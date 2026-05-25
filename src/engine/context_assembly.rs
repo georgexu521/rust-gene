@@ -32,16 +32,28 @@ pub struct ContextZone {
     pub chars: usize,
     pub tokens: u64,
     pub fingerprint: String,
+    pub budget_tokens: u64,
+    pub overflow_reason: Option<String>,
 }
 
 impl ContextZone {
     pub fn new(name: ContextZoneName, content: impl Into<String>) -> Self {
         let content = content.into();
+        let tokens = crate::engine::context_compressor::estimate_tokens(&content);
+        let budget_tokens = default_zone_budget_tokens(name);
+        let overflow_reason = (tokens > budget_tokens).then(|| {
+            format!(
+                "{} tokens exceed {} token zone budget",
+                tokens, budget_tokens
+            )
+        });
         Self {
             name,
             chars: content.chars().count(),
-            tokens: crate::engine::context_compressor::estimate_tokens(&content),
+            tokens,
             fingerprint: crate::engine::prompt_context::stable_fingerprint(&content),
+            budget_tokens,
+            overflow_reason,
             content,
         }
     }
@@ -56,6 +68,8 @@ impl ContextZone {
             chars: self.chars,
             tokens: self.tokens,
             fingerprint: self.fingerprint.clone(),
+            budget_tokens: self.budget_tokens,
+            overflow_reason: self.overflow_reason.clone(),
             empty: self.is_empty(),
         }
     }
@@ -67,6 +81,8 @@ pub struct ContextZoneReport {
     pub chars: usize,
     pub tokens: u64,
     pub fingerprint: String,
+    pub budget_tokens: u64,
+    pub overflow_reason: Option<String>,
     pub empty: bool,
 }
 
@@ -209,6 +225,16 @@ pub struct ContextAssemblyInput {
     pub relevant_material: String,
     pub recent_observation: String,
     pub current_decision_request: String,
+}
+
+fn default_zone_budget_tokens(name: ContextZoneName) -> u64 {
+    match name {
+        ContextZoneName::StablePrefix => 12_000,
+        ContextZoneName::TaskState => 2_000,
+        ContextZoneName::RelevantMaterial => 12_000,
+        ContextZoneName::RecentObservation => 4_000,
+        ContextZoneName::CurrentDecisionRequest => 4_000,
+    }
 }
 
 #[cfg(test)]

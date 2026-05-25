@@ -1,0 +1,81 @@
+id: memory-stale-project-fact-demotion
+title: stale project facts should be demoted before retrieval injection
+type: bug_fix
+eval_intent: seeded_code_change
+complexity: medium
+risk: high
+
+repo:
+  fixture: priority-agent
+  base_ref: "HEAD"
+  prepare_commands:
+    - |
+      python3 - <<'PY'
+      from pathlib import Path
+
+      path = Path("src/memory/manager.rs")
+      text = path.read_text()
+      text = text.replace(
+          "let stale = if record_needs_revalidation(record) {\n        \":stale\"\n    } else {\n        \"\"\n    };",
+          "let stale = \"\";",
+      )
+      text = text.replace(
+          "fn record_needs_revalidation(record: &MemoryRecord) -> bool {",
+          "fn record_needs_revalidation(_record: &MemoryRecord) -> bool {\n    return false;\n}\n\nfn disabled_record_needs_revalidation(record: &MemoryRecord) -> bool {",
+      )
+      path.write_text(text)
+      PY
+  setup:
+    - cargo test -q memory -- --test-threads=1
+
+prompt: |
+  修复过期 project fact 仍然高置信注入 retrieval context 的问题。
+
+  要求：
+  - typed MemoryRecord 要能根据 last_verified_at/evidence 判断 needs_revalidation。
+  - stale project/tool facts 的 retrieval score 和 trust 必须降级。
+  - stale record 的 provenance/reason 要能说明 needs revalidation。
+  - 新 verified project fact 可以 supersede 旧的未验证 fact，但不能删除审计历史。
+
+allowed_tools:
+  - grep
+  - file_read
+  - file_edit
+  - bash
+
+forbidden_tools:
+  - memory_clear
+  - git_push
+
+expected_behavior:
+  - stale project fact 不再作为 High trust memory 注入。
+  - retrieval reason 能暴露 stale/needs revalidation。
+  - verified replacement record 会把旧 record 标成 superseded。
+
+behavior_assertions:
+  - memory_record_used
+  - memory_stale_demoted
+  - memory_candidate_has_evidence
+  - memory_scope_correct
+
+acceptance:
+  required_commands:
+    - cargo test -q memory -- --test-threads=1
+    - cargo test -q retrieval_context -- --test-threads=1
+    - python3 -c "p='src/memory/manager.rs'; s=open(p).read(); assert 'record_needs_revalidation' in s and ':stale' in s and 'superseded_by' in s"
+    - python3 -c "p='src/engine/retrieval_context.rs'; s=open(p).read(); assert 'needs revalidation' in s and 'TrustLevel::Low' in s and ':stale:' in s"
+  diff_constraints:
+    max_files_changed: 8
+    forbidden_paths:
+      - target/
+      - .git/
+  human_review:
+    - stale 判断是否基于 record metadata，而不是模糊文本？
+    - supersede 是否保留旧 record 的审计历史？
+
+scoring:
+  success: 0.35
+  test_pass: 0.25
+  stale_demotion: 0.25
+  observability: 0.10
+  diff_discipline: 0.05

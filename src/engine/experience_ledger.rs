@@ -62,6 +62,16 @@ pub struct ExperienceCost {
 pub struct CandidateMemoryRef {
     pub summary: String,
     pub score: Option<f32>,
+    #[serde(default)]
+    pub failed_strategy: Option<String>,
+    #[serde(default)]
+    pub better_strategy: Option<String>,
+    #[serde(default)]
+    pub context_tags: Vec<String>,
+    #[serde(default)]
+    pub failure_type: Option<String>,
+    #[serde(default)]
+    pub recovery_plan_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -75,6 +85,33 @@ impl ExperienceRecord {
     pub fn from_turn_trace(trace: &TurnTrace) -> Self {
         let intent = trace.events.iter().find_map(|event| match event {
             TraceEvent::IntentRouted { intent, .. } => Some(intent.clone()),
+            _ => None,
+        });
+        let latest_stop = trace.events.iter().rev().find_map(|event| match event {
+            TraceEvent::StopCheckEvaluated {
+                terminal_status,
+                action,
+                reason,
+                summary,
+                failure_type,
+                recovery_plan_id,
+                next_action,
+                ..
+            } => Some((
+                terminal_status.clone(),
+                action.clone(),
+                reason.clone(),
+                summary.clone(),
+                failure_type.clone(),
+                recovery_plan_id.clone(),
+                next_action.clone(),
+            )),
+            _ => None,
+        });
+        let closeout_terminal = trace.events.iter().rev().find_map(|event| match event {
+            TraceEvent::FinalCloseoutPrepared {
+                terminal_status, ..
+            } => terminal_status.clone(),
             _ => None,
         });
         let tool_calls = trace
@@ -98,6 +135,48 @@ impl ExperienceRecord {
                 _ => None,
             })
             .collect::<Vec<_>>();
+        let terminal_status = latest_stop
+            .as_ref()
+            .and_then(|(terminal_status, ..)| terminal_status.clone())
+            .or(closeout_terminal);
+        let mut candidate_memories = Vec::new();
+        if let Some((
+            _terminal_status,
+            action,
+            reason,
+            summary,
+            failure_type,
+            recovery_plan_id,
+            next_action,
+        )) = latest_stop.as_ref()
+        {
+            if failure_type
+                .as_ref()
+                .is_some_and(|value| !value.trim().is_empty())
+            {
+                candidate_memories.push(CandidateMemoryRef {
+                    failed_strategy: failure_type.clone(),
+                    better_strategy: next_action.clone().or_else(|| Some(action.clone())),
+                    context_tags: vec![
+                        "stop_check".to_string(),
+                        "recovery".to_string(),
+                        failure_type
+                            .clone()
+                            .unwrap_or_else(|| "unknown_failure".to_string()),
+                    ],
+                    failure_type: failure_type.clone(),
+                    recovery_plan_id: recovery_plan_id.clone(),
+                    summary: format!(
+                        "failed_strategy={} reason={} better_strategy={} recovery_plan_id={}",
+                        failure_type.as_deref().unwrap_or(reason),
+                        summary,
+                        next_action.as_deref().unwrap_or(action),
+                        recovery_plan_id.as_deref().unwrap_or("none")
+                    ),
+                    score: Some(0.8),
+                });
+            }
+        }
 
         Self {
             task_type: intent.unwrap_or_else(|| "unknown".to_string()),
@@ -114,8 +193,9 @@ impl ExperienceRecord {
                 duration_ms: trace.duration_ms(),
                 tool_calls,
             },
-            final_outcome: format!("{:?}", trace.status),
+            final_outcome: terminal_status.unwrap_or_else(|| format!("{:?}", trace.status)),
             tool_failures: failed_tools,
+            candidate_memories,
             ..Default::default()
         }
     }

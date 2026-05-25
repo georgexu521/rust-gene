@@ -1,6 +1,8 @@
 use crate::engine::context_compressor::estimate_tokens;
 use crate::engine::intent_router::IntentRoute;
-use crate::engine::trace::{TraceCollector, TraceEvent};
+use crate::engine::trace::{
+    TraceCollector, TraceEvent, RUNTIME_DIET_PROMPT_TOKEN_BUDGET, RUNTIME_DIET_TOOL_COUNT_BUDGET,
+};
 
 #[derive(Debug, Clone)]
 pub(super) struct RuntimeDietSnapshot {
@@ -23,6 +25,7 @@ pub(super) struct RuntimeDietSnapshot {
     pub(super) route_scoped_tools: bool,
     pub(super) closeout_visibility: String,
     pub(super) validation_evidence: String,
+    pub(super) warnings: Vec<String>,
 }
 
 impl RuntimeDietSnapshot {
@@ -47,6 +50,7 @@ impl RuntimeDietSnapshot {
             route_scoped_tools,
             closeout_visibility: "none".to_string(),
             validation_evidence: "none".to_string(),
+            warnings: Vec::new(),
         }
     }
 
@@ -75,6 +79,7 @@ pub(super) fn trace_runtime_diet_report(
     runner: &crate::engine::code_change_workflow::CodeChangeWorkflowRunner,
     snapshot: &RuntimeDietSnapshot,
 ) {
+    let warnings = runtime_diet_warnings(snapshot);
     trace.record(TraceEvent::RuntimeDietReport {
         prompt_tokens: snapshot.prompt_tokens,
         tool_schema_tokens: snapshot.tool_schema_tokens,
@@ -96,7 +101,27 @@ pub(super) fn trace_runtime_diet_report(
         workflow_context: runtime_workflow_context_label(route, runner).to_string(),
         closeout_visibility: snapshot.closeout_visibility.clone(),
         validation_evidence: snapshot.validation_evidence.clone(),
+        warnings,
     });
+}
+
+pub(super) fn runtime_diet_warnings(snapshot: &RuntimeDietSnapshot) -> Vec<String> {
+    let mut warnings = snapshot.warnings.clone();
+    if snapshot.prompt_tokens > RUNTIME_DIET_PROMPT_TOKEN_BUDGET {
+        warnings.push("prompt_budget_heavy".to_string());
+    }
+    if snapshot.exposed_tools > RUNTIME_DIET_TOOL_COUNT_BUDGET {
+        warnings.push("exposed_tool_schema_heavy".to_string());
+    }
+    if snapshot.truncated_tool_results > snapshot.tool_result_artifacts {
+        warnings.push("truncated_without_artifact".to_string());
+    }
+    if snapshot.tool_result_tokens > snapshot.prompt_tokens.max(1) {
+        warnings.push("tool_result_tokens_exceed_prompt".to_string());
+    }
+    warnings.sort();
+    warnings.dedup();
+    warnings
 }
 
 fn runtime_workflow_context_label(
@@ -122,4 +147,26 @@ fn runtime_workflow_context_label(
         return "adaptive";
     }
     "minimal"
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn runtime_diet_warnings_name_context_waste_signals() {
+        let mut snapshot = RuntimeDietSnapshot::new(true);
+        snapshot.prompt_tokens = RUNTIME_DIET_PROMPT_TOKEN_BUDGET + 1;
+        snapshot.exposed_tools = RUNTIME_DIET_TOOL_COUNT_BUDGET + 1;
+        snapshot.truncated_tool_results = 2;
+        snapshot.tool_result_artifacts = 1;
+        snapshot.tool_result_tokens = snapshot.prompt_tokens + 1;
+
+        let warnings = runtime_diet_warnings(&snapshot);
+
+        assert!(warnings.contains(&"prompt_budget_heavy".to_string()));
+        assert!(warnings.contains(&"exposed_tool_schema_heavy".to_string()));
+        assert!(warnings.contains(&"truncated_without_artifact".to_string()));
+        assert!(warnings.contains(&"tool_result_tokens_exceed_prompt".to_string()));
+    }
 }

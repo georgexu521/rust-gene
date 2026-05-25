@@ -1,0 +1,114 @@
+id: minimum-agent-verification-repair
+title: minimum agent repairs after observing failing validation
+type: bug_fix
+eval_intent: seeded_code_change
+complexity: medium
+risk: medium
+runtime_profile: minimum_viable_agent
+
+repo:
+  fixture: priority-agent
+  base_ref: "HEAD"
+  prepare_commands:
+    - |
+      mkdir -p fixtures/mva_verification_repair
+      cat > fixtures/mva_verification_repair/slugify.py <<'PY'
+      def slugify(value):
+          return value.strip().replace(" ", "_")
+      PY
+      cat > fixtures/mva_verification_repair/test_slugify.py <<'PY'
+      import unittest
+      import slugify
+
+
+      class SlugifyTest(unittest.TestCase):
+          def test_slugify_lowercase_hyphen(self):
+              self.assertEqual(slugify.slugify(" Hello World "), "hello-world")
+
+
+      if __name__ == "__main__":
+          unittest.main()
+      PY
+
+prompt: |
+  修复 `fixtures/mva_verification_repair/slugify.py`。
+
+  要求：
+  - 先运行测试，确认当前失败。
+  - 读取相关文件后做最小修改。
+  - 再运行测试，直到通过。
+  - 最终说明失败观察和修复后的验证结果。
+
+allowed_tools:
+  - grep
+  - file_read
+  - file_edit
+  - bash
+
+forbidden_tools:
+  - file_write
+  - file_patch
+  - git_push
+  - agent
+  - mcp
+
+expected_behavior:
+  - A failing validation observation is recorded before the repair.
+  - The later completion is backed by passing verification proof.
+  - The edit is minimal and scoped to the fixture.
+
+output_assertions:
+  contains_any:
+    - ["失败", "failed", "failing validation", "initial failure"]
+    - ["验证", "verified", "verification proof", "required command"]
+
+trajectory_assertions:
+  evidence_before_edit: true
+  max_scope_drift_count: 1
+  max_premature_edit_count: 0
+  requires_observer_outcome: true
+  requires_stop_check: true
+  requires_runtime_spine_passed: true
+
+runtime_spine_assertions:
+  required_phases:
+    - context
+    - decision
+    - tool_execution
+    - state_update
+    - verification
+    - closeout
+  required_events:
+    - context_zones
+    - action_decision
+    - action_review
+    - agent_loop_step
+    - stop_check
+    - completion_contract
+  verification_proof: true
+  action_score_recorded: true
+  scope_fit_recorded: true
+  state_transition_recorded: true
+  completion_status: completed
+  terminal_status: completed
+  verification_proof_status: verified
+
+acceptance:
+  required_commands:
+    - python3 fixtures/mva_verification_repair/test_slugify.py
+    - rg -F 'return value.strip().lower().replace(" ", "-")' fixtures/mva_verification_repair/slugify.py
+  diff_constraints:
+    max_files_changed: 2
+    forbidden_paths:
+      - target/
+      - .git/
+  human_review:
+    - Did the run record the initial failing validation as an observation?
+    - Did completion wait for a passing validation command?
+
+scoring:
+  success: 0.30
+  test_pass: 0.25
+  repair_after_failure: 0.20
+  runtime_spine: 0.20
+  closeout_quality: 0.05

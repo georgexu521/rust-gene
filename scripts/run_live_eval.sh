@@ -29,6 +29,8 @@ RECOMMENDED_CASES=(
   skill-promotion-gate
   persistent-memory-planning-context
   memory-recall-conflict-precision
+  memory-failure-lesson-promotion
+  memory-stale-project-fact-demotion
   memory-save-sensitive-hard-block
   permission-default-open-dangerous-guard
   resume-session-picker
@@ -62,6 +64,8 @@ REAL_PROJECT_CODING_GAUNTLET_CASES=(
   memory-save-quality-gate
   skill-promotion-gate
   persistent-memory-planning-context
+  memory-failure-lesson-promotion
+  memory-stale-project-fact-demotion
 )
 
 RELEASE_DOGFOOD_CASES=(
@@ -73,11 +77,21 @@ RELEASE_DOGFOOD_CASES=(
   core-long-output-artifact
 )
 
+MVP_WEIGHTED_AGENT_CASES=(
+  minimum-agent-direct-answer
+  minimum-agent-light-inspection
+  minimum-agent-loop
+  minimum-agent-verification-repair
+  minimum-agent-high-risk-block
+  minimum-agent-low-value-replan
+  minimum-agent-memory-boundary
+)
+
 usage() {
   cat <<'EOF'
 Usage:
   scripts/run_live_eval.sh --list
-  scripts/run_live_eval.sh --case <id|recommended|core-coding-quality|real-project-coding|release-dogfood|all> --mode <prepare|api-plan|agent-run|collect|full> [options]
+  scripts/run_live_eval.sh --case <id|recommended|core-coding-quality|real-project-coding|release-dogfood|mvp-weighted-agent|all> --mode <prepare|api-plan|agent-run|collect|full> [options]
   scripts/run_live_eval.sh --mode summary --run-id <id>
 
 Modes:
@@ -91,7 +105,8 @@ Modes:
 
 Options:
   --case ID          Live task id, "recommended", "core-coding-quality",
-                     "real-project-coding", "release-dogfood", or "all".
+                     "real-project-coding", "release-dogfood",
+                     "mvp-weighted-agent", or "all".
                      With --list, a suite name lists only that suite.
   --mode MODE        list, prepare, api-plan, agent-run, collect, or full.
   --workdir DIR      Existing task worktree for collect mode.
@@ -196,6 +211,15 @@ write_agent_prompt() {
     sample = YAML.load_file(sample_path) || {}
     acceptance = sample["acceptance"] || {}
     diff_constraints = acceptance["diff_constraints"] || {}
+    eval_intent = sample.fetch("eval_intent", "seeded_code_change").to_s.strip
+    task_heading = case eval_intent
+    when "direct_answer"
+      "Direct answer regression task"
+    when "read_only_audit"
+      "Read-only local evidence task"
+    else
+      "Live coding regression task"
+    end
     list_block = lambda do |title, values, empty = "(none)"|
       lines = ["## #{title}"]
       values = [] unless values.is_a?(Array)
@@ -207,7 +231,7 @@ write_agent_prompt() {
       lines
     end
     lines = [
-      "# Live coding regression task: #{sample["title"] || sample["id"] || "unknown"}",
+      "# #{task_heading}: #{sample["title"] || sample["id"] || "unknown"}",
       "",
       "- Task id: `#{sample["id"] || "unknown"}`",
       "- Type: `#{sample["type"] || "unknown"}`",
@@ -226,15 +250,13 @@ write_agent_prompt() {
     lines << ""
     lines.concat(list_block.call("Expected behavior", sample["expected_behavior"] || []))
     lines << ""
-    lines.concat([
-      "## Acceptance checks",
-      "",
-      "Before your final response, run every required command below. If any command fails, inspect the failure, repair the code, and rerun the relevant command. Do not claim completion while required commands are failing.",
-    ])
+    lines.concat(["## Acceptance checks", ""])
     required = acceptance["required_commands"] || []
     if required.empty?
+      lines << "No required validation command is part of this eval."
       lines << "- (none)"
     else
+      lines << "Before your final response, run every required command below. If any command fails, inspect the failure, repair the code, and rerun the relevant command. Do not claim completion while required commands are failing."
       required.each { |cmd| lines << "- `#{cmd}`" }
     end
     harness = acceptance["harness_commands"] || []
@@ -252,7 +274,11 @@ write_agent_prompt() {
       lines << "- Do not change path: `#{forbidden}`"
     end
     lines.concat(["", "## Closeout requirements", ""])
-    case sample.fetch("eval_intent", "seeded_code_change").to_s.strip
+    case eval_intent
+    when "direct_answer"
+      lines << "- This is a direct-answer evaluation. Do not use tools unless the task explicitly asks for them; answer the user request directly and close out with no file changes."
+    when "read_only_audit"
+      lines << "- This is a read-only local evidence evaluation. Use the smallest relevant inspection, do not edit files, and answer from observed facts."
     when "audit_or_regression_check"
       lines << "- This is an audit/regression evaluation. If the requested behavior is already present, prove it with direct evidence and required commands instead of forcing an arbitrary edit."
     when "stale_or_already_satisfied"
@@ -260,19 +286,38 @@ write_agent_prompt() {
     else
       lines << "- This is a real code-change evaluation in an isolated worktree. Do not stop at investigation."
     end
-    case sample.fetch("eval_intent", "seeded_code_change").to_s.strip
+    case eval_intent
+    when "direct_answer"
+      lines << "- Do not inspect the repository for this task. Provide the direct answer and a concise Closeout."
+    when "read_only_audit"
+      lines << "- Inspect only the smallest relevant path or query; after at most 3 read-only inspections, close out with no changes."
     when "audit_or_regression_check", "stale_or_already_satisfied"
       lines << "- Inspect only the smallest set of relevant files first; after at most 3 read-only inspections, run the required validation commands and close out with no changes if the requested behavior is already present. Make a focused edit only when a concrete missing behavior is proven."
     else
       lines << "- Inspect only the smallest set of relevant files first; after at most 3 read-only inspections, either make a focused edit or clearly state the concrete blocker."
     end
-    lines.concat([
-      "- If the code is already fixed, prove it with the required commands and still provide a Closeout.",
-      "- Summarize files changed and why.",
-      "- List validation commands you ran and their pass/fail status.",
-      "- Mention any remaining risk or blocker explicitly.",
-      "- The final response must include a `Closeout:` section.",
-    ])
+    if eval_intent == "direct_answer"
+      lines.concat([
+        "- Summarize that no files changed.",
+        "- Mention that no validation command was required.",
+        "- The final response must include a `Closeout:` section.",
+      ])
+    elsif eval_intent == "read_only_audit"
+      lines.concat([
+        "- Summarize the observed evidence.",
+        "- Summarize that no files changed.",
+        "- Mention that no validation command was required unless you actually ran one.",
+        "- The final response must include a `Closeout:` section.",
+      ])
+    else
+      lines.concat([
+        "- If the code is already fixed, prove it with the required commands and still provide a Closeout.",
+        "- Summarize files changed and why.",
+        "- List validation commands you ran and their pass/fail status.",
+        "- Mention any remaining risk or blocker explicitly.",
+        "- The final response must include a `Closeout:` section.",
+      ])
+    end
     File.write(out_path, lines.join("\n").rstrip + "\n")
   ' "$file" "$out"
 }
@@ -435,6 +480,19 @@ release_dogfood_task_files() {
   return "$missing"
 }
 
+mvp_weighted_agent_task_files() {
+  local id file missing=0
+  for id in "${MVP_WEIGHTED_AGENT_CASES[@]}"; do
+    if file="$(find_task_file "$id")"; then
+      echo "$file"
+    else
+      echo "MVP weighted-agent live task missing: $id" >&2
+      missing=1
+    fi
+  done
+  return "$missing"
+}
+
 task_group_files() {
   local group="$1"
   case "$group" in
@@ -449,6 +507,9 @@ task_group_files() {
       ;;
     release-dogfood)
       release_dogfood_task_files
+      ;;
+    mvp-weighted-agent)
+      mvp_weighted_agent_task_files
       ;;
     *)
       return 1
@@ -568,9 +629,10 @@ overlay_working_tree_changes() {
 
 prepare_task() {
   local file="$1"
-  local id title base_ref resolved_ref task_workdir prompt_file runbook metadata env_base prepare_log overlay_patch
+  local id title base_ref resolved_ref task_workdir prompt_file runbook metadata env_base prepare_log overlay_patch runtime_profile
   id="$(yaml_get "$file" id)"
   title="$(yaml_get "$file" title)"
+  runtime_profile="$(yaml_get "$file" runtime_profile "")"
   base_ref="$(yaml_get "$file" repo.base_ref HEAD)"
   resolved_ref="$(resolve_ref "$base_ref")"
   task_workdir="$WORK_ROOT/$RUN_ID/$id/worktree"
@@ -644,6 +706,9 @@ File.write(metadata_path, JSON.pretty_generate(sample) + "\n")
     echo "- Resolved base ref: $resolved_ref"
     echo "- Worktree: $task_workdir"
     echo "- Isolated env: $env_base"
+    if [[ -n "$runtime_profile" ]]; then
+      echo "- Runtime profile: $runtime_profile"
+    fi
     echo "- MiniMax model: ${MINIMAX_MODEL:-MiniMax-M2.7}"
     if [[ -s "$prepare_log" ]]; then
       echo "- Prepare log: $prepare_log"
@@ -680,6 +745,15 @@ File.write(metadata_path, JSON.pretty_generate(sample) + "\n")
     echo "XDG_DATA_HOME=\"$env_base/xdg-data\" \\"
     echo "XDG_STATE_HOME=\"$env_base/xdg-state\" \\"
     echo "PRIORITY_AGENT_A2A_TRANSCRIPT_PATH=\"$env_base/a2a-transcript.jsonl\" \\"
+    if [[ "$runtime_profile" == "minimum_viable_agent" || "$runtime_profile" == "mva" ]]; then
+      echo "PRIORITY_AGENT_RUNTIME_PROFILE=\"$runtime_profile\" \\"
+      echo "PRIORITY_AGENT_MVA_AUDIT_TOOLS=\"1\" \\"
+      echo "PRIORITY_AGENT_CANDIDATE_ACTIONS=\"shadow\" \\"
+      echo "PRIORITY_AGENT_MVA_MAX_TOOL_CALLS=\"10\" \\"
+      echo "PRIORITY_AGENT_MVA_PARALLELISM_LIMIT=\"1\" \\"
+    elif [[ -n "$runtime_profile" ]]; then
+      echo "PRIORITY_AGENT_RUNTIME_PROFILE=\"$runtime_profile\" \\"
+    fi
     echo "MINIMAX_API_KEY=\"\${MINIMAX_API_KEY:?}\" \\"
     echo "MINIMAX_BASE_URL=\"\${MINIMAX_BASE_URL:-}\" \\"
     echo "MINIMAX_MODEL=\"\${MINIMAX_MODEL:-MiniMax-M2.7}\" \\"
@@ -961,8 +1035,9 @@ PY
 
 agent_run_task() {
   local file="$1" task_workdir="$2"
-  local id report_dir agent_stdout agent_stderr agent_output agent_events exit_file prompt_file env_base cargo_target_dir
+  local id report_dir agent_stdout agent_stderr agent_output agent_events exit_file prompt_file env_base cargo_target_dir runtime_profile
   id="$(yaml_get "$file" id)"
+  runtime_profile="$(yaml_get "$file" runtime_profile "")"
   report_dir="$REPORT_DIR/live-$RUN_ID/$id"
   mkdir -p "$report_dir"
   agent_stdout="$report_dir/agent-stdout.log"
@@ -1006,7 +1081,8 @@ agent_run_task() {
     "$agent_output" \
     "$agent_events" \
     "$env_base" \
-    "$cargo_target_dir" <<'PY' >"$exit_file"
+    "$cargo_target_dir" \
+    "$runtime_profile" <<'PY' >"$exit_file"
 import os
 import subprocess
 import sys
@@ -1023,6 +1099,7 @@ output_file = sys.argv[8]
 events_file = sys.argv[9]
 env_base = sys.argv[10]
 cargo_target_dir = sys.argv[11]
+runtime_profile = sys.argv[12]
 
 env = os.environ.copy()
 real_home = env.get("HOME", "")
@@ -1047,6 +1124,13 @@ env.update({
     "MINIMAX_BASE_URL": os.environ.get("MINIMAX_BASE_URL", ""),
     "MINIMAX_MODEL": os.environ.get("MINIMAX_MODEL", "MiniMax-M2.7"),
 })
+if runtime_profile:
+    env["PRIORITY_AGENT_RUNTIME_PROFILE"] = runtime_profile
+if runtime_profile in {"minimum_viable_agent", "mva"}:
+    env["PRIORITY_AGENT_MVA_AUDIT_TOOLS"] = os.environ.get("PRIORITY_AGENT_MVA_AUDIT_TOOLS", "1")
+    env["PRIORITY_AGENT_CANDIDATE_ACTIONS"] = os.environ.get("PRIORITY_AGENT_CANDIDATE_ACTIONS", "shadow")
+    env["PRIORITY_AGENT_MVA_MAX_TOOL_CALLS"] = os.environ.get("PRIORITY_AGENT_MVA_MAX_TOOL_CALLS", "10")
+    env["PRIORITY_AGENT_MVA_PARALLELISM_LIMIT"] = os.environ.get("PRIORITY_AGENT_MVA_PARALLELISM_LIMIT", "1")
 for key in (
     "OPENAI_API_KEY",
     "OPENAI_BASE_URL",
@@ -1311,8 +1395,12 @@ import json
 import pathlib
 import sys
 from scripts.live_eval_report_parser import (
+    derived_trajectory_metrics_from_events,
+    evaluate_output_assertions,
+    evaluate_trajectory_assertions,
     normalized_runtime_spine_assertions,
     runtime_spine_metrics_from_events,
+    score_live_eval_record,
 )
 
 output_path = pathlib.Path(sys.argv[1])
@@ -1449,6 +1537,63 @@ def normalized_behavior_assertions(sample):
             result.append(value)
     return result
 
+failures = []
+warnings = []
+acceptance_config = sample.get("acceptance") or {}
+required_commands = acceptance_config.get("required_commands") or []
+harness_commands = acceptance_config.get("harness_commands") or []
+validation_commands = list(required_commands) + list(harness_commands)
+repo = sample.get("repo") or {}
+base_ref = str(repo.get("base_ref", "HEAD")).strip()
+prepare_commands = repo.get("prepare_commands") or []
+task_type = str(sample.get("type", "")).strip()
+eval_intent = str(sample.get("eval_intent", "seeded_code_change")).strip() or "seeded_code_change"
+behavior_assertions = normalized_behavior_assertions(sample)
+if behavior_assertions:
+    if validation_commands and test_status == "ok":
+        behavior_assertion_status = "passed"
+    elif validation_commands:
+        behavior_assertion_status = "failed"
+    else:
+        behavior_assertion_status = "missing"
+else:
+    behavior_assertion_status = "none"
+runtime_spine_assertions = normalized_runtime_spine_assertions(sample)
+runtime_spine = runtime_spine_metrics_from_events(
+    events,
+    assertions=runtime_spine_assertions,
+)
+trajectory_metrics = derived_trajectory_metrics_from_events(
+    events,
+    output=output,
+    sample=sample,
+    test_status=test_status,
+    cmd_log_text=cmd_log_text,
+)
+output_assertions = evaluate_output_assertions(sample, output)
+trajectory_assertions = evaluate_trajectory_assertions(
+    sample,
+    {**trajectory_metrics, **runtime_spine},
+    runtime_spine=runtime_spine,
+)
+runtime_profile = str(sample.get("runtime_profile", "")).strip()
+mva_profile_active = runtime_profile in {"minimum_viable_agent", "mva"}
+if (
+    eval_intent in {"direct_answer", "read_only_audit"}
+    and closeout_status == "missing"
+    and runtime_spine.get("completion_contract_status") == "completed"
+):
+    closeout_status = "passed"
+expected_runtime_completion = str(
+    (sample.get("runtime_spine_assertions") or {}).get("completion_status", "")
+).strip().lower()
+if (
+    expected_runtime_completion == "blocked"
+    and runtime_spine.get("completion_contract_status") == "blocked"
+    and test_status == "ok"
+):
+    closeout_status = "passed"
+
 print(f"output_chars: {len(output)}")
 print(f"diff_chars: {len(diff)}")
 print(f"diff_files_changed: {len(diff_files)}")
@@ -1498,32 +1643,6 @@ print(f"action_checkpoint_no_patch: {str(action_checkpoint_no_patch).lower()}")
 print(f"action_checkpoint_invalid_tools: {str(action_checkpoint_invalid_tools).lower()}")
 print(f"patch_synthesis_no_change: {str(patch_synthesis_no_change).lower()}")
 
-failures = []
-warnings = []
-acceptance_config = sample.get("acceptance") or {}
-required_commands = acceptance_config.get("required_commands") or []
-harness_commands = acceptance_config.get("harness_commands") or []
-validation_commands = list(required_commands) + list(harness_commands)
-repo = sample.get("repo") or {}
-base_ref = str(repo.get("base_ref", "HEAD")).strip()
-prepare_commands = repo.get("prepare_commands") or []
-task_type = str(sample.get("type", "")).strip()
-eval_intent = str(sample.get("eval_intent", "seeded_code_change")).strip() or "seeded_code_change"
-behavior_assertions = normalized_behavior_assertions(sample)
-if behavior_assertions:
-    if validation_commands and test_status == "ok":
-        behavior_assertion_status = "passed"
-    elif validation_commands:
-        behavior_assertion_status = "failed"
-    else:
-        behavior_assertion_status = "missing"
-else:
-    behavior_assertion_status = "none"
-runtime_spine_assertions = normalized_runtime_spine_assertions(sample)
-runtime_spine = runtime_spine_metrics_from_events(
-    events,
-    assertions=runtime_spine_assertions,
-)
 code_change_types = {"bug_fix", "feature", "refactor", "ux"}
 current_head_without_fixture = (
     task_type in code_change_types
@@ -1531,12 +1650,20 @@ current_head_without_fixture = (
     and not prepare_commands
 )
 seeded_code_change = eval_intent == "seeded_code_change"
-audit_or_regression_check = eval_intent == "audit_or_regression_check"
+audit_or_regression_check = eval_intent in {"audit_or_regression_check", "read_only_audit"}
 stale_or_already_satisfied = eval_intent == "stale_or_already_satisfied"
 print(f"eval_intent: {eval_intent}")
 print(f"behavior_assertions: {','.join(behavior_assertions) if behavior_assertions else 'none'}")
 print(f"behavior_assertion_status: {behavior_assertion_status}")
+print(f"output_assertions: {output_assertions['output_assertions']}")
+print(f"output_assertion_status: {output_assertions['output_assertion_status']}")
+print(f"output_assertion_missing: {output_assertions['output_assertion_missing']}")
+print(f"trajectory_assertions: {trajectory_assertions['trajectory_assertions']}")
+print(f"trajectory_assertion_status: {trajectory_assertions['trajectory_assertion_status']}")
+print(f"trajectory_assertion_missing: {trajectory_assertions['trajectory_assertion_missing']}")
 print(f"runtime_spine: {runtime_spine['runtime_spine']}")
+print(f"runtime_profile: {runtime_profile or 'none'}")
+print(f"mva_profile_active: {str(mva_profile_active).lower()}")
 print(f"runtime_spine_detail: {runtime_spine['runtime_spine_detail']}")
 print(f"runtime_spine_trace_present: {runtime_spine['runtime_spine_trace_present']}")
 print(f"runtime_spine_phase_coverage: {runtime_spine['runtime_spine_phase_coverage']}")
@@ -1547,8 +1674,34 @@ print(f"runtime_spine_missing: {runtime_spine['runtime_spine_missing']}")
 print(f"risky_tool_runs: {runtime_spine['risky_tool_runs']}")
 print(f"risky_tool_reviewed: {runtime_spine['risky_tool_reviewed']}")
 print(f"risky_tool_missing_action_review: {runtime_spine['risky_tool_missing_action_review']}")
+print(f"agent_loop_steps: {runtime_spine['agent_loop_steps']}")
+print(f"context_zones_materialized: {runtime_spine['context_zones_materialized']}")
+print(f"context_zone_task_state_empty: {runtime_spine['context_zone_task_state_empty']}")
+print(f"context_zone_current_decision_request_empty: {runtime_spine['context_zone_current_decision_request_empty']}")
+print(f"state_transition_recorded: {runtime_spine['state_transition_recorded']}")
+print(f"completion_contract_status: {runtime_spine['completion_contract_status']}")
+print(f"completion_contract_proof_status: {runtime_spine['completion_contract_proof_status']}")
+print(f"candidate_score_calibrated: {runtime_spine['candidate_score_calibrated']}")
+print(f"candidate_score_disagreement: {runtime_spine['candidate_score_disagreement']}")
+print(f"observer_outcome_recorded: {runtime_spine['observer_outcome_recorded']}")
+print(f"memory_boundary_recorded: {runtime_spine['memory_boundary_recorded']}")
 print(f"verification_proof_status: {runtime_spine['verification_proof_status']}")
 print(f"verification_proof_summary: {runtime_spine['verification_proof_summary']}")
+for key in (
+    "premature_edit_count",
+    "evidence_before_first_edit",
+    "scope_drift_count",
+    "invalid_action_count",
+    "repeated_action_count",
+    "failed_action_count",
+    "user_question_count",
+    "unnecessary_question_count",
+    "verification_attempted",
+    "verification_passed",
+    "tool_call_count",
+    "llm_call_count",
+):
+    print(f"{key}: {trajectory_metrics[key]}")
 if not output.strip():
     print("warning: empty_agent_output")
     failures.append("empty_agent_output")
@@ -1609,6 +1762,12 @@ if behavior_assertion_status == "failed":
 elif behavior_assertion_status == "missing":
     print("warning: behavior_assertions_missing_checks")
     failures.append("behavior_assertions_missing_checks")
+if output_assertions["output_assertion_status"] == "failed":
+    print("warning: output_assertions_not_passing")
+    failures.append("output_assertions_not_passing")
+if trajectory_assertions["trajectory_assertion_status"] == "failed":
+    print("warning: trajectory_assertions_not_passing")
+    failures.append("trajectory_assertions_not_passing")
 if runtime_spine["runtime_spine_status"] in {"failed", "missing"}:
     print("warning: runtime_spine_assertions_not_passing")
     failures.append("runtime_spine_assertions_not_passing")
@@ -1675,8 +1834,18 @@ def infer_failure_owner():
         return "eval_harness"
     if "empty_agent_output" in failures or "missing_trace_summary" in failures:
         return "agent_flow"
+    if (
+        "required_commands_not_passing" in failures
+        and "expected_code_diff_missing" in failures
+        and closeout_status in {"failed", "not_verified", "blocked", "missing"}
+    ):
+        return "llm_reasoning"
     if "runtime_spine_assertions_not_passing" in failures:
         return "agent_flow"
+    if "trajectory_assertions_not_passing" in failures:
+        return "agent_flow"
+    if "output_assertions_not_passing" in failures:
+        return "llm_reasoning"
     if "tool_run_without_closeout" in failures:
         return "agent_flow"
     if (
@@ -1716,6 +1885,26 @@ def infer_failure_owner():
 
 failure_owner = infer_failure_owner()
 print(f"failure_owner: {failure_owner}")
+score_record = {
+    "status": "failed" if failures else "passed",
+    "intent": eval_intent,
+    "required": test_status,
+    "verification": "passed" if verification_passed else "failed",
+    "closeout": closeout_status,
+    "behavior_assertion_status": behavior_assertion_status,
+    "output_assertion_status": output_assertions["output_assertion_status"],
+    "trajectory_assertion_status": trajectory_assertions["trajectory_assertion_status"],
+    "runtime_spine_status": runtime_spine["runtime_spine_status"],
+    "diff": "yes" if diff.strip() else "no",
+    "warnings": warnings,
+    "failures": failures,
+    "mva_profile_active": str(mva_profile_active).lower(),
+    **runtime_spine,
+    **trajectory_metrics,
+}
+scorecard = score_live_eval_record(score_record)
+for key in ("outcome_score", "process_score", "efficiency_score", "agent_score", "score_penalties"):
+    print(f"{key}: {scorecard[key]}")
 with status_path.open("w", encoding="utf-8") as fh:
     fh.write(f"status={status}\n")
     fh.write(f"failure_owner={failure_owner}\n")
@@ -1729,7 +1918,7 @@ PY
       echo "Specialty signals:"
       echo
       echo '```text'
-      python3 - "$report_dir/agent-events.jsonl" "$sample_json" "$status_file" "$cmd_log" <<'PY'
+      python3 - "$report_dir/agent-events.jsonl" "$sample_json" "$status_file" "$cmd_log" "$report_dir/agent-output.md" "$diff_patch" <<'PY'
 import json
 import pathlib
 import sys
@@ -1742,10 +1931,14 @@ events_path = pathlib.Path(sys.argv[1])
 sample_json_path = pathlib.Path(sys.argv[2])
 test_status_path = pathlib.Path(sys.argv[3])
 cmd_log_path = pathlib.Path(sys.argv[4])
+output_path = pathlib.Path(sys.argv[5])
+diff_path = pathlib.Path(sys.argv[6])
 
 sample = json.loads(sample_json_path.read_text(encoding="utf-8")) if sample_json_path.exists() else {}
 test_status = test_status_path.read_text(encoding="utf-8").strip() if test_status_path.exists() else "missing"
 cmd_log_text = cmd_log_path.read_text(encoding="utf-8") if cmd_log_path.exists() else ""
+output = output_path.read_text(encoding="utf-8") if output_path.exists() else ""
+diff = diff_path.read_text(encoding="utf-8") if diff_path.exists() else ""
 events = []
 if events_path.exists():
     for line in events_path.read_text(encoding="utf-8").splitlines():
@@ -1766,6 +1959,8 @@ runtime_spine = runtime_spine_metrics_from_events(
     events,
     assertions=runtime_spine_assertions,
 )
+runtime_profile = str(sample.get("runtime_profile", "")).strip()
+mva_profile_active = runtime_profile in {"minimum_viable_agent", "mva"}
 
 def trace_count(label):
     return sum(1 for item in trace_types if item == label)
@@ -1794,10 +1989,57 @@ memory_tools = [
 ]
 
 memory_sources = []
+memory_provenance = []
 for event in retrieval_events:
     for source in event.get("sources") or []:
         if source not in memory_sources:
             memory_sources.append(str(source))
+    for provenance in event.get("provenance") or []:
+        memory_provenance.append(str(provenance))
+
+report_signal_text = "\n".join(
+    [
+        output,
+        diff,
+        cmd_log_text,
+        "\n".join(memory_provenance),
+        "\n".join(json.dumps(event, sort_keys=True) for event in trace_events),
+    ]
+).lower()
+memory_record_used = "memory_record/" in report_signal_text
+memory_candidate_typed = (
+    "memory-id:" in report_signal_text
+    or "records.jsonl" in report_signal_text
+    or "typed memory record" in report_signal_text
+)
+memory_candidate_has_evidence = (
+    "evidence_status" in report_signal_text
+    or "memory_candidate_has_evidence=true" in report_signal_text
+    or "runtimeobservation" in report_signal_text
+    or "memoryevidencekind" in report_signal_text
+)
+memory_use_count_updated = (
+    "use_count" in report_signal_text
+    or "last_used" in report_signal_text
+    or "memory_use_count_updated=true" in report_signal_text
+)
+memory_failure_lesson_promoted = (
+    "strategy-failures" in report_signal_text
+    or "failed_strategy=" in report_signal_text
+    or "memory_failure_lesson_promoted=true" in report_signal_text
+)
+memory_action_weight_changed = (
+    "memory modifier" in report_signal_text
+    or "memory_action_weight_changed=true" in report_signal_text
+)
+memory_stale_demoted = (
+    "memory_stale_demoted=true" in report_signal_text
+    or (":stale:" in report_signal_text and "needs revalidation" in report_signal_text)
+)
+memory_scope_correct = (
+    "memory_scope_correct=true" in report_signal_text
+    or ("project_root" in report_signal_text and "session_id" in report_signal_text)
+)
 
 weighted_plan_events = [
     event
@@ -1861,6 +2103,23 @@ if (
     and closeout_acceptance_items > 0
 ):
     acceptance_accepted = True
+specialty_closeout_status = str(latest_closeout.get("status", "missing")).lower()
+eval_intent = str(sample.get("eval_intent", "seeded_code_change")).strip() or "seeded_code_change"
+if (
+    eval_intent in {"direct_answer", "read_only_audit"}
+    and specialty_closeout_status == "missing"
+    and runtime_spine.get("completion_contract_status") == "completed"
+):
+    specialty_closeout_status = "passed"
+expected_runtime_completion = str(
+    (sample.get("runtime_spine_assertions") or {}).get("completion_status", "")
+).strip().lower()
+if (
+    expected_runtime_completion == "blocked"
+    and runtime_spine.get("completion_contract_status") == "blocked"
+    and test_status == "ok"
+):
+    specialty_closeout_status = "passed"
 
 for key, value in signals.items():
     print(f"{key}: {str(value).lower()}")
@@ -1868,6 +2127,8 @@ print(f"active_specialty_signals: {active_count}/{len(signals)}")
 print(f"workflow_contract_activation: entry={entry_label} repair={repair_label}")
 print(f"workflow_contract_events: {len(workflow_contract_events)}")
 print(f"runtime_spine: {runtime_spine['runtime_spine']}")
+print(f"runtime_profile: {runtime_profile or 'none'}")
+print(f"mva_profile_active: {str(mva_profile_active).lower()}")
 print(f"runtime_spine_detail: {runtime_spine['runtime_spine_detail']}")
 print(f"runtime_spine_phase_coverage: {runtime_spine['runtime_spine_phase_coverage']}")
 print(f"runtime_spine_observed_phases: {runtime_spine['runtime_spine_observed_phases']}")
@@ -1877,6 +2138,17 @@ print(f"runtime_spine_missing: {runtime_spine['runtime_spine_missing']}")
 print(f"risky_tool_runs: {runtime_spine['risky_tool_runs']}")
 print(f"risky_tool_reviewed: {runtime_spine['risky_tool_reviewed']}")
 print(f"risky_tool_missing_action_review: {runtime_spine['risky_tool_missing_action_review']}")
+print(f"agent_loop_steps: {runtime_spine['agent_loop_steps']}")
+print(f"context_zones_materialized: {runtime_spine['context_zones_materialized']}")
+print(f"context_zone_task_state_empty: {runtime_spine['context_zone_task_state_empty']}")
+print(f"context_zone_current_decision_request_empty: {runtime_spine['context_zone_current_decision_request_empty']}")
+print(f"state_transition_recorded: {runtime_spine['state_transition_recorded']}")
+print(f"completion_contract_status: {runtime_spine['completion_contract_status']}")
+print(f"completion_contract_proof_status: {runtime_spine['completion_contract_proof_status']}")
+print(f"candidate_score_calibrated: {runtime_spine['candidate_score_calibrated']}")
+print(f"candidate_score_disagreement: {runtime_spine['candidate_score_disagreement']}")
+print(f"observer_outcome_recorded: {runtime_spine['observer_outcome_recorded']}")
+print(f"memory_boundary_recorded: {runtime_spine['memory_boundary_recorded']}")
 print(f"verification_proof_status: {runtime_spine['verification_proof_status']}")
 risk_entry = entry_risk_signal.get("level", "missing") if entry_risk_signal else "missing"
 risk_runtime = runtime_risk_signal.get("level", "none") if runtime_risk_signal else "none"
@@ -1886,6 +2158,14 @@ if entry_risk_signal:
 print(f"memory_sync_events: {trace_count('memory.sync')}")
 print(f"memory_tool_calls: {len(memory_tools)}")
 print(f"retrieval_sources: {','.join(memory_sources) if memory_sources else 'none'}")
+print(f"memory_candidate_typed: {str(memory_candidate_typed).lower()}")
+print(f"memory_candidate_has_evidence: {str(memory_candidate_has_evidence).lower()}")
+print(f"memory_record_used: {str(memory_record_used).lower()}")
+print(f"memory_use_count_updated: {str(memory_use_count_updated).lower()}")
+print(f"memory_failure_lesson_promoted: {str(memory_failure_lesson_promoted).lower()}")
+print(f"memory_action_weight_changed: {str(memory_action_weight_changed).lower()}")
+print(f"memory_stale_demoted: {str(memory_stale_demoted).lower()}")
+print(f"memory_scope_correct: {str(memory_scope_correct).lower()}")
 print(f"required_commands: {len(validation_commands)}")
 print(f"agent_required_commands: {len(required_commands)}")
 print(f"harness_commands: {len(harness_commands)}")
@@ -1904,7 +2184,7 @@ print(f"latest_top_priority: {latest_plan.get('top_priority', 'none')}")
 print(f"latest_top_importance_score: {latest_plan.get('top_importance_score', 'none')}")
 print(f"latest_top_weight_share: {latest_plan.get('top_weight_share', 'none')}")
 print(f"acceptance_accepted: {acceptance_accepted}")
-print(f"closeout_status: {latest_closeout.get('status', 'missing')}")
+print(f"closeout_status: {specialty_closeout_status}")
 print(f"closeout_tool_records: {latest_closeout.get('tool_records', 0)}")
 print(f"closeout_tool_evidence: {latest_closeout.get('tool_evidence', 'missing')}")
 if latest_runtime_diet:
@@ -1947,6 +2227,26 @@ PY
     echo "- closeout_accuracy: TODO"
     echo "- notes: TODO"
   } >"$report"
+
+  local bundle_dir
+  bundle_dir="$report_dir/run-bundle"
+  PYTHONDONTWRITEBYTECODE=1 python3 scripts/live_eval_run_bundle.py "$report_dir" --run-id "$RUN_ID" --output-dir "$bundle_dir" >/dev/null
+  if [[ "${PRIORITY_AGENT_EVAL_LLM_JUDGE:-0}" == "1" ]]; then
+    PYTHONDONTWRITEBYTECODE=1 python3 scripts/live_eval_llm_judge.py "$report_dir" --output "$report_dir/judge.json" >/dev/null
+  fi
+  {
+    echo
+    echo "## Run Bundle"
+    echo
+    echo "- Bundle: \`$bundle_dir\`"
+    echo "- Task: \`$bundle_dir/task.json\`"
+    echo "- Steps: \`$bundle_dir/steps.jsonl\`"
+    echo "- Events: \`$bundle_dir/events.jsonl\`"
+    echo "- Final report: \`$bundle_dir/final_report.md\`"
+    if [[ -f "$report_dir/judge.json" ]]; then
+      echo "- Judge: \`$report_dir/judge.json\`"
+    fi
+  } >>"$report"
 
   echo "$report"
 }
@@ -2049,6 +2349,32 @@ runtime_spine_risky_tool_reviewed = sum(as_int(row["risky_tool_reviewed"]) for r
 runtime_spine_risky_missing_review_tasks = sum(
     1 for row in rows if row["risky_tool_missing_action_review"] != "none"
 )
+scored_score_rows = [row for row in rows if row.get("agent_score", "missing") != "missing"]
+avg_outcome_score = (
+    sum(as_int(row.get("outcome_score")) for row in scored_score_rows) / len(scored_score_rows)
+    if scored_score_rows
+    else 0
+)
+avg_process_score = (
+    sum(as_int(row.get("process_score")) for row in scored_score_rows) / len(scored_score_rows)
+    if scored_score_rows
+    else 0
+)
+avg_efficiency_score = (
+    sum(as_int(row.get("efficiency_score")) for row in scored_score_rows) / len(scored_score_rows)
+    if scored_score_rows
+    else 0
+)
+avg_agent_score = (
+    sum(as_int(row.get("agent_score")) for row in scored_score_rows) / len(scored_score_rows)
+    if scored_score_rows
+    else 0
+)
+invalid_actions_total = sum(as_int(row.get("invalid_action_count")) for row in rows)
+premature_edits_total = sum(as_int(row.get("premature_edit_count")) for row in rows)
+scope_drifts_total = sum(as_int(row.get("scope_drift_count")) for row in rows)
+repeated_actions_total = sum(as_int(row.get("repeated_action_count")) for row in rows)
+failed_actions_total = sum(as_int(row.get("failed_action_count")) for row in rows)
 coding_rows = [row for row in rows if row["boundary"] == "agent-run"]
 coding_task_count = len(coding_rows)
 coding_passed = sum(1 for row in coding_rows if row["coding_gauntlet_status"] == "passed")
@@ -2096,6 +2422,15 @@ lines = [
     f"- Runtime-spine risky tool runs: `{runtime_spine_risky_tool_runs}`",
     f"- Runtime-spine risky tool reviewed: `{runtime_spine_risky_tool_reviewed}`",
     f"- Runtime-spine risky missing-review tasks: `{runtime_spine_risky_missing_review_tasks}`",
+    f"- Average outcome score: `{avg_outcome_score:.1f}`",
+    f"- Average process score: `{avg_process_score:.1f}`",
+    f"- Average efficiency score: `{avg_efficiency_score:.1f}`",
+    f"- Average agent score: `{avg_agent_score:.1f}`",
+    f"- Invalid actions total: `{invalid_actions_total}`",
+    f"- Premature edits total: `{premature_edits_total}`",
+    f"- Scope drifts total: `{scope_drifts_total}`",
+    f"- Repeated actions total: `{repeated_actions_total}`",
+    f"- Failed actions total: `{failed_actions_total}`",
     f"- Coding gauntlet agent-run tasks: `{coding_task_count}`",
     f"- Coding gauntlet passes: `{coding_passed}`",
     f"- Coding gauntlet failures: `{coding_failed}`",
@@ -2175,6 +2510,38 @@ lines.extend([
     f"| runtime_spine_risky_tool_runs | {runtime_spine_risky_tool_runs} | Risky tool executions observed from trace or agent events. |",
     f"| runtime_spine_risky_tool_reviewed | {runtime_spine_risky_tool_reviewed} | Risky tool executions with matching action.review trace evidence. |",
     f"| runtime_spine_risky_missing_review_tasks | {runtime_spine_risky_missing_review_tasks} | Tasks with risky tool executions missing matching action.review evidence. |",
+    "",
+    "## Evaluation Scores",
+    "",
+    "| dimension | value | meaning |",
+    "|-----------|-------|---------|",
+    f"| outcome_score_avg | {avg_outcome_score:.1f} | Average deterministic outcome score across task reports. |",
+    f"| process_score_avg | {avg_process_score:.1f} | Average deterministic process score across task reports. |",
+    f"| efficiency_score_avg | {avg_efficiency_score:.1f} | Average deterministic efficiency score across task reports. |",
+    f"| agent_score_avg | {avg_agent_score:.1f} | Weighted score: outcome 50%, process 30%, efficiency 20%. |",
+    f"| invalid_actions_total | {invalid_actions_total} | Premature edits, scope drift, repeated actions, risky review gaps, and phase-misaligned actions. |",
+    f"| premature_edits_total | {premature_edits_total} | Edits attempted before enough evidence or explicitly demoted as early/low-value. |",
+    f"| scope_drifts_total | {scope_drifts_total} | Action decisions with very low scope fit or medium/high goal drift. |",
+    f"| repeated_actions_total | {repeated_actions_total} | Repeated tool actions or repeated-action stop signals. |",
+    f"| failed_actions_total | {failed_actions_total} | Failed tool/action observations from trace and event logs. |",
+    "",
+    "### Score Matrix",
+    "",
+    "| task | outcome | process | efficiency | agent | invalid | premature_edit | scope_drift | repeated | failed_actions | penalties |",
+    "|------|---------|---------|------------|-------|---------|----------------|-------------|----------|----------------|-----------|",
+])
+
+if rows:
+    for row in rows:
+        lines.append(
+            "| {task} | {outcome_score} | {process_score} | {efficiency_score} | {agent_score} | {invalid_action_count} | {premature_edit_count} | {scope_drift_count} | {repeated_action_count} | {failed_action_count} | {score_penalties} |".format(
+                **{key: md_cell(value) for key, value in row.items()}
+            )
+        )
+else:
+    lines.append("| none | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | none |")
+
+lines.extend([
     "",
     "## Outcome Classes",
     "",
@@ -2299,7 +2666,7 @@ run_one() {
 
 main() {
   if [[ "$MODE" == "list" ]]; then
-    if [[ "$CASE_ID" == "recommended" || "$CASE_ID" == "core-coding-quality" || "$CASE_ID" == "real-project-coding" || "$CASE_ID" == "release-dogfood" ]]; then
+    if [[ "$CASE_ID" == "recommended" || "$CASE_ID" == "core-coding-quality" || "$CASE_ID" == "real-project-coding" || "$CASE_ID" == "release-dogfood" || "$CASE_ID" == "mvp-weighted-agent" ]]; then
       need_yaml
       list_task_group "$CASE_ID"
     else
@@ -2324,9 +2691,9 @@ main() {
 
   mkdir -p "$REPORT_DIR" "$WORK_ROOT/$RUN_ID"
 
-  if [[ "$CASE_ID" == "all" || "$CASE_ID" == "recommended" || "$CASE_ID" == "core-coding-quality" || "$CASE_ID" == "real-project-coding" || "$CASE_ID" == "release-dogfood" ]]; then
+  if [[ "$CASE_ID" == "all" || "$CASE_ID" == "recommended" || "$CASE_ID" == "core-coding-quality" || "$CASE_ID" == "real-project-coding" || "$CASE_ID" == "release-dogfood" || "$CASE_ID" == "mvp-weighted-agent" ]]; then
     local file files failures=0
-    if [[ "$CASE_ID" == "recommended" || "$CASE_ID" == "core-coding-quality" || "$CASE_ID" == "real-project-coding" || "$CASE_ID" == "release-dogfood" ]]; then
+    if [[ "$CASE_ID" == "recommended" || "$CASE_ID" == "core-coding-quality" || "$CASE_ID" == "real-project-coding" || "$CASE_ID" == "release-dogfood" || "$CASE_ID" == "mvp-weighted-agent" ]]; then
       if ! files="$(task_group_files "$CASE_ID")"; then
         exit 1
       fi

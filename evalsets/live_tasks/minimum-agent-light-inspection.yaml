@@ -1,0 +1,98 @@
+id: minimum-agent-light-inspection
+title: minimum agent light inspection answers from grounded local evidence
+type: audit
+eval_intent: read_only_audit
+complexity: low
+risk: low
+runtime_profile: minimum_viable_agent
+
+repo:
+  fixture: priority-agent
+  base_ref: "HEAD"
+  prepare_commands:
+    - |
+      mkdir -p fixtures/mva_light_inspection/notes
+      printf 'alpha\n' > fixtures/mva_light_inspection/a.txt
+      printf 'beta\n' > fixtures/mva_light_inspection/b.log
+      printf 'hidden\n' > fixtures/mva_light_inspection/.hidden
+
+prompt: |
+  查看 `fixtures/mva_light_inspection`，回答目录里有什么。
+
+  要求：
+  - 必须基于实际工具输出。
+  - 区分普通文件、隐藏文件和子目录。
+  - 不要修改任何文件。
+
+allowed_tools:
+  - bash
+  - file_read
+
+forbidden_tools:
+  - file_edit
+  - file_write
+  - file_patch
+  - git_push
+  - agent
+  - mcp
+
+expected_behavior:
+  - The agent performs a bounded read-only inspection.
+  - The answer is grounded in observed filesystem facts.
+  - Runtime context, action, observation, stop, and completion signals are present.
+
+output_assertions:
+  contains:
+    - "a.txt"
+    - ".hidden"
+    - "notes"
+
+trajectory_assertions:
+  max_repeated_action_count: 1
+  max_scope_drift_count: 0
+  max_premature_edit_count: 0
+  max_invalid_action_count: 1
+  requires_observer_outcome: true
+  requires_stop_check: true
+  requires_runtime_spine_passed: true
+
+runtime_spine_assertions:
+  required_phases:
+    - context
+    - decision
+    - tool_execution
+    - state_update
+    - closeout
+  required_events:
+    - context_zones
+    - action_decision
+    - action_review
+    - agent_loop_step
+    - stop_check
+    - completion_contract
+  action_score_recorded: true
+  scope_fit_recorded: true
+  state_transition_recorded: true
+  completion_status: completed
+
+acceptance:
+  required_commands: []
+  harness_commands:
+    - test -f fixtures/mva_light_inspection/a.txt
+    - test -f fixtures/mva_light_inspection/.hidden
+    - test -d fixtures/mva_light_inspection/notes
+  diff_constraints:
+    max_files_changed: 0
+    forbidden_paths:
+      - target/
+      - .git/
+  human_review:
+    - Did the answer avoid invented metadata?
+    - Did the run stay read-only?
+
+scoring:
+  success: 0.35
+  grounding: 0.25
+  runtime_spine: 0.25
+  diff_discipline: 0.10
+  closeout_quality: 0.05

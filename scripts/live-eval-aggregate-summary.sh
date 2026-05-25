@@ -58,6 +58,16 @@ def table_rows(text):
                 "verification": record.get("verification_status", record.get("verification", "unknown")),
                 "closeout": record.get("closeout", "missing"),
                 "runtime_spine": record.get("runtime_spine", "coverage=0/7, status=none, missing=none"),
+                "outcome_score": record.get("outcome_score", "missing"),
+                "process_score": record.get("process_score", "missing"),
+                "efficiency_score": record.get("efficiency_score", "missing"),
+                "agent_score": record.get("agent_score", "missing"),
+                "invalid_action_count": record.get("invalid_action_count", "0"),
+                "premature_edit_count": record.get("premature_edit_count", "0"),
+                "scope_drift_count": record.get("scope_drift_count", "0"),
+                "repeated_action_count": record.get("repeated_action_count", "0"),
+                "failed_action_count": record.get("failed_action_count", "0"),
+                "score_penalties": record.get("score_penalties", "none"),
                 "runtime_diet": record.get("runtime_diet", "missing"),
                 "behavior_assertions": record.get("behavior_assertions", "none"),
                 "behavior_assertion_status": record.get("behavior_status", record.get("behavior_assertion_status", "none")),
@@ -82,6 +92,12 @@ def specialty_int(summary, key):
 def summary_field(summary, key, default="missing"):
     match = re.search(rf"{re.escape(key)}=([^, ]+)", summary)
     return match.group(1) if match else default
+
+def as_int(value, default=0):
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
 
 def infer_owner(record):
     if record["owner"] != "missing":
@@ -192,6 +208,16 @@ for run_dir in sorted(benchmarks.glob(run_glob)):
             "verification": row["verification"],
             "closeout": row["closeout"],
             "runtime_spine": row.get("runtime_spine", "coverage=0/7, status=none, missing=none"),
+            "outcome_score": row.get("outcome_score", "missing"),
+            "process_score": row.get("process_score", "missing"),
+            "efficiency_score": row.get("efficiency_score", "missing"),
+            "agent_score": row.get("agent_score", "missing"),
+            "invalid_action_count": row.get("invalid_action_count", "0"),
+            "premature_edit_count": row.get("premature_edit_count", "0"),
+            "scope_drift_count": row.get("scope_drift_count", "0"),
+            "repeated_action_count": row.get("repeated_action_count", "0"),
+            "failed_action_count": row.get("failed_action_count", "0"),
+            "score_penalties": row.get("score_penalties", "none"),
             "runtime_spine_assertions": row.get("runtime_spine_assertions", "none"),
             "runtime_spine_status": row.get(
                 "runtime_spine_status",
@@ -206,6 +232,8 @@ for run_dir in sorted(benchmarks.glob(run_glob)):
                 summary_field(row.get("runtime_spine", ""), "missing", "none"),
             ),
             "runtime_spine_trace_present": row.get("runtime_spine_trace_present", "false"),
+            "runtime_profile": row.get("runtime_profile", "none"),
+            "mva_profile_active": row.get("mva_profile_active", "false"),
             "behavior_assertions": row.get("behavior_assertions", "none"),
             "behavior_assertion_status": row.get("behavior_assertion_status", "none"),
             "triggers": row["triggers"],
@@ -219,6 +247,24 @@ for run_dir in sorted(benchmarks.glob(run_glob)):
         record["memory_recalled_items"] = int(row.get("memory_recalled_items", specialty_int(record["memory"], "recalled")))
         record["memory_conflicts"] = int(row.get("memory_conflicts", specialty_int(record["memory"], "conflicts")))
         record["memory_changed_plan"] = row.get("memory_changed_plan", specialty_flag(record["memory"], "changed_plan"))
+        record["memory_candidate_typed"] = row.get("memory_candidate_typed", "false")
+        record["memory_candidate_has_evidence"] = row.get("memory_candidate_has_evidence", "false")
+        record["memory_record_used"] = row.get("memory_record_used", "false")
+        record["memory_use_count_updated"] = row.get("memory_use_count_updated", "false")
+        record["memory_failure_lesson_promoted"] = row.get("memory_failure_lesson_promoted", "false")
+        record["memory_action_weight_changed"] = row.get("memory_action_weight_changed", "false")
+        record["memory_stale_demoted"] = row.get("memory_stale_demoted", "false")
+        record["memory_scope_correct"] = row.get("memory_scope_correct", "false")
+        record["agent_loop_steps"] = as_int(row.get("agent_loop_steps", "0"))
+        record["context_zones_materialized"] = row.get("context_zones_materialized", "false")
+        record["context_zone_task_state_empty"] = row.get("context_zone_task_state_empty", "false")
+        record["context_zone_current_decision_request_empty"] = row.get("context_zone_current_decision_request_empty", "false")
+        record["state_transition_recorded"] = row.get("state_transition_recorded", "false")
+        record["completion_contract_status"] = row.get("completion_contract_status", "missing")
+        record["candidate_score_calibrated"] = row.get("candidate_score_calibrated", "false")
+        record["candidate_score_disagreement"] = row.get("candidate_score_disagreement", "false")
+        record["observer_outcome_recorded"] = row.get("observer_outcome_recorded", "false")
+        record["memory_boundary_recorded"] = row.get("memory_boundary_recorded", "false")
         record["skill_active"] = row.get("skill_active", specialty_flag(record["skill"], "active"))
         record["skill_tool_calls"] = int(row.get("skill_tool_calls", specialty_int(record["skill"], "tool_calls")))
         record["skill_usage_events"] = int(row.get("skill_usage_events", specialty_int(record["skill"], "usage_events")))
@@ -249,6 +295,14 @@ memory_active_tasks = sum(1 for record in task_records if record["memory_active"
 memory_changed_plan_tasks = sum(1 for record in task_records if record["memory_changed_plan"] == "true")
 memory_recalled_items = sum(record["memory_recalled_items"] for record in task_records)
 memory_conflicts = sum(record["memory_conflicts"] for record in task_records)
+memory_candidate_typed_tasks = sum(1 for record in task_records if record["memory_candidate_typed"] == "true")
+memory_candidate_evidence_tasks = sum(1 for record in task_records if record["memory_candidate_has_evidence"] == "true")
+memory_record_used_tasks = sum(1 for record in task_records if record["memory_record_used"] == "true")
+memory_use_count_updated_tasks = sum(1 for record in task_records if record["memory_use_count_updated"] == "true")
+memory_failure_lesson_promoted_tasks = sum(1 for record in task_records if record["memory_failure_lesson_promoted"] == "true")
+memory_action_weight_changed_tasks = sum(1 for record in task_records if record["memory_action_weight_changed"] == "true")
+memory_stale_demoted_tasks = sum(1 for record in task_records if record["memory_stale_demoted"] == "true")
+memory_scope_correct_tasks = sum(1 for record in task_records if record["memory_scope_correct"] == "true")
 skill_active_tasks = sum(1 for record in task_records if record["skill_active"] == "true")
 skill_tool_calls = sum(record["skill_tool_calls"] for record in task_records)
 skill_usage_events = sum(record["skill_usage_events"] for record in task_records)
@@ -272,6 +326,60 @@ runtime_spine_full_coverage = sum(
 runtime_spine_trace_present = sum(
     1 for record in task_records if record["runtime_spine_trace_present"] == "true"
 )
+runtime_spine_agent_loop_steps = sum(record["agent_loop_steps"] for record in task_records)
+runtime_spine_context_zone_tasks = sum(
+    1 for record in task_records if record["context_zones_materialized"] == "true"
+)
+runtime_spine_stage_transition_tasks = sum(
+    1 for record in task_records if record["state_transition_recorded"] == "true"
+)
+runtime_spine_completion_contract_tasks = sum(
+    1 for record in task_records if record["completion_contract_status"] not in {"", "missing", "none"}
+)
+mva_profile_tasks = sum(1 for record in task_records if record["mva_profile_active"] == "true")
+mva_profile_runtime_spine_passed = sum(
+    1
+    for record in task_records
+    if record["mva_profile_active"] == "true" and record["runtime_spine_status"] == "passed"
+)
+candidate_score_calibrated_tasks = sum(
+    1 for record in task_records if record["candidate_score_calibrated"] == "true"
+)
+candidate_score_disagreement_tasks = sum(
+    1 for record in task_records if record["candidate_score_disagreement"] == "true"
+)
+observer_outcome_tasks = sum(
+    1 for record in task_records if record["observer_outcome_recorded"] == "true"
+)
+memory_boundary_tasks = sum(
+    1 for record in task_records if record["memory_boundary_recorded"] == "true"
+)
+score_records = [record for record in task_records if record.get("agent_score") != "missing"]
+avg_outcome_score = (
+    sum(as_int(record.get("outcome_score")) for record in score_records) / len(score_records)
+    if score_records
+    else 0
+)
+avg_process_score = (
+    sum(as_int(record.get("process_score")) for record in score_records) / len(score_records)
+    if score_records
+    else 0
+)
+avg_efficiency_score = (
+    sum(as_int(record.get("efficiency_score")) for record in score_records) / len(score_records)
+    if score_records
+    else 0
+)
+avg_agent_score = (
+    sum(as_int(record.get("agent_score")) for record in score_records) / len(score_records)
+    if score_records
+    else 0
+)
+invalid_actions_total = sum(as_int(record.get("invalid_action_count")) for record in task_records)
+premature_edits_total = sum(as_int(record.get("premature_edit_count")) for record in task_records)
+scope_drifts_total = sum(as_int(record.get("scope_drift_count")) for record in task_records)
+repeated_actions_total = sum(as_int(record.get("repeated_action_count")) for record in task_records)
+failed_actions_total = sum(as_int(record.get("failed_action_count")) for record in task_records)
 closeout_not_successful = failure_modes["closeout_not_successful"]
 owner_metadata_missing = owners["missing"]
 recovered_validation_failures = (
@@ -432,6 +540,14 @@ lines.extend(md_table(
         ["memory_changed_plan_tasks", memory_changed_plan_tasks, pct(memory_changed_plan_tasks, total_tasks)],
         ["memory_recalled_items", memory_recalled_items, "n/a"],
         ["memory_conflicts", memory_conflicts, "n/a"],
+        ["memory_candidate_typed_tasks", memory_candidate_typed_tasks, pct(memory_candidate_typed_tasks, total_tasks)],
+        ["memory_candidate_evidence_tasks", memory_candidate_evidence_tasks, pct(memory_candidate_evidence_tasks, total_tasks)],
+        ["memory_record_used_tasks", memory_record_used_tasks, pct(memory_record_used_tasks, total_tasks)],
+        ["memory_use_count_updated_tasks", memory_use_count_updated_tasks, pct(memory_use_count_updated_tasks, total_tasks)],
+        ["memory_failure_lesson_promoted_tasks", memory_failure_lesson_promoted_tasks, pct(memory_failure_lesson_promoted_tasks, total_tasks)],
+        ["memory_action_weight_changed_tasks", memory_action_weight_changed_tasks, pct(memory_action_weight_changed_tasks, total_tasks)],
+        ["memory_stale_demoted_tasks", memory_stale_demoted_tasks, pct(memory_stale_demoted_tasks, total_tasks)],
+        ["memory_scope_correct_tasks", memory_scope_correct_tasks, pct(memory_scope_correct_tasks, total_tasks)],
         ["skill_active_tasks", skill_active_tasks, pct(skill_active_tasks, total_tasks)],
         ["skill_tool_calls", skill_tool_calls, "n/a"],
         ["skill_usage_events", skill_usage_events, "n/a"],
@@ -452,7 +568,57 @@ lines.extend(md_table(
         ["runtime_spine_assertions_failed", runtime_spine_assertions_failed, pct(runtime_spine_assertions_failed, runtime_spine_assertion_tasks)],
         ["runtime_spine_full_coverage_tasks", runtime_spine_full_coverage, pct(runtime_spine_full_coverage, total_tasks)],
         ["runtime_spine_trace_present_tasks", runtime_spine_trace_present, pct(runtime_spine_trace_present, total_tasks)],
+        ["runtime_spine_agent_loop_steps", runtime_spine_agent_loop_steps, "n/a"],
+        ["runtime_spine_context_zone_tasks", runtime_spine_context_zone_tasks, pct(runtime_spine_context_zone_tasks, total_tasks)],
+        ["runtime_spine_stage_transition_tasks", runtime_spine_stage_transition_tasks, pct(runtime_spine_stage_transition_tasks, total_tasks)],
+        ["runtime_spine_completion_contract_tasks", runtime_spine_completion_contract_tasks, pct(runtime_spine_completion_contract_tasks, total_tasks)],
+        ["mva_profile_tasks", mva_profile_tasks, pct(mva_profile_tasks, total_tasks)],
+        ["mva_profile_runtime_spine_passed", mva_profile_runtime_spine_passed, pct(mva_profile_runtime_spine_passed, mva_profile_tasks)],
+        ["candidate_score_calibrated_tasks", candidate_score_calibrated_tasks, pct(candidate_score_calibrated_tasks, total_tasks)],
+        ["candidate_score_disagreement_tasks", candidate_score_disagreement_tasks, pct(candidate_score_disagreement_tasks, total_tasks)],
+        ["observer_outcome_tasks", observer_outcome_tasks, pct(observer_outcome_tasks, total_tasks)],
+        ["memory_boundary_tasks", memory_boundary_tasks, pct(memory_boundary_tasks, total_tasks)],
     ],
+))
+
+lines.extend(["", "## Evaluation Scores", ""])
+lines.extend(md_table(
+    ["dimension", "value", "share"],
+    [
+        ["score_task_reports", len(score_records), pct(len(score_records), total_tasks)],
+        ["outcome_score_avg", f"{avg_outcome_score:.1f}", "n/a"],
+        ["process_score_avg", f"{avg_process_score:.1f}", "n/a"],
+        ["efficiency_score_avg", f"{avg_efficiency_score:.1f}", "n/a"],
+        ["agent_score_avg", f"{avg_agent_score:.1f}", "n/a"],
+        ["invalid_actions_total", invalid_actions_total, "n/a"],
+        ["premature_edits_total", premature_edits_total, "n/a"],
+        ["scope_drifts_total", scope_drifts_total, "n/a"],
+        ["repeated_actions_total", repeated_actions_total, "n/a"],
+        ["failed_actions_total", failed_actions_total, "n/a"],
+    ],
+))
+
+lines.extend(["", "### Lowest Agent Scores", ""])
+lowest_score_records = sorted(
+    score_records,
+    key=lambda record: as_int(record.get("agent_score"), 100),
+)[:20]
+lines.extend(md_table(
+    ["run", "task", "status", "agent", "outcome", "process", "efficiency", "invalid", "penalties"],
+    [
+        [
+            record["run"],
+            record["task"],
+            record["status"],
+            record.get("agent_score", "missing"),
+            record.get("outcome_score", "missing"),
+            record.get("process_score", "missing"),
+            record.get("efficiency_score", "missing"),
+            record.get("invalid_action_count", "0"),
+            record.get("score_penalties", "none"),
+        ]
+        for record in lowest_score_records
+    ] or [["none", "none", "none", "0", "0", "0", "0", "0", "none"]],
 ))
 
 lines.extend(["", "## Instrumented Slice", ""])

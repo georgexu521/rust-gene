@@ -125,6 +125,11 @@ impl ReflectionGateController {
                 tool: review_call.name,
                 call_id: review_call.id,
                 approved,
+                source: Some(if approved {
+                    "user_once_allow".to_string()
+                } else {
+                    "user_once_reject".to_string()
+                }),
                 decision: None,
                 persistence_scope: None,
                 rule_pattern: None,

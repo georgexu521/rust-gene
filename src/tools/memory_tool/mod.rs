@@ -195,11 +195,7 @@ fn collect_memory_dir_files(root: &Path, dir: &Path, files: &mut Vec<(String, St
     }
 }
 
-fn topic_file_path(topic: &str) -> Option<PathBuf> {
-    let file_stem = sanitize_topic(topic)?;
-    Some(memory_dir().join(format!("{}.md", file_stem)))
-}
-
+#[cfg(test)]
 fn infer_topic(content: &str, category: &str) -> Option<&'static str> {
     let lower = content.to_lowercase();
     let category = category.to_lowercase();
@@ -251,6 +247,7 @@ fn infer_topic(content: &str, category: &str) -> Option<&'static str> {
     None
 }
 
+#[cfg(test)]
 fn contains_any(content: &str, needles: &[&str]) -> bool {
     needles.iter().any(|needle| content.contains(needle))
 }
@@ -333,6 +330,7 @@ struct MemoryDecisionCounts {
 struct MemoryDoctorJson {
     root: String,
     documents: MemoryDoctorDocumentsJson,
+    records: MemoryRecordSummaryJson,
     decisions: MemoryDecisionCountsJson,
     flushes: MemoryFlushCountsJson,
     quality_gates: MemoryQualityGatesJson,
@@ -347,6 +345,20 @@ struct MemoryDoctorDocumentsJson {
     topic: usize,
     agent: usize,
     chars: usize,
+}
+
+#[derive(Debug, serde::Serialize)]
+struct MemoryRecordSummaryJson {
+    total: usize,
+    accepted: usize,
+    proposed: usize,
+    rejected: usize,
+    archived: usize,
+    superseded: usize,
+    missing_evidence: usize,
+    stale: usize,
+    used: usize,
+    projection_drift: usize,
 }
 
 #[derive(Debug, serde::Serialize)]
@@ -451,6 +463,7 @@ fn format_memory_doctor(docs: &[MemoryDocument], conflicts: &[String]) -> String
     let flushes = load_memory_flush_summary();
     let calibration = crate::memory::run_memory_calibration_samples();
     let calibration_passed = calibration.iter().filter(|result| result.passed).count();
+    let record_summary = crate::memory::MemoryManager::new().memory_record_summary();
     let total_chars: usize = docs.iter().map(|doc| doc.content.chars().count()).sum();
     let topic_count = docs.iter().filter(|doc| doc.namespace == "topic").count();
     let agent_count = docs
@@ -471,6 +484,16 @@ fn format_memory_doctor(docs: &[MemoryDocument], conflicts: &[String]) -> String
     out.push_str(&format!(
         "  Decisions: {} accepted · {} proposed · {} rejected · {} blocked\n",
         counts.accepted, counts.proposed, counts.rejected, counts.blocked
+    ));
+    out.push_str(&format!(
+        "  Records: {} total · {} accepted · {} proposed · {} missing evidence · {} stale · {} used · {} projection drift\n",
+        record_summary.total,
+        record_summary.accepted,
+        record_summary.proposed,
+        record_summary.missing_evidence,
+        record_summary.stale,
+        record_summary.used,
+        record_summary.projection_drift
     ));
     out.push_str(&format!(
         "  Flushes: {} completed · {} pending · {} running · {} failed · {} skipped\n",
@@ -543,6 +566,7 @@ fn memory_doctor_json(docs: &[MemoryDocument], conflicts: &[String]) -> serde_js
             reason: decision.reason,
         })
         .collect();
+    let record_summary = crate::memory::MemoryManager::new().memory_record_summary();
     let report = MemoryDoctorJson {
         root: memory_root().display().to_string(),
         documents: MemoryDoctorDocumentsJson {
@@ -550,6 +574,18 @@ fn memory_doctor_json(docs: &[MemoryDocument], conflicts: &[String]) -> serde_js
             topic: topic_count,
             agent: agent_count,
             chars: total_chars,
+        },
+        records: MemoryRecordSummaryJson {
+            total: record_summary.total,
+            accepted: record_summary.accepted,
+            proposed: record_summary.proposed,
+            rejected: record_summary.rejected,
+            archived: record_summary.archived,
+            superseded: record_summary.superseded,
+            missing_evidence: record_summary.missing_evidence,
+            stale: record_summary.stale,
+            used: record_summary.used,
+            projection_drift: record_summary.projection_drift,
         },
         decisions: MemoryDecisionCountsJson {
             accepted: counts.accepted,
@@ -705,40 +741,6 @@ fn sanitize_topic(topic: &str) -> Option<String> {
     }
 }
 
-fn normalized_contains(existing: &str, candidate: &str) -> bool {
-    let normalized_existing = normalize_for_duplicate(existing);
-    let normalized_candidate = normalize_for_duplicate(candidate);
-    !normalized_candidate.is_empty() && normalized_existing.contains(&normalized_candidate)
-}
-
-fn normalize_for_duplicate(content: &str) -> String {
-    content
-        .to_lowercase()
-        .replace(|c: char| c.is_whitespace() || c.is_ascii_punctuation(), "")
-}
-
-fn write_memory_file_atomically(path: &Path, content: &str) -> std::io::Result<()> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    let parent = path.parent().unwrap_or_else(|| Path::new("."));
-    let file_name = path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or("memory.md");
-    let tmp_path = parent.join(format!(
-        ".{}.{}.tmp",
-        file_name,
-        uuid::Uuid::new_v4().simple()
-    ));
-    std::fs::write(&tmp_path, content)?;
-    if let Err(e) = std::fs::rename(&tmp_path, path) {
-        let _ = std::fs::remove_file(&tmp_path);
-        return Err(e);
-    }
-    Ok(())
-}
-
 /// Memory Save 工具 - 保存信息到持久记忆
 pub struct MemorySaveTool;
 
@@ -781,7 +783,7 @@ impl Tool for MemorySaveTool {
         })
     }
 
-    async fn execute(&self, params: serde_json::Value, _context: ToolContext) -> ToolResult {
+    async fn execute(&self, params: serde_json::Value, context: ToolContext) -> ToolResult {
         let content = params["content"].as_str().unwrap_or("");
         if content.is_empty() {
             return ToolResult::error("Content cannot be empty");
@@ -791,91 +793,89 @@ impl Tool for MemorySaveTool {
         let target = params["target"].as_str().unwrap_or("auto");
         let topic = params["topic"].as_str().unwrap_or("").trim();
 
-        let path = if target == "user" || category == "preference" {
-            user_path()
+        let manager = crate::memory::MemoryManager::new();
+        let mut candidate = crate::memory::MemoryCandidate::new(
+            content,
+            category,
+            crate::memory::MemoryScope {
+                project_root: Some(context.working_dir.clone()),
+                session_id: context.session_id.clone(),
+                platform: "tool".to_string(),
+                ..Default::default()
+            },
+            crate::memory::MemoryProvenance {
+                source: "memory_save_tool".to_string(),
+                session_id: Some(context.session_id.clone()),
+                turn_index: None,
+                tool_name: Some("memory_save".to_string()),
+            },
+        )
+        .explicit(true);
+        candidate
+            .evidence
+            .push(crate::memory::MemoryEvidenceRef::new(
+                crate::memory::MemoryEvidenceKind::ToolOutput,
+                "memory_save_tool",
+                "explicit memory_save tool call",
+                0.85,
+            ));
+
+        let write_target = if target == "user" || category == "preference" {
+            crate::memory::MemoryWriteTarget::User
         } else if target == "topic" || !topic.is_empty() {
-            match topic_file_path(if topic.is_empty() { category } else { topic }) {
-                Some(path) => path,
-                None => {
-                    return ToolResult::error("Topic must contain at least one valid character")
-                }
+            let topic = if topic.is_empty() { category } else { topic };
+            if sanitize_topic(topic).is_none() {
+                return ToolResult::error("Topic must contain at least one valid character");
             }
-        } else if target == "auto" {
-            if let Some(inferred) = infer_topic(content, category) {
-                topic_file_path(inferred).unwrap_or_else(memory_path)
-            } else {
-                memory_path()
-            }
+            crate::memory::MemoryWriteTarget::Topic(topic.to_string())
+        } else if target == "index" {
+            crate::memory::MemoryWriteTarget::Index
         } else {
-            memory_path()
+            crate::memory::MemoryWriteTarget::Auto
         };
 
-        if let Some(parent) = path.parent() {
-            let _ = tokio::fs::create_dir_all(parent).await;
-        }
+        let outcome = manager.submit_candidate(candidate, write_target);
+        let path = outcome
+            .path
+            .as_ref()
+            .map(|path| path.display().to_string())
+            .unwrap_or_else(|| memory_root().display().to_string());
+        let score = outcome
+            .quality_score
+            .map(|score| format!("{score:.2}"))
+            .unwrap_or_else(|| "n/a".to_string());
 
-        // 读取现有内容
-        let existing = std::fs::read_to_string(&path).unwrap_or_default();
-        let assessment =
-            match crate::memory::assess_memory_candidate(content, category, &existing, false) {
-                Ok(assessment) => assessment,
-                Err(issue) => {
-                    return ToolResult::error(format!(
-                        "Blocked unsafe memory [{}]: {}",
-                        issue.code, issue.message
-                    ))
-                }
-            };
-        if normalized_contains(&existing, content) {
-            return ToolResult::success(format!(
-                "Memory already exists in {} (quality {:.2}): [{}] {}",
-                path.display(),
-                assessment.score,
-                category,
-                content
-            ));
-        }
-        if assessment.status != crate::memory::MemoryStatus::Accepted {
-            return ToolResult::success(format!(
-                "Memory not saved to {}: quality gate returned {:?} (quality {:.2}). Reason: {}",
-                path.display(),
-                assessment.status,
-                assessment.score,
-                assessment.reason
-            ));
-        }
-
-        // 追加新记忆
-        let timestamp = chrono::Local::now().format("%Y-%m-%d %H:%M");
-        let entry = format!(
-            "\n## [{}] {}\n{}\n",
-            category.to_uppercase(),
-            timestamp,
-            content
-        );
-
-        let new_content = if existing.trim().is_empty() {
-            let title = if path == user_path() {
-                "# User Preferences"
-            } else if path.starts_with(memory_dir()) {
-                "# Priority Agent Topic Memory"
-            } else {
-                "# Priority Agent Memory"
-            };
-            format!("{}\n{}", title, entry)
-        } else {
-            format!("{}{}", existing, entry)
-        };
-
-        match write_memory_file_atomically(&path, &new_content) {
-            Ok(_) => ToolResult::success(format!(
-                "Saved to {} (quality {:.2}): [{}] {}",
-                path.display(),
-                assessment.score,
-                category,
-                content
-            )),
-            Err(e) => ToolResult::error(format!("Failed to save memory: {}", e)),
+        match outcome.status {
+            crate::memory::manager::MemoryWriteOutcomeStatus::Saved => ToolResult::success(
+                format!("Saved to {} (quality {}): [{}] {}", path, score, category, content),
+            ),
+            crate::memory::manager::MemoryWriteOutcomeStatus::Duplicate => ToolResult::success(
+                format!(
+                    "Memory already exists in {} (quality {}): [{}] {}",
+                    path, score, category, content
+                ),
+            ),
+            crate::memory::manager::MemoryWriteOutcomeStatus::Proposed => ToolResult::success(
+                format!(
+                    "Memory proposed for review, not injected as accepted memory yet (quality {}). Reason: {}",
+                    score, outcome.reason
+                ),
+            ),
+            crate::memory::manager::MemoryWriteOutcomeStatus::Rejected => ToolResult::success(
+                format!(
+                    "Memory not saved: quality gate rejected it (quality {}). Reason: {}",
+                    score, outcome.reason
+                ),
+            ),
+            crate::memory::manager::MemoryWriteOutcomeStatus::Blocked => ToolResult::error(
+                format!("Blocked unsafe memory: {}", outcome.reason),
+            ),
+            crate::memory::manager::MemoryWriteOutcomeStatus::Failed => {
+                ToolResult::error(format!("Failed to save memory: {}", outcome.reason))
+            }
+            crate::memory::manager::MemoryWriteOutcomeStatus::InvalidTarget => {
+                ToolResult::error(format!("Invalid memory target: {}", outcome.reason))
+            }
         }
     }
 }

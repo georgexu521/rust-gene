@@ -178,13 +178,53 @@ pub enum TraceEvent {
     WorkflowFallback {
         error: String,
     },
+    AgentLoopStepEvaluated {
+        route_workflow: String,
+        route_risk: String,
+        task_mode: String,
+        stage_before: String,
+        stage_after: String,
+        #[serde(default)]
+        mva_stage_before: String,
+        #[serde(default)]
+        mva_stage_after: String,
+        #[serde(default)]
+        stage_transition_policy: String,
+        exposed_tools: usize,
+        selected_tool_calls: usize,
+        action_score_records: usize,
+        #[serde(default)]
+        latest_action_score: Option<i16>,
+        observations_delta: usize,
+        key_findings_delta: usize,
+        stop_status: String,
+        stop_reason: String,
+        stop_action: String,
+        #[serde(default)]
+        terminal_status: Option<String>,
+        state_delta: String,
+    },
     StopCheckEvaluated {
         status: String,
         reason: String,
         stage: String,
+        #[serde(default)]
+        terminal_status: Option<String>,
+        #[serde(default)]
+        action: String,
         no_code_progress_rounds: usize,
         action_checkpoint_active: bool,
         summary: String,
+        #[serde(default)]
+        evidence_items: usize,
+        #[serde(default)]
+        failure_type: Option<String>,
+        #[serde(default)]
+        recovery_plan_id: Option<String>,
+        #[serde(default)]
+        rollback_recommended: bool,
+        #[serde(default)]
+        next_action: Option<String>,
     },
     WorkflowContractActivation {
         mode: String,
@@ -221,6 +261,55 @@ pub enum TraceEvent {
         provenance: Vec<String>,
         #[serde(default)]
         conflicts: usize,
+    },
+    ContextZonesMaterialized {
+        stable_prefix_tokens: u64,
+        task_state_tokens: u64,
+        relevant_material_tokens: u64,
+        recent_observation_tokens: u64,
+        current_decision_request_tokens: u64,
+        #[serde(default)]
+        stable_prefix_fingerprint: String,
+        #[serde(default)]
+        task_state_fingerprint: String,
+        #[serde(default)]
+        relevant_material_fingerprint: String,
+        #[serde(default)]
+        recent_observation_fingerprint: String,
+        #[serde(default)]
+        current_decision_request_fingerprint: String,
+        #[serde(default)]
+        stable_prefix_budget_tokens: u64,
+        #[serde(default)]
+        task_state_budget_tokens: u64,
+        #[serde(default)]
+        relevant_material_budget_tokens: u64,
+        #[serde(default)]
+        recent_observation_budget_tokens: u64,
+        #[serde(default)]
+        current_decision_request_budget_tokens: u64,
+        #[serde(default)]
+        stable_prefix_overflow: String,
+        #[serde(default)]
+        task_state_overflow: String,
+        #[serde(default)]
+        relevant_material_overflow: String,
+        #[serde(default)]
+        recent_observation_overflow: String,
+        #[serde(default)]
+        current_decision_request_overflow: String,
+        #[serde(default)]
+        task_state_empty: bool,
+        #[serde(default)]
+        current_decision_request_empty: bool,
+        relevant_material_items: usize,
+        recent_observation_items: usize,
+    },
+    MemoryBoundaryEvaluated {
+        read_status: String,
+        stale_conflict_demotion_status: String,
+        closeout_write_candidate_status: String,
+        reason: String,
     },
     MemorySynced {
         mode: String,
@@ -276,6 +365,8 @@ pub enum TraceEvent {
         workflow_context: String,
         closeout_visibility: String,
         validation_evidence: String,
+        #[serde(default)]
+        warnings: Vec<String>,
     },
     ApiRequestStarted {
         iteration: usize,
@@ -287,6 +378,36 @@ pub enum TraceEvent {
         nonstreaming_tools_required: bool,
         #[serde(default)]
         tool_result_adjacency_required: bool,
+    },
+    ProviderMessageSequenceNormalized {
+        provider_family: String,
+        requires_tool_result_adjacency: bool,
+        requires_merged_system_messages: bool,
+        system_messages_merged: usize,
+        input_messages: usize,
+        output_messages: usize,
+        valid_tool_call_pairs: usize,
+        dropped_assistant_tool_calls: usize,
+        dropped_tool_results: usize,
+        #[serde(default)]
+        valid_tool_call_ids: Vec<String>,
+        #[serde(default)]
+        dropped_assistant_tool_call_ids: Vec<String>,
+        #[serde(default)]
+        dropped_tool_result_ids: Vec<String>,
+    },
+    StreamingToolExecutionShadow {
+        mode: String,
+        provider_family: String,
+        provider_supports_streaming_tool_calls: bool,
+        streamed_request_path: bool,
+        observed_tool_calls: usize,
+        read_only_tool_calls: usize,
+        concurrency_safe_tool_calls: usize,
+        eligible_tool_calls: usize,
+        schema_complete_tool_calls: usize,
+        latency_upper_bound_ms: u64,
+        reason: String,
     },
     ApiRequestCompleted {
         iteration: usize,
@@ -308,7 +429,42 @@ pub enum TraceEvent {
         uncertainty_reduction: u8,
         cost: u8,
         reversibility: u8,
+        #[serde(default)]
+        scope_fit: u8,
+        #[serde(default)]
+        action_score: i16,
+        #[serde(default)]
+        formula_stage: String,
+        #[serde(default)]
+        formula_version: String,
+        #[serde(default)]
+        phase_aligned: bool,
+        #[serde(default)]
+        mutates_workspace: bool,
+        #[serde(default)]
+        broad_shell: bool,
+        #[serde(default)]
+        modifiers: Vec<serde_json::Value>,
         requires_confirmation: bool,
+        reason: String,
+    },
+    CandidateActionsEvaluated {
+        mode: String,
+        candidate_count: usize,
+        selected_id: Option<String>,
+        selected_tool: Option<String>,
+        selected_score: Option<i16>,
+        #[serde(default)]
+        selected_runtime_score: Option<i16>,
+        #[serde(default)]
+        selected_model_score: Option<i16>,
+        #[serde(default)]
+        runtime_model_score_delta: Option<i16>,
+        #[serde(default)]
+        runtime_selected_differs_from_model_order: bool,
+        #[serde(default)]
+        calibration_reason: String,
+        rejected: usize,
         reason: String,
     },
     ActionReviewed {
@@ -336,6 +492,8 @@ pub enum TraceEvent {
         call_id: String,
         approved: bool,
         #[serde(default)]
+        source: Option<String>,
+        #[serde(default)]
         decision: Option<String>,
         #[serde(default)]
         persistence_scope: Option<String>,
@@ -357,6 +515,30 @@ pub enum TraceEvent {
         tool: String,
         call_id: String,
         status: String,
+        #[serde(default)]
+        result_kind: String,
+        #[serde(default)]
+        model_visibility: String,
+        #[serde(default = "default_true")]
+        include_in_next_context: bool,
+        #[serde(default = "default_true")]
+        store_in_state: bool,
+        #[serde(default)]
+        key_findings: usize,
+        #[serde(default)]
+        evidence_items: usize,
+        #[serde(default)]
+        failure_type: Option<String>,
+        #[serde(default)]
+        recovery_plan_id: Option<String>,
+        #[serde(default)]
+        recovery_kind: Option<String>,
+        #[serde(default)]
+        raw_result_ref: Option<String>,
+        #[serde(default)]
+        quality_warnings: usize,
+        #[serde(default)]
+        quality_warning_labels: Vec<String>,
         files_read: usize,
         files_changed: usize,
         checkpoint_id: Option<String>,
@@ -423,9 +605,21 @@ pub enum TraceEvent {
         plan_id: String,
         source: String,
         category: String,
+        #[serde(default)]
+        failure_type: String,
+        #[serde(default)]
+        recovery_kind: String,
         action: String,
         retryable: bool,
         safe_retry: bool,
+        #[serde(default)]
+        allowed_alternatives: Vec<String>,
+        #[serde(default)]
+        retry_budget: Option<usize>,
+        #[serde(default)]
+        side_effect_uncertain: bool,
+        #[serde(default)]
+        requires_user_decision: bool,
         suggested_command: Option<String>,
         status: String,
     },
@@ -450,8 +644,31 @@ pub enum TraceEvent {
         chars: usize,
         iterations: usize,
     },
+    CompletionContractEvaluated {
+        mode: String,
+        workflow: String,
+        status: String,
+        terminal_status: String,
+        requires_validation: bool,
+        verification_status: String,
+        verification_proof_status: String,
+        changed_files: usize,
+        reason: String,
+    },
     FinalCloseoutPrepared {
         status: String,
+        #[serde(default)]
+        terminal_status: Option<String>,
+        #[serde(default)]
+        stop_reason: Option<String>,
+        #[serde(default)]
+        stop_action: Option<String>,
+        #[serde(default)]
+        failure_type: Option<String>,
+        #[serde(default)]
+        recovery_plan_id: Option<String>,
+        #[serde(default)]
+        rollback_status: Option<String>,
         changed_files: usize,
         validation_items: usize,
         #[serde(default)]
@@ -489,6 +706,7 @@ impl TraceEvent {
             TraceEvent::WorkflowRouted { .. } => "workflow.route",
             TraceEvent::WorkflowCompleted { .. } => "workflow.done",
             TraceEvent::WorkflowFallback { .. } => "workflow.fallback",
+            TraceEvent::AgentLoopStepEvaluated { .. } => "agent.loop",
             TraceEvent::StopCheckEvaluated { .. } => "stop.check",
             TraceEvent::WorkflowContractActivation { .. } => "workflow.contract",
             TraceEvent::RiskSignalAssessed { .. } => "risk.signal",
@@ -496,13 +714,18 @@ impl TraceEvent {
             TraceEvent::MemorySnapshotInjected { .. } => "memory.snapshot",
             TraceEvent::MemoryPrefetch { .. } => "memory.prefetch",
             TraceEvent::RetrievalContextBuilt { .. } => "retrieval.context",
+            TraceEvent::ContextZonesMaterialized { .. } => "context.zones",
+            TraceEvent::MemoryBoundaryEvaluated { .. } => "memory.boundary",
             TraceEvent::MemorySynced { .. } => "memory.sync",
             TraceEvent::ContextCompacted { .. } => "context.compact",
             TraceEvent::RuntimeDietReport { .. } => "runtime.diet",
             TraceEvent::ApiRequestStarted { .. } => "api.start",
+            TraceEvent::ProviderMessageSequenceNormalized { .. } => "provider.protocol",
+            TraceEvent::StreamingToolExecutionShadow { .. } => "streaming.tool.shadow",
             TraceEvent::ApiRequestCompleted { .. } => "api.done",
             TraceEvent::ToolStarted { .. } => "tool.start",
             TraceEvent::ActionDecisionEvaluated { .. } => "action.decision",
+            TraceEvent::CandidateActionsEvaluated { .. } => "action.candidates",
             TraceEvent::ActionReviewed { .. } => "action.review",
             TraceEvent::PermissionRequested { .. } => "permission.request",
             TraceEvent::PermissionResolved { .. } => "permission.resolve",
@@ -519,6 +742,7 @@ impl TraceEvent {
             TraceEvent::McpResourceAccessed { .. } => "mcp.resource",
             TraceEvent::RemoteBridgeAction { .. } => "remote.bridge",
             TraceEvent::AssistantResponded { .. } => "assistant",
+            TraceEvent::CompletionContractEvaluated { .. } => "completion.contract",
             TraceEvent::FinalCloseoutPrepared { .. } => "closeout",
             TraceEvent::Error { .. } => "error",
         }
@@ -749,20 +973,78 @@ impl TraceEvent {
             TraceEvent::WorkflowFallback { error } => {
                 format!("workflow fallback: {}", preview(error))
             }
+            TraceEvent::AgentLoopStepEvaluated {
+                route_workflow,
+                route_risk,
+                task_mode,
+                stage_before,
+                stage_after,
+                mva_stage_before,
+                mva_stage_after,
+                stage_transition_policy,
+                exposed_tools,
+                selected_tool_calls,
+                action_score_records,
+                latest_action_score,
+                observations_delta,
+                key_findings_delta,
+                stop_status,
+                stop_reason,
+                stop_action,
+                terminal_status,
+                state_delta,
+            } => format!(
+                "agent loop: mode={} workflow={} risk={} stage={}->{} mva_stage={}->{} transition={} tools_exposed={} calls={} scores={} latest_score={} obs_delta={} findings_delta={} stop={}/{}/{} terminal={} delta={} ",
+                task_mode,
+                route_workflow,
+                route_risk,
+                stage_before,
+                stage_after,
+                mva_stage_before,
+                mva_stage_after,
+                stage_transition_policy,
+                exposed_tools,
+                selected_tool_calls,
+                action_score_records,
+                latest_action_score
+                    .map(|score| score.to_string())
+                    .unwrap_or_else(|| "none".to_string()),
+                observations_delta,
+                key_findings_delta,
+                stop_status,
+                stop_reason,
+                stop_action,
+                terminal_status.as_deref().unwrap_or("none"),
+                preview(state_delta)
+            ),
             TraceEvent::StopCheckEvaluated {
                 status,
                 reason,
                 stage,
+                terminal_status,
+                action,
                 no_code_progress_rounds,
                 action_checkpoint_active,
                 summary,
+                evidence_items,
+                failure_type,
+                recovery_plan_id,
+                rollback_recommended,
+                next_action,
             } => format!(
-                "stop check status={} reason={} stage={} no_progress={} checkpoint={} ({})",
+                "stop check status={} reason={} terminal={} action={} stage={} no_progress={} checkpoint={} evidence={} failure={} recovery={} rollback={} next={} ({})",
                 status,
                 reason,
+                terminal_status.as_deref().unwrap_or("none"),
+                if action.is_empty() { "none" } else { action },
                 stage,
                 no_code_progress_rounds,
                 action_checkpoint_active,
+                evidence_items,
+                failure_type.as_deref().unwrap_or("none"),
+                recovery_plan_id.as_deref().unwrap_or("none"),
+                rollback_recommended,
+                next_action.as_deref().unwrap_or("none"),
                 preview(summary)
             ),
             TraceEvent::WorkflowContractActivation {
@@ -837,6 +1119,70 @@ impl TraceEvent {
                     provenance
                 )
             }
+            TraceEvent::ContextZonesMaterialized {
+                stable_prefix_tokens,
+                task_state_tokens,
+                relevant_material_tokens,
+                recent_observation_tokens,
+                current_decision_request_tokens,
+                stable_prefix_fingerprint,
+                task_state_fingerprint,
+                relevant_material_fingerprint,
+                recent_observation_fingerprint,
+                current_decision_request_fingerprint,
+                stable_prefix_budget_tokens,
+                task_state_budget_tokens,
+                relevant_material_budget_tokens,
+                recent_observation_budget_tokens,
+                current_decision_request_budget_tokens,
+                stable_prefix_overflow,
+                task_state_overflow,
+                relevant_material_overflow,
+                recent_observation_overflow,
+                current_decision_request_overflow,
+                task_state_empty,
+                current_decision_request_empty,
+                relevant_material_items,
+                recent_observation_items,
+            } => format!(
+                "context zones: stable={}t/{} task_state={}t/{} relevant={}t/{}/{} items observation={}t/{}/{} items decision={}t/{} empty_task={} empty_decision={} fp={}/{}/{}/{}/{} overflow={}/{}/{}/{}/{}",
+                stable_prefix_tokens,
+                stable_prefix_budget_tokens,
+                task_state_tokens,
+                task_state_budget_tokens,
+                relevant_material_tokens,
+                relevant_material_budget_tokens,
+                relevant_material_items,
+                recent_observation_tokens,
+                recent_observation_budget_tokens,
+                recent_observation_items,
+                current_decision_request_tokens,
+                current_decision_request_budget_tokens,
+                task_state_empty,
+                current_decision_request_empty,
+                preview(stable_prefix_fingerprint),
+                preview(task_state_fingerprint),
+                preview(relevant_material_fingerprint),
+                preview(recent_observation_fingerprint),
+                preview(current_decision_request_fingerprint),
+                stable_prefix_overflow,
+                task_state_overflow,
+                relevant_material_overflow,
+                recent_observation_overflow,
+                current_decision_request_overflow
+            ),
+            TraceEvent::MemoryBoundaryEvaluated {
+                read_status,
+                stale_conflict_demotion_status,
+                closeout_write_candidate_status,
+                reason,
+            } => format!(
+                "memory boundary: read={} stale_conflict={} closeout_write={} ({})",
+                read_status,
+                stale_conflict_demotion_status,
+                closeout_write_candidate_status,
+                preview(reason)
+            ),
             TraceEvent::MemorySynced { mode } => format!("memory synced: {}", mode),
             TraceEvent::ContextCompacted {
                 before_tokens,
@@ -903,6 +1249,7 @@ impl TraceEvent {
                 workflow_context,
                 closeout_visibility,
                 validation_evidence,
+                warnings,
             } => {
                 let total = if *total_request_tokens > 0 {
                     *total_request_tokens
@@ -917,7 +1264,7 @@ impl TraceEvent {
                     _ => String::new(),
                 };
                 format!(
-                    "{} prompt={} tool_schema={} total={} tools={} tool_results={}ch/~{}t truncated={} artifacts={} memory={}ch/~{}t retrieval={}items/~{}t skills={}ch/~{}t route_scoped={} workflow={} closeout={} validation={}{}",
+                    "{} prompt={} tool_schema={} total={} tools={} tool_results={}ch/~{}t truncated={} artifacts={} memory={}ch/~{}t retrieval={}items/~{}t skills={}ch/~{}t route_scoped={} workflow={} closeout={} validation={} warnings={}{}",
                     level,
                     prompt_tokens,
                     tool_schema_tokens,
@@ -937,6 +1284,7 @@ impl TraceEvent {
                     workflow_context,
                     closeout_visibility,
                     validation_evidence,
+                    compact_label_list(warnings),
                     context_budget
                 )
             }
@@ -955,6 +1303,60 @@ impl TraceEvent {
                 provider_family.as_deref().unwrap_or("unknown"),
                 nonstreaming_tools_required,
                 tool_result_adjacency_required
+            ),
+            TraceEvent::ProviderMessageSequenceNormalized {
+                provider_family,
+                requires_tool_result_adjacency,
+                requires_merged_system_messages,
+                system_messages_merged,
+                input_messages,
+                output_messages,
+                valid_tool_call_pairs,
+                dropped_assistant_tool_calls,
+                dropped_tool_results,
+                valid_tool_call_ids,
+                dropped_assistant_tool_call_ids,
+                dropped_tool_result_ids,
+            } => format!(
+                "provider protocol normalized: provider={} messages={}->{} tool_pairs={} dropped_calls={} dropped_results={} merged_system={} adjacency={} merge_system={} valid_ids={} dropped_call_ids={} dropped_result_ids={}",
+                provider_family,
+                input_messages,
+                output_messages,
+                valid_tool_call_pairs,
+                dropped_assistant_tool_calls,
+                dropped_tool_results,
+                system_messages_merged,
+                requires_tool_result_adjacency,
+                requires_merged_system_messages,
+                compact_id_list(valid_tool_call_ids),
+                compact_id_list(dropped_assistant_tool_call_ids),
+                compact_id_list(dropped_tool_result_ids)
+            ),
+            TraceEvent::StreamingToolExecutionShadow {
+                mode,
+                provider_family,
+                provider_supports_streaming_tool_calls,
+                streamed_request_path,
+                observed_tool_calls,
+                read_only_tool_calls,
+                concurrency_safe_tool_calls,
+                eligible_tool_calls,
+                schema_complete_tool_calls,
+                latency_upper_bound_ms,
+                reason,
+            } => format!(
+                "streaming tool shadow: mode={} provider={} supports_streaming_tools={} streamed_path={} calls={} read_only={} concurrency_safe={} schema_complete={} eligible={} latency_upper_bound={}ms reason={}",
+                mode,
+                provider_family,
+                provider_supports_streaming_tool_calls,
+                streamed_request_path,
+                observed_tool_calls,
+                read_only_tool_calls,
+                concurrency_safe_tool_calls,
+                schema_complete_tool_calls,
+                eligible_tool_calls,
+                latency_upper_bound_ms,
+                preview(reason)
             ),
             TraceEvent::ApiRequestCompleted {
                 iteration,
@@ -985,19 +1387,71 @@ impl TraceEvent {
                 uncertainty_reduction,
                 cost,
                 reversibility,
+                scope_fit,
+                action_score,
+                formula_stage,
+                formula_version,
+                phase_aligned,
+                mutates_workspace,
+                broad_shell,
+                modifiers,
                 requires_confirmation,
                 reason,
             } => format!(
-                "{} {} action decision: stage={} value={} risk={} uncertainty={} cost={} reversible={} confirm={} ({})",
+                "{} {} action decision: stage={} formula={}/{} score={} value={} risk={} uncertainty={} cost={} reversible={} scope_fit={} aligned={} mutates={} broad_shell={} modifiers={} confirm={} ({})",
                 tool,
                 short_id(call_id),
                 stage,
+                formula_stage,
+                formula_version,
+                action_score,
                 value,
                 risk,
                 uncertainty_reduction,
                 cost,
                 reversibility,
+                scope_fit,
+                phase_aligned,
+                mutates_workspace,
+                broad_shell,
+                modifiers.len(),
                 requires_confirmation,
+                preview(reason)
+            ),
+            TraceEvent::CandidateActionsEvaluated {
+                mode,
+                candidate_count,
+                selected_id,
+                selected_tool,
+                selected_score,
+                selected_runtime_score,
+                selected_model_score,
+                runtime_model_score_delta,
+                runtime_selected_differs_from_model_order,
+                calibration_reason,
+                rejected,
+                reason,
+            } => format!(
+                "candidate actions: mode={} count={} selected={} tool={} score={} runtime_score={} model_score={} delta={} differs={} rejected={} calibration={} ({})",
+                mode,
+                candidate_count,
+                selected_id.as_deref().unwrap_or("none"),
+                selected_tool.as_deref().unwrap_or("none"),
+                selected_score
+                    .map(|score| score.to_string())
+                    .unwrap_or_else(|| "none".to_string()),
+                selected_runtime_score
+                    .map(|score| score.to_string())
+                    .unwrap_or_else(|| "none".to_string()),
+                selected_model_score
+                    .map(|score| score.to_string())
+                    .unwrap_or_else(|| "none".to_string()),
+                runtime_model_score_delta
+                    .map(|score| score.to_string())
+                    .unwrap_or_else(|| "none".to_string()),
+                runtime_selected_differs_from_model_order,
+                rejected,
+                preview(calibration_reason),
                 preview(reason)
             ),
             TraceEvent::ActionReviewed {
@@ -1054,6 +1508,7 @@ impl TraceEvent {
                 tool,
                 call_id,
                 approved,
+                source,
                 decision,
                 persistence_scope,
                 rule_pattern,
@@ -1066,6 +1521,9 @@ impl TraceEvent {
                     short_id(call_id),
                     if *approved { "approved" } else { "denied" }
                 );
+                if let Some(source) = source {
+                    summary.push_str(&format!(" source={}", source));
+                }
                 if let Some(decision) = decision {
                     summary.push_str(&format!(" decision={}", decision));
                 }
@@ -1106,18 +1564,50 @@ impl TraceEvent {
                 tool,
                 call_id,
                 status,
+                result_kind,
+                model_visibility,
+                include_in_next_context,
+                store_in_state,
+                key_findings,
+                evidence_items,
+                failure_type,
+                recovery_plan_id,
+                recovery_kind,
+                raw_result_ref,
+                quality_warnings,
+                quality_warning_labels,
                 files_read,
                 files_changed,
                 checkpoint_id,
                 summary,
             } => format!(
-                "{} {} observation: status={} files_read={} files_changed={} checkpoint={} ({})",
+                "{} {} observation: kind={} status={} visibility={} context={} state={} findings={} evidence={} warnings={} warning_labels={} failure={} recovery_plan={} recovery_kind={} files_read={} files_changed={} checkpoint={} raw={} ({})",
                 tool,
                 short_id(call_id),
+                if result_kind.is_empty() {
+                    "generic"
+                } else {
+                    result_kind.as_str()
+                },
                 status,
+                if model_visibility.is_empty() {
+                    "unknown"
+                } else {
+                    model_visibility.as_str()
+                },
+                include_in_next_context,
+                store_in_state,
+                key_findings,
+                evidence_items,
+                quality_warnings,
+                compact_label_list(quality_warning_labels),
+                failure_type.as_deref().unwrap_or("none"),
+                recovery_plan_id.as_deref().unwrap_or("none"),
+                recovery_kind.as_deref().unwrap_or("none"),
                 files_read,
                 files_changed,
                 checkpoint_id.as_deref().unwrap_or("none"),
+                raw_result_ref.as_deref().unwrap_or("none"),
                 preview(summary)
             ),
             TraceEvent::HookCompleted {
@@ -1218,19 +1708,33 @@ impl TraceEvent {
                 plan_id,
                 source,
                 category,
+                failure_type,
+                recovery_kind,
                 action,
                 retryable,
                 safe_retry,
+                allowed_alternatives,
+                retry_budget,
+                side_effect_uncertain,
+                requires_user_decision,
                 suggested_command,
                 status,
             } => format!(
-                "{} {} {} action={} retryable={} safe_retry={} suggested={} status={}",
+                "{} {} {} failure_type={} recovery_kind={} action={} retryable={} safe_retry={} alternatives={} retry_budget={} side_effect_uncertain={} requires_user={} suggested={} status={}",
                 source,
                 short_id(plan_id),
                 category,
+                if failure_type.is_empty() { "none" } else { failure_type },
+                if recovery_kind.is_empty() { "none" } else { recovery_kind },
                 preview(action),
                 retryable,
                 safe_retry,
+                allowed_alternatives.len(),
+                retry_budget
+                    .map(|budget| budget.to_string())
+                    .unwrap_or_else(|| "none".to_string()),
+                side_effect_uncertain,
+                requires_user_decision,
                 suggested_command.as_deref().unwrap_or("none"),
                 status
             ),
@@ -1274,8 +1778,36 @@ impl TraceEvent {
                     chars, iterations
                 )
             }
+            TraceEvent::CompletionContractEvaluated {
+                mode,
+                workflow,
+                status,
+                terminal_status,
+                requires_validation,
+                verification_status,
+                verification_proof_status,
+                changed_files,
+                reason,
+            } => format!(
+                "completion contract: mode={} workflow={} status={} terminal={} validation_required={} verification={} proof={} changed_files={} ({})",
+                mode,
+                workflow,
+                status,
+                terminal_status,
+                requires_validation,
+                verification_status,
+                verification_proof_status,
+                changed_files,
+                preview(reason)
+            ),
             TraceEvent::FinalCloseoutPrepared {
                 status,
+                terminal_status,
+                stop_reason,
+                stop_action,
+                failure_type,
+                recovery_plan_id,
+                rollback_status,
                 changed_files,
                 validation_items,
                 tool_records,
@@ -1285,8 +1817,14 @@ impl TraceEvent {
                 acceptance_items,
                 residual_risks,
             } => format!(
-                "final closeout status={} files={} validation={} tool_records={} tool_evidence={} proof={} proof_summary={} acceptance={} risks={}",
+                "final closeout status={} terminal={} stop_reason={} stop_action={} failure={} recovery={} rollback={} files={} validation={} tool_records={} tool_evidence={} proof={} proof_summary={} acceptance={} risks={}",
                 status,
+                terminal_status.as_deref().unwrap_or("none"),
+                stop_reason.as_deref().unwrap_or("none"),
+                stop_action.as_deref().unwrap_or("none"),
+                failure_type.as_deref().unwrap_or("none"),
+                recovery_plan_id.as_deref().unwrap_or("none"),
+                rollback_status.as_deref().unwrap_or("none"),
                 changed_files,
                 validation_items,
                 tool_records,
@@ -1603,10 +2141,14 @@ fn control_loop_phase_for_event(event: &TraceEvent) -> Option<&'static str> {
         | TraceEvent::MemorySnapshotInjected { .. }
         | TraceEvent::MemoryPrefetch { .. }
         | TraceEvent::RetrievalContextBuilt { .. }
+        | TraceEvent::ContextZonesMaterialized { .. }
+        | TraceEvent::MemoryBoundaryEvaluated { .. }
         | TraceEvent::MemorySynced { .. }
         | TraceEvent::ContextCompacted { .. }
         | TraceEvent::RuntimeDietReport { .. }
-        | TraceEvent::ApiRequestStarted { .. } => Some("context"),
+        | TraceEvent::ApiRequestStarted { .. }
+        | TraceEvent::ProviderMessageSequenceNormalized { .. }
+        | TraceEvent::StreamingToolExecutionShadow { .. } => Some("context"),
         TraceEvent::ImplementationIntentRecorded { .. }
         | TraceEvent::WorkflowJudgmentCompleted { .. }
         | TraceEvent::WorkflowPlanProgress { .. }
@@ -1615,6 +2157,7 @@ fn control_loop_phase_for_event(event: &TraceEvent) -> Option<&'static str> {
         | TraceEvent::RiskSignalAssessed { .. }
         | TraceEvent::AdaptiveWorkflowTriggered { .. }
         | TraceEvent::ActionDecisionEvaluated { .. }
+        | TraceEvent::CandidateActionsEvaluated { .. }
         | TraceEvent::ActionReviewed { .. }
         | TraceEvent::WorkflowRouted { .. } => Some("decision"),
         TraceEvent::GoalDriftDetected { .. }
@@ -1630,6 +2173,7 @@ fn control_loop_phase_for_event(event: &TraceEvent) -> Option<&'static str> {
         | TraceEvent::McpResourceAccessed { .. }
         | TraceEvent::RemoteBridgeAction { .. } => Some("tool_execution"),
         TraceEvent::SessionGoalUpdated { .. }
+        | TraceEvent::AgentLoopStepEvaluated { .. }
         | TraceEvent::StopCheckEvaluated { .. }
         | TraceEvent::WorkflowFallback { .. }
         | TraceEvent::ToolObservationRecorded { .. }
@@ -1642,6 +2186,7 @@ fn control_loop_phase_for_event(event: &TraceEvent) -> Option<&'static str> {
         | TraceEvent::GuidedDebuggingCompleted { .. } => Some("verification"),
         TraceEvent::WorkflowCompleted { .. }
         | TraceEvent::AssistantResponded { .. }
+        | TraceEvent::CompletionContractEvaluated { .. }
         | TraceEvent::FinalCloseoutPrepared { .. }
         | TraceEvent::Error { .. } => Some("closeout"),
     }
@@ -1676,6 +2221,7 @@ pub fn latest_tool_record_evidence_summary(trace: &TurnTrace) -> Option<String> 
             verification_proof_summary,
             acceptance_items,
             residual_risks,
+            ..
         } if *tool_records > 0 || tool_evidence.as_ref().is_some_and(|s| !s.trim().is_empty()) => {
             Some(format!(
                 "status={} records={} files={} validation={} acceptance={} risks={} proof={} proof_summary={} evidence={}",
@@ -1712,8 +2258,38 @@ fn preview(text: &str) -> String {
     out.replace('\n', " ")
 }
 
+fn default_true() -> bool {
+    true
+}
+
 fn short_id(id: &str) -> String {
     id.chars().take(8).collect()
+}
+
+fn compact_id_list(ids: &[String]) -> String {
+    if ids.is_empty() {
+        return "none".to_string();
+    }
+    let mut compact = ids
+        .iter()
+        .take(4)
+        .map(|id| short_id(id))
+        .collect::<Vec<_>>();
+    if ids.len() > compact.len() {
+        compact.push(format!("+{}", ids.len() - compact.len()));
+    }
+    compact.join(",")
+}
+
+fn compact_label_list(labels: &[String]) -> String {
+    if labels.is_empty() {
+        return "none".to_string();
+    }
+    let mut compact = labels.iter().take(4).cloned().collect::<Vec<_>>();
+    if labels.len() > compact.len() {
+        compact.push(format!("+{}", labels.len() - compact.len()));
+    }
+    compact.join(",")
 }
 
 #[cfg(test)]
@@ -1759,6 +2335,14 @@ mod tests {
             uncertainty_reduction: 2,
             cost: 2,
             reversibility: 7,
+            scope_fit: 8,
+            action_score: 14,
+            formula_stage: "implementation".to_string(),
+            formula_version: "action_score.v1".to_string(),
+            phase_aligned: true,
+            mutates_workspace: true,
+            broad_shell: false,
+            modifiers: Vec::new(),
             requires_confirmation: false,
             reason: "scoped edit".to_string(),
         });
@@ -1766,6 +2350,7 @@ mod tests {
             tool: "file_edit".to_string(),
             call_id: "call_edit".to_string(),
             approved: true,
+            source: Some("user_once_allow".to_string()),
             decision: Some("allow_once".to_string()),
             persistence_scope: None,
             rule_pattern: None,
@@ -1783,9 +2368,16 @@ mod tests {
             status: "continue".to_string(),
             reason: "no_issue".to_string(),
             stage: "Validate".to_string(),
+            terminal_status: None,
+            action: "continue".to_string(),
             no_code_progress_rounds: 0,
             action_checkpoint_active: false,
             summary: "continue after edit".to_string(),
+            evidence_items: 0,
+            failure_type: None,
+            recovery_plan_id: None,
+            rollback_recommended: false,
+            next_action: None,
         });
         collector.record(TraceEvent::VerificationCompleted {
             changed_files: 1,
@@ -1797,6 +2389,12 @@ mod tests {
         });
         collector.record(TraceEvent::FinalCloseoutPrepared {
             status: "passed".to_string(),
+            terminal_status: Some("completed".to_string()),
+            stop_reason: None,
+            stop_action: None,
+            failure_type: None,
+            recovery_plan_id: None,
+            rollback_status: None,
             changed_files: 1,
             validation_items: 1,
             tool_records: 1,
@@ -1989,6 +2587,12 @@ mod tests {
         let collector = TraceCollector::new(TurnTrace::new("s1", 1, "finish task"));
         collector.record(TraceEvent::FinalCloseoutPrepared {
             status: "passed".to_string(),
+            terminal_status: Some("completed".to_string()),
+            stop_reason: None,
+            stop_action: None,
+            failure_type: None,
+            recovery_plan_id: None,
+            rollback_status: None,
             changed_files: 1,
             validation_items: 2,
             tool_records: 3,
@@ -2045,6 +2649,7 @@ mod tests {
             workflow_context: "minimal".to_string(),
             closeout_visibility: "concise".to_string(),
             validation_evidence: "passed".to_string(),
+            warnings: vec!["truncated_without_artifact".to_string()],
         });
 
         let trace = collector.finish(TurnStatus::Completed);
@@ -2061,6 +2666,7 @@ mod tests {
         assert!(summary.contains("retrieval=2items/~80t"));
         assert!(summary.contains("skills=120ch/~30t"));
         assert!(summary.contains("workflow=minimal"));
+        assert!(summary.contains("warnings=truncated_without_artifact"));
     }
 
     #[test]
@@ -2086,6 +2692,7 @@ mod tests {
             workflow_context: "minimal".to_string(),
             closeout_visibility: "none".to_string(),
             validation_evidence: "none".to_string(),
+            warnings: Vec::new(),
         };
 
         assert!(event.summary().starts_with("heavy "));

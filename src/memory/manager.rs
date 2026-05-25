@@ -7,7 +7,10 @@
 //! - 会话结束提取：session 过期时批量提取学习内容
 
 use crate::memory::quality::assess_memory_candidate;
-use crate::memory::types::MemoryStatus;
+use crate::memory::types::{
+    MemoryCandidate, MemoryEvidenceKind, MemoryEvidenceRef, MemoryKind, MemoryProjection,
+    MemoryProvenance, MemoryRecord, MemoryScope, MemoryStatus, MemoryStrategyMetadata,
+};
 use crate::services::api::{ChatRequest, LlmProvider, Message};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
@@ -27,6 +30,7 @@ const ACTIVE_MEMORY_SECTION_LIMIT: usize = 40;
 const ACTIVE_MEMORY_KEEP_SECTIONS: usize = 30;
 const ACTIVE_MEMORY_CHAR_LIMIT: usize = 20_000;
 const MEMORY_FLUSH_LOG_FILE: &str = "flush_queue.jsonl";
+const MEMORY_RECORDS_FILE: &str = "records.jsonl";
 const MEMORY_FLUSH_MAX_ATTEMPTS: u8 = 3;
 
 fn memory_llm_timeout() -> std::time::Duration {
@@ -63,65 +67,49 @@ fn write_background_memory_candidate(
     candidate: &str,
     source: &str,
 ) -> BackgroundMemoryWriteDecision {
-    let existing = std::fs::read_to_string(path).unwrap_or_default();
-    let assessment = match assess_memory_candidate(candidate, "learned", &existing, false) {
-        Ok(assessment) => assessment,
-        Err(issue) => {
-            return BackgroundMemoryWriteDecision {
-                source: source.to_string(),
-                status: MemoryStatus::Rejected,
-                quality_score: None,
-                wrote: false,
-                duplicate: false,
-                reason: format!("blocked_by_safety:{issue:?}"),
-            };
-        }
-    };
-
-    if assessment.duplication >= 0.85 || normalized_contains(&existing, candidate) {
-        return BackgroundMemoryWriteDecision {
+    let base = path
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| PathBuf::from("."));
+    let manager = MemoryManager::with_base_dir(base);
+    let mut memory_candidate = manager.candidate_from_content(candidate, "learned", source);
+    memory_candidate.provenance.source = source.to_string();
+    let outcome = manager.submit_candidate(memory_candidate, MemoryWriteTarget::Index);
+    match outcome.status {
+        MemoryWriteOutcomeStatus::Saved => BackgroundMemoryWriteDecision {
             source: source.to_string(),
-            status: assessment.status,
-            quality_score: Some(assessment.score),
+            status: MemoryStatus::Accepted,
+            quality_score: outcome.quality_score,
+            wrote: true,
+            duplicate: false,
+            reason: outcome.reason,
+        },
+        MemoryWriteOutcomeStatus::Duplicate => BackgroundMemoryWriteDecision {
+            source: source.to_string(),
+            status: MemoryStatus::Accepted,
+            quality_score: outcome.quality_score,
             wrote: false,
             duplicate: true,
             reason: "duplicate_memory".to_string(),
-        };
-    }
-
-    if assessment.status != MemoryStatus::Accepted {
-        return BackgroundMemoryWriteDecision {
-            source: source.to_string(),
-            status: assessment.status,
-            quality_score: Some(assessment.score),
-            wrote: false,
-            duplicate: false,
-            reason: assessment.reason,
-        };
-    }
-
-    let entry = format!(
-        "- [{}] {}\n",
-        chrono::Local::now().format("%Y-%m-%d %H:%M"),
-        candidate
-    );
-    let new_content = format!("{}{}", existing, entry);
-    match write_memory_file_atomically(path, &new_content) {
-        Ok(()) => BackgroundMemoryWriteDecision {
-            source: source.to_string(),
-            status: MemoryStatus::Accepted,
-            quality_score: Some(assessment.score),
-            wrote: true,
-            duplicate: false,
-            reason: assessment.reason,
         },
-        Err(error) => BackgroundMemoryWriteDecision {
+        MemoryWriteOutcomeStatus::Blocked => BackgroundMemoryWriteDecision {
             source: source.to_string(),
-            status: MemoryStatus::Accepted,
-            quality_score: Some(assessment.score),
+            status: MemoryStatus::Rejected,
+            quality_score: None,
             wrote: false,
             duplicate: false,
-            reason: format!("write_failed:{error}"),
+            reason: format!("blocked_by_safety:{}", outcome.reason),
+        },
+        MemoryWriteOutcomeStatus::Proposed
+        | MemoryWriteOutcomeStatus::Rejected
+        | MemoryWriteOutcomeStatus::Failed
+        | MemoryWriteOutcomeStatus::InvalidTarget => BackgroundMemoryWriteDecision {
+            source: source.to_string(),
+            status: MemoryStatus::Rejected,
+            quality_score: outcome.quality_score,
+            wrote: false,
+            duplicate: false,
+            reason: outcome.reason,
         },
     }
 }
@@ -190,6 +178,213 @@ fn status_label(status: MemoryStatus) -> &'static str {
     }
 }
 
+fn kind_label(kind: MemoryKind) -> &'static str {
+    match kind {
+        MemoryKind::UserPreference => "user_preference",
+        MemoryKind::ProjectFact => "project_fact",
+        MemoryKind::WorkflowConvention => "workflow_convention",
+        MemoryKind::ToolQuirk => "tool_quirk",
+        MemoryKind::FailurePattern => "failure_pattern",
+        MemoryKind::SuccessfulFix => "successful_fix",
+        MemoryKind::Decision => "decision",
+        MemoryKind::SkillCandidate => "skill_candidate",
+        MemoryKind::Note => "note",
+    }
+}
+
+fn default_candidate_evidence(candidate: &MemoryCandidate) -> Vec<MemoryEvidenceRef> {
+    let source = candidate.provenance.source.clone();
+    let summary = format!(
+        "memory candidate submitted from {}",
+        candidate.provenance.source
+    );
+    let kind = if matches!(candidate.kind, MemoryKind::UserPreference) {
+        MemoryEvidenceKind::UserStatement
+    } else if source.contains("tool")
+        || source.contains("memory_save")
+        || candidate.provenance.tool_name.is_some()
+    {
+        MemoryEvidenceKind::ToolOutput
+    } else if source.contains("trace") {
+        MemoryEvidenceKind::Trace
+    } else if source.contains("learning_event") || source.contains("experience") {
+        MemoryEvidenceKind::LearningEvent
+    } else if source.contains("observer")
+        || source.contains("stop")
+        || source.contains("recovery")
+        || source.contains("runtime")
+    {
+        MemoryEvidenceKind::RuntimeObservation
+    } else {
+        MemoryEvidenceKind::Inference
+    };
+    let confidence = if matches!(kind, MemoryEvidenceKind::Inference) {
+        0.45
+    } else {
+        0.75
+    };
+    vec![MemoryEvidenceRef::new(kind, source, summary, confidence)]
+}
+
+fn evidence_status(candidate: &MemoryCandidate) -> &'static str {
+    if candidate.evidence.is_empty() {
+        "missing"
+    } else if candidate
+        .evidence
+        .iter()
+        .any(|evidence| !matches!(evidence.kind, MemoryEvidenceKind::Inference))
+    {
+        "verified"
+    } else {
+        "inferred"
+    }
+}
+
+fn has_required_evidence(candidate: &MemoryCandidate) -> bool {
+    match candidate.kind {
+        MemoryKind::ProjectFact | MemoryKind::ToolQuirk => {
+            candidate.evidence.iter().any(|evidence| {
+                matches!(
+                    evidence.kind,
+                    MemoryEvidenceKind::File
+                        | MemoryEvidenceKind::ToolOutput
+                        | MemoryEvidenceKind::Trace
+                        | MemoryEvidenceKind::RuntimeObservation
+                )
+            })
+        }
+        MemoryKind::FailurePattern => candidate.evidence.iter().any(|evidence| {
+            matches!(
+                evidence.kind,
+                MemoryEvidenceKind::Trace
+                    | MemoryEvidenceKind::RuntimeObservation
+                    | MemoryEvidenceKind::LearningEvent
+                    | MemoryEvidenceKind::ToolOutput
+            )
+        }),
+        MemoryKind::SuccessfulFix => candidate.evidence.iter().any(|evidence| {
+            matches!(
+                evidence.kind,
+                MemoryEvidenceKind::Trace
+                    | MemoryEvidenceKind::RuntimeObservation
+                    | MemoryEvidenceKind::LearningEvent
+                    | MemoryEvidenceKind::ToolOutput
+                    | MemoryEvidenceKind::File
+            )
+        }),
+        _ => true,
+    }
+}
+
+fn requires_verified_evidence(kind: MemoryKind) -> bool {
+    matches!(
+        kind,
+        MemoryKind::ProjectFact
+            | MemoryKind::ToolQuirk
+            | MemoryKind::FailurePattern
+            | MemoryKind::SuccessfulFix
+    )
+}
+
+fn infer_memory_tags(content: &str, category: &str) -> Vec<String> {
+    let lower = content.to_lowercase();
+    let mut tags = vec![category.to_lowercase()];
+    for (tag, markers) in [
+        ("testing", &["test", "cargo test", "pytest", "测试"][..]),
+        ("rust", &["rust", "cargo", ".rs", "crate"][..]),
+        ("memory", &["memory", "remember", "记忆"][..]),
+        ("tool", &["tool", "bash", "mcp", "工具"][..]),
+        ("failure", &["error", "failed", "失败", "错误"][..]),
+        (
+            "strategy",
+            &["strategy", "solution", "fix", "策略", "修复"][..],
+        ),
+        ("preference", &["prefer", "preference", "偏好", "喜欢"][..]),
+        ("project", &["project", "repo", "项目", "仓库"][..]),
+    ] {
+        if markers.iter().any(|marker| lower.contains(marker)) {
+            tags.push(tag.to_string());
+        }
+    }
+    tags.sort();
+    tags.dedup();
+    tags
+}
+
+fn infer_memory_importance(content: &str, category: &str) -> u8 {
+    let lower = content.to_lowercase();
+    if matches!(category, "preference" | "user" | "decision" | "workflow") {
+        return 4;
+    }
+    if contains_any(
+        &lower,
+        &[
+            "must",
+            "always",
+            "never",
+            "failed",
+            "security",
+            "permission",
+            "必须",
+            "禁止",
+            "失败",
+            "安全",
+        ],
+    ) {
+        4
+    } else if contains_any(&lower, &["temporary", "today", "临时", "今天"]) {
+        2
+    } else {
+        3
+    }
+}
+
+fn markdown_entry_for_record(record: &MemoryRecord, category: &str) -> String {
+    let timestamp = chrono::Local::now().format("%Y-%m-%d %H:%M");
+    format!(
+        "\n## [{}] {}\n<!-- memory-id: {}; kind: {}; confidence: {:.2}; importance: {} -->\n{}\n",
+        category.to_uppercase(),
+        timestamp,
+        record.id,
+        kind_label(record.kind),
+        record.confidence,
+        record.importance,
+        record.content
+    )
+}
+
+fn memory_decision_event(
+    status: &str,
+    candidate: &MemoryCandidate,
+    score: Option<f32>,
+    reason: &str,
+    evidence_status: &str,
+) -> MemoryDecisionEvent {
+    MemoryDecisionEvent {
+        status: status.to_string(),
+        category: candidate.category.clone(),
+        content_preview: log_preview(&candidate.content, 180),
+        reason: reason.to_string(),
+        created_at: chrono::Utc::now().to_rfc3339(),
+        candidate_id: Some(candidate.id.clone()),
+        source: Some(candidate.provenance.source.clone()),
+        scope: Some(format!(
+            "profile={},project={}",
+            candidate.scope.profile,
+            candidate
+                .scope
+                .project_root
+                .as_ref()
+                .map(|path| path.display().to_string())
+                .unwrap_or_else(|| "none".to_string())
+        )),
+        kind: Some(kind_label(candidate.kind).to_string()),
+        score,
+        evidence_status: Some(evidence_status.to_string()),
+        safety_status: Some("passed".to_string()),
+    }
+}
+
 fn memory_decision_counts_from_jsonl(content: &str) -> MemoryDecisionCounts {
     let mut counts = MemoryDecisionCounts::default();
     for line in content
@@ -224,6 +419,134 @@ fn memory_flush_records_from_jsonl(content: &str) -> HashMap<String, MemoryFlush
         records.insert(record.id.clone(), record);
     }
     records
+}
+
+fn memory_records_from_jsonl(content: &str) -> Vec<MemoryRecord> {
+    content
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .filter_map(|line| serde_json::from_str::<MemoryRecord>(line).ok())
+        .collect()
+}
+
+fn append_memory_record(path: &Path, record: &MemoryRecord) -> std::io::Result<()> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let _guard = MemoryFileLock::acquire(path)?;
+    let line = serde_json::to_string(record)
+        .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?;
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)?;
+    writeln!(file, "{}", line)?;
+    Ok(())
+}
+
+fn write_memory_records(path: &Path, records: &[MemoryRecord]) -> std::io::Result<()> {
+    let mut content = String::new();
+    for record in records {
+        let line = serde_json::to_string(record)
+            .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?;
+        content.push_str(&line);
+        content.push('\n');
+    }
+    write_memory_file_atomically(path, &content)
+}
+
+fn memory_record_summary_from_records(records: &[MemoryRecord]) -> MemoryRecordSummary {
+    let mut summary = MemoryRecordSummary {
+        total: records.len(),
+        ..Default::default()
+    };
+    for record in records {
+        match record.status {
+            MemoryStatus::Accepted => summary.accepted += 1,
+            MemoryStatus::Proposed => summary.proposed += 1,
+            MemoryStatus::Rejected => summary.rejected += 1,
+            MemoryStatus::Archived => summary.archived += 1,
+            MemoryStatus::Superseded => summary.superseded += 1,
+        }
+        if record.evidence.is_empty() {
+            summary.missing_evidence += 1;
+        }
+        if record.use_count > 0 {
+            summary.used += 1;
+        }
+        if record_needs_revalidation(record) {
+            summary.stale += 1;
+        }
+    }
+    summary
+}
+
+fn record_needs_revalidation(record: &MemoryRecord) -> bool {
+    if !matches!(record.status, MemoryStatus::Accepted) {
+        return false;
+    }
+    let stale_cutoff = chrono::Utc::now() - chrono::Duration::days(90);
+    match record.kind {
+        MemoryKind::ProjectFact | MemoryKind::ToolQuirk => record
+            .last_verified_at
+            .map(|verified| verified < stale_cutoff)
+            .unwrap_or(true),
+        MemoryKind::WorkflowConvention => record
+            .last_verified_at
+            .map(|verified| verified < stale_cutoff)
+            .unwrap_or(false),
+        _ => false,
+    }
+}
+
+fn record_has_verified_evidence(record: &MemoryRecord) -> bool {
+    record
+        .evidence
+        .iter()
+        .any(|evidence| !matches!(evidence.kind, MemoryEvidenceKind::Inference))
+}
+
+fn memory_lifecycle_key(record: &MemoryRecord) -> String {
+    if let Some(strategy) = &record.strategy {
+        if let Some(failure_type) = strategy.failure_type.as_deref() {
+            let key = normalize_lifecycle_key(failure_type);
+            if !key.is_empty() {
+                return format!("strategy:{key}");
+            }
+        }
+        if let Some(failed_strategy) = strategy.failed_strategy.as_deref() {
+            let key = normalize_lifecycle_key(failed_strategy);
+            if !key.is_empty() {
+                return format!("strategy:{key}");
+            }
+        }
+    }
+
+    let content = record.content.trim();
+    if let Some((key, _)) = content.split_once(':') {
+        let normalized = normalize_lifecycle_key(key);
+        if !normalized.is_empty() {
+            return format!("{}:{normalized}", kind_label(record.kind));
+        }
+    }
+    normalize_lifecycle_key(
+        &content
+            .split_whitespace()
+            .take(6)
+            .collect::<Vec<_>>()
+            .join(" "),
+    )
+}
+
+fn normalize_lifecycle_key(value: &str) -> String {
+    value
+        .to_lowercase()
+        .replace(|ch: char| !ch.is_alphanumeric(), " ")
+        .split_whitespace()
+        .take(8)
+        .collect::<Vec<_>>()
+        .join("_")
 }
 
 fn memory_messages_hash(messages: &[Message]) -> u64 {
@@ -351,6 +674,9 @@ pub struct MemoryMaintenanceReport {
     pub duplicate_sections_removed: usize,
     pub files_compacted: usize,
     pub archives_created: usize,
+    pub records_scanned: usize,
+    pub records_needing_revalidation: usize,
+    pub records_archived: usize,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -370,6 +696,14 @@ pub enum MemoryWriteOutcomeStatus {
     Duplicate,
     Failed,
     InvalidTarget,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MemoryWriteTarget {
+    Auto,
+    Index,
+    User,
+    Topic(String),
 }
 
 #[derive(Debug, Clone)]
@@ -439,6 +773,20 @@ impl MemoryWriteOutcome {
             path: None,
         }
     }
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct MemoryRecordSummary {
+    pub total: usize,
+    pub accepted: usize,
+    pub proposed: usize,
+    pub rejected: usize,
+    pub archived: usize,
+    pub superseded: usize,
+    pub missing_evidence: usize,
+    pub stale: usize,
+    pub used: usize,
+    pub projection_drift: usize,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -523,16 +871,26 @@ struct MemoryDecisionEvent {
     content_preview: String,
     reason: String,
     created_at: String,
+    candidate_id: Option<String>,
+    source: Option<String>,
+    scope: Option<String>,
+    kind: Option<String>,
+    score: Option<f32>,
+    evidence_status: Option<String>,
+    safety_status: Option<String>,
 }
 
 impl MemoryMaintenanceReport {
     pub fn format(&self) -> String {
         format!(
-            "Memory Maintenance:\n  Files scanned: {}\n  Duplicate sections removed: {}\n  Files compacted: {}\n  Archives created: {}",
+            "Memory Maintenance:\n  Files scanned: {}\n  Duplicate sections removed: {}\n  Files compacted: {}\n  Archives created: {}\n  Records scanned: {}\n  Records needing revalidation: {}\n  Records archived: {}",
             self.files_scanned,
             self.duplicate_sections_removed,
             self.files_compacted,
-            self.archives_created
+            self.archives_created,
+            self.records_scanned,
+            self.records_needing_revalidation,
+            self.records_archived
         )
     }
 }
@@ -547,6 +905,8 @@ pub struct MemoryManager {
     memory_dir: PathBuf,
     /// 记忆决策日志（accepted/proposed/rejected/blocked）
     decision_log_path: PathBuf,
+    /// typed memory record sidecar (`memory/records.jsonl`)
+    records_path: PathBuf,
     /// durable memory flush lifecycle log
     flush_log_path: PathBuf,
     /// 冻结快照（会话开始时捕获，整个会话不变）
@@ -611,6 +971,7 @@ impl MemoryManager {
             memory_path: base.join("MEMORY.md"),
             user_path: base.join("USER.md"),
             decision_log_path: base.join(MEMORY_DIR_NAME).join("decisions.jsonl"),
+            records_path: base.join(MEMORY_DIR_NAME).join(MEMORY_RECORDS_FILE),
             flush_log_path: base.join(MEMORY_DIR_NAME).join(MEMORY_FLUSH_LOG_FILE),
             memory_dir,
             frozen_memory: None,
@@ -631,6 +992,439 @@ impl MemoryManager {
             cache_hits: 0,
             cache_misses: 0,
         }
+    }
+
+    pub fn records_path(&self) -> &Path {
+        &self.records_path
+    }
+
+    pub fn memory_records(&self) -> Vec<MemoryRecord> {
+        let content = std::fs::read_to_string(&self.records_path).unwrap_or_default();
+        memory_records_from_jsonl(&content)
+    }
+
+    pub fn memory_record_summary(&self) -> MemoryRecordSummary {
+        let records = self.memory_records();
+        let mut summary = memory_record_summary_from_records(&records);
+        summary.projection_drift = records
+            .iter()
+            .filter(|record| {
+                matches!(record.status, MemoryStatus::Accepted)
+                    && record.projection.as_ref().is_some_and(|projection| {
+                        !self.projection_contains_record(projection, &record.id)
+                    })
+            })
+            .count();
+        summary
+    }
+
+    pub fn import_legacy_markdown_records(&self) -> usize {
+        let mut existing_records = self.memory_records();
+        let mut seen = existing_records
+            .iter()
+            .map(|record| normalize_for_duplicate(&record.content))
+            .collect::<HashSet<_>>();
+        let mut imported = 0usize;
+
+        let mut sources = vec![
+            (self.memory_path.clone(), "MEMORY.md".to_string(), "learned"),
+            (self.user_path.clone(), "USER.md".to_string(), "preference"),
+        ];
+        sources.extend(
+            collect_memory_file_paths(&self.memory_dir, false)
+                .into_iter()
+                .map(|path| {
+                    let projection = self.projection_path(&path);
+                    (path, projection, "learned")
+                }),
+        );
+
+        for (path, projection_path, default_category) in sources {
+            let Ok(content) = std::fs::read_to_string(&path) else {
+                continue;
+            };
+            for section in legacy_markdown_sections(&content) {
+                if section.contains("memory-id:") {
+                    continue;
+                }
+                let Some((category, body)) =
+                    legacy_markdown_section_parts(&section, default_category)
+                else {
+                    continue;
+                };
+                let normalized = normalize_for_duplicate(&body);
+                if normalized.is_empty() || !seen.insert(normalized) {
+                    continue;
+                }
+                let Ok(assessment) =
+                    assess_memory_candidate(&body, &category, "", category == "preference")
+                else {
+                    continue;
+                };
+                let mut candidate = MemoryCandidate::new(
+                    body.clone(),
+                    category.clone(),
+                    MemoryScope::local("legacy-markdown-import"),
+                    MemoryProvenance::local("legacy_markdown_import"),
+                )
+                .confidence(assessment.score)
+                .importance(infer_memory_importance(&body, &category))
+                .with_tags({
+                    let mut tags = infer_memory_tags(&body, &category);
+                    tags.push("legacy_import".to_string());
+                    tags.sort();
+                    tags.dedup();
+                    tags
+                })
+                .explicit(category == "preference");
+                let evidence_kind = if category == "preference" {
+                    MemoryEvidenceKind::UserStatement
+                } else {
+                    MemoryEvidenceKind::Inference
+                };
+                candidate.evidence.push(MemoryEvidenceRef::new(
+                    evidence_kind,
+                    projection_path.clone(),
+                    "Imported from existing Markdown memory projection",
+                    if category == "preference" { 0.7 } else { 0.45 },
+                ));
+                let mut record = MemoryRecord::from_candidate(
+                    candidate,
+                    MemoryStatus::Accepted,
+                    assessment.score,
+                    assessment.future_utility,
+                    assessment.sensitivity,
+                );
+                record.projection = Some(MemoryProjection {
+                    path: projection_path.clone(),
+                    heading: format!("[{}]", category.to_uppercase()),
+                });
+                existing_records.push(record);
+                imported += 1;
+            }
+        }
+
+        if imported > 0 {
+            if let Err(error) = write_memory_records(&self.records_path, &existing_records) {
+                debug!("Failed to import legacy Markdown memory records: {}", error);
+                return 0;
+            }
+        }
+        imported
+    }
+
+    pub fn record_memory_usage_for_matches(&self, matches: &[MemoryMatch]) -> usize {
+        let used_ids = matches
+            .iter()
+            .filter_map(|memory_match| memory_record_id_from_source(&memory_match.source))
+            .collect::<HashSet<_>>();
+        if used_ids.is_empty() {
+            return 0;
+        }
+
+        let mut records = self.memory_records();
+        if records.is_empty() {
+            return 0;
+        }
+        let now = chrono::Utc::now();
+        let mut updated = 0usize;
+        for record in &mut records {
+            if used_ids.contains(&record.id) {
+                record.use_count = record.use_count.saturating_add(1);
+                record.last_used_at = Some(now);
+                record.updated_at = now;
+                updated += 1;
+            }
+        }
+        if updated > 0 {
+            if let Err(error) = write_memory_records(&self.records_path, &records) {
+                debug!("Failed to update memory record usage: {}", error);
+                return 0;
+            }
+        }
+        updated
+    }
+
+    pub fn candidate_from_content(
+        &self,
+        content: &str,
+        category: &str,
+        source: &str,
+    ) -> MemoryCandidate {
+        let mut candidate = MemoryCandidate::new(
+            content,
+            category,
+            MemoryScope::local("unbound-session"),
+            MemoryProvenance::local(source),
+        )
+        .with_tags(infer_memory_tags(content, category))
+        .importance(infer_memory_importance(content, category));
+        candidate.evidence = default_candidate_evidence(&candidate);
+        candidate
+    }
+
+    pub fn submit_candidate(
+        &self,
+        mut candidate: MemoryCandidate,
+        target: MemoryWriteTarget,
+    ) -> MemoryWriteOutcome {
+        if candidate.evidence.is_empty() {
+            candidate.evidence = default_candidate_evidence(&candidate);
+        }
+        if candidate.tags.is_empty() {
+            candidate.tags = infer_memory_tags(&candidate.content, &candidate.category);
+        }
+        candidate.importance = candidate.importance.max(infer_memory_importance(
+            &candidate.content,
+            &candidate.category,
+        ));
+
+        let (path, projection_path) = match self.path_for_candidate(&candidate, target) {
+            Ok(path) => path,
+            Err(reason) => return MemoryWriteOutcome::invalid_target(reason),
+        };
+        let existing = std::fs::read_to_string(&path).unwrap_or_default();
+        let assessment = match assess_memory_candidate(
+            &candidate.content,
+            &candidate.category,
+            &existing,
+            candidate.explicit,
+        ) {
+            Ok(assessment) => assessment,
+            Err(issue) => {
+                self.record_memory_decision_event(memory_decision_event(
+                    "blocked",
+                    &candidate,
+                    None,
+                    &format!("{}: {}", issue.code, issue.message),
+                    "blocked",
+                ));
+                return MemoryWriteOutcome::blocked(format!("{}: {}", issue.code, issue.message));
+            }
+        };
+
+        if assessment.duplication >= 0.85 || normalized_contains(&existing, &candidate.content) {
+            self.record_memory_decision_event(memory_decision_event(
+                "duplicate",
+                &candidate,
+                Some(assessment.score),
+                &format!("duplicate memory already exists; {}", assessment.reason),
+                evidence_status(&candidate),
+            ));
+            return MemoryWriteOutcome::duplicate(
+                path,
+                format!("duplicate memory already exists; {}", assessment.reason),
+            );
+        }
+
+        let mut status = assessment.status;
+        let mut reason = assessment.reason.clone();
+        if status == MemoryStatus::Proposed
+            && requires_verified_evidence(candidate.kind)
+            && has_required_evidence(&candidate)
+            && assessment.score >= 0.55
+        {
+            status = MemoryStatus::Accepted;
+            reason = format!(
+                "{}; accepted because kind-appropriate evidence verified the candidate",
+                reason
+            );
+        }
+        if status == MemoryStatus::Accepted
+            && requires_verified_evidence(candidate.kind)
+            && !has_required_evidence(&candidate)
+        {
+            status = MemoryStatus::Proposed;
+            reason = format!(
+                "{}; {:?} memory requires kind-appropriate evidence before acceptance",
+                reason, candidate.kind
+            );
+        }
+        if status == MemoryStatus::Accepted
+            && candidate.kind == MemoryKind::UserPreference
+            && !candidate.explicit
+            && !candidate
+                .evidence
+                .iter()
+                .any(|evidence| matches!(evidence.kind, MemoryEvidenceKind::UserStatement))
+        {
+            status = MemoryStatus::Proposed;
+            reason = format!(
+                "{}; user preference memory requires explicit user-statement evidence",
+                reason
+            );
+        }
+
+        let mut record = MemoryRecord::from_candidate(
+            candidate.clone(),
+            status,
+            candidate.confidence.max(assessment.score),
+            assessment.future_utility,
+            assessment.sensitivity,
+        );
+        record.projection = Some(MemoryProjection {
+            path: projection_path.clone(),
+            heading: format!("[{}]", candidate.category.to_uppercase()),
+        });
+
+        self.apply_record_lifecycle_before_append(&mut record);
+
+        if let Err(error) = append_memory_record(&self.records_path, &record) {
+            return MemoryWriteOutcome::failed(
+                self.records_path.clone(),
+                format!("failed to append typed memory record: {error}"),
+            );
+        }
+
+        self.record_memory_decision_event(memory_decision_event(
+            status_label(status),
+            &candidate,
+            Some(assessment.score),
+            &reason,
+            evidence_status(&candidate),
+        ));
+
+        if status != MemoryStatus::Accepted {
+            return MemoryWriteOutcome::gated(status, assessment.score, reason);
+        }
+
+        let entry = markdown_entry_for_record(&record, &candidate.category);
+        let header = if existing.trim().is_empty() {
+            if path == self.user_path.as_path() {
+                "# User Preferences\n".to_string()
+            } else if path.starts_with(&self.memory_dir) {
+                "# Priority Agent Topic Memory\n".to_string()
+            } else {
+                "# Priority Agent Memory\n".to_string()
+            }
+        } else {
+            String::new()
+        };
+        let new_content = format!("{}{}{}", existing, header, entry);
+        if let Err(error) = write_memory_file_atomically(&path, &new_content) {
+            return MemoryWriteOutcome::failed(path, error.to_string());
+        }
+
+        MemoryWriteOutcome::saved(path, assessment.score, reason)
+    }
+
+    fn apply_record_lifecycle_before_append(&self, record: &mut MemoryRecord) {
+        if !matches!(record.status, MemoryStatus::Accepted) {
+            return;
+        }
+        let mut records = self.memory_records();
+        if records.is_empty() {
+            return;
+        }
+        let record_key = memory_lifecycle_key(record);
+        if record_key.is_empty() {
+            return;
+        }
+
+        let mut changed = false;
+        let verified = record_has_verified_evidence(record);
+        for existing in &mut records {
+            if existing.id == record.id
+                || !matches!(
+                    existing.status,
+                    MemoryStatus::Accepted | MemoryStatus::Proposed
+                )
+                || existing.kind != record.kind
+                || memory_lifecycle_key(existing) != record_key
+            {
+                continue;
+            }
+
+            let supersede = match record.kind {
+                MemoryKind::ProjectFact | MemoryKind::ToolQuirk => {
+                    verified
+                        && (!record_has_verified_evidence(existing)
+                            || record_needs_revalidation(existing))
+                }
+                MemoryKind::FailurePattern | MemoryKind::SuccessfulFix => true,
+                _ => false,
+            };
+            if !supersede {
+                continue;
+            }
+
+            record.failure_count = record.failure_count.saturating_add(existing.failure_count);
+            record.success_count = record.success_count.saturating_add(existing.success_count);
+            record.supersedes.push(existing.id.clone());
+            existing.status = MemoryStatus::Superseded;
+            existing.superseded_by = Some(record.id.clone());
+            existing.updated_at = chrono::Utc::now();
+            changed = true;
+        }
+
+        if changed {
+            record.supersedes.sort();
+            record.supersedes.dedup();
+            if let Err(error) = write_memory_records(&self.records_path, &records) {
+                debug!("Failed to update superseded memory records: {}", error);
+            }
+        }
+    }
+
+    fn path_for_candidate(
+        &self,
+        candidate: &MemoryCandidate,
+        target: MemoryWriteTarget,
+    ) -> Result<(PathBuf, String), String> {
+        let path = match target {
+            MemoryWriteTarget::User => self.user_path.clone(),
+            MemoryWriteTarget::Index => self.memory_path.clone(),
+            MemoryWriteTarget::Topic(topic) => topic_memory_path(&self.memory_dir, &topic)
+                .ok_or_else(|| format!("invalid topic '{}'", topic))?,
+            MemoryWriteTarget::Auto => {
+                if matches!(candidate.kind, MemoryKind::UserPreference)
+                    || matches!(candidate.category.as_str(), "preference" | "user")
+                {
+                    self.user_path.clone()
+                } else if let Some(topic) =
+                    infer_learning_topic(&candidate.content, &candidate.category)
+                {
+                    topic_memory_path(&self.memory_dir, topic)
+                        .ok_or_else(|| format!("invalid inferred topic '{}'", topic))?
+                } else {
+                    self.memory_path.clone()
+                }
+            }
+        };
+        let projection_path = self.projection_path(&path);
+        Ok((path, projection_path))
+    }
+
+    fn projection_path(&self, path: &Path) -> String {
+        if path == self.user_path.as_path() {
+            return "USER.md".to_string();
+        }
+        if path == self.memory_path.as_path() {
+            return "MEMORY.md".to_string();
+        }
+        if let Ok(relative) = path.strip_prefix(&self.memory_dir) {
+            return format!("memory/{}", relative.to_string_lossy().replace('\\', "/"));
+        }
+        path.to_string_lossy().to_string()
+    }
+
+    fn projection_contains_record(&self, projection: &MemoryProjection, record_id: &str) -> bool {
+        let path = self.path_from_projection(&projection.path);
+        let content = std::fs::read_to_string(path).unwrap_or_default();
+        content.contains(&format!("memory-id: {}", record_id))
+    }
+
+    fn path_from_projection(&self, projection_path: &str) -> PathBuf {
+        if projection_path == "USER.md" {
+            return self.user_path.clone();
+        }
+        if projection_path == "MEMORY.md" {
+            return self.memory_path.clone();
+        }
+        if let Some(relative) = projection_path.strip_prefix("memory/") {
+            return self.memory_dir.join(relative);
+        }
+        PathBuf::from(projection_path)
     }
 
     /// 会话开始时冻结快照（同步版本 — 兼容非异步上下文）
@@ -700,6 +1494,7 @@ impl MemoryManager {
         }
 
         let relevant = self.preview_relevant_memories(user_message, 5);
+        self.record_memory_usage_for_matches(&relevant);
         format_relevant_memory_block(relevant)
     }
 
@@ -723,6 +1518,7 @@ impl MemoryManager {
 
             let selected =
                 rerank_memory_matches_with_llm(user_message, &candidates, provider, model, 5).await;
+            self.record_memory_usage_for_matches(&selected);
             format_relevant_memory_block(selected)
         }
     }
@@ -744,8 +1540,10 @@ impl MemoryManager {
         } else {
             self.frozen_memory_files.clone()
         };
+        let memory_records = self.memory_records();
 
         let mut matches = Vec::new();
+        matches.extend(rank_memory_records(&memory_records, &keywords));
         matches.extend(rank_memory_paragraphs(
             "MEMORY.md",
             &memory_content,
@@ -796,6 +1594,7 @@ impl MemoryManager {
         }
         let selected =
             rerank_memory_matches_with_llm(user_message, &candidates, provider, model, 5).await;
+        self.record_memory_usage_for_matches(&selected);
         let conflicts = self.memory_conflicts(8);
         crate::engine::retrieval_context::RetrievalContext::from_memory_matches(
             user_message,
@@ -858,10 +1657,12 @@ impl MemoryManager {
         // 若启发式无结果且启用了 LLM 提取，则调用 LLM
         if heuristic.is_empty() {
             if let Some(p) = provider {
-                let llm_learnings = self
-                    .extract_memories_with_llm(user, assistant, p, model)
+                let llm_candidates = self
+                    .extract_memory_candidates_with_llm(user, assistant, p, model)
                     .await;
-                self.ingest_learnings(llm_learnings, MAX_LEARNINGS_PER_TURN);
+                for candidate in llm_candidates.into_iter().take(MAX_LEARNINGS_PER_TURN) {
+                    self.submit_candidate(candidate, MemoryWriteTarget::Auto);
+                }
             }
         }
     }
@@ -917,11 +1718,9 @@ impl MemoryManager {
 
             if should_llm_extract {
                 let system_prompt = "You are a memory extraction assistant. \
-Analyze the conversation turn and extract up to 3 concise memory bullets of CRITICAL CONTEXT only. \
-Critical context includes: API keys or paths, architecture decisions, user preferences, \
-specific error messages and their fixes, project conventions, or important configuration values. \
-Each bullet should be one line starting with '- '. \
-Return exactly the word NONE if there is nothing critical to remember.";
+Analyze the conversation turn and propose up to 3 long-term memory candidates only. \
+Return JSON: {\"memory_candidates\":[{\"type\":\"project_fact|user_preference|strategy|failure_lesson|note\",\"content\":\"...\",\"evidence\":\"...\",\"confidence\":0.0,\"importance\":1,\"tags\":[\"...\"]}]}. \
+Only include facts supported by the turn. Return exactly NONE if there is nothing critical to remember.";
 
                 let content = format!(
                     "User:\n{}\n\nAssistant:\n{}\n",
@@ -939,40 +1738,29 @@ Return exactly the word NONE if there is nothing critical to remember.";
                 {
                     let text = response.content.trim();
                     if !text.eq_ignore_ascii_case("NONE") && !text.is_empty() {
-                        let bullets: Vec<String> = text
-                            .lines()
-                            .map(|l: &str| l.trim())
-                            .filter(|l| !l.is_empty())
-                            .map(|l| {
-                                if let Some(stripped) = l.strip_prefix("- ") {
-                                    stripped.to_string()
-                                } else {
-                                    l.to_string()
-                                }
-                            })
-                            .filter(|l| !l.is_empty())
-                            .collect();
+                        let base = path
+                            .parent()
+                            .map(Path::to_path_buf)
+                            .unwrap_or_else(|| PathBuf::from("."));
+                        let manager = MemoryManager::with_base_dir(base);
+                        let candidates = parse_llm_memory_candidates(
+                            text,
+                            MemoryScope::local("background-llm"),
+                            MemoryProvenance::local("background_llm"),
+                        );
                         debug!(
-                            "Background LLM extracted {} memory bullets (forked: {})",
-                            bullets.len(),
+                            "Background LLM extracted {} memory candidates (forked: {})",
+                            candidates.len(),
                             forked_mode
                         );
 
-                        // 写入文件（不依赖 MemoryManager 内部状态）
-                        for bullet in bullets {
-                            let decision =
-                                write_background_memory_candidate(&path, &bullet, "background_llm");
-                            if decision.wrote {
-                                debug!(
-                                    "Background LLM memory accepted (quality={:?})",
-                                    decision.quality_score
-                                );
-                            } else {
-                                debug!(
-                                    "Background LLM memory skipped ({:?}, duplicate={}): {}",
-                                    decision.status, decision.duplicate, decision.reason
-                                );
-                            }
+                        for candidate in candidates {
+                            let outcome =
+                                manager.submit_candidate(candidate, MemoryWriteTarget::Auto);
+                            debug!(
+                                "Background LLM memory outcome ({:?}): {}",
+                                outcome.status, outcome.reason
+                            );
                         }
                     }
                 }
@@ -981,18 +1769,17 @@ Return exactly the word NONE if there is nothing critical to remember.";
     }
 
     /// 使用 LLM 从对话中提取记忆
-    async fn extract_memories_with_llm(
+    async fn extract_memory_candidates_with_llm(
         &self,
         user: &str,
         assistant: &str,
         provider: &dyn LlmProvider,
         model: &str,
-    ) -> Vec<String> {
+    ) -> Vec<MemoryCandidate> {
         let system_prompt = "You are a memory extraction assistant. \
-Analyze the conversation turn and extract up to 3 concise memory bullets of CRITICAL CONTEXT only. \
-Critical context includes: API keys or paths, architecture decisions, user preferences, specific error messages and their fixes, project conventions, or important configuration values. \
-Each bullet should be one line starting with '- '. \
-Return exactly the word NONE if there is nothing critical to remember.";
+Analyze the conversation turn and propose up to 3 long-term memory candidates only. \
+Return JSON: {\"memory_candidates\":[{\"type\":\"project_fact|user_preference|strategy|failure_lesson|note\",\"content\":\"...\",\"evidence\":\"...\",\"confidence\":0.0,\"importance\":1,\"tags\":[\"...\"]}]}. \
+Only include facts supported by the turn. Return exactly NONE if there is nothing critical to remember.";
 
         let content = format!(
             "User:\n{}\n\nAssistant:\n{}\n",
@@ -1011,22 +1798,13 @@ Return exactly the word NONE if there is nothing critical to remember.";
                 if text.eq_ignore_ascii_case("NONE") || text.is_empty() {
                     return Vec::new();
                 }
-                let bullets: Vec<String> = text
-                    .lines()
-                    .map(|l| l.trim())
-                    .filter(|l| !l.is_empty())
-                    .map(|l| {
-                        // 统一去掉开头的 '- '
-                        if let Some(stripped) = l.strip_prefix("- ") {
-                            stripped.to_string()
-                        } else {
-                            l.to_string()
-                        }
-                    })
-                    .filter(|l| !l.is_empty())
-                    .collect();
-                debug!("LLM extracted {} memory bullets", bullets.len());
-                bullets
+                let candidates = parse_llm_memory_candidates(
+                    text,
+                    MemoryScope::local("llm-memory-extraction"),
+                    MemoryProvenance::local("turn_llm_memory_extraction"),
+                );
+                debug!("LLM extracted {} memory candidates", candidates.len());
+                candidates
             }
             Ok(Err(e)) => {
                 warn!("LLM memory extraction failed: {}", e);
@@ -1077,168 +1855,48 @@ Return exactly the word NONE if there is nothing critical to remember.";
 
     /// 添加学习内容（同步版本）
     pub fn add_learning(&mut self, content: &str, category: &str) {
-        let path = match category {
-            "preference" | "user" => &self.user_path,
-            _ => &self.memory_path,
+        let candidate =
+            self.candidate_from_content(content, category, "memory_manager.add_learning");
+        let target = if matches!(category, "preference" | "user") {
+            MemoryWriteTarget::User
+        } else {
+            MemoryWriteTarget::Index
         };
-
-        let existing = std::fs::read_to_string(path).unwrap_or_default();
-        let assessment = match assess_memory_candidate(content, category, &existing, false) {
-            Ok(assessment) => assessment,
-            Err(issue) => {
-                warn!(
-                    "Blocked unsafe memory candidate [{}]: {}",
-                    issue.code, issue.message
-                );
-                self.record_memory_decision(
-                    "blocked",
-                    category,
-                    content,
-                    &format!("{}: {}", issue.code, issue.message),
-                );
-                return;
-            }
-        };
-        if assessment.status != MemoryStatus::Accepted {
+        let outcome = self.submit_candidate(candidate, target);
+        if outcome.status == MemoryWriteOutcomeStatus::Saved {
+            self.main_agent_wrote_this_turn = true;
+            debug!("Memory saved: [{}] {}", category, log_preview(content, 50));
+        } else {
             debug!(
-                "Skipping memory candidate ({:?}): {} | {}",
-                assessment.status,
-                assessment.reason,
+                "Memory candidate not saved ({:?}): {} | {}",
+                outcome.status,
+                outcome.reason,
                 log_preview(content, 80)
             );
-            self.record_memory_decision(
-                status_label(assessment.status),
-                category,
-                content,
-                &assessment.reason,
-            );
-            return;
         }
-
-        let entry = format!(
-            "\n## [{}] {}\n{}\n",
-            category.to_uppercase(),
-            chrono::Local::now().format("%Y-%m-%d %H:%M"),
-            content
-        );
-
-        let header = if existing.trim().is_empty() {
-            if path == &self.user_path {
-                "# User Preferences\n".to_string()
-            } else {
-                "# Priority Agent Memory\n".to_string()
-            }
-        } else {
-            String::new()
-        };
-
-        let new_content = format!("{}{}{}", existing, header, entry);
-        if normalized_contains(&existing, content) {
-            debug!(
-                "Skipping duplicate learning (already in file): {}",
-                log_preview(content, 50)
-            );
-            self.record_memory_decision(
-                "rejected",
-                category,
-                content,
-                "duplicate memory already exists",
-            );
-            return;
-        }
-        if let Err(e) = write_memory_file_atomically(path, &new_content) {
-            debug!("Failed to save memory: {}", e);
-            return;
-        }
-        self.main_agent_wrote_this_turn = true;
-        self.record_memory_decision("accepted", category, content, &assessment.reason);
-
-        debug!("Memory saved: [{}] {}", category, log_preview(content, 50));
     }
 
     /// 添加学习内容到分主题记忆文件（同步版本）
     pub fn add_topic_learning(&mut self, content: &str, category: &str, topic: &str) {
-        let Some(path) = topic_memory_path(&self.memory_dir, topic) else {
-            debug!("Skipping topic memory with invalid topic: {}", topic);
-            return;
-        };
-
-        if let Some(parent) = path.parent() {
-            let _ = std::fs::create_dir_all(parent);
-        }
-
-        let existing = std::fs::read_to_string(&path).unwrap_or_default();
-        let assessment = match assess_memory_candidate(content, category, &existing, false) {
-            Ok(assessment) => assessment,
-            Err(issue) => {
-                warn!(
-                    "Blocked unsafe topic memory candidate [{}]: {}",
-                    issue.code, issue.message
-                );
-                self.record_memory_decision(
-                    "blocked",
-                    category,
-                    content,
-                    &format!("{}: {}", issue.code, issue.message),
-                );
-                return;
-            }
-        };
-        if assessment.status != MemoryStatus::Accepted {
+        let candidate =
+            self.candidate_from_content(content, category, "memory_manager.add_topic_learning");
+        let outcome = self.submit_candidate(candidate, MemoryWriteTarget::Topic(topic.to_string()));
+        if outcome.status == MemoryWriteOutcomeStatus::Saved {
+            self.main_agent_wrote_this_turn = true;
             debug!(
-                "Skipping topic memory candidate ({:?}): {} | {}",
-                assessment.status,
-                assessment.reason,
-                log_preview(content, 80)
-            );
-            self.record_memory_decision(
-                status_label(assessment.status),
+                "Topic memory saved: [{}:{}] {}",
+                topic,
                 category,
-                content,
-                &assessment.reason,
-            );
-            return;
-        }
-        if normalized_contains(&existing, content) {
-            debug!(
-                "Skipping duplicate topic learning (already in file): {}",
                 log_preview(content, 50)
             );
-            self.record_memory_decision(
-                "rejected",
-                category,
-                content,
-                "duplicate topic memory already exists",
-            );
-            return;
-        }
-
-        let entry = format!(
-            "\n## [{}] {}\n{}\n",
-            category.to_uppercase(),
-            chrono::Local::now().format("%Y-%m-%d %H:%M"),
-            content
-        );
-        let header = if existing.trim().is_empty() {
-            "# Priority Agent Topic Memory\n".to_string()
         } else {
-            String::new()
-        };
-        let new_content = format!("{}{}{}", existing, header, entry);
-
-        if let Err(e) = write_memory_file_atomically(&path, &new_content) {
-            debug!("Failed to save topic memory: {}", e);
-            return;
+            debug!(
+                "Topic memory candidate not saved ({:?}): {} | {}",
+                outcome.status,
+                outcome.reason,
+                log_preview(content, 80)
+            );
         }
-        self.main_agent_wrote_this_turn = true;
-        self.record_memory_decision("accepted", category, content, &assessment.reason);
-
-        debug!(
-            "Topic memory saved: [{}:{}] {}",
-            topic,
-            category,
-            log_preview(content, 50)
-        );
     }
 
     /// 自动选择 USER.md、MEMORY.md 或分主题文件保存学习内容。
@@ -1254,94 +1912,14 @@ Return exactly the word NONE if there is nothing critical to remember.";
 
     /// 添加学习内容（异步版本 — 推荐在异步上下文中使用）
     pub async fn add_learning_async(&self, content: &str, category: &str) -> MemoryWriteOutcome {
-        let path = match category {
-            "preference" | "user" => &self.user_path,
-            _ => &self.memory_path,
-        };
-
-        let existing = tokio::fs::read_to_string(path).await.unwrap_or_default();
-        let assessment = match assess_memory_candidate(content, category, &existing, false) {
-            Ok(assessment) => assessment,
-            Err(issue) => {
-                warn!(
-                    "Blocked unsafe async memory candidate [{}]: {}",
-                    issue.code, issue.message
-                );
-                self.record_memory_decision(
-                    "blocked",
-                    category,
-                    content,
-                    &format!("{}: {}", issue.code, issue.message),
-                );
-                return MemoryWriteOutcome::blocked(format!("{}: {}", issue.code, issue.message));
-            }
-        };
-        if assessment.duplication >= 0.85 || normalized_contains(&existing, content) {
-            debug!(
-                "Skipping duplicate learning (already in file, async): {}",
-                log_preview(content, 50)
-            );
-            self.record_memory_decision(
-                "duplicate",
-                category,
-                content,
-                &format!("duplicate memory already exists; {}", assessment.reason),
-            );
-            return MemoryWriteOutcome::duplicate(
-                path.to_path_buf(),
-                format!("duplicate memory already exists; {}", assessment.reason),
-            );
-        }
-        if assessment.status != MemoryStatus::Accepted {
-            debug!(
-                "Skipping async memory candidate ({:?}): {} | {}",
-                assessment.status,
-                assessment.reason,
-                log_preview(content, 80)
-            );
-            self.record_memory_decision(
-                status_label(assessment.status),
-                category,
-                content,
-                &assessment.reason,
-            );
-            return MemoryWriteOutcome::gated(
-                assessment.status,
-                assessment.score,
-                assessment.reason,
-            );
-        }
-
-        let entry = format!(
-            "\n## [{}] {}\n{}\n",
-            category.to_uppercase(),
-            chrono::Local::now().format("%Y-%m-%d %H:%M"),
-            content
-        );
-
-        let header = if existing.trim().is_empty() {
-            if path == &self.user_path {
-                "# User Preferences\n".to_string()
-            } else {
-                "# Priority Agent Memory\n".to_string()
-            }
+        let candidate =
+            self.candidate_from_content(content, category, "memory_manager.add_learning_async");
+        let target = if matches!(category, "preference" | "user") {
+            MemoryWriteTarget::User
         } else {
-            String::new()
+            MemoryWriteTarget::Index
         };
-
-        let new_content = format!("{}{}{}", existing, header, entry);
-        if let Err(e) = write_memory_file_atomically(path, &new_content) {
-            debug!("Failed to save memory (async): {}", e);
-            return MemoryWriteOutcome::failed(path.to_path_buf(), e.to_string());
-        }
-        self.record_memory_decision("accepted", category, content, &assessment.reason);
-
-        debug!(
-            "Memory saved (async): [{}] {}",
-            category,
-            log_preview(content, 50)
-        );
-        MemoryWriteOutcome::saved(path.to_path_buf(), assessment.score, assessment.reason)
+        self.submit_candidate(candidate, target)
     }
 
     /// 添加学习内容到分主题记忆文件（异步版本）
@@ -1351,100 +1929,12 @@ Return exactly the word NONE if there is nothing critical to remember.";
         category: &str,
         topic: &str,
     ) -> MemoryWriteOutcome {
-        let Some(path) = topic_memory_path(&self.memory_dir, topic) else {
-            debug!("Skipping topic memory with invalid topic: {}", topic);
-            return MemoryWriteOutcome::invalid_target(format!("invalid topic '{}'", topic));
-        };
-
-        if let Some(parent) = path.parent() {
-            let _ = tokio::fs::create_dir_all(parent).await;
-        }
-
-        let existing = tokio::fs::read_to_string(&path).await.unwrap_or_default();
-        let assessment = match assess_memory_candidate(content, category, &existing, false) {
-            Ok(assessment) => assessment,
-            Err(issue) => {
-                warn!(
-                    "Blocked unsafe async topic memory candidate [{}]: {}",
-                    issue.code, issue.message
-                );
-                self.record_memory_decision(
-                    "blocked",
-                    category,
-                    content,
-                    &format!("{}: {}", issue.code, issue.message),
-                );
-                return MemoryWriteOutcome::blocked(format!("{}: {}", issue.code, issue.message));
-            }
-        };
-        if assessment.duplication >= 0.85 || normalized_contains(&existing, content) {
-            debug!(
-                "Skipping duplicate topic learning (already in file, async): {}",
-                log_preview(content, 50)
-            );
-            self.record_memory_decision(
-                "duplicate",
-                category,
-                content,
-                &format!(
-                    "duplicate topic memory already exists; {}",
-                    assessment.reason
-                ),
-            );
-            return MemoryWriteOutcome::duplicate(
-                path.clone(),
-                format!(
-                    "duplicate topic memory already exists; {}",
-                    assessment.reason
-                ),
-            );
-        }
-        if assessment.status != MemoryStatus::Accepted {
-            debug!(
-                "Skipping async topic memory candidate ({:?}): {} | {}",
-                assessment.status,
-                assessment.reason,
-                log_preview(content, 80)
-            );
-            self.record_memory_decision(
-                status_label(assessment.status),
-                category,
-                content,
-                &assessment.reason,
-            );
-            return MemoryWriteOutcome::gated(
-                assessment.status,
-                assessment.score,
-                assessment.reason,
-            );
-        }
-
-        let entry = format!(
-            "\n## [{}] {}\n{}\n",
-            category.to_uppercase(),
-            chrono::Local::now().format("%Y-%m-%d %H:%M"),
-            content
-        );
-        let header = if existing.trim().is_empty() {
-            "# Priority Agent Topic Memory\n".to_string()
-        } else {
-            String::new()
-        };
-        let new_content = format!("{}{}{}", existing, header, entry);
-
-        if let Err(e) = write_memory_file_atomically(&path, &new_content) {
-            debug!("Failed to save topic memory (async): {}", e);
-            return MemoryWriteOutcome::failed(path.clone(), e.to_string());
-        }
-        self.record_memory_decision("accepted", category, content, &assessment.reason);
-
-        debug!(
-            "Topic memory saved (async): [{}:{}] {}",
-            topic,
+        let candidate = self.candidate_from_content(
+            content,
             category,
-            log_preview(content, 50)
+            "memory_manager.add_topic_learning_async",
         );
-        MemoryWriteOutcome::saved(path, assessment.score, assessment.reason)
+        self.submit_candidate(candidate, MemoryWriteTarget::Topic(topic.to_string()))
     }
 
     /// 自动选择 USER.md、MEMORY.md 或分主题文件保存学习内容（异步版本）。
@@ -1536,11 +2026,11 @@ Return exactly the word NONE if there is nothing critical to remember.";
 
         if let Some(p) = provider {
             let system_prompt = "You are a memory extraction assistant. \
-Analyze this entire conversation session and extract up to 6 critical memory bullets. \
+Analyze this entire conversation session and propose up to 6 critical long-term memory candidates. \
 Critical context includes: API keys or paths, architecture decisions, user preferences, \
 specific error messages and their fixes, project conventions, important configuration values, \
 or key decisions made during the session. \
-Each bullet should be one line starting with '- '. \
+Return JSON: {\"memory_candidates\":[{\"type\":\"project_fact|user_preference|strategy|failure_lesson|note\",\"content\":\"...\",\"evidence\":\"...\",\"confidence\":0.0,\"importance\":1,\"tags\":[\"...\"]}]}. \
 Return exactly the word NONE if there is nothing critical to remember.";
 
             let request = ChatRequest::new(model).with_messages(vec![
@@ -1552,16 +2042,18 @@ Return exactly the word NONE if there is nothing critical to remember.";
                 Ok(Ok(response)) => {
                     let text = response.content.trim();
                     if !text.eq_ignore_ascii_case("NONE") && !text.is_empty() {
-                        let bullets: Vec<String> = text
-                            .lines()
-                            .filter(|l| !l.trim().is_empty())
-                            .map(|l| l.strip_prefix("- ").unwrap_or(l).to_string())
-                            .filter(|l| !l.is_empty())
-                            .collect();
+                        let candidates = parse_llm_memory_candidates(
+                            text,
+                            MemoryScope::local("trailing-memory-extraction"),
+                            MemoryProvenance::local("trailing_llm_memory_extraction"),
+                        );
 
-                        debug!("Trailing run extracted {} memory bullets", bullets.len());
-                        for bullet in bullets {
-                            self.add_auto_learning_async(&bullet, "session").await;
+                        debug!(
+                            "Trailing run extracted {} memory candidates",
+                            candidates.len()
+                        );
+                        for candidate in candidates {
+                            self.submit_candidate(candidate, MemoryWriteTarget::Auto);
                         }
                     }
                 }
@@ -1917,6 +2409,53 @@ Return exactly the word NONE if there is nothing critical to remember.";
             }
         }
 
+        let record_report = self.maintain_memory_records();
+        report.records_scanned = record_report.records_scanned;
+        report.records_needing_revalidation = record_report.records_needing_revalidation;
+        report.records_archived = record_report.records_archived;
+
+        report
+    }
+
+    fn maintain_memory_records(&self) -> MemoryMaintenanceReport {
+        let mut report = MemoryMaintenanceReport::default();
+        let mut records = self.memory_records();
+        report.records_scanned = records.len();
+        if records.is_empty() {
+            return report;
+        }
+
+        let now = chrono::Utc::now();
+        let archive_cutoff = now - chrono::Duration::days(365);
+        let mut changed = false;
+        for record in &mut records {
+            if record_needs_revalidation(record) {
+                report.records_needing_revalidation += 1;
+                if !record.tags.iter().any(|tag| tag == "needs_revalidation") {
+                    record.tags.push("needs_revalidation".to_string());
+                    record.tags.sort();
+                    record.tags.dedup();
+                    record.updated_at = now;
+                    changed = true;
+                }
+            }
+            if matches!(record.status, MemoryStatus::Accepted)
+                && record.use_count == 0
+                && record.created_at < archive_cutoff
+                && record.confidence < 0.55
+            {
+                record.status = MemoryStatus::Archived;
+                record.updated_at = now;
+                report.records_archived += 1;
+                changed = true;
+            }
+        }
+
+        if changed {
+            if let Err(error) = write_memory_records(&self.records_path, &records) {
+                debug!("Failed to maintain typed memory records: {}", error);
+            }
+        }
         report
     }
 
@@ -2016,17 +2555,10 @@ Return exactly the word NONE if there is nothing critical to remember.";
         }
     }
 
-    fn record_memory_decision(&self, status: &str, category: &str, content: &str, reason: &str) {
+    fn record_memory_decision_event(&self, event: MemoryDecisionEvent) {
         if let Some(parent) = self.decision_log_path.parent() {
             let _ = std::fs::create_dir_all(parent);
         }
-        let event = MemoryDecisionEvent {
-            status: status.to_string(),
-            category: category.to_string(),
-            content_preview: log_preview(content, 180),
-            reason: reason.to_string(),
-            created_at: chrono::Utc::now().to_rfc3339(),
-        };
         let Ok(line) = serde_json::to_string(&event) else {
             return;
         };
@@ -2438,6 +2970,203 @@ fn parse_rerank_ids(content: &str, candidate_count: usize) -> Vec<usize> {
         .collect()
 }
 
+#[cfg(test)]
+fn parse_llm_memory_candidate_contents(content: &str) -> Vec<String> {
+    parse_llm_memory_candidates(
+        content,
+        MemoryScope::local("parse-preview"),
+        MemoryProvenance::local("parse_preview"),
+    )
+    .into_iter()
+    .map(|candidate| candidate.content)
+    .collect()
+}
+
+fn parse_llm_memory_candidates(
+    content: &str,
+    scope: MemoryScope,
+    provenance: MemoryProvenance,
+) -> Vec<MemoryCandidate> {
+    let trimmed = content.trim();
+    if trimmed.eq_ignore_ascii_case("NONE") || trimmed.is_empty() {
+        return Vec::new();
+    }
+    if let (Some(start), Some(end)) = (trimmed.find('{'), trimmed.rfind('}')) {
+        if start <= end {
+            let json = &trimmed[start..=end];
+            if let Ok(value) = serde_json::from_str::<serde_json::Value>(json) {
+                if let Some(candidates) = value
+                    .get("memory_candidates")
+                    .and_then(serde_json::Value::as_array)
+                {
+                    return candidates
+                        .iter()
+                        .filter_map(|candidate| {
+                            memory_candidate_from_json(candidate, &scope, &provenance)
+                        })
+                        .take(6)
+                        .collect();
+                }
+            }
+        }
+    }
+
+    trimmed
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .filter_map(|line| {
+            let content = line.strip_prefix("- ").unwrap_or(line).trim();
+            if content.is_empty() {
+                return None;
+            }
+            let mut candidate =
+                MemoryCandidate::new(content, "note", scope.clone(), provenance.clone())
+                    .confidence(0.45)
+                    .with_tags(infer_memory_tags(content, "note"));
+            candidate.evidence.push(MemoryEvidenceRef::inferred(
+                provenance.source.clone(),
+                "legacy free-form LLM memory bullet",
+            ));
+            Some(candidate)
+        })
+        .take(6)
+        .collect()
+}
+
+fn memory_candidate_from_json(
+    value: &serde_json::Value,
+    scope: &MemoryScope,
+    provenance: &MemoryProvenance,
+) -> Option<MemoryCandidate> {
+    let content = value
+        .get("content")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|content| !content.is_empty())?;
+    let raw_type = value
+        .get("type")
+        .or_else(|| value.get("kind"))
+        .or_else(|| value.get("category"))
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("note");
+    let category = normalize_llm_memory_category(raw_type);
+    let confidence = value
+        .get("confidence")
+        .and_then(serde_json::Value::as_f64)
+        .unwrap_or(0.55) as f32;
+    let importance = value
+        .get("importance")
+        .and_then(serde_json::Value::as_u64)
+        .and_then(|value| u8::try_from(value).ok())
+        .unwrap_or(3);
+    let mut tags = value
+        .get("tags")
+        .and_then(serde_json::Value::as_array)
+        .map(|tags| {
+            tags.iter()
+                .filter_map(serde_json::Value::as_str)
+                .map(str::trim)
+                .filter(|tag| !tag.is_empty())
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    tags.extend(infer_memory_tags(content, &category));
+    tags.sort();
+    tags.dedup();
+
+    let mut candidate =
+        MemoryCandidate::new(content, category.clone(), scope.clone(), provenance.clone())
+            .confidence(confidence)
+            .importance(importance)
+            .with_tags(tags)
+            .explicit(category == "preference");
+    let evidence_summary = value
+        .get("evidence")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|evidence| !evidence.is_empty())
+        .unwrap_or("LLM proposed this candidate from conversation context");
+    candidate.evidence.push(MemoryEvidenceRef::new(
+        llm_memory_evidence_kind(&category, provenance),
+        provenance.source.clone(),
+        evidence_summary,
+        confidence.clamp(0.0, 1.0),
+    ));
+
+    if matches!(
+        candidate.kind,
+        MemoryKind::FailurePattern | MemoryKind::SuccessfulFix
+    ) {
+        let failed_strategy = json_string(value, "failed_strategy");
+        let better_strategy = json_string(value, "better_strategy").or_else(|| {
+            if candidate.kind == MemoryKind::SuccessfulFix {
+                Some(content.to_string())
+            } else {
+                None
+            }
+        });
+        let failure_type = json_string(value, "failure_type");
+        let recovery_plan_id = json_string(value, "recovery_plan_id");
+        let context_tags = candidate.tags.clone();
+        candidate.strategy = Some(MemoryStrategyMetadata {
+            failed_strategy,
+            better_strategy,
+            context_tags,
+            failure_type,
+            recovery_plan_id,
+            risk_modifier: if candidate.kind == MemoryKind::FailurePattern {
+                1
+            } else {
+                0
+            },
+            value_modifier: if candidate.kind == MemoryKind::SuccessfulFix {
+                1
+            } else {
+                0
+            },
+        });
+    }
+    Some(candidate)
+}
+
+fn normalize_llm_memory_category(raw_type: &str) -> String {
+    match raw_type.trim().to_ascii_lowercase().as_str() {
+        "user_preference" | "preference" | "user" => "preference",
+        "project_fact" | "fact" | "project" => "project_fact",
+        "failure_lesson" | "failure" | "failure_pattern" => "failure",
+        "successful_strategy" | "successful_fix" | "success" | "strategy" => "success",
+        "workflow_convention" | "convention" => "convention",
+        "decision" | "workflow" => "decision",
+        "tool_quirk" | "tool" => "tool",
+        "skill" | "skill_candidate" => "skill",
+        _ => "note",
+    }
+    .to_string()
+}
+
+fn llm_memory_evidence_kind(category: &str, provenance: &MemoryProvenance) -> MemoryEvidenceKind {
+    if category == "preference" {
+        return MemoryEvidenceKind::UserStatement;
+    }
+    let source = provenance.source.to_ascii_lowercase();
+    if source.contains("trace") || source.contains("stop") || source.contains("recovery") {
+        MemoryEvidenceKind::RuntimeObservation
+    } else {
+        MemoryEvidenceKind::Inference
+    }
+}
+
+fn json_string(value: &serde_json::Value, key: &str) -> Option<String> {
+    value
+        .get(key)
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string)
+}
+
 #[derive(Debug, Clone, Default)]
 struct FileMaintenanceReport {
     duplicates_removed: usize,
@@ -2524,6 +3253,44 @@ fn split_memory_sections(content: &str) -> (String, Vec<String>) {
     (header.trim_end().to_string(), sections)
 }
 
+fn legacy_markdown_sections(content: &str) -> Vec<String> {
+    let (_, mut sections) = split_memory_sections(content);
+    if sections.is_empty() && !content.trim().is_empty() {
+        sections.push(content.trim().to_string());
+    }
+    sections
+}
+
+fn legacy_markdown_section_parts(
+    section: &str,
+    default_category: &str,
+) -> Option<(String, String)> {
+    let mut lines = section.lines();
+    let first = lines.next().unwrap_or_default().trim();
+    let category = first
+        .strip_prefix("## [")
+        .and_then(|rest| rest.split(']').next())
+        .map(|value| value.trim().to_ascii_lowercase())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| default_category.to_string());
+    let body = if first.starts_with("## ") {
+        lines.collect::<Vec<_>>()
+    } else {
+        section.lines().collect::<Vec<_>>()
+    }
+    .into_iter()
+    .map(str::trim)
+    .filter(|line| !line.starts_with("<!-- memory-id:"))
+    .filter(|line| !line.is_empty())
+    .collect::<Vec<_>>()
+    .join("\n");
+    if body.trim().is_empty() {
+        None
+    } else {
+        Some((category, body))
+    }
+}
+
 fn join_memory_sections(header: &str, sections: &[String]) -> String {
     let mut output = String::new();
     if !header.trim().is_empty() {
@@ -2576,6 +3343,65 @@ fn write_memory_archive(
         join_memory_sections(&archive_header, sections),
     )?;
     Ok(())
+}
+
+fn rank_memory_records(records: &[MemoryRecord], keywords: &[String]) -> Vec<MemoryMatch> {
+    if keywords.is_empty() || records.is_empty() {
+        return Vec::new();
+    }
+    records
+        .iter()
+        .filter(|record| matches!(record.status, MemoryStatus::Accepted))
+        .filter_map(|record| {
+            let score = semantic_memory_score(&record.content, keywords, &record_source(record));
+            if score == 0 {
+                return None;
+            }
+            let importance_boost = usize::from(record.importance.min(5));
+            let verified_boost = if record.last_verified_at.is_some() {
+                3
+            } else {
+                0
+            };
+            let stale = record_needs_revalidation(record);
+            let score = score + importance_boost + verified_boost;
+            let score = if stale {
+                score.saturating_div(2).max(1)
+            } else {
+                score
+            };
+            Some(MemoryMatch {
+                source: record_source(record),
+                score,
+                rerank_score: None,
+                snippet: record.content.trim().chars().take(800).collect(),
+            })
+        })
+        .collect()
+}
+
+fn record_source(record: &MemoryRecord) -> String {
+    let projection = record
+        .projection
+        .as_ref()
+        .map(|projection| projection.path.as_str())
+        .unwrap_or(kind_label(record.kind));
+    let stale = if record_needs_revalidation(record) {
+        ":stale"
+    } else {
+        ""
+    };
+    format!("memory_record/{}{}:{}", record.id, stale, projection)
+}
+
+fn memory_record_id_from_source(source: &str) -> Option<String> {
+    let rest = source.strip_prefix("memory_record/")?;
+    let id = rest.split(':').next()?.trim();
+    if id.is_empty() {
+        None
+    } else {
+        Some(id.to_string())
+    }
 }
 
 fn rank_memory_paragraphs(source: &str, content: &str, keywords: &[String]) -> Vec<MemoryMatch> {
@@ -2987,6 +3813,34 @@ Always check logs first.
         assert_eq!(parse_rerank_ids("choose 1 then 0", 3), vec![1, 0]);
     }
 
+    #[test]
+    fn test_parse_llm_memory_candidate_json() {
+        let parsed = parse_llm_memory_candidate_contents(
+            r#"{"memory_candidates":[{"type":"strategy","content":"Run targeted tests before broad validation.","evidence":"turn trace","confidence":0.8,"importance":4,"tags":["testing"]}]}"#,
+        );
+
+        assert_eq!(parsed, vec!["Run targeted tests before broad validation."]);
+        assert!(parse_llm_memory_candidate_contents("NONE").is_empty());
+    }
+
+    #[test]
+    fn test_parse_structured_llm_memory_candidate_metadata() {
+        let parsed = parse_llm_memory_candidates(
+            r#"{"memory_candidates":[{"type":"failure_lesson","content":"Avoid broad edits after validation fails.","evidence":"stop trace recorded repeated validation failure","confidence":0.8,"importance":4,"tags":["validation"],"failed_strategy":"broad_edit_after_failure","better_strategy":"run targeted validation first","failure_type":"test_assertion_failed","recovery_plan_id":"rp_1"}]}"#,
+            MemoryScope::local("parse-test"),
+            MemoryProvenance::local("stop_trace_llm"),
+        );
+
+        assert_eq!(parsed.len(), 1);
+        assert_eq!(parsed[0].kind, MemoryKind::FailurePattern);
+        assert_eq!(parsed[0].importance, 4);
+        assert!(parsed[0].strategy.is_some());
+        assert!(matches!(
+            parsed[0].evidence[0].kind,
+            MemoryEvidenceKind::RuntimeObservation
+        ));
+    }
+
     #[tokio::test]
     async fn test_llm_rerank_reorders_candidates() {
         let provider = MockRankProvider {
@@ -3355,6 +4209,219 @@ Always check logs first.
         assert!(second.reason.contains("duplicate memory"));
         let after = std::fs::read_to_string(&mgr.memory_path).unwrap_or_default();
         assert_eq!(before, after, "duplicate save should not append content");
+
+        let _ = std::fs::remove_dir_all(base);
+    }
+
+    #[tokio::test]
+    async fn test_add_learning_async_writes_typed_record_sidecar() {
+        let base = temp_memory_base("learning-async-record");
+        let mgr = MemoryManager::with_base_dir(base.clone());
+        let content =
+            "Project convention: run cargo test --quiet before committing Rust workflow changes.";
+
+        let outcome = mgr.add_learning_async(content, "convention").await;
+
+        assert_eq!(outcome.status, MemoryWriteOutcomeStatus::Saved);
+        let records = mgr.memory_records();
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].status, MemoryStatus::Accepted);
+        assert_eq!(records[0].kind, MemoryKind::WorkflowConvention);
+        assert_eq!(records[0].importance, 3);
+        assert!(!records[0].evidence.is_empty());
+        let markdown = std::fs::read_to_string(&mgr.memory_path).unwrap_or_default();
+        assert!(markdown.contains("memory-id:"));
+        assert!(markdown.contains(&records[0].id));
+
+        let _ = std::fs::remove_dir_all(base);
+    }
+
+    #[test]
+    fn test_typed_memory_retrieval_updates_usage() {
+        let base = temp_memory_base("typed-memory-usage");
+        let mut mgr = MemoryManager::with_base_dir(base.clone());
+        mgr.add_learning(
+            "Project convention: run cargo check after memory record changes.",
+            "convention",
+        );
+        mgr.freeze_snapshot();
+
+        let matches = mgr.preview_relevant_memories("memory record cargo check", 5);
+
+        assert!(
+            matches
+                .iter()
+                .any(|entry| entry.source.starts_with("memory_record/")),
+            "typed record should be eligible for retrieval"
+        );
+        let updated = mgr.record_memory_usage_for_matches(&matches);
+        assert_eq!(updated, 1);
+        let records = mgr.memory_records();
+        assert_eq!(records[0].use_count, 1);
+        assert!(records[0].last_used_at.is_some());
+
+        let _ = std::fs::remove_dir_all(base);
+    }
+
+    #[test]
+    fn test_project_fact_without_verified_evidence_is_proposed_record() {
+        let base = temp_memory_base("project-fact-evidence");
+        let mgr = MemoryManager::with_base_dir(base.clone());
+        let mut candidate = mgr.candidate_from_content(
+            "Project fact: this repository uses a custom unverified test runner.",
+            "note",
+            "background_llm",
+        );
+        candidate.evidence = vec![MemoryEvidenceRef::inferred(
+            "background_llm",
+            "LLM proposed a project fact without tool evidence",
+        )];
+
+        let outcome = mgr.submit_candidate(candidate, MemoryWriteTarget::Index);
+
+        assert_eq!(outcome.status, MemoryWriteOutcomeStatus::Proposed);
+        let records = mgr.memory_records();
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].status, MemoryStatus::Proposed);
+        assert!(std::fs::read_to_string(&mgr.memory_path)
+            .unwrap_or_default()
+            .trim()
+            .is_empty());
+
+        let _ = std::fs::remove_dir_all(base);
+    }
+
+    #[test]
+    fn test_failure_lesson_without_runtime_evidence_is_proposed_record() {
+        let base = temp_memory_base("failure-evidence");
+        let mgr = MemoryManager::with_base_dir(base.clone());
+        let mut candidate = mgr.candidate_from_content(
+            "Failure pattern: broad edits after failed validation tend to compound errors.",
+            "failure",
+            "background_llm",
+        );
+        candidate.evidence = vec![MemoryEvidenceRef::inferred(
+            "background_llm",
+            "LLM proposed a failure lesson without runtime failure evidence",
+        )];
+
+        let outcome = mgr.submit_candidate(candidate, MemoryWriteTarget::Index);
+
+        assert_eq!(outcome.status, MemoryWriteOutcomeStatus::Proposed);
+        let records = mgr.memory_records();
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].status, MemoryStatus::Proposed);
+
+        let _ = std::fs::remove_dir_all(base);
+    }
+
+    #[test]
+    fn test_import_legacy_markdown_records_preserves_projection() {
+        let base = temp_memory_base("legacy-import");
+        let markdown = "# Priority Agent Memory\n\n## [CONVENTION] 2026-05-25\nProject convention: run cargo check after memory lifecycle changes.\n";
+        std::fs::write(base.join("MEMORY.md"), markdown).unwrap();
+        let mgr = MemoryManager::with_base_dir(base.clone());
+
+        let imported = mgr.import_legacy_markdown_records();
+
+        assert_eq!(imported, 1);
+        let records = mgr.memory_records();
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].status, MemoryStatus::Accepted);
+        assert!(records[0].tags.iter().any(|tag| tag == "legacy_import"));
+        assert_eq!(
+            records[0]
+                .projection
+                .as_ref()
+                .map(|projection| projection.path.as_str()),
+            Some("MEMORY.md")
+        );
+        assert_eq!(mgr.memory_record_summary().projection_drift, 1);
+        assert_eq!(
+            std::fs::read_to_string(base.join("MEMORY.md")).unwrap(),
+            markdown
+        );
+
+        let _ = std::fs::remove_dir_all(base);
+    }
+
+    #[test]
+    fn test_stale_project_fact_is_demoted_in_retrieval_context() {
+        let base = temp_memory_base("stale-record-demotion");
+        let mut mgr = MemoryManager::with_base_dir(base.clone());
+        let candidate = MemoryCandidate::new(
+            "project_runtime: package manager is pnpm.",
+            "project_fact",
+            MemoryScope::local("stale-test"),
+            MemoryProvenance::local("tool_output"),
+        )
+        .with_evidence(MemoryEvidenceRef::new(
+            MemoryEvidenceKind::ToolOutput,
+            "package.json",
+            "verified package manager from project file",
+            0.95,
+        ))
+        .confidence(0.95);
+        let outcome = mgr.submit_candidate(candidate, MemoryWriteTarget::Index);
+        assert_eq!(outcome.status, MemoryWriteOutcomeStatus::Saved);
+        let mut records = mgr.memory_records();
+        records[0].last_verified_at = Some(chrono::Utc::now() - chrono::Duration::days(120));
+        write_memory_records(mgr.records_path(), &records).unwrap();
+        mgr.freeze_snapshot();
+
+        let matches = mgr.preview_relevant_memories("pnpm package manager", 5);
+        assert!(matches.iter().any(|item| item.source.contains(":stale:")));
+        let ctx = mgr
+            .preview_retrieval_context(
+                "pnpm package manager",
+                5,
+                crate::engine::intent_router::RetrievalPolicy::Memory,
+            )
+            .expect("retrieval context");
+        assert!(ctx.items.iter().any(|item| {
+            item.provenance.contains(":stale:")
+                && item.trust == crate::engine::retrieval_context::TrustLevel::Low
+                && item.reason.contains("needs revalidation")
+        }));
+
+        let _ = std::fs::remove_dir_all(base);
+    }
+
+    #[test]
+    fn test_verified_project_fact_supersedes_legacy_unverified_fact() {
+        let base = temp_memory_base("verified-supersedes");
+        std::fs::write(
+            base.join("MEMORY.md"),
+            "# Priority Agent Memory\n\n## [PROJECT_FACT] 2026-05-25\nproject_runtime: package manager is npm.\n",
+        )
+        .unwrap();
+        let mgr = MemoryManager::with_base_dir(base.clone());
+        assert_eq!(mgr.import_legacy_markdown_records(), 1);
+        let old_id = mgr.memory_records()[0].id.clone();
+        let candidate = MemoryCandidate::new(
+            "project_runtime: package manager is pnpm.",
+            "project_fact",
+            MemoryScope::local("supersede-test"),
+            MemoryProvenance::local("tool_output"),
+        )
+        .with_evidence(MemoryEvidenceRef::new(
+            MemoryEvidenceKind::ToolOutput,
+            "package.json",
+            "verified package manager from project file",
+            0.95,
+        ))
+        .confidence(0.95);
+
+        let outcome = mgr.submit_candidate(candidate, MemoryWriteTarget::Index);
+
+        assert_eq!(outcome.status, MemoryWriteOutcomeStatus::Saved);
+        let records = mgr.memory_records();
+        assert_eq!(records.len(), 2);
+        let old = records.iter().find(|record| record.id == old_id).unwrap();
+        let new = records.iter().find(|record| record.id != old_id).unwrap();
+        assert_eq!(old.status, MemoryStatus::Superseded);
+        assert_eq!(old.superseded_by.as_deref(), Some(new.id.as_str()));
+        assert!(new.supersedes.iter().any(|id| id == &old_id));
 
         let _ = std::fs::remove_dir_all(base);
     }

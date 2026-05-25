@@ -12,15 +12,24 @@ impl WorkflowPromptPolicy {
     }
 
     pub(super) fn forbids_code_write_tools(prompt: &str) -> bool {
+        let mut in_allowed_tools = false;
         let mut in_forbidden_tools = false;
+        let mut saw_allowed_tools_section = false;
+        let mut allowed_code_write_tools = false;
+        let mut forbidden_code_write_tools = std::collections::HashSet::new();
+
         for line in prompt.lines() {
             let trimmed = line.trim();
             if trimmed.starts_with("## ") {
+                in_allowed_tools = trimmed.eq_ignore_ascii_case("## Allowed tools");
                 in_forbidden_tools = trimmed.eq_ignore_ascii_case("## Forbidden tools")
                     || trimmed.eq_ignore_ascii_case("## Disallowed tools");
+                if in_allowed_tools {
+                    saw_allowed_tools_section = true;
+                }
                 continue;
             }
-            if !in_forbidden_tools || !trimmed.starts_with("- ") {
+            if !(in_allowed_tools || in_forbidden_tools) || !trimmed.starts_with("- ") {
                 continue;
             }
             let tool = trimmed
@@ -29,8 +38,27 @@ impl WorkflowPromptPolicy {
                 .trim_matches('`')
                 .to_ascii_lowercase();
             if matches!(tool.as_str(), "file_edit" | "file_write" | "file_patch") {
-                return true;
+                if in_allowed_tools {
+                    allowed_code_write_tools = true;
+                } else if in_forbidden_tools {
+                    forbidden_code_write_tools.insert(tool);
+                }
             }
+        }
+
+        if allowed_code_write_tools {
+            return false;
+        }
+
+        if saw_allowed_tools_section {
+            return true;
+        }
+
+        if forbidden_code_write_tools.contains("file_edit")
+            && (forbidden_code_write_tools.contains("file_write")
+                || forbidden_code_write_tools.contains("file_patch"))
+        {
+            return true;
         }
 
         let lower = prompt.to_ascii_lowercase();
@@ -74,6 +102,41 @@ mod tests {
         assert!(!WorkflowPromptPolicy::forbids_code_write_tools(
             "## Forbidden tools\n- git_push\n"
         ));
+    }
+
+    #[test]
+    fn prompt_does_not_forbid_code_writes_when_file_edit_is_allowed() {
+        let prompt = r#"
+## Allowed tools
+- grep
+- file_read
+- file_edit
+- bash
+
+## Forbidden tools
+- file_write
+- file_patch
+- git_push
+"#;
+
+        assert!(!WorkflowPromptPolicy::forbids_code_write_tools(prompt));
+    }
+
+    #[test]
+    fn prompt_forbids_code_writes_when_allowed_tool_section_has_no_write_tool() {
+        let prompt = r#"
+## Allowed tools
+- grep
+- file_read
+- bash
+
+## Forbidden tools
+- file_edit
+- file_write
+- file_patch
+"#;
+
+        assert!(WorkflowPromptPolicy::forbids_code_write_tools(prompt));
     }
 
     #[test]

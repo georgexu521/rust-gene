@@ -589,6 +589,23 @@ impl PatchSynthesisFlowController {
                 PatchSynthesisRecoveryFlow::Continue
             }
             PatchSynthesisFailureRecovery::Stop { message } => {
+                context.trace.record(TraceEvent::StopCheckEvaluated {
+                    status: "stop".to_string(),
+                    reason: "model_output_invalid".to_string(),
+                    stage: "Repair".to_string(),
+                    terminal_status: Some("failed".to_string()),
+                    action: "recover".to_string(),
+                    no_code_progress_rounds: context.state.no_code_progress_rounds,
+                    action_checkpoint_active: context.state.action_checkpoint_active,
+                    summary: message.to_string(),
+                    evidence_items: 1,
+                    failure_type: Some("model_output_invalid".to_string()),
+                    recovery_plan_id: None,
+                    rollback_recommended: false,
+                    next_action: Some(
+                        "return control after bounded patch synthesis failure".to_string(),
+                    ),
+                });
                 FocusedRepairRecoveryController::stop_with_message(
                     context.tx,
                     &mut *context.final_content,

@@ -111,6 +111,23 @@ fn runtime_spine_behavior_contract_covers_context_action_progress_stop_and_proof
         force_patch_synthesis_after_no_change: false,
         repeated_failed_tools: 0,
         duplicate_read_only_tools: 0,
+        max_iterations_reached: false,
+        uncertainty_not_reduced_steps: 0,
+        consecutive_validation_failures: 0,
+        consecutive_edit_failures: 0,
+        consecutive_command_failures: 0,
+        consecutive_permission_blocks: 0,
+        consecutive_low_action_scores: 0,
+        consecutive_high_risk_low_value_actions: 0,
+        score_without_uncertainty_reduction_rounds: 0,
+        repeated_revised_action_count: 0,
+        user_interrupted: false,
+        model_output_invalid_attempts: 0,
+        action_review_decision: None,
+        action_review_reason: None,
+        rollback_candidate: None,
+        failure_type: None,
+        recovery_plan_id: None,
     });
     assert_eq!(stop.status, StopCheckStatus::Checkpoint);
     assert_eq!(stop.reason, StopCheckReason::NoProgress);
@@ -119,7 +136,7 @@ fn runtime_spine_behavior_contract_covers_context_action_progress_stop_and_proof
     assert!(task_bundle
         .agent_state
         .format_for_context_zone()
-        .contains("Stop check: Checkpoint"));
+        .contains("Stop check: checkpoint"));
 
     let required = vec!["cargo test -q".to_string()];
     let mut ledger = EvidenceLedger::new();
@@ -166,6 +183,17 @@ fn runtime_spine_behavior_contract_keeps_high_risk_phase_mismatch_visible() {
     assert!(decision.requires_confirmation);
     assert!(decision.trace_recommended);
     assert!(decision.scores.risk >= 8);
+    assert!(decision.scores.scope_fit <= 4);
+    assert!(decision.scores.action_score <= 5);
+    assert_eq!(
+        decision.score_computation.formula_stage.as_str(),
+        "diagnosis"
+    );
+    assert!(decision
+        .score_computation
+        .modifiers
+        .iter()
+        .any(|modifier| modifier.kind == "phase_mismatch"));
 }
 
 #[test]
@@ -304,12 +332,47 @@ fn runtime_spine_behavior_contract_covers_checkpoint_and_observation_signals() {
         tool: "file_edit".to_string(),
         call_id: "call_edit".to_string(),
         status: "success".to_string(),
+        result_kind: "edit".to_string(),
+        model_visibility: "raw_excerpt".to_string(),
+        include_in_next_context: true,
+        store_in_state: true,
+        key_findings: 1,
+        evidence_items: 1,
+        failure_type: None,
+        recovery_plan_id: None,
+        recovery_kind: None,
+        raw_result_ref: None,
+        quality_warnings: 0,
+        quality_warning_labels: Vec::new(),
         files_read: 0,
         files_changed: 1,
         checkpoint_id: Some("cp_runtime_1".to_string()),
         summary: "file_edit succeeded: edited src/lib.rs".to_string(),
     });
+    trace.record(TraceEvent::AgentLoopStepEvaluated {
+        route_workflow: "code_change".to_string(),
+        route_risk: "medium".to_string(),
+        task_mode: "full".to_string(),
+        stage_before: "Edit".to_string(),
+        stage_after: "Validate".to_string(),
+        mva_stage_before: "implementation".to_string(),
+        mva_stage_after: "verification".to_string(),
+        stage_transition_policy: "expected".to_string(),
+        exposed_tools: 4,
+        selected_tool_calls: 1,
+        action_score_records: 1,
+        latest_action_score: Some(12),
+        observations_delta: 1,
+        key_findings_delta: 1,
+        stop_status: "continue".to_string(),
+        stop_reason: "no_issue".to_string(),
+        stop_action: "continue".to_string(),
+        terminal_status: None,
+        state_delta: "stage_changed=true observations_delta=1".to_string(),
+    });
     let summary = format_trace_summary(&trace.snapshot(), 10);
     assert!(summary.contains("action review"));
-    assert!(summary.contains("observation: status=success"));
+    assert!(summary.contains("observation: kind=edit status=success"));
+    assert!(summary.contains("visibility=raw_excerpt context=true state=true"));
+    assert!(summary.contains("agent loop"));
 }

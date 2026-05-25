@@ -304,6 +304,7 @@ fn latest_closeout_label(trace: &crate::engine::trace::TurnTrace) -> Option<Stri
             verification_proof_summary,
             acceptance_items,
             residual_risks,
+            ..
         } = event
         {
             Some(format!(
@@ -1926,19 +1927,41 @@ pub fn handle_recover(app: &mut TuiApp, args: &str) -> String {
                 plan_id,
                 source,
                 category,
+                failure_type,
+                recovery_kind,
                 action,
                 retryable,
                 safe_retry,
+                retry_budget,
+                side_effect_uncertain,
+                requires_user_decision,
                 suggested_command,
                 status,
+                ..
             } => Some(format!(
-                "- {} [{}:{}] status={} retryable={} safe_retry={} suggested={} action={}",
+                "- {} [{}:{}] failure={} recovery_kind={} status={} retryable={} safe_retry={} retry_budget={} side_effect_uncertain={} requires_user={} suggested={} action={}",
                 &plan_id[..8.min(plan_id.len())],
                 source,
                 category,
+                if failure_type.is_empty() {
+                    "none"
+                } else {
+                    failure_type.as_str()
+                },
+                if recovery_kind.is_empty() {
+                    "none"
+                } else {
+                    recovery_kind.as_str()
+                },
                 status,
                 retryable,
                 safe_retry,
+                retry_budget
+                    .as_ref()
+                    .map(|budget| budget.to_string())
+                    .unwrap_or_else(|| "none".to_string()),
+                side_effect_uncertain,
+                requires_user_decision,
                 suggested_command.as_deref().unwrap_or("none"),
                 action
             )),

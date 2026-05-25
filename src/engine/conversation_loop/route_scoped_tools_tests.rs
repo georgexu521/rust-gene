@@ -363,6 +363,35 @@ fn route_scoped_tools_for_generic_mcp_config_hide_auth_tool() {
 }
 
 #[test]
+fn route_scoped_tools_for_config_audit_include_read_only_search() {
+    let mut env = EnvVarGuard::acquire_blocking();
+    env.remove("PRIORITY_AGENT_ROUTE_SCOPED_TOOLS");
+    env.remove("PRIORITY_AGENT_DEBUG_TOOL_EXPOSURE");
+    env.remove("PRIORITY_AGENT_TOOL_PROFILE");
+
+    let route = crate::engine::intent_router::IntentRoute {
+        intent: crate::engine::intent_router::IntentKind::Configuration,
+        confidence: 0.8,
+        workflow: crate::engine::intent_router::WorkflowKind::Direct,
+        retrieval: crate::engine::intent_router::RetrievalPolicy::Light,
+        reasoning: crate::engine::intent_router::ReasoningPolicy::Medium,
+        risk: crate::engine::intent_router::RiskLevel::Medium,
+        recommended_tools: Vec::new(),
+        dependency_install_intent: false,
+        mcp_auth_intent: false,
+        reason: "read-only config audit needs local search".to_string(),
+    };
+    let tools = fake_tools(&["glob", "grep", "file_read", "bash", "file_edit", "ask_user"]);
+
+    let exposed = exposed_names(&ConversationLoop::route_scoped_tools(&tools, &route));
+    assert!(exposed.contains("glob"));
+    assert!(exposed.contains("grep"));
+    assert!(exposed.contains("file_read"));
+    assert!(exposed.contains("bash"));
+    assert!(!exposed.contains("file_edit"));
+}
+
+#[test]
 fn route_scoped_tools_for_explicit_mcp_auth_include_auth_tool() {
     let mut env = EnvVarGuard::acquire_blocking();
     env.remove("PRIORITY_AGENT_ROUTE_SCOPED_TOOLS");

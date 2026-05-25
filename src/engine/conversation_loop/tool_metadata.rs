@@ -673,8 +673,15 @@ pub(super) fn attach_tool_execution_metadata(tool_call: &ToolCall, result: &mut 
         code.as_deref(),
     );
     let metadata = serde_json::json!({
+        "plan_id": plan.id,
         "recoverable": plan.retryable,
         "safe_retry": plan.safe_retry,
+        "failure_type": plan.failure_type,
+        "recovery_kind": plan.recovery_kind,
+        "allowed_alternatives": plan.allowed_alternatives,
+        "retry_budget": plan.retry_budget,
+        "side_effect_uncertain": plan.side_effect_uncertain,
+        "requires_user_decision": plan.requires_user_decision,
         "suggested_command": plan.suggested_command,
         "user_note": plan.user_note,
         "recovery_action": plan.action,

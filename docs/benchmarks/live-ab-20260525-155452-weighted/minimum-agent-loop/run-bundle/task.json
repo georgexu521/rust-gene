@@ -1,0 +1,29 @@
+{
+  "schema": "agent_run_bundle.v1",
+  "task_id": "minimum-agent-loop",
+  "run_id": "ab-20260525-155452-weighted",
+  "generated_at": "2026-05-25T08:01:25.510008+00:00",
+  "goal_summary": "seeded_code_change",
+  "mode": "agent-run",
+  "final_status": "failed",
+  "terminal_status": "completed",
+  "stop_reason": "no_issue",
+  "modified_files": "1",
+  "validation_status": "ok",
+  "verification_status": "passed",
+  "closeout_status": "passed",
+  "scores": {
+    "outcome": "65",
+    "process": "100",
+    "efficiency": "100",
+    "agent": "82",
+    "penalties": "run_failed,output_assertions_failed"
+  },
+  "artifacts": {
+    "source_report": "docs/benchmarks/live-ab-20260525-155452-weighted/minimum-agent-loop/report.md",
+    "source_events": "docs/benchmarks/live-ab-20260525-155452-weighted/minimum-agent-loop/agent-events.jsonl",
+    "steps": "docs/benchmarks/live-ab-20260525-155452-weighted/minimum-agent-loop/run-bundle/steps.jsonl",
+    "events": "docs/benchmarks/live-ab-20260525-155452-weighted/minimum-agent-loop/run-bundle/events.jsonl",
+    "final_report": "docs/benchmarks/live-ab-20260525-155452-weighted/minimum-agent-loop/run-bundle/final_report.md"
+  }
+}

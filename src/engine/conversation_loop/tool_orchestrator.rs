@@ -107,6 +107,8 @@ impl ConversationLoop {
                 "mcp_tool",
                 "list_mcp_resources",
                 "read_mcp_resource",
+                "glob",
+                "grep",
                 "file_read",
                 "bash",
                 "ask_user",

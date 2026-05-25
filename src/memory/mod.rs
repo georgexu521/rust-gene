@@ -13,6 +13,7 @@ pub use calibration::{
 };
 pub use manager::{
     MemoryFlushReason, MemoryFlushRecord, MemoryFlushStatus, MemoryFlushSummary, MemoryManager,
+    MemoryRecordSummary, MemoryWriteTarget,
 };
 pub use provider::{LocalMemoryProvider, MemoryProvider};
 pub use quality::{assess_memory_candidate, MemoryQualityAssessment};
@@ -24,6 +25,7 @@ pub use scoring::{
     MemoryWriteDecision, MemoryWriteFactors,
 };
 pub use types::{
-    AgentContext, MemoryKind, MemoryProvenance, MemoryRecord, MemoryScope, MemoryStatus,
-    SensitivityLevel,
+    AgentContext, MemoryCandidate, MemoryEvidenceKind, MemoryEvidenceRef, MemoryKind,
+    MemoryProjection, MemoryProvenance, MemoryRecord, MemoryScope, MemoryStatus,
+    MemoryStrategyMetadata, SensitivityLevel,
 };

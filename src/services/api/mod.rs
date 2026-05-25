@@ -283,6 +283,30 @@ pub fn sanitize_assistant_content(content: impl AsRef<str>) -> String {
         .to_string()
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct ToolMessageSequenceNormalizationReport {
+    pub input_messages: usize,
+    pub output_messages: usize,
+    pub valid_tool_call_pairs: usize,
+    pub dropped_assistant_tool_calls: usize,
+    pub dropped_tool_results: usize,
+    pub valid_tool_call_ids: Vec<String>,
+    pub dropped_assistant_tool_call_ids: Vec<String>,
+    pub dropped_tool_result_ids: Vec<String>,
+}
+
+impl ToolMessageSequenceNormalizationReport {
+    pub fn has_repairs(&self) -> bool {
+        self.dropped_assistant_tool_calls > 0 || self.dropped_tool_results > 0
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct ToolMessageSequenceNormalization {
+    pub messages: Vec<Message>,
+    pub report: ToolMessageSequenceNormalizationReport,
+}
+
 /// Keep provider-bound histories compatible with OpenAI-style tool semantics.
 ///
 /// A message with `tool_calls` must be followed immediately by matching tool
@@ -291,7 +315,18 @@ pub fn sanitize_assistant_content(content: impl AsRef<str>) -> String {
 /// metadata, not provider context. Drop invalid calls and orphan tool results
 /// before sending the request so strict providers do not reject the turn.
 pub fn normalize_tool_message_sequence(messages: Vec<Message>) -> Vec<Message> {
+    normalize_tool_message_sequence_with_report(messages).messages
+}
+
+pub fn normalize_tool_message_sequence_with_report(
+    messages: Vec<Message>,
+) -> ToolMessageSequenceNormalization {
+    let input_messages = messages.len();
     let mut normalized = Vec::with_capacity(messages.len());
+    let mut report = ToolMessageSequenceNormalizationReport {
+        input_messages,
+        ..ToolMessageSequenceNormalizationReport::default()
+    };
     let mut index = 0;
 
     while index < messages.len() {
@@ -322,17 +357,29 @@ pub fn normalize_tool_message_sequence(messages: Vec<Message>) -> Vec<Message> {
                     && tool_result_ids.iter().all(|id| expected_ids.contains(id));
 
                 if has_matching_results {
+                    report.valid_tool_call_pairs += tool_calls.len();
+                    report
+                        .valid_tool_call_ids
+                        .extend(tool_calls.iter().map(|call| call.id.clone()));
                     normalized.push(Message::assistant_with_tools(content, tool_calls));
                     normalized.extend(messages[index + 1..next].iter().cloned());
                     index = next;
                 } else {
+                    report.dropped_assistant_tool_calls += tool_calls.len();
+                    report
+                        .dropped_assistant_tool_call_ids
+                        .extend(tool_calls.iter().map(|call| call.id.clone()));
                     normalized.push(Message::assistant(content));
                     index += 1;
                 }
             }
-            Message::Tool { .. } => {
+            Message::Tool { tool_call_id, .. } => {
                 // Orphan tool results are not valid provider messages. The UI still
                 // displays them separately; they should not poison the next API turn.
+                report.dropped_tool_results += 1;
+                if !tool_call_id.is_empty() {
+                    report.dropped_tool_result_ids.push(tool_call_id);
+                }
                 index += 1;
             }
             other => {
@@ -342,7 +389,11 @@ pub fn normalize_tool_message_sequence(messages: Vec<Message>) -> Vec<Message> {
         }
     }
 
-    normalized
+    report.output_messages = normalized.len();
+    ToolMessageSequenceNormalization {
+        messages: normalized,
+        report,
+    }
 }
 
 fn strip_tag_block(input: &str, tag: &str) -> String {
@@ -390,7 +441,10 @@ pub struct Usage {
 
 #[cfg(test)]
 mod tests {
-    use super::{normalize_tool_message_sequence, sanitize_assistant_content, Message, ToolCall};
+    use super::{
+        normalize_tool_message_sequence, normalize_tool_message_sequence_with_report,
+        sanitize_assistant_content, Message, ToolCall,
+    };
 
     #[test]
     fn sanitizer_removes_think_blocks() {
@@ -476,5 +530,49 @@ mod tests {
         assert_eq!(normalized.len(), 2);
         assert!(matches!(normalized[0], Message::User { .. }));
         assert!(matches!(normalized[1], Message::Assistant { .. }));
+    }
+
+    #[test]
+    fn normalize_tool_sequence_reports_repairs_and_preserved_pairs() {
+        let messages = vec![
+            Message::assistant_with_tools(
+                "read",
+                vec![ToolCall {
+                    id: "call_valid".to_string(),
+                    name: "file_read".to_string(),
+                    arguments: serde_json::json!({"path": "Cargo.toml"}),
+                }],
+            ),
+            Message::tool("call_valid", "Result: OK"),
+            Message::assistant_with_tools(
+                "stale display metadata",
+                vec![ToolCall {
+                    id: "call_dangling".to_string(),
+                    name: "file_write".to_string(),
+                    arguments: serde_json::json!({"path": "/tmp/a", "content": "x"}),
+                }],
+            ),
+            Message::tool("call_orphan", "Result: aborted"),
+        ];
+
+        let normalized = normalize_tool_message_sequence_with_report(messages);
+
+        assert_eq!(normalized.report.valid_tool_call_pairs, 1);
+        assert_eq!(normalized.report.dropped_assistant_tool_calls, 1);
+        assert_eq!(normalized.report.dropped_tool_results, 1);
+        assert_eq!(
+            normalized.report.valid_tool_call_ids,
+            vec!["call_valid".to_string()]
+        );
+        assert_eq!(
+            normalized.report.dropped_assistant_tool_call_ids,
+            vec!["call_dangling".to_string()]
+        );
+        assert_eq!(
+            normalized.report.dropped_tool_result_ids,
+            vec!["call_orphan".to_string()]
+        );
+        assert!(normalized.report.has_repairs());
+        assert_eq!(normalized.messages.len(), 3);
     }
 }

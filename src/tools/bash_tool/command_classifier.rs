@@ -380,7 +380,10 @@ fn validation_family(command: &str) -> Option<ValidationFamily> {
         || lower.starts_with("python -m py_compile")
     {
         Some(ValidationFamily::PythonCompile)
-    } else if lower.starts_with("python3 -m unittest") || lower.starts_with("python -m unittest") {
+    } else if lower.starts_with("python3 -m unittest")
+        || lower.starts_with("python -m unittest")
+        || is_python_test_script(command)
+    {
         Some(ValidationFamily::PythonUnittest)
     } else if lower == "go test" || lower.starts_with("go test ") {
         Some(ValidationFamily::GoTest)
@@ -446,6 +449,25 @@ fn is_project_validation_script(command: &str) -> bool {
     };
     let script = script.strip_prefix("./").unwrap_or(script);
     script.starts_with("scripts/") && script.ends_with(".sh")
+}
+
+fn is_python_test_script(command: &str) -> bool {
+    let tokens = command.split_whitespace().collect::<Vec<_>>();
+    let [python, script] = tokens.as_slice() else {
+        return false;
+    };
+    if !matches!(*python, "python" | "python3") {
+        return false;
+    }
+    let script = script.strip_prefix("./").unwrap_or(script);
+    if !script.ends_with(".py") {
+        return false;
+    }
+    let file_name = script.rsplit('/').next().unwrap_or(script);
+    file_name.starts_with("test_")
+        || file_name.ends_with("_test.py")
+        || script.starts_with("tests/")
+        || script.contains("/tests/")
 }
 
 fn is_safe_rg_assertion(command: &str) -> bool {
@@ -1643,6 +1665,11 @@ mod tests {
         assert_eq!(
             classify_command("python3 -m py_compile snake.py").validation_family,
             Some(ValidationFamily::PythonCompile)
+        );
+        assert_eq!(
+            classify_command("python3 fixtures/mva_verification_repair/test_slugify.py")
+                .validation_family,
+            Some(ValidationFamily::PythonUnittest)
         );
         assert_eq!(
             classify_command("go test ./...").validation_family,

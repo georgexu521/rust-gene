@@ -1488,6 +1488,12 @@ mod tests {
                 .events
                 .push(crate::engine::trace::TraceEvent::FinalCloseoutPrepared {
                     status: "passed".to_string(),
+                    terminal_status: Some("completed".to_string()),
+                    stop_reason: None,
+                    stop_action: None,
+                    failure_type: None,
+                    recovery_plan_id: None,
+                    rollback_status: None,
                     changed_files: 1,
                     validation_items: 1,
                     tool_records: turn_index as usize,

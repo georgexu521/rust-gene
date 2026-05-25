@@ -1,66 +1,72 @@
 # Priority Agent Project Notes
 
-Only the `## Agent Runtime Guidance` section is intended for normal prompt
-injection. Longer history and old product notes were archived in
+Only `## Agent Runtime Guidance` is prompt-injected. Older notes live in
 `docs/archive/AGENTS_PROJECT_GUIDE_PRE_RUNTIME_DIET_2026-05-08.md`.
 
 ## Agent Runtime Guidance
 
-## Current Project Facts
+### Current Project Facts
 
 - Product: `priority-agent`, a Rust programming-agent terminal CLI.
-- Default entry: `priority-agent` or `pa`; `--cli` is the normal interactive
-  path. `--tui` is the compatibility full-screen terminal interface.
+- Default entry: `priority-agent` or `pa`; `--cli` is normal interactive mode,
+  and `--tui` is compatibility mode.
 - Canonical status: `docs/PROJECT_STATUS.md`.
-- Claude Code gap tracking:
-  `docs/CLAUDE_CODE_GAP_MATRIX_2026-05-03.md`.
-- Runtime simplification plan:
-  `docs/LLM_RUNTIME_SIMPLIFICATION_PLAN_2026-05-08.md`.
-- Product principle:
+- Key docs: `docs/LLM_RUNTIME_SIMPLIFICATION_PLAN_2026-05-08.md`,
   `docs/PERSONAL_AGENT_PRODUCT_PRINCIPLES_2026-05-18.md`.
 
-## Product Direction
+### Product Direction
 
-Priority Agent is not trying to win by becoming a broad, generic clone of
-Claude Code, Codex, opencode, or any other general-purpose coding agent.
+Stay narrow, deep, personal, and verifiable. The product should win by knowing
+gex's machine, projects, habits, validation loops, and local coding workflow.
 
-The guiding principle is: narrow, deep, personal, and verifiable. Large vendors
-will likely win generic entrypoints; this project should win by being the agent
-that best understands gex's machine, projects, habits, validation loops, and
-local coding workflow.
+### Agent/LLM Boundary
 
-## Work Style
+- LLM owns semantic and engineering judgment: approach, code reasoning, failure
+  interpretation, and repair choice.
+- If docs say the agent/runtime "judges" an action, read that as deterministic
+  screening by rules, scores, permissions, risk, state, and evidence, not as
+  independent code understanding.
+- Runtime should organize context, execute tools, record observations, enforce
+  hard constraints, feed failures back to the LLM, and gate closeout on proof.
 
-- Read the current code before changing behavior. Follow existing module
-  boundaries and keep edits scoped to the requested phase.
-- Preserve user or prior-agent work in the dirty tree. Do not revert unrelated
+### Work Style
+
+- Read current code before changing behavior; follow existing module boundaries.
+- Preserve user or prior-agent work in the dirty tree; do not revert unrelated
   changes.
 - Prefer `rg` / `rg --files` for search and local targeted tests for feedback.
 - Keep docs aligned only when a change affects startup, validation, or current
   project status.
-- Do not force a heavyweight planning, priority, or workflow framework into
-  simple tasks. Runtime checks, tool contracts, and tests should carry hard
-  constraints; the model should keep normal problem-solving freedom.
+- Do not force heavyweight planning into simple tasks. Runtime checks, tool
+  contracts, and tests carry hard constraints.
 
-## Main Entry Points
+### Testing And Failure Triage
 
-- Startup and mode routing: `src/main.rs`.
-- Prompt assembly: `src/engine/prompt_context.rs`,
-  `src/instructions/mod.rs`, `src/engine/mod.rs`.
-- Main execution loop: `src/engine/conversation_loop/mod.rs`.
-- Query and streaming paths: `src/engine/query_engine.rs`,
-  `src/engine/streaming.rs`.
-- Intent routing and workflow policy: `src/engine/intent_router.rs`,
-  `src/engine/workflow/`.
-- Tool registry and routing: `src/tools/mod.rs`.
-- Memory and retrieval: `src/memory/manager.rs`,
-  `src/engine/retrieval_context.rs`.
-- Interactive CLI surface: `src/tui/`.
+- A failed live eval is not automatically an agent-flow bug. Check required
+  commands, diff state, proof, closeout, runtime spine, and `failure_owner`.
+- With weaker providers such as MiniMax, wrong edits and stale anchors are
+  expected. Honest `not_verified`/`failed`/`partial` with evidence is valid.
+- Failed tools or validation should become `ToolObservation`, re-enter context,
+  trigger bounded repair, and block verified closeout until proof is real.
+- Do not add always-on prompt rules for one-off model mistakes. Prefer runtime
+  checks, tool contracts, semantic assertions, gated repair, and failure-owner
+  classification.
+- Never weaken validation, permissions, checkpoints, or high-risk gates to make
+  a weak provider pass.
 
-## Validation Commands
+### Main Entry Points
 
-Use the narrowest gate that matches the change, then broaden when behavior or
-shared contracts moved.
+- Startup/mode: `src/main.rs`; prompts: `src/engine/mod.rs`,
+  `src/engine/prompt_context.rs`, `src/instructions/mod.rs`.
+- Main loop: `src/engine/conversation_loop/mod.rs`; query/streaming:
+  `src/engine/query_engine.rs`, `src/engine/streaming.rs`.
+- Routing/tools/memory/UI: `src/engine/intent_router.rs`,
+  `src/engine/workflow/`, `src/tools/mod.rs`, `src/memory/manager.rs`,
+  `src/tui/`.
+
+### Validation Commands
+
+Use the narrowest matching gate, then broaden when shared contracts moved.
 
 ```bash
 cargo check -q
@@ -82,7 +88,7 @@ bash -n scripts/run_live_eval.sh
 python3 -m py_compile scripts/live_eval_report_parser.py
 ```
 
-## Current Cleanup Focus
+### Current Cleanup Focus
 
 The active line of work is reducing over-control in the LLM runtime:
 

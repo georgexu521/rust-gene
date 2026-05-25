@@ -9,12 +9,16 @@ use crate::engine::task_context::AgentTaskStage;
 use crate::services::api::ToolCall;
 use serde::{Deserialize, Serialize};
 
+pub const ACTION_SCORE_FORMULA_VERSION: &str = "action_score.v1";
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ActionDecision {
     pub reason_summary: String,
     pub action: ProposedAction,
     pub expected_observation: String,
     pub scores: ActionScores,
+    #[serde(default)]
+    pub score_computation: ActionScoreComputation,
     pub requires_confirmation: bool,
     pub verification_after: Option<String>,
     pub trace_recommended: bool,
@@ -36,6 +40,72 @@ pub struct ActionScores {
     pub uncertainty_reduction: u8,
     pub cost: u8,
     pub reversibility: u8,
+    #[serde(default)]
+    pub scope_fit: u8,
+    #[serde(default)]
+    pub action_score: i16,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ActionScoreComputation {
+    #[serde(default)]
+    pub formula_stage: ActionScoreStage,
+    #[serde(default = "default_formula_version")]
+    pub formula_version: String,
+    #[serde(default)]
+    pub modifiers: Vec<ActionScoreModifier>,
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ActionScoreStage {
+    #[default]
+    Diagnosis,
+    Planning,
+    Implementation,
+    Verification,
+    Recovery,
+    Closeout,
+}
+
+impl Default for ActionScoreComputation {
+    fn default() -> Self {
+        Self {
+            formula_stage: ActionScoreStage::Diagnosis,
+            formula_version: ACTION_SCORE_FORMULA_VERSION.to_string(),
+            modifiers: Vec::new(),
+        }
+    }
+}
+
+fn default_formula_version() -> String {
+    ACTION_SCORE_FORMULA_VERSION.to_string()
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ActionScoreModifier {
+    pub source: ActionScoreModifierSource,
+    pub kind: String,
+    pub reason: String,
+    pub value_delta: i8,
+    pub risk_delta: i8,
+    pub uncertainty_reduction_delta: i8,
+    pub cost_delta: i8,
+    pub reversibility_delta: i8,
+    pub scope_fit_delta: i8,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ActionScoreModifierSource {
+    Route,
+    Checkpoint,
+    Progress,
+    Phase,
+    ToolProfile,
+    Memory,
+    Observer,
+    Review,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -53,22 +123,83 @@ impl ActionDecision {
         let profile = ToolActionProfile::from_tool_call(tool_call);
         let phase_aligned = phase_allows_action(input.task_stage, &profile);
         let mut scores = scores_for_profile(&profile, input.task_stage);
+        let mut modifiers = Vec::new();
+        let formula_stage = ActionScoreStage::from_task_stage(input.task_stage);
 
         if input.route_risk == Some(RiskLevel::High) {
-            scores.risk = scores.risk.saturating_add(2).min(10);
+            apply_score_modifier_to_scores(
+                &mut scores,
+                &mut modifiers,
+                ActionScoreModifier::new(
+                    ActionScoreModifierSource::Route,
+                    "high_route_risk",
+                    "high-risk route raises action risk",
+                )
+                .risk(2),
+            );
+        }
+        if matches!(
+            input.route_workflow,
+            Some(WorkflowKind::CodeChange | WorkflowKind::BugFix)
+        ) && matches!(
+            profile.kind,
+            ToolActionKind::Inspect
+                | ToolActionKind::Edit
+                | ToolActionKind::Validate
+                | ToolActionKind::Format
+        ) {
+            apply_score_modifier_to_scores(
+                &mut scores,
+                &mut modifiers,
+                ActionScoreModifier::new(
+                    ActionScoreModifierSource::Route,
+                    "workflow_scope_fit",
+                    "tool kind fits the routed programming workflow",
+                )
+                .scope_fit(1),
+            );
         }
         if input.action_checkpoint_active {
-            scores.value = scores.value.saturating_add(1).min(10);
-            scores.risk = scores.risk.saturating_add(1).min(10);
+            apply_score_modifier_to_scores(
+                &mut scores,
+                &mut modifiers,
+                ActionScoreModifier::new(
+                    ActionScoreModifierSource::Checkpoint,
+                    "checkpoint_active",
+                    "active checkpoint raises mutation value and risk visibility",
+                )
+                .value(1)
+                .risk(1),
+            );
         }
         if input.no_progress_rounds >= 2 {
-            scores.value = scores.value.saturating_add(1).min(10);
-            scores.cost = scores.cost.saturating_add(1).min(10);
+            apply_score_modifier_to_scores(
+                &mut scores,
+                &mut modifiers,
+                ActionScoreModifier::new(
+                    ActionScoreModifierSource::Progress,
+                    "no_progress_pressure",
+                    "repeated no-progress rounds make useful actions more valuable but costlier",
+                )
+                .value(1)
+                .cost(1),
+            );
         }
         if !phase_aligned {
-            scores.risk = scores.risk.saturating_add(2).min(10);
-            scores.value = scores.value.saturating_sub(2);
+            apply_score_modifier_to_scores(
+                &mut scores,
+                &mut modifiers,
+                ActionScoreModifier::new(
+                    ActionScoreModifierSource::Phase,
+                    "phase_mismatch",
+                    "action does not fit the current task stage",
+                )
+                .value(-2)
+                .risk(2)
+                .scope_fit(-4),
+            );
         }
+        scores.action_score = compute_action_score(scores, formula_stage);
 
         let requires_confirmation = profile.requires_confirmation
             || (input.route_risk == Some(RiskLevel::High)
@@ -102,10 +233,104 @@ impl ActionDecision {
             },
             expected_observation: profile.expected_observation.to_string(),
             scores,
+            score_computation: ActionScoreComputation {
+                formula_stage,
+                formula_version: ACTION_SCORE_FORMULA_VERSION.to_string(),
+                modifiers,
+            },
             requires_confirmation,
             verification_after,
             trace_recommended,
         }
+    }
+
+    pub fn apply_score_modifier(&mut self, modifier: ActionScoreModifier) {
+        apply_score_delta(&mut self.scores.value, modifier.value_delta);
+        apply_score_delta(&mut self.scores.risk, modifier.risk_delta);
+        apply_score_delta(
+            &mut self.scores.uncertainty_reduction,
+            modifier.uncertainty_reduction_delta,
+        );
+        apply_score_delta(&mut self.scores.cost, modifier.cost_delta);
+        apply_score_delta(&mut self.scores.reversibility, modifier.reversibility_delta);
+        apply_score_delta(&mut self.scores.scope_fit, modifier.scope_fit_delta);
+        self.scores.action_score =
+            compute_action_score(self.scores, self.score_computation.formula_stage);
+        self.score_computation.modifiers.push(modifier);
+    }
+}
+
+impl ActionScoreStage {
+    pub fn from_task_stage(stage: AgentTaskStage) -> Self {
+        match stage {
+            AgentTaskStage::Understand => Self::Diagnosis,
+            AgentTaskStage::Plan => Self::Planning,
+            AgentTaskStage::Edit => Self::Implementation,
+            AgentTaskStage::Validate => Self::Verification,
+            AgentTaskStage::Repair => Self::Recovery,
+            AgentTaskStage::Closeout | AgentTaskStage::Done => Self::Closeout,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Diagnosis => "diagnosis",
+            Self::Planning => "planning",
+            Self::Implementation => "implementation",
+            Self::Verification => "verification",
+            Self::Recovery => "recovery",
+            Self::Closeout => "closeout",
+        }
+    }
+}
+
+impl ActionScoreModifier {
+    pub fn new(
+        source: ActionScoreModifierSource,
+        kind: impl Into<String>,
+        reason: impl Into<String>,
+    ) -> Self {
+        Self {
+            source,
+            kind: kind.into(),
+            reason: reason.into(),
+            value_delta: 0,
+            risk_delta: 0,
+            uncertainty_reduction_delta: 0,
+            cost_delta: 0,
+            reversibility_delta: 0,
+            scope_fit_delta: 0,
+        }
+    }
+
+    pub fn value(mut self, delta: i8) -> Self {
+        self.value_delta = delta;
+        self
+    }
+
+    pub fn risk(mut self, delta: i8) -> Self {
+        self.risk_delta = delta;
+        self
+    }
+
+    pub fn uncertainty_reduction(mut self, delta: i8) -> Self {
+        self.uncertainty_reduction_delta = delta;
+        self
+    }
+
+    pub fn cost(mut self, delta: i8) -> Self {
+        self.cost_delta = delta;
+        self
+    }
+
+    pub fn reversibility(mut self, delta: i8) -> Self {
+        self.reversibility_delta = delta;
+        self
+    }
+
+    pub fn scope_fit(mut self, delta: i8) -> Self {
+        self.scope_fit_delta = delta;
+        self
     }
 }
 
@@ -279,6 +504,8 @@ fn scores_for_profile(profile: &ToolActionProfile, stage: AgentTaskStage) -> Act
             uncertainty_reduction: 8,
             cost: 2,
             reversibility: 10,
+            scope_fit: scope_fit_for_profile(profile, stage),
+            action_score: 0,
         },
         ToolActionKind::Edit => ActionScores {
             value: 8,
@@ -286,6 +513,8 @@ fn scores_for_profile(profile: &ToolActionProfile, stage: AgentTaskStage) -> Act
             uncertainty_reduction: 3,
             cost: 4,
             reversibility: 6,
+            scope_fit: scope_fit_for_profile(profile, stage),
+            action_score: 0,
         },
         ToolActionKind::Validate => ActionScores {
             value: 8,
@@ -293,6 +522,8 @@ fn scores_for_profile(profile: &ToolActionProfile, stage: AgentTaskStage) -> Act
             uncertainty_reduction: 7,
             cost: 4,
             reversibility: 9,
+            scope_fit: scope_fit_for_profile(profile, stage),
+            action_score: 0,
         },
         ToolActionKind::Format => ActionScores {
             value: 6,
@@ -300,6 +531,8 @@ fn scores_for_profile(profile: &ToolActionProfile, stage: AgentTaskStage) -> Act
             uncertainty_reduction: 2,
             cost: 3,
             reversibility: 7,
+            scope_fit: scope_fit_for_profile(profile, stage),
+            action_score: 0,
         },
         ToolActionKind::StartServer => ActionScores {
             value: 7,
@@ -307,6 +540,8 @@ fn scores_for_profile(profile: &ToolActionProfile, stage: AgentTaskStage) -> Act
             uncertainty_reduction: 5,
             cost: 5,
             reversibility: 6,
+            scope_fit: scope_fit_for_profile(profile, stage),
+            action_score: 0,
         },
         ToolActionKind::InstallDependencies => ActionScores {
             value: 6,
@@ -314,6 +549,8 @@ fn scores_for_profile(profile: &ToolActionProfile, stage: AgentTaskStage) -> Act
             uncertainty_reduction: 4,
             cost: 6,
             reversibility: 4,
+            scope_fit: scope_fit_for_profile(profile, stage),
+            action_score: 0,
         },
         ToolActionKind::VersionControl => ActionScores {
             value: 5,
@@ -321,6 +558,8 @@ fn scores_for_profile(profile: &ToolActionProfile, stage: AgentTaskStage) -> Act
             uncertainty_reduction: 3,
             cost: 4,
             reversibility: 4,
+            scope_fit: scope_fit_for_profile(profile, stage),
+            action_score: 0,
         },
         ToolActionKind::Delegate => ActionScores {
             value: 6,
@@ -328,6 +567,8 @@ fn scores_for_profile(profile: &ToolActionProfile, stage: AgentTaskStage) -> Act
             uncertainty_reduction: 5,
             cost: 5,
             reversibility: 8,
+            scope_fit: scope_fit_for_profile(profile, stage),
+            action_score: 0,
         },
         ToolActionKind::Memory => ActionScores {
             value: 5,
@@ -335,6 +576,8 @@ fn scores_for_profile(profile: &ToolActionProfile, stage: AgentTaskStage) -> Act
             uncertainty_reduction: 2,
             cost: 2,
             reversibility: 5,
+            scope_fit: scope_fit_for_profile(profile, stage),
+            action_score: 0,
         },
         ToolActionKind::Unknown => ActionScores {
             value: 4,
@@ -342,20 +585,147 @@ fn scores_for_profile(profile: &ToolActionProfile, stage: AgentTaskStage) -> Act
             uncertainty_reduction: 4,
             cost: 4,
             reversibility: 6,
+            scope_fit: scope_fit_for_profile(profile, stage),
+            action_score: 0,
         },
     };
 
     if matches!(stage, AgentTaskStage::Validate) && profile.kind == ToolActionKind::Validate {
         scores.value = scores.value.saturating_add(1).min(10);
+        scores.scope_fit = scores.scope_fit.saturating_add(1).min(10);
     }
     if profile.broad_shell {
         scores.risk = scores.risk.saturating_add(2).min(10);
         scores.cost = scores.cost.saturating_add(1).min(10);
+        scores.scope_fit = scores.scope_fit.saturating_sub(2);
     }
     if profile.requires_confirmation {
         scores.risk = scores.risk.saturating_add(1).min(10);
     }
     scores
+}
+
+fn scope_fit_for_profile(profile: &ToolActionProfile, stage: AgentTaskStage) -> u8 {
+    let base: u8 = match (stage, profile.kind) {
+        (AgentTaskStage::Understand, ToolActionKind::Inspect) => 9,
+        (AgentTaskStage::Plan, ToolActionKind::Inspect | ToolActionKind::Delegate) => 8,
+        (AgentTaskStage::Edit, ToolActionKind::Edit) => 9,
+        (AgentTaskStage::Edit, ToolActionKind::Inspect | ToolActionKind::Format) => 7,
+        (AgentTaskStage::Validate, ToolActionKind::Validate) => 9,
+        (AgentTaskStage::Validate, ToolActionKind::Inspect | ToolActionKind::StartServer) => 7,
+        (AgentTaskStage::Validate, ToolActionKind::VersionControl) => 6,
+        (AgentTaskStage::Repair, ToolActionKind::Inspect | ToolActionKind::Validate) => 8,
+        (AgentTaskStage::Repair, ToolActionKind::Edit | ToolActionKind::Format) => 7,
+        (AgentTaskStage::Repair, _) => 6,
+        (AgentTaskStage::Closeout | AgentTaskStage::Done, ToolActionKind::Validate) => 8,
+        (AgentTaskStage::Closeout | AgentTaskStage::Done, ToolActionKind::Inspect) => 6,
+        (_, ToolActionKind::Unknown) => 4,
+        _ => 5,
+    };
+    if profile.broad_shell {
+        base.saturating_sub(1)
+    } else {
+        base
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ActionScoreFormula {
+    value_weight: i16,
+    risk_weight: i16,
+    uncertainty_weight: i16,
+    cost_weight: i16,
+    reversibility_weight: i16,
+    scope_fit_weight: i16,
+}
+
+pub fn compute_action_score(scores: ActionScores, stage: ActionScoreStage) -> i16 {
+    let formula = stage_formula_coefficients(stage);
+    let positive = i16::from(scores.value) * formula.value_weight
+        + i16::from(scores.uncertainty_reduction) * formula.uncertainty_weight
+        + i16::from(scores.reversibility) * formula.reversibility_weight
+        + i16::from(scores.scope_fit) * formula.scope_fit_weight;
+    let negative =
+        i16::from(scores.risk) * formula.risk_weight + i16::from(scores.cost) * formula.cost_weight;
+    ((positive - negative) / 10).clamp(-30, 40)
+}
+
+fn stage_formula_coefficients(stage: ActionScoreStage) -> ActionScoreFormula {
+    match stage {
+        ActionScoreStage::Diagnosis => ActionScoreFormula {
+            value_weight: 10,
+            risk_weight: 10,
+            uncertainty_weight: 14,
+            cost_weight: 8,
+            reversibility_weight: 4,
+            scope_fit_weight: 12,
+        },
+        ActionScoreStage::Planning => ActionScoreFormula {
+            value_weight: 10,
+            risk_weight: 8,
+            uncertainty_weight: 12,
+            cost_weight: 8,
+            reversibility_weight: 5,
+            scope_fit_weight: 12,
+        },
+        ActionScoreStage::Implementation => ActionScoreFormula {
+            value_weight: 13,
+            risk_weight: 12,
+            uncertainty_weight: 7,
+            cost_weight: 8,
+            reversibility_weight: 5,
+            scope_fit_weight: 13,
+        },
+        ActionScoreStage::Verification => ActionScoreFormula {
+            value_weight: 13,
+            risk_weight: 8,
+            uncertainty_weight: 12,
+            cost_weight: 9,
+            reversibility_weight: 5,
+            scope_fit_weight: 10,
+        },
+        ActionScoreStage::Recovery => ActionScoreFormula {
+            value_weight: 12,
+            risk_weight: 12,
+            uncertainty_weight: 13,
+            cost_weight: 8,
+            reversibility_weight: 7,
+            scope_fit_weight: 12,
+        },
+        ActionScoreStage::Closeout => ActionScoreFormula {
+            value_weight: 14,
+            risk_weight: 8,
+            uncertainty_weight: 5,
+            cost_weight: 10,
+            reversibility_weight: 3,
+            scope_fit_weight: 10,
+        },
+    }
+}
+
+fn apply_score_modifier_to_scores(
+    scores: &mut ActionScores,
+    modifiers: &mut Vec<ActionScoreModifier>,
+    modifier: ActionScoreModifier,
+) {
+    apply_score_delta(&mut scores.value, modifier.value_delta);
+    apply_score_delta(&mut scores.risk, modifier.risk_delta);
+    apply_score_delta(
+        &mut scores.uncertainty_reduction,
+        modifier.uncertainty_reduction_delta,
+    );
+    apply_score_delta(&mut scores.cost, modifier.cost_delta);
+    apply_score_delta(&mut scores.reversibility, modifier.reversibility_delta);
+    apply_score_delta(&mut scores.scope_fit, modifier.scope_fit_delta);
+    modifiers.push(modifier);
+}
+
+fn apply_score_delta(score: &mut u8, delta: i8) {
+    if delta >= 0 {
+        *score = score.saturating_add(delta as u8).min(10);
+    } else {
+        *score = score.saturating_sub(delta.unsigned_abs());
+    }
 }
 
 fn phase_allows_action(stage: AgentTaskStage, profile: &ToolActionProfile) -> bool {
@@ -446,6 +816,12 @@ mod tests {
         assert!(!decision.action.mutates_workspace);
         assert!(decision.scores.uncertainty_reduction >= 7);
         assert!(decision.scores.risk <= 2);
+        assert!(decision.scores.scope_fit >= 8);
+        assert!(decision.scores.action_score > 0);
+        assert_eq!(
+            decision.score_computation.formula_stage,
+            ActionScoreStage::Diagnosis
+        );
         assert!(!decision.requires_confirmation);
     }
 
@@ -459,6 +835,8 @@ mod tests {
         assert!(decision.action.phase_aligned);
         assert!(decision.action.mutates_workspace);
         assert!(decision.verification_after.is_some());
+        assert!(decision.scores.scope_fit >= 8);
+        assert!(decision.scores.action_score > 0);
         assert!(decision.trace_recommended);
     }
 
@@ -476,6 +854,7 @@ mod tests {
 
         assert!(decision.action.broad_shell);
         assert!(decision.scores.risk >= 7);
+        assert!(decision.scores.scope_fit <= 6);
         assert!(decision.requires_confirmation);
     }
 
@@ -489,5 +868,40 @@ mod tests {
         assert!(!decision.action.phase_aligned);
         assert!(decision.scores.risk >= 7);
         assert!(decision.scores.value <= 6);
+        assert!(decision.scores.scope_fit <= 2);
+        assert!(decision
+            .score_computation
+            .modifiers
+            .iter()
+            .any(|modifier| modifier.kind == "phase_mismatch"));
+    }
+
+    #[test]
+    fn score_modifier_recomputes_final_score() {
+        let mut decision = ActionDecision::for_tool_call(
+            &call("file_read", serde_json::json!({ "path": "src/lib.rs" })),
+            input(AgentTaskStage::Understand),
+        );
+        let before = decision.scores.action_score;
+
+        decision.apply_score_modifier(
+            ActionScoreModifier::new(
+                ActionScoreModifierSource::Observer,
+                "broad_read_repeated",
+                "repeated read did not reduce uncertainty",
+            )
+            .uncertainty_reduction(-2)
+            .scope_fit(-1),
+        );
+
+        assert!(decision.scores.action_score < before);
+        assert!(decision
+            .score_computation
+            .modifiers
+            .iter()
+            .any(
+                |modifier| modifier.source == ActionScoreModifierSource::Observer
+                    && modifier.kind == "broad_read_repeated"
+            ));
     }
 }

@@ -52,7 +52,9 @@ failure_owner=none
 EOF
 echo "ok" >"$RUN_DIR/task-code-pass/test-status.txt"
 echo " scripts/run_live_eval.sh | 2 +-" >"$RUN_DIR/task-code-pass/diff-stat.txt"
-: >"$RUN_DIR/task-code-pass/agent-events.jsonl"
+cat >"$RUN_DIR/task-code-pass/agent-events.jsonl" <<'EOF'
+{"event":"tool_execution_complete","id":"call_secret","name":"bash","result_preview":"api_key=super-secret-token-1234567890 should be redacted","metadata":{"token":"super-secret-token-1234567890"}}
+EOF
 
 cat >"$RUN_DIR/task-plan-pass/report.md" <<'EOF'
 # Live Eval Report: task-plan-pass
@@ -213,5 +215,15 @@ grep -q '| runtime_spine_full_coverage_tasks | 1 | 25.0% |' "$aggregate_path"
 grep -q '| runtime_spine_trace_present_tasks | 2 | 50.0% |' "$aggregate_path"
 grep -q '| runtime_spine_assertions_not_passing | 1 |' "$aggregate_path"
 grep -q '| task-seeded-fail | seeded_code_change | agent_flow | agent_flow | failed | failed | no | coverage=3/7, status=failed, missing=event:action_decision_evaluated,special:verification_proof | memory_write_safety | failed | active=false, recalled=0, conflicts=0, changed_plan=false | active=false, tool_calls=0, usage_events=0, promotion=false | repeated_no_code_progress | no_code_diff,action_checkpoint_no_patch |' "$aggregate_path"
+
+bundle_path="$(python3 scripts/live_eval_run_bundle.py "$RUN_DIR/task-code-pass")"
+test -f "$bundle_path/task.json"
+test -f "$bundle_path/steps.jsonl"
+test -f "$bundle_path/events.jsonl"
+test -f "$bundle_path/final_report.md"
+! grep -R 'super-secret-token' "$bundle_path"
+
+PRIORITY_AGENT_EVAL_LLM_JUDGE=1 python3 scripts/live_eval_llm_judge.py "$RUN_DIR/task-code-pass" >/dev/null
+grep -q '"status": "skipped"' "$RUN_DIR/task-code-pass/judge.json"
 
 echo "live eval summary smoke passed: $summary_path"

@@ -194,6 +194,8 @@ pub struct EvalPermissionReplay {
     #[serde(default)]
     pub approved: bool,
     #[serde(default)]
+    pub source: Option<String>,
+    #[serde(default)]
     pub decision: Option<String>,
     #[serde(default)]
     pub persistence_scope: Option<String>,
@@ -203,15 +205,27 @@ pub struct EvalPermissionReplay {
     pub persisted_path: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct EvalRecoveryPlan {
     pub source: String,
     pub category: String,
+    #[serde(default)]
+    pub failure_type: String,
+    #[serde(default)]
+    pub recovery_kind: String,
     pub action: String,
     #[serde(default = "default_true")]
     pub retryable: bool,
     #[serde(default)]
     pub safe_retry: bool,
+    #[serde(default)]
+    pub allowed_alternatives: Vec<String>,
+    #[serde(default)]
+    pub retry_budget: Option<usize>,
+    #[serde(default)]
+    pub side_effect_uncertain: bool,
+    #[serde(default)]
+    pub requires_user_decision: bool,
     #[serde(default)]
     pub suggested_command: Option<String>,
     #[serde(default = "default_recovery_status")]
@@ -345,6 +359,8 @@ pub struct EvalRuntimeDietReplay {
     pub closeout_visibility: String,
     #[serde(default = "default_validation_evidence")]
     pub validation_evidence: String,
+    #[serde(default)]
+    pub warnings: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -2342,6 +2358,7 @@ fn append_replay_trace(trace: &mut TurnTrace, scenario: &EvalScenario, task_id: 
             workflow_context: diet.workflow_context.clone(),
             closeout_visibility: diet.closeout_visibility.clone(),
             validation_evidence: diet.validation_evidence.clone(),
+            warnings: diet.warnings.clone(),
         });
     }
 
@@ -2378,12 +2395,18 @@ fn append_replay_trace(trace: &mut TurnTrace, scenario: &EvalScenario, task_id: 
             plan_id: format!("eval-mcp-repair-{}", idx + 1),
             source: "mcp".to_string(),
             category: format!("mcp_{}_required", repair.category),
+            failure_type: format!("mcp_{}_required", repair.category),
+            recovery_kind: "run_repair_command".to_string(),
             action: format!(
                 "run {} then retry MCP resource access on {}",
                 repair.command, repair.server
             ),
             retryable: true,
             safe_retry: repair.safe_retry,
+            allowed_alternatives: vec!["inspect MCP server status".to_string()],
+            retry_budget: Some(1),
+            side_effect_uncertain: !repair.safe_retry,
+            requires_user_decision: !repair.safe_retry,
             suggested_command: Some(repair.command.clone()),
             status: repair.status.clone(),
         });
@@ -2412,6 +2435,7 @@ fn append_replay_trace(trace: &mut TurnTrace, scenario: &EvalScenario, task_id: 
                 tool: call.tool.clone(),
                 call_id: call_id.clone(),
                 approved: permission.approved,
+                source: permission.source.clone(),
                 decision: permission.decision.clone(),
                 persistence_scope: permission.persistence_scope.clone(),
                 rule_pattern: permission.rule_pattern.clone(),
@@ -2433,9 +2457,19 @@ fn append_replay_trace(trace: &mut TurnTrace, scenario: &EvalScenario, task_id: 
             plan_id: format!("eval-recovery-{}", idx + 1),
             source: plan.source.clone(),
             category: plan.category.clone(),
+            failure_type: if plan.failure_type.is_empty() {
+                plan.category.clone()
+            } else {
+                plan.failure_type.clone()
+            },
+            recovery_kind: plan.recovery_kind.clone(),
             action: plan.action.clone(),
             retryable: plan.retryable,
             safe_retry: plan.safe_retry,
+            allowed_alternatives: plan.allowed_alternatives.clone(),
+            retry_budget: plan.retry_budget,
+            side_effect_uncertain: plan.side_effect_uncertain,
+            requires_user_decision: plan.requires_user_decision,
             suggested_command: plan.suggested_command.clone(),
             status: plan.status.clone(),
         });
@@ -3260,6 +3294,7 @@ scenarios:
                         safe_retry: false,
                         suggested_command: Some("/permissions explain".to_string()),
                         status: "Planned".to_string(),
+                        ..Default::default()
                     }],
                     ..Default::default()
                 },
@@ -3443,6 +3478,7 @@ scenarios:
                         workflow_context: "strict".to_string(),
                         closeout_visibility: "full".to_string(),
                         validation_evidence: "pending".to_string(),
+                        warnings: Vec::new(),
                     }),
                     tool_calls: vec![EvalToolCall {
                         tool: "file_read".to_string(),

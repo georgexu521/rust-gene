@@ -1,0 +1,29 @@
+{
+  "schema": "agent_run_bundle.v1",
+  "task_id": "minimum-agent-verification-repair",
+  "run_id": "mva-followup-20260525-162804",
+  "generated_at": "2026-05-25T08:32:21.262789+00:00",
+  "goal_summary": "seeded_code_change",
+  "mode": "agent-run",
+  "final_status": "failed",
+  "terminal_status": "completed",
+  "stop_reason": "no_issue",
+  "modified_files": "1",
+  "validation_status": "ok",
+  "verification_status": "passed",
+  "closeout_status": "passed",
+  "scores": {
+    "outcome": "65",
+    "process": "75",
+    "efficiency": "84",
+    "agent": "72",
+    "penalties": "run_failed,trajectory_assertions_failed,scope_drift,invalid_action,failed_actions"
+  },
+  "artifacts": {
+    "source_report": "docs/benchmarks/live-mva-followup-20260525-162804/minimum-agent-verification-repair/report.md",
+    "source_events": "docs/benchmarks/live-mva-followup-20260525-162804/minimum-agent-verification-repair/agent-events.jsonl",
+    "steps": "docs/benchmarks/live-mva-followup-20260525-162804/minimum-agent-verification-repair/run-bundle/steps.jsonl",
+    "events": "docs/benchmarks/live-mva-followup-20260525-162804/minimum-agent-verification-repair/run-bundle/events.jsonl",
+    "final_report": "docs/benchmarks/live-mva-followup-20260525-162804/minimum-agent-verification-repair/run-bundle/final_report.md"
+  }
+}

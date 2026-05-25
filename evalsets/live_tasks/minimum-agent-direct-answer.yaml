@@ -1,0 +1,73 @@
+id: minimum-agent-direct-answer
+title: minimum agent direct answer closes without tool use
+type: audit
+eval_intent: direct_answer
+complexity: low
+risk: low
+runtime_profile: minimum_viable_agent
+
+repo:
+  fixture: priority-agent
+  base_ref: "HEAD"
+
+prompt: |
+  不要使用工具，直接回答：2 + 2 等于几？
+
+allowed_tools: []
+
+forbidden_tools:
+  - bash
+  - file_read
+  - file_edit
+  - file_write
+  - file_patch
+  - git_push
+  - agent
+  - mcp
+
+expected_behavior:
+  - The runtime can close a direct answer without tool use.
+  - Context and completion diagnostics are still recorded.
+  - No files are changed.
+
+output_assertions:
+  contains:
+    - "4"
+  not_contains:
+    - "无法"
+
+trajectory_assertions:
+  max_repeated_action_count: 0
+  max_scope_drift_count: 0
+  max_premature_edit_count: 0
+  max_invalid_action_count: 0
+  requires_runtime_spine_passed: true
+
+runtime_spine_assertions:
+  required_phases:
+    - context
+    - decision
+    - closeout
+  required_events:
+    - context_zones
+    - completion_contract
+  completion_status: completed
+  terminal_status: completed
+  verification_proof_status: missing
+
+acceptance:
+  required_commands: []
+  diff_constraints:
+    max_files_changed: 0
+    forbidden_paths:
+      - target/
+      - .git/
+  human_review:
+    - Did the final answer directly answer the arithmetic question?
+    - Did the run avoid tool use and file changes?
+
+scoring:
+  success: 0.45
+  runtime_spine: 0.30
+  no_tool_use: 0.15
+  closeout_quality: 0.10

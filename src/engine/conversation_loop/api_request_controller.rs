@@ -1,4 +1,5 @@
 use super::session_processor::SessionStepResult;
+use super::tool_execution::{tool_call_is_concurrency_safe, tool_call_is_read_only};
 use super::turn_recording::record_recovery_plan;
 use super::ConversationLoop;
 use crate::engine::context_collapse::{CompactionDecision, ContextCompactionStrategy};
@@ -7,11 +8,14 @@ use crate::engine::error_classifier::{ClassifiedError, ErrorCategory};
 use crate::engine::resource_policy::ResourcePolicy;
 use crate::engine::streaming::StreamEvent;
 use crate::engine::trace::{TraceCollector, TraceEvent};
-use crate::services::api::provider_protocol::ProviderCapabilities;
+use crate::services::api::provider_protocol::{
+    provider_message_normalization_report, ProviderCapabilities,
+};
 use crate::services::api::{ChatRequest, Message, Tool, ToolCall};
-use crate::tools::ToolResult;
+use crate::tools::{ToolRegistry, ToolResult};
 use anyhow::Result;
 use std::collections::{HashMap, HashSet};
+use std::time::Instant;
 use tokio::sync::mpsc;
 use tracing::{debug, warn};
 
@@ -70,9 +74,31 @@ impl ApiRequestController {
                 tool_result_adjacency_required: provider_capabilities
                     .requires_tool_result_adjacency,
             });
+            let normalization_report =
+                provider_message_normalization_report(provider_capabilities, &request.messages);
+            context
+                .trace
+                .record(TraceEvent::ProviderMessageSequenceNormalized {
+                    provider_family: normalization_report.provider_family.label().to_string(),
+                    requires_tool_result_adjacency: normalization_report
+                        .requires_tool_result_adjacency,
+                    requires_merged_system_messages: normalization_report
+                        .requires_merged_system_messages,
+                    system_messages_merged: normalization_report.system_messages_merged,
+                    input_messages: normalization_report.input_messages,
+                    output_messages: normalization_report.output_messages,
+                    valid_tool_call_pairs: normalization_report.valid_tool_call_pairs,
+                    dropped_assistant_tool_calls: normalization_report.dropped_assistant_tool_calls,
+                    dropped_tool_results: normalization_report.dropped_tool_results,
+                    valid_tool_call_ids: normalization_report.valid_tool_call_ids,
+                    dropped_assistant_tool_call_ids: normalization_report
+                        .dropped_assistant_tool_call_ids,
+                    dropped_tool_result_ids: normalization_report.dropped_tool_result_ids,
+                });
             let nonstreaming_tool_request = context.tx.is_some()
                 && !context.tools.is_empty()
                 && provider_capabilities.requires_nonstreaming_tool_calls;
+            let request_started_at = Instant::now();
             api_result = if let Some(tx) = context.tx {
                 if nonstreaming_tool_request {
                     context.trace.record(TraceEvent::WorkflowFallback {
@@ -95,7 +121,17 @@ impl ApiRequestController {
             };
 
             match &api_result {
-                Ok(_) => break,
+                Ok(step) => {
+                    Self::record_streaming_tool_shadow(
+                        context.trace,
+                        context.conversation.tool_registry.as_ref(),
+                        provider_capabilities,
+                        !nonstreaming_tool_request && context.tx.is_some(),
+                        request_started_at.elapsed().as_millis() as u64,
+                        step,
+                    );
+                    break;
+                }
                 Err(error) => {
                     let mut recovered = false;
                     if Self::is_context_size_error(error) && compress_retry < 2 {
@@ -377,6 +413,82 @@ impl ApiRequestController {
                 | ErrorCategory::MalformedResponse
         )
     }
+
+    fn record_streaming_tool_shadow(
+        trace: &TraceCollector,
+        tool_registry: &ToolRegistry,
+        capabilities: ProviderCapabilities,
+        streamed_request_path: bool,
+        latency_upper_bound_ms: u64,
+        step: &SessionStepResult,
+    ) {
+        let Some(mode) = streaming_tool_execution_shadow_mode() else {
+            return;
+        };
+        let observed_tool_calls = step.tool_calls.len();
+        if observed_tool_calls == 0 {
+            return;
+        }
+
+        let mut read_only_tool_calls = 0usize;
+        let mut concurrency_safe_tool_calls = 0usize;
+        let mut eligible_tool_calls = 0usize;
+        for tool_call in &step.tool_calls {
+            let read_only =
+                tool_call_is_read_only(tool_registry, &tool_call.name, &tool_call.arguments);
+            let concurrency_safe =
+                tool_call_is_concurrency_safe(tool_registry, &tool_call.name, &tool_call.arguments);
+            if read_only {
+                read_only_tool_calls += 1;
+            }
+            if concurrency_safe {
+                concurrency_safe_tool_calls += 1;
+            }
+            if capabilities.supports_streaming_tool_calls
+                && streamed_request_path
+                && read_only
+                && concurrency_safe
+            {
+                eligible_tool_calls += 1;
+            }
+        }
+
+        let reason = if !capabilities.supports_streaming_tool_calls {
+            "provider_does_not_support_streaming_tool_calls"
+        } else if !streamed_request_path {
+            "request_used_nonstreaming_tool_path"
+        } else if eligible_tool_calls == 0 {
+            "no_read_only_concurrency_safe_tool_calls"
+        } else {
+            "shadow_only_no_early_execution"
+        };
+
+        trace.record(TraceEvent::StreamingToolExecutionShadow {
+            mode,
+            provider_family: capabilities.protocol_family.label().to_string(),
+            provider_supports_streaming_tool_calls: capabilities.supports_streaming_tool_calls,
+            streamed_request_path,
+            observed_tool_calls,
+            read_only_tool_calls,
+            concurrency_safe_tool_calls,
+            eligible_tool_calls,
+            schema_complete_tool_calls: observed_tool_calls,
+            latency_upper_bound_ms,
+            reason: reason.to_string(),
+        });
+    }
+}
+
+fn streaming_tool_execution_shadow_mode() -> Option<String> {
+    match std::env::var("PRIORITY_AGENT_STREAMING_TOOL_EXECUTION")
+        .ok()?
+        .trim()
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "shadow" => Some("shadow".to_string()),
+        _ => None,
+    }
 }
 
 #[cfg(test)]
@@ -461,6 +573,22 @@ mod tests {
             true,
         )
         .is_none());
+    }
+
+    #[test]
+    fn streaming_tool_execution_shadow_mode_is_gated_by_env() {
+        let mut env = EnvVarGuard::acquire_blocking();
+        env.remove("PRIORITY_AGENT_STREAMING_TOOL_EXECUTION");
+        assert_eq!(streaming_tool_execution_shadow_mode(), None);
+
+        env.set("PRIORITY_AGENT_STREAMING_TOOL_EXECUTION", "shadow");
+        assert_eq!(
+            streaming_tool_execution_shadow_mode().as_deref(),
+            Some("shadow")
+        );
+
+        env.set("PRIORITY_AGENT_STREAMING_TOOL_EXECUTION", "on");
+        assert_eq!(streaming_tool_execution_shadow_mode(), None);
     }
 
     #[test]

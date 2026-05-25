@@ -13,7 +13,9 @@ use super::turn_recording::{
     record_web_retrieval_trace,
 };
 use super::ConversationLoop;
-use crate::engine::action_decision::{ActionDecision, ActionDecisionInput};
+use crate::engine::action_decision::{
+    ActionDecision, ActionDecisionInput, ActionScoreModifier, ActionScoreModifierSource,
+};
 use crate::engine::action_review::{ActionReview, ActionReviewInput};
 use crate::engine::destructive_scope::DestructiveScopeContract;
 use crate::engine::hooks::HookDecision;
@@ -23,7 +25,9 @@ use crate::engine::streaming::StreamEvent;
 use crate::engine::task_context::{AgentTaskStage, AgentTaskState};
 use crate::engine::trace::{TraceCollector, TraceEvent};
 use crate::services::api::ToolCall;
-use crate::tools::{ToolContext, ToolContextRetainedContext, ToolRegistry, ToolResult};
+use crate::tools::{
+    ToolContext, ToolContextRetainedContext, ToolContextRetentionItem, ToolRegistry, ToolResult,
+};
 use futures::StreamExt;
 use std::collections::{HashMap, HashSet};
 use std::future::Future;
@@ -262,6 +266,8 @@ struct ToolRuntimeContext {
     retained_skill_triggers: usize,
     retained_context_tokens: usize,
     retained_context_provenance: Vec<String>,
+    retained_context_items: Vec<ToolContextRetentionItem>,
+    observer_signal: Option<ObserverActionSignal>,
 }
 
 struct ToolRuntimeContextInput<'a> {
@@ -273,6 +279,18 @@ struct ToolRuntimeContextInput<'a> {
     has_changes_before_tools: bool,
     exposed_tools_count: usize,
     retained_context: &'a ToolContextRetainedContext,
+    task_state: Option<&'a AgentTaskState>,
+}
+
+#[derive(Debug, Clone, Default)]
+struct ObserverActionSignal {
+    uncertainty_not_reduced_steps: usize,
+    candidate_focus: Vec<String>,
+    key_findings: usize,
+    consecutive_validation_failures: usize,
+    validation_verified: bool,
+    risks: usize,
+    last_progress_signal: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -309,6 +327,7 @@ impl ToolRuntimeContext {
             has_changes_before_tools,
             exposed_tools_count,
             retained_context,
+            task_state,
         } = input;
 
         Self {
@@ -345,6 +364,8 @@ impl ToolRuntimeContext {
             retained_skill_triggers: retained_context.skill_triggers.len(),
             retained_context_tokens: retained_context.token_estimate,
             retained_context_provenance: retained_context.provenance.clone(),
+            retained_context_items: retained_context.retrieval_items.clone(),
+            observer_signal: task_state.map(ObserverActionSignal::from_task_state),
         }
     }
 
@@ -401,7 +422,7 @@ impl ToolRuntimeContext {
     }
 
     fn action_decision(&self, tool_call: &ToolCall) -> ActionDecision {
-        ActionDecision::for_tool_call(
+        let mut decision = ActionDecision::for_tool_call(
             tool_call,
             ActionDecisionInput {
                 task_stage: self.task_stage,
@@ -411,7 +432,12 @@ impl ToolRuntimeContext {
                 has_changes_before_tools: self.has_changes_before_tools,
                 no_progress_rounds: self.no_progress_rounds,
             },
-        )
+        );
+        apply_memory_action_signal(&mut decision, tool_call, &self.retained_context_items);
+        if let Some(observer_signal) = &self.observer_signal {
+            apply_observer_action_signal(&mut decision, tool_call, observer_signal);
+        }
+        decision
     }
 
     fn attach_action_decision(&self, tool_call: &ToolCall, result: &mut ToolResult) {
@@ -440,12 +466,325 @@ where
         .unwrap_or_else(|| format!("{value:?}"))
 }
 
+impl ObserverActionSignal {
+    fn from_task_state(task_state: &AgentTaskState) -> Self {
+        Self {
+            uncertainty_not_reduced_steps: task_state.uncertainty_not_reduced_steps,
+            candidate_focus: task_state
+                .candidate_focus
+                .iter()
+                .rev()
+                .take(5)
+                .map(|focus| focus.target.clone())
+                .collect(),
+            key_findings: task_state.key_findings.len(),
+            consecutive_validation_failures: task_state.consecutive_validation_failures,
+            validation_verified: task_state.verification_plan.status
+                == crate::engine::task_context::VerificationStatus::Verified,
+            risks: task_state.risks.len(),
+            last_progress_signal: task_state.last_progress_signal.clone(),
+        }
+    }
+}
+
+fn apply_observer_action_signal(
+    decision: &mut ActionDecision,
+    tool_call: &ToolCall,
+    signal: &ObserverActionSignal,
+) {
+    let tool_name = tool_call.name.as_str();
+    let text = format!(
+        "{} {}",
+        tool_name,
+        serde_json::to_string(&tool_call.arguments).unwrap_or_default()
+    )
+    .to_lowercase();
+
+    if signal.uncertainty_not_reduced_steps >= 2
+        && matches!(tool_name, "file_read" | "grep" | "glob" | "bash")
+    {
+        decision.apply_score_modifier(
+            ActionScoreModifier::new(
+                ActionScoreModifierSource::Observer,
+                "uncertainty_not_reduced",
+                "recent observations did not reduce uncertainty",
+            )
+            .uncertainty_reduction(-2)
+            .cost(1),
+        );
+    }
+
+    if !signal.candidate_focus.is_empty()
+        && signal
+            .candidate_focus
+            .iter()
+            .any(|focus| text.contains(&focus.to_lowercase()))
+    {
+        decision.apply_score_modifier(
+            ActionScoreModifier::new(
+                ActionScoreModifierSource::Observer,
+                "candidate_focus_match",
+                "action targets recent observer candidate focus",
+            )
+            .scope_fit(2)
+            .uncertainty_reduction(1),
+        );
+    }
+
+    if signal.consecutive_validation_failures > 0
+        && matches!(
+            tool_name,
+            "file_read" | "grep" | "run_tests" | "bash" | "file_edit" | "file_patch"
+        )
+    {
+        decision.apply_score_modifier(
+            ActionScoreModifier::new(
+                ActionScoreModifierSource::Observer,
+                "validation_failure_focus",
+                "recent validation failure raises value of focused repair evidence",
+            )
+            .value(1)
+            .uncertainty_reduction(1),
+        );
+    }
+
+    if signal.validation_verified
+        && matches!(
+            tool_name,
+            "file_edit" | "file_write" | "file_patch" | "format" | "bash"
+        )
+    {
+        decision.apply_score_modifier(
+            ActionScoreModifier::new(
+                ActionScoreModifierSource::Observer,
+                "validated_mutation_penalty",
+                "validated work should prefer closeout over more mutation",
+            )
+            .value(-2)
+            .risk(1)
+            .scope_fit(-2),
+        );
+    }
+
+    if signal.risks > 0 && decision.action.mutates_workspace {
+        decision.apply_score_modifier(
+            ActionScoreModifier::new(
+                ActionScoreModifierSource::Observer,
+                "active_risk_mutation",
+                "active task risks increase mutation caution",
+            )
+            .risk(1),
+        );
+    }
+
+    if signal.key_findings > 0
+        && !signal.candidate_focus.is_empty()
+        && matches!(tool_name, "file_edit" | "file_patch" | "run_tests" | "bash")
+    {
+        decision.apply_score_modifier(
+            ActionScoreModifier::new(
+                ActionScoreModifierSource::Observer,
+                "finding_to_action",
+                "recent key findings support targeted edit or validation",
+            )
+            .value(1)
+            .scope_fit(1),
+        );
+    }
+
+    if let Some(progress) = &signal.last_progress_signal {
+        if !progress.trim().is_empty() && matches!(tool_name, "diff" | "git_diff" | "run_tests") {
+            decision.apply_score_modifier(
+                ActionScoreModifier::new(
+                    ActionScoreModifierSource::Observer,
+                    "progress_validation",
+                    "recent progress makes verification evidence more valuable",
+                )
+                .value(1)
+                .scope_fit(1),
+            );
+        }
+    }
+
+    if decision
+        .score_computation
+        .modifiers
+        .iter()
+        .any(|modifier| modifier.source == ActionScoreModifierSource::Observer)
+    {
+        decision.trace_recommended = true;
+        decision.reason_summary = format!("{}; observer modifier applied", decision.reason_summary);
+    }
+}
+
+fn apply_memory_action_signal(
+    decision: &mut ActionDecision,
+    tool_call: &ToolCall,
+    retained_items: &[ToolContextRetentionItem],
+) {
+    let signal = memory_action_signal(tool_call, retained_items);
+    if signal.is_empty() {
+        return;
+    }
+    decision.apply_score_modifier(
+        ActionScoreModifier::new(
+            ActionScoreModifierSource::Memory,
+            signal.kind,
+            signal.reasons.join("; "),
+        )
+        .value(signal.value_delta)
+        .risk(signal.risk_delta)
+        .uncertainty_reduction(signal.uncertainty_reduction_delta)
+        .scope_fit(signal.scope_fit_delta),
+    );
+    decision.trace_recommended = true;
+    decision.reason_summary = format!(
+        "{}; memory modifier value_delta={} risk_delta={} uncertainty_delta={} scope_delta={} ({})",
+        decision.reason_summary,
+        signal.value_delta,
+        signal.risk_delta,
+        signal.uncertainty_reduction_delta,
+        signal.scope_fit_delta,
+        signal.reasons.join("; ")
+    );
+}
+
+#[derive(Debug, Clone, Default)]
+struct MemoryActionSignal {
+    kind: String,
+    value_delta: i8,
+    risk_delta: i8,
+    uncertainty_reduction_delta: i8,
+    scope_fit_delta: i8,
+    reasons: Vec<String>,
+}
+
+impl MemoryActionSignal {
+    fn is_empty(&self) -> bool {
+        self.value_delta == 0
+            && self.risk_delta == 0
+            && self.uncertainty_reduction_delta == 0
+            && self.scope_fit_delta == 0
+    }
+}
+
+fn memory_action_signal(
+    tool_call: &ToolCall,
+    retained_items: &[ToolContextRetentionItem],
+) -> MemoryActionSignal {
+    let mut signal = MemoryActionSignal {
+        kind: "memory_context".to_string(),
+        ..Default::default()
+    };
+    let tool_name = tool_call.name.as_str();
+    let validation_or_inspection = matches!(
+        tool_name,
+        "file_read" | "grep" | "glob" | "bash" | "run_tests" | "diff" | "git_status" | "git_diff"
+    );
+
+    for item in retained_items {
+        if item.source != "Memory" {
+            continue;
+        }
+        let text = format!("{} {} {}", item.title, item.provenance, item.reason).to_lowercase();
+        let trusted = matches!(item.trust.as_str(), "High" | "Verified" | "Trusted");
+        let memory_id = item
+            .provenance
+            .split_whitespace()
+            .find(|part| part.contains("memory_record/"))
+            .unwrap_or(item.provenance.as_str());
+
+        if item.conflict {
+            signal.risk_delta = signal.risk_delta.saturating_add(1).min(2);
+            signal.uncertainty_reduction_delta =
+                signal.uncertainty_reduction_delta.saturating_add(1).min(2);
+            signal.kind = "memory_conflict_uncertainty".to_string();
+            signal
+                .reasons
+                .push(format!("{} is conflicting memory context", memory_id));
+        }
+        if contains_any_local(&text, &["stale", "outdated", "过期", "旧"]) {
+            signal.value_delta = signal.value_delta.saturating_sub(1).max(-2);
+            signal.scope_fit_delta = signal.scope_fit_delta.saturating_sub(1).max(-2);
+            signal.kind = "memory_stale_penalty".to_string();
+            signal.reasons.push(format!("{} appears stale", memory_id));
+        }
+        if contains_any_local(
+            &text,
+            &[
+                "failure",
+                "failed",
+                "risk",
+                "rollback",
+                "strategy-failures",
+                "never",
+                "avoid",
+                "失败",
+                "回滚",
+                "禁止",
+            ],
+        ) && (tool_name == "file_edit"
+            || tool_name == "file_write"
+            || tool_name == "file_patch"
+            || tool_name == "format"
+            || tool_name == "bash")
+        {
+            let delta = if trusted { 2 } else { 1 };
+            signal.risk_delta = signal.risk_delta.saturating_add(delta).min(3);
+            signal.kind = "memory_failure_risk".to_string();
+            signal
+                .reasons
+                .push(format!("{} warns about prior failure", memory_id));
+        }
+        if contains_any_local(
+            &text,
+            &[
+                "successful",
+                "strategy",
+                "diagnostic",
+                "validate",
+                "targeted",
+                "fix",
+                "成功",
+                "策略",
+                "验证",
+            ],
+        ) && validation_or_inspection
+        {
+            let delta = if trusted { 2 } else { 1 };
+            signal.value_delta = signal.value_delta.saturating_add(delta).min(3);
+            signal.scope_fit_delta = signal.scope_fit_delta.saturating_add(1).min(2);
+            signal.kind = "memory_success_value".to_string();
+            signal.reasons.push(format!(
+                "{} supports diagnostic/validation action",
+                memory_id
+            ));
+        }
+        if contains_any_local(&text, &["project", "repo", "workspace", "项目", "仓库"]) {
+            signal.scope_fit_delta = signal.scope_fit_delta.saturating_add(1).min(2);
+            if signal.kind == "memory_context" {
+                signal.kind = "memory_project_fit".to_string();
+            }
+            signal
+                .reasons
+                .push(format!("{} is project-scoped memory", memory_id));
+        }
+    }
+    signal.reasons.sort();
+    signal.reasons.dedup();
+    signal
+}
+
+fn contains_any_local(content: &str, needles: &[&str]) -> bool {
+    needles.iter().any(|needle| content.contains(needle))
+}
+
 fn record_action_decision_if_needed(
     trace: &Option<TraceCollector>,
     tool_call: &ToolCall,
     decision: &ActionDecision,
 ) {
-    if !decision.trace_recommended {
+    if !decision.trace_recommended && !mva_runtime_profile_enabled() {
         return;
     }
     if let Some(trace) = trace {
@@ -458,10 +797,36 @@ fn record_action_decision_if_needed(
             uncertainty_reduction: decision.scores.uncertainty_reduction,
             cost: decision.scores.cost,
             reversibility: decision.scores.reversibility,
+            scope_fit: decision.scores.scope_fit,
+            action_score: decision.scores.action_score,
+            formula_stage: decision
+                .score_computation
+                .formula_stage
+                .as_str()
+                .to_string(),
+            formula_version: decision.score_computation.formula_version.clone(),
+            phase_aligned: decision.action.phase_aligned,
+            mutates_workspace: decision.action.mutates_workspace,
+            broad_shell: decision.action.broad_shell,
+            modifiers: decision
+                .score_computation
+                .modifiers
+                .iter()
+                .filter_map(|modifier| serde_json::to_value(modifier).ok())
+                .collect(),
             requires_confirmation: decision.requires_confirmation,
             reason: decision.reason_summary.clone(),
         });
     }
+}
+
+fn mva_runtime_profile_enabled() -> bool {
+    matches!(
+        std::env::var("PRIORITY_AGENT_RUNTIME_PROFILE")
+            .ok()
+            .as_deref(),
+        Some("minimum_viable_agent" | "mva")
+    )
 }
 
 fn attach_action_review_metadata(result: &mut ToolResult, review: &ActionReview) {
@@ -546,6 +911,32 @@ fn record_tool_observation(
         .and_then(serde_json::Value::as_array)
         .map(Vec::len)
         .unwrap_or(0);
+    let key_findings = observation
+        .get("key_findings")
+        .and_then(serde_json::Value::as_array)
+        .map(Vec::len)
+        .unwrap_or(0);
+    let evidence_items = observation
+        .get("evidence")
+        .and_then(serde_json::Value::as_array)
+        .map(Vec::len)
+        .unwrap_or(0);
+    let quality_warning_labels = observation
+        .get("quality_warnings")
+        .and_then(serde_json::Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(serde_json::Value::as_str)
+                .map(str::to_string)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let quality_warnings = quality_warning_labels.len();
+    let context_policy = result
+        .data
+        .as_ref()
+        .and_then(|data| data.get("tool_result_context_policy"));
     trace.record(TraceEvent::ToolObservationRecorded {
         tool: tool_call.name.clone(),
         call_id: tool_call.id.clone(),
@@ -554,6 +945,44 @@ fn record_tool_observation(
             .and_then(serde_json::Value::as_str)
             .unwrap_or(if result.success { "success" } else { "failed" })
             .to_string(),
+        result_kind: observation
+            .get("result_kind")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("generic")
+            .to_string(),
+        model_visibility: context_policy
+            .and_then(|policy| policy.get("model_visibility"))
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("unknown")
+            .to_string(),
+        include_in_next_context: observation
+            .get("include_in_next_context")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(true),
+        store_in_state: observation
+            .get("store_in_state")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(true),
+        key_findings,
+        evidence_items,
+        failure_type: observation
+            .get("failure_type")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string),
+        recovery_plan_id: observation
+            .get("recovery_plan_id")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string),
+        recovery_kind: observation
+            .get("recovery_kind")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string),
+        raw_result_ref: observation
+            .get("raw_result_ref")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string),
+        quality_warnings,
+        quality_warning_labels,
         files_read,
         files_changed,
         checkpoint_id: observation
@@ -754,6 +1183,35 @@ impl<'a> ToolExecutionGate<'a> {
                 success: false,
                 duration_ms: Some(0),
                 output_chars: result.content.chars().count(),
+            });
+            let (reason, terminal_status, action) = match review.decision {
+                crate::engine::action_review::ActionReviewDecision::Deny => {
+                    ("action_denied", "blocked", "stop")
+                }
+                crate::engine::action_review::ActionReviewDecision::Revise => {
+                    ("action_needs_revision", "blocked", "replan")
+                }
+                crate::engine::action_review::ActionReviewDecision::AskUser => {
+                    ("high_risk_needs_user", "needs_user", "ask_user")
+                }
+                crate::engine::action_review::ActionReviewDecision::Allow => {
+                    ("no_issue", "missing", "continue")
+                }
+            };
+            trace.record(TraceEvent::StopCheckEvaluated {
+                status: "stop".to_string(),
+                reason: reason.to_string(),
+                stage: "PreAction".to_string(),
+                terminal_status: Some(terminal_status.to_string()),
+                action: action.to_string(),
+                no_code_progress_rounds: self.runtime_context.no_progress_rounds,
+                action_checkpoint_active: self.action_checkpoint_active,
+                summary: review.user_reason.clone(),
+                evidence_items: review.reasons.len().max(1),
+                failure_type: Some(review.primary_reason.as_str().to_string()),
+                recovery_plan_id: None,
+                rollback_recommended: false,
+                next_action: Some(review.model_recovery.clone()),
             });
         }
         ToolExecutionGateOutcome::Deny(result)
@@ -1020,7 +1478,7 @@ impl ToolExecutionController {
                             .unwrap_or_else(|| format!("blocked by pre-tool hook: {}", tool_name)),
                     )
                 } else if permission_evaluation.requires_approval {
-                    let approved = PermissionController::request_user_permission(
+                    let permission_outcome = PermissionController::request_user_permission(
                         &tc,
                         &permission_evaluation,
                         PermissionRequestRuntime {
@@ -1033,7 +1491,7 @@ impl ToolExecutionController {
                         },
                     )
                     .await;
-                    if approved {
+                    if permission_outcome.approved {
                         PermissionController::record_approved_session_rule(
                             &mut context,
                             &tool_name,
@@ -1054,7 +1512,10 @@ impl ToolExecutionController {
                             merge_tool_result_metadata(
                                 &mut result,
                                 "permission_request",
-                                record.to_json_with_approval(true),
+                                record.to_json_with_approval_source(
+                                    true,
+                                    Some(&permission_outcome.source),
+                                ),
                             );
                         }
                         result
@@ -1062,6 +1523,7 @@ impl ToolExecutionController {
                         PermissionController::denied_result(
                             &tool_name,
                             permission_evaluation.record.as_ref(),
+                            Some(&permission_outcome.source),
                         )
                     }
                 } else {
@@ -1250,6 +1712,7 @@ impl ToolExecutionController {
             has_changes_before_tools,
             exposed_tools_count: exposed_tool_names.len(),
             retained_context,
+            task_state,
         });
         let gate = ToolExecutionGate {
             tool_registry: execution.tool_registry.as_ref(),
@@ -1500,6 +1963,37 @@ mod tests {
             name: name.to_string(),
             arguments: serde_json::json!({}),
         }
+    }
+
+    #[test]
+    fn memory_action_signal_raises_risk_for_prior_failure_memory() {
+        let call = tool_call("call_1", "file_edit");
+        let mut decision = ActionDecision::for_tool_call(
+            &call,
+            ActionDecisionInput {
+                task_stage: AgentTaskStage::Edit,
+                route_workflow: None,
+                route_risk: None,
+                action_checkpoint_active: false,
+                has_changes_before_tools: false,
+                no_progress_rounds: 0,
+            },
+        );
+        let before = decision.scores.risk;
+        let items = vec![ToolContextRetentionItem {
+            source: "Memory".to_string(),
+            title: "memory_record/mem1:memory/strategy-failures.md".to_string(),
+            provenance: "memory.match:memory_record/mem1:memory/strategy-failures.md".to_string(),
+            reason: "failure pattern warns about broad edit".to_string(),
+            trust: "High".to_string(),
+            conflict: false,
+            token_estimate: 12,
+        }];
+
+        apply_memory_action_signal(&mut decision, &call, &items);
+
+        assert!(decision.scores.risk > before);
+        assert!(decision.reason_summary.contains("memory modifier"));
     }
 
     struct NoopProvider;

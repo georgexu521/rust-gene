@@ -2,7 +2,8 @@ use super::runtime_timeouts::{llm_request_timeout, stream_chunk_idle_timeout};
 use super::text_sanitizer::{strip_think_blocks, VisibleTextSanitizer};
 use super::tool_execution::read_only_tool_concurrency;
 use super::turn_recording::{
-    persist_turn_learning_event, record_hook_traces, record_recovery_plan,
+    persist_turn_learning_event, promote_trace_candidate_memories, record_hook_traces,
+    record_recovery_plan,
 };
 use super::ConversationLoop;
 use crate::engine::hooks::HookDecision;
@@ -663,6 +664,20 @@ impl ConversationLoop {
             }
             if let Err(e) = persist_turn_learning_event(store, &trace) {
                 warn!("Failed to persist learning event: {}", e);
+            }
+        }
+        if let Some(memory_manager) = &self.memory_manager {
+            match memory_manager.try_lock() {
+                Ok(memory) => {
+                    let promoted = promote_trace_candidate_memories(&memory, &trace);
+                    if promoted > 0 {
+                        debug!(
+                            "Promoted {} trace candidate memories from turn outcome",
+                            promoted
+                        );
+                    }
+                }
+                Err(_) => debug!("Skipped candidate memory promotion because memory lock was busy"),
             }
         }
     }

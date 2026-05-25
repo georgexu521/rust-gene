@@ -158,10 +158,15 @@ impl RetrievalContext {
                 .iter()
                 .any(|conflict| memory_conflict_matches_item(conflict, &item));
             let score = memory_retrieval_score(&item, conflict);
-            let trust = if item.source.starts_with("USER.md") {
+            let stale = item.source.contains(":stale:");
+            let trust = if stale {
+                TrustLevel::Low
+            } else if item.source.starts_with("USER.md") {
                 TrustLevel::High
             } else if conflict {
                 TrustLevel::Low
+            } else if item.source.starts_with("memory_record/") {
+                TrustLevel::High
             } else {
                 TrustLevel::Medium
             };
@@ -372,6 +377,8 @@ fn memory_retrieval_score(item: &crate::memory::manager::MemoryMatch, conflict: 
     };
     let scope_match = if item.source.starts_with("USER.md") {
         0.95
+    } else if item.source.starts_with("memory_record/") {
+        0.90
     } else if item.source.starts_with("MEMORY.md") {
         0.80
     } else if item.source.starts_with("memory/") {
@@ -379,21 +386,35 @@ fn memory_retrieval_score(item: &crate::memory::manager::MemoryMatch, conflict: 
     } else {
         0.65
     };
-    let trust = if item.source.starts_with("USER.md") {
+    let stale = item.source.contains(":stale:");
+    let trust = if stale {
+        0.45
+    } else if item.source.starts_with("USER.md") {
         0.95
+    } else if item.source.starts_with("memory_record/") {
+        0.88
     } else if item.source.starts_with("memory/") {
         0.80
     } else {
         0.75
     };
-    let recency = if item.source.contains("archive") {
+    let recency = if stale {
+        0.25
+    } else if item.source.contains("archive") {
         0.35
     } else {
         0.65
     };
     let token_cost = (token_estimate / 600.0).clamp(0.0, 1.0);
-    let prior_usefulness = if item.source.contains("accepted") || item.source.contains("learned") {
-        0.75
+    let prior_usefulness = if item.source.starts_with("memory_record/")
+        || item.source.contains("accepted")
+        || item.source.contains("learned")
+    {
+        if stale {
+            0.45
+        } else {
+            0.75
+        }
     } else {
         0.55
     };
@@ -435,6 +456,8 @@ fn memory_type_boost(snippet: &str) -> f32 {
 fn memory_retrieval_reason(item: &crate::memory::manager::MemoryMatch, conflict: bool) -> String {
     let scope = if item.source.starts_with("USER.md") {
         "user preference"
+    } else if item.source.starts_with("memory_record/") {
+        "typed memory record"
     } else if item.source.starts_with("MEMORY.md") {
         "project memory"
     } else if item.source.starts_with("memory/") {
@@ -442,7 +465,13 @@ fn memory_retrieval_reason(item: &crate::memory::manager::MemoryMatch, conflict:
     } else {
         "memory"
     };
-    if conflict {
+    let stale = item.source.contains(":stale:");
+    if stale {
+        format!(
+            "{} matched query but needs revalidation; confidence reduced",
+            scope
+        )
+    } else if conflict {
         format!(
             "{} matched query but overlaps with a conflicting memory; confidence reduced",
             scope

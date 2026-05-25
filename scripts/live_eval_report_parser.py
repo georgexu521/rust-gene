@@ -25,7 +25,11 @@ RUNTIME_SPINE_PHASE_EVENT_TYPES = {
         "memory_synced",
         "context_compacted",
         "runtime_diet_report",
+        "context_zones_materialized",
+        "memory_boundary_evaluated",
         "api_request_started",
+        "provider_message_sequence_normalized",
+        "streaming_tool_execution_shadow",
     },
     "decision": {
         "implementation_intent_recorded",
@@ -36,6 +40,7 @@ RUNTIME_SPINE_PHASE_EVENT_TYPES = {
         "risk_signal_assessed",
         "adaptive_workflow_triggered",
         "action_decision_evaluated",
+        "candidate_actions_evaluated",
         "action_reviewed",
         "workflow_routed",
     },
@@ -62,6 +67,7 @@ RUNTIME_SPINE_PHASE_EVENT_TYPES = {
         "recovery_applied",
         "recovery_plan",
         "tool_observation_recorded",
+        "agent_loop_step_evaluated",
     },
     "verification": {
         "stage_validation_completed",
@@ -73,6 +79,7 @@ RUNTIME_SPINE_PHASE_EVENT_TYPES = {
     "closeout": {
         "workflow_completed",
         "assistant_responded",
+        "completion_contract_evaluated",
         "final_closeout_prepared",
         "error",
     },
@@ -95,6 +102,20 @@ RUNTIME_SPINE_ASSERTION_ALIASES = {
     "closeout_phase": "phase:closeout",
     "runtime_diet": "event:runtime_diet_report",
     "runtime_diet_report": "event:runtime_diet_report",
+    "runtime_diet_warnings": "special:runtime_diet_warnings",
+    "runtime_diet_warning": "special:runtime_diet_warnings",
+    "provider_protocol_attribution": "event:provider_message_sequence_normalized",
+    "provider_message_sequence_normalized": "event:provider_message_sequence_normalized",
+    "provider_protocol_repair": "special:provider_protocol_repair",
+    "provider_protocol_repairs": "special:provider_protocol_repair",
+    "streaming_tool_shadow": "event:streaming_tool_execution_shadow",
+    "streaming_tool_execution_shadow": "event:streaming_tool_execution_shadow",
+    "context_zones": "event:context_zones_materialized",
+    "context_zones_materialized": "event:context_zones_materialized",
+    "context_task_state_non_empty": "special:context_task_state_non_empty",
+    "current_decision_request_non_empty": "special:current_decision_request_non_empty",
+    "memory_boundary": "event:memory_boundary_evaluated",
+    "memory_boundary_evaluated": "event:memory_boundary_evaluated",
     "task_context": "event:task_context_built",
     "task_context_built": "event:task_context_built",
     "implementation_intent": "event:implementation_intent_recorded",
@@ -105,6 +126,18 @@ RUNTIME_SPINE_ASSERTION_ALIASES = {
     "action_reviewed": "event:action_reviewed",
     "tool_observation": "special:tool_observation",
     "tool_observation_recorded": "event:tool_observation_recorded",
+    "observer_key_findings": "special:observer_key_findings",
+    "tool_observation_key_findings": "special:observer_key_findings",
+    "observer_evidence": "special:observer_evidence",
+    "tool_observation_evidence": "special:observer_evidence",
+    "observer_raw_result_ref": "special:observer_raw_result_ref",
+    "tool_observation_raw_result_ref": "special:observer_raw_result_ref",
+    "observer_model_visibility": "special:observer_model_visibility",
+    "tool_observation_model_visibility": "special:observer_model_visibility",
+    "observer_context_inclusion": "special:observer_context_inclusion",
+    "tool_observation_context_inclusion": "special:observer_context_inclusion",
+    "observer_state_storage": "special:observer_state_storage",
+    "tool_observation_state_storage": "special:observer_state_storage",
     "checkpoint_metadata": "special:checkpoint_metadata",
     "checkpoint_present": "special:checkpoint_metadata",
     "action_review_revise": "special:action_review_revise",
@@ -114,8 +147,45 @@ RUNTIME_SPINE_ASSERTION_ALIASES = {
     "risky_tool_reviews": "special:risky_tool_action_review",
     "review_risky_tools": "special:risky_tool_action_review",
     "action_review_for_risky_tools": "special:risky_tool_action_review",
+    "action_score_recorded": "special:action_score_recorded",
+    "scope_fit_recorded": "special:scope_fit_recorded",
+    "early_edit_demoted": "special:early_edit_demoted",
+    "observer_modified_next_action": "special:observer_modified_next_action",
+    "observer_action_modifier": "special:observer_modified_next_action",
+    "memory_modified_action_score": "special:memory_modified_action_score",
+    "memory_action_modifier": "special:memory_modified_action_score",
+    "low_score_replan_triggered": "special:low_score_replan_triggered",
+    "candidate_ranking_used": "special:candidate_ranking_used",
+    "candidate_score_calibrated": "special:candidate_score_calibrated",
+    "candidate_score_disagreement": "special:candidate_score_disagreement",
+    "observer_outcome": "special:observer_outcome_recorded",
+    "observer_outcome_recorded": "special:observer_outcome_recorded",
+    "observer_quality_warnings": "special:observer_quality_warnings",
+    "observer_quality_warning": "special:observer_quality_warnings",
+    "permission_source": "special:permission_source",
+    "permission_provenance": "special:permission_source",
+    "agent_loop_step": "event:agent_loop_step_evaluated",
+    "agent_loop_step_evaluated": "event:agent_loop_step_evaluated",
+    "state_transition_recorded": "special:state_transition_recorded",
+    "completion_contract": "event:completion_contract_evaluated",
+    "completion_contract_evaluated": "event:completion_contract_evaluated",
     "stop_check": "event:stop_check_evaluated",
     "stop_check_evaluated": "event:stop_check_evaluated",
+    "stop_terminal_status": "special:stop_terminal_status",
+    "terminal_status": "special:stop_terminal_status",
+    "stop_action": "special:stop_action",
+    "stop_recovery_plan": "special:stop_recovery_plan",
+    "stop_failure_type": "special:failure_type",
+    "failure_type": "special:failure_type",
+    "recovery_plan_typed": "special:recovery_plan_typed",
+    "recovery_failure_type": "special:recovery_plan_typed",
+    "typed_recovery": "special:recovery_plan_typed",
+    "rollback_recommended": "special:rollback_recommended",
+    "rollback_completed": "special:rollback_completed",
+    "needs_user": "special:needs_user",
+    "stopped_by_user": "special:stopped_by_user",
+    "uncertainty_not_reduced": "special:uncertainty_not_reduced",
+    "model_output_invalid": "special:model_output_invalid",
     "closeout_prepared": "event:final_closeout_prepared",
     "final_closeout_prepared": "event:final_closeout_prepared",
     "verification_proof": "special:verification_proof",
@@ -280,6 +350,11 @@ def token(value):
     return re.sub(r"[^a-z0-9]+", "_", str(value).strip().lower()).strip("_")
 
 
+def meaningful_token(value):
+    normalized = token(value)
+    return "" if normalized in {"", "missing", "none", "null"} else normalized
+
+
 def int_text(value, default=0):
     try:
         return str(int(value))
@@ -292,6 +367,37 @@ def int_value(value, default=0):
         return int(value)
     except Exception:
         return default
+
+
+def float_value(value, default=0.0):
+    try:
+        return float(value)
+    except Exception:
+        return default
+
+
+def clamp_int(value, low=0, high=100):
+    return max(low, min(high, int(round(value))))
+
+
+def split_list(value):
+    if value is None:
+        return []
+    if isinstance(value, list):
+        raw = value
+    elif isinstance(value, set):
+        raw = sorted(value)
+    else:
+        raw = str(value).split(",")
+    return [
+        str(item).strip()
+        for item in raw
+        if str(item).strip() and str(item).strip().lower() != "none"
+    ]
+
+
+def score_text(value):
+    return str(clamp_int(value))
 
 
 def short_identifier(value, max_chars=12):
@@ -307,6 +413,42 @@ def event_tool_name(event):
 
 def event_call_id(event):
     return str(event.get("call_id") or event.get("id") or "").strip()
+
+
+WRITE_TOOL_NAMES = {
+    "file_edit",
+    "file_patch",
+    "file_write",
+    "format",
+    "notebook",
+    "refactor",
+    "rewind",
+}
+
+EVIDENCE_TOOL_NAMES = {
+    "bash",
+    "file_read",
+    "git_diff",
+    "git_status",
+    "glob",
+    "grep",
+    "list_mcp_resources",
+    "read_mcp_resource",
+    "run_tests",
+    "symbol_query",
+}
+
+
+def event_sequence_key(event):
+    name = token(event_tool_name(event))
+    args = event.get("arguments") or event.get("args") or event.get("metadata") or ""
+    try:
+        args_text = json.dumps(args, sort_keys=True)
+    except Exception:
+        args_text = str(args)
+    if len(args_text) > 160:
+        args_text = args_text[:160]
+    return f"{name}:{args_text}"
 
 
 def is_risky_tool_name(name):
@@ -413,8 +555,36 @@ def normalize_runtime_spine_assertion(value):
             "risky_tool_action_review",
             "checkpoint_metadata",
             "tool_observation",
+            "observer_key_findings",
+            "observer_evidence",
+            "observer_raw_result_ref",
+            "observer_model_visibility",
+            "observer_context_inclusion",
+            "observer_state_storage",
+            "stop_terminal_status",
+            "stop_action",
+            "stop_recovery_plan",
+            "failure_type",
+            "recovery_plan_typed",
+            "rollback_recommended",
+            "rollback_completed",
+            "needs_user",
+            "stopped_by_user",
+            "uncertainty_not_reduced",
+            "model_output_invalid",
+            "candidate_score_calibrated",
+            "candidate_score_disagreement",
+            "observer_outcome_recorded",
+            "observer_quality_warnings",
+            "permission_source",
+            "runtime_diet_warnings",
+            "provider_protocol_repair",
+            "context_task_state_non_empty",
+            "current_decision_request_non_empty",
         }:
             return f"special:{name}"
+        if prefix in {"completion_status", "terminal_status", "verification_proof_status"}:
+            return f"{prefix}:{name}"
     normalized = token(raw.removeprefix("runtime_spine_"))
     return RUNTIME_SPINE_ASSERTION_ALIASES.get(normalized, f"unknown:{normalized}")
 
@@ -434,6 +604,10 @@ def normalized_runtime_spine_assertions(sample):
             values.append(f"event:{event}")
         for item in raw.get("required") or raw.get("assertions") or []:
             values.append(item)
+        for field in ("completion_status", "terminal_status", "verification_proof_status"):
+            expected = raw.get(field) or raw.get(f"expected_{field}")
+            if expected:
+                values.append(f"{field}:{expected}")
         if raw.get("verification_proof") is True or raw.get("require_verification_proof") is True:
             values.append("verification_proof")
         if raw.get("verification_proof_verified") is True:
@@ -442,6 +616,10 @@ def normalized_runtime_spine_assertions(sample):
             values.append("action_decision")
         if raw.get("stop_check") is True:
             values.append("stop_check")
+        if raw.get("context_task_state_non_empty") is True:
+            values.append("context_task_state_non_empty")
+        if raw.get("current_decision_request_non_empty") is True:
+            values.append("current_decision_request_non_empty")
         if (
             raw.get("risky_tool_action_review") is True
             or raw.get("require_risky_tool_action_review") is True
@@ -494,10 +672,49 @@ def runtime_spine_metrics_from_events(events, report_text="", assertions=None):
     action_review_events = [
         event for event in trace_items if token(event.get("type", "")) == "action_reviewed"
     ]
+    action_decision_events = [
+        event for event in trace_items if token(event.get("type", "")) == "action_decision_evaluated"
+    ]
     tool_observation_events = [
         event
         for event in trace_items
         if token(event.get("type", "")) == "tool_observation_recorded"
+    ]
+    permission_resolved_events = [
+        event for event in trace_items if token(event.get("type", "")) == "permission_resolved"
+    ]
+    runtime_diet_events = [
+        event for event in trace_items if token(event.get("type", "")) == "runtime_diet_report"
+    ]
+    provider_protocol_events = [
+        event
+        for event in trace_items
+        if token(event.get("type", "")) == "provider_message_sequence_normalized"
+    ]
+    streaming_shadow_events = [
+        event
+        for event in trace_items
+        if token(event.get("type", "")) == "streaming_tool_execution_shadow"
+    ]
+    stop_check_events = [
+        event for event in trace_items if token(event.get("type", "")) == "stop_check_evaluated"
+    ]
+    agent_loop_events = [
+        event for event in trace_items if token(event.get("type", "")) == "agent_loop_step_evaluated"
+    ]
+    context_zone_events = [
+        event for event in trace_items if token(event.get("type", "")) == "context_zones_materialized"
+    ]
+    memory_boundary_events = [
+        event for event in trace_items if token(event.get("type", "")) == "memory_boundary_evaluated"
+    ]
+    completion_contract_events = [
+        event
+        for event in trace_items
+        if token(event.get("type", "")) == "completion_contract_evaluated"
+    ]
+    recovery_plan_events = [
+        event for event in trace_items if token(event.get("type", "")) == "recovery_plan"
     ]
     risky_review_gaps = risky_tool_action_review_gaps(events)
     risky_tool_runs = len(risky_review_gaps["runs"])
@@ -520,6 +737,188 @@ def runtime_spine_metrics_from_events(events, report_text="", assertions=None):
         proof_status = str(latest_closeout.get("verification_proof_status", "missing"))
     if not proof_summary:
         proof_summary = str(latest_closeout.get("verification_proof_summary", "missing"))
+
+    latest_stop = stop_check_events[-1] if stop_check_events else {}
+    stop_terminal_status = str(
+        latest_stop.get("terminal_status")
+        or latest_closeout.get("terminal_status")
+        or "missing"
+    )
+    stop_action = str(
+        latest_stop.get("action") or latest_closeout.get("stop_action") or "missing"
+    )
+    stop_reason = str(
+        latest_stop.get("reason") or latest_closeout.get("stop_reason") or "missing"
+    )
+    stop_failure_type = str(
+        latest_stop.get("failure_type")
+        or latest_closeout.get("failure_type")
+        or "missing"
+    )
+    stop_recovery_plan_id = str(
+        latest_stop.get("recovery_plan_id")
+        or latest_closeout.get("recovery_plan_id")
+        or "missing"
+    )
+    rollback_recommended = any(
+        bool(event.get("rollback_recommended"))
+        or token(event.get("reason", "")) == "rollback_recommended"
+        for event in stop_check_events
+    ) or token(latest_closeout.get("rollback_status", "")) not in {"", "none", "missing", "null"}
+    rollback_completed = (
+        token(latest_closeout.get("terminal_status", "")) == "rolled_back"
+        or any(
+            token(event.get("tool", "")) in {"rewind", "rollback"}
+            and token(event.get("status", "")) == "success"
+            for event in tool_observation_events
+        )
+    )
+    typed_recovery_events = [
+        event
+        for event in recovery_plan_events
+        if token(event.get("failure_type", "")) or token(event.get("recovery_kind", ""))
+    ]
+    recovery_failure_types = unique_items(
+        meaningful_token(event.get("failure_type", ""))
+        for event in recovery_plan_events
+        if meaningful_token(event.get("failure_type", ""))
+    )
+    recovery_kinds = unique_items(
+        meaningful_token(event.get("recovery_kind", ""))
+        for event in recovery_plan_events
+        if meaningful_token(event.get("recovery_kind", ""))
+    )
+    trace_failure_types = unique_items(
+        meaningful_token(value)
+        for value in [
+            *(event.get("failure_type") for event in stop_check_events),
+            *(event.get("failure_type") for event in recovery_plan_events),
+            *(event.get("failure_type") for event in tool_observation_events),
+            latest_closeout.get("failure_type"),
+        ]
+        if meaningful_token(value)
+    )
+    action_scores = [
+        int_value(event.get("action_score"))
+        for event in action_decision_events
+        if event.get("action_score") is not None
+    ]
+    scope_fit_values = [
+        int_value(event.get("scope_fit"))
+        for event in action_decision_events
+        if event.get("scope_fit") is not None
+    ]
+    latest_action_score = action_scores[-1] if action_scores else None
+    low_action_score_count = sum(1 for score in action_scores if score <= 3)
+    phase_misaligned_actions = sum(
+        1 for event in action_decision_events if event.get("phase_aligned") is False
+    )
+    memory_modifier_applied = any(
+        any(token(modifier.get("source", "")) == "memory" for modifier in event.get("modifiers") or [])
+        or "memory modifier" in str(event.get("reason", "")).lower()
+        for event in action_decision_events
+    )
+    observer_modifier_applied = any(
+        any(token(modifier.get("source", "")) == "observer" for modifier in event.get("modifiers") or [])
+        or "observer modifier" in str(event.get("reason", "")).lower()
+        for event in action_decision_events
+    )
+    scope_fit_revision = any(
+        token(event.get("reason", "")) == "low_scope_fit" for event in action_review_events
+    )
+    early_edit_demoted = any(
+        token(event.get("reason", "")) == "low_value_action" for event in action_review_events
+    ) or any(
+        event.get("phase_aligned") is False
+        and bool(event.get("mutates_workspace"))
+        and token(event.get("stage", "")) in {"understand", "diagnosis"}
+        for event in action_decision_events
+    )
+    candidate_action_count = sum(
+        int_value(event.get("candidate_count", 0))
+        for event in trace_items
+        if token(event.get("type", "")) == "candidate_actions_evaluated"
+    )
+    candidate_events = [
+        event
+        for event in trace_items
+        if token(event.get("type", "")) == "candidate_actions_evaluated"
+    ]
+    candidate_selected_by_runtime = any(
+        bool(event.get("selected_id"))
+        for event in candidate_events
+    ) or "candidate_action_request" in report_text.lower()
+    candidate_score_calibrated = any(
+        event.get("selected_runtime_score") is not None
+        and event.get("selected_model_score") is not None
+        for event in candidate_events
+    )
+    candidate_score_disagreement = any(
+        bool(event.get("runtime_selected_differs_from_model_order"))
+        for event in candidate_events
+    )
+    score_driven_replan = any(
+        token(event.get("reason", ""))
+        in {
+            "low_action_value_loop",
+            "score_not_reducing_uncertainty",
+            "repeated_action_revision",
+        }
+        and token(event.get("action", "")) == "replan"
+        for event in stop_check_events
+    )
+    score_driven_stop = any(
+        token(event.get("reason", ""))
+        in {
+            "low_action_value_loop",
+            "score_not_reducing_uncertainty",
+            "repeated_action_revision",
+        }
+        and token(event.get("status", "")) == "stop"
+        for event in stop_check_events
+    )
+    formula_versions = unique_items(
+        meaningful_token(event.get("formula_version", "")) for event in action_decision_events
+    )
+    latest_agent_loop = agent_loop_events[-1] if agent_loop_events else {}
+    latest_context_zones = context_zone_events[-1] if context_zone_events else {}
+    latest_memory_boundary = memory_boundary_events[-1] if memory_boundary_events else {}
+    latest_completion_contract = (
+        completion_contract_events[-1] if completion_contract_events else {}
+    )
+    permission_sources = unique_items(
+        meaningful_token(event.get("source", ""))
+        for event in permission_resolved_events
+        if meaningful_token(event.get("source", ""))
+    )
+    observer_quality_warning_count = sum(
+        int_value(event.get("quality_warnings", 0)) for event in tool_observation_events
+    )
+    observer_quality_warning_labels = unique_items(
+        meaningful_token(label)
+        for event in tool_observation_events
+        for label in event.get("quality_warning_labels") or []
+        if meaningful_token(label)
+    )
+    runtime_diet_warning_labels = unique_items(
+        meaningful_token(label)
+        for event in runtime_diet_events
+        for label in event.get("warnings") or []
+        if meaningful_token(label)
+    )
+    provider_protocol_repair_count = sum(
+        int_value(event.get("system_messages_merged", 0))
+        + int_value(event.get("dropped_assistant_tool_calls", 0))
+        + int_value(event.get("dropped_tool_results", 0))
+        for event in provider_protocol_events
+    )
+    streaming_shadow_eligible = sum(
+        int_value(event.get("eligible_tool_calls", 0)) for event in streaming_shadow_events
+    )
+    state_transition_recorded = any(
+        token(event.get("stage_before", "")) != token(event.get("stage_after", ""))
+        for event in agent_loop_events
+    )
 
     missing = []
     for assertion in assertions:
@@ -559,8 +958,138 @@ def runtime_spine_metrics_from_events(events, report_text="", assertions=None):
                 and "context_ledger.tool_observation" not in report_text.lower()
             ):
                 missing.append(assertion)
+        elif kind == "special" and name == "observer_key_findings":
+            if not any(int_value(event.get("key_findings", 0)) > 0 for event in tool_observation_events):
+                missing.append(assertion)
+        elif kind == "special" and name == "observer_evidence":
+            if not any(int_value(event.get("evidence_items", 0)) > 0 for event in tool_observation_events):
+                missing.append(assertion)
+        elif kind == "special" and name == "observer_raw_result_ref":
+            if not any(str(event.get("raw_result_ref", "")).strip() for event in tool_observation_events):
+                missing.append(assertion)
+        elif kind == "special" and name == "observer_model_visibility":
+            if not any(str(event.get("model_visibility", "")).strip() for event in tool_observation_events):
+                missing.append(assertion)
+        elif kind == "special" and name == "observer_context_inclusion":
+            if not any(bool(event.get("include_in_next_context")) for event in tool_observation_events):
+                missing.append(assertion)
+        elif kind == "special" and name == "observer_state_storage":
+            if not any(bool(event.get("store_in_state")) for event in tool_observation_events):
+                missing.append(assertion)
+        elif kind == "special" and name == "stop_terminal_status":
+            if token(stop_terminal_status) in {"", "missing", "none", "null"}:
+                missing.append(assertion)
+        elif kind == "special" and name == "stop_action":
+            if token(stop_action) in {"", "missing", "none", "null"}:
+                missing.append(assertion)
+        elif kind == "special" and name == "stop_recovery_plan":
+            if (
+                token(stop_recovery_plan_id) in {"", "missing", "none", "null"}
+                and not recovery_plan_events
+            ):
+                missing.append(assertion)
+        elif kind == "special" and name == "failure_type":
+            if not trace_failure_types:
+                missing.append(assertion)
+        elif kind == "special" and name == "recovery_plan_typed":
+            if not typed_recovery_events:
+                missing.append(assertion)
+        elif kind == "special" and name == "rollback_recommended":
+            if not rollback_recommended:
+                missing.append(assertion)
+        elif kind == "special" and name == "rollback_completed":
+            if not rollback_completed:
+                missing.append(assertion)
+        elif kind == "special" and name == "needs_user":
+            if not (
+                token(stop_terminal_status) == "needs_user"
+                or token(stop_action) == "ask_user"
+                or any(bool(event.get("requires_user_decision")) for event in recovery_plan_events)
+            ):
+                missing.append(assertion)
+        elif kind == "special" and name == "stopped_by_user":
+            if token(stop_terminal_status) != "stopped_by_user":
+                missing.append(assertion)
+        elif kind == "special" and name == "uncertainty_not_reduced":
+            if not any(token(event.get("reason", "")) == "uncertainty_not_reduced" for event in stop_check_events):
+                missing.append(assertion)
+        elif kind == "special" and name == "model_output_invalid":
+            if not any(
+                token(event.get("reason", "")) == "model_output_invalid"
+                or token(event.get("failure_type", "")) == "model_output_invalid"
+                for event in stop_check_events
+            ):
+                missing.append(assertion)
         elif kind == "special" and name == "risky_tool_action_review":
             if risky_tool_missing_reviews:
+                missing.append(assertion)
+        elif kind == "special" and name == "action_score_recorded":
+            if not action_scores:
+                missing.append(assertion)
+        elif kind == "special" and name == "scope_fit_recorded":
+            if not scope_fit_values:
+                missing.append(assertion)
+        elif kind == "special" and name == "early_edit_demoted":
+            if not early_edit_demoted:
+                missing.append(assertion)
+        elif kind == "special" and name == "observer_modified_next_action":
+            if not observer_modifier_applied:
+                missing.append(assertion)
+        elif kind == "special" and name == "memory_modified_action_score":
+            if not memory_modifier_applied:
+                missing.append(assertion)
+        elif kind == "special" and name == "low_score_replan_triggered":
+            if not score_driven_replan:
+                missing.append(assertion)
+        elif kind == "special" and name == "candidate_ranking_used":
+            if not candidate_selected_by_runtime:
+                missing.append(assertion)
+        elif kind == "special" and name == "candidate_score_calibrated":
+            if not candidate_score_calibrated:
+                missing.append(assertion)
+        elif kind == "special" and name == "candidate_score_disagreement":
+            if not candidate_score_disagreement:
+                missing.append(assertion)
+        elif kind == "special" and name == "observer_outcome_recorded":
+            if not tool_observation_events:
+                missing.append(assertion)
+        elif kind == "special" and name == "observer_quality_warnings":
+            if observer_quality_warning_count <= 0 and not observer_quality_warning_labels:
+                missing.append(assertion)
+        elif kind == "special" and name == "permission_source":
+            if not permission_sources:
+                missing.append(assertion)
+        elif kind == "special" and name == "runtime_diet_warnings":
+            if not runtime_diet_warning_labels:
+                missing.append(assertion)
+        elif kind == "special" and name == "provider_protocol_repair":
+            if provider_protocol_repair_count <= 0:
+                missing.append(assertion)
+        elif kind == "special" and name == "context_task_state_non_empty":
+            if latest_context_zones.get("task_state_empty") is not False:
+                missing.append(assertion)
+        elif kind == "special" and name == "current_decision_request_non_empty":
+            if latest_context_zones.get("current_decision_request_empty") is not False:
+                missing.append(assertion)
+        elif kind == "special" and name == "state_transition_recorded":
+            if not state_transition_recorded:
+                missing.append(assertion)
+        elif kind == "completion_status":
+            if token(latest_completion_contract.get("status", "")) != name:
+                missing.append(assertion)
+        elif kind == "terminal_status":
+            terminal = token(
+                latest_completion_contract.get("terminal_status", "")
+                or stop_terminal_status
+            )
+            if terminal != name:
+                missing.append(assertion)
+        elif kind == "verification_proof_status":
+            proof = token(
+                latest_completion_contract.get("verification_proof_status", "")
+                or proof_status
+            )
+            if proof != name:
                 missing.append(assertion)
         else:
             missing.append(assertion)
@@ -585,7 +1114,30 @@ def runtime_spine_metrics_from_events(events, report_text="", assertions=None):
     detail = (
         f"{detail} risky_tool_runs={risky_tool_runs} "
         f"risky_tool_reviewed={risky_tool_reviewed} "
-        f"risky_tool_missing_action_review={risky_tool_missing_text}"
+        f"risky_tool_missing_action_review={risky_tool_missing_text} "
+        f"stop_reason={stop_reason} stop_terminal_status={stop_terminal_status} "
+        f"stop_action={stop_action} stop_failure_type={stop_failure_type} "
+        f"rollback_recommended={bool_text(rollback_recommended)} "
+        f"rollback_completed={bool_text(rollback_completed)} "
+        f"recovery_failure_types={','.join(recovery_failure_types) if recovery_failure_types else 'none'} "
+        f"recovery_kinds={','.join(recovery_kinds) if recovery_kinds else 'none'} "
+        f"action_scores={len(action_scores)} latest_action_score={latest_action_score if latest_action_score is not None else 'none'} "
+        f"low_action_score_count={low_action_score_count} phase_misaligned_actions={phase_misaligned_actions} "
+        f"observer_modifier_applied={bool_text(observer_modifier_applied)} "
+        f"memory_modifier_applied={bool_text(memory_modifier_applied)} "
+        f"observer_outcome_recorded={bool_text(bool(tool_observation_events))} "
+        f"observer_quality_warnings={observer_quality_warning_count} "
+        f"observer_quality_warning_labels={','.join(observer_quality_warning_labels) if observer_quality_warning_labels else 'none'} "
+        f"permission_sources={','.join(permission_sources) if permission_sources else 'none'} "
+        f"runtime_diet_warnings={','.join(runtime_diet_warning_labels) if runtime_diet_warning_labels else 'none'} "
+        f"provider_protocol_events={len(provider_protocol_events)} "
+        f"provider_protocol_repairs={provider_protocol_repair_count} "
+        f"streaming_tool_shadow_events={len(streaming_shadow_events)} "
+        f"streaming_tool_shadow_eligible={streaming_shadow_eligible} "
+        f"memory_boundary_recorded={bool_text(bool(memory_boundary_events))} "
+        f"agent_loop_steps={len(agent_loop_events)} "
+        f"context_zones={len(context_zone_events)} "
+        f"completion_contract={token(latest_completion_contract.get('status', 'missing'))}"
     )
     missing_text = ",".join(missing) if missing else "none"
     assertions_text = ",".join(assertions) if assertions else "none"
@@ -605,6 +1157,56 @@ def runtime_spine_metrics_from_events(events, report_text="", assertions=None):
         "risky_tool_runs": str(risky_tool_runs),
         "risky_tool_reviewed": str(risky_tool_reviewed),
         "risky_tool_missing_action_review": risky_tool_missing_text,
+        "stop_reason": stop_reason,
+        "stop_terminal_status": stop_terminal_status,
+        "stop_action": stop_action,
+        "stop_failure_type": stop_failure_type,
+        "stop_recovery_plan_id": stop_recovery_plan_id,
+        "rollback_recommended": bool_text(rollback_recommended),
+        "rollback_completed": bool_text(rollback_completed),
+        "trace_failure_types": ",".join(trace_failure_types) if trace_failure_types else "none",
+        "recovery_failure_types": ",".join(recovery_failure_types) if recovery_failure_types else "none",
+        "recovery_kinds": ",".join(recovery_kinds) if recovery_kinds else "none",
+        "recovery_requires_user": bool_text(any(bool(event.get("requires_user_decision")) for event in recovery_plan_events)),
+        "recovery_side_effect_uncertain": bool_text(any(bool(event.get("side_effect_uncertain")) for event in recovery_plan_events)),
+        "action_scoring_active": bool_text(bool(action_scores or scope_fit_values)),
+        "selected_action_score": str(latest_action_score) if latest_action_score is not None else "missing",
+        "selected_action_score_min": str(min(action_scores)) if action_scores else "missing",
+        "selected_action_score_avg": "{:.2f}".format(sum(action_scores) / len(action_scores)) if action_scores else "missing",
+        "low_score_actions": str(low_action_score_count),
+        "low_action_score_count": str(low_action_score_count),
+        "phase_misaligned_actions": str(phase_misaligned_actions),
+        "action_score_formula_version": ",".join(formula_versions) if formula_versions else "missing",
+        "observer_modifier_applied": bool_text(observer_modifier_applied),
+        "memory_modifier_applied": bool_text(memory_modifier_applied),
+        "scope_fit_revision": bool_text(scope_fit_revision),
+        "early_edit_demoted": bool_text(early_edit_demoted),
+        "candidate_action_count": str(candidate_action_count),
+        "candidate_selected_by_runtime": bool_text(candidate_selected_by_runtime),
+        "candidate_score_calibrated": bool_text(candidate_score_calibrated),
+        "candidate_score_disagreement": bool_text(candidate_score_disagreement),
+        "score_driven_replan": bool_text(score_driven_replan),
+        "score_driven_stop": bool_text(score_driven_stop),
+        "agent_loop_steps": str(len(agent_loop_events)),
+        "agent_loop_latest_stage_before": str(latest_agent_loop.get("stage_before", "missing")),
+        "agent_loop_latest_stage_after": str(latest_agent_loop.get("stage_after", "missing")),
+        "agent_loop_latest_stop_reason": str(latest_agent_loop.get("stop_reason", "missing")),
+        "state_transition_recorded": bool_text(state_transition_recorded),
+        "context_zones_materialized": bool_text(bool(context_zone_events)),
+        "context_zone_relevant_items": str(latest_context_zones.get("relevant_material_items", "missing")),
+        "context_zone_observation_items": str(latest_context_zones.get("recent_observation_items", "missing")),
+        "context_zone_task_state_empty": bool_text(bool(latest_context_zones.get("task_state_empty"))),
+        "context_zone_current_decision_request_empty": bool_text(bool(latest_context_zones.get("current_decision_request_empty"))),
+        "observer_outcome_recorded": bool_text(bool(tool_observation_events)),
+        "observer_outcome_latest_status": str((tool_observation_events[-1] if tool_observation_events else {}).get("status", "missing")),
+        "observer_outcome_latest_findings": str((tool_observation_events[-1] if tool_observation_events else {}).get("key_findings", "missing")),
+        "observer_outcome_latest_evidence": str((tool_observation_events[-1] if tool_observation_events else {}).get("evidence_items", "missing")),
+        "memory_boundary_recorded": bool_text(bool(memory_boundary_events)),
+        "memory_boundary_read_status": str(latest_memory_boundary.get("read_status", "missing")),
+        "memory_boundary_closeout_write_candidate_status": str(latest_memory_boundary.get("closeout_write_candidate_status", "missing")),
+        "completion_contract_status": str(latest_completion_contract.get("status", "missing")),
+        "completion_contract_terminal_status": str(latest_completion_contract.get("terminal_status", "missing")),
+        "completion_contract_proof_status": str(latest_completion_contract.get("verification_proof_status", "missing")),
         "verification_proof_status": proof_status,
         "verification_proof_summary": proof_summary,
     }
@@ -631,6 +1233,56 @@ def runtime_spine_metrics(task_dir, report_text):
         "risky_tool_runs",
         "risky_tool_reviewed",
         "risky_tool_missing_action_review",
+        "stop_reason",
+        "stop_terminal_status",
+        "stop_action",
+        "stop_failure_type",
+        "stop_recovery_plan_id",
+        "rollback_recommended",
+        "rollback_completed",
+        "trace_failure_types",
+        "recovery_failure_types",
+        "recovery_kinds",
+        "recovery_requires_user",
+        "recovery_side_effect_uncertain",
+        "action_scoring_active",
+        "selected_action_score",
+        "selected_action_score_min",
+        "selected_action_score_avg",
+        "low_score_actions",
+        "low_action_score_count",
+        "phase_misaligned_actions",
+        "action_score_formula_version",
+        "observer_modifier_applied",
+        "memory_modifier_applied",
+        "scope_fit_revision",
+        "early_edit_demoted",
+        "candidate_action_count",
+        "candidate_selected_by_runtime",
+        "candidate_score_calibrated",
+        "candidate_score_disagreement",
+        "score_driven_replan",
+        "score_driven_stop",
+        "agent_loop_steps",
+        "agent_loop_latest_stage_before",
+        "agent_loop_latest_stage_after",
+        "agent_loop_latest_stop_reason",
+        "state_transition_recorded",
+        "context_zones_materialized",
+        "context_zone_relevant_items",
+        "context_zone_observation_items",
+        "context_zone_task_state_empty",
+        "context_zone_current_decision_request_empty",
+        "observer_outcome_recorded",
+        "observer_outcome_latest_status",
+        "observer_outcome_latest_findings",
+        "observer_outcome_latest_evidence",
+        "memory_boundary_recorded",
+        "memory_boundary_read_status",
+        "memory_boundary_closeout_write_candidate_status",
+        "completion_contract_status",
+        "completion_contract_terminal_status",
+        "completion_contract_proof_status",
         "verification_proof_status",
         "verification_proof_summary",
     ]:
@@ -638,6 +1290,492 @@ def runtime_spine_metrics(task_dir, report_text):
         if value:
             metrics[key] = value
     return metrics
+
+
+def output_assertions_from_sample(sample):
+    raw = sample.get("output_assertions")
+    if raw is None:
+        raw = (sample.get("quality_assertions") or {}).get("output")
+    if raw is None:
+        return {}
+    if isinstance(raw, str):
+        return {"contains": [raw]}
+    if isinstance(raw, list):
+        return {"contains": raw}
+    if isinstance(raw, dict):
+        return raw
+    return {"contains": [str(raw)]}
+
+
+def trajectory_assertions_from_sample(sample):
+    raw = sample.get("trajectory_assertions")
+    if raw is None:
+        raw = (sample.get("quality_assertions") or {}).get("trajectory")
+    if raw is None:
+        return {}
+    return raw if isinstance(raw, dict) else {}
+
+
+def evaluate_output_assertions(sample, output):
+    assertions = output_assertions_from_sample(sample)
+    if not assertions:
+        return {
+            "output_assertions": "none",
+            "output_assertion_status": "none",
+            "output_assertion_missing": "none",
+        }
+
+    missing = []
+    output_text = output or ""
+    output_lower = output_text.lower()
+
+    def normalized_values(value):
+        if value is None:
+            return []
+        if isinstance(value, str):
+            return [value]
+        if isinstance(value, list):
+            return value
+        return [value]
+
+    for expected in assertions.get("contains") or []:
+        expected = str(expected)
+        if expected and expected.lower() not in output_lower:
+            missing.append(f"contains:{expected}")
+    for group in assertions.get("contains_any") or []:
+        values = normalized_values(group)
+        group_values = [str(value) for value in values if str(value)]
+        if group_values and not any(value.lower() in output_lower for value in group_values):
+            missing.append(f"contains_any:{'|'.join(group_values)}")
+    for forbidden in (
+        assertions.get("not_contains")
+        or assertions.get("forbidden")
+        or assertions.get("forbidden_output")
+        or []
+    ):
+        forbidden = str(forbidden)
+        if forbidden and forbidden.lower() in output_lower:
+            missing.append(f"not_contains:{forbidden}")
+    for pattern in assertions.get("regex") or []:
+        pattern = str(pattern)
+        try:
+            if not re.search(pattern, output_text, re.MULTILINE | re.IGNORECASE):
+                missing.append(f"regex:{pattern}")
+        except re.error:
+            missing.append(f"invalid_regex:{pattern}")
+    for group in assertions.get("regex_any") or []:
+        patterns = [str(value) for value in normalized_values(group) if str(value)]
+        if not patterns:
+            continue
+        matched = False
+        invalid_patterns = []
+        for pattern in patterns:
+            try:
+                if re.search(pattern, output_text, re.MULTILINE | re.IGNORECASE):
+                    matched = True
+                    break
+            except re.error:
+                invalid_patterns.append(pattern)
+        if not matched:
+            if invalid_patterns and len(invalid_patterns) == len(patterns):
+                missing.append(f"invalid_regex_any:{'|'.join(invalid_patterns)}")
+            else:
+                missing.append(f"regex_any:{'|'.join(patterns)}")
+
+    labels = []
+    for key in (
+        "contains",
+        "contains_any",
+        "not_contains",
+        "forbidden",
+        "forbidden_output",
+        "regex",
+        "regex_any",
+    ):
+        values = assertions.get(key) or []
+        if isinstance(values, str):
+            values = [values]
+        if values:
+            labels.append(f"{key}={len(values)}")
+
+    return {
+        "output_assertions": ",".join(labels) if labels else "configured",
+        "output_assertion_status": "failed" if missing else "passed",
+        "output_assertion_missing": ";".join(missing) if missing else "none",
+    }
+
+
+def derived_trajectory_metrics_from_events(
+    events,
+    report_text="",
+    output="",
+    sample=None,
+    test_status="missing",
+    cmd_log_text="",
+):
+    sample = sample or {}
+    trace_items = trace_events(events)
+    action_decision_events = [
+        event
+        for event in trace_items
+        if token(event.get("type", "")) == "action_decision_evaluated"
+    ]
+    action_review_events = [
+        event for event in trace_items if token(event.get("type", "")) == "action_reviewed"
+    ]
+    stop_check_events = [
+        event for event in trace_items if token(event.get("type", "")) == "stop_check_evaluated"
+    ]
+    verification_events = [
+        event for event in trace_items if token(event.get("type", "")) == "verification_completed"
+    ]
+    stage_validation_events = [
+        event
+        for event in trace_items
+        if token(event.get("type", "")) == "stage_validation_completed"
+    ]
+    tool_observation_events = [
+        event
+        for event in trace_items
+        if token(event.get("type", "")) == "tool_observation_recorded"
+    ]
+    api_events = [
+        event
+        for event in trace_items
+        if token(event.get("type", ""))
+        in {"api_request_started", "api_request_completed"}
+    ]
+    tool_starts = [
+        event for event in events if token(event.get("event", "")) == "tool_execution_start"
+    ]
+    tool_completes = [
+        event for event in events if token(event.get("event", "")) == "tool_execution_complete"
+    ]
+    if not tool_starts:
+        tool_starts = [
+            event for event in trace_items if token(event.get("type", "")) == "tool_started"
+        ]
+
+    write_indexes = [
+        index
+        for index, event in enumerate(tool_starts, start=1)
+        if token(event_tool_name(event)) in WRITE_TOOL_NAMES
+    ]
+    first_write_index = write_indexes[0] if write_indexes else None
+    evidence_before_first_edit = False
+    if first_write_index is None:
+        evidence_before_first_edit = True
+    else:
+        preceding_tools = [
+            token(event_tool_name(event)) for event in tool_starts[: first_write_index - 1]
+        ]
+        evidence_before_first_edit = any(
+            name in EVIDENCE_TOOL_NAMES for name in preceding_tools
+        ) or bool(tool_observation_events)
+
+    early_edit_demoted = any(
+        token(event.get("reason", "")) == "low_value_action"
+        for event in action_review_events
+    ) or any(
+        event.get("phase_aligned") is False
+        and bool(event.get("mutates_workspace"))
+        and token(event.get("stage", "")) in {"understand", "diagnosis"}
+        for event in action_decision_events
+    )
+    premature_edit_count = 0
+    if first_write_index == 1 and not evidence_before_first_edit:
+        premature_edit_count += 1
+    if early_edit_demoted:
+        premature_edit_count += 1
+
+    scope_drift_count = sum(
+        1
+        for event in action_decision_events
+        if event.get("scope_fit") is not None and int_value(event.get("scope_fit"), 10) <= 2
+    )
+    scope_drift_count += sum(
+        1
+        for event in trace_items
+        if token(event.get("type", "")) == "goal_drift_detected"
+        and token(event.get("severity", event.get("level", ""))) in {"medium", "high"}
+    )
+
+    repeated_action_count = 0
+    previous_key = None
+    for event in tool_starts:
+        key = event_sequence_key(event)
+        if previous_key == key:
+            repeated_action_count += 1
+        previous_key = key
+    repeated_action_count += sum(
+        1
+        for event in stop_check_events
+        if token(event.get("reason", ""))
+        in {"repeated_action_revision", "low_action_value_loop"}
+    )
+
+    failed_action_count = sum(
+        1
+        for event in tool_completes
+        if "result: error" in str(event.get("result_preview", "")).lower()
+    )
+    failed_action_count += sum(
+        1
+        for event in trace_items
+        if token(event.get("type", "")) == "tool_completed"
+        and event.get("success") is False
+    )
+
+    risky_gaps = risky_tool_action_review_gaps(events)
+    risky_missing_review_count = len(risky_gaps["missing"])
+    phase_misaligned_actions = sum(
+        1 for event in action_decision_events if event.get("phase_aligned") is False
+    )
+    invalid_action_count = (
+        premature_edit_count
+        + scope_drift_count
+        + repeated_action_count
+        + risky_missing_review_count
+        + phase_misaligned_actions
+    )
+
+    user_question_count = sum(
+        1 for event in tool_starts if token(event_tool_name(event)) == "ask_user"
+    )
+    user_question_count += sum(
+        1
+        for event in stop_check_events
+        if token(event.get("action", "")) == "ask_user"
+        or token(event.get("terminal_status", "")) == "needs_user"
+    )
+    eval_intent = token(sample.get("eval_intent", report_value(report_text, "eval_intent", "")))
+    unnecessary_question_count = (
+        user_question_count
+        if eval_intent in {"direct_answer", "read_only_audit"}
+        and "needs user" not in output.lower()
+        else 0
+    )
+
+    verification_attempted = bool(
+        verification_events
+        or stage_validation_events
+        or str(test_status).strip() not in {"", "missing", "skipped"}
+        or cmd_log_text.strip()
+    )
+    verification_passed = (
+        str(test_status).strip() == "ok"
+        or any(event.get("passed") is True for event in verification_events)
+        or any(token(event.get("status", "")) in {"passed", "ok"} for event in stage_validation_events)
+    )
+    llm_call_count = max(
+        1 if events else 0,
+        sum(1 for event in api_events if token(event.get("type", "")) == "api_request_completed"),
+        sum(1 for event in events if token(event.get("event", "")) == "usage"),
+    )
+
+    return {
+        "premature_edit_count": str(premature_edit_count),
+        "evidence_before_first_edit": bool_text(evidence_before_first_edit),
+        "scope_drift_count": str(scope_drift_count),
+        "invalid_action_count": str(invalid_action_count),
+        "repeated_action_count": str(repeated_action_count),
+        "failed_action_count": str(failed_action_count),
+        "user_question_count": str(user_question_count),
+        "unnecessary_question_count": str(unnecessary_question_count),
+        "verification_attempted": bool_text(verification_attempted),
+        "verification_passed": bool_text(verification_passed),
+        "tool_call_count": str(len(tool_starts) or int_value(report_value(report_text, "tool_executions", 0))),
+        "llm_call_count": str(llm_call_count),
+        "risky_missing_review_count": str(risky_missing_review_count),
+        "phase_misaligned_action_count": str(phase_misaligned_actions),
+        "first_write_tool_index_normalized": str(first_write_index) if first_write_index else "none",
+    }
+
+
+def derived_trajectory_metrics(task_dir, report_text, output="", sample=None, test_status="missing", cmd_log_text=""):
+    events = jsonl_events(pathlib.Path(task_dir) / "agent-events.jsonl")
+    return derived_trajectory_metrics_from_events(
+        events,
+        report_text=report_text,
+        output=output,
+        sample=sample,
+        test_status=test_status,
+        cmd_log_text=cmd_log_text,
+    )
+
+
+def evaluate_trajectory_assertions(sample, trajectory_metrics, runtime_spine=None):
+    assertions = trajectory_assertions_from_sample(sample)
+    if not assertions:
+        return {
+            "trajectory_assertions": "none",
+            "trajectory_assertion_status": "none",
+            "trajectory_assertion_missing": "none",
+        }
+    runtime_spine = runtime_spine or {}
+    missing = []
+    labels = []
+
+    def require_bool(field, metric_key=None):
+        metric_key = metric_key or field
+        if assertions.get(field) is True:
+            labels.append(field)
+            if str(trajectory_metrics.get(metric_key, "false")).lower() != "true":
+                missing.append(field)
+
+    require_bool("evidence_before_edit", "evidence_before_first_edit")
+    require_bool("requires_observer_outcome", "observer_outcome_recorded")
+    if assertions.get("requires_stop_check") is True:
+        labels.append("requires_stop_check")
+        stop_action = str(runtime_spine.get("stop_action") or trajectory_metrics.get("stop_action") or "")
+        if token(stop_action) in {"", "missing", "none", "null"}:
+            missing.append("requires_stop_check")
+
+    for field, metric_key in [
+        ("max_repeated_action_count", "repeated_action_count"),
+        ("max_scope_drift_count", "scope_drift_count"),
+        ("max_premature_edit_count", "premature_edit_count"),
+        ("max_invalid_action_count", "invalid_action_count"),
+        ("max_failed_action_count", "failed_action_count"),
+    ]:
+        if field in assertions:
+            labels.append(field)
+            if int_value(trajectory_metrics.get(metric_key), 0) > int_value(assertions.get(field), 0):
+                missing.append(f"{field}:{trajectory_metrics.get(metric_key)}>{assertions.get(field)}")
+
+    if assertions.get("requires_runtime_spine_passed") is True:
+        labels.append("requires_runtime_spine_passed")
+        if runtime_spine.get("runtime_spine_status") != "passed":
+            missing.append("requires_runtime_spine_passed")
+
+    return {
+        "trajectory_assertions": ",".join(labels) if labels else "configured",
+        "trajectory_assertion_status": "failed" if missing else "passed",
+        "trajectory_assertion_missing": ";".join(unique_items(missing)) if missing else "none",
+    }
+
+
+def score_live_eval_record(record):
+    warnings = set(split_list(record.get("warnings")))
+    failures = set(split_list(record.get("failures")))
+    behavior_status = token(record.get("behavior_assertion_status", "none"))
+    output_status = token(record.get("output_assertion_status", "none"))
+    trajectory_status = token(record.get("trajectory_assertion_status", "none"))
+    runtime_status = token(record.get("runtime_spine_status", "none"))
+    required = token(record.get("required", record.get("required_command_status", "missing")))
+    closeout = token(record.get("closeout", record.get("closeout_status", "missing")))
+    verification = token(record.get("verification", record.get("verification_status", "unknown")))
+    status = token(record.get("status", record.get("quality_status", "missing")))
+    eval_intent = token(record.get("intent", record.get("eval_intent", "")))
+    diff = token(record.get("diff", "no"))
+
+    outcome = 100
+    outcome_penalties = []
+
+    def penalize_outcome(points, reason):
+        nonlocal outcome
+        outcome -= points
+        outcome_penalties.append(reason)
+
+    if status in {"failed", "error"}:
+        penalize_outcome(25, "run_failed")
+    elif status in {"skipped", "missing"}:
+        penalize_outcome(10, "run_unscored")
+    if required == "failed":
+        penalize_outcome(25, "required_commands_failed")
+    elif required == "missing":
+        penalize_outcome(5, "required_commands_missing")
+    if verification == "failed" or (
+        record.get("verification_passed") == "false"
+        and record.get("verification_attempted") == "true"
+    ):
+        penalize_outcome(20, "verification_failed")
+    if closeout in {"failed", "not_verified", "missing"}:
+        penalize_outcome(15, "closeout_not_successful")
+    if runtime_status in {"failed", "missing"}:
+        penalize_outcome(10, "runtime_spine_failed")
+    if behavior_status == "failed":
+        penalize_outcome(10, "behavior_assertions_failed")
+    if output_status == "failed":
+        penalize_outcome(10, "output_assertions_failed")
+    if trajectory_status == "failed":
+        penalize_outcome(10, "trajectory_assertions_failed")
+    if "forbidden_tool_used" in failures or "forbidden_tool_used" in warnings:
+        penalize_outcome(30, "forbidden_tool_used")
+    if eval_intent == "seeded_code_change" and diff == "no":
+        penalize_outcome(15, "expected_code_diff_missing")
+
+    process = 100
+    process_penalties = []
+
+    def penalize_process(points, reason):
+        nonlocal process
+        process -= points
+        process_penalties.append(reason)
+
+    premature_edits = int_value(record.get("premature_edit_count"), 0)
+    scope_drifts = int_value(record.get("scope_drift_count"), 0)
+    repeated_actions = int_value(record.get("repeated_action_count"), 0)
+    invalid_actions = int_value(record.get("invalid_action_count"), 0)
+    risky_missing = int_value(record.get("risky_missing_review_count"), 0)
+    if record.get("evidence_before_first_edit") == "false":
+        penalize_process(20, "missing_evidence_before_edit")
+    if premature_edits:
+        penalize_process(min(30, 15 * premature_edits), "premature_edit")
+    if scope_drifts:
+        penalize_process(min(30, 15 * scope_drifts), "scope_drift")
+    if repeated_actions:
+        penalize_process(min(20, 8 * repeated_actions), "repeated_action")
+    if invalid_actions:
+        penalize_process(min(20, 5 * invalid_actions), "invalid_action")
+    if risky_missing:
+        penalize_process(min(25, 12 * risky_missing), "risky_tool_missing_review")
+    if runtime_status in {"failed", "missing"}:
+        penalize_process(15, "runtime_spine_not_passing")
+    if record.get("observer_outcome_recorded") == "false" and int_value(record.get("tool_call_count"), 0) > 0:
+        penalize_process(8, "observer_outcome_missing")
+    if token(record.get("stop_action", "")) in {"", "missing", "none", "null"}:
+        penalize_process(5, "stop_check_missing")
+
+    efficiency = 100
+    efficiency_penalties = []
+
+    def penalize_efficiency(points, reason):
+        nonlocal efficiency
+        efficiency -= points
+        efficiency_penalties.append(reason)
+
+    tool_calls = int_value(record.get("tool_call_count", record.get("tool_executions")), 0)
+    failed_actions = int_value(record.get("failed_action_count", record.get("tool_failures")), 0)
+    user_questions = int_value(record.get("user_question_count"), 0)
+    unnecessary_questions = int_value(record.get("unnecessary_question_count"), 0)
+    max_tools = 10 if record.get("mva_profile_active") == "true" else 25
+    if tool_calls > max_tools:
+        penalize_efficiency(min(25, (tool_calls - max_tools) * 2), "tool_budget_exceeded")
+    if failed_actions:
+        penalize_efficiency(min(25, failed_actions * 8), "failed_actions")
+    if repeated_actions:
+        penalize_efficiency(min(20, repeated_actions * 7), "repeated_actions")
+    if user_questions:
+        penalize_efficiency(min(15, user_questions * 5), "user_questions")
+    if unnecessary_questions:
+        penalize_efficiency(min(20, unnecessary_questions * 10), "unnecessary_questions")
+    if int_value(record.get("llm_call_count"), 0) > 8:
+        penalize_efficiency(10, "llm_call_budget_pressure")
+
+    outcome = clamp_int(outcome)
+    process = clamp_int(process)
+    efficiency = clamp_int(efficiency)
+    agent = clamp_int(outcome * 0.5 + process * 0.3 + efficiency * 0.2)
+    penalties = unique_items(outcome_penalties + process_penalties + efficiency_penalties)
+
+    return {
+        "outcome_score": score_text(outcome),
+        "process_score": score_text(process),
+        "efficiency_score": score_text(efficiency),
+        "agent_score": score_text(agent),
+        "score_penalties": ",".join(penalties) if penalties else "none",
+    }
 
 
 FAILURE_CLASS_ORDER = [
@@ -827,6 +1965,44 @@ def specialty_metrics(task_dir, report_text):
     memory_sync_events = event_types.count("memory.sync")
     memory_recalled_items = sum(int(event.get("items") or 0) for event in memory_retrievals)
     memory_conflicts = sum(int(event.get("conflicts") or 0) for event in memory_retrievals)
+    memory_record_used = any(
+        "memory_record/" in " ".join(str(value) for value in event.get("provenance") or [])
+        for event in memory_retrievals
+    ) or "memory_record/" in report_lower
+    memory_candidate_typed = (
+        "memory-id:" in report_lower
+        or "records.jsonl" in report_lower
+        or "typed memory record" in report_lower
+        or "memory_candidate_typed=true" in report_lower
+    )
+    memory_candidate_has_evidence = (
+        "evidence_status" in report_lower
+        or "memory_candidate_has_evidence=true" in report_lower
+        or "missing evidence" in report_lower
+    )
+    memory_use_count_updated = (
+        "use_count" in report_lower
+        or "last_used" in report_lower
+        or "memory_use_count_updated=true" in report_lower
+    )
+    memory_failure_lesson_promoted = (
+        "strategy-failures" in report_lower
+        or "failed_strategy=" in report_lower
+        or "memory_failure_lesson_promoted=true" in report_lower
+    )
+    memory_action_weight_changed = any(
+        str(event.get("reason", "")).lower().find("memory modifier") >= 0
+        for event in trace_items
+        if event.get("type") in {"action_decision_evaluated", "action.decision"}
+    ) or "memory_action_weight_changed=true" in report_lower
+    memory_stale_demoted = (
+        "memory_stale_demoted=true" in report_lower
+        or "stale" in report_lower and "memory" in report_lower and "demot" in report_lower
+    )
+    memory_scope_correct = (
+        "memory_scope_correct=true" in report_lower
+        or "scope=" in report_lower and "project=" in report_lower
+    )
 
     report_memory_active = report_value(report_text, "memory_active", "")
     memory_active = (
@@ -875,6 +2051,14 @@ def specialty_metrics(task_dir, report_text):
             report_value(report_text, "memory_conflicts", memory_conflicts)
         ),
         "memory_changed_plan": bool_text(memory_changed_plan),
+        "memory_candidate_typed": bool_text(memory_candidate_typed),
+        "memory_candidate_has_evidence": bool_text(memory_candidate_has_evidence),
+        "memory_record_used": bool_text(memory_record_used),
+        "memory_use_count_updated": bool_text(memory_use_count_updated),
+        "memory_failure_lesson_promoted": bool_text(memory_failure_lesson_promoted),
+        "memory_action_weight_changed": bool_text(memory_action_weight_changed),
+        "memory_stale_demoted": bool_text(memory_stale_demoted),
+        "memory_scope_correct": bool_text(memory_scope_correct),
         "memory": memory_summary,
         "skill_active": bool_text(skill_active),
         "skill_tool_calls": int_text(report_value(report_text, "skill_tool_calls", len(skill_tools))),
@@ -895,6 +2079,12 @@ def report_rows(run_dir):
         test_status = read(task_dir / "test-status.txt").strip() or "missing"
         diff_stat = read(task_dir / "diff-stat.txt").strip()
         agent_output = read(task_dir / "agent-output.md")
+        cmd_log_text = read(task_dir / "required-commands.log")
+        sample_json = task_dir / "sample.json"
+        try:
+            sample = json.loads(read(sample_json)) if sample_json.exists() else {}
+        except Exception:
+            sample = {}
         plan_file = task_dir / "minimax-plan.md"
         plan_lint = task_dir / "plan-lint.txt"
         api_response = task_dir / "api-response.json"
@@ -918,6 +2108,8 @@ def report_rows(run_dir):
             report_text, "workflow_contract_activation", "missing"
         )
         risk_signal = report_value(report_text, "risk_signal", "missing")
+        runtime_profile = report_value(report_text, "runtime_profile", "none")
+        mva_profile_active = report_value(report_text, "mva_profile_active", "false")
         behavior_assertions = report_value(
             report_text, "behavior_assertions", "none"
         )
@@ -992,6 +2184,20 @@ def report_rows(run_dir):
             run_status,
         )
         specialty = specialty_metrics(task_dir, report_text)
+        output_assertions = evaluate_output_assertions(sample, agent_output)
+        trajectory = derived_trajectory_metrics(
+            task_dir,
+            report_text,
+            output=agent_output,
+            sample=sample,
+            test_status=test_status,
+            cmd_log_text=cmd_log_text,
+        )
+        trajectory_assertions = evaluate_trajectory_assertions(
+            sample,
+            {**trajectory, **runtime_spine},
+            runtime_spine=runtime_spine,
+        )
         tool_executions = int_value(report_value(report_text, "tool_executions", 0))
         diff_files_changed = int_value(report_value(report_text, "diff_files_changed", 0))
         validation_events = int_value(report_value(report_text, "validation_events", 0))
@@ -1035,42 +2241,47 @@ def report_rows(run_dir):
             f"validations={validation_events + stage_validation_events}, "
             f"repair={repair_signals}, files={diff_files_changed}"
         )
-        rows.append(
-            {
-                "task": task_id,
-                "status": run_status,
-                "intent": eval_intent,
-                "owner": failure_owner,
-                "required": required,
-                "plan": plan_quality,
-                "boundary": tool_boundary,
-                "verification": verification_status,
-                "closeout": closeout,
-                "closeout_tool_records": closeout_tool_records,
-                "closeout_tool_evidence": closeout_tool_evidence,
-                "runtime_diet": runtime_diet,
-                "workflow_contract_activation": workflow_contract_activation,
-                "risk_signal": risk_signal,
-                "behavior_assertions": behavior_assertions,
-                "behavior_assertion_status": behavior_assertion_status,
-                **runtime_spine,
-                "triggers": adaptive_triggers,
-                "first_write": first_write,
-                "diff": "yes" if diff_stat else "no",
-                "warnings": ",".join(warnings) if warnings else "none",
-                "failures": failures,
-                "failure_classes": failure_classes,
-                "failure_class": ",".join(failure_classes) if failure_classes else "none",
-                "has_output": bool(agent_output.strip()),
-                "coding_gauntlet_status": coding_gauntlet_status,
-                "first_pass_signal": first_pass_signal,
-                "tool_executions": str(tool_executions),
-                "validation_events": str(validation_events),
-                "stage_validation_events": str(stage_validation_events),
-                "repair_signals": str(repair_signals),
-                "diff_files_changed": str(diff_files_changed),
-                "coding": coding_summary,
-                **specialty,
-            }
-        )
+        row = {
+            "task": task_id,
+            "status": run_status,
+            "intent": eval_intent,
+            "owner": failure_owner,
+            "required": required,
+            "plan": plan_quality,
+            "boundary": tool_boundary,
+            "verification": verification_status,
+            "closeout": closeout,
+            "closeout_tool_records": closeout_tool_records,
+            "closeout_tool_evidence": closeout_tool_evidence,
+            "runtime_diet": runtime_diet,
+            "workflow_contract_activation": workflow_contract_activation,
+            "risk_signal": risk_signal,
+            "runtime_profile": runtime_profile,
+            "mva_profile_active": mva_profile_active,
+            "behavior_assertions": behavior_assertions,
+            "behavior_assertion_status": behavior_assertion_status,
+            **runtime_spine,
+            **trajectory,
+            **output_assertions,
+            **trajectory_assertions,
+            "triggers": adaptive_triggers,
+            "first_write": first_write,
+            "diff": "yes" if diff_stat else "no",
+            "warnings": ",".join(warnings) if warnings else "none",
+            "failures": failures,
+            "failure_classes": failure_classes,
+            "failure_class": ",".join(failure_classes) if failure_classes else "none",
+            "has_output": bool(agent_output.strip()),
+            "coding_gauntlet_status": coding_gauntlet_status,
+            "first_pass_signal": first_pass_signal,
+            "tool_executions": str(tool_executions),
+            "validation_events": str(validation_events),
+            "stage_validation_events": str(stage_validation_events),
+            "repair_signals": str(repair_signals),
+            "diff_files_changed": str(diff_files_changed),
+            "coding": coding_summary,
+            **specialty,
+        }
+        row.update(score_live_eval_record(row))
+        rows.append(row)
     return rows

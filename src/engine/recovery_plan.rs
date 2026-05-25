@@ -22,10 +22,22 @@ pub struct RecoveryPlan {
     pub id: String,
     pub source: String,
     pub category: String,
+    #[serde(default)]
+    pub failure_type: String,
+    #[serde(default)]
+    pub recovery_kind: String,
     pub primary_error: String,
     pub action: String,
     pub retryable: bool,
     pub safe_retry: bool,
+    #[serde(default)]
+    pub allowed_alternatives: Vec<String>,
+    #[serde(default)]
+    pub retry_budget: Option<usize>,
+    #[serde(default)]
+    pub side_effect_uncertain: bool,
+    #[serde(default)]
+    pub requires_user_decision: bool,
     pub suggested_command: Option<String>,
     pub user_note: String,
     pub status: RecoveryStatus,
@@ -43,10 +55,19 @@ impl RecoveryPlan {
             id: format!("recovery_{}", uuid::Uuid::new_v4().simple()),
             source: source.into(),
             category: error.category.to_string(),
+            failure_type: error.category.to_string(),
+            recovery_kind: error.action.to_string(),
             primary_error: error.message.clone(),
             action: error.action.to_string(),
             retryable: error.retryable,
             safe_retry,
+            allowed_alternatives: classified_alternatives(&error.category, &error.action),
+            retry_budget: if safe_retry { Some(1) } else { None },
+            side_effect_uncertain: false,
+            requires_user_decision: matches!(
+                error.category,
+                ErrorCategory::Auth | ErrorCategory::Billing | ErrorCategory::ContentFiltered
+            ),
             suggested_command,
             user_note: user_note(&error.category, &error.action),
             status: RecoveryStatus::Planned,
@@ -58,10 +79,19 @@ impl RecoveryPlan {
             id: format!("recovery_{}", uuid::Uuid::new_v4().simple()),
             source: source.into(),
             category: "fallback_model".to_string(),
+            failure_type: "model_unavailable".to_string(),
+            recovery_kind: "fallback_model".to_string(),
             primary_error: truncate(error, 240),
             action: format!("switch to fallback model {}", fallback_model),
             retryable: true,
             safe_retry: true,
+            allowed_alternatives: vec![
+                "retry non-streaming".to_string(),
+                "compact context".to_string(),
+            ],
+            retry_budget: Some(1),
+            side_effect_uncertain: false,
+            requires_user_decision: false,
             suggested_command: Some("/model".to_string()),
             user_note: format!(
                 "Primary model failed; retrying this turn with fallback model {}.",
@@ -76,10 +106,19 @@ impl RecoveryPlan {
             id: format!("recovery_{}", uuid::Uuid::new_v4().simple()),
             source: source.into(),
             category: "streaming_fallback".to_string(),
+            failure_type: "streaming_transport".to_string(),
+            recovery_kind: "non_streaming_retry".to_string(),
             primary_error: truncate(error, 240),
             action: "retry request without streaming".to_string(),
             retryable: true,
             safe_retry: true,
+            allowed_alternatives: vec![
+                "switch fallback model".to_string(),
+                "compact context".to_string(),
+            ],
+            retry_budget: Some(1),
+            side_effect_uncertain: false,
+            requires_user_decision: false,
             suggested_command: Some("/retry".to_string()),
             user_note: "Streaming failed; retrying the same request through non-streaming mode."
                 .to_string(),
@@ -104,10 +143,13 @@ impl RecoveryPlan {
             "permission_denied" | "dangerous_blocked" | "cancelled"
         );
         let suggested_command = suggested_tool_command(tool_name, error, error_code);
+        let profile = classified_failure_profile(tool_name, error, error_code);
         Self {
             id: format!("recovery_{}", uuid::Uuid::new_v4().simple()),
             source: "tool_execution".to_string(),
             category: error_code.unwrap_or("unknown").to_string(),
+            failure_type: profile.failure_type,
+            recovery_kind: profile.recovery_kind,
             primary_error: truncate(error, 240),
             action: suggested_tool_action(tool_name, error, error_code),
             retryable: recoverable,
@@ -117,6 +159,10 @@ impl RecoveryPlan {
                     "execution_failed" | "unknown"
                 )
                 && !remote_tool,
+            allowed_alternatives: profile.allowed_alternatives,
+            retry_budget: profile.retry_budget,
+            side_effect_uncertain: profile.side_effect_uncertain || remote_tool,
+            requires_user_decision: profile.requires_user_decision,
             suggested_command,
             user_note: tool_user_note(tool_name, error, error_code),
             status: RecoveryStatus::Planned,
@@ -152,10 +198,23 @@ impl RecoveryPlan {
             id: format!("recovery_{}", uuid::Uuid::new_v4().simple()),
             source: "hook_runtime".to_string(),
             category: category.to_string(),
+            failure_type: category.to_string(),
+            recovery_kind: if blocked {
+                "inspect_hook_before_retry".to_string()
+            } else {
+                "repair_hook_or_continue_without_assumption".to_string()
+            },
             primary_error: truncate(detail, 240),
             action,
             retryable: !blocked,
             safe_retry: false,
+            allowed_alternatives: vec![
+                "inspect hook configuration".to_string(),
+                "choose a lower-risk tool path".to_string(),
+            ],
+            retry_budget: if blocked { None } else { Some(1) },
+            side_effect_uncertain: true,
+            requires_user_decision: blocked,
             suggested_command: Some("/hooks".to_string()),
             user_note: if blocked {
                 format!(
@@ -179,9 +238,11 @@ impl RecoveryPlan {
 
     pub fn trace_action(&self) -> String {
         format!(
-            "{} [{} safe_retry={} suggested={}]",
+            "{} [{} failure_type={} recovery_kind={} safe_retry={} suggested={}]",
             self.action,
             format!("{:?}", self.status).to_ascii_lowercase(),
+            self.failure_type,
+            self.recovery_kind,
             self.safe_retry,
             self.suggested_command.as_deref().unwrap_or("none")
         )
@@ -194,6 +255,160 @@ impl RecoveryPlan {
             truncate(&self.primary_error, 80),
             self.action
         )
+    }
+}
+
+struct FailureProfile {
+    failure_type: String,
+    recovery_kind: String,
+    allowed_alternatives: Vec<String>,
+    retry_budget: Option<usize>,
+    side_effect_uncertain: bool,
+    requires_user_decision: bool,
+}
+
+fn classified_failure_profile(
+    tool_name: &str,
+    error: &str,
+    error_code: Option<&str>,
+) -> FailureProfile {
+    let lower = error.to_ascii_lowercase();
+    let code = error_code.unwrap_or("unknown");
+
+    let (failure_type, recovery_kind, alternatives, retry_budget, side_effect, requires_user) =
+        if lower.contains("old_string")
+            || lower.contains("old string")
+            || lower.contains("string not found")
+        {
+            (
+                "old_string_not_found",
+                "refresh_target_and_retry_edit",
+                vec!["read exact target range", "use patch with fresh context"],
+                Some(1),
+                false,
+                false,
+            )
+        } else if lower.contains("occurrence") || lower.contains("multiple matches") {
+            (
+                "old_string_occurrence_mismatch",
+                "narrow_edit_context",
+                vec!["read narrower range", "use line-scoped replacement"],
+                Some(1),
+                false,
+                false,
+            )
+        } else if lower.contains("stale") || lower.contains("changed since read") {
+            (
+                "stale_read_conflict",
+                "refresh_read_before_edit",
+                vec!["read file again", "recompute patch from latest content"],
+                Some(1),
+                false,
+                false,
+            )
+        } else if lower.contains("checkpoint") && lower.contains("failed") {
+            (
+                "checkpoint_creation_failed",
+                "stop_before_mutation",
+                vec![
+                    "inspect checkpoint store",
+                    "retry after checkpoint succeeds",
+                ],
+                None,
+                true,
+                true,
+            )
+        } else if matches!(code, "permission_denied" | "dangerous_blocked")
+            || lower.contains("permission")
+            || lower.contains("denied")
+        {
+            (
+                "permission_block",
+                "ask_user_or_choose_safer_path",
+                vec!["ask for permission", "switch to read-only inspection"],
+                None,
+                true,
+                true,
+            )
+        } else if matches!(code, "timeout")
+            || lower.contains("timed out")
+            || lower.contains("timeout")
+        {
+            (
+                "timeout",
+                "retry_narrower",
+                vec!["narrow command scope", "increase timeout if safe"],
+                Some(1),
+                is_remote_tool(tool_name),
+                is_remote_tool(tool_name),
+            )
+        } else if lower.contains("command not found") || lower.contains("not found") {
+            (
+                if tool_name == "bash" {
+                    "command_not_found"
+                } else {
+                    "target_not_found"
+                },
+                "verify_target_exists",
+                vec!["search available target", "inspect project tooling"],
+                Some(1),
+                false,
+                false,
+            )
+        } else if lower.contains("test result: failed")
+            || lower.contains("test failed")
+            || lower.contains("assertion failed")
+        {
+            (
+                "test_failed",
+                "debug_validation_failure",
+                vec![
+                    "inspect failing test output",
+                    "patch before rerunning validation",
+                ],
+                None,
+                false,
+                false,
+            )
+        } else if matches!(code, "invalid_params") || lower.contains("invalid params") {
+            (
+                "invalid_params",
+                "correct_arguments",
+                vec!["inspect tool schema", "retry with corrected arguments"],
+                Some(1),
+                false,
+                false,
+            )
+        } else if matches!(code, "unavailable") || lower.contains("unavailable") {
+            (
+                "unavailable",
+                "check_tool_or_remote_status",
+                vec!["check tool status", "use local fallback if available"],
+                Some(1),
+                is_remote_tool(tool_name),
+                is_remote_tool(tool_name),
+            )
+        } else {
+            (
+                code,
+                "inspect_failure_before_retry",
+                vec!["read error detail", "choose alternate tool path"],
+                None,
+                is_remote_tool(tool_name),
+                is_remote_tool(tool_name),
+            )
+        };
+
+    FailureProfile {
+        failure_type: failure_type.to_string(),
+        recovery_kind: recovery_kind.to_string(),
+        allowed_alternatives: alternatives
+            .into_iter()
+            .map(str::to_string)
+            .collect::<Vec<_>>(),
+        retry_budget,
+        side_effect_uncertain: side_effect,
+        requires_user_decision: requires_user,
     }
 }
 
@@ -229,6 +444,38 @@ fn suggested_tool_command(
                 None
             }
         }
+    }
+}
+
+fn classified_alternatives(category: &ErrorCategory, action: &RecoveryAction) -> Vec<String> {
+    match category {
+        ErrorCategory::ContextOverflow | ErrorCategory::PayloadTooLarge => {
+            vec![
+                "compact context".to_string(),
+                "retry with fewer attachments".to_string(),
+            ]
+        }
+        ErrorCategory::ProviderProtocol | ErrorCategory::RequestSchema => vec![
+            "inspect latest trace".to_string(),
+            "normalize request before retry".to_string(),
+        ],
+        ErrorCategory::Auth | ErrorCategory::Billing => vec![
+            "resolve account or credential state".to_string(),
+            "switch provider only after user decision".to_string(),
+        ],
+        _ if matches!(
+            action,
+            RecoveryAction::FallbackModel
+                | RecoveryAction::Retry
+                | RecoveryAction::RetryWithBackoff { .. }
+        ) =>
+        {
+            vec![
+                "retry once".to_string(),
+                "switch fallback model".to_string(),
+            ]
+        }
+        _ => vec!["inspect error detail".to_string()],
     }
 }
 

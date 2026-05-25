@@ -1,0 +1,4 @@
+status=failed
+failure_owner=agent_flow
+failure=trajectory_assertions_not_passing
+warning=audit_no_code_diff

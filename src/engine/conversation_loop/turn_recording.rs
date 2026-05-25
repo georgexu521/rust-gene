@@ -55,6 +55,76 @@ pub(super) fn persist_turn_learning_event(
     )
 }
 
+pub(super) fn promote_trace_candidate_memories(
+    memory: &crate::memory::MemoryManager,
+    trace: &crate::engine::trace::TurnTrace,
+) -> usize {
+    let experience = crate::engine::experience_ledger::ExperienceRecord::from_turn_trace(trace);
+    let mut promoted = 0usize;
+    for candidate_ref in experience.candidate_memories {
+        if candidate_ref.summary.trim().is_empty() {
+            continue;
+        }
+        let confidence = candidate_ref.score.unwrap_or(0.75).clamp(0.0, 1.0);
+        let mut candidate = crate::memory::MemoryCandidate::new(
+            candidate_ref.summary,
+            "failure",
+            crate::memory::MemoryScope {
+                session_id: trace.session_id.clone(),
+                platform: "conversation_loop".to_string(),
+                ..Default::default()
+            },
+            crate::memory::MemoryProvenance {
+                source: "turn_outcome_experience".to_string(),
+                session_id: Some(trace.session_id.clone()),
+                turn_index: Some(trace.turn_index),
+                tool_name: None,
+            },
+        )
+        .confidence(confidence)
+        .importance(4)
+        .with_tags(vec![
+            "failure".to_string(),
+            "strategy".to_string(),
+            "recovery".to_string(),
+            "turn_outcome".to_string(),
+        ])
+        .strategy(crate::memory::MemoryStrategyMetadata {
+            failed_strategy: candidate_ref.failed_strategy.clone(),
+            better_strategy: candidate_ref.better_strategy.clone(),
+            context_tags: candidate_ref.context_tags.clone(),
+            failure_type: candidate_ref.failure_type.clone(),
+            recovery_plan_id: candidate_ref.recovery_plan_id.clone(),
+            risk_modifier: 1,
+            value_modifier: 0,
+        });
+        candidate
+            .evidence
+            .push(crate::memory::MemoryEvidenceRef::new(
+                crate::memory::MemoryEvidenceKind::RuntimeObservation,
+                trace.trace_id.clone(),
+                format!(
+                    "turn {} ended with status {:?}; candidate came from stop/recovery trace",
+                    trace.turn_index, trace.status
+                ),
+                confidence,
+            ));
+        candidate.source_experience_ids.push(trace.trace_id.clone());
+        let outcome = memory.submit_candidate(
+            candidate,
+            crate::memory::MemoryWriteTarget::Topic("strategy-failures".to_string()),
+        );
+        if matches!(
+            outcome.status,
+            crate::memory::manager::MemoryWriteOutcomeStatus::Saved
+                | crate::memory::manager::MemoryWriteOutcomeStatus::Proposed
+        ) {
+            promoted += 1;
+        }
+    }
+    promoted
+}
+
 pub(super) fn record_recovery_plan(
     trace: &TraceCollector,
     plan: &crate::engine::recovery_plan::RecoveryPlan,
@@ -63,9 +133,15 @@ pub(super) fn record_recovery_plan(
         plan_id: plan.id.clone(),
         source: plan.source.clone(),
         category: plan.category.clone(),
+        failure_type: plan.failure_type.clone(),
+        recovery_kind: plan.recovery_kind.clone(),
         action: plan.action.clone(),
         retryable: plan.retryable,
         safe_retry: plan.safe_retry,
+        allowed_alternatives: plan.allowed_alternatives.clone(),
+        retry_budget: plan.retry_budget,
+        side_effect_uncertain: plan.side_effect_uncertain,
+        requires_user_decision: plan.requires_user_decision,
         suggested_command: plan.suggested_command.clone(),
         status: format!("{:?}", plan.status),
     });
@@ -332,6 +408,44 @@ mod tests {
     use crate::engine::trace::{TurnStatus, TurnTrace};
     use crate::tools::{ToolErrorCode, ToolResult};
     use serde_json::json;
+
+    #[test]
+    fn promotes_stop_failure_candidate_memory() {
+        let base = std::env::temp_dir().join(format!(
+            "priority-agent-turn-recording-memory-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+        let memory = crate::memory::MemoryManager::with_base_dir(base.clone());
+        let mut trace = TurnTrace::new("session-test", 1, "test");
+        trace.status = TurnStatus::Completed;
+        trace.events.push(TraceEvent::StopCheckEvaluated {
+            status: "stop".to_string(),
+            reason: "repeated failure".to_string(),
+            stage: "Repair".to_string(),
+            terminal_status: Some("failed".to_string()),
+            action: "stop".to_string(),
+            no_code_progress_rounds: 2,
+            action_checkpoint_active: false,
+            summary: "validation kept failing".to_string(),
+            evidence_items: 1,
+            failure_type: Some("test_assertion_failed".to_string()),
+            recovery_plan_id: Some("rp_test".to_string()),
+            rollback_recommended: false,
+            next_action: Some("run targeted validation first".to_string()),
+        });
+
+        let promoted = promote_trace_candidate_memories(&memory, &trace);
+
+        assert_eq!(promoted, 1);
+        let records = memory.memory_records();
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].kind, crate::memory::MemoryKind::FailurePattern);
+        assert!(records[0].content.contains("better_strategy"));
+
+        let _ = std::fs::remove_dir_all(base);
+    }
 
     #[test]
     fn remote_bridge_trace_records_recovery_plan_for_failure() {

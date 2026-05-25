@@ -9,13 +9,18 @@ use super::turn_assistant_response_controller::{
 use super::turn_loop_state_controller::TurnLoopState;
 use super::turn_runtime_state::TurnRuntimeState;
 use super::ConversationLoop;
+use crate::engine::action_decision::ActionDecisionInput;
+use crate::engine::candidate_action::{
+    parse_candidate_actions, rank_candidate_actions, CandidateAction, CandidateActionMode,
+    CandidateActionSet,
+};
 use crate::engine::code_change_workflow::CodeChangeWorkflowRunner;
 use crate::engine::intent_router::IntentRoute;
 use crate::engine::resource_policy::ResourcePolicy;
 use crate::engine::retrieval_context::RetrievalContext;
 use crate::engine::streaming::StreamEvent;
 use crate::engine::task_context::TaskContextBundle;
-use crate::engine::trace::TraceCollector;
+use crate::engine::trace::{TraceCollector, TraceEvent};
 use crate::services::api::{Message, Tool, ToolCall};
 use crate::tools::ToolResult;
 use anyhow::Result;
@@ -123,13 +128,128 @@ impl TurnModelStepController {
                 content,
                 tool_calls,
                 pre_executed,
-            } => TurnModelStepFlow::ToolRound {
-                content,
-                tool_calls,
-                pre_executed,
-            },
+            } => {
+                let (tool_calls, pre_executed) =
+                    evaluate_candidate_actions_for_tool_round(CandidateActionRoundContext {
+                        content: &content,
+                        tool_calls,
+                        pre_executed,
+                        route: context.route,
+                        task_bundle: context.task_bundle,
+                        turn_state: context.turn_state,
+                        exposed_tool_names: context.exposed_tool_names,
+                        trace: context.trace,
+                    });
+                TurnModelStepFlow::ToolRound {
+                    content,
+                    tool_calls,
+                    pre_executed,
+                }
+            }
         })
     }
+}
+
+struct CandidateActionRoundContext<'a> {
+    content: &'a str,
+    tool_calls: Vec<ToolCall>,
+    pre_executed: HashMap<usize, ToolResult>,
+    route: &'a IntentRoute,
+    task_bundle: &'a TaskContextBundle,
+    turn_state: &'a TurnRuntimeState,
+    exposed_tool_names: &'a HashSet<String>,
+    trace: &'a TraceCollector,
+}
+
+fn evaluate_candidate_actions_for_tool_round(
+    context: CandidateActionRoundContext<'_>,
+) -> (Vec<ToolCall>, HashMap<usize, ToolResult>) {
+    let mode = CandidateActionMode::from_env();
+    if mode == CandidateActionMode::Off || context.tool_calls.is_empty() {
+        return (context.tool_calls, context.pre_executed);
+    }
+
+    let parsed_candidates = parse_candidate_actions(context.content).ok();
+    let candidates =
+        parsed_candidates.unwrap_or_else(|| candidate_set_from_tool_calls(&context.tool_calls));
+    let ranking = rank_candidate_actions(
+        &candidates,
+        ActionDecisionInput {
+            task_stage: context.task_bundle.agent_state.stage,
+            route_workflow: Some(context.route.workflow),
+            route_risk: Some(context.route.risk),
+            action_checkpoint_active: context.turn_state.focused_repair.action_checkpoint_active,
+            has_changes_before_tools: false,
+            no_progress_rounds: context.turn_state.focused_repair.no_code_progress_rounds,
+        },
+        context.exposed_tool_names,
+        mode,
+    );
+    let selected_id = ranking.selected_id.clone();
+    context.trace.record(TraceEvent::CandidateActionsEvaluated {
+        mode: mode.as_str().to_string(),
+        candidate_count: ranking.candidate_count,
+        selected_id: ranking.selected_id,
+        selected_tool: ranking.selected_tool,
+        selected_score: ranking.selected_score,
+        selected_runtime_score: ranking.selected_runtime_score,
+        selected_model_score: ranking.selected_model_score,
+        runtime_model_score_delta: ranking.runtime_model_score_delta,
+        runtime_selected_differs_from_model_order: ranking
+            .runtime_selected_differs_from_model_order,
+        calibration_reason: ranking.calibration_reason,
+        rejected: ranking.rejected.len(),
+        reason: "candidate-action ranking evaluated for tool round".to_string(),
+    });
+
+    if mode != CandidateActionMode::Gated || !candidate_gate_triggered(context.task_bundle) {
+        return (context.tool_calls, context.pre_executed);
+    }
+
+    let Some(selected_id) = selected_id else {
+        return (context.tool_calls, context.pre_executed);
+    };
+    let Some((selected_idx, selected_call)) = context
+        .tool_calls
+        .iter()
+        .cloned()
+        .enumerate()
+        .find(|(_, call)| call.id == selected_id)
+    else {
+        return (context.tool_calls, context.pre_executed);
+    };
+
+    let mut pre_executed = HashMap::new();
+    if let Some(result) = context.pre_executed.get(&selected_idx).cloned() {
+        pre_executed.insert(0, result);
+    }
+    (vec![selected_call], pre_executed)
+}
+
+fn candidate_set_from_tool_calls(tool_calls: &[ToolCall]) -> CandidateActionSet {
+    CandidateActionSet {
+        candidate_actions: tool_calls
+            .iter()
+            .map(|tool_call| CandidateAction {
+                id: tool_call.id.clone(),
+                action_type: "tool_call".to_string(),
+                tool: tool_call.name.clone(),
+                arguments: tool_call.arguments.clone(),
+                reason: "model-proposed tool call".to_string(),
+                expected_observation: None,
+                model_scores: None,
+            })
+            .collect(),
+    }
+}
+
+fn candidate_gate_triggered(task_bundle: &TaskContextBundle) -> bool {
+    let state = &task_bundle.agent_state;
+    state.repeated_revised_action_count() >= 1
+        || state.consecutive_low_action_scores() >= 2
+        || state.consecutive_high_risk_low_value_actions() >= 1
+        || state.score_without_uncertainty_reduction_rounds() >= 2
+        || state.uncertainty_not_reduced_steps >= 2
 }
 
 #[cfg(test)]
@@ -301,6 +421,61 @@ mod tests {
         assert_eq!(tool_calls[0].id, tool_call.id);
         assert!(pre_executed.is_empty());
         assert!(loop_state.tool_calls_made);
+    }
+
+    #[test]
+    fn gated_candidate_ranking_filters_to_runtime_selected_action_only_after_trigger() {
+        let mut guard = crate::test_utils::env_guard::EnvVarGuard::acquire_blocking();
+        guard.set("PRIORITY_AGENT_CANDIDATE_ACTIONS", "gated");
+
+        let route = IntentRouter::new().route("修改 src/lib.rs");
+        let mut task_bundle = crate::engine::task_context::TaskContextBundle::new(
+            "修改 src/lib.rs",
+            ".",
+            route.clone(),
+            None,
+        );
+        task_bundle.agent_state.uncertainty_not_reduced_steps = 2;
+        let turn_state = TurnRuntimeState::new(true);
+        let trace = TraceCollector::new(TurnTrace::new("session", 1, "candidate ranking"));
+        let tool_calls = vec![
+            ToolCall {
+                id: "edit".to_string(),
+                name: "file_edit".to_string(),
+                arguments: serde_json::json!({"path": "src/lib.rs"}),
+            },
+            ToolCall {
+                id: "read".to_string(),
+                name: "file_read".to_string(),
+                arguments: serde_json::json!({"path": "src/lib.rs"}),
+            },
+        ];
+        let exposed = HashSet::from(["file_edit".to_string(), "file_read".to_string()]);
+
+        let (ranked, pre_executed) =
+            evaluate_candidate_actions_for_tool_round(CandidateActionRoundContext {
+                content: "choose a tool",
+                tool_calls,
+                pre_executed: HashMap::new(),
+                route: &route,
+                task_bundle: &task_bundle,
+                turn_state: &turn_state,
+                exposed_tool_names: &exposed,
+                trace: &trace,
+            });
+
+        assert_eq!(ranked.len(), 1);
+        assert_eq!(ranked[0].name, "file_read");
+        assert!(pre_executed.is_empty());
+        let finished = trace.finish(TurnStatus::Completed);
+        assert!(finished.events.iter().any(|event| matches!(
+            event,
+            TraceEvent::CandidateActionsEvaluated {
+                mode,
+                selected_tool: Some(tool),
+                ..
+            } if mode == "gated" && tool == "file_read"
+        )));
     }
 
     #[tokio::test]

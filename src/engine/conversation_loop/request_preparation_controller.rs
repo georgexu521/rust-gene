@@ -1,8 +1,10 @@
 use super::context_budget_controller::ContextBudgetController;
 use super::runtime_diet::RuntimeDietSnapshot;
+use crate::engine::context_assembly::{ContextAssemblyInput, ContextAssemblyPlan, ContextZone};
 use crate::engine::context_ledger::{
     diff_entry_from_event, file_edit_entry_from_event, file_read_entry_from_event,
-    user_confirmation_entry_from_event, validation_entry_from_event, CONTEXT_LEDGER_BASH_READ_KIND,
+    tool_observation_entry_from_event, user_confirmation_entry_from_event,
+    validation_entry_from_event, CONTEXT_LEDGER_BASH_READ_KIND,
 };
 use crate::engine::intent_router::RetrievalPolicy;
 use crate::engine::retrieval_context::{RetrievalContext, RetrievalSource};
@@ -68,6 +70,7 @@ impl RequestPreparationController {
 
         let mut request_messages = messages.to_vec();
         Self::inject_task_state_zone(&mut request_messages, agent_task_state);
+        Self::inject_mva_candidate_action_hint(&mut request_messages);
         if let Some(prompt) = focused_repair_prompt {
             request_messages.push(prompt);
         }
@@ -83,6 +86,7 @@ impl RequestPreparationController {
             runtime_diet,
         };
         Self::inject_memory_prefetch(&mut request_messages, &mut memory_context).await;
+        Self::record_context_zones(&request_messages, trace);
 
         let request_budget = ContextBudgetController::observe_request(&request_messages, tools);
         ContextBudgetController::record_runtime_diet(memory_context.runtime_diet, &request_budget);
@@ -121,6 +125,23 @@ impl RequestPreparationController {
         request_messages.insert(insert_pos, Message::system(block));
     }
 
+    fn inject_mva_candidate_action_hint(request_messages: &mut Vec<Message>) {
+        if !mva_runtime_profile_enabled() {
+            return;
+        }
+        if request_messages.iter().any(
+            |message| matches!(message, Message::System { content } if content.contains("candidate_actions")),
+        ) {
+            return;
+        }
+        let hint = "MVA profile: when proposing tools, keep the first-version loop explicit. If useful, include a compact candidate_actions JSON object with at most 3 tool_call candidates, model_scores, and reason before normal tool calls. Do not force JSON for direct final answers.";
+        let insert_pos = request_messages
+            .iter()
+            .rposition(|message| matches!(message, Message::User { .. }))
+            .unwrap_or(request_messages.len());
+        request_messages.insert(insert_pos, Message::system(hint));
+    }
+
     fn inject_context_ledger_hint(
         request_messages: &mut Vec<Message>,
         session_store: Option<&Arc<SessionStore>>,
@@ -138,7 +159,8 @@ impl RequestPreparationController {
         }
 
         let mut seen = HashSet::new();
-        let mut lines = Vec::new();
+        let mut relevant_lines = Vec::new();
+        let mut observation_lines = Vec::new();
         for event in events {
             if let Some(entry) = file_read_entry_from_event(&event) {
                 if !seen.insert(format!("file:{}", entry.resolved_path)) {
@@ -153,7 +175,7 @@ impl RequestPreparationController {
                 } else {
                     "full read".to_string()
                 };
-                lines.push(format!(
+                relevant_lines.push(format!(
                     "- file {}: {}, {} displayed / {} total lines, hash {}",
                     compact_path(&entry.path, &entry.resolved_path),
                     scope,
@@ -180,7 +202,7 @@ impl RequestPreparationController {
                     .get("exit_code")
                     .and_then(serde_json::Value::as_i64)
                     .unwrap_or(0);
-                lines.push(format!(
+                relevant_lines.push(format!(
                     "- bash {}: {} exited {}",
                     category, command, exit_code
                 ));
@@ -204,7 +226,7 @@ impl RequestPreparationController {
                     (Some(start), Some(end)) => format!(" lines {start}-{end}"),
                     _ => String::new(),
                 };
-                lines.push(format!(
+                relevant_lines.push(format!(
                     "- edit {}: {} file(s), first {}, success={}, bytes={}{}",
                     entry.tool, entry.file_count, path, entry.success, entry.bytes_written, range
                 ));
@@ -222,7 +244,7 @@ impl RequestPreparationController {
                     .or(entry.path.as_deref())
                     .or(entry.action.as_deref())
                     .unwrap_or("diff");
-                lines.push(format!(
+                relevant_lines.push(format!(
                     "- diff {}: {} changed={} success={}",
                     entry.tool, target, entry.changed, entry.success
                 ));
@@ -234,7 +256,7 @@ impl RequestPreparationController {
                     .exit_code
                     .map(|code| code.to_string())
                     .unwrap_or_else(|| "unknown".to_string());
-                lines.push(format!(
+                relevant_lines.push(format!(
                     "- validation {}: {} success={} exit={} family={}",
                     entry.tool,
                     entry.command,
@@ -250,27 +272,73 @@ impl RequestPreparationController {
                 if !seen.insert(key) {
                     continue;
                 }
-                lines.push(format!(
+                relevant_lines.push(format!(
                     "- confirmation {}: approved={} kind={}",
                     entry.tool,
                     entry.approved,
                     entry.kind.as_deref().unwrap_or("unknown")
                 ));
+            } else if let Some(entry) = tool_observation_entry_from_event(&event) {
+                if !entry.include_in_next_context {
+                    continue;
+                }
+                let key = format!("observation:{}:{}", entry.tool, entry.call_id);
+                if !seen.insert(key) {
+                    continue;
+                }
+                let mut detail = format!(
+                    "- observation {} {}: {}",
+                    entry.tool,
+                    if entry.result_kind.is_empty() {
+                        entry.status.clone()
+                    } else {
+                        format!("{}/{}", entry.result_kind, entry.status)
+                    },
+                    compact_text(&entry.summary, 160)
+                );
+                if !entry.key_findings.is_empty() {
+                    detail.push_str("; findings=");
+                    detail.push_str(&compact_text(&entry.key_findings.join(" | "), 180));
+                }
+                if !entry.next_attention.is_empty() {
+                    detail.push_str("; next=");
+                    detail.push_str(&compact_text(&entry.next_attention.join(" | "), 160));
+                }
+                if let Some(source) = entry.permission_source.as_deref() {
+                    detail.push_str("; permission_source=");
+                    detail.push_str(source);
+                }
+                if !entry.quality_warnings.is_empty() {
+                    detail.push_str("; observer_warnings=");
+                    detail.push_str(&compact_text(&entry.quality_warnings.join(","), 120));
+                }
+                observation_lines.push(detail);
             } else {
                 continue;
             }
-            if lines.len() >= 6 {
+            if relevant_lines.len() + observation_lines.len() >= 6 {
                 break;
             }
         }
-        if lines.is_empty() {
+        if relevant_lines.is_empty() && observation_lines.is_empty() {
             return;
         }
 
-        let hint = format!(
-            "Context ledger for this session:\n{}\nUse these recorded reads, edits, diffs, validations, and confirmations before repeating tool calls. If exact file text is no longer visible or a specific range is needed, prefer a targeted file_read range instead of rereading the same whole file repeatedly.",
-            lines.join("\n")
-        );
+        let mut sections = Vec::new();
+        if !relevant_lines.is_empty() {
+            sections.push(format!(
+                "<relevant_material>\nContext ledger for this session:\n{}\n</relevant_material>",
+                relevant_lines.join("\n")
+            ));
+        }
+        if !observation_lines.is_empty() {
+            sections.push(format!(
+                "<recent_observation>\nRecent semantic observations:\n{}\n</recent_observation>",
+                observation_lines.join("\n")
+            ));
+        }
+        sections.push("Use these recorded reads, edits, diffs, validations, confirmations, and observations before repeating tool calls. If exact file text is no longer visible or a specific range is needed, prefer a targeted file_read range instead of rereading the same whole file repeatedly.".to_string());
+        let hint = sections.join("\n\n");
         let insert_pos = request_messages
             .iter()
             .rposition(|message| matches!(message, Message::User { .. }))
@@ -279,7 +347,7 @@ impl RequestPreparationController {
     }
 
     async fn inject_memory_prefetch(
-        request_messages: &mut [Message],
+        request_messages: &mut Vec<Message>,
         context: &mut MemoryPrefetchContext<'_>,
     ) {
         if !context.retrieval_policy.allows_memory_context() {
@@ -320,6 +388,14 @@ impl RequestPreparationController {
             )
             .await;
         let Some(ctx) = retrieval_context else {
+            if mva_runtime_profile_enabled() {
+                context.trace.record(TraceEvent::MemoryBoundaryEvaluated {
+                    read_status: "skipped".to_string(),
+                    stale_conflict_demotion_status: "not_applicable".to_string(),
+                    closeout_write_candidate_status: "not_evaluated".to_string(),
+                    reason: "no retrieval context was available for this request".to_string(),
+                });
+            }
             return;
         };
 
@@ -343,11 +419,141 @@ impl RequestPreparationController {
             provenance: ctx.provenance_summaries(),
             conflicts: ctx.conflict_count(),
         });
-        let retrieval_block = ctx.format_for_prompt();
-        let enhanced = format!("{content}\n{retrieval_block}");
-        request_messages[last_user_idx] = Message::user(&enhanced);
-        debug!("Prefetched memory context injected into user message");
+        if mva_runtime_profile_enabled() {
+            context.trace.record(TraceEvent::MemoryBoundaryEvaluated {
+                read_status: if ctx.items.is_empty() {
+                    "empty".to_string()
+                } else {
+                    "read".to_string()
+                },
+                stale_conflict_demotion_status: if ctx.conflict_count() > 0 {
+                    "conflicts_recorded_for_demote".to_string()
+                } else {
+                    "no_conflicts".to_string()
+                },
+                closeout_write_candidate_status: "not_evaluated".to_string(),
+                reason: format!(
+                    "retrieval policy {:?} produced {} item(s)",
+                    ctx.policy,
+                    ctx.items.len()
+                ),
+            });
+        }
+        let retrieval_block = format!(
+            "<relevant_material>\n{}\n</relevant_material>",
+            ctx.format_for_prompt().trim()
+        );
+        request_messages.insert(last_user_idx, Message::system(retrieval_block));
+        debug!("Prefetched memory context injected as background system message");
     }
+
+    fn record_context_zones(request_messages: &[Message], trace: &TraceCollector) {
+        let stable_prefix = request_messages
+            .iter()
+            .find_map(|message| match message {
+                Message::System { content } => Some(content.as_str()),
+                _ => None,
+            })
+            .unwrap_or("");
+        let task_state = tagged_content(request_messages, "task-state")
+            .or_else(|| tagged_content(request_messages, "task_state"))
+            .unwrap_or_default();
+        let relevant_material =
+            tagged_content(request_messages, "relevant_material").unwrap_or_default();
+        let recent_observation =
+            tagged_content(request_messages, "recent_observation").unwrap_or_default();
+        let current_decision_request = request_messages
+            .iter()
+            .rev()
+            .find_map(|message| match message {
+                Message::User { content } => Some(content.as_str()),
+                _ => None,
+            })
+            .unwrap_or("");
+        let plan = ContextAssemblyPlan::new(ContextAssemblyInput {
+            stable_prefix: stable_prefix.to_string(),
+            task_state,
+            relevant_material,
+            recent_observation,
+            current_decision_request: current_decision_request.to_string(),
+        });
+
+        trace.record(TraceEvent::ContextZonesMaterialized {
+            stable_prefix_tokens: plan.stable_prefix.tokens,
+            task_state_tokens: plan.task_state.tokens,
+            relevant_material_tokens: plan.relevant_material.tokens,
+            recent_observation_tokens: plan.recent_observation.tokens,
+            current_decision_request_tokens: plan.current_decision_request.tokens,
+            stable_prefix_fingerprint: plan.stable_prefix.fingerprint.clone(),
+            task_state_fingerprint: plan.task_state.fingerprint.clone(),
+            relevant_material_fingerprint: plan.relevant_material.fingerprint.clone(),
+            recent_observation_fingerprint: plan.recent_observation.fingerprint.clone(),
+            current_decision_request_fingerprint: plan.current_decision_request.fingerprint.clone(),
+            stable_prefix_budget_tokens: plan.stable_prefix.budget_tokens,
+            task_state_budget_tokens: plan.task_state.budget_tokens,
+            relevant_material_budget_tokens: plan.relevant_material.budget_tokens,
+            recent_observation_budget_tokens: plan.recent_observation.budget_tokens,
+            current_decision_request_budget_tokens: plan.current_decision_request.budget_tokens,
+            stable_prefix_overflow: overflow_label(&plan.stable_prefix),
+            task_state_overflow: overflow_label(&plan.task_state),
+            relevant_material_overflow: overflow_label(&plan.relevant_material),
+            recent_observation_overflow: overflow_label(&plan.recent_observation),
+            current_decision_request_overflow: overflow_label(&plan.current_decision_request),
+            task_state_empty: plan.task_state.is_empty(),
+            current_decision_request_empty: plan.current_decision_request.is_empty(),
+            relevant_material_items: zone_item_count(&plan.relevant_material.content),
+            recent_observation_items: zone_item_count(&plan.recent_observation.content),
+        });
+    }
+}
+
+fn overflow_label(zone: &ContextZone) -> String {
+    zone.overflow_reason
+        .as_deref()
+        .unwrap_or("within_budget")
+        .to_string()
+}
+
+fn tagged_content(messages: &[Message], tag: &str) -> Option<String> {
+    let start = format!("<{tag}>");
+    let end = format!("</{tag}>");
+    let mut blocks = Vec::new();
+    for message in messages {
+        let Message::System { content } = message else {
+            continue;
+        };
+        let mut rest = content.as_str();
+        while let Some(start_idx) = rest.find(&start) {
+            let after_start = &rest[start_idx + start.len()..];
+            let Some(end_idx) = after_start.find(&end) else {
+                break;
+            };
+            let block = after_start[..end_idx].trim();
+            if !block.is_empty() {
+                blocks.push(block.to_string());
+            }
+            rest = &after_start[end_idx + end.len()..];
+        }
+    }
+    (!blocks.is_empty()).then(|| blocks.join("\n"))
+}
+
+fn zone_item_count(content: &str) -> usize {
+    content
+        .lines()
+        .filter(|line| line.trim_start().starts_with("- "))
+        .count()
+}
+
+fn mva_runtime_profile_enabled() -> bool {
+    matches!(
+        std::env::var("PRIORITY_AGENT_RUNTIME_PROFILE")
+            .unwrap_or_default()
+            .trim()
+            .to_ascii_lowercase()
+            .as_str(),
+        "minimum_viable_agent" | "mva"
+    )
 }
 
 fn compact_path(path: &str, resolved_path: &str) -> String {
@@ -355,6 +561,15 @@ fn compact_path(path: &str, resolved_path: &str) -> String {
         return path.to_string();
     }
     resolved_path.to_string()
+}
+
+fn compact_text(value: &str, max_chars: usize) -> String {
+    let trimmed = value.trim();
+    let mut text = trimmed.chars().take(max_chars).collect::<String>();
+    if trimmed.chars().count() > max_chars {
+        text.push_str("...");
+    }
+    text
 }
 
 #[cfg(test)]
@@ -560,6 +775,35 @@ mod tests {
                 }),
             )
             .unwrap();
+        store
+            .add_learning_event(
+                "session-ledger-evidence",
+                crate::engine::context_ledger::CONTEXT_LEDGER_TOOL_OBSERVATION_KIND,
+                "bash",
+                "Validation `cargo test -q` failed.",
+                0.9,
+                &serde_json::json!({
+                    "tool": "bash",
+                    "call_id": "call_test",
+                    "status": "failed",
+                    "result_kind": "validation",
+                    "summary": "Validation `cargo test -q` failed.",
+                    "key_findings": ["Failed tests: auth::login."],
+                    "evidence": ["error[E0425]: cannot find value `token`"],
+                    "next_attention": ["Rerun `cargo test -q` after the next patch."],
+                    "files_read": [],
+                    "files_changed": [],
+                    "command_run": "cargo test -q",
+                    "validation_result": "failed",
+                    "state_updates": ["validation_result"],
+                    "include_in_next_context": true,
+                    "store_in_state": true,
+                    "confidence": 90,
+                    "candidate_focus": ["src/auth/login.rs"],
+                    "reduced_uncertainty": true
+                }),
+            )
+            .unwrap();
 
         let mut runtime_diet = RuntimeDietSnapshot::new(true);
         let prepared = RequestPreparationController::prepare(RequestPreparationContext {
@@ -586,7 +830,20 @@ mod tests {
                     && content.contains("src/lib.rs")
                     && content.contains("validation bash")
                     && content.contains("cargo test -q")
+                    && content.contains("observation bash validation/failed")
+                    && content.contains("Failed tests: auth::login")
+                    && content.contains("<relevant_material>")
+                    && content.contains("<recent_observation>")
         ));
+        let trace = trace.finish(crate::engine::trace::TurnStatus::Completed);
+        assert!(trace.events.iter().any(|event| matches!(
+            event,
+            TraceEvent::ContextZonesMaterialized {
+                relevant_material_items,
+                recent_observation_items,
+                ..
+            } if *relevant_material_items >= 2 && *recent_observation_items >= 1
+        )));
     }
 
     #[tokio::test]
@@ -636,6 +893,15 @@ mod tests {
                     && content.contains("Active files: src/lib.rs")
                     && content.contains("cargo test -q")
         ));
+        let trace = trace.finish(crate::engine::trace::TurnStatus::Completed);
+        assert!(trace.events.iter().any(|event| matches!(
+            event,
+            TraceEvent::ContextZonesMaterialized {
+                task_state_tokens,
+                current_decision_request_tokens,
+                ..
+            } if *task_state_tokens > 0 && *current_decision_request_tokens > 0
+        )));
         assert!(matches!(
             &prepared.request.messages[2],
             Message::User { content } if content == "change"

@@ -16,6 +16,12 @@ use serde_json::Value;
 use std::collections::HashSet;
 use std::path::Path;
 
+const LOW_SCOPE_FIT_THRESHOLD: u8 = 4;
+const HIGH_COST_THRESHOLD: u8 = 8;
+const LOW_VALUE_THRESHOLD: u8 = 5;
+const HIGH_RISK_THRESHOLD: u8 = 8;
+const LOW_ACTION_SCORE_THRESHOLD: i16 = 3;
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ActionReviewDecision {
@@ -47,6 +53,11 @@ pub enum ActionReviewReason {
     ToolNotExposed,
     InvalidArguments,
     LowValueAction,
+    LowScopeFit,
+    LowActionValue,
+    HighCostLowValue,
+    HighRiskLowValue,
+    RepeatedLowScoreAction,
     PermissionRequired,
     PermissionDenied,
     PathOutsideWorkspace,
@@ -65,6 +76,11 @@ impl ActionReviewReason {
             Self::ToolNotExposed => "tool_not_exposed",
             Self::InvalidArguments => "invalid_arguments",
             Self::LowValueAction => "low_value_action",
+            Self::LowScopeFit => "low_scope_fit",
+            Self::LowActionValue => "low_action_value",
+            Self::HighCostLowValue => "high_cost_low_value",
+            Self::HighRiskLowValue => "high_risk_low_value",
+            Self::RepeatedLowScoreAction => "repeated_low_score_action",
             Self::PermissionRequired => "permission_required",
             Self::PermissionDenied => "permission_denied",
             Self::PathOutsideWorkspace => "path_outside_workspace",
@@ -150,6 +166,7 @@ impl ActionReview {
             "schema": "action_review_debug.v1",
             "action_checkpoint_rejection": input.action_checkpoint_rejection,
             "exposed_tool_alternatives": tool_contract.available_alternatives,
+            "candidate_action_request": candidate_action_request(decision, primary_reason, &worth),
         });
 
         Self {
@@ -266,8 +283,17 @@ pub struct ActionWorthVerdict {
     pub uncertainty_reduction: u8,
     pub cost: u8,
     pub reversibility: u8,
+    pub scope_fit: u8,
+    pub action_score: i16,
+    pub formula_stage: String,
+    pub formula_version: String,
+    pub modifier_count: usize,
     pub requires_confirmation: bool,
     pub low_value: bool,
+    pub low_scope_fit: bool,
+    pub high_cost_low_value: bool,
+    pub high_risk_low_value: bool,
+    pub repeated_low_score: bool,
     pub has_relevant_observation: Option<bool>,
     pub premature_mutation: bool,
     pub reason: String,
@@ -281,6 +307,16 @@ impl ActionWorthVerdict {
         let low_value = decision.scores.value <= 3
             && decision.scores.uncertainty_reduction <= 3
             && decision.scores.risk >= 7;
+        let low_scope_fit = decision.scores.scope_fit <= LOW_SCOPE_FIT_THRESHOLD;
+        let high_cost_low_value = decision.scores.cost >= HIGH_COST_THRESHOLD
+            && decision.scores.value <= LOW_VALUE_THRESHOLD;
+        let high_risk_low_value = decision.scores.risk >= HIGH_RISK_THRESHOLD
+            && decision.scores.value <= LOW_VALUE_THRESHOLD;
+        let repeated_low_score = input
+            .task_state
+            .map(|state| state.consecutive_low_action_scores() >= 2)
+            .unwrap_or(false)
+            && decision.scores.action_score <= LOW_ACTION_SCORE_THRESHOLD;
         let has_relevant_observation = relevant_observation(input.task_state, contract);
         let code_like_mutation = decision.action.mutates_workspace
             && contract.input_paths.iter().any(|path| code_like_path(path));
@@ -307,8 +343,21 @@ impl ActionWorthVerdict {
             uncertainty_reduction: decision.scores.uncertainty_reduction,
             cost: decision.scores.cost,
             reversibility: decision.scores.reversibility,
+            scope_fit: decision.scores.scope_fit,
+            action_score: decision.scores.action_score,
+            formula_stage: decision
+                .score_computation
+                .formula_stage
+                .as_str()
+                .to_string(),
+            formula_version: decision.score_computation.formula_version.clone(),
+            modifier_count: decision.score_computation.modifiers.len(),
             requires_confirmation: decision.requires_confirmation,
             low_value,
+            low_scope_fit,
+            high_cost_low_value,
+            high_risk_low_value,
+            repeated_low_score,
             has_relevant_observation,
             premature_mutation,
             reason: decision.reason_summary.clone(),
@@ -700,6 +749,52 @@ fn final_decision(
         let reason = permission_confirmation_reason(permission, contract);
         return (ActionReviewDecision::AskUser, reason, vec![reason]);
     }
+    if worth.repeated_low_score {
+        return (
+            ActionReviewDecision::Revise,
+            ActionReviewReason::RepeatedLowScoreAction,
+            vec![ActionReviewReason::RepeatedLowScoreAction],
+        );
+    }
+    if worth.low_scope_fit
+        && (worth.mutates_workspace || worth.broad_shell || worth.risk >= HIGH_RISK_THRESHOLD)
+    {
+        return (
+            ActionReviewDecision::Revise,
+            ActionReviewReason::LowScopeFit,
+            vec![ActionReviewReason::LowScopeFit],
+        );
+    }
+    if worth.high_cost_low_value {
+        return (
+            ActionReviewDecision::Revise,
+            ActionReviewReason::HighCostLowValue,
+            vec![ActionReviewReason::HighCostLowValue],
+        );
+    }
+    if worth.high_risk_low_value {
+        if permission.requires_confirmation || worth.requires_confirmation {
+            return (
+                ActionReviewDecision::AskUser,
+                ActionReviewReason::HighRiskLowValue,
+                vec![ActionReviewReason::HighRiskLowValue],
+            );
+        }
+        return (
+            ActionReviewDecision::Revise,
+            ActionReviewReason::HighRiskLowValue,
+            vec![ActionReviewReason::HighRiskLowValue],
+        );
+    }
+    if (worth.low_value || worth.action_score <= LOW_ACTION_SCORE_THRESHOLD)
+        && (worth.mutates_workspace || worth.broad_shell || worth.risk >= HIGH_RISK_THRESHOLD)
+    {
+        return (
+            ActionReviewDecision::Revise,
+            ActionReviewReason::LowActionValue,
+            vec![ActionReviewReason::LowActionValue],
+        );
+    }
 
     (
         ActionReviewDecision::Allow,
@@ -756,6 +851,12 @@ fn user_reason(
             if reason == ActionReviewReason::LowValueAction {
                 return "Action rejected before execution: mutation is premature for the current understanding stage.".to_string();
             }
+            if is_score_review_reason(reason) {
+                return format!(
+                    "Action rejected before execution: {}. Choose a narrower, lower-risk action that fits the current task stage.",
+                    reason.as_str()
+                );
+            }
             if reason == ActionReviewReason::CheckpointRequired {
                 return "Action rejected before execution: workspace mutation requires a checkpoint-managed tool.".to_string();
             }
@@ -800,6 +901,14 @@ fn model_recovery(
             if reason == ActionReviewReason::LowValueAction {
                 return "Action rejected before execution: low_value_action. Inspect the target with file_read or grep first, then retry the smallest safe mutation if the evidence supports it.".to_string();
             }
+            if is_score_review_reason(reason) {
+                return format!(
+                    "Action rejected before execution: {}. Propose a safer candidate action with scope_fit above {}, value above {}, and risk/cost justified by current evidence.",
+                    reason.as_str(),
+                    LOW_SCOPE_FIT_THRESHOLD,
+                    LOW_VALUE_THRESHOLD
+                );
+            }
             if reason == ActionReviewReason::CheckpointRequired {
                 return "Action rejected before execution: checkpoint_required. Use file_write/file_edit/file_patch, format, or another checkpoint-managed wrapper; do not mutate workspace files through raw bash.".to_string();
             }
@@ -817,6 +926,42 @@ fn model_recovery(
             )
         }
     }
+}
+
+fn is_score_review_reason(reason: ActionReviewReason) -> bool {
+    matches!(
+        reason,
+        ActionReviewReason::LowScopeFit
+            | ActionReviewReason::LowActionValue
+            | ActionReviewReason::HighCostLowValue
+            | ActionReviewReason::HighRiskLowValue
+            | ActionReviewReason::RepeatedLowScoreAction
+    )
+}
+
+fn candidate_action_request(
+    decision: ActionReviewDecision,
+    reason: ActionReviewReason,
+    worth: &ActionWorthVerdict,
+) -> Value {
+    let mode = crate::engine::candidate_action::CandidateActionMode::from_env();
+    let triggered = decision != ActionReviewDecision::Allow
+        && (is_score_review_reason(reason) || reason == ActionReviewReason::LowValueAction);
+    serde_json::json!({
+        "schema": "candidate_action_request.v1",
+        "mode": mode.as_str(),
+        "triggered": triggered,
+        "reason": reason.as_str(),
+        "selected_action_score": worth.action_score,
+        "selected_scope_fit": worth.scope_fit,
+        "min_scope_fit": LOW_SCOPE_FIT_THRESHOLD + 1,
+        "min_value": LOW_VALUE_THRESHOLD + 1,
+        "instructions": if triggered {
+            "Return a narrower next action that uses an exposed tool, reduces uncertainty or verifies progress, and will still pass normal ActionReview."
+        } else {
+            "none"
+        },
+    })
 }
 
 struct PermissionFields {
@@ -956,7 +1101,9 @@ fn code_like_path(path: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::engine::action_decision::{ActionDecision, ActionDecisionInput};
+    use crate::engine::action_decision::{
+        ActionDecision, ActionDecisionInput, ActionScoreModifier, ActionScoreModifierSource,
+    };
     use crate::engine::intent_router::{RiskLevel, WorkflowKind};
     use crate::engine::task_context::{AgentTaskStage, TaskContextBundle};
     use crate::tools::{
@@ -1266,6 +1413,74 @@ mod tests {
         assert_eq!(review.worth.has_relevant_observation, Some(false));
         assert!(review.worth.premature_mutation);
         assert!(review.model_recovery.contains("file_read or grep"));
+    }
+
+    #[test]
+    fn phase_misaligned_action_revises_for_low_scope_fit() {
+        let tool = FileEditLikeTool;
+        let tool_call = call(
+            "file_edit",
+            serde_json::json!({"path": "src/lib.rs", "new_string": "updated"}),
+        );
+        let exposed = HashSet::from(["file_edit".to_string()]);
+        let permission_context = PermissionContext::new(".");
+        let review = ActionReview::build(ActionReviewInput {
+            tool_call: &tool_call,
+            tool: Some(&tool),
+            exposed_tool_names: &exposed,
+            scheduled_count: 0,
+            max_tool_calls: 4,
+            action_decision: code_change_decision(&tool_call, AgentTaskStage::Understand),
+            permission_context: Some(&permission_context),
+            task_state: None,
+            working_dir: None,
+            tool_allowed_by_context: true,
+            destructive_scope_check: None,
+            action_checkpoint_rejection: None,
+        });
+
+        assert_eq!(review.decision, ActionReviewDecision::Revise);
+        assert_eq!(review.primary_reason, ActionReviewReason::LowScopeFit);
+        assert!(review.worth.scope_fit <= LOW_SCOPE_FIT_THRESHOLD);
+    }
+
+    #[test]
+    fn high_cost_low_value_action_revises_before_execution() {
+        let tool = FileEditLikeTool;
+        let tool_call = call(
+            "file_edit",
+            serde_json::json!({"path": "src/lib.rs", "new_string": "updated"}),
+        );
+        let exposed = HashSet::from(["file_edit".to_string()]);
+        let permission_context = PermissionContext::new(".");
+        let mut action_decision = code_change_decision(&tool_call, AgentTaskStage::Edit);
+        action_decision.apply_score_modifier(
+            ActionScoreModifier::new(
+                ActionScoreModifierSource::Review,
+                "test_cost_penalty",
+                "test high-cost low-value calibration",
+            )
+            .value(-4)
+            .cost(5),
+        );
+        let review = ActionReview::build(ActionReviewInput {
+            tool_call: &tool_call,
+            tool: Some(&tool),
+            exposed_tool_names: &exposed,
+            scheduled_count: 0,
+            max_tool_calls: 4,
+            action_decision,
+            permission_context: Some(&permission_context),
+            task_state: None,
+            working_dir: None,
+            tool_allowed_by_context: true,
+            destructive_scope_check: None,
+            action_checkpoint_rejection: None,
+        });
+
+        assert_eq!(review.decision, ActionReviewDecision::Revise);
+        assert_eq!(review.primary_reason, ActionReviewReason::HighCostLowValue);
+        assert!(review.model_recovery.contains("high_cost_low_value"));
     }
 
     #[test]

@@ -129,6 +129,8 @@ pub struct ToolPermissionRecord {
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ToolPermissionSourceRecord {
+    pub permission_source: Option<String>,
+    pub resolved_permission_source: Option<String>,
     pub permission_requires: Option<bool>,
     pub tool_requires: Option<bool>,
     pub raw_tool_requires: Option<bool>,
@@ -287,6 +289,8 @@ pub struct PermissionEvidence {
     pub tool: String,
     pub kind: Option<String>,
     pub approved: bool,
+    #[serde(default)]
+    pub source: Option<String>,
     pub summary: String,
 }
 
@@ -486,19 +490,7 @@ impl EvidenceLedger {
 
         let required_rollup = self.required_validation_rollup(request.required_commands);
         let validation_rollup = self.current_validation_rollup();
-        let mut proof = if request.task_verification_status == VerificationStatus::Blocked {
-            VerificationProof::new(VerificationProofStatus::Blocked, "verification is blocked")
-        } else if request.task_verification_status == VerificationStatus::UserDeferred {
-            VerificationProof::new(
-                VerificationProofStatus::UserDeferred,
-                "user deferred verification",
-            )
-        } else if request.task_verification_status == VerificationStatus::Unavailable {
-            VerificationProof::new(
-                VerificationProofStatus::Unavailable,
-                "verification evidence is unavailable",
-            )
-        } else if let Some(rollup) = required_rollup.as_ref() {
+        let mut proof = if let Some(rollup) = required_rollup.as_ref() {
             if rollup.missing > 0 {
                 VerificationProof::new(
                     VerificationProofStatus::NotRun,
@@ -524,6 +516,18 @@ impl EvidenceLedger {
                     ),
                 )
             }
+        } else if request.task_verification_status == VerificationStatus::Blocked {
+            VerificationProof::new(VerificationProofStatus::Blocked, "verification is blocked")
+        } else if request.task_verification_status == VerificationStatus::UserDeferred {
+            VerificationProof::new(
+                VerificationProofStatus::UserDeferred,
+                "user deferred verification",
+            )
+        } else if request.task_verification_status == VerificationStatus::Unavailable {
+            VerificationProof::new(
+                VerificationProofStatus::Unavailable,
+                "verification evidence is unavailable",
+            )
         } else if !request.required_commands.is_empty() {
             VerificationProof::new(
                 VerificationProofStatus::NotRun,
@@ -1198,6 +1202,7 @@ impl EvidenceLedger {
             tool: tool_call.name.clone(),
             kind,
             approved: permission_request_approved(permission_request, result.success),
+            source: permission_source_label(permission_request),
             summary: preview(&summary),
         });
     }
@@ -1282,6 +1287,10 @@ fn tool_permission_record(result: &ToolResult) -> Option<ToolPermissionRecord> {
         patterns: json_string_array(permission_request, "patterns"),
         allowed_always_rules: json_string_array(permission_request, "allowed_always_rules"),
         source: ToolPermissionSourceRecord {
+            permission_source: nested_string(metadata, "permission_source")
+                .or_else(|| json_string(permission_request, "permission_source")),
+            resolved_permission_source: nested_string(metadata, "resolved_permission_source")
+                .or_else(|| json_string(permission_request, "permission_source")),
             permission_requires: nested_bool(metadata, "permission_requires"),
             tool_requires: nested_bool(metadata, "tool_requires"),
             raw_tool_requires: nested_bool(metadata, "raw_tool_requires"),
@@ -1298,6 +1307,23 @@ fn permission_request_approved(permission_request: &serde_json::Value, fallback:
         .get("approved")
         .and_then(serde_json::Value::as_bool)
         .unwrap_or(fallback)
+}
+
+fn permission_source_label(permission_request: &serde_json::Value) -> Option<String> {
+    permission_request
+        .get("permission_source")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string)
+        .or_else(|| {
+            permission_request
+                .get("metadata")
+                .and_then(|metadata| nested_string(Some(metadata), "resolved_permission_source"))
+        })
+        .or_else(|| {
+            permission_request
+                .get("metadata")
+                .and_then(|metadata| nested_string(Some(metadata), "permission_source"))
+        })
 }
 
 fn tool_output_metadata_record(result: &ToolResult) -> ToolOutputMetadataRecord {
@@ -2419,6 +2445,8 @@ mod tests {
                     "drift_requires_approval": false,
                     "permission_family": "file",
                     "permission_decision": "Ask",
+                    "permission_source": "config_project_ask",
+                    "resolved_permission_source": "user_once_reject",
                     "risk_level": "High"
                 },
                 "rejection_feedback": "Denied by policy"
@@ -2463,6 +2491,14 @@ mod tests {
         assert_eq!(
             permission.source.permission_decision.as_deref(),
             Some("Ask")
+        );
+        assert_eq!(
+            permission.source.permission_source.as_deref(),
+            Some("config_project_ask")
+        );
+        assert_eq!(
+            permission.source.resolved_permission_source.as_deref(),
+            Some("user_once_reject")
         );
         assert_eq!(permission.source.risk_level.as_deref(), Some("High"));
         assert_eq!(ledger.snapshot().denied_permission_facts, 1);
@@ -2603,6 +2639,28 @@ mod tests {
     }
 
     #[test]
+    fn verification_proof_prefers_required_validation_success_over_prior_user_deferred_state() {
+        let mut ledger = EvidenceLedger::new();
+        ledger.record_validation_result(
+            "run_tests",
+            Some("python3 fixtures/example/test_slugify.py"),
+            true,
+            "OK",
+        );
+        let required = vec!["python3 fixtures/example/test_slugify.py".to_string()];
+
+        let proof = ledger.verification_proof(VerificationProofRequest {
+            required_commands: &required,
+            requires_validation: true,
+            task_verification_status: crate::engine::task_context::VerificationStatus::UserDeferred,
+        });
+
+        assert_eq!(proof.status, VerificationProofStatus::Verified);
+        assert_eq!(proof.required_passed, 1);
+        assert!(proof.summary.contains("required validation passed 1/1"));
+    }
+
+    #[test]
     fn verification_proof_does_not_trust_verified_task_state_without_ledger_evidence() {
         let ledger = EvidenceLedger::new();
 
@@ -2656,6 +2714,7 @@ mod tests {
         result.data = Some(serde_json::json!({
             "permission_request": {
                 "kind": "runtime_rule",
+                "permission_source": "hook_deny",
                 "rejection_feedback": "Permission denied: 'git' requires user confirmation.",
                 "recovery_feedback": "Ask the user to approve git push before retrying."
             }
@@ -2676,6 +2735,10 @@ mod tests {
         assert!(ledger.permission_facts()[0]
             .summary
             .contains("Recovery: Ask the user"));
+        assert_eq!(
+            ledger.permission_facts()[0].source.as_deref(),
+            Some("hook_deny")
+        );
     }
 
     #[test]

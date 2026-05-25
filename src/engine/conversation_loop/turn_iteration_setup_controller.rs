@@ -23,6 +23,7 @@ pub(super) struct TurnIterationSetupContext<'a> {
     pub(super) task_stage: AgentTaskStage,
     pub(super) baseline_git_status_files: &'a HashSet<PathBuf>,
     pub(super) base_tools: &'a [Tool],
+    pub(super) required_validation_commands_present: bool,
 }
 
 pub(super) enum TurnIterationSetupFlow {
@@ -79,6 +80,7 @@ impl TurnIterationSetupController {
             ),
             task_stage: Some(context.task_stage),
             has_changes_before_request,
+            required_validation_commands_present: context.required_validation_commands_present,
             action_checkpoint_active: context.turn_state.focused_repair.action_checkpoint_active,
             action_checkpoint_lookup_count: context
                 .turn_state
@@ -126,6 +128,7 @@ mod tests {
             task_stage: AgentTaskStage::Understand,
             baseline_git_status_files: &HashSet::new(),
             base_tools: &[tool("file_read")],
+            required_validation_commands_present: false,
         })
         .await;
 
@@ -150,6 +153,7 @@ mod tests {
             task_stage: AgentTaskStage::Understand,
             baseline_git_status_files: &HashSet::new(),
             base_tools: &[tool("file_read"), tool("bash")],
+            required_validation_commands_present: false,
         })
         .await;
 

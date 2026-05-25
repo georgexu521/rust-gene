@@ -29,7 +29,9 @@ use crate::engine::resource_policy::ResourcePolicy;
 use crate::engine::retrieval_context::RetrievalContext;
 use crate::engine::stop_checker::{StopCheckInput, StopChecker};
 use crate::engine::streaming::StreamEvent;
-use crate::engine::task_context::{AgentToolRoundObservation, TaskContextBundle};
+use crate::engine::task_context::{
+    mva_stage_transition_policy, AgentToolRoundObservation, TaskContextBundle,
+};
 use crate::engine::trace::{TraceCollector, TraceEvent};
 use crate::services::api::{Message, Tool, ToolCall};
 use crate::tools::ToolContextRetainedContext;
@@ -82,6 +84,7 @@ impl TurnIterationController {
             task_stage: context.task_bundle.agent_state.stage,
             baseline_git_status_files: context.baseline_git_status_files,
             base_tools: context.base_tools,
+            required_validation_commands_present: !context.required_validation_commands.is_empty(),
         })
         .await
         {
@@ -91,7 +94,7 @@ impl TurnIterationController {
         let tools = exposure_plan.tools;
         let exposed_tool_names = exposure_plan.exposed_tool_names;
 
-        let (content, tool_calls, pre_executed) =
+        let (content, mut tool_calls, pre_executed) =
             match TurnModelStepController::run(TurnModelStepContext {
                 conversation: context.conversation,
                 iteration: context.iteration + 1,
@@ -120,18 +123,34 @@ impl TurnIterationController {
                 } => (content, tool_calls, pre_executed),
             };
 
-        if let Some(message) = duplicate_successful_read_only_pre_execution_closeout(
-            &tool_calls,
-            context.turn_state,
-            context.last_user_preview,
-            context.conversation.session_store.as_ref(),
-            &context.conversation.session_id,
-        ) {
-            context.loop_state.final_content.push_str(&message);
-            if let Some(tx) = context.tx {
-                let _ = tx.send(StreamEvent::TextChunk(message)).await;
+        if duplicate_read_only_closeout_allowed(context.route, context.required_validation_commands)
+        {
+            if let Some(message) = duplicate_successful_read_only_pre_execution_closeout(
+                &tool_calls,
+                context.turn_state,
+                context.last_user_preview,
+                context.conversation.session_store.as_ref(),
+                &context.conversation.session_id,
+            ) {
+                context.loop_state.final_content.push_str(&message);
+                if let Some(tx) = context.tx {
+                    let _ = tx.send(StreamEvent::TextChunk(message)).await;
+                }
+                return Ok(TurnIterationFlow::Break);
             }
-            return Ok(TurnIterationFlow::Break);
+        }
+        if pre_executed.is_empty() {
+            if let Some(filtered) =
+                drop_duplicate_successful_read_only_tool_calls(&tool_calls, context.turn_state)
+            {
+                let dropped = tool_calls.len().saturating_sub(filtered.len());
+                context.trace.record(TraceEvent::WorkflowFallback {
+                    error: format!(
+                        "dropped {dropped} duplicate successful read-only tool call(s) before executing mixed tool batch"
+                    ),
+                });
+                tool_calls = filtered;
+            }
         }
 
         let mut tool_round_state = TurnToolRoundStepController::run(TurnToolRoundStepContext {
@@ -180,17 +199,23 @@ impl TurnIterationController {
             context.task_bundle,
             context.turn_state,
             &tool_round_state,
+            exposed_tool_names.len(),
+            tool_calls.len(),
             false,
         );
 
-        if let Some(message) =
-            duplicate_successful_read_only_closeout(&tool_round_state, context.last_user_preview)
+        if duplicate_read_only_closeout_allowed(context.route, context.required_validation_commands)
         {
-            context.loop_state.final_content.push_str(&message);
-            if let Some(tx) = context.tx {
-                let _ = tx.send(StreamEvent::TextChunk(message)).await;
+            if let Some(message) = duplicate_successful_read_only_closeout(
+                &tool_round_state,
+                context.last_user_preview,
+            ) {
+                context.loop_state.final_content.push_str(&message);
+                if let Some(tx) = context.tx {
+                    let _ = tx.send(StreamEvent::TextChunk(message)).await;
+                }
+                return Ok(TurnIterationFlow::Break);
             }
-            return Ok(TurnIterationFlow::Break);
         }
 
         let focused_repair_flow =
@@ -219,6 +244,8 @@ impl TurnIterationController {
             context.task_bundle,
             context.turn_state,
             &tool_round_state,
+            exposed_tool_names.len(),
+            tool_calls.len(),
             matches!(
                 focused_repair_flow,
                 TurnFocusedRepairFlow::Continue | TurnFocusedRepairFlow::Stop
@@ -280,8 +307,25 @@ fn record_stop_check(
     task_bundle: &mut TaskContextBundle,
     turn_state: &TurnRuntimeState,
     tool_round_state: &super::turn_tool_round_outcome_controller::TurnToolRoundState,
+    exposed_tool_count: usize,
+    selected_tool_calls: usize,
     force_patch_synthesis_after_no_change: bool,
 ) {
+    let stage_before = task_bundle.agent_state.stage;
+    let observations_before = task_bundle.agent_state.observations.len();
+    let key_findings_before = task_bundle.agent_state.key_findings.len();
+    let duplicate_read_only_tools =
+        if crate::engine::code_change_workflow::is_programming_workflow(task_bundle.route.workflow)
+            || !task_bundle
+                .agent_state
+                .verification_plan
+                .required_checks
+                .is_empty()
+        {
+            0
+        } else {
+            tool_round_state.duplicate_successful_read_only_tools.len()
+        };
     let decision = StopChecker::evaluate(StopCheckInput {
         any_tool_success: tool_round_state.any_tool_success,
         successful_write_tool: tool_round_state.successful_write_tool,
@@ -293,17 +337,106 @@ fn record_stop_check(
             .action_checkpoint_no_change_rounds,
         force_patch_synthesis_after_no_change,
         repeated_failed_tools: tool_round_state.repeated_failed_tools.len(),
-        duplicate_read_only_tools: tool_round_state.duplicate_successful_read_only_tools.len(),
+        duplicate_read_only_tools,
+        max_iterations_reached: false,
+        uncertainty_not_reduced_steps: task_bundle.agent_state.uncertainty_not_reduced_steps,
+        consecutive_validation_failures: task_bundle.agent_state.consecutive_validation_failures,
+        consecutive_edit_failures: task_bundle.agent_state.consecutive_edit_failures,
+        consecutive_command_failures: task_bundle.agent_state.consecutive_command_failures,
+        consecutive_permission_blocks: task_bundle.agent_state.consecutive_permission_blocks,
+        consecutive_low_action_scores: task_bundle.agent_state.consecutive_low_action_scores(),
+        consecutive_high_risk_low_value_actions: task_bundle
+            .agent_state
+            .consecutive_high_risk_low_value_actions(),
+        score_without_uncertainty_reduction_rounds: task_bundle
+            .agent_state
+            .score_without_uncertainty_reduction_rounds(),
+        repeated_revised_action_count: task_bundle.agent_state.repeated_revised_action_count(),
+        user_interrupted: false,
+        model_output_invalid_attempts: 0,
+        action_review_decision: None,
+        action_review_reason: None,
+        rollback_candidate: task_bundle.agent_state.rollback_candidates.last().cloned(),
+        failure_type: task_bundle.agent_state.last_failure_family.clone(),
+        recovery_plan_id: None,
     });
     StopChecker::apply_to_task_state(&mut task_bundle.agent_state, &decision);
+    let stage_after = task_bundle.agent_state.stage;
+    let observations_delta = task_bundle
+        .agent_state
+        .observations
+        .len()
+        .saturating_sub(observations_before);
+    let key_findings_delta = task_bundle
+        .agent_state
+        .key_findings
+        .len()
+        .saturating_sub(key_findings_before);
     trace.record(TraceEvent::StopCheckEvaluated {
         status: decision.status.label().to_string(),
         reason: decision.reason.label().to_string(),
         stage: format!("{:?}", task_bundle.agent_state.stage),
+        terminal_status: decision
+            .terminal_status
+            .map(|status| status.label().to_string()),
+        action: decision.action.label().to_string(),
         no_code_progress_rounds: decision.no_code_progress_rounds,
         action_checkpoint_active: decision.action_checkpoint_active,
         summary: decision.summary,
+        evidence_items: decision.evidence.len(),
+        failure_type: decision.failure_type.clone(),
+        recovery_plan_id: decision.recovery_plan_id.clone(),
+        rollback_recommended: decision.rollback_candidate.is_some(),
+        next_action: decision.next_action.clone(),
     });
+    let latest_action_score = task_bundle
+        .agent_state
+        .action_score_history
+        .last()
+        .map(|record| record.action_score);
+    trace.record(TraceEvent::AgentLoopStepEvaluated {
+        route_workflow: serde_label(&task_bundle.route.workflow),
+        route_risk: serde_label(&task_bundle.route.risk),
+        task_mode: serde_label(&task_bundle.agent_state.mode),
+        stage_before: format!("{stage_before:?}"),
+        stage_after: format!("{stage_after:?}"),
+        mva_stage_before: stage_before.mva_stage_label().to_string(),
+        mva_stage_after: stage_after.mva_stage_label().to_string(),
+        stage_transition_policy: mva_stage_transition_policy(stage_before, stage_after).to_string(),
+        exposed_tools: exposed_tool_count,
+        selected_tool_calls,
+        action_score_records: task_bundle.agent_state.action_score_history.len(),
+        latest_action_score,
+        observations_delta,
+        key_findings_delta,
+        stop_status: decision.status.label().to_string(),
+        stop_reason: decision.reason.label().to_string(),
+        stop_action: decision.action.label().to_string(),
+        terminal_status: decision
+            .terminal_status
+            .map(|status| status.label().to_string()),
+        state_delta: format!(
+            "stage_changed={} observations_delta={} key_findings_delta={} latest_progress={}",
+            stage_before != stage_after,
+            observations_delta,
+            key_findings_delta,
+            task_bundle
+                .agent_state
+                .last_progress_signal
+                .as_deref()
+                .unwrap_or("none")
+        ),
+    });
+}
+
+fn serde_label<T>(value: &T) -> String
+where
+    T: serde::Serialize + std::fmt::Debug,
+{
+    serde_json::to_value(value)
+        .ok()
+        .and_then(|value| value.as_str().map(str::to_string))
+        .unwrap_or_else(|| format!("{value:?}"))
 }
 
 fn duplicate_successful_read_only_pre_execution_closeout(
@@ -353,6 +486,43 @@ fn duplicate_successful_read_only_pre_execution_closeout(
     ))
 }
 
+fn duplicate_read_only_closeout_allowed(
+    route: &IntentRoute,
+    required_validation_commands: &[String],
+) -> bool {
+    !crate::engine::code_change_workflow::is_programming_workflow(route.workflow)
+        && required_validation_commands.is_empty()
+}
+
+fn drop_duplicate_successful_read_only_tool_calls(
+    tool_calls: &[ToolCall],
+    turn_state: &TurnRuntimeState,
+) -> Option<Vec<ToolCall>> {
+    if tool_calls.len() < 2 {
+        return None;
+    }
+
+    let mut filtered = Vec::with_capacity(tool_calls.len());
+    let mut dropped = 0usize;
+    for tool_call in tool_calls {
+        let duplicate_successful_read = is_read_only(&tool_call.name)
+            && turn_state
+                .successful_read_only_tool_fingerprints
+                .contains_key(&tool_call_fingerprint(tool_call));
+        if duplicate_successful_read {
+            dropped += 1;
+        } else {
+            filtered.push(tool_call.clone());
+        }
+    }
+
+    if dropped > 0 && !filtered.is_empty() {
+        Some(filtered)
+    } else {
+        None
+    }
+}
+
 fn duplicate_successful_read_only_closeout(
     round_state: &super::turn_tool_round_outcome_controller::TurnToolRoundState,
     last_user_preview: &str,
@@ -387,6 +557,18 @@ fn synthesize_read_only_duplicate_answer(
     } else {
         summarize_read_only_result(result_text, chinese)
     };
+    let missing_note = missing_requested_search_terms(last_user_preview, result_text)
+        .map(|terms| {
+            if chinese {
+                format!("\n\n未在已检查结果中找到：{}。", format_terms(&terms))
+            } else {
+                format!(
+                    "\n\nNot found in the checked result: {}.",
+                    format_terms(&terms)
+                )
+            }
+        })
+        .unwrap_or_default();
     let provenance = ledger_summary
         .filter(|summary| !summary.trim().is_empty())
         .map(|summary| {
@@ -399,13 +581,70 @@ fn synthesize_read_only_duplicate_answer(
         .unwrap_or_default();
     if chinese {
         format!(
-            "我已经读到需要的信息；模型重复请求 `{tool_name}` 时我已停止继续读取，下面直接根据已有结果回答。\n\n{summary}{provenance}"
+            "我已经读到需要的信息；模型重复请求 `{tool_name}` 时我已停止继续读取，下面直接根据已有结果回答。\n\n{summary}{missing_note}{provenance}"
         )
     } else {
         format!(
-            "I already had the needed information, so I stopped the repeated `{tool_name}` read and answered from the existing tool output.\n\n{summary}{provenance}"
+            "I already had the needed information, so I stopped the repeated `{tool_name}` read and answered from the existing tool output.\n\n{summary}{missing_note}{provenance}"
         )
     }
+}
+
+fn missing_requested_search_terms(
+    last_user_preview: &str,
+    result_text: &str,
+) -> Option<Vec<String>> {
+    let result_lower = result_text.to_ascii_lowercase();
+    let missing = requested_search_terms(last_user_preview)
+        .into_iter()
+        .filter(|term| !result_lower.contains(&term.to_ascii_lowercase()))
+        .collect::<Vec<_>>();
+    (!missing.is_empty()).then_some(missing)
+}
+
+fn requested_search_terms(text: &str) -> Vec<String> {
+    let mut terms = Vec::new();
+    for (index, part) in text.split('`').enumerate() {
+        if index % 2 == 0 {
+            continue;
+        }
+        let term = part.trim();
+        if is_search_target_term(term) && !terms.iter().any(|existing| existing == term) {
+            terms.push(term.to_string());
+        }
+    }
+    terms
+}
+
+fn is_search_target_term(term: &str) -> bool {
+    let len = term.chars().count();
+    let lower = term.to_ascii_lowercase();
+    (3..=120).contains(&len)
+        && !term.contains('/')
+        && !term.contains('\\')
+        && !term.contains('\n')
+        && !term.contains('.')
+        && !lower.starts_with("minimum-agent-")
+        && !matches!(
+            lower.as_str(),
+            "audit"
+                | "bug_fix"
+                | "feature"
+                | "read_only_audit"
+                | "seeded_code_change"
+                | "low"
+                | "medium"
+                | "high"
+                | "closeout:"
+        )
+}
+
+fn format_terms(terms: &[String]) -> String {
+    terms
+        .iter()
+        .map(|term| format!("`{term}`"))
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 fn ledger_reuse_answer(ledger_summary: &str, chinese: bool) -> String {
@@ -593,7 +832,10 @@ mod tests {
     use super::super::turn_loop_state_controller::TurnLoopStateController;
     use super::*;
     use crate::engine::destructive_scope::DestructiveScopeContract;
-    use crate::engine::intent_router::IntentRouter;
+    use crate::engine::intent_router::{
+        IntentKind, IntentRoute, IntentRouter, ReasoningPolicy, RetrievalPolicy, RiskLevel,
+        WorkflowKind,
+    };
     use crate::engine::trace::{TraceEvent, TurnStatus, TurnTrace};
     use crate::services::api::{ChatRequest, ChatResponse, LlmProvider};
     use crate::tools::ToolRegistry;
@@ -740,6 +982,45 @@ mod tests {
     }
 
     #[test]
+    fn repeated_read_only_closeout_reports_missing_requested_search_token() {
+        let round_state = super::super::turn_tool_round_outcome_controller::TurnToolRoundState {
+            tool_results_text: String::new(),
+            changed_files: Vec::new(),
+            batch_has_unsuccessful_tools: false,
+            used_write_tool: false,
+            successful_write_tool: false,
+            used_action_checkpoint_lookup: false,
+            any_tool_success: true,
+            repeated_failed_tools: Vec::new(),
+            failed_tool_names_this_round: Vec::new(),
+            failed_tool_evidence: Vec::new(),
+            file_edit_failure_correction_added: false,
+            successful_validation_commands: Vec::new(),
+            duplicate_successful_read_only_tools: vec!["file_read".to_string()],
+            duplicate_successful_read_only_results: vec![DuplicateSuccessfulReadOnlyToolResult {
+                tool_name: "file_read".to_string(),
+                result_text: "   1 | known fact".to_string(),
+                ledger_summary: Some(
+                    "ledger: file `fixtures/mva_low_value_replan/known.txt` was read previously"
+                        .to_string(),
+                ),
+            }],
+            should_closeout_after_verified_change: false,
+        };
+
+        let message = duplicate_successful_read_only_closeout(
+            &round_state,
+            "在 `fixtures/mva_low_value_replan` 里找到 `missing-target-token-7391`。",
+        )
+        .expect("closeout");
+
+        assert!(message.contains("missing-target-token-7391"));
+        assert!(message.contains("未在已检查结果中找到"));
+        assert!(!message.contains("`audit`"));
+        assert!(!message.contains("`minimum-agent-low-value-replan`"));
+    }
+
+    #[test]
     fn repeated_read_only_pre_execution_closeout_blocks_duplicate_tool_run() {
         let tool_call = ToolCall {
             id: "call_read_again".to_string(),
@@ -771,6 +1052,38 @@ mod tests {
     }
 
     #[test]
+    fn mixed_read_only_batch_drops_duplicate_successful_read_and_keeps_new_search() {
+        let duplicate_read = ToolCall {
+            id: "call_read_again".to_string(),
+            name: "file_read".to_string(),
+            arguments: serde_json::json!({"path": "fixtures/mva_low_value_replan/known.txt"}),
+        };
+        let search = ToolCall {
+            id: "call_search".to_string(),
+            name: "grep".to_string(),
+            arguments: serde_json::json!({
+                "pattern": "missing-target-token-7391",
+                "path": "fixtures/mva_low_value_replan"
+            }),
+        };
+        let fingerprint = tool_call_fingerprint(&duplicate_read);
+        let mut turn_state = TurnRuntimeState::new(true);
+        turn_state
+            .successful_read_only_tool_fingerprints
+            .insert(fingerprint, 1);
+
+        let filtered = drop_duplicate_successful_read_only_tool_calls(
+            &[duplicate_read, search.clone()],
+            &turn_state,
+        )
+        .expect("mixed batch should drop the duplicate read");
+
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].id, search.id);
+        assert_eq!(filtered[0].name, "grep");
+    }
+
+    #[test]
     fn repeated_read_only_pre_execution_closeout_allows_new_read() {
         let tool_call = ToolCall {
             id: "call_new_read".to_string(),
@@ -787,6 +1100,91 @@ mod tests {
             "session",
         )
         .is_none());
+    }
+
+    #[test]
+    fn duplicate_read_only_closeout_is_disabled_for_programming_work() {
+        let direct_route = IntentRoute {
+            intent: IntentKind::DirectAnswer,
+            confidence: 0.95,
+            workflow: WorkflowKind::Direct,
+            retrieval: RetrievalPolicy::Light,
+            reasoning: ReasoningPolicy::Low,
+            risk: RiskLevel::Low,
+            recommended_tools: Vec::new(),
+            dependency_install_intent: false,
+            mcp_auth_intent: false,
+            reason: "direct read-only question".to_string(),
+        };
+        let code_route = IntentRoute {
+            intent: IntentKind::CodeChange,
+            workflow: WorkflowKind::CodeChange,
+            reason: "bug fix".to_string(),
+            ..direct_route.clone()
+        };
+
+        assert!(duplicate_read_only_closeout_allowed(&direct_route, &[]));
+        assert!(!duplicate_read_only_closeout_allowed(
+            &direct_route,
+            &["cargo test -q".to_string()]
+        ));
+        assert!(!duplicate_read_only_closeout_allowed(&code_route, &[]));
+    }
+
+    #[test]
+    fn stop_check_ignores_duplicate_read_only_for_code_change() {
+        let route = IntentRoute {
+            intent: IntentKind::CodeChange,
+            confidence: 0.95,
+            workflow: WorkflowKind::CodeChange,
+            retrieval: RetrievalPolicy::Project,
+            reasoning: ReasoningPolicy::Medium,
+            risk: RiskLevel::Medium,
+            recommended_tools: Vec::new(),
+            dependency_install_intent: false,
+            mcp_auth_intent: false,
+            reason: "bug fix".to_string(),
+        };
+        let mut task_bundle = TaskContextBundle::new("fix slugify", ".", route, None);
+        let turn_state = TurnRuntimeState::new(true);
+        let round_state = super::super::turn_tool_round_outcome_controller::TurnToolRoundState {
+            tool_results_text: String::new(),
+            changed_files: Vec::new(),
+            batch_has_unsuccessful_tools: false,
+            used_write_tool: false,
+            successful_write_tool: false,
+            used_action_checkpoint_lookup: false,
+            any_tool_success: true,
+            repeated_failed_tools: Vec::new(),
+            failed_tool_names_this_round: Vec::new(),
+            failed_tool_evidence: Vec::new(),
+            file_edit_failure_correction_added: false,
+            successful_validation_commands: Vec::new(),
+            duplicate_successful_read_only_tools: vec!["file_read".to_string()],
+            duplicate_successful_read_only_results: Vec::new(),
+            should_closeout_after_verified_change: false,
+        };
+        let trace = TraceCollector::new(TurnTrace::new("session", 1, "fix slugify"));
+
+        record_stop_check(
+            &trace,
+            &mut task_bundle,
+            &turn_state,
+            &round_state,
+            4,
+            1,
+            false,
+        );
+
+        let stop_check = task_bundle
+            .agent_state
+            .stop_checks
+            .last()
+            .expect("stop check");
+        assert_ne!(
+            stop_check.reason,
+            crate::engine::task_context::StopCheckReason::DuplicateReadOnly
+        );
     }
 
     #[test]
@@ -868,7 +1266,15 @@ mod tests {
         };
         let trace = TraceCollector::new(TurnTrace::new("session", 1, "fix src/main.rs"));
 
-        record_stop_check(&trace, &mut task_bundle, &turn_state, &round_state, false);
+        record_stop_check(
+            &trace,
+            &mut task_bundle,
+            &turn_state,
+            &round_state,
+            4,
+            1,
+            false,
+        );
 
         let stop_check = task_bundle
             .agent_state
@@ -898,6 +1304,15 @@ mod tests {
                 action_checkpoint_active: true,
                 ..
             } if status == "checkpoint" && reason == "no_progress"
+        )));
+        assert!(finished.events.iter().any(|event| matches!(
+            event,
+            TraceEvent::AgentLoopStepEvaluated {
+                stage_before,
+                stage_after,
+                selected_tool_calls: 1,
+                ..
+            } if stage_before == "Understand" && stage_after == "Repair"
         )));
     }
 }

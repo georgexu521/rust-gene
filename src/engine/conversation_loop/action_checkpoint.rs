@@ -347,6 +347,8 @@ impl ConversationLoop {
             .filter(|evidence| evidence.contains("file_edit"))
             .filter(|evidence| {
                 evidence.contains("Expected 1 occurrence")
+                    || evidence.contains("Could not find old_string")
+                    || evidence.contains("old_string not found")
                     || evidence.contains("old_string cannot be empty")
                     || evidence.contains("old_string cannot be empty or whitespace-only")
                     || evidence.contains("Action checkpoint file_edit rejected")
@@ -361,7 +363,7 @@ impl ConversationLoop {
         }
 
         Some(format!(
-            "File edit repair correction:\n{}\nNext action is still a patch, not closeout. The previous file_edit did not modify a file because its anchor was empty, whitespace-only, or non-unique. Use one of these safer forms:\n- If prior file_read/grep output shows the target line number, call file_edit with path, line_start, line_end, and new_string for that exact line.\n- Otherwise copy a multi-line old_string that includes the surrounding function call and is unique exactly once.\nDo not retry the same broad old_string. Do not close out until a file_edit/file_write succeeds and validation runs.",
+            "File edit repair correction:\n{}\nNext action is still a patch, not closeout. The previous file_edit did not modify a file because its anchor was missing, stale, empty, whitespace-only, or non-unique. Use one of these safer forms:\n- If prior file_read/grep output shows the target line number, call file_edit with path, line_start, line_end, and new_string for that exact line.\n- If the old_string was not found, re-read the target at most once, then patch using the latest line numbers or an exact old_string copied from that current content.\n- Otherwise copy a multi-line old_string that includes the surrounding function call and is unique exactly once.\nDo not retry the same broad or stale old_string. Do not close out until a file_edit/file_write succeeds and validation runs.",
             relevant.join("\n\n")
         ))
     }
@@ -875,7 +877,22 @@ Expected 1 occurrence(s) of old_string, but found 1487.
         .expect("ambiguous file_edit should produce a correction");
 
         assert!(correction.contains("line_start, line_end"));
-        assert!(correction.contains("Do not retry the same broad old_string"));
+        assert!(correction.contains("Do not retry the same broad or stale old_string"));
+        assert!(correction.contains("not close out"));
+    }
+
+    #[test]
+    fn file_edit_failure_correction_handles_old_string_not_found() {
+        let correction = ConversationLoop::file_edit_failure_repair_correction(&[r#"
+file_edit call_1 failed:
+Could not find old_string in file. Make sure it matches exactly (including whitespace).
+"#
+        .to_string()])
+        .expect("missing old_string should produce a correction");
+
+        assert!(correction.contains("old_string was not found"));
+        assert!(correction.contains("re-read the target at most once"));
+        assert!(correction.contains("latest line numbers"));
         assert!(correction.contains("not close out"));
     }
 

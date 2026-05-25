@@ -88,6 +88,8 @@ pub struct UserConfirmationLedgerEntry {
     pub allowed_always_rules: Vec<String>,
     pub risk_level: Option<String>,
     pub decision: Option<String>,
+    #[serde(default)]
+    pub source: Option<String>,
     pub summary: String,
 }
 
@@ -96,16 +98,74 @@ pub struct ToolObservationLedgerEntry {
     pub tool: String,
     pub call_id: String,
     pub status: String,
+    #[serde(default)]
+    pub result_kind: String,
     pub summary: String,
+    #[serde(default)]
+    pub key_findings: Vec<String>,
+    #[serde(default)]
+    pub evidence: Vec<String>,
+    #[serde(default)]
+    pub impact_on_goal: Option<String>,
+    #[serde(default)]
+    pub next_attention: Vec<String>,
     pub files_read: Vec<String>,
     pub files_changed: Vec<String>,
     pub command_run: Option<String>,
     pub validation_result: Option<String>,
     pub permission_decision: Option<String>,
+    #[serde(default)]
+    pub permission_source: Option<String>,
     pub checkpoint_id: Option<String>,
     pub artifact_path: Option<String>,
+    #[serde(default)]
+    pub quality_warnings: Vec<String>,
     pub state_updates: Vec<String>,
     pub recommended_next_action: Option<String>,
+    #[serde(default = "default_true")]
+    pub include_in_next_context: bool,
+    #[serde(default = "default_true")]
+    pub store_in_state: bool,
+    #[serde(default)]
+    pub confidence: Option<u8>,
+    #[serde(default)]
+    pub raw_result_ref: Option<String>,
+    #[serde(default)]
+    pub hypothesis_updates: Vec<String>,
+    #[serde(default)]
+    pub candidate_focus: Vec<String>,
+    #[serde(default)]
+    pub reduced_uncertainty: bool,
+    #[serde(default)]
+    pub risk_note: Option<String>,
+    #[serde(default)]
+    pub failure_type: Option<String>,
+    #[serde(default)]
+    pub recovery_plan_id: Option<String>,
+    #[serde(default)]
+    pub recovery_kind: Option<String>,
+    #[serde(default)]
+    pub action_stage: Option<String>,
+    #[serde(default)]
+    pub action_value: Option<u8>,
+    #[serde(default)]
+    pub action_risk: Option<u8>,
+    #[serde(default)]
+    pub action_uncertainty_reduction: Option<u8>,
+    #[serde(default)]
+    pub action_cost: Option<u8>,
+    #[serde(default)]
+    pub action_reversibility: Option<u8>,
+    #[serde(default)]
+    pub action_scope_fit: Option<u8>,
+    #[serde(default)]
+    pub action_score: Option<i16>,
+    #[serde(default)]
+    pub action_formula_stage: Option<String>,
+    #[serde(default)]
+    pub action_formula_version: Option<String>,
+    #[serde(default)]
+    pub action_review_decision: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -114,7 +174,7 @@ pub enum ContextLedgerEntry {
     Diff(DiffLedgerEntry),
     Validation(ValidationLedgerEntry),
     UserConfirmation(UserConfirmationLedgerEntry),
-    ToolObservation(ToolObservationLedgerEntry),
+    ToolObservation(Box<ToolObservationLedgerEntry>),
 }
 
 #[derive(Debug, Clone)]
@@ -288,7 +348,7 @@ pub fn tool_context_evidence_entries(
         entries.push(ContextLedgerEntry::UserConfirmation(entry));
     }
     if let Some(entry) = tool_observation_entry_from_tool_result(tool_call, result) {
-        entries.push(ContextLedgerEntry::ToolObservation(entry));
+        entries.push(ContextLedgerEntry::ToolObservation(Box::new(entry)));
     }
     entries
 }
@@ -355,6 +415,9 @@ impl ContextLedgerEntry {
                 }
             }
             Self::ToolObservation(entry) => match entry.status.as_str() {
+                _ if entry.confidence.is_some() => {
+                    f64::from(entry.confidence.unwrap_or_default()) / 100.0
+                }
                 "success" => 1.0,
                 "failed" => 0.8,
                 "denied" | "revised" => 0.9,
@@ -641,6 +704,9 @@ fn user_confirmation_entry_from_tool_result(
     let metadata = permission_request.get("metadata");
     let risk_level = metadata.and_then(|value| json_string(value, "risk_level"));
     let decision = metadata.and_then(|value| json_string(value, "permission_decision"));
+    let source = json_string(permission_request, "permission_source")
+        .or_else(|| metadata.and_then(|value| json_string(value, "resolved_permission_source")))
+        .or_else(|| metadata.and_then(|value| json_string(value, "permission_source")));
     let label = kind.as_deref().unwrap_or(tool_call.name.as_str());
     let summary = format!(
         "User {} {} for {}",
@@ -658,6 +724,7 @@ fn user_confirmation_entry_from_tool_result(
         allowed_always_rules,
         risk_level,
         decision,
+        source,
         summary,
     })
 }
@@ -666,10 +733,15 @@ fn tool_observation_entry_from_tool_result(
     tool_call: &ToolCall,
     result: &ToolResult,
 ) -> Option<ToolObservationLedgerEntry> {
+    let data = result.data.as_ref()?;
     let observation = result
         .data
         .as_ref()
         .and_then(|data| data.get("tool_observation"))?;
+    let action_decision = data.get("action_decision");
+    let action_scores = action_decision.and_then(|decision| decision.get("scores"));
+    let action_computation = action_decision.and_then(|decision| decision.get("score_computation"));
+    let action_review = data.get("action_review");
     let status = json_string(observation, "status").unwrap_or_else(|| {
         if result.success {
             "success".to_string()
@@ -684,16 +756,51 @@ fn tool_observation_entry_from_tool_result(
         tool: json_string(observation, "tool").unwrap_or_else(|| tool_call.name.clone()),
         call_id: json_string(observation, "call_id").unwrap_or_else(|| tool_call.id.clone()),
         status,
+        result_kind: json_string(observation, "result_kind")
+            .unwrap_or_else(|| "generic".to_string()),
         summary,
+        key_findings: json_string_array(observation, "key_findings"),
+        evidence: json_observation_evidence_array(observation),
+        impact_on_goal: json_string(observation, "impact_on_goal"),
+        next_attention: json_string_array(observation, "next_attention"),
         files_read: json_string_array(observation, "files_read"),
         files_changed: json_string_array(observation, "files_changed"),
         command_run: json_string(observation, "command_run"),
         validation_result: json_string(observation, "validation_result"),
         permission_decision: json_string(observation, "permission_decision"),
+        permission_source: json_string(observation, "permission_source"),
         checkpoint_id: json_string(observation, "checkpoint_id"),
         artifact_path: json_string(observation, "artifact_path"),
+        quality_warnings: json_string_array(observation, "quality_warnings"),
         state_updates: json_string_array(observation, "state_updates"),
         recommended_next_action: json_string(observation, "recommended_next_action"),
+        include_in_next_context: json_bool_default(observation, "include_in_next_context", true),
+        store_in_state: json_bool_default(observation, "store_in_state", true),
+        confidence: json_u8(observation, "confidence"),
+        raw_result_ref: json_string(observation, "raw_result_ref"),
+        hypothesis_updates: json_hypothesis_update_array(observation),
+        candidate_focus: json_string_array(observation, "candidate_focus"),
+        reduced_uncertainty: json_bool_default(observation, "reduced_uncertainty", false),
+        risk_note: json_string(observation, "risk_note"),
+        failure_type: json_string(observation, "failure_type"),
+        recovery_plan_id: json_string(observation, "recovery_plan_id"),
+        recovery_kind: json_string(observation, "recovery_kind"),
+        action_stage: action_decision
+            .and_then(|decision| decision.get("action"))
+            .and_then(|action| json_string(action, "stage")),
+        action_value: action_scores.and_then(|scores| json_u8(scores, "value")),
+        action_risk: action_scores.and_then(|scores| json_u8(scores, "risk")),
+        action_uncertainty_reduction: action_scores
+            .and_then(|scores| json_u8(scores, "uncertainty_reduction")),
+        action_cost: action_scores.and_then(|scores| json_u8(scores, "cost")),
+        action_reversibility: action_scores.and_then(|scores| json_u8(scores, "reversibility")),
+        action_scope_fit: action_scores.and_then(|scores| json_u8(scores, "scope_fit")),
+        action_score: action_scores.and_then(|scores| json_i16(scores, "action_score")),
+        action_formula_stage: action_computation
+            .and_then(|computation| json_string(computation, "formula_stage")),
+        action_formula_version: action_computation
+            .and_then(|computation| json_string(computation, "formula_version")),
+        action_review_decision: action_review.and_then(|review| json_string(review, "decision")),
     })
 }
 
@@ -929,6 +1036,71 @@ fn json_string_array(value: &serde_json::Value, key: &str) -> Vec<String> {
         .unwrap_or_default()
 }
 
+fn json_bool_default(value: &serde_json::Value, key: &str, default: bool) -> bool {
+    value
+        .get(key)
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(default)
+}
+
+fn default_true() -> bool {
+    true
+}
+
+fn json_u8(value: &serde_json::Value, key: &str) -> Option<u8> {
+    value
+        .get(key)
+        .and_then(serde_json::Value::as_u64)
+        .and_then(|value| u8::try_from(value).ok())
+}
+
+fn json_i16(value: &serde_json::Value, key: &str) -> Option<i16> {
+    value
+        .get(key)
+        .and_then(serde_json::Value::as_i64)
+        .and_then(|value| i16::try_from(value).ok())
+}
+
+fn json_observation_evidence_array(value: &serde_json::Value) -> Vec<String> {
+    value
+        .get("evidence")
+        .and_then(serde_json::Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| {
+                    item.as_str().map(str::to_string).or_else(|| {
+                        item.get("text")
+                            .and_then(serde_json::Value::as_str)
+                            .map(str::to_string)
+                    })
+                })
+                .filter(|value| !value.is_empty())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn json_hypothesis_update_array(value: &serde_json::Value) -> Vec<String> {
+    value
+        .get("hypothesis_updates")
+        .and_then(serde_json::Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| {
+                    item.as_str().map(str::to_string).or_else(|| {
+                        item.get("hypothesis")
+                            .and_then(serde_json::Value::as_str)
+                            .map(str::to_string)
+                    })
+                })
+                .filter(|value| !value.is_empty())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 fn dedup_strings(values: &mut Vec<String>) {
     let mut seen = std::collections::HashSet::new();
     values.retain(|value| seen.insert(value.clone()));
@@ -1126,6 +1298,27 @@ mod tests {
                     "artifact_path": null,
                     "state_updates": ["files_changed", "checkpoint"],
                     "recommended_next_action": null
+                },
+                "action_decision": {
+                    "action": {
+                        "stage": "Edit"
+                    },
+                    "scores": {
+                        "value": 8,
+                        "risk": 5,
+                        "uncertainty_reduction": 3,
+                        "cost": 4,
+                        "reversibility": 6,
+                        "scope_fit": 9,
+                        "action_score": 12
+                    },
+                    "score_computation": {
+                        "formula_stage": "implementation",
+                        "formula_version": "action_score.v1"
+                    }
+                },
+                "action_review": {
+                    "decision": "allow"
                 }
             }),
         );
@@ -1141,5 +1334,8 @@ mod tests {
         assert_eq!(observation.status, "success");
         assert_eq!(observation.files_changed, vec!["src/lib.rs"]);
         assert_eq!(observation.checkpoint_id.as_deref(), Some("cp_1"));
+        assert_eq!(observation.action_score, Some(12));
+        assert_eq!(observation.action_scope_fit, Some(9));
+        assert_eq!(observation.action_review_decision.as_deref(), Some("allow"));
     }
 }

@@ -2,9 +2,12 @@ use super::approval::{ToolApprovalChannel, ToolApprovalRequest};
 use crate::engine::action_review::ActionReview;
 use crate::engine::goal_drift::DriftCheck;
 use crate::engine::hooks::ToolHookManager;
-use crate::engine::human_review::{HumanReviewAuditRecord, PermissionReview};
+use crate::engine::human_review::{
+    HumanReviewAuditRecord, PermissionReview, PermissionReviewDecision,
+};
 use crate::engine::streaming::StreamEvent;
 use crate::engine::trace::{TraceCollector, TraceEvent};
+use crate::permissions::{PermissionDecision, RuleSource};
 use crate::services::api::ToolCall;
 use crate::tools::{Tool, ToolContext, ToolErrorCode, ToolResult};
 use std::collections::HashMap;
@@ -37,6 +40,12 @@ pub(super) struct PermissionRequestRuntime<'a> {
     pub hook_manager: Option<&'a Arc<ToolHookManager>>,
     pub context: &'a ToolContext,
     pub action_review: Option<&'a ActionReview>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct PermissionApprovalOutcome {
+    pub(super) approved: bool,
+    pub(super) source: String,
 }
 
 impl PermissionRequestKind {
@@ -102,10 +111,29 @@ impl PermissionRequestRecord {
         })
     }
 
-    pub(super) fn to_json_with_approval(&self, approved: bool) -> serde_json::Value {
+    pub(super) fn to_json_with_approval_source(
+        &self,
+        approved: bool,
+        source: Option<&str>,
+    ) -> serde_json::Value {
         let mut value = self.to_json();
         if let Some(object) = value.as_object_mut() {
             object.insert("approved".to_string(), serde_json::Value::Bool(approved));
+            if let Some(source) = source {
+                object.insert(
+                    "permission_source".to_string(),
+                    serde_json::Value::String(source.to_string()),
+                );
+                if let Some(metadata) = object
+                    .get_mut("metadata")
+                    .and_then(serde_json::Value::as_object_mut)
+                {
+                    metadata.insert(
+                        "resolved_permission_source".to_string(),
+                        serde_json::Value::String(source.to_string()),
+                    );
+                }
+            }
         }
         value
     }
@@ -170,6 +198,13 @@ impl PermissionController {
             .map(|(_, rule)| rule.pattern.clone())
             .collect::<Vec<_>>();
         let family = permission_tool_family(tool_name, &permission_explanation);
+        let permission_source = initial_permission_source(
+            kind,
+            permission_requires,
+            tool_requires,
+            drift_requires_approval,
+            &permission_explanation,
+        );
         let allowed_always_rules = permission_explanation
             .matched_rules
             .iter()
@@ -221,6 +256,7 @@ impl PermissionController {
             "drift_requires_approval": drift_requires_approval,
             "permission_family": family.as_str(),
             "permission_decision": format!("{:?}", permission_explanation.decision),
+            "permission_source": permission_source,
             "risk_level": format!("{:?}", permission_explanation.risk_level),
             "permission_matcher_input": tool.permission_matcher_input(&tool_call.arguments),
             "input_paths": tool.input_paths(&tool_call.arguments),
@@ -265,9 +301,23 @@ impl PermissionController {
         tool_call: &ToolCall,
         evaluation: &ToolPermissionEvaluation,
         runtime: PermissionRequestRuntime<'_>,
-    ) -> bool {
+    ) -> PermissionApprovalOutcome {
+        let initial_source = evaluation
+            .record
+            .as_ref()
+            .and_then(|record| {
+                record
+                    .metadata
+                    .get("permission_source")
+                    .and_then(serde_json::Value::as_str)
+            })
+            .unwrap_or("runtime_rule")
+            .to_string();
         let Some(prompt) = evaluation.prompt.as_ref() else {
-            return true;
+            return PermissionApprovalOutcome {
+                approved: true,
+                source: initial_source,
+            };
         };
         if let Some(ref trace) = runtime.trace {
             trace.record(TraceEvent::PermissionRequested {
@@ -293,6 +343,7 @@ impl PermissionController {
                         tool: tool_call.name.clone(),
                         call_id: tool_call.id.clone(),
                         approved: false,
+                        source: Some("hook_deny".to_string()),
                         decision: Some("hook_denied".to_string()),
                         persistence_scope: None,
                         rule_pattern: None,
@@ -308,10 +359,14 @@ impl PermissionController {
                         }),
                     });
                 }
-                return false;
+                return PermissionApprovalOutcome {
+                    approved: false,
+                    source: "hook_deny".to_string(),
+                };
             }
         }
         let mut approved = false;
+        let mut resolved_source = "approval_unavailable".to_string();
         if let (Some(channel), Some(tx)) = (runtime.approval_channel, runtime.tx) {
             let _ = tx
                 .send(StreamEvent::PermissionRequest {
@@ -342,6 +397,7 @@ impl PermissionController {
             match channel.submit(request).await {
                 Ok(response) => {
                     approved = response.approved;
+                    resolved_source = permission_source_for_approval_response(&response);
                     approval_response = Some(response);
                 }
                 Err(e) => warn!("Tool approval error: {}", e),
@@ -355,6 +411,7 @@ impl PermissionController {
                 super::turn_recording::record_hook_traces(runtime.trace, &hook_records);
                 if approved && !decision.allow {
                     approved = false;
+                    resolved_source = "hook_deny".to_string();
                     if approval_response.is_none() {
                         approval_response =
                             Some(super::approval::ToolApprovalResponse::rejected_once());
@@ -366,6 +423,7 @@ impl PermissionController {
                     tool: tool_call.name.clone(),
                     call_id: tool_call.id.clone(),
                     approved,
+                    source: Some(resolved_source.clone()),
                     decision: approval_response
                         .as_ref()
                         .and_then(|response| response.decision_label().map(str::to_string)),
@@ -394,7 +452,10 @@ impl PermissionController {
                 });
             }
         }
-        approved
+        PermissionApprovalOutcome {
+            approved,
+            source: resolved_source,
+        }
     }
 
     pub(super) fn record_approved_session_rule(context: &mut ToolContext, tool_name: &str) {
@@ -406,6 +467,7 @@ impl PermissionController {
     pub(super) fn denied_result(
         tool_name: &str,
         record: Option<&PermissionRequestRecord>,
+        permission_source: Option<&str>,
     ) -> ToolResult {
         let denial_state = record.map(record_permission_denial);
         let mut message = record
@@ -430,7 +492,7 @@ impl PermissionController {
         result.error_code = Some(ToolErrorCode::PermissionDenied);
         if let Some(record) = record {
             result.data = Some(serde_json::json!({
-                "permission_request": record.to_json_with_approval(false),
+                "permission_request": record.to_json_with_approval_source(false, permission_source),
                 "denial_state": denial_state,
             }));
         }
@@ -468,6 +530,75 @@ fn permission_request_metadata(
         .as_object()
         .is_some_and(|object| !object.is_empty())
         .then_some(metadata)
+}
+
+fn initial_permission_source(
+    kind: PermissionRequestKind,
+    permission_requires: bool,
+    tool_requires: bool,
+    drift_requires_approval: bool,
+    explanation: &crate::permissions::ExplainableDecision,
+) -> String {
+    if drift_requires_approval || matches!(kind, PermissionRequestKind::GoalDrift) {
+        return "goal_drift".to_string();
+    }
+    if permission_requires {
+        if let Some(source) = permission_source_from_rules(&explanation.matched_rules) {
+            return source;
+        }
+        return "runtime_rule".to_string();
+    }
+    if tool_requires || matches!(kind, PermissionRequestKind::ToolConfirmation) {
+        return "tool_confirmation".to_string();
+    }
+    "runtime_rule".to_string()
+}
+
+fn permission_source_from_rules(
+    rules: &[(PermissionDecision, crate::permissions::SourcedRule)],
+) -> Option<String> {
+    rules.iter().find_map(|(decision, rule)| {
+        permission_source_from_rule(*decision, rule.source).map(str::to_string)
+    })
+}
+
+fn permission_source_from_rule(
+    decision: PermissionDecision,
+    source: RuleSource,
+) -> Option<&'static str> {
+    match (decision, source) {
+        (PermissionDecision::Allow, RuleSource::Global) => Some("config_global_allow"),
+        (PermissionDecision::Allow, RuleSource::Project) => Some("config_project_allow"),
+        (PermissionDecision::Allow, RuleSource::User) => Some("config_session_allow"),
+        (PermissionDecision::Allow, RuleSource::System) => Some("runtime_rule"),
+        (PermissionDecision::Deny, RuleSource::Global) => Some("config_global_deny"),
+        (PermissionDecision::Deny, RuleSource::Project) => Some("config_project_deny"),
+        (PermissionDecision::Deny, RuleSource::User) => Some("config_session_deny"),
+        (PermissionDecision::Deny, RuleSource::System) => Some("runtime_rule"),
+        (PermissionDecision::Ask, RuleSource::Global) => Some("config_global_ask"),
+        (PermissionDecision::Ask, RuleSource::Project) => Some("config_project_ask"),
+        (PermissionDecision::Ask, RuleSource::User) => Some("config_session_ask"),
+        (PermissionDecision::Ask, RuleSource::System) => Some("runtime_rule"),
+    }
+}
+
+fn permission_source_for_approval_response(
+    response: &super::approval::ToolApprovalResponse,
+) -> String {
+    let decision = response.decision.unwrap_or(if response.approved {
+        PermissionReviewDecision::ApproveOnce
+    } else {
+        PermissionReviewDecision::RejectOnce
+    });
+    match decision {
+        PermissionReviewDecision::ApproveOnce => "user_once_allow",
+        PermissionReviewDecision::ApproveSession => "user_session_allow",
+        PermissionReviewDecision::ApproveProject => "user_project_allow",
+        PermissionReviewDecision::ApproveGlobal => "user_global_allow",
+        PermissionReviewDecision::RejectOnce => "user_once_reject",
+        PermissionReviewDecision::RejectAlways => "user_global_deny",
+    }
+    .to_string()
 }
 
 fn permission_denied_message(record: &PermissionRequestRecord) -> String {
@@ -957,6 +1088,10 @@ mod tests {
             evaluation.record.as_ref().unwrap().metadata["tool_name"],
             "git"
         );
+        assert_eq!(
+            evaluation.record.as_ref().unwrap().metadata["permission_source"],
+            "runtime_rule"
+        );
     }
 
     #[test]
@@ -990,7 +1125,8 @@ mod tests {
             recovery_feedback: "Ask the user to approve 'git' before retrying.".to_string(),
         };
 
-        let result = PermissionController::denied_result("git", Some(&record));
+        let result =
+            PermissionController::denied_result("git", Some(&record), Some("user_once_reject"));
 
         assert!(PermissionController::is_permission_denied(&result));
         assert!(result
@@ -1005,6 +1141,15 @@ mod tests {
         assert_eq!(
             result.data.as_ref().unwrap()["permission_request"]["session_id"],
             "session-1"
+        );
+        assert_eq!(
+            result.data.as_ref().unwrap()["permission_request"]["permission_source"],
+            "user_once_reject"
+        );
+        assert_eq!(
+            result.data.as_ref().unwrap()["permission_request"]["metadata"]
+                ["resolved_permission_source"],
+            "user_once_reject"
         );
     }
 
@@ -1042,14 +1187,14 @@ mod tests {
             recovery_feedback: "Ask the user before retrying.".to_string(),
         };
 
-        let first = PermissionController::denied_result("bash", Some(&record));
+        let first = PermissionController::denied_result("bash", Some(&record), Some("hook_deny"));
         assert_eq!(first.data.as_ref().unwrap()["denial_state"]["denials"], 1);
         assert_eq!(
             first.data.as_ref().unwrap()["denial_state"]["bounded_recovery"],
             false
         );
 
-        let second = PermissionController::denied_result("bash", Some(&record));
+        let second = PermissionController::denied_result("bash", Some(&record), Some("hook_deny"));
         assert_eq!(second.data.as_ref().unwrap()["denial_state"]["denials"], 2);
         assert_eq!(
             second.data.as_ref().unwrap()["denial_state"]["bounded_recovery"],

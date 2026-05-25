@@ -91,6 +91,24 @@ impl ResourcePolicy {
                 .push_str("; high-risk route limits parallel side effects");
         }
 
+        if mva_runtime_profile_enabled() {
+            let max_tool_calls = std::env::var("PRIORITY_AGENT_MVA_MAX_TOOL_CALLS")
+                .ok()
+                .and_then(|value| value.trim().parse::<usize>().ok())
+                .filter(|value| *value > 0)
+                .unwrap_or(10);
+            let parallelism_limit = std::env::var("PRIORITY_AGENT_MVA_PARALLELISM_LIMIT")
+                .ok()
+                .and_then(|value| value.trim().parse::<usize>().ok())
+                .filter(|value| *value > 0)
+                .unwrap_or(1);
+            policy.parallelism_limit = policy.parallelism_limit.min(parallelism_limit);
+            policy.max_tool_calls = policy.max_tool_calls.min(max_tool_calls);
+            policy
+                .reason
+                .push_str("; MVA profile applies first-version resource caps");
+        }
+
         policy
     }
 
@@ -104,6 +122,17 @@ impl ResourcePolicy {
             self.context_budget_tokens
         )
     }
+}
+
+fn mva_runtime_profile_enabled() -> bool {
+    matches!(
+        std::env::var("PRIORITY_AGENT_RUNTIME_PROFILE")
+            .unwrap_or_default()
+            .trim()
+            .to_ascii_lowercase()
+            .as_str(),
+        "minimum_viable_agent" | "mva"
+    )
 }
 
 #[cfg(test)]

@@ -9,6 +9,7 @@ pub mod action_review;
 pub mod agent_mode;
 pub mod auto_verify;
 pub mod batch_refactor;
+pub mod candidate_action;
 pub mod checkpoint;
 pub mod code_change_workflow;
 pub mod code_review;

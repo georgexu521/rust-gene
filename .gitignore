@@ -1,6 +1,8 @@
 /target
 .DS_Store
 **/.DS_Store
+__pycache__/
+*.pyc
 
 # Desktop app local build artifacts
 apps/desktop/dist/

@@ -257,6 +257,8 @@ impl WorkspaceBoundaryPolicy {
             .any(|root| normalized.starts_with(root));
         let class = if path.trim().is_empty() {
             WorkspacePathClass::Unknown
+        } else if inside_workspace && is_live_eval_worktree_path(&normalized) {
+            WorkspacePathClass::Workspace
         } else if lower.contains("/.git/") || lower.ends_with("/.git") {
             WorkspacePathClass::RepoMetadata
         } else if lower.contains("/node_modules/")
@@ -708,6 +710,11 @@ fn trusted_workspace_roots(working_dir: &Path) -> Vec<PathBuf> {
     roots
 }
 
+fn is_live_eval_worktree_path(path: &Path) -> bool {
+    let lower = path.to_string_lossy().to_ascii_lowercase();
+    lower.contains("/target/live-evals/") && lower.contains("/worktree/")
+}
+
 fn contains_credential_marker(path: &str) -> bool {
     [
         ".env",
@@ -805,6 +812,16 @@ mod tests {
         let external = WorkspaceBoundaryPolicy::classify_path("/etc/hosts", Path::new("/repo"));
         assert_eq!(external.class, WorkspacePathClass::System);
         assert!(!external.inside_workspace);
+    }
+
+    #[test]
+    fn live_eval_worktree_paths_are_workspace_not_dependency_paths() {
+        let working_dir = Path::new("/repo/target/live-evals/run-123/minimum-agent-loop/worktree");
+        let verdict =
+            WorkspaceBoundaryPolicy::classify_path("fixtures/mva_loop/calculator.py", working_dir);
+
+        assert_eq!(verdict.class, WorkspacePathClass::Workspace);
+        assert!(verdict.inside_workspace);
     }
 
     #[test]

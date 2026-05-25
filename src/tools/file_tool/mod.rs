@@ -173,6 +173,8 @@ fn high_risk_file_target_diagnostic(
             "target is inside .git metadata",
             "use_git_tool_or_choose_project_file",
         ))
+    } else if is_live_eval_worktree_path(path, working_dir) {
+        None
     } else if components.iter().any(|component| {
         matches!(
             component.as_str(),
@@ -233,6 +235,27 @@ fn high_risk_file_target_diagnostic(
             }
         }),
     ))
+}
+
+fn is_live_eval_worktree_path(path: &Path, working_dir: &Path) -> bool {
+    let normalized_path = normalize_path(path);
+    let normalized_working_dir = normalize_path(working_dir);
+    let canonical_path = canonicalize_or_normalize(path);
+    let canonical_working_dir = canonicalize_or_normalize(working_dir);
+
+    let inside_working_dir = normalized_path.starts_with(&normalized_working_dir)
+        || normalized_path.starts_with(&canonical_working_dir)
+        || canonical_path.starts_with(&normalized_working_dir)
+        || canonical_path.starts_with(&canonical_working_dir);
+    if !inside_working_dir {
+        return false;
+    }
+
+    let is_live_eval_worktree = [&normalized_working_dir, &canonical_working_dir]
+        .into_iter()
+        .map(|path| path.to_string_lossy().to_ascii_lowercase())
+        .any(|lower| lower.contains("/target/live-evals/") && lower.ends_with("/worktree"));
+    is_live_eval_worktree
 }
 
 fn high_risk_file_target_result(
@@ -1873,7 +1896,7 @@ fn exact_replace_preflight_error(
             },
         });
         data["recovery"]["recommended_action"] = if fuzzy.is_empty() {
-            json!("re_read_file")
+            json!("re_read_once_then_line_range_edit")
         } else {
             json!("copy_exact_fuzzy_match")
         };
@@ -3051,6 +3074,40 @@ mod tests {
             "edit_source_file_instead"
         );
         assert!(!dir.path().join("target/generated.txt").exists());
+    }
+
+    #[tokio::test]
+    async fn file_write_allows_live_eval_worktree_under_target() {
+        let tool = FileWriteTool;
+        let dir = tempfile::tempdir().unwrap();
+        let worktree = dir
+            .path()
+            .join("target/live-evals/run-123/minimum-agent-loop/worktree");
+        tokio::fs::create_dir_all(worktree.join("fixtures"))
+            .await
+            .unwrap();
+
+        let result = tool
+            .execute(
+                json!({
+                    "path": "fixtures/generated.py",
+                    "content": "print('ok')\n"
+                }),
+                ToolContext::new(&worktree, "test-session-write-live-eval-worktree"),
+            )
+            .await;
+
+        assert!(
+            result.success,
+            "unexpected file_write failure: {:?}",
+            result
+        );
+        assert_eq!(
+            tokio::fs::read_to_string(worktree.join("fixtures/generated.py"))
+                .await
+                .unwrap(),
+            "print('ok')\n"
+        );
     }
 
     #[tokio::test]
@@ -4495,6 +4552,36 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_file_edit_old_string_not_found_recommends_bounded_reread_then_line_range() {
+        let tool = FileEditTool;
+        let path = "/tmp/test_priority_agent_edit_missing_old_string.txt";
+        tokio::fs::write(path, "hello world\n").await.unwrap();
+        read_test_file_for_edit(path, "test-session-edit-missing-old-string").await;
+
+        let params = json!({
+            "path": path,
+            "old_string": "goodbye moon",
+            "new_string": "hi world"
+        });
+        let context = ToolContext::new(".", "test-session-edit-missing-old-string");
+        let result = tool.execute(params, context).await;
+
+        assert!(!result.success);
+        let data = result
+            .data
+            .expect("missing old_string should return recovery data");
+        assert_eq!(data["failure"], "old_string_not_found");
+        assert_eq!(
+            data["recovery"]["recommended_action"],
+            "re_read_once_then_line_range_edit"
+        );
+        assert_eq!(data["match_diagnostics"]["exact_occurrences"], 0);
+        assert_eq!(data["match_diagnostics"]["fuzzy_occurrences"], 0);
+
+        let _ = tokio::fs::remove_file(path).await;
+    }
+
+    #[tokio::test]
     async fn test_file_edit_rejects_file_read_line_prefix_in_old_string() {
         let tool = FileEditTool;
         let path = "/tmp/test_priority_agent_edit_line_prefix.txt";
@@ -4655,12 +4742,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_file_edit_refuses_when_checkpoint_creation_fails() {
+        let mut env = crate::test_utils::env_guard::EnvVarGuard::acquire().await;
         let tool = FileEditTool;
         let path = "/tmp/test_priority_agent_edit_checkpoint_failure.txt";
         tokio::fs::write(path, "before\n").await.unwrap();
         read_test_file_for_edit(path, "test-session-checkpoint-failure").await;
 
-        std::env::set_var("PRIORITY_AGENT_TEST_FAIL_CHECKPOINT", "1");
+        env.set("PRIORITY_AGENT_TEST_FAIL_CHECKPOINT", "1");
         let result = tool
             .execute(
                 json!({
@@ -4671,7 +4759,6 @@ mod tests {
                 ToolContext::new(".", "test-session-checkpoint-failure"),
             )
             .await;
-        std::env::remove_var("PRIORITY_AGENT_TEST_FAIL_CHECKPOINT");
 
         assert!(!result.success);
         assert!(result
@@ -4692,11 +4779,12 @@ mod tests {
 
     #[tokio::test]
     async fn test_file_write_refuses_when_checkpoint_creation_fails() {
+        let mut env = crate::test_utils::env_guard::EnvVarGuard::acquire().await;
         let tool = FileWriteTool;
         let path = "/tmp/test_priority_agent_write_checkpoint_failure.txt";
         tokio::fs::write(path, "before\n").await.unwrap();
 
-        std::env::set_var("PRIORITY_AGENT_TEST_FAIL_CHECKPOINT", "1");
+        env.set("PRIORITY_AGENT_TEST_FAIL_CHECKPOINT", "1");
         let result = tool
             .execute(
                 json!({
@@ -4706,7 +4794,6 @@ mod tests {
                 ToolContext::new(".", "test-session-write-checkpoint-failure"),
             )
             .await;
-        std::env::remove_var("PRIORITY_AGENT_TEST_FAIL_CHECKPOINT");
 
         assert!(!result.success);
         assert!(result

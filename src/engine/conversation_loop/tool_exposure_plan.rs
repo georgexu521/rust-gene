@@ -8,6 +8,7 @@ pub(super) struct ToolExposureRequest<'a> {
     pub(super) programming_workflow: bool,
     pub(super) task_stage: Option<AgentTaskStage>,
     pub(super) has_changes_before_request: bool,
+    pub(super) required_validation_commands_present: bool,
     pub(super) action_checkpoint_active: bool,
     pub(super) action_checkpoint_lookup_count: usize,
     pub(super) action_checkpoint_requires_patch_before_validation: bool,
@@ -43,7 +44,13 @@ impl ToolExposurePlan {
             phase_scoped_tools(
                 &tools,
                 request.task_stage.unwrap_or(AgentTaskStage::Understand),
+                request.required_validation_commands_present,
             )
+        } else {
+            tools
+        };
+        let tools = if mva_audit_tools_enabled() {
+            mva_audit_scoped_tools(&tools)
         } else {
             tools
         };
@@ -73,10 +80,14 @@ impl ToolExposurePlan {
     }
 }
 
-fn phase_scoped_tools(tools: &[Tool], stage: AgentTaskStage) -> Vec<Tool> {
+fn phase_scoped_tools(
+    tools: &[Tool],
+    stage: AgentTaskStage,
+    required_validation_commands_present: bool,
+) -> Vec<Tool> {
     let scoped = tools
         .iter()
-        .filter(|tool| phase_allows_tool(stage, &tool.name))
+        .filter(|tool| phase_allows_tool(stage, &tool.name, required_validation_commands_present))
         .cloned()
         .collect::<Vec<_>>();
     if scoped.is_empty() {
@@ -86,12 +97,24 @@ fn phase_scoped_tools(tools: &[Tool], stage: AgentTaskStage) -> Vec<Tool> {
     }
 }
 
-fn phase_allows_tool(stage: AgentTaskStage, name: &str) -> bool {
+fn phase_allows_tool(
+    stage: AgentTaskStage,
+    name: &str,
+    required_validation_commands_present: bool,
+) -> bool {
     match stage {
-        AgentTaskStage::Understand => matches!(
-            name,
-            "project_list" | "glob" | "grep" | "file_read" | "lsp" | "symbol_query" | "ask_user"
-        ),
+        AgentTaskStage::Understand => {
+            matches!(
+                name,
+                "project_list"
+                    | "glob"
+                    | "grep"
+                    | "file_read"
+                    | "lsp"
+                    | "symbol_query"
+                    | "ask_user"
+            ) || (required_validation_commands_present && matches!(name, "bash" | "run_tests"))
+        }
         AgentTaskStage::Plan => matches!(
             name,
             "project_list"
@@ -164,6 +187,48 @@ fn phase_allows_tool(stage: AgentTaskStage, name: &str) -> bool {
     }
 }
 
+fn mva_audit_tools_enabled() -> bool {
+    matches!(
+        std::env::var("PRIORITY_AGENT_MVA_AUDIT_TOOLS")
+            .unwrap_or_default()
+            .trim()
+            .to_ascii_lowercase()
+            .as_str(),
+        "1" | "true" | "yes" | "on"
+    )
+}
+
+fn mva_audit_scoped_tools(tools: &[Tool]) -> Vec<Tool> {
+    let scoped = tools
+        .iter()
+        .filter(|tool| mva_audit_allows_tool(&tool.name))
+        .cloned()
+        .collect::<Vec<_>>();
+    if scoped.is_empty() {
+        tools.to_vec()
+    } else {
+        scoped
+    }
+}
+
+fn mva_audit_allows_tool(name: &str) -> bool {
+    matches!(
+        name,
+        "project_list"
+            | "glob"
+            | "grep"
+            | "file_read"
+            | "file_edit"
+            | "file_patch"
+            | "run_tests"
+            | "bash"
+            | "diff"
+            | "git_diff"
+            | "git_status"
+            | "ask_user"
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -200,6 +265,7 @@ mod tests {
             programming_workflow: false,
             task_stage: None,
             has_changes_before_request: false,
+            required_validation_commands_present: false,
             action_checkpoint_active: false,
             action_checkpoint_lookup_count: 0,
             action_checkpoint_requires_patch_before_validation: false,
@@ -218,6 +284,7 @@ mod tests {
             programming_workflow: true,
             task_stage: Some(AgentTaskStage::Repair),
             has_changes_before_request: false,
+            required_validation_commands_present: false,
             action_checkpoint_active: true,
             action_checkpoint_lookup_count: 0,
             action_checkpoint_requires_patch_before_validation: false,
@@ -248,6 +315,7 @@ mod tests {
             programming_workflow: true,
             task_stage: Some(AgentTaskStage::Repair),
             has_changes_before_request: true,
+            required_validation_commands_present: false,
             action_checkpoint_active: true,
             action_checkpoint_lookup_count: 0,
             action_checkpoint_requires_patch_before_validation: false,
@@ -266,6 +334,7 @@ mod tests {
             programming_workflow: true,
             task_stage: Some(AgentTaskStage::Repair),
             has_changes_before_request: true,
+            required_validation_commands_present: false,
             action_checkpoint_active: true,
             action_checkpoint_lookup_count: 0,
             action_checkpoint_requires_patch_before_validation: true,
@@ -291,6 +360,7 @@ mod tests {
             programming_workflow: true,
             task_stage: Some(AgentTaskStage::Understand),
             has_changes_before_request: false,
+            required_validation_commands_present: false,
             action_checkpoint_active: false,
             action_checkpoint_lookup_count: 0,
             action_checkpoint_requires_patch_before_validation: false,
@@ -310,6 +380,28 @@ mod tests {
     }
 
     #[test]
+    fn programming_understand_stage_can_run_required_validation_commands() {
+        let mut base_tools = base_tools();
+        base_tools.push(tool("ask_user"));
+        let plan = ToolExposurePlan::build(ToolExposureRequest {
+            base_tools: &base_tools,
+            programming_workflow: true,
+            task_stage: Some(AgentTaskStage::Understand),
+            has_changes_before_request: false,
+            required_validation_commands_present: true,
+            action_checkpoint_active: false,
+            action_checkpoint_lookup_count: 0,
+            action_checkpoint_requires_patch_before_validation: false,
+        });
+
+        assert!(plan.exposed_tool_names.contains("file_read"));
+        assert!(plan.exposed_tool_names.contains("bash"));
+        assert!(plan.exposed_tool_names.contains("run_tests"));
+        assert!(!plan.exposed_tool_names.contains("file_edit"));
+        assert!(!plan.exposed_tool_names.contains("file_patch"));
+    }
+
+    #[test]
     fn programming_edit_stage_allows_write_but_not_validation_shell() {
         let base_tools = base_tools();
         let plan = ToolExposurePlan::build(ToolExposureRequest {
@@ -317,6 +409,7 @@ mod tests {
             programming_workflow: true,
             task_stage: Some(AgentTaskStage::Edit),
             has_changes_before_request: false,
+            required_validation_commands_present: false,
             action_checkpoint_active: false,
             action_checkpoint_lookup_count: 0,
             action_checkpoint_requires_patch_before_validation: false,
@@ -341,6 +434,7 @@ mod tests {
             programming_workflow: true,
             task_stage: Some(AgentTaskStage::Validate),
             has_changes_before_request: true,
+            required_validation_commands_present: false,
             action_checkpoint_active: false,
             action_checkpoint_lookup_count: 0,
             action_checkpoint_requires_patch_before_validation: false,
@@ -364,6 +458,7 @@ mod tests {
             programming_workflow: true,
             task_stage: Some(AgentTaskStage::Repair),
             has_changes_before_request: false,
+            required_validation_commands_present: false,
             action_checkpoint_active: false,
             action_checkpoint_lookup_count: 0,
             action_checkpoint_requires_patch_before_validation: false,
@@ -372,5 +467,38 @@ mod tests {
         assert!(plan.exposed_tool_names.contains("install_dependencies"));
         assert!(plan.exposed_tool_names.contains("file_edit"));
         assert!(plan.exposed_tool_names.contains("file_patch"));
+    }
+
+    #[test]
+    fn mva_audit_profile_hides_advanced_tools_without_changing_normal_profile() {
+        let mut guard = crate::test_utils::env_guard::EnvVarGuard::acquire_blocking();
+        guard.set("PRIORITY_AGENT_MVA_AUDIT_TOOLS", "1");
+
+        let mut base_tools = base_tools();
+        base_tools.push(tool("agent"));
+        base_tools.push(tool("mcp"));
+        base_tools.push(tool("web_search"));
+        base_tools.push(tool("ask_user"));
+
+        let plan = ToolExposurePlan::build(ToolExposureRequest {
+            base_tools: &base_tools,
+            programming_workflow: true,
+            task_stage: Some(AgentTaskStage::Repair),
+            has_changes_before_request: true,
+            required_validation_commands_present: false,
+            action_checkpoint_active: false,
+            action_checkpoint_lookup_count: 0,
+            action_checkpoint_requires_patch_before_validation: false,
+        });
+
+        assert!(plan.exposed_tool_names.contains("file_read"));
+        assert!(plan.exposed_tool_names.contains("grep"));
+        assert!(plan.exposed_tool_names.contains("file_edit"));
+        assert!(plan.exposed_tool_names.contains("run_tests"));
+        assert!(plan.exposed_tool_names.contains("ask_user"));
+        assert!(!plan.exposed_tool_names.contains("agent"));
+        assert!(!plan.exposed_tool_names.contains("mcp"));
+        assert!(!plan.exposed_tool_names.contains("web_search"));
+        assert!(!plan.exposed_tool_names.contains("install_dependencies"));
     }
 }

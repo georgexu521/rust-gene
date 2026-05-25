@@ -1,6 +1,6 @@
 # Project Status
 
-Last updated: 2026-05-24
+Last updated: 2026-05-25
 
 ## Summary
 
@@ -42,6 +42,46 @@ Current stage:
   risk, uncertainty, tool need, and user impact, and `LightweightPlan` gives
   tool-assisted light turns bounded scope/observe/respond steps without
   invoking the heavy workflow contract.
+- `docs/AGENT_MINIMUM_VIABLE_ARCHITECTURE_ALIGNMENT_PLAN_2026-05-25.md` is
+  implemented as a thin contract layer over the existing runtime spine rather
+  than as a second agent loop. The runtime now emits `AgentLoopStepEvaluated`,
+  `ContextZonesMaterialized`, and `CompletionContractEvaluated` diagnostics,
+  keeps explicit stage-transition history in `AgentTaskState`, supports
+  shadow/gated candidate-action ranking, exposes an opt-in MVA audit tool
+  profile, and adds `minimum-agent-*` live-eval coverage plus parser and
+  aggregate-report metrics for these signals. The follow-up plan in
+  `docs/AGENT_MINIMUM_VIABLE_ARCHITECTURE_FOLLOWUP_PLAN_2026-05-25.md` is also
+  implemented: MVA live evals now activate the minimum-viable runtime profile,
+  report candidate-action calibration, context-zone budgets, MVA state
+  snapshots, observer/memory-boundary signals, and exact completion/proof
+  assertions. The current seven-case MVA baseline has passing targeted
+  `agent-run` evidence, with the latest low-value replan and memory-boundary
+  checks from run `live-eval-20260525-145541`.
+- `docs/AGENT_EVALUATION_OBSERVABILITY_MVP_FOLLOWUP_PLAN_2026-05-25.md` is
+  implemented for the evaluation/reporting layer. Live-eval reports now expose
+  deterministic `outcome_score`, `process_score`, `efficiency_score`, and
+  `agent_score`; summaries aggregate invalid actions, premature edits, scope
+  drift, repeated actions, and failed actions; `minimum-agent-*` tasks carry
+  semantic output and trajectory assertions; reports export a redacted
+  `run-bundle/` with `task.json`, `steps.jsonl`, `events.jsonl`, and
+  `final_report.md`; and `scripts/live-eval-ab-compare.sh` can compare
+  baseline vs weighted profiles on the `mvp-weighted-agent` suite. The first
+  real A/B run (`ab-20260525-155452-baseline` vs
+  `ab-20260525-155452-weighted`) showed weighted process-score improvement
+  without outcome improvement. Follow-up hardening fixed the assertion/reporting
+  false negatives for high-risk block and loop, added bounded duplicate
+  read-only filtering plus target-preserving closeout for low-value replan, and
+  improved stale/missing `old_string` edit-repair guidance. Latest full
+  weighted suite: `mva-followup-full-20260525-165257`, `6/7` passed with
+  average `agent_score=87.1`; the remaining `minimum-agent-verification-repair`
+  failure is a model/task-completion failure with honest `not_verified`
+  closeout and failed required commands, not a false-success verification path.
+  `docs/LLM_FLOW_FAILURE_AUDIT_2026-05-25.md` records the follow-up split
+  between model variability and flow defects; it also fixed a prompt-derived
+  tool-policy over-block where forbidding `file_write`/`file_patch` could be
+  misread as forbidding explicitly allowed `file_edit`. The targeted rerun
+  `mva-prompt-policy-verification-20260525-llm-flow-audit` passed with required
+  validation proof and no code-write-forbidden fallback.
 - `docs/NEXT_AGENT_CORE_CODING_QUALITY_PLAN_2026-05-11.md` is complete for its
   current Phase 1-4 scope: main-loop splitting reached the first line-count
   target, terminal and file-quality contracts are in place, and the real

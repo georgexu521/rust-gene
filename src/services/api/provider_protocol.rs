@@ -3,7 +3,9 @@
 //! This layer keeps OpenAI-compatible tool-call turns in a shape strict
 //! providers accept before the request is serialized.
 
-use crate::services::api::{normalize_tool_message_sequence, Message};
+use crate::services::api::{
+    normalize_tool_message_sequence_with_report, Message, ToolMessageSequenceNormalizationReport,
+};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -130,6 +132,36 @@ pub struct ProviderRuntimeFacts {
     pub diagnostics: Vec<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProviderMessageNormalizationReport {
+    pub provider_family: ProviderProtocolFamily,
+    pub requires_tool_result_adjacency: bool,
+    pub requires_merged_system_messages: bool,
+    pub system_messages_merged: usize,
+    pub input_messages: usize,
+    pub output_messages: usize,
+    pub valid_tool_call_pairs: usize,
+    pub dropped_assistant_tool_calls: usize,
+    pub dropped_tool_results: usize,
+    pub valid_tool_call_ids: Vec<String>,
+    pub dropped_assistant_tool_call_ids: Vec<String>,
+    pub dropped_tool_result_ids: Vec<String>,
+}
+
+impl ProviderMessageNormalizationReport {
+    pub fn has_repairs(&self) -> bool {
+        self.system_messages_merged > 0
+            || self.dropped_assistant_tool_calls > 0
+            || self.dropped_tool_results > 0
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct ProviderMessageNormalization {
+    pub messages: Vec<Message>,
+    pub report: ProviderMessageNormalizationReport,
+}
+
 impl ProviderRuntimeFacts {
     pub fn detect(base_url: &str, model: &str) -> Self {
         Self::from_capabilities(model, ProviderCapabilities::detect(base_url, model))
@@ -178,25 +210,55 @@ pub fn normalize_messages_for_provider(
     family: ProviderProtocolFamily,
     messages: Vec<Message>,
 ) -> Vec<Message> {
-    let messages = match family {
-        ProviderProtocolFamily::MiniMax => merge_system_messages(messages),
-        ProviderProtocolFamily::OpenAiCompatible
-        | ProviderProtocolFamily::Kimi
-        | ProviderProtocolFamily::AnthropicLike
-        | ProviderProtocolFamily::ReasoningCapable => messages,
-    };
-
-    normalize_tool_message_sequence(messages)
+    normalize_messages_for_provider_with_report(family, messages).messages
 }
 
 pub fn normalize_messages_for_capabilities(
     capabilities: ProviderCapabilities,
     messages: Vec<Message>,
 ) -> Vec<Message> {
-    normalize_messages_for_provider(capabilities.protocol_family, messages)
+    normalize_messages_for_capabilities_with_report(capabilities, messages).messages
 }
 
-fn merge_system_messages(messages: Vec<Message>) -> Vec<Message> {
+pub fn normalize_messages_for_provider_with_report(
+    family: ProviderProtocolFamily,
+    messages: Vec<Message>,
+) -> ProviderMessageNormalization {
+    normalize_messages_for_capabilities_with_report(
+        ProviderCapabilities::for_family(family),
+        messages,
+    )
+}
+
+pub fn normalize_messages_for_capabilities_with_report(
+    capabilities: ProviderCapabilities,
+    messages: Vec<Message>,
+) -> ProviderMessageNormalization {
+    let (messages, system_messages_merged) = match capabilities.protocol_family {
+        ProviderProtocolFamily::MiniMax => merge_system_messages_with_count(messages),
+        ProviderProtocolFamily::OpenAiCompatible
+        | ProviderProtocolFamily::Kimi
+        | ProviderProtocolFamily::AnthropicLike
+        | ProviderProtocolFamily::ReasoningCapable => (messages, 0),
+    };
+
+    let normalized = normalize_tool_message_sequence_with_report(messages);
+    let report =
+        provider_report_from_tool_report(capabilities, system_messages_merged, normalized.report);
+    ProviderMessageNormalization {
+        messages: normalized.messages,
+        report,
+    }
+}
+
+pub fn provider_message_normalization_report(
+    capabilities: ProviderCapabilities,
+    messages: &[Message],
+) -> ProviderMessageNormalizationReport {
+    normalize_messages_for_capabilities_with_report(capabilities, messages.to_vec()).report
+}
+
+fn merge_system_messages_with_count(messages: Vec<Message>) -> (Vec<Message>, usize) {
     let mut system_parts: Vec<String> = Vec::new();
     let mut others: Vec<Message> = Vec::new();
 
@@ -208,13 +270,35 @@ fn merge_system_messages(messages: Vec<Message>) -> Vec<Message> {
     }
 
     if system_parts.is_empty() {
-        return others;
+        return (others, 0);
     }
 
+    let system_messages_merged = system_parts.len().saturating_sub(1);
     let mut normalized = Vec::with_capacity(others.len() + 1);
     normalized.push(Message::system(system_parts.join("\n\n")));
     normalized.extend(others);
-    normalized
+    (normalized, system_messages_merged)
+}
+
+fn provider_report_from_tool_report(
+    capabilities: ProviderCapabilities,
+    system_messages_merged: usize,
+    report: ToolMessageSequenceNormalizationReport,
+) -> ProviderMessageNormalizationReport {
+    ProviderMessageNormalizationReport {
+        provider_family: capabilities.protocol_family,
+        requires_tool_result_adjacency: capabilities.requires_tool_result_adjacency,
+        requires_merged_system_messages: capabilities.requires_merged_system_messages,
+        system_messages_merged,
+        input_messages: report.input_messages,
+        output_messages: report.output_messages,
+        valid_tool_call_pairs: report.valid_tool_call_pairs,
+        dropped_assistant_tool_calls: report.dropped_assistant_tool_calls,
+        dropped_tool_results: report.dropped_tool_results,
+        valid_tool_call_ids: report.valid_tool_call_ids,
+        dropped_assistant_tool_call_ids: report.dropped_assistant_tool_call_ids,
+        dropped_tool_result_ids: report.dropped_tool_result_ids,
+    }
 }
 
 #[cfg(test)]
@@ -433,5 +517,44 @@ mod tests {
         }
         assert!(normalized[2].tool_calls().is_some());
         assert!(matches!(normalized[3], Message::Tool { .. }));
+    }
+
+    #[test]
+    fn provider_normalization_report_attributes_protocol_repairs() {
+        let normalized = normalize_messages_for_provider_with_report(
+            ProviderProtocolFamily::MiniMax,
+            vec![
+                Message::system("system one"),
+                Message::system("system two"),
+                Message::assistant_with_tools(
+                    "stale",
+                    vec![ToolCall {
+                        id: "call_dangling".to_string(),
+                        name: "file_read".to_string(),
+                        arguments: serde_json::json!({"path": "Cargo.toml"}),
+                    }],
+                ),
+                Message::tool("call_orphan", "Tool aborted"),
+            ],
+        );
+
+        assert_eq!(normalized.messages.len(), 2);
+        assert_eq!(
+            normalized.report.provider_family,
+            ProviderProtocolFamily::MiniMax
+        );
+        assert!(normalized.report.requires_tool_result_adjacency);
+        assert_eq!(normalized.report.system_messages_merged, 1);
+        assert_eq!(normalized.report.dropped_assistant_tool_calls, 1);
+        assert_eq!(normalized.report.dropped_tool_results, 1);
+        assert_eq!(
+            normalized.report.dropped_assistant_tool_call_ids,
+            vec!["call_dangling".to_string()]
+        );
+        assert_eq!(
+            normalized.report.dropped_tool_result_ids,
+            vec!["call_orphan".to_string()]
+        );
+        assert!(normalized.report.has_repairs());
     }
 }
