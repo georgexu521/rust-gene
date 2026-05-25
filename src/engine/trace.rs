@@ -2331,6 +2331,35 @@ pub fn latest_runtime_diet_summary(trace: &TurnTrace) -> Option<String> {
     })
 }
 
+pub fn latest_memory_proposal_summary(trace: &TurnTrace) -> Option<String> {
+    trace.events.iter().rev().find_map(|event| match event {
+        TraceEvent::MemoryProposalPrepared {
+            status,
+            candidates,
+            candidate_kinds,
+            evidence_items,
+            write_policy,
+            write_performed,
+            reason,
+            ..
+        } => Some(format!(
+            "{} candidates={} kinds={} evidence={} write_policy={} wrote={} reason={}",
+            status,
+            candidates,
+            if candidate_kinds.is_empty() {
+                "none".to_string()
+            } else {
+                candidate_kinds.join("+")
+            },
+            evidence_items,
+            write_policy,
+            write_performed,
+            preview(reason)
+        )),
+        _ => None,
+    })
+}
+
 pub fn latest_tool_record_count(trace: &TurnTrace) -> Option<usize> {
     trace.events.iter().rev().find_map(|event| match event {
         TraceEvent::FinalCloseoutPrepared { tool_records, .. } => Some(*tool_records),
@@ -2573,6 +2602,29 @@ mod tests {
         assert!(summary.contains("decision=1 latest=action.decision"));
         assert!(summary.contains("tool_execution=1 latest=tool.done"));
         assert!(summary.contains("closeout=1 latest=closeout"));
+    }
+
+    #[test]
+    fn latest_memory_proposal_summary_reports_review_state() {
+        let collector = TraceCollector::new(TurnTrace::new("s1", 1, "fix code"));
+        collector.record(TraceEvent::MemoryProposalPrepared {
+            task_id: "task-123456".to_string(),
+            status: "proposed".to_string(),
+            candidates: 1,
+            candidate_kinds: vec!["successful_fix".to_string()],
+            evidence_items: 2,
+            write_policy: "review_required".to_string(),
+            write_performed: false,
+            reason: "candidate memory requires review before persistence".to_string(),
+        });
+
+        let trace = collector.finish(TurnStatus::Completed);
+        let summary = latest_memory_proposal_summary(&trace).expect("memory proposal summary");
+
+        assert!(summary.contains("proposed candidates=1"));
+        assert!(summary.contains("kinds=successful_fix"));
+        assert!(summary.contains("write_policy=review_required"));
+        assert!(summary.contains("wrote=false"));
     }
 
     #[test]

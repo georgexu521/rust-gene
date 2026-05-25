@@ -75,10 +75,14 @@ pub fn handle_quick(app: &mut TuiApp) -> String {
     let closeout_line = latest_trace_for_app(app)
         .and_then(|trace| latest_closeout_label(&trace))
         .unwrap_or_else(|| "none".to_string());
+    let memory_proposal_line = latest_trace_for_app(app)
+        .and_then(|trace| crate::engine::trace::latest_memory_proposal_summary(&trace))
+        .map(|line| compact_inline(&line, 120))
+        .unwrap_or_else(|| "none".to_string());
     let a2a_line = latest_a2a_transcript_label();
 
     format!(
-        "Quick Panel\n\nStatus:\n- Agent mode: {}\n- UI mode: {:?}\n- Querying: {}\n- Pending prompts: {}\n- Messages: {}\n- Session: {}\n- Goal: {}\n- Goal drift: {}\n\nRuntime:\n- Provider: {}\n- Model: {}\n- Permissions: {}\n- Resource policy: {}\n- Runtime diet: {}\n- Recent commands: {}\n\nContracts:\n- State: {}\n- Plan: {}\n- Stage: {}\n- Retrieval: {}\n- Reflection: {}\n- Acceptance: {}\n- Guided debug: {}\n- Closeout: {}\n- A2A: {}\n\nWorkspace:\n- Project: {}\n- Path: {}\n- {}\n\nNext actions:\n1. /mode         switch auto/build/plan/explore/review\n2. /resource     inspect latest resource budget\n3. /goal         inspect or pin the active goal\n4. /doctor       run environment diagnostics\n5. /permissions  inspect or edit permission rules\n6. Ctrl+P        open command palette",
+        "Quick Panel\n\nStatus:\n- Agent mode: {}\n- UI mode: {:?}\n- Querying: {}\n- Pending prompts: {}\n- Messages: {}\n- Session: {}\n- Goal: {}\n- Goal drift: {}\n\nRuntime:\n- Provider: {}\n- Model: {}\n- Permissions: {}\n- Resource policy: {}\n- Runtime diet: {}\n- Recent commands: {}\n\nContracts:\n- State: {}\n- Plan: {}\n- Stage: {}\n- Retrieval: {}\n- Reflection: {}\n- Acceptance: {}\n- Guided debug: {}\n- Closeout: {}\n- Memory proposal: {}\n- A2A: {}\n\nWorkspace:\n- Project: {}\n- Path: {}\n- {}\n\nNext actions:\n1. /mode         switch auto/build/plan/explore/review\n2. /resource     inspect latest resource budget\n3. /goal         inspect or pin the active goal\n4. /doctor       run environment diagnostics\n5. /permissions  inspect or edit permission rules\n6. Ctrl+P        open command palette",
         app.current_agent_mode_label(),
         app.mode,
         app.is_querying,
@@ -101,6 +105,7 @@ pub fn handle_quick(app: &mut TuiApp) -> String {
         acceptance_line,
         debugging_line,
         closeout_line,
+        memory_proposal_line,
         a2a_line,
         workspace,
         cwd.display(),

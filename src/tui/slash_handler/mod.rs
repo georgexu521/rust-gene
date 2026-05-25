@@ -318,6 +318,7 @@ mod tests {
         assert!(msg.contains("Plan:"));
         assert!(msg.contains("Acceptance:"));
         assert!(msg.contains("Guided debug:"));
+        assert!(msg.contains("Memory proposal:"));
         assert!(msg.contains("A2A:"));
         assert!(msg.contains("Workspace:"));
         assert!(msg.contains("Messages:"));
