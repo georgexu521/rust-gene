@@ -917,6 +917,9 @@ Implementation progress on 2026-05-25:
 - Added a pull-first `/project pulse` surface that derives the smallest next
   step from current git state, active goal, typed memory review counts, and the
   latest memory proposal, without scheduling reminders.
+- Added the `project-partner-demo` live-eval suite with replayable cases for
+  vague-idea-to-MVP, project resume from memory plus prior execution report,
+  and failure-to-review-only-memory-proposal.
 - Added focused tests for assumptions, scope, validation commands, context
   budgets, executor context injection, weak-model profiles, profile-scoped tool
   exposure, execution report status mapping, review-only memory proposals,

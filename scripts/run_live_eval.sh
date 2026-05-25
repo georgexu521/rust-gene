@@ -87,11 +87,17 @@ MVP_WEIGHTED_AGENT_CASES=(
   minimum-agent-memory-boundary
 )
 
+PROJECT_PARTNER_DEMO_CASES=(
+  project-partner-vague-local-tool
+  project-partner-resume-with-memory
+  project-partner-failure-memory-proposal
+)
+
 usage() {
   cat <<'EOF'
 Usage:
   scripts/run_live_eval.sh --list
-  scripts/run_live_eval.sh --case <id|recommended|core-coding-quality|real-project-coding|release-dogfood|mvp-weighted-agent|all> --mode <prepare|api-plan|agent-run|collect|full> [options]
+  scripts/run_live_eval.sh --case <id|recommended|core-coding-quality|real-project-coding|release-dogfood|mvp-weighted-agent|project-partner-demo|all> --mode <prepare|api-plan|agent-run|collect|full> [options]
   scripts/run_live_eval.sh --mode summary --run-id <id>
 
 Modes:
@@ -106,7 +112,7 @@ Modes:
 Options:
   --case ID          Live task id, "recommended", "core-coding-quality",
                      "real-project-coding", "release-dogfood",
-                     "mvp-weighted-agent", or "all".
+                     "mvp-weighted-agent", "project-partner-demo", or "all".
                      With --list, a suite name lists only that suite.
   --mode MODE        list, prepare, api-plan, agent-run, collect, or full.
   --workdir DIR      Existing task worktree for collect mode.
@@ -493,6 +499,19 @@ mvp_weighted_agent_task_files() {
   return "$missing"
 }
 
+project_partner_demo_task_files() {
+  local id file missing=0
+  for id in "${PROJECT_PARTNER_DEMO_CASES[@]}"; do
+    if file="$(find_task_file "$id")"; then
+      echo "$file"
+    else
+      echo "Project-partner demo live task missing: $id" >&2
+      missing=1
+    fi
+  done
+  return "$missing"
+}
+
 task_group_files() {
   local group="$1"
   case "$group" in
@@ -510,6 +529,9 @@ task_group_files() {
       ;;
     mvp-weighted-agent)
       mvp_weighted_agent_task_files
+      ;;
+    project-partner-demo)
+      project_partner_demo_task_files
       ;;
     *)
       return 1
@@ -2666,7 +2688,7 @@ run_one() {
 
 main() {
   if [[ "$MODE" == "list" ]]; then
-    if [[ "$CASE_ID" == "recommended" || "$CASE_ID" == "core-coding-quality" || "$CASE_ID" == "real-project-coding" || "$CASE_ID" == "release-dogfood" || "$CASE_ID" == "mvp-weighted-agent" ]]; then
+    if [[ "$CASE_ID" == "recommended" || "$CASE_ID" == "core-coding-quality" || "$CASE_ID" == "real-project-coding" || "$CASE_ID" == "release-dogfood" || "$CASE_ID" == "mvp-weighted-agent" || "$CASE_ID" == "project-partner-demo" ]]; then
       need_yaml
       list_task_group "$CASE_ID"
     else
@@ -2691,9 +2713,9 @@ main() {
 
   mkdir -p "$REPORT_DIR" "$WORK_ROOT/$RUN_ID"
 
-  if [[ "$CASE_ID" == "all" || "$CASE_ID" == "recommended" || "$CASE_ID" == "core-coding-quality" || "$CASE_ID" == "real-project-coding" || "$CASE_ID" == "release-dogfood" || "$CASE_ID" == "mvp-weighted-agent" ]]; then
+  if [[ "$CASE_ID" == "all" || "$CASE_ID" == "recommended" || "$CASE_ID" == "core-coding-quality" || "$CASE_ID" == "real-project-coding" || "$CASE_ID" == "release-dogfood" || "$CASE_ID" == "mvp-weighted-agent" || "$CASE_ID" == "project-partner-demo" ]]; then
     local file files failures=0
-    if [[ "$CASE_ID" == "recommended" || "$CASE_ID" == "core-coding-quality" || "$CASE_ID" == "real-project-coding" || "$CASE_ID" == "release-dogfood" || "$CASE_ID" == "mvp-weighted-agent" ]]; then
+    if [[ "$CASE_ID" == "recommended" || "$CASE_ID" == "core-coding-quality" || "$CASE_ID" == "real-project-coding" || "$CASE_ID" == "release-dogfood" || "$CASE_ID" == "mvp-weighted-agent" || "$CASE_ID" == "project-partner-demo" ]]; then
       if ! files="$(task_group_files "$CASE_ID")"; then
         exit 1
       fi
