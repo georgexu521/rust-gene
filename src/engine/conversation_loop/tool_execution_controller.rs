@@ -1420,6 +1420,7 @@ impl ToolExecutionController {
                     .send(StreamEvent::ToolExecutionStart {
                         id: tool_id.clone(),
                         name: tool_name.clone(),
+                        metadata: tool_execution_start_metadata(&tool_name, &tc.arguments),
                     })
                     .await;
             }
@@ -1858,6 +1859,7 @@ impl ToolExecutionController {
                         .send(StreamEvent::ToolExecutionStart {
                             id: tc.id.clone(),
                             name: tc.name.clone(),
+                            metadata: tool_execution_start_metadata(&tc.name, &tc.arguments),
                         })
                         .await;
                 }
@@ -1940,6 +1942,26 @@ fn tool_completion_metadata(result: &ToolResult) -> Option<serde_json::Value> {
         object.insert("tool_observation".to_string(), observation.clone());
     }
     Some(metadata)
+}
+
+fn tool_execution_start_metadata(
+    tool_name: &str,
+    arguments: &serde_json::Value,
+) -> Option<serde_json::Value> {
+    let mut object = serde_json::Map::new();
+    object.insert(
+        "tool".to_string(),
+        serde_json::Value::String(tool_name.to_string()),
+    );
+    for key in ["path", "command", "pattern", "query"] {
+        if let Some(value) = arguments.get(key).and_then(serde_json::Value::as_str) {
+            object.insert(
+                key.to_string(),
+                serde_json::Value::String(value.to_string()),
+            );
+        }
+    }
+    (object.len() > 1).then_some(serde_json::Value::Object(object))
 }
 
 #[cfg(test)]

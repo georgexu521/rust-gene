@@ -294,7 +294,7 @@ impl DesktopRunEvent {
                 delta: args_delta,
             },
             StreamEvent::ToolCallComplete { id } => Self::ToolCallCompleted { id },
-            StreamEvent::ToolExecutionStart { id, name } => Self::ToolStarted { id, name },
+            StreamEvent::ToolExecutionStart { id, name, .. } => Self::ToolStarted { id, name },
             StreamEvent::ToolExecutionProgress { id, progress } => {
                 Self::ToolExecutionProgress { id, progress }
             }

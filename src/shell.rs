@@ -646,7 +646,7 @@ async fn run_turn(engine: Arc<StreamingQueryEngine>, message: String) -> anyhow:
                 with_tool_run(&mut tool_runs, &id, |run| run.push_args_delta(&args_delta));
             }
             StreamEvent::ToolCallComplete { .. } => {}
-            StreamEvent::ToolExecutionStart { id, name } => {
+            StreamEvent::ToolExecutionStart { id, name, .. } => {
                 clear_status_if_visible(&mut status_visible)?;
                 assistant_printer.finish_line_if_needed()?;
                 upsert_tool_run(&mut tool_runs, id.clone(), name.clone());

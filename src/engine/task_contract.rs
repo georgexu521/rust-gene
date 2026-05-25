@@ -700,6 +700,36 @@ impl MemoryProposal {
             self.evidence_items()
         )
     }
+
+    pub fn format_for_final_response(&self) -> String {
+        if self.candidates.is_empty() {
+            return String::new();
+        }
+        let mut lines = vec![
+            "\nMemory proposal:".to_string(),
+            format!(
+                "- Status: {} candidates={} evidence={}",
+                self.status.label(),
+                self.candidates.len(),
+                self.evidence_items()
+            ),
+            format!(
+                "- Write policy: {} write_performed={}",
+                self.write_policy, self.write_performed
+            ),
+            format!("- Reason: {}", self.reason),
+        ];
+        for candidate in self.candidates.iter().take(3) {
+            lines.push(format!(
+                "- Candidate: kind={} scope={} evidence={} :: {}",
+                candidate.kind,
+                candidate.scope,
+                candidate.evidence.len(),
+                compact_text(&candidate.content, 180)
+            ));
+        }
+        lines.join("\n")
+    }
 }
 
 pub trait TaskContractBundleExt {

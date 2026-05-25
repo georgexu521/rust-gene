@@ -181,10 +181,13 @@ async fn run_eval_task(args: &[String]) -> anyhow::Result<()> {
                 &mut event_writer,
                 json!({"event": "tool_call_complete", "id": id}),
             )?,
-            StreamEvent::ToolExecutionStart { id, name } => write_eval_event(
-                &mut event_writer,
-                json!({"event": "tool_execution_start", "id": id, "name": name}),
-            )?,
+            StreamEvent::ToolExecutionStart { id, name, metadata } => {
+                let mut event = json!({"event": "tool_execution_start", "id": id, "name": name});
+                if let (Some(object), Some(metadata)) = (event.as_object_mut(), metadata) {
+                    object.insert("metadata".to_string(), metadata);
+                }
+                write_eval_event(&mut event_writer, event)?
+            }
             StreamEvent::ToolExecutionProgress { id, progress } => write_eval_event(
                 &mut event_writer,
                 json!({"event": "tool_execution_progress", "id": id, "progress": progress}),

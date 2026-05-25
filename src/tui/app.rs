@@ -1697,7 +1697,7 @@ impl TuiApp {
                             let mut runs = tool_runs_clone.lock().await;
                             with_tool_run(&mut runs, &id, |run| run.push_args_delta(&args_delta));
                         }
-                        StreamEvent::ToolExecutionStart { id, name } => {
+                        StreamEvent::ToolExecutionStart { id, name, .. } => {
                             let mut runs = tool_runs_clone.lock().await;
                             with_tool_run(&mut runs, &id, |run| run.mark_running(name));
                         }

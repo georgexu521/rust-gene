@@ -129,7 +129,14 @@ impl GoalDriftDetector {
             .unwrap_or(false)
             && !matches!(
                 tool,
-                "mcp" | "config" | "memory_load" | "memory_save" | "bash" | "file_read"
+                "mcp"
+                    | "config"
+                    | "memory_load"
+                    | "memory_save"
+                    | "bash"
+                    | "file_read"
+                    | "glob"
+                    | "grep"
             )
         {
             return DriftCheck {
@@ -487,6 +494,24 @@ mod tests {
             },
         );
         assert_eq!(check.level, DriftLevel::None);
+    }
+
+    #[test]
+    fn allows_read_only_discovery_for_configuration_goal() {
+        for tool_name in ["glob", "grep"] {
+            let check = GoalDriftDetector::new().check(
+                &goal(
+                    IntentKind::Configuration,
+                    "resume from local project evidence",
+                ),
+                &ToolCall {
+                    id: "1".to_string(),
+                    name: tool_name.to_string(),
+                    arguments: serde_json::json!({"pattern": "fixtures/project/**/*"}),
+                },
+            );
+            assert_eq!(check.level, DriftLevel::None);
+        }
     }
 
     #[test]

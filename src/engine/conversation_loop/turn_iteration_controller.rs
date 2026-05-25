@@ -130,6 +130,16 @@ impl TurnIterationController {
                 } => (content, tool_calls, pre_executed),
             };
 
+        let redirected_directory_reads =
+            redirect_duplicate_directory_file_reads(&mut tool_calls, context.turn_state);
+        if redirected_directory_reads > 0 {
+            context.trace.record(TraceEvent::WorkflowFallback {
+                error: format!(
+                    "redirected {redirected_directory_reads} duplicate directory read(s) to the single listed file"
+                ),
+            });
+        }
+
         if duplicate_read_only_closeout_allowed(context.route, context.required_validation_commands)
         {
             if let Some(message) = duplicate_successful_read_only_pre_execution_closeout(
@@ -484,13 +494,13 @@ fn duplicate_successful_read_only_pre_execution_closeout(
         duplicate_results.push((tool_call.name.as_str(), cached, ledger_summary));
     }
 
-    let (tool_name, result_text, ledger_summary) = duplicate_results.last()?;
-    Some(synthesize_read_only_duplicate_answer(
-        tool_name,
-        result_text,
-        last_user_preview,
-        ledger_summary.as_deref(),
-    ))
+    let parts = duplicate_results
+        .iter()
+        .map(|(tool_name, result_text, ledger_summary)| {
+            (*tool_name, *result_text, ledger_summary.as_deref())
+        })
+        .collect::<Vec<_>>();
+    synthesize_read_only_duplicate_answer_from_parts(&parts, last_user_preview)
 }
 
 fn duplicate_read_only_closeout_allowed(
@@ -530,6 +540,84 @@ fn drop_duplicate_successful_read_only_tool_calls(
     }
 }
 
+fn redirect_duplicate_directory_file_reads(
+    tool_calls: &mut [ToolCall],
+    turn_state: &TurnRuntimeState,
+) -> usize {
+    let mut redirected = 0usize;
+    for tool_call in tool_calls {
+        if tool_call.name != "file_read" {
+            continue;
+        }
+        let fingerprint = tool_call_fingerprint(tool_call);
+        if !turn_state
+            .successful_read_only_tool_fingerprints
+            .contains_key(&fingerprint)
+        {
+            continue;
+        }
+        let Some(result_text) = turn_state
+            .successful_read_only_tool_results
+            .get(&fingerprint)
+        else {
+            continue;
+        };
+        let Some(entry) = single_file_entry_from_directory_listing(result_text) else {
+            continue;
+        };
+        let Some(path) = tool_call
+            .arguments
+            .get("path")
+            .and_then(|value| value.as_str())
+        else {
+            continue;
+        };
+        let child_path = format!("{}/{}", path.trim_end_matches('/'), entry);
+        let Some(arguments) = tool_call.arguments.as_object_mut() else {
+            continue;
+        };
+        arguments.insert("path".to_string(), serde_json::Value::String(child_path));
+        redirected += 1;
+    }
+    redirected
+}
+
+fn single_file_entry_from_directory_listing(result_text: &str) -> Option<String> {
+    let lines = normalized_result_lines(result_text);
+    if !lines.iter().any(|line| line.starts_with("Directory:")) {
+        return None;
+    }
+    let mut entries = Vec::new();
+    let mut in_entries = false;
+    for line in lines {
+        if line.starts_with("Entries ") {
+            in_entries = true;
+            continue;
+        }
+        if in_entries {
+            if line.starts_with("Result:") || line.starts_with("Directory:") {
+                continue;
+            }
+            entries.push(line);
+        }
+    }
+    let files = entries
+        .into_iter()
+        .filter(|entry| {
+            !entry.ends_with('/')
+                && !entry.contains('/')
+                && !entry.contains('\\')
+                && entry != "."
+                && entry != ".."
+        })
+        .collect::<Vec<_>>();
+    if files.len() == 1 {
+        files.into_iter().next()
+    } else {
+        None
+    }
+}
+
 fn duplicate_successful_read_only_closeout(
     round_state: &super::turn_tool_round_outcome_controller::TurnToolRoundState,
     last_user_preview: &str,
@@ -537,16 +625,58 @@ fn duplicate_successful_read_only_closeout(
     if round_state.duplicate_successful_read_only_tools.is_empty() {
         return None;
     }
-    let duplicate = round_state.duplicate_successful_read_only_results.last()?;
-    let result_text = duplicate.result_text.trim();
-    if result_text.is_empty() {
+    let parts = round_state
+        .duplicate_successful_read_only_results
+        .iter()
+        .map(|duplicate| {
+            (
+                duplicate.tool_name.as_str(),
+                duplicate.result_text.as_str(),
+                duplicate.ledger_summary.as_deref(),
+            )
+        })
+        .collect::<Vec<_>>();
+    synthesize_read_only_duplicate_answer_from_parts(&parts, last_user_preview)
+}
+
+fn synthesize_read_only_duplicate_answer_from_parts(
+    parts: &[(&str, &str, Option<&str>)],
+    last_user_preview: &str,
+) -> Option<String> {
+    if parts.is_empty() {
         return None;
     }
+    let result_text = parts
+        .iter()
+        .map(|(_, result_text, _)| result_text.trim())
+        .filter(|result_text| !result_text.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n\n");
+    if result_text.trim().is_empty() {
+        return None;
+    }
+    let first_tool = parts[0].0;
+    let tool_name = if parts
+        .iter()
+        .all(|(tool_name, _, _)| *tool_name == first_tool)
+    {
+        first_tool
+    } else {
+        "read-only tools"
+    };
+    let ledger_summary = parts
+        .iter()
+        .filter_map(|(_, _, ledger_summary)| *ledger_summary)
+        .map(str::trim)
+        .filter(|summary| !summary.is_empty())
+        .collect::<Vec<_>>()
+        .join("; ");
+    let ledger_summary = (!ledger_summary.is_empty()).then_some(ledger_summary.as_str());
     Some(synthesize_read_only_duplicate_answer(
-        &duplicate.tool_name,
-        result_text,
+        tool_name,
+        &result_text,
         last_user_preview,
-        duplicate.ledger_summary.as_deref(),
+        ledger_summary,
     ))
 }
 
@@ -632,6 +762,7 @@ fn is_search_target_term(term: &str) -> bool {
         && !term.contains('\n')
         && !term.contains('.')
         && !lower.starts_with("minimum-agent-")
+        && !lower.starts_with("project-partner-")
         && !matches!(
             lower.as_str(),
             "audit"
@@ -1059,6 +1190,52 @@ mod tests {
     }
 
     #[test]
+    fn repeated_read_only_pre_execution_closeout_combines_duplicate_results() {
+        let memory_read = ToolCall {
+            id: "call_memory_again".to_string(),
+            name: "file_read".to_string(),
+            arguments: serde_json::json!({"path": "fixtures/project_partner_resume/memory/project.md"}),
+        };
+        let report_read = ToolCall {
+            id: "call_report_again".to_string(),
+            name: "file_read".to_string(),
+            arguments: serde_json::json!({"path": "fixtures/project_partner_resume/reports/previous_execution_report.json"}),
+        };
+        let memory_fingerprint = tool_call_fingerprint(&memory_read);
+        let report_fingerprint = tool_call_fingerprint(&report_read);
+        let mut turn_state = TurnRuntimeState::new(true);
+        turn_state
+            .successful_read_only_tool_fingerprints
+            .insert(memory_fingerprint.clone(), 1);
+        turn_state
+            .successful_read_only_tool_fingerprints
+            .insert(report_fingerprint.clone(), 1);
+        turn_state.successful_read_only_tool_results.insert(
+            memory_fingerprint,
+            "1 | # Project Memory\n2 |\n3 | - Decision: first version is a local-only lab notebook helper.\n4 | - Next product goal: add CSV export for recorded strain rows."
+                .to_string(),
+        );
+        turn_state.successful_read_only_tool_results.insert(
+            report_fingerprint,
+            "1 | {\n2 |   \"status\": \"partial\",\n3 |   \"risks\": [\"CSV export is not implemented yet\"],\n4 |   \"next_steps\": [\"Implement CSV export before adding login or cloud sync\"]\n5 | }"
+                .to_string(),
+        );
+
+        let message = duplicate_successful_read_only_pre_execution_closeout(
+            &[memory_read, report_read],
+            &turn_state,
+            "project-partner-resume-with-memory",
+            None,
+            "session",
+        )
+        .expect("duplicate reads should close out from combined evidence");
+
+        assert!(message.contains("local-only"));
+        assert!(message.contains("CSV export"));
+        assert!(!message.contains("Not found"));
+    }
+
+    #[test]
     fn mixed_read_only_batch_drops_duplicate_successful_read_and_keeps_new_search() {
         let duplicate_read = ToolCall {
             id: "call_read_again".to_string(),
@@ -1088,6 +1265,72 @@ mod tests {
         assert_eq!(filtered.len(), 1);
         assert_eq!(filtered[0].id, search.id);
         assert_eq!(filtered[0].name, "grep");
+    }
+
+    #[test]
+    fn repeated_directory_read_redirects_to_single_child_file() {
+        let mut tool_call = ToolCall {
+            id: "call_read_dir_again".to_string(),
+            name: "file_read".to_string(),
+            arguments: serde_json::json!({"path": "fixtures/project_partner_resume/memory"}),
+        };
+        let fingerprint = tool_call_fingerprint(&tool_call);
+        let mut turn_state = TurnRuntimeState::new(true);
+        turn_state
+            .successful_read_only_tool_fingerprints
+            .insert(fingerprint.clone(), 1);
+        turn_state.successful_read_only_tool_results.insert(
+            fingerprint,
+            "Directory: /tmp/worktree/fixtures/project_partner_resume/memory\nEntries (1):\nproject.md"
+                .to_string(),
+        );
+
+        let redirected = redirect_duplicate_directory_file_reads(
+            std::slice::from_mut(&mut tool_call),
+            &turn_state,
+        );
+
+        assert_eq!(redirected, 1);
+        assert_eq!(
+            tool_call
+                .arguments
+                .get("path")
+                .and_then(|value| value.as_str()),
+            Some("fixtures/project_partner_resume/memory/project.md")
+        );
+    }
+
+    #[test]
+    fn repeated_directory_read_does_not_redirect_ambiguous_listing() {
+        let mut tool_call = ToolCall {
+            id: "call_read_dir_again".to_string(),
+            name: "file_read".to_string(),
+            arguments: serde_json::json!({"path": "fixtures/project_partner_resume"}),
+        };
+        let fingerprint = tool_call_fingerprint(&tool_call);
+        let mut turn_state = TurnRuntimeState::new(true);
+        turn_state
+            .successful_read_only_tool_fingerprints
+            .insert(fingerprint.clone(), 1);
+        turn_state.successful_read_only_tool_results.insert(
+            fingerprint,
+            "Directory: /tmp/worktree/fixtures/project_partner_resume\nEntries (2):\nmemory/\nreports/"
+                .to_string(),
+        );
+
+        let redirected = redirect_duplicate_directory_file_reads(
+            std::slice::from_mut(&mut tool_call),
+            &turn_state,
+        );
+
+        assert_eq!(redirected, 0);
+        assert_eq!(
+            tool_call
+                .arguments
+                .get("path")
+                .and_then(|value| value.as_str()),
+            Some("fixtures/project_partner_resume")
+        );
     }
 
     #[test]

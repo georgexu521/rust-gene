@@ -252,8 +252,14 @@ impl FinalCloseoutController {
             context.runtime_diet.validation_evidence = runtime_validation_label
                 .clone()
                 .unwrap_or_else(|| verification_proof.status_label().to_string());
-            let closeout_text = if mva_runtime_profile_enabled() {
-                closeout.format_for_final_response()
+            let closeout_text = if structured_closeout_runtime_profile_enabled() {
+                let mut text = closeout.format_for_final_response();
+                let memory_proposal_text = memory_proposal.format_for_final_response();
+                if !memory_proposal_text.is_empty() {
+                    text.push_str(&memory_proposal_text);
+                    text.push('\n');
+                }
+                text
             } else {
                 closeout.format_for_user_response()
             };
@@ -313,20 +319,20 @@ impl FinalCloseoutController {
 }
 
 fn should_prepare_mva_direct_closeout(context: &FinalCloseoutContext<'_>) -> bool {
-    mva_runtime_profile_enabled()
+    structured_closeout_runtime_profile_enabled()
         && !context.final_content.trim().is_empty()
         && (context.evidence_ledger.snapshot().tool_execution_records > 0
             || !context.required_validation_commands.is_empty())
 }
 
-fn mva_runtime_profile_enabled() -> bool {
+fn structured_closeout_runtime_profile_enabled() -> bool {
     matches!(
         std::env::var("PRIORITY_AGENT_RUNTIME_PROFILE")
             .unwrap_or_default()
             .trim()
             .to_ascii_lowercase()
             .as_str(),
-        "minimum_viable_agent" | "mva"
+        "minimum_viable_agent" | "mva" | "project_partner_alignment"
     )
 }
 
@@ -485,6 +491,7 @@ mod tests {
     };
     use crate::engine::trace::{TurnStatus, TurnTrace};
     use crate::test_utils::env_guard::EnvVarGuard;
+    use std::path::PathBuf;
 
     fn audit_route() -> IntentRoute {
         IntentRoute {
@@ -617,6 +624,137 @@ mod tests {
                 write_performed: false,
                 ..
             } if status == "not_applicable"
+        )));
+    }
+
+    #[tokio::test]
+    async fn project_partner_profile_adds_direct_execution_report_for_read_only_turn() {
+        let mut env = EnvVarGuard::acquire().await;
+        env.set(
+            "PRIORITY_AGENT_RUNTIME_PROFILE",
+            "project_partner_alignment",
+        );
+        let bundle = TaskContextBundle::new(
+            "Resume project from memory and previous execution report",
+            ".",
+            direct_route(),
+            None,
+        );
+        let code_workflow = CodeChangeWorkflowRunner::new(&bundle);
+        let trace = TraceCollector::new(TurnTrace::new("session", 1, "resume"));
+        let mut runtime_diet = RuntimeDietSnapshot::new(true);
+        let mut evidence_ledger = EvidenceLedger::new();
+        evidence_ledger.record_tool_result(
+            &ToolCall {
+                id: "call-1".to_string(),
+                name: "file_read".to_string(),
+                arguments: serde_json::json!({"path": "memory/project.md"}),
+            },
+            &crate::tools::ToolResult::success("Project Memory: CSV export is next"),
+        );
+        let mut final_content = "Current state: CSV export is next.".to_string();
+
+        FinalCloseoutController::apply_final_closeout(FinalCloseoutContext {
+            trace: &trace,
+            code_workflow: &code_workflow,
+            task_bundle: &bundle,
+            required_validation_commands: &[],
+            runtime_diet: &mut runtime_diet,
+            final_content: &mut final_content,
+            final_tool_calls: &[],
+            iterations_used: 1,
+            max_iterations: 10,
+            evidence_ledger: &evidence_ledger,
+            tx: None,
+        })
+        .await;
+
+        assert!(final_content.contains("Closeout:"));
+        assert!(!final_content.contains("ExecutionReport"));
+
+        let finished = trace.finish(TurnStatus::Completed);
+        assert!(finished.events.iter().any(|event| matches!(
+            event,
+            TraceEvent::ExecutionReportPrepared {
+                status,
+                changed_files: 0,
+                validation_evidence,
+                ..
+            } if status == "success" && *validation_evidence > 0
+        )));
+    }
+
+    #[tokio::test]
+    async fn project_partner_profile_surfaces_review_only_memory_proposal() {
+        let mut env = EnvVarGuard::acquire().await;
+        env.set(
+            "PRIORITY_AGENT_RUNTIME_PROFILE",
+            "project_partner_alignment",
+        );
+        let mut bundle = TaskContextBundle::new(
+            "Fix slugify and surface a memory proposal",
+            ".",
+            audit_route(),
+            None,
+        );
+        bundle.add_acceptance_check("slugify test passes");
+        let mut code_workflow = CodeChangeWorkflowRunner::new(&bundle);
+        let trace = TraceCollector::new(TurnTrace::new("session", 1, "fix"));
+        let mut runtime_diet = RuntimeDietSnapshot::new(true);
+        let mut evidence_ledger = EvidenceLedger::new();
+        evidence_ledger.record_tool_result(
+            &ToolCall {
+                id: "call-1".to_string(),
+                name: "file_edit".to_string(),
+                arguments: serde_json::json!({"path": "fixtures/project_partner_failure/slugify.py"}),
+            },
+            &crate::tools::ToolResult::success("File edited successfully"),
+        );
+        evidence_ledger.record_validation_result(
+            "required_validation",
+            Some("python3 fixtures/project_partner_failure/test_slugify.py"),
+            true,
+            "slugify test passed",
+        );
+        code_workflow.record_stage_validation(
+            &bundle,
+            &[PathBuf::from("fixtures/project_partner_failure/slugify.py")],
+            true,
+            &["python3 fixtures/project_partner_failure/test_slugify.py passed".to_string()],
+        );
+        let required_commands =
+            vec!["python3 fixtures/project_partner_failure/test_slugify.py".to_string()];
+        let mut final_content = "Fixed slugify.".to_string();
+
+        FinalCloseoutController::apply_final_closeout(FinalCloseoutContext {
+            trace: &trace,
+            code_workflow: &code_workflow,
+            task_bundle: &bundle,
+            required_validation_commands: &required_commands,
+            runtime_diet: &mut runtime_diet,
+            final_content: &mut final_content,
+            final_tool_calls: &[],
+            iterations_used: 1,
+            max_iterations: 10,
+            evidence_ledger: &evidence_ledger,
+            tx: None,
+        })
+        .await;
+
+        assert!(final_content.contains("Memory proposal:"));
+        assert!(final_content.contains("write_performed=false"));
+        assert!(final_content.contains("scope=project"));
+        assert!(final_content.contains("evidence="));
+
+        let finished = trace.finish(TurnStatus::Completed);
+        assert!(finished.events.iter().any(|event| matches!(
+            event,
+            TraceEvent::MemoryProposalPrepared {
+                status,
+                candidates: 1,
+                write_performed: false,
+                ..
+            } if status == "proposed"
         )));
     }
 

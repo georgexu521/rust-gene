@@ -923,6 +923,20 @@ Implementation progress on 2026-05-25:
 - Extended live-eval parsing with typed handoff/report/proposal signals and
   product-differentiation assertion status so the demo suite can fail on missing
   TaskContract, ExecutionReport, memory proposal, or grounding evidence.
+- Hardened `project_partner_alignment` closeout so read-only resume turns and
+  successful fixes both prepare `execution.report`; review-only memory
+  proposals are surfaced in the final closeout when evidence-backed candidates
+  exist.
+- Added weak-model compensation for repeated read-only loops: duplicate
+  directory reads that expose exactly one child file are redirected to the child
+  file, duplicate read closeout combines all cached evidence instead of only the
+  last result, and tool-start eval events carry safe path/query metadata so
+  repeated-action scoring tracks same-tool same-argument repetition.
+- Replayed the demo suite's previously failing focused cases: the
+  failure-to-memory-proposal case now passes with `memory.proposal`,
+  `write_performed=false`, and runtime spine evidence; the resume-from-memory
+  case now passes with grounded `local-only` and `CSV export` evidence, no
+  repeated-action penalty, and `agent_score=100`.
 - Added focused tests for assumptions, scope, validation commands, context
   budgets, executor context injection, weak-model profiles, profile-scoped tool
   exposure, execution report status mapping, review-only memory proposals,

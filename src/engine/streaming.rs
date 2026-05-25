@@ -37,7 +37,11 @@ pub enum StreamEvent {
     /// 工具调用完成
     ToolCallComplete { id: String },
     /// 工具执行开始
-    ToolExecutionStart { id: String, name: String },
+    ToolExecutionStart {
+        id: String,
+        name: String,
+        metadata: Option<serde_json::Value>,
+    },
     /// 工具执行进度
     ToolExecutionProgress { id: String, progress: String },
     /// 工具执行完成
