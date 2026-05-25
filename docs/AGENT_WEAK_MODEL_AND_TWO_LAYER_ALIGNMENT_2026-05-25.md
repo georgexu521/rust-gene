@@ -908,10 +908,13 @@ Implementation progress on 2026-05-25:
 - Surfaced the latest memory proposal in the `/quick` contract summary, giving
   users a pull-first way to inspect proposal status, candidate count, evidence,
   write policy, and whether anything was persisted.
+- Added a typed `/memory review` record report that groups accepted, proposed,
+  rejected, stale, and lifecycle memory records with scope, evidence,
+  freshness, and projection status.
 - Added focused tests for assumptions, scope, validation commands, context
   budgets, executor context injection, weak-model profiles, profile-scoped tool
-  exposure, execution report status mapping, review-only memory proposals, and
-  memory-proposal visibility.
+  exposure, execution report status mapping, review-only memory proposals,
+  memory-proposal visibility, and typed memory review grouping.
 
 ### Phase 0: Document the contract shape
 

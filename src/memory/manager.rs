@@ -482,6 +482,96 @@ fn memory_record_summary_from_records(records: &[MemoryRecord]) -> MemoryRecordS
     summary
 }
 
+fn format_review_section(title: &str, items: &[MemoryReviewItem]) -> String {
+    let mut lines = vec![format!("{title}:")];
+    if items.is_empty() {
+        lines.push("  none".to_string());
+        return lines.join("\n");
+    }
+    for item in items {
+        lines.push(format!(
+            "  - {} [{} {}] scope={} evidence={} freshness={} projection={} updated={} :: {}",
+            item.id,
+            item.status,
+            item.kind,
+            item.scope,
+            item.evidence,
+            item.freshness,
+            item.projection,
+            item.updated_at,
+            item.summary
+        ));
+    }
+    lines.join("\n")
+}
+
+fn truncate_review_items(items: &mut Vec<MemoryReviewItem>, limit: usize) {
+    if limit == 0 {
+        items.clear();
+    } else if items.len() > limit {
+        items.truncate(limit);
+    }
+}
+
+fn memory_review_item(record: &MemoryRecord, projection_drift: bool) -> MemoryReviewItem {
+    MemoryReviewItem {
+        id: short_record_id(&record.id),
+        status: status_label(record.status).to_string(),
+        kind: kind_label(record.kind).to_string(),
+        scope: memory_scope_label(&record.scope),
+        evidence: memory_evidence_label(record).to_string(),
+        freshness: memory_freshness_label(record).to_string(),
+        projection: memory_projection_label(record, projection_drift),
+        updated_at: record.updated_at.format("%Y-%m-%d").to_string(),
+        summary: log_preview(&record.summary, 180),
+    }
+}
+
+fn short_record_id(id: &str) -> String {
+    id.chars().take(8).collect()
+}
+
+fn memory_scope_label(scope: &MemoryScope) -> String {
+    if let Some(root) = &scope.project_root {
+        return format!("project:{}", root.display());
+    }
+    if !scope.session_id.trim().is_empty() {
+        return format!("session:{}", scope.session_id);
+    }
+    format!("{}:{}", scope.platform, scope.profile)
+}
+
+fn memory_evidence_label(record: &MemoryRecord) -> &'static str {
+    if record.evidence.is_empty() {
+        "missing"
+    } else if record_has_verified_evidence(record) {
+        "verified"
+    } else {
+        "inferred"
+    }
+}
+
+fn memory_freshness_label(record: &MemoryRecord) -> &'static str {
+    if record_needs_revalidation(record) {
+        "stale"
+    } else if record.last_verified_at.is_some() {
+        "verified"
+    } else {
+        "unverified"
+    }
+}
+
+fn memory_projection_label(record: &MemoryRecord, projection_drift: bool) -> String {
+    let Some(projection) = &record.projection else {
+        return "none".to_string();
+    };
+    if projection_drift {
+        format!("drift:{}", projection.path)
+    } else {
+        projection.path.clone()
+    }
+}
+
 fn record_needs_revalidation(record: &MemoryRecord) -> bool {
     if !matches!(record.status, MemoryStatus::Accepted) {
         return false;
@@ -789,6 +879,60 @@ pub struct MemoryRecordSummary {
     pub projection_drift: usize,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MemoryReviewItem {
+    pub id: String,
+    pub status: String,
+    pub kind: String,
+    pub scope: String,
+    pub evidence: String,
+    pub freshness: String,
+    pub projection: String,
+    pub updated_at: String,
+    pub summary: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MemoryReviewReport {
+    pub summary: MemoryRecordSummary,
+    pub review_items: Vec<MemoryReviewItem>,
+    pub accepted_items: Vec<MemoryReviewItem>,
+    pub stale_items: Vec<MemoryReviewItem>,
+    pub proposed_items: Vec<MemoryReviewItem>,
+    pub rejected_items: Vec<MemoryReviewItem>,
+    pub lifecycle_items: Vec<MemoryReviewItem>,
+}
+
+impl MemoryReviewReport {
+    pub fn format(&self) -> String {
+        let mut lines = vec![
+            "Typed records:".to_string(),
+            format!(
+                "  total={} accepted={} proposed={} rejected={} archived={} superseded={} stale={} missing_evidence={} projection_drift={} used={}",
+                self.summary.total,
+                self.summary.accepted,
+                self.summary.proposed,
+                self.summary.rejected,
+                self.summary.archived,
+                self.summary.superseded,
+                self.summary.stale,
+                self.summary.missing_evidence,
+                self.summary.projection_drift,
+                self.summary.used
+            ),
+            "".to_string(),
+            format_review_section("Review queue", &self.review_items),
+            format_review_section("Accepted records", &self.accepted_items),
+            format_review_section("Stale accepted records", &self.stale_items),
+            format_review_section("Proposed records", &self.proposed_items),
+            format_review_section("Rejected records", &self.rejected_items),
+            format_review_section("Lifecycle records", &self.lifecycle_items),
+        ];
+        lines.retain(|line| !line.is_empty());
+        lines.join("\n")
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum MemoryFlushReason {
@@ -1016,6 +1160,58 @@ impl MemoryManager {
             })
             .count();
         summary
+    }
+
+    pub fn memory_review_report(&self, limit: usize) -> MemoryReviewReport {
+        let records = self.memory_records();
+        let summary = self.memory_record_summary();
+        let mut review_items = Vec::new();
+        let mut accepted_items = Vec::new();
+        let mut stale_items = Vec::new();
+        let mut proposed_items = Vec::new();
+        let mut rejected_items = Vec::new();
+        let mut lifecycle_items = Vec::new();
+
+        for record in records.iter().rev() {
+            let projection_drift = matches!(record.status, MemoryStatus::Accepted)
+                && record.projection.as_ref().is_some_and(|projection| {
+                    !self.projection_contains_record(projection, &record.id)
+                });
+            let item = memory_review_item(record, projection_drift);
+            let needs_revalidation = record_needs_revalidation(record);
+            if matches!(record.status, MemoryStatus::Proposed)
+                || projection_drift
+                || needs_revalidation
+            {
+                review_items.push(item.clone());
+            }
+            if needs_revalidation {
+                stale_items.push(item.clone());
+            }
+            match record.status {
+                MemoryStatus::Proposed => proposed_items.push(item),
+                MemoryStatus::Rejected => rejected_items.push(item),
+                MemoryStatus::Superseded | MemoryStatus::Archived => lifecycle_items.push(item),
+                MemoryStatus::Accepted => accepted_items.push(item),
+            }
+        }
+
+        truncate_review_items(&mut review_items, limit);
+        truncate_review_items(&mut accepted_items, limit);
+        truncate_review_items(&mut stale_items, limit);
+        truncate_review_items(&mut proposed_items, limit);
+        truncate_review_items(&mut rejected_items, limit);
+        truncate_review_items(&mut lifecycle_items, limit);
+
+        MemoryReviewReport {
+            summary,
+            review_items,
+            accepted_items,
+            stale_items,
+            proposed_items,
+            rejected_items,
+            lifecycle_items,
+        }
     }
 
     pub fn import_legacy_markdown_records(&self) -> usize {
@@ -4383,6 +4579,70 @@ Always check logs first.
                 && item.trust == crate::engine::retrieval_context::TrustLevel::Low
                 && item.reason.contains("needs revalidation")
         }));
+
+        let _ = std::fs::remove_dir_all(base);
+    }
+
+    #[test]
+    fn test_memory_review_report_groups_status_evidence_and_stale_records() {
+        let base = temp_memory_base("memory-review-report");
+        let mgr = MemoryManager::with_base_dir(base.clone());
+
+        let mut accepted = MemoryRecord::new(
+            "project_runtime: package manager is pnpm.",
+            MemoryKind::ProjectFact,
+            MemoryScope::local("review-test"),
+            MemoryProvenance::local("tool_output"),
+        );
+        accepted.status = MemoryStatus::Accepted;
+        accepted.evidence.push(MemoryEvidenceRef::new(
+            MemoryEvidenceKind::ToolOutput,
+            "package.json",
+            "verified package manager from project file",
+            0.95,
+        ));
+        accepted.last_verified_at = Some(chrono::Utc::now() - chrono::Duration::days(120));
+
+        let mut proposed = MemoryRecord::new(
+            "project_goal: build the smallest useful local project partner first.",
+            MemoryKind::ProjectFact,
+            MemoryScope::local("review-test"),
+            MemoryProvenance::local("partner_inference"),
+        );
+        proposed.evidence.push(MemoryEvidenceRef::inferred(
+            "partner_layer",
+            "inferred from current conversation",
+        ));
+
+        let mut rejected = MemoryRecord::new(
+            "project_goal: auto-write all memory without review.",
+            MemoryKind::Decision,
+            MemoryScope::local("review-test"),
+            MemoryProvenance::local("review_gate"),
+        );
+        rejected.status = MemoryStatus::Rejected;
+
+        write_memory_records(mgr.records_path(), &[accepted, proposed, rejected]).unwrap();
+
+        let report = mgr.memory_review_report(8);
+        let formatted = report.format();
+
+        assert_eq!(report.summary.total, 3);
+        assert_eq!(report.summary.accepted, 1);
+        assert_eq!(report.summary.proposed, 1);
+        assert_eq!(report.summary.rejected, 1);
+        assert_eq!(report.summary.stale, 1);
+        assert_eq!(report.summary.missing_evidence, 1);
+        assert_eq!(report.accepted_items.len(), 1);
+        assert_eq!(report.stale_items.len(), 1);
+        assert_eq!(report.proposed_items.len(), 1);
+        assert_eq!(report.rejected_items.len(), 1);
+        assert!(formatted.contains("Review queue:"));
+        assert!(formatted.contains("Accepted records:"));
+        assert!(formatted.contains("evidence=verified"));
+        assert!(formatted.contains("evidence=inferred"));
+        assert!(formatted.contains("evidence=missing"));
+        assert!(formatted.contains("freshness=stale"));
 
         let _ = std::fs::remove_dir_all(base);
     }

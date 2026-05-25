@@ -2376,13 +2376,13 @@ impl TuiApp {
                             format!("Memory Conflicts\n{}", conflicts.join("\n"))
                         }
                     } else if memory_action == "review" {
-                        let summary = mem.memory_summary();
+                        let review = mem.memory_review_report(8);
                         let decisions = mem.memory_decision_counts();
                         let flushes = mem.memory_flush_summary();
                         let conflicts = mem.memory_conflicts(8);
                         format!(
                             "Memory Review\n\n{}\n\nDecisions: {} accepted · {} proposed · {} rejected · {} blocked\n{}\n\nConflicts:\n{}",
-                            summary.format(),
+                            review.format(),
                             decisions.accepted,
                             decisions.proposed,
                             decisions.rejected,
