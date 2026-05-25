@@ -1,5 +1,6 @@
 use super::ConversationLoop;
 use crate::engine::task_context::AgentTaskStage;
+use crate::engine::task_contract::ModelProfileMode;
 use crate::services::api::{Message, Tool};
 use std::collections::HashSet;
 
@@ -9,6 +10,7 @@ pub(super) struct ToolExposureRequest<'a> {
     pub(super) task_stage: Option<AgentTaskStage>,
     pub(super) has_changes_before_request: bool,
     pub(super) required_validation_commands_present: bool,
+    pub(super) model_profile: ModelProfileMode,
     pub(super) action_checkpoint_active: bool,
     pub(super) action_checkpoint_lookup_count: usize,
     pub(super) action_checkpoint_requires_patch_before_validation: bool,
@@ -49,6 +51,11 @@ impl ToolExposurePlan {
         } else {
             tools
         };
+        let tools = if request.programming_workflow {
+            model_profile_scoped_tools(&tools, request.model_profile)
+        } else {
+            tools
+        };
         let tools = if mva_audit_tools_enabled() {
             mva_audit_scoped_tools(&tools)
         } else {
@@ -77,6 +84,59 @@ impl ToolExposurePlan {
             exposed_tool_names,
             focused_repair_prompt,
         }
+    }
+}
+
+fn model_profile_scoped_tools(tools: &[Tool], profile: ModelProfileMode) -> Vec<Tool> {
+    if profile == ModelProfileMode::Standard {
+        return tools.to_vec();
+    }
+    let scoped = tools
+        .iter()
+        .filter(|tool| model_profile_allows_tool(profile, &tool.name))
+        .cloned()
+        .collect::<Vec<_>>();
+    if scoped.is_empty() {
+        tools.to_vec()
+    } else {
+        scoped
+    }
+}
+
+fn model_profile_allows_tool(profile: ModelProfileMode, name: &str) -> bool {
+    match profile {
+        ModelProfileMode::Standard => true,
+        ModelProfileMode::Constrained | ModelProfileMode::ReviewRequired => matches!(
+            name,
+            "project_list"
+                | "glob"
+                | "grep"
+                | "file_read"
+                | "file_edit"
+                | "file_patch"
+                | "bash"
+                | "run_tests"
+                | "diff"
+                | "git_status"
+                | "git_diff"
+                | "format"
+                | "lsp"
+                | "symbol_query"
+                | "todo_write"
+                | "plan"
+                | "ask_user"
+        ),
+        ModelProfileMode::HumanConfirm => matches!(
+            name,
+            "project_list"
+                | "glob"
+                | "grep"
+                | "file_read"
+                | "diff"
+                | "git_status"
+                | "git_diff"
+                | "ask_user"
+        ),
     }
 }
 
@@ -266,6 +326,7 @@ mod tests {
             task_stage: None,
             has_changes_before_request: false,
             required_validation_commands_present: false,
+            model_profile: ModelProfileMode::Standard,
             action_checkpoint_active: false,
             action_checkpoint_lookup_count: 0,
             action_checkpoint_requires_patch_before_validation: false,
@@ -285,6 +346,7 @@ mod tests {
             task_stage: Some(AgentTaskStage::Repair),
             has_changes_before_request: false,
             required_validation_commands_present: false,
+            model_profile: ModelProfileMode::Standard,
             action_checkpoint_active: true,
             action_checkpoint_lookup_count: 0,
             action_checkpoint_requires_patch_before_validation: false,
@@ -316,6 +378,7 @@ mod tests {
             task_stage: Some(AgentTaskStage::Repair),
             has_changes_before_request: true,
             required_validation_commands_present: false,
+            model_profile: ModelProfileMode::Standard,
             action_checkpoint_active: true,
             action_checkpoint_lookup_count: 0,
             action_checkpoint_requires_patch_before_validation: false,
@@ -335,6 +398,7 @@ mod tests {
             task_stage: Some(AgentTaskStage::Repair),
             has_changes_before_request: true,
             required_validation_commands_present: false,
+            model_profile: ModelProfileMode::Standard,
             action_checkpoint_active: true,
             action_checkpoint_lookup_count: 0,
             action_checkpoint_requires_patch_before_validation: true,
@@ -361,6 +425,7 @@ mod tests {
             task_stage: Some(AgentTaskStage::Understand),
             has_changes_before_request: false,
             required_validation_commands_present: false,
+            model_profile: ModelProfileMode::Standard,
             action_checkpoint_active: false,
             action_checkpoint_lookup_count: 0,
             action_checkpoint_requires_patch_before_validation: false,
@@ -389,6 +454,7 @@ mod tests {
             task_stage: Some(AgentTaskStage::Understand),
             has_changes_before_request: false,
             required_validation_commands_present: true,
+            model_profile: ModelProfileMode::Standard,
             action_checkpoint_active: false,
             action_checkpoint_lookup_count: 0,
             action_checkpoint_requires_patch_before_validation: false,
@@ -410,6 +476,7 @@ mod tests {
             task_stage: Some(AgentTaskStage::Edit),
             has_changes_before_request: false,
             required_validation_commands_present: false,
+            model_profile: ModelProfileMode::Standard,
             action_checkpoint_active: false,
             action_checkpoint_lookup_count: 0,
             action_checkpoint_requires_patch_before_validation: false,
@@ -435,6 +502,7 @@ mod tests {
             task_stage: Some(AgentTaskStage::Validate),
             has_changes_before_request: true,
             required_validation_commands_present: false,
+            model_profile: ModelProfileMode::Standard,
             action_checkpoint_active: false,
             action_checkpoint_lookup_count: 0,
             action_checkpoint_requires_patch_before_validation: false,
@@ -459,6 +527,7 @@ mod tests {
             task_stage: Some(AgentTaskStage::Repair),
             has_changes_before_request: false,
             required_validation_commands_present: false,
+            model_profile: ModelProfileMode::Standard,
             action_checkpoint_active: false,
             action_checkpoint_lookup_count: 0,
             action_checkpoint_requires_patch_before_validation: false,
@@ -486,6 +555,7 @@ mod tests {
             task_stage: Some(AgentTaskStage::Repair),
             has_changes_before_request: true,
             required_validation_commands_present: false,
+            model_profile: ModelProfileMode::Standard,
             action_checkpoint_active: false,
             action_checkpoint_lookup_count: 0,
             action_checkpoint_requires_patch_before_validation: false,
@@ -500,5 +570,52 @@ mod tests {
         assert!(!plan.exposed_tool_names.contains("mcp"));
         assert!(!plan.exposed_tool_names.contains("web_search"));
         assert!(!plan.exposed_tool_names.contains("install_dependencies"));
+    }
+
+    #[test]
+    fn constrained_model_profile_removes_broad_mutation_tools() {
+        let base_tools = base_tools();
+        let plan = ToolExposurePlan::build(ToolExposureRequest {
+            base_tools: &base_tools,
+            programming_workflow: true,
+            task_stage: Some(AgentTaskStage::Repair),
+            has_changes_before_request: false,
+            required_validation_commands_present: false,
+            model_profile: ModelProfileMode::Constrained,
+            action_checkpoint_active: false,
+            action_checkpoint_lookup_count: 0,
+            action_checkpoint_requires_patch_before_validation: false,
+        });
+
+        assert!(plan.exposed_tool_names.contains("file_edit"));
+        assert!(plan.exposed_tool_names.contains("file_patch"));
+        assert!(plan.exposed_tool_names.contains("bash"));
+        assert!(!plan.exposed_tool_names.contains("install_dependencies"));
+        assert!(!plan.exposed_tool_names.contains("start_dev_server"));
+    }
+
+    #[test]
+    fn human_confirm_profile_is_read_only_until_confirmed() {
+        let mut base_tools = base_tools();
+        base_tools.push(tool("ask_user"));
+        let plan = ToolExposurePlan::build(ToolExposureRequest {
+            base_tools: &base_tools,
+            programming_workflow: true,
+            task_stage: Some(AgentTaskStage::Repair),
+            has_changes_before_request: true,
+            required_validation_commands_present: false,
+            model_profile: ModelProfileMode::HumanConfirm,
+            action_checkpoint_active: false,
+            action_checkpoint_lookup_count: 0,
+            action_checkpoint_requires_patch_before_validation: false,
+        });
+
+        assert!(plan.exposed_tool_names.contains("file_read"));
+        assert!(plan.exposed_tool_names.contains("grep"));
+        assert!(plan.exposed_tool_names.contains("ask_user"));
+        assert!(plan.exposed_tool_names.contains("git_status"));
+        assert!(!plan.exposed_tool_names.contains("file_edit"));
+        assert!(!plan.exposed_tool_names.contains("file_patch"));
+        assert!(!plan.exposed_tool_names.contains("bash"));
     }
 }

@@ -65,6 +65,7 @@ pub mod streaming;
 pub mod swarm;
 pub mod symbol_index;
 pub mod task_context;
+pub mod task_contract;
 pub mod task_mode_score;
 pub mod tool_exposure;
 pub mod tool_orchestration;

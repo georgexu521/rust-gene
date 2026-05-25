@@ -4,6 +4,7 @@ use super::turn_runtime_state::TurnRuntimeState;
 use super::workflow_change_tracker::WorkflowChangeTracker;
 use crate::engine::intent_router::WorkflowKind;
 use crate::engine::task_context::AgentTaskStage;
+use crate::engine::task_contract::ModelProfileMode;
 use crate::engine::trace::TraceCollector;
 use crate::memory::MemoryManager;
 use crate::services::api::Tool;
@@ -24,6 +25,7 @@ pub(super) struct TurnIterationSetupContext<'a> {
     pub(super) baseline_git_status_files: &'a HashSet<PathBuf>,
     pub(super) base_tools: &'a [Tool],
     pub(super) required_validation_commands_present: bool,
+    pub(super) model_profile: ModelProfileMode,
 }
 
 pub(super) enum TurnIterationSetupFlow {
@@ -81,6 +83,7 @@ impl TurnIterationSetupController {
             task_stage: Some(context.task_stage),
             has_changes_before_request,
             required_validation_commands_present: context.required_validation_commands_present,
+            model_profile: context.model_profile,
             action_checkpoint_active: context.turn_state.focused_repair.action_checkpoint_active,
             action_checkpoint_lookup_count: context
                 .turn_state
@@ -129,6 +132,7 @@ mod tests {
             baseline_git_status_files: &HashSet::new(),
             base_tools: &[tool("file_read")],
             required_validation_commands_present: false,
+            model_profile: ModelProfileMode::Standard,
         })
         .await;
 
@@ -154,6 +158,7 @@ mod tests {
             baseline_git_status_files: &HashSet::new(),
             base_tools: &[tool("file_read"), tool("bash")],
             required_validation_commands_present: false,
+            model_profile: ModelProfileMode::Standard,
         })
         .await;
 

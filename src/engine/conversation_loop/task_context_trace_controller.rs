@@ -1,5 +1,6 @@
 use crate::engine::intent_router::WorkflowKind;
 use crate::engine::task_context::TaskContextBundle;
+use crate::engine::task_contract::TaskContractBundleExt;
 use crate::engine::trace::{TraceCollector, TraceEvent};
 
 pub(super) struct TaskContextTraceContext<'a> {
@@ -20,6 +21,31 @@ impl TaskContextTraceController {
             constraints: context.task_bundle.constraints.len(),
             risks: context.task_bundle.risks.len(),
             acceptance_checks: context.task_bundle.acceptance_checks.len(),
+        });
+        let contract = context
+            .task_bundle
+            .task_contract(context.required_validation_commands);
+        context.trace.record(TraceEvent::TaskContractMaterialized {
+            task_id: contract.task_id.clone(),
+            task_type: format!("{:?}", contract.task_type),
+            model_profile: contract.model_profile.label().to_string(),
+            assumptions: contract.assumptions.len(),
+            scope_files: contract.scope.files_allowed.len(),
+            validation_commands: contract.validation.required_commands.len(),
+            proof_required: contract.validation.proof_required,
+            risk: format!("{:?}", contract.risk.level),
+        });
+        let context_pack = context.task_bundle.context_pack(&contract);
+        context.trace.record(TraceEvent::ContextPackMaterialized {
+            task_id: context_pack.task_id,
+            project_facts: context_pack.project_facts.len(),
+            memory_records: context_pack.memory_records.len(),
+            recent_observations: context_pack.recent_observations.len(),
+            failure_summaries: context_pack.failure_summaries.len(),
+            estimated_tokens: context_pack.estimated_tokens,
+            max_tokens: context_pack.budget.max_total_estimated_tokens,
+            overflow_items: context_pack.overflow_items,
+            fingerprint: context_pack.fingerprint,
         });
         if crate::engine::code_change_workflow::is_programming_workflow(context.route_workflow) {
             context
@@ -74,6 +100,24 @@ mod tests {
         )));
         assert!(finished.events.iter().any(|event| matches!(
             event,
+            TraceEvent::TaskContractMaterialized {
+                task_type,
+                model_profile,
+                validation_commands: 1,
+                proof_required: true,
+                ..
+            } if task_type == "CodeChange" && model_profile == "standard"
+        )));
+        assert!(finished.events.iter().any(|event| matches!(
+            event,
+            TraceEvent::ContextPackMaterialized {
+                project_facts,
+                estimated_tokens,
+                ..
+            } if *project_facts > 0 && *estimated_tokens > 0
+        )));
+        assert!(finished.events.iter().any(|event| matches!(
+            event,
             TraceEvent::ImplementationIntentRecorded {
                 target_files: 1,
                 validation_commands,
@@ -100,6 +144,14 @@ mod tests {
             .events
             .iter()
             .any(|event| matches!(event, TraceEvent::TaskContextBuilt { .. })));
+        assert!(finished
+            .events
+            .iter()
+            .any(|event| matches!(event, TraceEvent::TaskContractMaterialized { .. })));
+        assert!(finished
+            .events
+            .iter()
+            .any(|event| matches!(event, TraceEvent::ContextPackMaterialized { .. })));
         assert!(!finished
             .events
             .iter()

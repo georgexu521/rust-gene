@@ -32,6 +32,7 @@ use crate::engine::streaming::StreamEvent;
 use crate::engine::task_context::{
     mva_stage_transition_policy, AgentToolRoundObservation, TaskContextBundle,
 };
+use crate::engine::task_contract::TaskContractBundleExt;
 use crate::engine::trace::{TraceCollector, TraceEvent};
 use crate::services::api::{Message, Tool, ToolCall};
 use crate::tools::ToolContextRetainedContext;
@@ -74,6 +75,10 @@ impl TurnIterationController {
     pub(super) async fn run(
         context: TurnIterationContext<'_>,
     ) -> anyhow::Result<TurnIterationFlow> {
+        let model_profile = context
+            .task_bundle
+            .task_contract(context.required_validation_commands)
+            .model_profile;
         let exposure_plan = match TurnIterationSetupController::run(TurnIterationSetupContext {
             iteration: context.iteration,
             max_iterations: context.conversation.max_iterations,
@@ -85,6 +90,7 @@ impl TurnIterationController {
             baseline_git_status_files: context.baseline_git_status_files,
             base_tools: context.base_tools,
             required_validation_commands_present: !context.required_validation_commands.is_empty(),
+            model_profile,
         })
         .await
         {
@@ -101,6 +107,7 @@ impl TurnIterationController {
                 route: context.route,
                 code_workflow: &*context.code_workflow,
                 task_bundle: &*context.task_bundle,
+                required_validation_commands: context.required_validation_commands,
                 turn_retrieval_context: context.turn_retrieval_context,
                 focused_repair_prompt: exposure_plan.focused_repair_prompt,
                 tools: &tools,

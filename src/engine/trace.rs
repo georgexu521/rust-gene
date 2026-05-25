@@ -97,6 +97,27 @@ pub enum TraceEvent {
         risks: usize,
         acceptance_checks: usize,
     },
+    TaskContractMaterialized {
+        task_id: String,
+        task_type: String,
+        model_profile: String,
+        assumptions: usize,
+        scope_files: usize,
+        validation_commands: usize,
+        proof_required: bool,
+        risk: String,
+    },
+    ContextPackMaterialized {
+        task_id: String,
+        project_facts: usize,
+        memory_records: usize,
+        recent_observations: usize,
+        failure_summaries: usize,
+        estimated_tokens: usize,
+        max_tokens: usize,
+        overflow_items: usize,
+        fingerprint: String,
+    },
     ImplementationIntentRecorded {
         task_id: String,
         workflow: String,
@@ -682,6 +703,14 @@ pub enum TraceEvent {
         acceptance_items: usize,
         residual_risks: usize,
     },
+    ExecutionReportPrepared {
+        task_id: String,
+        status: String,
+        changed_files: usize,
+        validation_evidence: usize,
+        risks: usize,
+        next_steps: usize,
+    },
     Error {
         message: String,
     },
@@ -694,6 +723,8 @@ impl TraceEvent {
             TraceEvent::IntentRouted { .. } => "intent",
             TraceEvent::ResourcePolicySelected { .. } => "resource.policy",
             TraceEvent::TaskContextBuilt { .. } => "task.context",
+            TraceEvent::TaskContractMaterialized { .. } => "task.contract",
+            TraceEvent::ContextPackMaterialized { .. } => "context.pack",
             TraceEvent::ImplementationIntentRecorded { .. } => "implementation.intent",
             TraceEvent::WorkflowJudgmentCompleted { .. } => "workflow.judgment",
             TraceEvent::WorkflowPlanProgress { .. } => "workflow.plan",
@@ -744,6 +775,7 @@ impl TraceEvent {
             TraceEvent::AssistantResponded { .. } => "assistant",
             TraceEvent::CompletionContractEvaluated { .. } => "completion.contract",
             TraceEvent::FinalCloseoutPrepared { .. } => "closeout",
+            TraceEvent::ExecutionReportPrepared { .. } => "execution.report",
             TraceEvent::Error { .. } => "error",
         }
     }
@@ -812,6 +844,48 @@ impl TraceEvent {
                 constraints,
                 risks,
                 acceptance_checks
+            ),
+            TraceEvent::TaskContractMaterialized {
+                task_id,
+                task_type,
+                model_profile,
+                assumptions,
+                scope_files,
+                validation_commands,
+                proof_required,
+                risk,
+            } => format!(
+                "task contract {} type={} profile={} assumptions={} files={} validations={} proof_required={} risk={}",
+                short_id(task_id),
+                task_type,
+                model_profile,
+                assumptions,
+                scope_files,
+                validation_commands,
+                proof_required,
+                risk
+            ),
+            TraceEvent::ContextPackMaterialized {
+                task_id,
+                project_facts,
+                memory_records,
+                recent_observations,
+                failure_summaries,
+                estimated_tokens,
+                max_tokens,
+                overflow_items,
+                fingerprint,
+            } => format!(
+                "context pack {} project_facts={} memory_records={} observations={} failures={} tokens~{}/{} overflow={} fp={}",
+                short_id(task_id),
+                project_facts,
+                memory_records,
+                recent_observations,
+                failure_summaries,
+                estimated_tokens,
+                max_tokens,
+                overflow_items,
+                preview(fingerprint)
             ),
             TraceEvent::ImplementationIntentRecorded {
                 task_id,
@@ -1834,6 +1908,22 @@ impl TraceEvent {
                 acceptance_items,
                 residual_risks
             ),
+            TraceEvent::ExecutionReportPrepared {
+                task_id,
+                status,
+                changed_files,
+                validation_evidence,
+                risks,
+                next_steps,
+            } => format!(
+                "execution report {} status={} files={} validation={} risks={} next_steps={}",
+                short_id(task_id),
+                status,
+                changed_files,
+                validation_evidence,
+                risks,
+                next_steps
+            ),
             TraceEvent::Error { message } => format!("error: {}", preview(message)),
         }
     }
@@ -2138,6 +2228,8 @@ fn control_loop_phase_for_event(event: &TraceEvent) -> Option<&'static str> {
         | TraceEvent::IntentRouted { .. }
         | TraceEvent::ResourcePolicySelected { .. }
         | TraceEvent::TaskContextBuilt { .. }
+        | TraceEvent::TaskContractMaterialized { .. }
+        | TraceEvent::ContextPackMaterialized { .. }
         | TraceEvent::MemorySnapshotInjected { .. }
         | TraceEvent::MemoryPrefetch { .. }
         | TraceEvent::RetrievalContextBuilt { .. }
@@ -2188,6 +2280,7 @@ fn control_loop_phase_for_event(event: &TraceEvent) -> Option<&'static str> {
         | TraceEvent::AssistantResponded { .. }
         | TraceEvent::CompletionContractEvaluated { .. }
         | TraceEvent::FinalCloseoutPrepared { .. }
+        | TraceEvent::ExecutionReportPrepared { .. }
         | TraceEvent::Error { .. } => Some("closeout"),
     }
 }

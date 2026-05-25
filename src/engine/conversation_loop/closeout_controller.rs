@@ -4,6 +4,7 @@ use crate::engine::code_change_workflow::{
 };
 use crate::engine::evidence_ledger::EvidenceLedger;
 use crate::engine::task_context::TaskContextBundle;
+use crate::engine::task_contract::{ExecutionReport, TaskContractBundleExt};
 use crate::engine::trace::{TraceCollector, TraceEvent};
 use crate::engine::verification_proof::{
     VerificationProof, VerificationProofRequest, VerificationProofStatus,
@@ -222,6 +223,18 @@ impl FinalCloseoutController {
                 verification_proof_summary: Some(verification_proof.summary.clone()),
                 acceptance_items: closeout.acceptance.len(),
                 residual_risks: closeout.residual_risks.len(),
+            });
+            let contract = context
+                .task_bundle
+                .task_contract(context.required_validation_commands);
+            let report = ExecutionReport::from_closeout(&contract, &closeout);
+            context.trace.record(TraceEvent::ExecutionReportPrepared {
+                task_id: report.task_id,
+                status: report.status.label().to_string(),
+                changed_files: report.changed_files.len(),
+                validation_evidence: report.validation_evidence.len(),
+                risks: report.risks.len(),
+                next_steps: report.next_steps.len(),
             });
             context.runtime_diet.closeout_visibility =
                 format!("{:?}", closeout.visibility_from_env()).to_ascii_lowercase();
@@ -575,6 +588,15 @@ mod tests {
                 tool_records: 1,
                 ..
             } if status == "passed"
+        )));
+        assert!(finished.events.iter().any(|event| matches!(
+            event,
+            TraceEvent::ExecutionReportPrepared {
+                status,
+                changed_files: 0,
+                validation_evidence,
+                ..
+            } if status == "success" && *validation_evidence > 0
         )));
     }
 

@@ -9,6 +9,7 @@ use crate::engine::context_ledger::{
 use crate::engine::intent_router::RetrievalPolicy;
 use crate::engine::retrieval_context::{RetrievalContext, RetrievalSource};
 use crate::engine::task_context::AgentTaskState;
+use crate::engine::task_contract::{ContextPack, TaskContract};
 use crate::engine::trace::{TraceCollector, TraceEvent};
 use crate::memory::MemoryManager;
 use crate::services::api::{ChatRequest, LlmProvider, Message, Tool};
@@ -22,6 +23,8 @@ pub(super) struct RequestPreparationContext<'a> {
     pub(super) messages: &'a [Message],
     pub(super) focused_repair_prompt: Option<Message>,
     pub(super) agent_task_state: Option<&'a AgentTaskState>,
+    pub(super) task_contract: Option<&'a TaskContract>,
+    pub(super) context_pack: Option<&'a ContextPack>,
     pub(super) turn_retrieval_context: Option<&'a RetrievalContext>,
     pub(super) retrieval_policy: RetrievalPolicy,
     pub(super) memory_manager: Option<&'a Arc<Mutex<MemoryManager>>>,
@@ -56,6 +59,8 @@ impl RequestPreparationController {
             messages,
             focused_repair_prompt,
             agent_task_state,
+            task_contract,
+            context_pack,
             turn_retrieval_context,
             retrieval_policy,
             memory_manager,
@@ -70,6 +75,7 @@ impl RequestPreparationController {
 
         let mut request_messages = messages.to_vec();
         Self::inject_task_state_zone(&mut request_messages, agent_task_state);
+        Self::inject_task_contract_zone(&mut request_messages, task_contract, context_pack);
         Self::inject_mva_candidate_action_hint(&mut request_messages);
         if let Some(prompt) = focused_repair_prompt {
             request_messages.push(prompt);
@@ -122,6 +128,45 @@ impl RequestPreparationController {
             Some(Message::System { .. }) => 1,
             _ => 0,
         };
+        request_messages.insert(insert_pos, Message::system(block));
+    }
+
+    fn inject_task_contract_zone(
+        request_messages: &mut Vec<Message>,
+        task_contract: Option<&TaskContract>,
+        context_pack: Option<&ContextPack>,
+    ) {
+        let Some(task_contract) = task_contract else {
+            return;
+        };
+        if !task_contract.should_inject_executor_context() {
+            return;
+        }
+        if request_messages.iter().any(|message| {
+            matches!(message, Message::System { content } if content.contains("<task-contract>"))
+        }) {
+            return;
+        }
+
+        let mut sections = vec![format!(
+            "<task-contract>\n{}\n</task-contract>",
+            task_contract.format_for_context_zone().trim()
+        )];
+        if let Some(context_pack) = context_pack {
+            sections.push(format!(
+                "<context-pack>\n{}\n</context-pack>",
+                context_pack.format_for_context_zone().trim()
+            ));
+        }
+        let block = sections.join("\n");
+        let insert_pos = request_messages
+            .iter()
+            .rposition(|message| matches!(message, Message::System { content } if content.contains("<task-state>")))
+            .map(|index| index + 1)
+            .unwrap_or_else(|| match request_messages.first() {
+                Some(Message::System { .. }) => 1,
+                _ => 0,
+            });
         request_messages.insert(insert_pos, Message::system(block));
     }
 
@@ -575,6 +620,7 @@ fn compact_text(value: &str, max_chars: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::engine::task_contract::TaskContractBundleExt;
     use crate::engine::trace::TurnTrace;
 
     fn tool(name: &str) -> Tool {
@@ -597,6 +643,8 @@ mod tests {
             messages: &[Message::user("change src/lib.rs")],
             focused_repair_prompt: Some(focused_prompt),
             agent_task_state: None,
+            task_contract: None,
+            context_pack: None,
             turn_retrieval_context: None,
             retrieval_policy: RetrievalPolicy::None,
             memory_manager: None,
@@ -634,6 +682,8 @@ mod tests {
             messages: &[Message::user("remembered context should not be injected")],
             focused_repair_prompt: None,
             agent_task_state: None,
+            task_contract: None,
+            context_pack: None,
             turn_retrieval_context: None,
             retrieval_policy: RetrievalPolicy::Memory,
             memory_manager: None,
@@ -689,6 +739,8 @@ mod tests {
             messages: &[Message::user("summarize README")],
             focused_repair_prompt: None,
             agent_task_state: None,
+            task_contract: None,
+            context_pack: None,
             turn_retrieval_context: None,
             retrieval_policy: RetrievalPolicy::None,
             memory_manager: None,
@@ -810,6 +862,8 @@ mod tests {
             messages: &[Message::user("continue changes")],
             focused_repair_prompt: None,
             agent_task_state: None,
+            task_contract: None,
+            context_pack: None,
             turn_retrieval_context: None,
             retrieval_policy: RetrievalPolicy::None,
             memory_manager: None,
@@ -868,6 +922,8 @@ mod tests {
             ],
             focused_repair_prompt: None,
             agent_task_state: Some(&task_bundle.agent_state),
+            task_contract: None,
+            context_pack: None,
             turn_retrieval_context: None,
             retrieval_policy: RetrievalPolicy::None,
             memory_manager: None,
@@ -904,6 +960,66 @@ mod tests {
         )));
         assert!(matches!(
             &prepared.request.messages[2],
+            Message::User { content } if content == "change"
+        ));
+    }
+
+    #[tokio::test]
+    async fn prepare_injects_task_contract_and_context_pack_for_executor() {
+        let trace =
+            TraceCollector::new(TurnTrace::new("session-test".to_string(), 1, "update code"));
+        let mut runtime_diet = RuntimeDietSnapshot::new(true);
+        let route = crate::engine::intent_router::IntentRouter::new().route("修改 src/lib.rs");
+        let mut task_bundle = crate::engine::task_context::TaskContextBundle::new(
+            "修改 src/lib.rs",
+            ".",
+            route,
+            None,
+        );
+        task_bundle.add_file("src/lib.rs");
+        task_bundle.add_acceptance_check("cargo test -q");
+        let required = vec!["cargo test -q".to_string()];
+        let contract = task_bundle.task_contract(&required);
+        let context_pack = task_bundle.context_pack(&contract);
+
+        let prepared = RequestPreparationController::prepare(RequestPreparationContext {
+            messages: &[
+                Message::system("base system prompt"),
+                Message::user("change"),
+            ],
+            focused_repair_prompt: None,
+            agent_task_state: Some(&task_bundle.agent_state),
+            task_contract: Some(&contract),
+            context_pack: Some(&context_pack),
+            turn_retrieval_context: None,
+            retrieval_policy: RetrievalPolicy::None,
+            memory_manager: None,
+            provider: None,
+            session_store: None,
+            session_id: "session-test",
+            model: "test-model",
+            tools: &[],
+            trace: &trace,
+            runtime_diet: &mut runtime_diet,
+        })
+        .await;
+
+        assert!(matches!(
+            &prepared.request.messages[1],
+            Message::System { content } if content.contains("<task-state>")
+        ));
+        assert!(matches!(
+            &prepared.request.messages[2],
+            Message::System { content }
+                if content.contains("<task-contract>")
+                    && content.contains("type: code_change")
+                    && content.contains("model_profile: standard")
+                    && content.contains("commands=cargo test -q")
+                    && content.contains("<context-pack>")
+                    && content.contains("allowed_files: src/lib.rs")
+        ));
+        assert!(matches!(
+            &prepared.request.messages[3],
             Message::User { content } if content == "change"
         ));
     }

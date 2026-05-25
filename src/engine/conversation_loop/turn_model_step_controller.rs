@@ -20,6 +20,7 @@ use crate::engine::resource_policy::ResourcePolicy;
 use crate::engine::retrieval_context::RetrievalContext;
 use crate::engine::streaming::StreamEvent;
 use crate::engine::task_context::TaskContextBundle;
+use crate::engine::task_contract::TaskContractBundleExt;
 use crate::engine::trace::{TraceCollector, TraceEvent};
 use crate::services::api::{Message, Tool, ToolCall};
 use crate::tools::ToolResult;
@@ -33,6 +34,7 @@ pub(super) struct TurnModelStepContext<'a> {
     pub(super) route: &'a IntentRoute,
     pub(super) code_workflow: &'a CodeChangeWorkflowRunner,
     pub(super) task_bundle: &'a TaskContextBundle,
+    pub(super) required_validation_commands: &'a [String],
     pub(super) turn_retrieval_context: Option<&'a RetrievalContext>,
     pub(super) focused_repair_prompt: Option<Message>,
     pub(super) tools: &'a [Tool],
@@ -60,10 +62,16 @@ pub(super) struct TurnModelStepController;
 
 impl TurnModelStepController {
     pub(super) async fn run(context: TurnModelStepContext<'_>) -> Result<TurnModelStepFlow> {
+        let task_contract = context
+            .task_bundle
+            .task_contract(context.required_validation_commands);
+        let context_pack = context.task_bundle.context_pack(&task_contract);
         let prepared_request = RequestPreparationController::prepare(RequestPreparationContext {
             messages: context.messages,
             focused_repair_prompt: context.focused_repair_prompt,
             agent_task_state: Some(&context.task_bundle.agent_state),
+            task_contract: Some(&task_contract),
+            context_pack: Some(&context_pack),
             turn_retrieval_context: context.turn_retrieval_context,
             retrieval_policy: context.route.retrieval,
             memory_manager: context.conversation.memory_manager.as_ref(),
@@ -331,6 +339,7 @@ mod tests {
             route,
             code_workflow: &code_workflow,
             task_bundle: &task_bundle,
+            required_validation_commands: &[],
             turn_retrieval_context: None,
             focused_repair_prompt: None,
             tools: &[],
