@@ -4,7 +4,7 @@ use crate::engine::code_change_workflow::{
 };
 use crate::engine::evidence_ledger::EvidenceLedger;
 use crate::engine::task_context::TaskContextBundle;
-use crate::engine::task_contract::{ExecutionReport, TaskContractBundleExt};
+use crate::engine::task_contract::{ExecutionReport, MemoryProposal, TaskContractBundleExt};
 use crate::engine::trace::{TraceCollector, TraceEvent};
 use crate::engine::verification_proof::{
     VerificationProof, VerificationProofRequest, VerificationProofStatus,
@@ -228,13 +228,24 @@ impl FinalCloseoutController {
                 .task_bundle
                 .task_contract(context.required_validation_commands);
             let report = ExecutionReport::from_closeout(&contract, &closeout);
+            let memory_proposal = MemoryProposal::from_execution_report(&report);
             context.trace.record(TraceEvent::ExecutionReportPrepared {
-                task_id: report.task_id,
+                task_id: report.task_id.clone(),
                 status: report.status.label().to_string(),
                 changed_files: report.changed_files.len(),
                 validation_evidence: report.validation_evidence.len(),
                 risks: report.risks.len(),
                 next_steps: report.next_steps.len(),
+            });
+            context.trace.record(TraceEvent::MemoryProposalPrepared {
+                task_id: memory_proposal.task_id.clone(),
+                status: memory_proposal.status.label().to_string(),
+                candidates: memory_proposal.candidates.len(),
+                candidate_kinds: memory_proposal.candidate_kinds(),
+                evidence_items: memory_proposal.evidence_items(),
+                write_policy: memory_proposal.write_policy.clone(),
+                write_performed: memory_proposal.write_performed,
+                reason: memory_proposal.reason.clone(),
             });
             context.runtime_diet.closeout_visibility =
                 format!("{:?}", closeout.visibility_from_env()).to_ascii_lowercase();
@@ -597,6 +608,15 @@ mod tests {
                 validation_evidence,
                 ..
             } if status == "success" && *validation_evidence > 0
+        )));
+        assert!(finished.events.iter().any(|event| matches!(
+            event,
+            TraceEvent::MemoryProposalPrepared {
+                status,
+                candidates: 0,
+                write_performed: false,
+                ..
+            } if status == "not_applicable"
         )));
     }
 

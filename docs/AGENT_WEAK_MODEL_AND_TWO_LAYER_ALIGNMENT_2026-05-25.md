@@ -899,9 +899,15 @@ Implementation progress on 2026-05-25:
   keeps the existing surface, `constrained` and `review_required` remove broad
   mutation/environment tools, and `human_confirm` stays read/inspect/confirm
   until a safer handoff is available.
+- Added a review-only `MemoryProposal` surface derived from `ExecutionReport`;
+  it can propose `successful_fix` or `failure_pattern` candidates with evidence
+  but records `write_performed=false`.
+- Added `memory.proposal` trace output and closeout memory boundary diagnostics
+  so future memory-review UI can distinguish proposal generation from legacy
+  heuristic/LLM memory sync.
 - Added focused tests for assumptions, scope, validation commands, context
   budgets, executor context injection, weak-model profiles, profile-scoped tool
-  exposure, and execution report status mapping.
+  exposure, execution report status mapping, and review-only memory proposals.
 
 ### Phase 0: Document the contract shape
 

@@ -20,6 +20,12 @@ pub(super) struct MemorySyncController;
 impl MemorySyncController {
     pub(super) async fn sync_turn(context: MemorySyncContext<'_>) {
         let Some(memory_manager) = context.memory_manager else {
+            context.trace.record(TraceEvent::MemoryBoundaryEvaluated {
+                read_status: "not_applicable".to_string(),
+                stale_conflict_demotion_status: "not_applicable".to_string(),
+                closeout_write_candidate_status: "skipped_no_memory_manager".to_string(),
+                reason: "no memory manager configured for closeout sync".to_string(),
+            });
             return;
         };
         let mut memory = memory_manager.lock().await;
@@ -27,6 +33,17 @@ impl MemorySyncController {
         if !user_msg.is_empty() {
             let assistant_text =
                 Self::assistant_memory_text(context.final_content, context.tool_results_text);
+            context.trace.record(TraceEvent::MemoryBoundaryEvaluated {
+                read_status: "not_applicable".to_string(),
+                stale_conflict_demotion_status: "not_applicable".to_string(),
+                closeout_write_candidate_status: if context.llm_memory_extraction {
+                    "legacy_llm_sync_enabled".to_string()
+                } else {
+                    "legacy_heuristic_sync_enabled".to_string()
+                },
+                reason: "legacy memory sync remains separate from review-only MemoryProposal"
+                    .to_string(),
+            });
             if context.llm_memory_extraction {
                 if memory.should_extract_with_llm() {
                     if memory.is_forked_mode() {

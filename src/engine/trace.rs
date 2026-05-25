@@ -332,6 +332,16 @@ pub enum TraceEvent {
         closeout_write_candidate_status: String,
         reason: String,
     },
+    MemoryProposalPrepared {
+        task_id: String,
+        status: String,
+        candidates: usize,
+        candidate_kinds: Vec<String>,
+        evidence_items: usize,
+        write_policy: String,
+        write_performed: bool,
+        reason: String,
+    },
     MemorySynced {
         mode: String,
     },
@@ -747,6 +757,7 @@ impl TraceEvent {
             TraceEvent::RetrievalContextBuilt { .. } => "retrieval.context",
             TraceEvent::ContextZonesMaterialized { .. } => "context.zones",
             TraceEvent::MemoryBoundaryEvaluated { .. } => "memory.boundary",
+            TraceEvent::MemoryProposalPrepared { .. } => "memory.proposal",
             TraceEvent::MemorySynced { .. } => "memory.sync",
             TraceEvent::ContextCompacted { .. } => "context.compact",
             TraceEvent::RuntimeDietReport { .. } => "runtime.diet",
@@ -1255,6 +1266,30 @@ impl TraceEvent {
                 read_status,
                 stale_conflict_demotion_status,
                 closeout_write_candidate_status,
+                preview(reason)
+            ),
+            TraceEvent::MemoryProposalPrepared {
+                task_id,
+                status,
+                candidates,
+                candidate_kinds,
+                evidence_items,
+                write_policy,
+                write_performed,
+                reason,
+            } => format!(
+                "memory proposal {} status={} candidates={} kinds={} evidence={} write_policy={} wrote={} ({})",
+                short_id(task_id),
+                status,
+                candidates,
+                if candidate_kinds.is_empty() {
+                    "none".to_string()
+                } else {
+                    candidate_kinds.join(",")
+                },
+                evidence_items,
+                write_policy,
+                write_performed,
                 preview(reason)
             ),
             TraceEvent::MemorySynced { mode } => format!("memory synced: {}", mode),
@@ -2281,6 +2316,7 @@ fn control_loop_phase_for_event(event: &TraceEvent) -> Option<&'static str> {
         | TraceEvent::CompletionContractEvaluated { .. }
         | TraceEvent::FinalCloseoutPrepared { .. }
         | TraceEvent::ExecutionReportPrepared { .. }
+        | TraceEvent::MemoryProposalPrepared { .. }
         | TraceEvent::Error { .. } => Some("closeout"),
     }
 }
