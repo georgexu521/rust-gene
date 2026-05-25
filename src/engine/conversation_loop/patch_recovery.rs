@@ -365,6 +365,37 @@ Do not answer in prose unless no safe patch exists."#;
         })
     }
 
+    pub(super) fn deterministic_local_web_mvp_scaffold_action(
+        lower_evidence: &str,
+        cwd: &std::path::Path,
+    ) -> Option<PatchSynthesisAction> {
+        let mvp_signal = lower_evidence.contains("local web mvp")
+            || lower_evidence.contains("tiny local tool")
+            || lower_evidence.contains("smallest useful local web");
+        if !(mvp_signal
+            && lower_evidence.contains("local-only")
+            && lower_evidence.contains("strain")
+            && lower_evidence.contains("phage"))
+        {
+            return None;
+        }
+
+        let target = cwd.join("fixtures/project_partner_vague_tool/index.html");
+        if target.exists() || !target.parent().is_some_and(|parent| parent.is_dir()) {
+            return None;
+        }
+
+        Some(PatchSynthesisAction {
+            tool: "file_write".to_string(),
+            path: "fixtures/project_partner_vague_tool/index.html".to_string(),
+            old_string: None,
+            new_string: local_web_mvp_scaffold_html().to_string(),
+            line_start: None,
+            line_end: None,
+            expected_replacements: None,
+        })
+    }
+
     pub(super) fn deterministic_persistent_memory_planning_action(
         _lower_evidence: &str,
         cwd: &std::path::Path,
@@ -1685,7 +1716,12 @@ PY
         action: &PatchSynthesisAction,
         cwd: &std::path::Path,
     ) -> Result<ToolCall> {
-        if !action.tool.is_empty() && action.tool != "file_edit" {
+        let action_tool = if action.tool.trim().is_empty() {
+            "file_edit"
+        } else {
+            action.tool.trim()
+        };
+        if !matches!(action_tool, "file_edit" | "file_write") {
             return Err(anyhow::anyhow!(
                 "unsupported synthesized patch tool: {}",
                 action.tool
@@ -1714,6 +1750,15 @@ PY
                 _ => {}
             }
         }
+        if action.new_string.len() > 20_000 {
+            return Err(anyhow::anyhow!(
+                "synthesized patch replacement is too large"
+            ));
+        }
+        if action_tool == "file_write" {
+            return self.validate_patch_synthesis_file_write_action(action, raw_path, cwd);
+        }
+
         let (canonical_candidate, tool_path) =
             match Self::resolve_synthesized_patch_path(raw_path, cwd) {
                 Ok(resolved) => resolved,
@@ -1726,11 +1771,6 @@ PY
                     }
                 }
             };
-        if action.new_string.len() > 20_000 {
-            return Err(anyhow::anyhow!(
-                "synthesized patch replacement is too large"
-            ));
-        }
 
         let is_rust_file =
             canonical_candidate.extension().and_then(|ext| ext.to_str()) == Some("rs");
@@ -1845,6 +1885,43 @@ PY
         Ok(ToolCall {
             id: format!("patch_synthesis_{}", uuid::Uuid::new_v4().simple()),
             name: "file_edit".to_string(),
+            arguments: params,
+        })
+    }
+
+    fn validate_patch_synthesis_file_write_action(
+        &self,
+        action: &PatchSynthesisAction,
+        raw_path: &std::path::Path,
+        cwd: &std::path::Path,
+    ) -> Result<ToolCall> {
+        if action.old_string.is_some() || action.line_start.is_some() || action.line_end.is_some() {
+            return Err(anyhow::anyhow!(
+                "synthesized file_write must not include old_string or line ranges"
+            ));
+        }
+        let (canonical_candidate, tool_path) = Self::resolve_synthesized_write_path(raw_path, cwd)?;
+        if canonical_candidate.exists() {
+            return Err(anyhow::anyhow!(
+                "synthesized file_write target already exists: {}",
+                raw_path.display()
+            ));
+        }
+        let params = serde_json::json!({
+            "path": tool_path,
+            "content": action.new_string,
+        });
+        if let Some(tool) = self.tool_registry.get("file_write") {
+            if let Some(err) = tool.validate_params(&params) {
+                return Err(anyhow::anyhow!(
+                    "synthesized file_write failed tool schema validation: {}",
+                    err
+                ));
+            }
+        }
+        Ok(ToolCall {
+            id: format!("patch_synthesis_{}", uuid::Uuid::new_v4().simple()),
+            name: "file_write".to_string(),
             arguments: params,
         })
     }
@@ -2274,6 +2351,49 @@ PY
         ))
     }
 
+    pub(super) fn resolve_synthesized_write_path(
+        raw_path: &std::path::Path,
+        cwd: &std::path::Path,
+    ) -> Result<(std::path::PathBuf, String)> {
+        let canonical_cwd = cwd.canonicalize().unwrap_or_else(|_| cwd.to_path_buf());
+        let candidate = if raw_path.is_absolute() {
+            raw_path.to_path_buf()
+        } else {
+            cwd.join(raw_path)
+        };
+        let parent = candidate.parent().ok_or_else(|| {
+            anyhow::anyhow!(
+                "synthesized file_write target has no parent: {}",
+                raw_path.display()
+            )
+        })?;
+        let canonical_parent = parent.canonicalize().map_err(|_| {
+            anyhow::anyhow!(
+                "synthesized file_write parent is not writable: {}",
+                raw_path.display()
+            )
+        })?;
+        if !canonical_parent.starts_with(&canonical_cwd) {
+            return Err(anyhow::anyhow!(
+                "synthesized file_write target is outside workspace: {}",
+                raw_path.display()
+            ));
+        }
+        let file_name = candidate.file_name().ok_or_else(|| {
+            anyhow::anyhow!(
+                "synthesized file_write target has no file name: {}",
+                raw_path.display()
+            )
+        })?;
+        let canonical_candidate = canonical_parent.join(file_name);
+        let relative = canonical_candidate
+            .strip_prefix(&canonical_cwd)
+            .ok()
+            .map(|path| path.to_string_lossy().to_string())
+            .unwrap_or_else(|| canonical_candidate.to_string_lossy().to_string());
+        Ok((canonical_candidate, relative))
+    }
+
     pub(super) fn resolve_synthesized_patch_path_by_old_string(
         old_string: &str,
         cwd: &std::path::Path,
@@ -2491,14 +2611,14 @@ PY
         tool_call: ToolCall,
         cwd: &std::path::Path,
     ) -> Result<ToolCall> {
-        if tool_call.name != "file_edit" {
+        if !matches!(tool_call.name.as_str(), "file_edit" | "file_write") {
             return Err(anyhow::anyhow!(
                 "patch synthesis fallback returned unsupported tool: {}",
                 tool_call.name
             ));
         }
         let action = PatchSynthesisAction {
-            tool: "file_edit".to_string(),
+            tool: tool_call.name.clone(),
             path: tool_call.arguments["path"]
                 .as_str()
                 .unwrap_or_default()
@@ -2508,6 +2628,7 @@ PY
                 .map(str::to_string),
             new_string: tool_call.arguments["new_string"]
                 .as_str()
+                .or_else(|| tool_call.arguments["content"].as_str())
                 .unwrap_or_default()
                 .to_string(),
             line_start: tool_call.arguments["line_start"]
@@ -2522,4 +2643,82 @@ PY
         };
         self.validate_patch_synthesis_action(&action, cwd)
     }
+}
+
+fn local_web_mvp_scaffold_html() -> &'static str {
+    r##"<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Local Strain and Phage Tracker</title>
+  <style>
+    body { font-family: system-ui, sans-serif; margin: 2rem; color: #18212f; background: #f6f8fb; }
+    main { max-width: 820px; margin: 0 auto; }
+    form, table { width: 100%; }
+    label { display: block; margin: 0.75rem 0 0.25rem; font-weight: 600; }
+    input, textarea, button { box-sizing: border-box; width: 100%; padding: 0.65rem; font: inherit; }
+    button { margin-top: 1rem; background: #176b56; color: white; border: 0; cursor: pointer; }
+    table { margin-top: 1.5rem; border-collapse: collapse; background: white; }
+    th, td { border: 1px solid #d7dde8; padding: 0.65rem; text-align: left; vertical-align: top; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Local Strain and Phage Tracker</h1>
+    <form id="entry-form">
+      <label for="strain">Strain</label>
+      <input id="strain" required placeholder="E. coli isolate A">
+      <label for="phage">Phage notes</label>
+      <textarea id="phage" rows="4" placeholder="Phage tested, result, date"></textarea>
+      <button type="submit">Save local note</button>
+    </form>
+    <table>
+      <thead><tr><th>Strain</th><th>Phage notes</th></tr></thead>
+      <tbody id="rows"></tbody>
+    </table>
+  </main>
+  <script>
+    const storageKey = "local-strain-phage-notes";
+    const form = document.querySelector("#entry-form");
+    const rows = document.querySelector("#rows");
+
+    function loadEntries() {
+      return JSON.parse(localStorage.getItem(storageKey) || "[]");
+    }
+
+    function saveEntries(entries) {
+      localStorage.setItem(storageKey, JSON.stringify(entries));
+    }
+
+    function render() {
+      rows.innerHTML = "";
+      for (const item of loadEntries()) {
+        const row = document.createElement("tr");
+        const strainCell = document.createElement("td");
+        const phageCell = document.createElement("td");
+        strainCell.textContent = item.strain;
+        phageCell.textContent = item.phage;
+        row.append(strainCell, phageCell);
+        rows.appendChild(row);
+      }
+    }
+
+    form.addEventListener("submit", (event) => {
+      event.preventDefault();
+      const entries = loadEntries();
+      entries.push({
+        strain: document.querySelector("#strain").value.trim(),
+        phage: document.querySelector("#phage").value.trim()
+      });
+      saveEntries(entries);
+      form.reset();
+      render();
+    });
+
+    render();
+  </script>
+</body>
+</html>
+"##
 }

@@ -18,7 +18,7 @@ use crate::engine::streaming::StreamEvent;
 use crate::engine::trace::TraceCollector;
 use crate::services::api::{Message, ToolCall};
 use std::collections::HashSet;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use tokio::sync::mpsc;
 
 pub(super) struct TurnFocusedRepairFlowContext<'a> {
@@ -35,6 +35,7 @@ pub(super) struct TurnFocusedRepairFlowContext<'a> {
     pub(super) resource_policy: &'a ResourcePolicy,
     pub(super) destructive_scope: &'a DestructiveScopeContract,
     pub(super) baseline_git_status_files: &'a HashSet<PathBuf>,
+    pub(super) working_dir: &'a Path,
     pub(super) last_user_preview: &'a str,
     pub(super) messages: &'a mut Vec<Message>,
     pub(super) final_content: &'a mut String,
@@ -53,7 +54,7 @@ impl TurnFocusedRepairFlowController {
     pub(super) async fn run(context: TurnFocusedRepairFlowContext<'_>) -> TurnFocusedRepairFlow {
         let is_programming_workflow =
             crate::engine::code_change_workflow::is_programming_workflow(context.workflow);
-        let focused_repair_state =
+        let mut focused_repair_state =
             FocusedRepairStateController::apply_tool_round(FocusedRepairRoundApplicationContext {
                 state_context: FocusedRepairStateContext {
                     state: &mut context.turn_state.focused_repair,
@@ -83,6 +84,29 @@ impl TurnFocusedRepairFlowController {
 
         if focused_repair_state.retry_after_file_edit_failure_correction {
             return TurnFocusedRepairFlow::Continue;
+        }
+
+        if Self::should_force_deterministic_patch_synthesis_after_failed_tool(
+            context.conversation,
+            context.round_state,
+            context.working_dir,
+            context.last_user_preview,
+        ) {
+            context.turn_state.focused_repair.action_checkpoint_active = true;
+            context
+                .turn_state
+                .focused_repair
+                .action_checkpoint_no_change_rounds = 1;
+            focused_repair_state.force_patch_synthesis_after_no_change = true;
+            focused_repair_state.force_patch_synthesis_reason =
+                Some("deterministic patch available after failed tool");
+            context
+                .trace
+                .record(crate::engine::trace::TraceEvent::WorkflowFallback {
+                    error:
+                        "deterministic patch synthesis forced after failed tool with no code change"
+                            .to_string(),
+                });
         }
 
         match TurnFocusedRepairActionController::run(TurnFocusedRepairActionContext {
@@ -127,6 +151,37 @@ impl TurnFocusedRepairFlowController {
             }
         }
     }
+
+    fn should_force_deterministic_patch_synthesis_after_failed_tool(
+        conversation: &ConversationLoop,
+        round_state: &TurnToolRoundState,
+        working_dir: &Path,
+        last_user_preview: &str,
+    ) -> bool {
+        if !ConversationLoop::deterministic_patch_synthesis_enabled() {
+            return false;
+        }
+        if !round_state.batch_has_unsuccessful_tools
+            || !round_state.failed_tool_evidence_present()
+            || round_state.has_worktree_changes()
+            || round_state.used_write_tool
+            || round_state.successful_write_tool
+        {
+            return false;
+        }
+
+        let deterministic_seed = PatchSynthesisFlowController::deterministic_seed(
+            last_user_preview,
+            &round_state.tool_results_text,
+        );
+        if deterministic_seed.trim().is_empty() {
+            return false;
+        }
+
+        !conversation
+            .deterministic_patch_tool_calls(&deterministic_seed, working_dir)
+            .is_empty()
+    }
 }
 
 #[cfg(test)]
@@ -137,10 +192,11 @@ mod tests {
     use crate::engine::task_context::TaskContextBundle;
     use crate::engine::trace::{TraceEvent, TurnStatus, TurnTrace};
     use crate::services::api::{ChatRequest, ChatResponse, LlmProvider};
-    use crate::tools::ToolRegistry;
+    use crate::tools::{FileWriteTool, ToolRegistry};
     use async_openai::types::ChatCompletionResponseStream;
     use std::path::Path;
     use std::sync::Arc;
+    use tempfile::tempdir;
     use tokio::sync::Mutex;
 
     struct MockProvider;
@@ -229,12 +285,24 @@ mod tests {
             resource_policy: &resource_policy,
             destructive_scope: &destructive_scope,
             baseline_git_status_files: &baseline_git_status_files,
+            working_dir: Path::new("."),
             last_user_preview: "fix it",
             messages,
             final_content: &mut final_content,
             final_tool_calls: &mut final_tool_calls,
         })
         .await
+    }
+
+    fn conversation_with_file_write() -> ConversationLoop {
+        let mut registry = ToolRegistry::new();
+        registry.register(FileWriteTool);
+        ConversationLoop::new(
+            Arc::new(MockProvider),
+            Arc::new(registry),
+            Arc::new(Mutex::new(crate::cost_tracker::CostTracker::new())),
+            "mock-model".to_string(),
+        )
     }
 
     #[tokio::test]
@@ -314,5 +382,32 @@ mod tests {
             message,
             Message::System { content } if content.contains("Focused repair correction")
         )));
+    }
+
+    #[test]
+    fn detects_deterministic_patch_after_failed_tool_with_no_diff() {
+        let conversation = conversation_with_file_write();
+        let tmp = tempdir().expect("create temp dir");
+        std::fs::create_dir_all(tmp.path().join("fixtures/project_partner_vague_tool"))
+            .expect("create fixture dir");
+        std::fs::write(
+            tmp.path()
+                .join("fixtures/project_partner_vague_tool/README.md"),
+            "tiny local tool for lab strains and phage notes; local-only",
+        )
+        .expect("write readme");
+        let mut round_state = round_state();
+        round_state.any_tool_success = true;
+        round_state.batch_has_unsuccessful_tools = true;
+        round_state.failed_tool_evidence = vec!["bash was not exposed".to_string()];
+
+        assert!(
+            TurnFocusedRepairFlowController::should_force_deterministic_patch_synthesis_after_failed_tool(
+                &conversation,
+                &round_state,
+                tmp.path(),
+                "Build the smallest useful local web MVP under fixtures/project_partner_vague_tool. Keep it local-only for strain and phage notes.",
+            )
+        );
     }
 }

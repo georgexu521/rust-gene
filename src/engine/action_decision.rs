@@ -730,7 +730,12 @@ fn apply_score_delta(score: &mut u8, delta: i8) {
 
 fn phase_allows_action(stage: AgentTaskStage, profile: &ToolActionProfile) -> bool {
     match stage {
-        AgentTaskStage::Understand => profile.kind == ToolActionKind::Inspect,
+        AgentTaskStage::Understand => {
+            profile.kind == ToolActionKind::Inspect
+                || (profile.kind == ToolActionKind::Validate
+                    && !profile.mutates_workspace
+                    && !profile.broad_shell)
+        }
         AgentTaskStage::Plan => matches!(
             profile.kind,
             ToolActionKind::Inspect | ToolActionKind::Delegate
@@ -870,6 +875,28 @@ mod tests {
         assert!(decision.scores.value <= 6);
         assert!(decision.scores.scope_fit <= 2);
         assert!(decision
+            .score_computation
+            .modifiers
+            .iter()
+            .any(|modifier| modifier.kind == "phase_mismatch"));
+    }
+
+    #[test]
+    fn read_only_validation_is_understand_evidence() {
+        let decision = ActionDecision::for_tool_call(
+            &call(
+                "bash",
+                serde_json::json!({
+                    "command": "test -f fixtures/project_partner_vague_tool/index.html"
+                }),
+            ),
+            input(AgentTaskStage::Understand),
+        );
+
+        assert!(decision.action.phase_aligned);
+        assert!(!decision.action.mutates_workspace);
+        assert!(decision.scores.scope_fit > 2);
+        assert!(!decision
             .score_computation
             .modifiers
             .iter()

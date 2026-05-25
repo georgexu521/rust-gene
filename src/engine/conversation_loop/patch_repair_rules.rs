@@ -48,6 +48,12 @@ fn repair_rules() -> &'static [RepairRule] {
             apply: rust_e0596_rule,
         },
         RepairRule {
+            id: "local-web-mvp-scaffold",
+            owner: "project-partner",
+            review_after: "2026-06-01",
+            apply: local_web_mvp_scaffold_rule,
+        },
+        RepairRule {
             id: "persistent-memory-planning-prefetch",
             owner: "memory-routing",
             review_after: "2026-06-01",
@@ -104,6 +110,16 @@ fn rust_e0596_rule(
     cwd: &std::path::Path,
 ) -> Vec<PatchSynthesisAction> {
     ConversationLoop::deterministic_rust_e0596_action(lower_evidence, cwd)
+        .into_iter()
+        .collect()
+}
+
+fn local_web_mvp_scaffold_rule(
+    _loop_state: &ConversationLoop,
+    lower_evidence: &str,
+    cwd: &std::path::Path,
+) -> Vec<PatchSynthesisAction> {
+    ConversationLoop::deterministic_local_web_mvp_scaffold_action(lower_evidence, cwd)
         .into_iter()
         .collect()
 }

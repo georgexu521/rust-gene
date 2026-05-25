@@ -1583,6 +1583,48 @@ PY
     }
 
     #[test]
+    fn test_deterministic_patch_synthesis_scaffolds_local_web_mvp() {
+        let provider = Arc::new(MockLlmProvider {
+            responses: StdMutex::new(VecDeque::new()),
+        });
+        let mut registry = ToolRegistry::new();
+        registry.register(FileWriteTool);
+        let loop_instance = ConversationLoop::new(
+            provider,
+            Arc::new(registry),
+            Arc::new(Mutex::new(crate::cost_tracker::CostTracker::new())),
+            "test".into(),
+        );
+        let tmp = tempdir().expect("create temp dir");
+        std::fs::create_dir_all(tmp.path().join("fixtures/project_partner_vague_tool"))
+            .expect("create fixture dir");
+        std::fs::write(
+            tmp.path()
+                .join("fixtures/project_partner_vague_tool/README.md"),
+            "tiny local tool for lab strains and phage notes; local-only",
+        )
+        .expect("write readme");
+
+        let calls = loop_instance.deterministic_patch_tool_calls(
+            "Build the smallest useful local web MVP under fixtures/project_partner_vague_tool. Missing index.html. It must mention strain, phage, and localStorage while staying local-only.",
+            tmp.path(),
+        );
+
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].name, "file_write");
+        assert_eq!(
+            calls[0].arguments["path"],
+            "fixtures/project_partner_vague_tool/index.html"
+        );
+        let content = calls[0].arguments["content"]
+            .as_str()
+            .expect("file_write content");
+        assert!(content.contains("localStorage"));
+        assert!(content.contains("Strain"));
+        assert!(content.contains("Phage"));
+    }
+
+    #[test]
     fn test_deterministic_patch_fallback_records_source_and_reason() {
         let mut guard = EnvVarGuard::acquire_blocking();
         guard.remove("PRIORITY_AGENT_DETERMINISTIC_PATCH_SYNTHESIS");

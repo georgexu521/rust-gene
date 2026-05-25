@@ -1298,6 +1298,14 @@ collect_task() {
   git -C "$task_workdir" status --short >"$report_dir/git-status.txt" || true
   git -C "$task_workdir" diff --stat >"$diff_stat" || true
   git -C "$task_workdir" diff >"$diff_patch" || true
+  while IFS= read -r untracked_path; do
+    [[ -z "$untracked_path" ]] && continue
+    (
+      cd "$task_workdir"
+      git diff --stat --no-index -- /dev/null "$untracked_path" >>"$ROOT_DIR/$diff_stat" || true
+      git diff --no-index -- /dev/null "$untracked_path" >>"$ROOT_DIR/$diff_patch" || true
+    )
+  done < <(git -C "$task_workdir" ls-files --others --exclude-standard || true)
 
   : >"$cmd_log"
   if [[ "$effective_run_tests" -eq 1 ]]; then

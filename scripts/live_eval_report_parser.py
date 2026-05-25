@@ -1508,6 +1508,18 @@ def evaluate_product_differentiation_assertions(sample, output, report_text, run
     }
 
 
+def action_was_revised_before_execution(action_event, action_review_events):
+    call_id = str(action_event.get("call_id", "")).strip()
+    if not call_id:
+        return False
+    for review in action_review_events:
+        if str(review.get("call_id", "")).strip() != call_id:
+            continue
+        if token(review.get("decision", "")) in {"revise", "deny", "block", "blocked", "reject"}:
+            return True
+    return False
+
+
 def derived_trajectory_metrics_from_events(
     events,
     report_text="",
@@ -1583,6 +1595,7 @@ def derived_trajectory_metrics_from_events(
         event.get("phase_aligned") is False
         and bool(event.get("mutates_workspace"))
         and token(event.get("stage", "")) in {"understand", "diagnosis"}
+        and not action_was_revised_before_execution(event, action_review_events)
         for event in action_decision_events
     )
     premature_edit_count = 0
@@ -1595,6 +1608,7 @@ def derived_trajectory_metrics_from_events(
         1
         for event in action_decision_events
         if event.get("scope_fit") is not None and int_value(event.get("scope_fit"), 10) <= 2
+        and not action_was_revised_before_execution(event, action_review_events)
     )
     scope_drift_count += sum(
         1

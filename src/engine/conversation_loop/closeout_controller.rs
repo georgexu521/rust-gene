@@ -253,7 +253,8 @@ impl FinalCloseoutController {
                 .clone()
                 .unwrap_or_else(|| verification_proof.status_label().to_string());
             let closeout_text = if structured_closeout_runtime_profile_enabled() {
-                let mut text = closeout.format_for_final_response();
+                let mut text = format!("Task contract: {}\n", contract.compact_summary());
+                text.push_str(&closeout.format_for_final_response());
                 let memory_proposal_text = memory_proposal.format_for_final_response();
                 if !memory_proposal_text.is_empty() {
                     text.push_str(&memory_proposal_text);

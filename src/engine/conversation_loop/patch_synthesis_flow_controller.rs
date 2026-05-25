@@ -275,7 +275,7 @@ impl PatchSynthesisFlowController {
             .to_string();
         context.trace.record(TraceEvent::WorkflowFallback {
             error: format!(
-                "patch synthesis owner={} reason={} source={} produced {} file_edit action(s)",
+                "patch synthesis owner={} reason={} source={} produced {} patch action(s)",
                 context.proposal.fallback_owner,
                 synthesis_reason,
                 source.label(),
@@ -319,7 +319,7 @@ impl PatchSynthesisFlowController {
         if !deterministic_calls.is_empty() {
             context.trace.record(TraceEvent::WorkflowFallback {
                 error: format!(
-                    "deterministic patch synthesis fallback owner={} reason={} produced {} file_edit action(s)",
+                    "deterministic patch synthesis fallback owner={} reason={} produced {} patch action(s)",
                     context.proposal.fallback_owner,
                     context.proposal.fallback_reason,
                     deterministic_calls.len()

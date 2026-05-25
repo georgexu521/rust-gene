@@ -250,6 +250,7 @@ impl TurnIterationController {
                 resource_policy: context.resource_policy,
                 destructive_scope: context.destructive_scope,
                 baseline_git_status_files: context.baseline_git_status_files,
+                working_dir: context.working_dir,
                 last_user_preview: context.last_user_preview,
                 messages: &mut *context.messages,
                 final_content: &mut context.loop_state.final_content,

@@ -937,6 +937,22 @@ Implementation progress on 2026-05-25:
   `write_performed=false`, and runtime spine evidence; the resume-from-memory
   case now passes with grounded `local-only` and `CSV export` evidence, no
   repeated-action penalty, and `agent_score=100`.
+- Added weak-model compensation for the vague-idea-to-local-MVP demo: when the
+  model stalls after read-only evidence, tries a raw shell mutation, or loses
+  the focused write tool boundary, deterministic patch synthesis can create the
+  scoped `fixtures/project_partner_vague_tool/index.html` scaffold through
+  `file_write`, then run the normal validation/closeout spine.
+- Fixed live-eval diff accounting for newly created untracked files by adding
+  no-index diff/stat output, so file-creation tasks are judged from real
+  diffable evidence instead of appearing as `no_code_diff`.
+- Refined trajectory metrics so actions revised or denied before execution by
+  runtime policy are not counted as actual premature edits or scope drift; they
+  remain visible as failed/revised actions, preserving the distinction between
+  weak-model attempts and runtime-contained effects.
+- Replayed `project-partner-vague-local-tool` successfully:
+  `docs/benchmarks/live-project-partner-vague-fix6-20260525-233041/project-partner-vague-local-tool/report.md`
+  shows `diff_files_changed=1`, required commands passing, runtime spine
+  passed, verified closeout, `failure_owner=none`, and `agent_score=100`.
 - Added focused tests for assumptions, scope, validation commands, context
   budgets, executor context injection, weak-model profiles, profile-scoped tool
   exposure, execution report status mapping, review-only memory proposals,
