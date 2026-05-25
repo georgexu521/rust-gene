@@ -324,6 +324,115 @@ fn project_name(dir: &std::path::Path) -> String {
         .to_string()
 }
 
+fn compact_project_text(text: &str, max_chars: usize) -> String {
+    let compact = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    if compact.chars().count() <= max_chars {
+        compact
+    } else {
+        let mut out = compact.chars().take(max_chars).collect::<String>();
+        out.push_str("...");
+        out
+    }
+}
+
+fn git_dirty_summary() -> (usize, String) {
+    let Some(output) = std::process::Command::new("git")
+        .args(["status", "--short"])
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+    else {
+        return (0, "git status unavailable".to_string());
+    };
+    let lines = String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(ToString::to_string)
+        .collect::<Vec<_>>();
+    if lines.is_empty() {
+        (0, "clean".to_string())
+    } else {
+        let preview = lines
+            .iter()
+            .take(4)
+            .map(|line| compact_project_text(line, 80))
+            .collect::<Vec<_>>()
+            .join(", ");
+        (lines.len(), preview)
+    }
+}
+
+fn project_goal_line(app: &TuiApp) -> String {
+    app.streaming_engine
+        .as_ref()
+        .and_then(|engine| engine.goal_manager().current())
+        .map(|goal| compact_project_text(&goal.compact_status(), 120))
+        .unwrap_or_else(|| "none".to_string())
+}
+
+fn project_memory_pulse_line(app: &TuiApp) -> String {
+    let Some(manager) = app
+        .streaming_engine
+        .as_ref()
+        .and_then(|engine| engine.memory_manager())
+    else {
+        return "memory manager unavailable".to_string();
+    };
+    let Ok(memory) = manager.try_lock() else {
+        return "memory manager busy".to_string();
+    };
+    let report = memory.memory_review_report(3);
+    format!(
+        "records={} review={} proposed={} stale={} rejected={}",
+        report.summary.total,
+        report.review_items.len(),
+        report.summary.proposed,
+        report.summary.stale,
+        report.summary.rejected
+    )
+}
+
+fn project_memory_proposal_line(app: &TuiApp) -> String {
+    latest_trace_for_app(app)
+        .and_then(|trace| crate::engine::trace::latest_memory_proposal_summary(&trace))
+        .map(|line| compact_project_text(&line, 140))
+        .unwrap_or_else(|| "none".to_string())
+}
+
+struct ProjectPulseView<'a> {
+    name: &'a str,
+    dir: &'a std::path::Path,
+    branch: &'a str,
+    dirty_count: usize,
+    dirty_summary: &'a str,
+    goal: &'a str,
+    memory: &'a str,
+    memory_proposal: &'a str,
+}
+
+fn format_project_pulse(view: ProjectPulseView<'_>) -> String {
+    let next_step = if view.dirty_count > 0 {
+        "Review the current diff and either finish, validate, or commit the scoped change."
+    } else if view.memory.contains("review=0") && view.memory.contains("stale=0") {
+        "Pick the next small TaskContract-worthy project step from /quick or the active goal."
+    } else {
+        "Run /memory review before relying on project memory for the next execution task."
+    };
+    format!(
+        "Project Pulse\n\nState:\n- Project: {}\n- Path: {}\n- Git branch: {}\n- Git changes: {} ({})\n- Goal: {}\n- Memory: {}\n- Memory proposal: {}\n\nSmallest next step:\n- {}\n\nBoundaries:\n- Pull-first only; no reminder or background task was scheduled.\n- Pulse must stay tied to project state, memory review state, or execution evidence.",
+        view.name,
+        view.dir.display(),
+        view.branch,
+        view.dirty_count,
+        view.dirty_summary,
+        view.goal,
+        view.memory,
+        view.memory_proposal,
+        next_step
+    )
+}
+
 fn format_project_soul(name: &str, dir: &std::path::Path, branch: &str) -> String {
     format!(
         "Project Soul\n\nScope:\n- Project: {}\n- Path: {}\n- Git branch: {}\n\nPartner layer:\n- Act as a long-term project partner, not a separate execution agent.\n- Keep the user/project relationship warm, direct, and grounded in current project state.\n- Ask clarifying questions only when missing information blocks safe progress.\n- Default to the smallest useful MVP scope, and state assumptions when requirements are vague.\n- Route state-changing work through TaskContract, ContextPack, and the verified executor.\n\nBoundaries:\n- Soul does not grant filesystem, shell, network, or memory-write permission.\n- Execution context must receive only the typed task contract and execution-safe context pack, not full persona or chat history.\n- Memory, skill, and behavior changes start as reviewable proposals unless runtime policy or eval evidence allows promotion.\n- Hard constraints belong in permissions, tool contracts, validation, and closeout gates.\n\nReview surfaces:\n- /quick shows current contract and memory-proposal state.\n- /memory review shows accepted, proposed, rejected, stale, and lifecycle memory records.\n- /project soul shows this compact constitution without injecting it into executor context.",
@@ -334,7 +443,7 @@ fn format_project_soul(name: &str, dir: &std::path::Path, branch: &str) -> Strin
 }
 
 /// /project - Project management
-pub fn handle_project(_app: &TuiApp, args: &str) -> String {
+pub fn handle_project(app: &TuiApp, args: &str) -> String {
     if args.is_empty() || args == "info" {
         let dir = current_project_dir();
         let name = project_name(&dir);
@@ -343,7 +452,7 @@ pub fn handle_project(_app: &TuiApp, args: &str) -> String {
             .unwrap_or(0);
         let branch = current_git_branch();
         return format!(
-            "Project: {}\nPath: {}\nEntries: {}\nGit branch: {}\nSoul: /project soul",
+            "Project: {}\nPath: {}\nEntries: {}\nGit branch: {}\nSoul: /project soul\nPulse: /project pulse",
             name,
             dir.display(),
             entries,
@@ -358,6 +467,25 @@ pub fn handle_project(_app: &TuiApp, args: &str) -> String {
             let name = project_name(&dir);
             let branch = current_git_branch();
             format_project_soul(&name, &dir, &branch)
+        }
+        "pulse" => {
+            let dir = current_project_dir();
+            let name = project_name(&dir);
+            let branch = current_git_branch();
+            let (dirty_count, dirty_summary) = git_dirty_summary();
+            let goal = project_goal_line(app);
+            let memory = project_memory_pulse_line(app);
+            let memory_proposal = project_memory_proposal_line(app);
+            format_project_pulse(ProjectPulseView {
+                name: &name,
+                dir: &dir,
+                branch: &branch,
+                dirty_count,
+                dirty_summary: &dirty_summary,
+                goal: &goal,
+                memory: &memory,
+                memory_proposal: &memory_proposal,
+            })
         }
         "list" => {
             let dir = current_project_dir();
@@ -411,7 +539,7 @@ pub fn handle_project(_app: &TuiApp, args: &str) -> String {
                 }
             }
         }
-        _ => "Usage: /project [info|soul|list|tree [depth]|init <name>]".to_string(),
+        _ => "Usage: /project [info|soul|pulse|list|tree [depth]|init <name>]".to_string(),
     }
 }
 
@@ -668,5 +796,26 @@ mod tests {
         assert!(soul.contains("Soul does not grant filesystem"));
         assert!(soul.contains("not full persona or chat history"));
         assert!(soul.contains("/memory review"));
+    }
+
+    #[test]
+    fn test_project_pulse_is_pull_first_and_state_tied() {
+        let pulse = format_project_pulse(ProjectPulseView {
+            name: "demo",
+            dir: std::path::Path::new("/tmp/demo"),
+            branch: "main",
+            dirty_count: 2,
+            dirty_summary: "M src/lib.rs, M docs/status.md",
+            goal: "goal: finish MVP",
+            memory: "records=4 review=1 proposed=1 stale=0 rejected=0",
+            memory_proposal: "candidate_count=1 write_performed=false",
+        });
+
+        assert!(pulse.contains("Project Pulse"));
+        assert!(pulse.contains("Git changes: 2"));
+        assert!(pulse.contains("Memory: records=4 review=1"));
+        assert!(pulse.contains("Memory proposal: candidate_count=1"));
+        assert!(pulse.contains("Review the current diff"));
+        assert!(pulse.contains("Pull-first only"));
     }
 }

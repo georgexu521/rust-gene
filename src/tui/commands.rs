@@ -1238,7 +1238,7 @@ pub const CMD_PROJECT: CommandDef = CommandDef::new(
     "/project",
     &[],
     "Info",
-    "/project [info|soul|list|tree [depth]|init <name>]",
+    "/project [info|soul|pulse|list|tree [depth]|init <name>]",
     "Project management",
 );
 
