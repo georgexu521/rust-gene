@@ -1402,6 +1402,7 @@ PY
             quality_score: None,
             reason: "secret_like_content: memory appears to contain a raw token".to_string(),
             path: None,
+            record: None,
         };
 
         let rendered = format_memory_write_outcome("api_key = [redacted]", &outcome);

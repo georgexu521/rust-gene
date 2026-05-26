@@ -1511,3 +1511,47 @@ cargo fmt --check
 - remaining high-risk migration 仍是 candidate submission / quality gate /
   Markdown projection / search-index rebuild 的 transaction 语义，下一步应先把
   write transaction owner 定清楚，再做主路径迁移。
+
+### 2026-05-26 第十六批落地
+
+已完成:
+
+- typed memory write transaction 增加 provider notification 路径:
+  - `MemoryWriteOutcome` 携带实际写入的 `MemoryRecord`；
+  - `submit_candidate_with_provider_notifications` 在 manager 完成 quality gate、
+    safety gate、typed record append、Markdown projection 后，调用
+    `provider_registry.on_memory_write_all(record, record.scope)`；
+  - local provider 的 `on_memory_write` 因第十二批已经是 idempotent，所以 manager
+    主写路径先写入 records 后再通知 local provider 不会重复追加；
+  - provider write hook failure 只 debug 记录，不 retroactively 推翻已经完成的
+    local persistence。
+- async write paths 接入 provider notification:
+  - `add_learning_async`；
+  - `add_topic_learning_async`；
+  - turn-level LLM memory extraction；
+  - forked background LLM extraction；
+  - trailing LLM extraction。
+- 保留同步 `submit_candidate` / `add_learning` 为当前 manager-owned 主写路径:
+  - 这避免一次性把 memory tool、TUI、turn-recording 等同步调用点改成 async；
+  - 后续迁移可以逐步把调用点切到 async notification path。
+- 测试新增 external provider write recorder:
+  - async memory write 会通知 external provider 一次；
+  - provider hook 收到的 scope 等于 record/current active scope；
+  - local provider notification 不会导致 `records.jsonl` 双写。
+
+已验证:
+
+```bash
+cargo test -q async_memory_write_notifies_providers_once_with_record_scope
+cargo test -q memory
+cargo check -q
+cargo fmt --check
+```
+
+第十六批之后的状态:
+
+- P2 Memory Provider Boundary 的 candidate submission / quality gate / safety
+  gate / typed record write 已有一条 async provider-notification 主路径。
+- Markdown projection 和 lifecycle 仍由 `MemoryManager::submit_candidate` 负责，
+  provider hook 收到的是已经通过 manager transaction 的 typed record；这样先
+  建立 provider bridge，再逐步抽 manager 内部实现，避免双写和 projection drift。

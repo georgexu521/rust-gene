@@ -815,15 +815,22 @@ pub struct MemoryWriteOutcome {
     pub quality_score: Option<f32>,
     pub reason: String,
     pub path: Option<PathBuf>,
+    pub record: Option<MemoryRecord>,
 }
 
 impl MemoryWriteOutcome {
-    fn saved(path: impl Into<PathBuf>, score: f32, reason: impl Into<String>) -> Self {
+    fn saved_with_record(
+        path: impl Into<PathBuf>,
+        score: f32,
+        reason: impl Into<String>,
+        record: MemoryRecord,
+    ) -> Self {
         Self {
             status: MemoryWriteOutcomeStatus::Saved,
             quality_score: Some(score),
             reason: reason.into(),
             path: Some(path.into()),
+            record: Some(record),
         }
     }
 
@@ -838,7 +845,23 @@ impl MemoryWriteOutcome {
             quality_score: Some(score),
             reason: reason.into(),
             path: None,
+            record: None,
         }
+    }
+
+    fn gated_with_record(
+        record: MemoryRecord,
+        status: MemoryStatus,
+        score: f32,
+        reason: impl Into<String>,
+    ) -> Self {
+        let mut outcome = Self::gated(status, score, reason);
+        outcome.record = Some(record);
+        outcome
+    }
+
+    fn provider_notifiable_record(&self) -> Option<&MemoryRecord> {
+        self.record.as_ref()
     }
 
     fn duplicate(path: impl Into<PathBuf>, reason: impl Into<String>) -> Self {
@@ -847,6 +870,7 @@ impl MemoryWriteOutcome {
             quality_score: None,
             reason: reason.into(),
             path: Some(path.into()),
+            record: None,
         }
     }
 
@@ -856,6 +880,7 @@ impl MemoryWriteOutcome {
             quality_score: None,
             reason: reason.into(),
             path: None,
+            record: None,
         }
     }
 
@@ -865,6 +890,7 @@ impl MemoryWriteOutcome {
             quality_score: None,
             reason: reason.into(),
             path: Some(path.into()),
+            record: None,
         }
     }
 
@@ -874,6 +900,7 @@ impl MemoryWriteOutcome {
             quality_score: None,
             reason: reason.into(),
             path: None,
+            record: None,
         }
     }
 }
@@ -1694,7 +1721,7 @@ impl MemoryManager {
         ));
 
         if status != MemoryStatus::Accepted {
-            return MemoryWriteOutcome::gated(status, assessment.score, reason);
+            return MemoryWriteOutcome::gated_with_record(record, status, assessment.score, reason);
         }
 
         let entry = markdown_entry_for_record(&record, &candidate.category);
@@ -1714,7 +1741,34 @@ impl MemoryManager {
             return MemoryWriteOutcome::failed(path, error.to_string());
         }
 
-        MemoryWriteOutcome::saved(path, assessment.score, reason)
+        MemoryWriteOutcome::saved_with_record(path, assessment.score, reason, record)
+    }
+
+    pub async fn submit_candidate_with_provider_notifications(
+        &self,
+        candidate: MemoryCandidate,
+        target: MemoryWriteTarget,
+    ) -> MemoryWriteOutcome {
+        let outcome = self.submit_candidate(candidate, target);
+        let Some(record) = outcome.provider_notifiable_record() else {
+            return outcome;
+        };
+        let provider_outcomes = self
+            .provider_registry
+            .on_memory_write_all(record, &record.scope)
+            .await;
+        for provider_outcome in provider_outcomes {
+            if provider_outcome.status != MemoryProviderCallStatus::Ok {
+                debug!(
+                    "Memory provider write hook {:?}: provider={} record={} error={:?}",
+                    provider_outcome.status,
+                    provider_outcome.provider,
+                    record.id,
+                    provider_outcome.error
+                );
+            }
+        }
+        outcome
     }
 
     fn apply_record_lifecycle_before_append(&self, record: &mut MemoryRecord) {
@@ -2084,7 +2138,11 @@ impl MemoryManager {
                     .extract_memory_candidates_with_llm(user, assistant, p, model)
                     .await;
                 for candidate in llm_candidates.into_iter().take(MAX_LEARNINGS_PER_TURN) {
-                    self.submit_candidate(candidate, MemoryWriteTarget::Auto);
+                    self.submit_candidate_with_provider_notifications(
+                        candidate,
+                        MemoryWriteTarget::Auto,
+                    )
+                    .await;
                 }
             }
         }
@@ -2184,8 +2242,12 @@ Only include facts supported by the turn. Do not save task progress, command his
                         );
 
                         for candidate in candidates {
-                            let outcome =
-                                manager.submit_candidate(candidate, MemoryWriteTarget::Auto);
+                            let outcome = manager
+                                .submit_candidate_with_provider_notifications(
+                                    candidate,
+                                    MemoryWriteTarget::Auto,
+                                )
+                                .await;
                             debug!(
                                 "Background LLM memory outcome ({:?}): {}",
                                 outcome.status, outcome.reason
@@ -2348,7 +2410,8 @@ Only include facts supported by the turn. Do not save task progress, command his
         } else {
             MemoryWriteTarget::Index
         };
-        self.submit_candidate(candidate, target)
+        self.submit_candidate_with_provider_notifications(candidate, target)
+            .await
     }
 
     /// 添加学习内容到分主题记忆文件（异步版本）
@@ -2363,7 +2426,11 @@ Only include facts supported by the turn. Do not save task progress, command his
             category,
             "memory_manager.add_topic_learning_async",
         );
-        self.submit_candidate(candidate, MemoryWriteTarget::Topic(topic.to_string()))
+        self.submit_candidate_with_provider_notifications(
+            candidate,
+            MemoryWriteTarget::Topic(topic.to_string()),
+        )
+        .await
     }
 
     /// 自动选择 USER.md、MEMORY.md 或分主题文件保存学习内容（异步版本）。
@@ -2494,7 +2561,11 @@ Do not save task progress, command history, or repeatable procedures; procedures
                             candidates.len()
                         );
                         for candidate in candidates {
-                            self.submit_candidate(candidate, MemoryWriteTarget::Auto);
+                            self.submit_candidate_with_provider_notifications(
+                                candidate,
+                                MemoryWriteTarget::Auto,
+                            )
+                            .await;
                         }
                     }
                 }
@@ -4372,6 +4443,29 @@ mod tests {
         }
     }
 
+    #[derive(Debug, Default)]
+    struct RecordingWriteProvider {
+        record_ids: Mutex<Vec<String>>,
+        scopes: Mutex<Vec<MemoryScope>>,
+    }
+
+    #[async_trait::async_trait]
+    impl MemoryProvider for RecordingWriteProvider {
+        fn name(&self) -> &str {
+            "recording-write"
+        }
+
+        async fn on_memory_write(
+            &self,
+            record: &MemoryRecord,
+            scope: &MemoryScope,
+        ) -> anyhow::Result<()> {
+            self.record_ids.lock().unwrap().push(record.id.clone());
+            self.scopes.lock().unwrap().push(scope.clone());
+            Ok(())
+        }
+    }
+
     #[tokio::test]
     async fn llm_memory_extraction_uses_active_scope() {
         let base = temp_memory_base("llm-memory-active-scope");
@@ -4397,6 +4491,40 @@ mod tests {
 
         assert_eq!(candidates.len(), 1);
         assert_eq!(candidates[0].scope, scope);
+
+        let _ = std::fs::remove_dir_all(base);
+    }
+
+    #[tokio::test]
+    async fn async_memory_write_notifies_providers_once_with_record_scope() {
+        let base = temp_memory_base("provider-write-notification");
+        let mut manager = MemoryManager::with_base_dir(base.clone());
+        let mut scope = MemoryScope::local("session-provider-write");
+        scope.project_root = Some(base.clone());
+        manager.set_active_scope(scope.clone());
+        let provider = Arc::new(RecordingWriteProvider::default());
+        manager
+            .register_external_memory_provider(provider.clone())
+            .unwrap();
+
+        let outcome = manager
+            .add_learning_async(
+                "Project convention: run cargo check before closeout.",
+                "convention",
+            )
+            .await;
+
+        assert_eq!(outcome.status, MemoryWriteOutcomeStatus::Saved);
+        let record = outcome
+            .record
+            .as_ref()
+            .expect("saved outcome should carry record");
+        assert_eq!(
+            provider.record_ids.lock().unwrap().as_slice(),
+            &[record.id.clone()]
+        );
+        assert_eq!(provider.scopes.lock().unwrap().as_slice(), &[scope]);
+        assert_eq!(manager.memory_records().len(), 1);
 
         let _ = std::fs::remove_dir_all(base);
     }

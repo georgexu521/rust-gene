@@ -43,7 +43,8 @@ Current stage:
   session id and working directory during turn bootstrap; turn-level LLM
   extraction, forked background extraction, and trailing session extraction now
   inherit that active scope, trailing runs notify memory providers through
-  `on_session_end`, and streaming flush paths without a persistent session id
+  `on_session_end`, async memory writes notify providers through idempotent
+  `on_memory_write`, and streaming flush paths without a persistent session id
   skip memory writes instead of falling back to `unbound-session`. Phase 5 has
   started by applying the memory
   safety scanner on persisted load paths: unsafe `MEMORY.md`, `USER.md`, topic
