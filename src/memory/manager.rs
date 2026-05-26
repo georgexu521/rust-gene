@@ -2127,7 +2127,7 @@ impl MemoryManager {
                 let system_prompt = "You are a memory extraction assistant. \
 Analyze the conversation turn and propose up to 3 long-term memory candidates only. \
 Return JSON: {\"memory_candidates\":[{\"type\":\"project_fact|user_preference|strategy|failure_lesson|note\",\"content\":\"...\",\"evidence\":\"...\",\"confidence\":0.0,\"importance\":1,\"tags\":[\"...\"]}]}. \
-Only include facts supported by the turn. Return exactly NONE if there is nothing critical to remember.";
+Only include facts supported by the turn. Do not save task progress, command history, or repeatable procedures; procedures belong in skills. Return exactly NONE if there is nothing critical to remember.";
 
                 let content = format!(
                     "User:\n{}\n\nAssistant:\n{}\n",
@@ -2186,7 +2186,7 @@ Only include facts supported by the turn. Return exactly NONE if there is nothin
         let system_prompt = "You are a memory extraction assistant. \
 Analyze the conversation turn and propose up to 3 long-term memory candidates only. \
 Return JSON: {\"memory_candidates\":[{\"type\":\"project_fact|user_preference|strategy|failure_lesson|note\",\"content\":\"...\",\"evidence\":\"...\",\"confidence\":0.0,\"importance\":1,\"tags\":[\"...\"]}]}. \
-Only include facts supported by the turn. Return exactly NONE if there is nothing critical to remember.";
+Only include facts supported by the turn. Do not save task progress, command history, or repeatable procedures; procedures belong in skills. Return exactly NONE if there is nothing critical to remember.";
 
         let content = format!(
             "User:\n{}\n\nAssistant:\n{}\n",
@@ -2438,7 +2438,7 @@ Critical context includes: API keys or paths, architecture decisions, user prefe
 specific error messages and their fixes, project conventions, important configuration values, \
 or key decisions made during the session. \
 Return JSON: {\"memory_candidates\":[{\"type\":\"project_fact|user_preference|strategy|failure_lesson|note\",\"content\":\"...\",\"evidence\":\"...\",\"confidence\":0.0,\"importance\":1,\"tags\":[\"...\"]}]}. \
-Return exactly the word NONE if there is nothing critical to remember.";
+Do not save task progress, command history, or repeatable procedures; procedures belong in skills. Return exactly the word NONE if there is nothing critical to remember.";
 
             let request = ChatRequest::new(model).with_messages(vec![
                 Message::system(system_prompt),

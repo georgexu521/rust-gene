@@ -15,7 +15,7 @@ mod types;
 
 pub use runtime::{SkillInvocation, SkillRuntime};
 pub use tools::{SkillListTool, SkillManageTool, SkillViewTool};
-pub use types::Skill;
+pub use types::{Skill, SkillLoadMetadata, SkillSource, SkillTrustLevel};
 
 #[cfg(test)]
 mod tests {
@@ -74,6 +74,7 @@ Always write meaningful commit messages."#;
             raw_content: String::new(),
             skill_dir: PathBuf::from("."),
             modified: None,
+            load_metadata: SkillLoadMetadata::programmatic("test skill"),
         };
 
         assert!(skill.matches(&["commit".to_string()]));
@@ -116,6 +117,7 @@ Always write meaningful commit messages."#;
             raw_content: String::new(),
             skill_dir: PathBuf::from("."),
             modified: None,
+            load_metadata: SkillLoadMetadata::programmatic("test skill"),
         };
 
         let injection = skill.to_injection();
@@ -144,6 +146,7 @@ Do X then Y. This body should only appear after skill_view or direct skill invoc
             raw_content: String::new(),
             skill_dir: PathBuf::from("."),
             modified: None,
+            load_metadata: SkillLoadMetadata::programmatic("test skill"),
         };
 
         let summary = skill.discovery_summary();

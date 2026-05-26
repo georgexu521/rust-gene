@@ -24,7 +24,8 @@ impl crate::tools::Tool for SkillManageTool {
 
     fn description(&self) -> &str {
         "Manage skills: list, view, create, patch, or delete SKILL.md files. \
-         Skills are declarative knowledge that the agent can load on demand."
+         Skills are declarative procedural knowledge that the agent can load on demand; \
+         created or patched skills are scanned before they become active."
     }
 
     fn parameters(&self) -> serde_json::Value {
@@ -212,6 +213,14 @@ impl crate::tools::Tool for SkillManageTool {
                 md.push_str("---\n\n");
                 md.push_str(body);
 
+                let scan = crate::skills::loader::scan_third_party_skill(&md);
+                if !scan.allowed {
+                    return crate::tools::ToolResult::error(format!(
+                        "Refusing to create unsafe skill '{}': {}",
+                        name, scan.reason
+                    ));
+                }
+
                 if let Err(e) = std::fs::create_dir_all(&skill_dir) {
                     return crate::tools::ToolResult::error(format!(
                         "Cannot create skill dir: {}",
@@ -241,6 +250,14 @@ impl crate::tools::Tool for SkillManageTool {
                     return crate::tools::ToolResult::error(format!(
                         "Skill '{}' not found. Use 'create' first.",
                         name
+                    ));
+                }
+
+                let scan = crate::skills::loader::scan_third_party_skill(new_content);
+                if !scan.allowed {
+                    return crate::tools::ToolResult::error(format!(
+                        "Refusing to patch unsafe skill '{}': {}",
+                        name, scan.reason
                     ));
                 }
 
@@ -429,6 +446,9 @@ impl crate::tools::Tool for SkillViewTool {
                     "effort": skill.meta.effort,
                     "context": skill.meta.context,
                     "user_invocable": skill.meta.user_invocable,
+                    "source": skill.load_metadata.source.label(),
+                    "trust": skill.load_metadata.trust.label(),
+                    "load_reason": skill.load_metadata.load_reason.clone(),
                 }),
             ),
             None => crate::tools::ToolResult::error(format!("Skill '{}' not found", name)),

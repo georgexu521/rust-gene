@@ -3,10 +3,16 @@
 //! 文件驱动的 Skill 发现和管理
 
 use super::parser::parse_skill_md;
-use super::types::Skill;
+use super::types::{Skill, SkillLoadMetadata};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use tracing::{debug, info, warn};
+
+#[derive(Debug, Clone)]
+struct SkillSearchPath {
+    path: PathBuf,
+    load_metadata: SkillLoadMetadata,
+}
 
 /// Skill 注册表 - 文件驱动
 #[allow(dead_code)]
@@ -14,7 +20,7 @@ pub struct SkillRegistry {
     /// 已加载的 skills（name -> Skill）
     skills: HashMap<String, Skill>,
     /// skills 搜索路径
-    search_paths: Vec<PathBuf>,
+    search_paths: Vec<SkillSearchPath>,
     /// 远程 skill URL 列表
     remote_urls: Vec<String>,
 }
@@ -32,47 +38,64 @@ impl SkillRegistry {
 
     /// 添加搜索路径
     pub fn add_search_path(&mut self, path: PathBuf) {
-        if !self.search_paths.contains(&path) {
-            self.search_paths.push(path);
-        }
+        self.add_search_path_with_metadata(
+            path,
+            SkillLoadMetadata::user_configured("explicit skill search path"),
+        );
     }
 
-    /// 设置默认搜索路径（项目 skills/ + 用户 ~/.priority-agent/skills/）
+    pub fn add_search_path_with_metadata(
+        &mut self,
+        path: PathBuf,
+        load_metadata: SkillLoadMetadata,
+    ) {
+        if self.search_paths.iter().any(|entry| entry.path == path) {
+            return;
+        }
+        self.search_paths.push(SkillSearchPath {
+            path,
+            load_metadata,
+        });
+    }
+
+    /// 设置默认搜索路径（workspace roots + 用户 ~/.priority-agent/skills/ + env paths）
     pub fn with_default_paths(mut self, project_root: &Path) -> Self {
-        // 项目内 skills 目录
-        self.add_search_path(project_root.join("skills"));
-
-        // 用户级 skills 目录
-        if let Some(home) = dirs::home_dir() {
-            self.add_search_path(home.join(".priority-agent").join("skills"));
+        for path in super::loader::discover_workspace_skill_roots(project_root) {
+            let metadata = if path.ends_with(Path::new(".agents/skills")) {
+                SkillLoadMetadata::workspace_agents(format!(
+                    "workspace .agents/skills root {}",
+                    path.display()
+                ))
+            } else {
+                SkillLoadMetadata::workspace(format!("workspace skills root {}", path.display()))
+            };
+            self.add_search_path_with_metadata(path, metadata);
         }
 
-        // 支持 PRIORITY_AGENT_SKILLS_PATH 环境变量（冒号分隔多路径）
-        if let Ok(extra_paths) = std::env::var("PRIORITY_AGENT_SKILLS_PATH") {
-            for path in extra_paths.split(':') {
-                if !path.is_empty() {
-                    let p = PathBuf::from(path);
-                    if !self.search_paths.contains(&p) {
-                        info!(
-                            "Adding skill search path from PRIORITY_AGENT_SKILLS_PATH: {}",
-                            path
-                        );
-                        self.add_search_path(p);
-                    }
-                }
+        for path in super::loader::get_user_skill_paths() {
+            if path.is_dir() {
+                info!(
+                    "Adding user-configured skill search path: {}",
+                    path.display()
+                );
             }
+            self.add_search_path_with_metadata(
+                path.clone(),
+                SkillLoadMetadata::user_configured(format!(
+                    "user-configured skill root {}",
+                    path.display()
+                )),
+            );
         }
 
-        // 支持 PRIORITY_AGENT_SKILLS_URL 环境变量（冒号分隔多 URL）
-        if let Ok(urls) = std::env::var("PRIORITY_AGENT_SKILLS_URL") {
-            for url in urls.split(':') {
-                if !url.is_empty() {
-                    info!(
-                        "Adding remote skill URL from PRIORITY_AGENT_SKILLS_URL: {}",
-                        url
-                    );
-                    self.remote_urls.push(url.to_string());
-                }
+        // 支持 PRIORITY_AGENT_SKILLS_URL 环境变量（逗号、分号或空白分隔多 URL）
+        for url in super::loader::get_remote_skill_urls() {
+            if !url.is_empty() {
+                info!(
+                    "Adding remote skill URL from PRIORITY_AGENT_SKILLS_URL: {}",
+                    url
+                );
+                self.remote_urls.push(url);
             }
         }
 
@@ -85,28 +108,72 @@ impl SkillRegistry {
         let mut loaded = 0;
 
         for search_path in &paths {
-            if !search_path.is_dir() {
+            if !search_path.path.is_dir() {
+                tracing::debug!(
+                    target: "skills.load",
+                    event = "skill_root_skipped",
+                    path = %search_path.path.display(),
+                    reason = "not a directory",
+                    "Skill root skipped"
+                );
                 continue;
             }
 
-            match std::fs::read_dir(search_path) {
+            match std::fs::read_dir(&search_path.path) {
                 Ok(entries) => {
-                    for entry in entries.flatten() {
+                    let mut entries = entries.flatten().collect::<Vec<_>>();
+                    entries.sort_by_key(|entry| entry.path());
+                    let allowlist = super::loader::get_skill_allowlist();
+                    for entry in entries {
                         let skill_dir = entry.path();
                         if skill_dir.is_dir() {
                             let skill_md = skill_dir.join("SKILL.md");
                             if skill_md.is_file() {
-                                match Self::load_skill_file(&skill_md) {
+                                tracing::debug!(
+                                    target: "skills.load",
+                                    event = "skill_considered",
+                                    source = %search_path.load_metadata.source.label(),
+                                    trust = %search_path.load_metadata.trust.label(),
+                                    path = %skill_md.display(),
+                                    "Considering skill"
+                                );
+                                match Self::load_skill_file(
+                                    &skill_md,
+                                    search_path.load_metadata.clone(),
+                                    allowlist.as_ref(),
+                                ) {
                                     Ok(skill) => {
-                                        info!("Loaded skill: {}", skill.meta.name);
-                                        self.skills.insert(skill.meta.name.clone(), skill);
+                                        let skill_name = skill.meta.name.clone();
+                                        if self.skills.contains_key(&skill_name) {
+                                            tracing::info!(
+                                                target: "skills.load",
+                                                event = "skill_skipped",
+                                                skill = %skill_name,
+                                                path = %skill_md.display(),
+                                                reason = "lower-precedence duplicate",
+                                                "Skill skipped"
+                                            );
+                                            continue;
+                                        }
+                                        info!(
+                                            target: "skills.load",
+                                            event = "skill_loaded",
+                                            skill = %skill_name,
+                                            source = %skill.load_metadata.source.label(),
+                                            trust = %skill.load_metadata.trust.label(),
+                                            path = %skill_md.display(),
+                                            "Loaded skill"
+                                        );
+                                        self.skills.insert(skill_name, skill);
                                         loaded += 1;
                                     }
                                     Err(e) => {
                                         warn!(
-                                            "Failed to load skill from {}: {}",
-                                            skill_md.display(),
-                                            e
+                                            target: "skills.load",
+                                            event = "skill_rejected",
+                                            path = %skill_md.display(),
+                                            reason = %e,
+                                            "Failed to load skill"
                                         );
                                     }
                                 }
@@ -115,7 +182,11 @@ impl SkillRegistry {
                     }
                 }
                 Err(e) => {
-                    warn!("Cannot read skills dir {}: {}", search_path.display(), e);
+                    warn!(
+                        "Cannot read skills dir {}: {}",
+                        search_path.path.display(),
+                        e
+                    );
                 }
             }
         }
@@ -124,11 +195,26 @@ impl SkillRegistry {
     }
 
     /// 从 SKILL.md 文件加载单个 skill
-    fn load_skill_file(path: &Path) -> anyhow::Result<Skill> {
+    fn load_skill_file(
+        path: &Path,
+        load_metadata: SkillLoadMetadata,
+        allowlist: Option<&std::collections::HashSet<String>>,
+    ) -> anyhow::Result<Skill> {
         let raw_content = std::fs::read_to_string(path)?;
+        let scan = super::loader::scan_third_party_skill(&raw_content);
+        if !scan.allowed {
+            anyhow::bail!("{}", scan.reason);
+        }
         let (meta, content) = parse_skill_md(&raw_content)?;
 
         let skill_dir = path.parent().unwrap_or(Path::new(".")).to_path_buf();
+        let dir_name = skill_dir.file_name().and_then(|name| name.to_str());
+        if !super::loader::skill_allowed_by_allowlist(&meta.name, dir_name, allowlist) {
+            anyhow::bail!(
+                "skill '{}' skipped because it is not in PRIORITY_AGENT_SKILL_ALLOWLIST",
+                meta.name
+            );
+        }
 
         let modified = std::fs::metadata(path).ok().and_then(|m| m.modified().ok());
 
@@ -138,6 +224,7 @@ impl SkillRegistry {
             raw_content,
             skill_dir,
             modified,
+            load_metadata,
         })
     }
 
@@ -193,9 +280,21 @@ impl SkillRegistry {
     /// 加载 bundled skills
     pub fn load_bundled(&mut self) -> usize {
         let skills = super::loader::load_bundled_skills();
-        let count = skills.len();
+        let mut count = 0;
         for skill in skills {
+            let skill_name = skill.meta.name.clone();
+            if self.skills.contains_key(&skill_name) {
+                tracing::info!(
+                    target: "skills.load",
+                    event = "skill_skipped",
+                    skill = %skill_name,
+                    reason = "higher-precedence duplicate already loaded",
+                    "Bundled skill skipped"
+                );
+                continue;
+            }
             self.register(skill);
+            count += 1;
         }
         count
     }
@@ -235,14 +334,18 @@ impl SkillRegistry {
 
     /// 异步加载所有外部 skills（文件路径 + 远程 URL）
     pub async fn load_external_skills(&mut self) -> usize {
-        use super::loader::{get_extra_skill_paths, load_skill_from_url};
+        use super::loader::{get_user_skill_paths, load_skill_from_url};
 
         let mut loaded = 0;
 
         // 从文件路径加载
-        for path in get_extra_skill_paths() {
+        for path in get_user_skill_paths() {
             if path.is_dir() {
-                match Self::load_skills_from_dir_sync(&path).await {
+                let metadata = SkillLoadMetadata::user_configured(format!(
+                    "user-configured skill root {}",
+                    path.display()
+                ));
+                match Self::load_skills_from_dir_sync(&path, metadata).await {
                     Ok(skills) => {
                         for skill in skills {
                             self.register(skill);
@@ -275,16 +378,26 @@ impl SkillRegistry {
     }
 
     /// 同步从目录加载 skills（内部使用）
-    async fn load_skills_from_dir_sync(dir: &PathBuf) -> anyhow::Result<Vec<Skill>> {
+    async fn load_skills_from_dir_sync(
+        dir: &PathBuf,
+        load_metadata: SkillLoadMetadata,
+    ) -> anyhow::Result<Vec<Skill>> {
         let mut skills = Vec::new();
         let mut entries = tokio::fs::read_dir(dir).await?;
+        let allowlist = super::loader::get_skill_allowlist();
 
         while let Some(entry) = entries.next_entry().await? {
             let path = entry.path();
             if path.is_dir() {
                 let skill_md = path.join("SKILL.md");
                 if skill_md.is_file() {
-                    match Self::load_skill_file_sync(&skill_md).await {
+                    match Self::load_skill_file_sync(
+                        &skill_md,
+                        load_metadata.clone(),
+                        allowlist.as_ref(),
+                    )
+                    .await
+                    {
                         Ok(skill) => skills.push(skill),
                         Err(e) => warn!("Failed to load skill from {}: {}", skill_md.display(), e),
                     }
@@ -296,12 +409,27 @@ impl SkillRegistry {
     }
 
     /// 同步加载单个 skill 文件
-    async fn load_skill_file_sync(path: &Path) -> anyhow::Result<Skill> {
+    async fn load_skill_file_sync(
+        path: &Path,
+        load_metadata: SkillLoadMetadata,
+        allowlist: Option<&std::collections::HashSet<String>>,
+    ) -> anyhow::Result<Skill> {
         use super::parser::parse_skill_md;
 
         let raw_content = tokio::fs::read_to_string(path).await?;
+        let scan = super::loader::scan_third_party_skill(&raw_content);
+        if !scan.allowed {
+            anyhow::bail!("{}", scan.reason);
+        }
         let (meta, content) = parse_skill_md(&raw_content)?;
         let skill_dir = path.parent().unwrap_or(Path::new(".")).to_path_buf();
+        let dir_name = skill_dir.file_name().and_then(|name| name.to_str());
+        if !super::loader::skill_allowed_by_allowlist(&meta.name, dir_name, allowlist) {
+            anyhow::bail!(
+                "skill '{}' skipped because it is not in PRIORITY_AGENT_SKILL_ALLOWLIST",
+                meta.name
+            );
+        }
         let modified = tokio::fs::metadata(path)
             .await
             .ok()
@@ -313,6 +441,7 @@ impl SkillRegistry {
             raw_content,
             skill_dir,
             modified,
+            load_metadata,
         })
     }
 

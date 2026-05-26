@@ -3,6 +3,119 @@
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SkillSource {
+    Bundled,
+    WorkspaceAgents,
+    Workspace,
+    UserConfigured,
+    RemoteUrl,
+    Programmatic,
+}
+
+impl SkillSource {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Bundled => "bundled",
+            Self::WorkspaceAgents => "workspace_agents",
+            Self::Workspace => "workspace",
+            Self::UserConfigured => "user_configured",
+            Self::RemoteUrl => "remote_url",
+            Self::Programmatic => "programmatic",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SkillTrustLevel {
+    BuiltIn,
+    Workspace,
+    UserConfigured,
+    Remote,
+    Programmatic,
+}
+
+impl SkillTrustLevel {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::BuiltIn => "built_in",
+            Self::Workspace => "workspace",
+            Self::UserConfigured => "user_configured",
+            Self::Remote => "remote",
+            Self::Programmatic => "programmatic",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct SkillLoadMetadata {
+    pub source: SkillSource,
+    pub trust: SkillTrustLevel,
+    pub load_reason: String,
+}
+
+impl SkillLoadMetadata {
+    pub fn new(
+        source: SkillSource,
+        trust: SkillTrustLevel,
+        load_reason: impl Into<String>,
+    ) -> Self {
+        Self {
+            source,
+            trust,
+            load_reason: load_reason.into(),
+        }
+    }
+
+    pub fn bundled(load_reason: impl Into<String>) -> Self {
+        Self::new(SkillSource::Bundled, SkillTrustLevel::BuiltIn, load_reason)
+    }
+
+    pub fn workspace_agents(load_reason: impl Into<String>) -> Self {
+        Self::new(
+            SkillSource::WorkspaceAgents,
+            SkillTrustLevel::Workspace,
+            load_reason,
+        )
+    }
+
+    pub fn workspace(load_reason: impl Into<String>) -> Self {
+        Self::new(
+            SkillSource::Workspace,
+            SkillTrustLevel::Workspace,
+            load_reason,
+        )
+    }
+
+    pub fn user_configured(load_reason: impl Into<String>) -> Self {
+        Self::new(
+            SkillSource::UserConfigured,
+            SkillTrustLevel::UserConfigured,
+            load_reason,
+        )
+    }
+
+    pub fn remote_url(load_reason: impl Into<String>) -> Self {
+        Self::new(SkillSource::RemoteUrl, SkillTrustLevel::Remote, load_reason)
+    }
+
+    pub fn programmatic(load_reason: impl Into<String>) -> Self {
+        Self::new(
+            SkillSource::Programmatic,
+            SkillTrustLevel::Programmatic,
+            load_reason,
+        )
+    }
+}
+
+impl Default for SkillLoadMetadata {
+    fn default() -> Self {
+        Self::programmatic("programmatic skill")
+    }
+}
+
 /// Skill 元数据（从 frontmatter 解析）
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SkillMeta {
@@ -83,6 +196,8 @@ pub struct Skill {
     pub skill_dir: PathBuf,
     /// 最后修改时间
     pub modified: Option<std::time::SystemTime>,
+    /// Source/trust metadata for deterministic loading and audit traces.
+    pub load_metadata: SkillLoadMetadata,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -153,7 +268,12 @@ impl Skill {
             matched_keywords,
             matched_fields,
             triggers: self.meta.triggers.clone(),
-            provenance: format!("skill_match:{}", self.skill_dir.display()),
+            provenance: format!(
+                "skill_match:{}:{}:{}",
+                self.load_metadata.source.label(),
+                self.load_metadata.trust.label(),
+                self.skill_dir.display()
+            ),
         })
     }
 

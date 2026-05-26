@@ -47,7 +47,12 @@ Current stage:
   rebuildable local SQLite FTS5 index at `memory/search.sqlite`; it indexes safe
   project/user/topic memory plus accepted typed records and feeds hits into the
   existing memory retrieval ranking while keeping Markdown and `records.jsonl`
-  as canonical storage.
+  as canonical storage. Phase 7 has started by making skills a safer procedural
+  memory surface: workspace `.agents/skills` now wins over workspace `skills`,
+  user-configured roots load after workspace roots, bundled skills remain the
+  fallback, third-party and URL-loaded skills pass through a scanner and
+  optional `PRIORITY_AGENT_SKILL_ALLOWLIST`, loaded skills carry source/trust
+  metadata, and `docs/SKILL_ROOTS_AND_TRUST.md` documents the trust model.
 - `docs/LLM_RUNTIME_SIMPLIFICATION_PLAN_2026-05-08.md` is complete through its
   follow-up implementation phases. Future runtime-diet work should come from
   live-use gaps, release-hardening gates, or a newly reviewed plan.

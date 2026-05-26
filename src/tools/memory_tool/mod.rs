@@ -751,7 +751,7 @@ impl Tool for MemorySaveTool {
     }
 
     fn description(&self) -> &str {
-        "Save important information to persistent memory. By default it auto-routes to USER.md or memory/<topic>.md; use target=index to force MEMORY.md."
+        "Save durable facts, preferences, decisions, and stable quirks to persistent memory. Do not save task progress, command history, or repeatable procedures; procedures belong in skills. By default it auto-routes to USER.md or memory/<topic>.md; use target=index to force MEMORY.md."
     }
 
     fn parameters(&self) -> serde_json::Value {
@@ -760,7 +760,7 @@ impl Tool for MemorySaveTool {
             "properties": {
                 "content": {
                     "type": "string",
-                    "description": "The information to save to memory"
+                    "description": "Durable information to save. Exclude task progress, command history, and step-by-step procedures; procedures belong in skills."
                 },
                 "category": {
                     "type": "string",

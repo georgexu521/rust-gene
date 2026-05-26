@@ -137,8 +137,8 @@ fn query_keywords(query: &str) -> Vec<String> {
 
 fn load_skills(project_root: &Path) -> HashMap<String, Skill> {
     let mut registry = SkillRegistry::new().with_default_paths(project_root);
-    registry.load_bundled();
     registry.discover_and_load();
+    registry.load_bundled();
 
     registry
         .list()
@@ -186,6 +186,8 @@ fn render_skill_invocation(skill: &Skill, task: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::skills::SkillSource;
+    use tempfile::TempDir;
 
     #[test]
     fn bundled_skill_is_directly_invocable() {
@@ -202,5 +204,31 @@ mod tests {
     fn underscore_and_slash_names_are_normalized() {
         let runtime = SkillRuntime::load(".");
         assert!(runtime.get("/review_pr").is_some());
+    }
+
+    #[test]
+    fn workspace_agents_skill_overrides_plain_workspace_and_bundled() {
+        let tmp = TempDir::new().unwrap();
+        std::fs::create_dir(tmp.path().join(".git")).unwrap();
+        let agents_skill = tmp.path().join(".agents").join("skills").join("fix");
+        let plain_skill = tmp.path().join("skills").join("fix");
+        std::fs::create_dir_all(&agents_skill).unwrap();
+        std::fs::create_dir_all(&plain_skill).unwrap();
+        std::fs::write(
+            agents_skill.join("SKILL.md"),
+            "---\nname: fix\n---\n\nWorkspace agents fix procedure.",
+        )
+        .unwrap();
+        std::fs::write(
+            plain_skill.join("SKILL.md"),
+            "---\nname: fix\n---\n\nPlain workspace fix procedure.",
+        )
+        .unwrap();
+
+        let runtime = SkillRuntime::load(tmp.path());
+        let skill = runtime.get("fix").unwrap();
+
+        assert!(skill.content.contains("Workspace agents fix procedure."));
+        assert_eq!(skill.load_metadata.source, SkillSource::WorkspaceAgents);
     }
 }
