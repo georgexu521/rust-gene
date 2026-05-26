@@ -37,6 +37,8 @@ const MAX_EDITABLE_FILE_SIZE_BYTES: u64 = 64 * 1024 * 1024; // 64 MiB
 const DEFAULT_MAX_FILE_EDIT_REPLACEMENTS: usize = 20;
 const MAX_MATCH_CONTEXT_OCCURRENCES: usize = 12;
 const DEFAULT_DIRECTORY_READ_ENTRY_LIMIT: usize = 200;
+const FILE_READ_PREVIEW_MAX_LINES: usize = 5;
+const FILE_READ_PREVIEW_MAX_CHARS: usize = 280;
 
 fn is_unc_or_network_path(path: &str) -> bool {
     path.starts_with("\\\\") || path.starts_with("//")
@@ -629,6 +631,32 @@ fn content_hash_hex(content: &str) -> String {
     format!("{:016x}", compute_content_hash(content))
 }
 
+fn file_read_content_preview<'a, I>(lines: I) -> Option<String>
+where
+    I: IntoIterator<Item = &'a str>,
+{
+    let mut parts = Vec::new();
+    for line in lines {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        parts.push(trimmed.to_string());
+        if parts.len() >= FILE_READ_PREVIEW_MAX_LINES {
+            break;
+        }
+    }
+    if parts.is_empty() {
+        return None;
+    }
+    let mut preview = parts.join(" | ");
+    if preview.chars().count() > FILE_READ_PREVIEW_MAX_CHARS {
+        preview = preview.chars().take(FILE_READ_PREVIEW_MAX_CHARS).collect();
+        preview.push_str("...");
+    }
+    Some(preview)
+}
+
 pub(crate) fn edit_diff_summary(
     path: &str,
     old_content: &str,
@@ -1019,10 +1047,15 @@ impl Tool for FileReadTool {
                 && cache.is_unchanged_since_last_read_for_session(&context.session_id, &path)
             {
                 let lines_count = content.lines().count();
+                let content_preview = file_read_content_preview(content.lines());
+                let preview_note = content_preview
+                    .as_deref()
+                    .map(|preview| format!("\nContext preview: {preview}"))
+                    .unwrap_or_default();
                 return ToolResult::success_with_data(
                     format!(
-                        "[File unchanged since last read: {}] ({} lines)\nIf you need the full content, it was provided in a previous message.",
-                        path_str, lines_count
+                        "[File unchanged since last read: {}] ({} lines)\nIf you need the full content, it was provided in a previous message.{}",
+                        path_str, lines_count, preview_note
                     ),
                     json!({
                         "path": path_str,
@@ -1039,6 +1072,7 @@ impl Tool for FileReadTool {
                         "read_coverage": "full",
                         "size_bytes": snapshot.byte_len,
                         "content_hash": content_hash_hex(content),
+                        "content_preview": content_preview,
                         "text_format": text_format_json(&snapshot),
                         "display_format": "unchanged_notice",
                         "content_format": {
@@ -1124,6 +1158,7 @@ impl Tool for FileReadTool {
         };
         let content_hash = content_hash_hex(content);
         let selected_content_hash = content_hash_hex(&result);
+        let content_preview = file_read_content_preview(selected_lines.iter().copied());
         if let Some(store) = context.session_store.as_ref() {
             record_file_read(
                 store,
@@ -1132,6 +1167,7 @@ impl Tool for FileReadTool {
                     path: path_str,
                     resolved_path: &identity.resolved_path,
                     content_hash: &content_hash,
+                    content_preview: content_preview.as_deref(),
                     size_bytes: snapshot.byte_len as u64,
                     total_lines: lines.len(),
                     displayed_lines: selected_lines.len(),
@@ -1161,6 +1197,7 @@ impl Tool for FileReadTool {
                 "size_bytes": snapshot.byte_len,
                 "content_hash": content_hash,
                 "selected_content_hash": selected_content_hash,
+                "content_preview": content_preview,
                 "text_format": text_format_json(&snapshot),
                 "display_format": if lines.len() > 1 { "line_numbered_content" } else { "raw_content" },
                 "content_format": {

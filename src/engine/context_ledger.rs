@@ -21,6 +21,8 @@ pub struct FileReadLedgerEntry {
     pub path: String,
     pub resolved_path: String,
     pub content_hash: String,
+    #[serde(default)]
+    pub content_preview: Option<String>,
     pub size_bytes: u64,
     pub total_lines: usize,
     pub displayed_lines: usize,
@@ -183,6 +185,7 @@ pub struct FileReadLedgerInput<'a> {
     pub path: &'a str,
     pub resolved_path: &'a str,
     pub content_hash: &'a str,
+    pub content_preview: Option<&'a str>,
     pub size_bytes: u64,
     pub total_lines: usize,
     pub displayed_lines: usize,
@@ -211,6 +214,11 @@ pub fn record_file_read(store: &SessionStore, input: &FileReadLedgerInput<'_>) {
         path: input.path.to_string(),
         resolved_path: input.resolved_path.to_string(),
         content_hash: input.content_hash.to_string(),
+        content_preview: input
+            .content_preview
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToString::to_string),
         size_bytes: input.size_bytes,
         total_lines: input.total_lines,
         displayed_lines: input.displayed_lines,
@@ -244,6 +252,7 @@ pub fn record_file_read(store: &SessionStore, input: &FileReadLedgerInput<'_>) {
         "path": entry.path,
         "resolved_path": entry.resolved_path,
         "content_hash": entry.content_hash,
+        "content_preview": entry.content_preview,
         "size_bytes": entry.size_bytes,
         "total_lines": entry.total_lines,
         "displayed_lines": entry.displayed_lines,

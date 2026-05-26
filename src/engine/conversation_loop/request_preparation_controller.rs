@@ -220,13 +220,18 @@ impl RequestPreparationController {
                 } else {
                     "full read".to_string()
                 };
+                let preview = entry
+                    .content_preview
+                    .as_deref()
+                    .map(|preview| format!(", evidence \"{}\"", compact_text(preview, 140)))
+                    .unwrap_or_default();
                 relevant_lines.push(format!(
-                    "- file {}: {}, {} displayed / {} total lines, hash {}",
+                    "- file {}: {}, {} displayed / {} total lines{}",
                     compact_path(&entry.path, &entry.resolved_path),
                     scope,
                     entry.displayed_lines,
                     entry.total_lines,
-                    entry.content_hash
+                    preview
                 ));
             } else if event.kind == CONTEXT_LEDGER_BASH_READ_KIND {
                 let command = event
@@ -382,7 +387,7 @@ impl RequestPreparationController {
                 observation_lines.join("\n")
             ));
         }
-        sections.push("Use these recorded reads, edits, diffs, validations, confirmations, and observations before repeating tool calls. If exact file text is no longer visible or a specific range is needed, prefer a targeted file_read range instead of rereading the same whole file repeatedly.".to_string());
+        sections.push("Use these recorded reads, edits, diffs, validations, confirmations, and observations before repeating tool calls. If exact file text is no longer visible or a specific range is needed, prefer a targeted file_read range instead of rereading the same whole file repeatedly. For read-only/project-memory answers, cite concrete recorded content facts instead of hash-only metadata.".to_string());
         let hint = sections.join("\n\n");
         let insert_pos = request_messages
             .iter()
@@ -723,6 +728,7 @@ mod tests {
                     "path": "README.md",
                     "resolved_path": "/tmp/project/README.md",
                     "content_hash": "abc123",
+                    "content_preview": "# Project memory says local-only first and CSV export next.",
                     "size_bytes": 12,
                     "total_lines": 3,
                     "displayed_lines": 3,
@@ -760,7 +766,8 @@ mod tests {
             Message::System { content }
                 if content.contains("Context ledger")
                     && content.contains("README.md")
-                    && content.contains("abc123")
+                    && content.contains("local-only first")
+                    && !content.contains("abc123")
         ));
         assert!(matches!(
             &prepared.request.messages[1],

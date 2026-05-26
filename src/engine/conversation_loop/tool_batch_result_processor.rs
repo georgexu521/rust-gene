@@ -349,16 +349,17 @@ fn ledger_summary_from_result(result: &crate::tools::ToolResult) -> Option<Strin
             .get("total_lines")
             .and_then(serde_json::Value::as_u64)
             .unwrap_or(0);
-        let content_hash = data
-            .get("content_hash")
-            .and_then(serde_json::Value::as_str)
-            .unwrap_or("unknown");
         let coverage = data
             .get("read_coverage")
             .and_then(serde_json::Value::as_str)
             .unwrap_or("read");
+        let preview = data
+            .get("content_preview")
+            .and_then(serde_json::Value::as_str)
+            .map(|preview| format!(", evidence \"{}\"", compact_text(preview, 160)))
+            .unwrap_or_default();
         return Some(format!(
-            "ledger: file `{path}` is unchanged in this session ({coverage}, {total_lines} lines, hash {content_hash})"
+            "ledger: file `{path}` is unchanged in this session ({coverage}, {total_lines} lines{preview})"
         ));
     }
     if let Some(shell_result) = data.get("shell_result") {
@@ -392,6 +393,15 @@ fn bounded_duplicate_read_only_result(text: &str) -> String {
         preview.push_str("\n\n[stored read-only result truncated]");
     }
     preview
+}
+
+fn compact_text(value: &str, max_chars: usize) -> String {
+    let trimmed = value.trim();
+    let mut text = trimmed.chars().take(max_chars).collect::<String>();
+    if trimmed.chars().count() > max_chars {
+        text.push_str("...");
+    }
+    text
 }
 
 fn is_read_cache_notice(text: &str) -> bool {

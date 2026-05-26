@@ -285,6 +285,7 @@ impl TurnIterationController {
             last_user_preview: context.last_user_preview,
             task_bundle: &mut *context.task_bundle,
             round_state: &mut tool_round_state,
+            turn_state: context.turn_state,
             failed_tool_names: &context.loop_state.failed_tool_names,
             tx: context.tx,
             final_content: &mut context.loop_state.final_content,
@@ -489,7 +490,10 @@ fn duplicate_successful_read_only_pre_execution_closeout(
         }
         let ledger_summary =
             duplicate_tool_call_ledger_summary(session_store, session_id, tool_call);
-        if is_read_cache_notice(cached) && ledger_summary.is_none() {
+        if is_read_cache_notice(cached)
+            && normalized_result_lines(cached).is_empty()
+            && ledger_summary.is_none()
+        {
             return None;
         }
         duplicate_results.push((tool_call.name.as_str(), cached, ledger_summary));
@@ -689,9 +693,13 @@ fn synthesize_read_only_duplicate_answer(
 ) -> String {
     let chinese = contains_cjk(last_user_preview);
     let summary = if is_read_cache_notice(result_text) {
-        ledger_summary
-            .map(|summary| ledger_reuse_answer(summary, chinese))
-            .unwrap_or_else(|| summarize_read_only_result(result_text, chinese))
+        if normalized_result_lines(result_text).is_empty() {
+            ledger_summary
+                .map(|summary| ledger_reuse_answer(summary, chinese))
+                .unwrap_or_else(|| summarize_read_only_result(result_text, chinese))
+        } else {
+            summarize_read_only_result(result_text, chinese)
+        }
     } else {
         summarize_read_only_result(result_text, chinese)
     };
@@ -786,6 +794,15 @@ fn format_terms(terms: &[String]) -> String {
         .join(", ")
 }
 
+fn compact_preview(value: &str, max_chars: usize) -> String {
+    let trimmed = value.trim();
+    let mut text = trimmed.chars().take(max_chars).collect::<String>();
+    if trimmed.chars().count() > max_chars {
+        text.push_str("...");
+    }
+    text
+}
+
 fn ledger_reuse_answer(ledger_summary: &str, chinese: bool) -> String {
     if chinese {
         format!(
@@ -814,12 +831,21 @@ fn duplicate_tool_call_ledger_summary(
                     || entry.resolved_path == path
                     || entry.resolved_path.ends_with(path.trim_start_matches("~/"));
                 matches_path.then(|| {
+                    let preview = entry
+                        .content_preview
+                        .as_deref()
+                        .map(|preview| format!(", evidence \"{}\"", compact_preview(preview, 160)))
+                        .unwrap_or_default();
                     format!(
-                        "ledger: file `{}` was read previously ({} displayed / {} total lines, hash {})",
-                        if entry.path.is_empty() { entry.resolved_path } else { entry.path },
+                        "ledger: file `{}` was read previously ({} displayed / {} total lines{})",
+                        if entry.path.is_empty() {
+                            entry.resolved_path
+                        } else {
+                            entry.path
+                        },
                         entry.displayed_lines,
                         entry.total_lines,
-                        entry.content_hash
+                        preview
                     )
                 })
             })
@@ -1467,6 +1493,7 @@ mod tests {
                     "path": "README.md",
                     "resolved_path": "/tmp/project/README.md",
                     "content_hash": "abc123",
+                    "content_preview": "# Project memory says local-only first.",
                     "size_bytes": 10,
                     "total_lines": 2,
                     "displayed_lines": 2,
@@ -1487,7 +1514,7 @@ mod tests {
         )
         .expect("ledger should recover cache notice");
 
-        assert!(message.contains("abc123"));
+        assert!(message.contains("local-only first"));
         assert!(message.contains("Reuse basis"));
     }
 
