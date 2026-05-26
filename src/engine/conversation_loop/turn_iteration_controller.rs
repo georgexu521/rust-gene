@@ -897,6 +897,7 @@ fn summarize_read_only_result(result_text: &str, chinese: bool) -> String {
                 && !line.starts_with("* ")
                 && !line.starts_with('`')
                 && !line.starts_with('[')
+                && !looks_like_structured_payload_line(line)
         });
     let bullets: Vec<String> = lines
         .iter()
@@ -907,7 +908,7 @@ fn summarize_read_only_result(result_text: &str, chinese: bool) -> String {
     if chinese {
         let mut answer = match description {
             Some(description) if description != title => {
-                format!("根据 README，这是 **{title}**：{description}")
+                format!("根据已读内容，这是 **{title}**：{description}")
             }
             _ => format!("根据已读内容，这是 **{title}**。"),
         };
@@ -923,7 +924,7 @@ fn summarize_read_only_result(result_text: &str, chinese: bool) -> String {
 
     let mut answer = match description {
         Some(description) if description != title => {
-            format!("Based on the README, this is **{title}**: {description}")
+            format!("Based on the already-read content, this is **{title}**: {description}")
         }
         _ => format!("Based on the already-read content, this is **{title}**."),
     };
@@ -979,6 +980,23 @@ fn markdown_bullet_text(line: &str) -> Option<String> {
         .map(str::trim)
         .filter(|text| !text.is_empty())
         .map(ToString::to_string)
+}
+
+fn looks_like_structured_payload_line(line: &str) -> bool {
+    let trimmed = line.trim();
+    if matches!(trimmed, "{" | "}" | "[" | "]" | ",") {
+        return true;
+    }
+    if trimmed.starts_with('{') || trimmed.starts_with('}') {
+        return true;
+    }
+    if trimmed
+        .chars()
+        .all(|ch| matches!(ch, '{' | '}' | '[' | ']' | ':' | ',' | '"'))
+    {
+        return true;
+    }
+    trimmed.starts_with('"') && trimmed.contains(':')
 }
 
 fn contains_cjk(text: &str) -> bool {
@@ -1259,6 +1277,8 @@ mod tests {
 
         assert!(message.contains("local-only"));
         assert!(message.contains("CSV export"));
+        assert!(!message.contains("**Project Memory**: {"));
+        assert!(!message.contains("**Project Memory**: ]"));
         assert!(!message.contains("Not found"));
     }
 

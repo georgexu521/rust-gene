@@ -1,0 +1,29 @@
+{
+  "schema": "agent_run_bundle.v1",
+  "task_id": "project-partner-resume-with-memory",
+  "run_id": "live-eval-20260526-114246",
+  "generated_at": "2026-05-26T03:45:43.296902+00:00",
+  "goal_summary": "read_only_audit",
+  "mode": "agent-run",
+  "final_status": "passed",
+  "terminal_status": "completed",
+  "stop_reason": "no_issue",
+  "modified_files": "0",
+  "validation_status": "ok",
+  "verification_status": "passed",
+  "closeout_status": "passed",
+  "scores": {
+    "outcome": "100",
+    "process": "100",
+    "efficiency": "100",
+    "agent": "100",
+    "penalties": "none"
+  },
+  "artifacts": {
+    "source_report": "docs/benchmarks/live-live-eval-20260526-114246/project-partner-resume-with-memory/report.md",
+    "source_events": "docs/benchmarks/live-live-eval-20260526-114246/project-partner-resume-with-memory/agent-events.jsonl",
+    "steps": "docs/benchmarks/live-live-eval-20260526-114246/project-partner-resume-with-memory/run-bundle/steps.jsonl",
+    "events": "docs/benchmarks/live-live-eval-20260526-114246/project-partner-resume-with-memory/run-bundle/events.jsonl",
+    "final_report": "docs/benchmarks/live-live-eval-20260526-114246/project-partner-resume-with-memory/run-bundle/final_report.md"
+  }
+}
