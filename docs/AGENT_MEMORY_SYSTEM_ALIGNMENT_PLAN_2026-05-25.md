@@ -50,6 +50,24 @@ record/index layer and route every write through one memory candidate pipeline.
 
 ## 0.1 Implementation Status
 
+2026-05-26 OpenClaw/Hermes follow-up batch started the provider-boundary
+cleanup:
+
+- Added a `MemoryProviderRegistry` with built-in local provider ownership,
+  optional single external provider registration, provider-name reporting, and
+  lifecycle fanout for initialize, system prompt blocks, prefetch,
+  queue-prefetch, turn sync, session end, pre-compress, write notifications, and
+  shutdown.
+- Added structured provider call outcomes so unavailable providers are skipped
+  and failing providers report errors without stopping unrelated providers.
+- `MemoryManager` now owns the provider registry and exposes provider lifecycle
+  wrapper methods. Local Markdown/record storage still stays in `MemoryManager`
+  for this first batch; moving it behind `LocalMemoryProvider` remains the next
+  provider-boundary step.
+- Turn retrieval context is now injected as an explicit `<relevant_material>`
+  zone before the current user request, and dynamic zone system messages are
+  excluded from the stable-prefix context trace.
+
 2026-05-25 implementation batch completed the planned memory-system alignment
 slice across all eight phases:
 
@@ -102,7 +120,7 @@ cargo clippy --all-features -- -D warnings
 
 | Note requirement | Current project state | Alignment | Main gap |
 | --- | --- | --- | --- |
-| Context, State, Memory must be separate | `RetrievalContext`, `<task-state>`, `MemoryManager`, context ledger, and learning events are separate runtime surfaces. | Strong partial | Memory prefetch still has a fallback path that injects retrieval context into the user message instead of a pure background system/context zone. |
+| Context, State, Memory must be separate | `RetrievalContext`, `<task-state>`, `MemoryManager`, context ledger, and learning events are separate runtime surfaces. | Strong partial | Retrieval is now zoned as `<relevant_material>`; remaining work is to fully render every live request from the zone plan instead of mixed controller-level system messages. |
 | Memory is not all history in prompt | Frozen snapshot, relevant memory prefetch, top-k retrieval, and retrieval policy gating exist. | Strong | Good foundation; tune ranking and metadata rather than replace it. |
 | Store user preference, project fact, strategy, failure lesson, stable constraint | `MemoryKind` covers preferences, project facts, conventions, tool quirks, failure patterns, successful fixes, decisions, skill candidates, and notes. | Partial | Markdown output does not preserve typed kind/evidence/importance/verification fields consistently. |
 | Do not store logs, stale facts, secrets, unverified guesses | `scan_memory_content`, quality scoring, duplicate gates, prompt-injection fences, and memory calibration tests exist. | Strong partial | Evidence and verified-vs-inferred state are not first-class in stored records. Staleness is mostly file-level maintenance, not per-memory lifecycle. |
@@ -125,9 +143,10 @@ cargo clippy --all-features -- -D warnings
 - `src/memory/quality.rs`, `src/memory/scoring.rs`, `src/memory/safety.rs`,
   and `src/memory/recall.rs` already implement write, keep, safety, and recall
   scoring contracts.
-- `src/memory/provider.rs` defines a provider lifecycle trait, but the current
-  `LocalMemoryProvider` is an adapter marker; `MemoryManager` still owns local
-  storage directly.
+- `src/memory/provider.rs` defines a provider lifecycle trait and
+  `MemoryProviderRegistry` for local plus optional single external provider
+  fanout. The current `LocalMemoryProvider` is still an adapter marker;
+  `MemoryManager` owns the registry and still owns local storage directly.
 - `src/engine/retrieval_context.rs` turns memory matches into provenance-bearing
   retrieval items and lowers confidence for conflicts.
 - `src/engine/conversation_loop/memory_snapshot_controller.rs` injects frozen
@@ -135,9 +154,10 @@ cargo clippy --all-features -- -D warnings
 - `src/engine/conversation_loop/turn_retrieval_context_controller.rs` builds
   memory retrieval context, records trace events, and merges memory with
   project/session retrieval.
-- `src/engine/conversation_loop/request_preparation_controller.rs` has a memory
-  prefetch fallback that appends retrieval context into the user message if a
-  turn retrieval context was not already built.
+- `src/engine/conversation_loop/request_preparation_controller.rs` records
+  context-zone materialization and keeps dynamic zone system messages out of
+  the stable-prefix trace. Its memory prefetch fallback now injects fenced
+  `<relevant_material>` when a turn retrieval context was not already built.
 - `src/engine/conversation_loop/memory_sync_controller.rs` performs heuristic or
   LLM memory sync after the turn and records `MemorySynced`.
 - `src/session_store/mod.rs` persists `learning_events` with kind, source,

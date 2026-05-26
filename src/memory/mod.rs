@@ -15,7 +15,10 @@ pub use manager::{
     MemoryFlushReason, MemoryFlushRecord, MemoryFlushStatus, MemoryFlushSummary, MemoryManager,
     MemoryRecordSummary, MemoryWriteTarget,
 };
-pub use provider::{LocalMemoryProvider, MemoryProvider};
+pub use provider::{
+    LocalMemoryProvider, MemoryProvider, MemoryProviderCallOutcome, MemoryProviderCallStatus,
+    MemoryProviderRegistry,
+};
 pub use quality::{assess_memory_candidate, MemoryQualityAssessment};
 pub use recall::{score_recall, RecallDecision, RecallFactors, RecallScore};
 pub use safety::{scan_memory_content, MemorySafetyIssue};

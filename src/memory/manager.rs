@@ -6,6 +6,9 @@
 //! - 同步：每轮结束后自动提取关键信息保存
 //! - 会话结束提取：session 过期时批量提取学习内容
 
+use crate::memory::provider::{
+    MemoryProvider, MemoryProviderCallOutcome, MemoryProviderRegistry, MemoryTurn,
+};
 use crate::memory::quality::assess_memory_candidate;
 use crate::memory::types::{
     MemoryCandidate, MemoryEvidenceKind, MemoryEvidenceRef, MemoryKind, MemoryProjection,
@@ -1083,6 +1086,9 @@ pub struct MemoryManager {
     /// 缓存命中率统计
     cache_hits: usize,
     cache_misses: usize,
+    /// Provider lifecycle registry. Local storage still lives in this manager
+    /// during the first provider-boundary phase.
+    provider_registry: MemoryProviderRegistry,
 }
 
 impl MemoryManager {
@@ -1135,11 +1141,102 @@ impl MemoryManager {
             trailing_completed: false,
             cache_hits: 0,
             cache_misses: 0,
+            provider_registry: MemoryProviderRegistry::new(),
         }
     }
 
     pub fn records_path(&self) -> &Path {
         &self.records_path
+    }
+
+    pub fn memory_provider_names(&self) -> Vec<String> {
+        self.provider_registry.provider_names()
+    }
+
+    pub fn register_external_memory_provider(
+        &mut self,
+        provider: Arc<dyn MemoryProvider>,
+    ) -> anyhow::Result<()> {
+        self.provider_registry.register_external(provider)
+    }
+
+    pub async fn initialize_memory_providers(
+        &self,
+        scope: &MemoryScope,
+    ) -> Vec<MemoryProviderCallOutcome> {
+        self.provider_registry.initialize_all(scope).await
+    }
+
+    pub async fn provider_system_prompt_blocks(
+        &self,
+        scope: &MemoryScope,
+    ) -> (Vec<String>, Vec<MemoryProviderCallOutcome>) {
+        self.provider_registry.system_prompt_blocks(scope).await
+    }
+
+    pub async fn provider_prefetch(
+        &self,
+        query: &str,
+        scope: &MemoryScope,
+    ) -> (Vec<MemoryRecord>, Vec<MemoryProviderCallOutcome>) {
+        self.provider_registry.prefetch_all(query, scope).await
+    }
+
+    pub async fn queue_memory_provider_prefetch(
+        &self,
+        query: &str,
+        scope: &MemoryScope,
+    ) -> Vec<MemoryProviderCallOutcome> {
+        self.provider_registry
+            .queue_prefetch_all(query, scope)
+            .await
+    }
+
+    pub async fn sync_memory_providers_turn(
+        &self,
+        user: &str,
+        assistant: &str,
+        scope: &MemoryScope,
+    ) -> Vec<MemoryProviderCallOutcome> {
+        let turn = MemoryTurn {
+            user: user.to_string(),
+            assistant: assistant.to_string(),
+        };
+        self.provider_registry.sync_turn_all(&turn, scope).await
+    }
+
+    pub async fn notify_memory_providers_session_end(
+        &self,
+        transcript: &[Message],
+        scope: &MemoryScope,
+    ) -> Vec<MemoryProviderCallOutcome> {
+        self.provider_registry
+            .on_session_end_all(transcript, scope)
+            .await
+    }
+
+    pub async fn notify_memory_providers_pre_compress(
+        &self,
+        messages: &[Message],
+        scope: &MemoryScope,
+    ) -> (Vec<MemoryRecord>, Vec<MemoryProviderCallOutcome>) {
+        self.provider_registry
+            .on_pre_compress_all(messages, scope)
+            .await
+    }
+
+    pub async fn notify_memory_providers_write(
+        &self,
+        record: &MemoryRecord,
+        scope: &MemoryScope,
+    ) -> Vec<MemoryProviderCallOutcome> {
+        self.provider_registry
+            .on_memory_write_all(record, scope)
+            .await
+    }
+
+    pub async fn shutdown_memory_providers(&self) -> Vec<MemoryProviderCallOutcome> {
+        self.provider_registry.shutdown_all().await
     }
 
     pub fn memory_records(&self) -> Vec<MemoryRecord> {
@@ -3940,6 +4037,16 @@ mod tests {
         let _ = std::fs::remove_dir_all(&base);
         std::fs::create_dir_all(&base).unwrap();
         base
+    }
+
+    #[test]
+    fn memory_manager_starts_with_local_provider_registry() {
+        let base = temp_memory_base("provider-registry");
+        let manager = MemoryManager::with_base_dir(base.clone());
+
+        assert_eq!(manager.memory_provider_names(), vec!["local".to_string()]);
+
+        let _ = std::fs::remove_dir_all(&base);
     }
 
     struct MockRankProvider {

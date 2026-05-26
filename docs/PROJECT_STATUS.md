@@ -31,7 +31,12 @@ Current stage:
   also started: turn-level retrieval context is now injected as an explicit
   `<relevant_material>` zone before the current user request, and
   context-zone tracing excludes dynamic zone system messages from the stable
-  prefix fingerprint.
+  prefix fingerprint. Phase 3 has begun with a `MemoryProviderRegistry` owned by
+  `MemoryManager`, structured provider lifecycle outcomes, local plus optional
+  single external provider registration, and fanout wrappers for initialize,
+  prompt blocks, prefetch, queued prefetch, turn sync, session end,
+  pre-compress, write notifications, and shutdown; local storage migration
+  behind `LocalMemoryProvider` remains the next memory-boundary step.
 - `docs/LLM_RUNTIME_SIMPLIFICATION_PLAN_2026-05-08.md` is complete through its
   follow-up implementation phases. Future runtime-diet work should come from
   live-use gaps, release-hardening gates, or a newly reviewed plan.
