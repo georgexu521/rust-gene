@@ -249,6 +249,13 @@ for run_dir in sorted(benchmarks.glob(run_glob)):
         record["memory_changed_plan"] = row.get("memory_changed_plan", specialty_flag(record["memory"], "changed_plan"))
         record["memory_candidate_typed"] = row.get("memory_candidate_typed", "false")
         record["memory_candidate_has_evidence"] = row.get("memory_candidate_has_evidence", "false")
+        record["memory_proposal_recorded"] = row.get("memory_proposal_recorded", "false")
+        record["memory_proposal_status"] = row.get("memory_proposal_status", "missing")
+        record["memory_proposal_candidates"] = as_int(row.get("memory_proposal_candidates", "0"))
+        record["memory_proposal_kinds"] = row.get("memory_proposal_kinds", "none")
+        record["memory_proposal_evidence_items"] = as_int(row.get("memory_proposal_evidence_items", "0"))
+        record["memory_proposal_write_policy"] = row.get("memory_proposal_write_policy", "missing")
+        record["memory_proposal_write_performed"] = row.get("memory_proposal_write_performed", "false")
         record["memory_record_used"] = row.get("memory_record_used", "false")
         record["memory_use_count_updated"] = row.get("memory_use_count_updated", "false")
         record["memory_failure_lesson_promoted"] = row.get("memory_failure_lesson_promoted", "false")
@@ -297,6 +304,12 @@ memory_recalled_items = sum(record["memory_recalled_items"] for record in task_r
 memory_conflicts = sum(record["memory_conflicts"] for record in task_records)
 memory_candidate_typed_tasks = sum(1 for record in task_records if record["memory_candidate_typed"] == "true")
 memory_candidate_evidence_tasks = sum(1 for record in task_records if record["memory_candidate_has_evidence"] == "true")
+memory_proposal_tasks = sum(1 for record in task_records if record["memory_proposal_recorded"] == "true")
+memory_proposal_candidates = sum(record["memory_proposal_candidates"] for record in task_records)
+memory_proposal_evidence_items = sum(record["memory_proposal_evidence_items"] for record in task_records)
+memory_proposal_review_required_tasks = sum(
+    1 for record in task_records if record["memory_proposal_write_policy"] == "review_required"
+)
 memory_record_used_tasks = sum(1 for record in task_records if record["memory_record_used"] == "true")
 memory_use_count_updated_tasks = sum(1 for record in task_records if record["memory_use_count_updated"] == "true")
 memory_failure_lesson_promoted_tasks = sum(1 for record in task_records if record["memory_failure_lesson_promoted"] == "true")
@@ -542,6 +555,10 @@ lines.extend(md_table(
         ["memory_conflicts", memory_conflicts, "n/a"],
         ["memory_candidate_typed_tasks", memory_candidate_typed_tasks, pct(memory_candidate_typed_tasks, total_tasks)],
         ["memory_candidate_evidence_tasks", memory_candidate_evidence_tasks, pct(memory_candidate_evidence_tasks, total_tasks)],
+        ["memory_proposal_tasks", memory_proposal_tasks, pct(memory_proposal_tasks, total_tasks)],
+        ["memory_proposal_candidates", memory_proposal_candidates, "n/a"],
+        ["memory_proposal_evidence_items", memory_proposal_evidence_items, "n/a"],
+        ["memory_proposal_review_required_tasks", memory_proposal_review_required_tasks, pct(memory_proposal_review_required_tasks, total_tasks)],
         ["memory_record_used_tasks", memory_record_used_tasks, pct(memory_record_used_tasks, total_tasks)],
         ["memory_use_count_updated_tasks", memory_use_count_updated_tasks, pct(memory_use_count_updated_tasks, total_tasks)],
         ["memory_failure_lesson_promoted_tasks", memory_failure_lesson_promoted_tasks, pct(memory_failure_lesson_promoted_tasks, total_tasks)],

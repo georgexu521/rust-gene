@@ -5,7 +5,7 @@
 - Worktree: `target/live-evals/project-partner-demo-latest-20260525-233509/project-partner-failure-memory-proposal/worktree`
 - Isolated env: `/Users/georgexu/Desktop/rust-agent/target/live-evals/project-partner-demo-latest-20260525-233509/project-partner-failure-memory-proposal/env`
 - Test status: `ok`
-- Generated: `2026-05-25 23:37:34 +0800`
+- Generated: `2026-05-26 00:13:14 +0800`
 
 ## Git Status
 
@@ -189,8 +189,15 @@ risk_signal_reasons: required validation commands present; runtime risk keyword 
 memory_sync_events: 2
 memory_tool_calls: 0
 retrieval_sources: Project
-memory_candidate_typed: false
-memory_candidate_has_evidence: false
+memory_candidate_typed: true
+memory_candidate_has_evidence: true
+memory_proposal_recorded: true
+memory_proposal_status: proposed
+memory_proposal_candidates: 1
+memory_proposal_kinds: successful_fix
+memory_proposal_evidence_items: 9
+memory_proposal_write_policy: review_required
+memory_proposal_write_performed: false
 memory_record_used: false
 memory_use_count_updated: false
 memory_failure_lesson_promoted: false

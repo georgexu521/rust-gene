@@ -377,6 +377,62 @@ def int_value(value, default=0):
         return default
 
 
+def _memory_proposal_events(trace_items):
+    return [
+        event
+        for event in trace_items
+        if token(event.get("type", "")) == "memory_proposal_prepared"
+    ]
+
+
+def _join_memory_proposal_kinds(kinds):
+    if isinstance(kinds, list):
+        values = [str(kind).strip() for kind in kinds if str(kind).strip()]
+    else:
+        values = [part.strip() for part in str(kinds or "").split(",") if part.strip()]
+    return ",".join(unique_items(values)) if values else "none"
+
+
+def memory_proposal_metrics_from_trace(trace_items, signal_text=""):
+    signal_lower = str(signal_text or "").lower()
+    proposals = _memory_proposal_events(trace_items)
+    latest = proposals[-1] if proposals else {}
+    candidate_kinds = _join_memory_proposal_kinds(latest.get("candidate_kinds"))
+    candidates = int_value(latest.get("candidates"), 0)
+    evidence_items = int_value(latest.get("evidence_items"), 0)
+    write_performed_value = latest.get("write_performed", False)
+    write_performed = (
+        write_performed_value is True
+        or parse_boolish(write_performed_value)
+    )
+    old_typed_signal = (
+        "memory-id:" in signal_lower
+        or "records.jsonl" in signal_lower
+        or "typed memory record" in signal_lower
+        or "memory_candidate_typed=true" in signal_lower
+    )
+    old_evidence_signal = (
+        "evidence_status" in signal_lower
+        or "memory_candidate_has_evidence=true" in signal_lower
+        or "missing evidence" in signal_lower
+        or "runtimeobservation" in signal_lower
+        or "memoryevidencekind" in signal_lower
+    )
+    typed = old_typed_signal or (candidates > 0 and candidate_kinds != "none")
+    has_evidence = old_evidence_signal or evidence_items > 0
+    return {
+        "memory_candidate_typed": bool_text(typed),
+        "memory_candidate_has_evidence": bool_text(has_evidence),
+        "memory_proposal_recorded": bool_text(bool(proposals)),
+        "memory_proposal_status": str(latest.get("status", "missing")),
+        "memory_proposal_candidates": str(candidates),
+        "memory_proposal_kinds": candidate_kinds,
+        "memory_proposal_evidence_items": str(evidence_items),
+        "memory_proposal_write_policy": str(latest.get("write_policy", "missing")),
+        "memory_proposal_write_performed": bool_text(write_performed),
+    }
+
+
 def float_value(value, default=0.0):
     try:
         return float(value)
@@ -2089,17 +2145,7 @@ def specialty_metrics(task_dir, report_text):
         "memory_record/" in " ".join(str(value) for value in event.get("provenance") or [])
         for event in memory_retrievals
     ) or "memory_record/" in report_lower
-    memory_candidate_typed = (
-        "memory-id:" in report_lower
-        or "records.jsonl" in report_lower
-        or "typed memory record" in report_lower
-        or "memory_candidate_typed=true" in report_lower
-    )
-    memory_candidate_has_evidence = (
-        "evidence_status" in report_lower
-        or "memory_candidate_has_evidence=true" in report_lower
-        or "missing evidence" in report_lower
-    )
+    memory_proposal = memory_proposal_metrics_from_trace(trace_items, report_text)
     memory_use_count_updated = (
         "use_count" in report_lower
         or "last_used" in report_lower
@@ -2171,8 +2217,15 @@ def specialty_metrics(task_dir, report_text):
             report_value(report_text, "memory_conflicts", memory_conflicts)
         ),
         "memory_changed_plan": bool_text(memory_changed_plan),
-        "memory_candidate_typed": bool_text(memory_candidate_typed),
-        "memory_candidate_has_evidence": bool_text(memory_candidate_has_evidence),
+        "memory_candidate_typed": memory_proposal["memory_candidate_typed"],
+        "memory_candidate_has_evidence": memory_proposal["memory_candidate_has_evidence"],
+        "memory_proposal_recorded": memory_proposal["memory_proposal_recorded"],
+        "memory_proposal_status": memory_proposal["memory_proposal_status"],
+        "memory_proposal_candidates": memory_proposal["memory_proposal_candidates"],
+        "memory_proposal_kinds": memory_proposal["memory_proposal_kinds"],
+        "memory_proposal_evidence_items": memory_proposal["memory_proposal_evidence_items"],
+        "memory_proposal_write_policy": memory_proposal["memory_proposal_write_policy"],
+        "memory_proposal_write_performed": memory_proposal["memory_proposal_write_performed"],
         "memory_record_used": bool_text(memory_record_used),
         "memory_use_count_updated": bool_text(memory_use_count_updated),
         "memory_failure_lesson_promoted": bool_text(memory_failure_lesson_promoted),

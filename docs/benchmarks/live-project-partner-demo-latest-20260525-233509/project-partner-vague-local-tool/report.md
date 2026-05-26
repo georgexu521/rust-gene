@@ -5,7 +5,7 @@
 - Worktree: `target/live-evals/project-partner-demo-latest-20260525-233509/project-partner-vague-local-tool/worktree`
 - Isolated env: `/Users/georgexu/Desktop/rust-agent/target/live-evals/project-partner-demo-latest-20260525-233509/project-partner-vague-local-tool/env`
 - Test status: `ok`
-- Generated: `2026-05-25 23:36:18 +0800`
+- Generated: `2026-05-26 00:13:14 +0800`
 
 ## Git Status
 
@@ -27,8 +27,6 @@ $ test -f fixtures/project_partner_vague_tool/index.html
 [exit status: 0]
 
 $ rg 'strain|phage|localStorage' fixtures/project_partner_vague_tool
-fixtures/project_partner_vague_tool/README.md:A non-programmer researcher wants a tiny local tool to track lab strains
-fixtures/project_partner_vague_tool/README.md:and phage notes. The first version should stay local-only and avoid auth,
 fixtures/project_partner_vague_tool/index.html:      <label for="strain">Strain</label>
 fixtures/project_partner_vague_tool/index.html:      <input id="strain" required placeholder="E. coli isolate A">
 fixtures/project_partner_vague_tool/index.html:      <label for="phage">Phage notes</label>
@@ -43,6 +41,8 @@ fixtures/project_partner_vague_tool/index.html:        phageCell.textContent = i
 fixtures/project_partner_vague_tool/index.html:        row.append(strainCell, phageCell);
 fixtures/project_partner_vague_tool/index.html:        strain: document.querySelector("#strain").value.trim(),
 fixtures/project_partner_vague_tool/index.html:        phage: document.querySelector("#phage").value.trim()
+fixtures/project_partner_vague_tool/README.md:A non-programmer researcher wants a tiny local tool to track lab strains
+fixtures/project_partner_vague_tool/README.md:and phage notes. The first version should stay local-only and avoid auth,
 [exit status: 0]
 
 ```
@@ -195,8 +195,15 @@ risk_signal_reasons: required validation commands present
 memory_sync_events: 2
 memory_tool_calls: 0
 retrieval_sources: Project,Session
-memory_candidate_typed: false
-memory_candidate_has_evidence: false
+memory_candidate_typed: true
+memory_candidate_has_evidence: true
+memory_proposal_recorded: true
+memory_proposal_status: proposed
+memory_proposal_candidates: 1
+memory_proposal_kinds: successful_fix
+memory_proposal_evidence_items: 8
+memory_proposal_write_policy: review_required
+memory_proposal_write_performed: false
 memory_record_used: false
 memory_use_count_updated: false
 memory_failure_lesson_promoted: false

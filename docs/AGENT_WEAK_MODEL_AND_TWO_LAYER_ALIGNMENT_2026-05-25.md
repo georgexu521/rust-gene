@@ -459,6 +459,40 @@ Examples:
 Project Soul should carry values, relationship, and routing behavior. Hard
 constraints belong in runtime.
 
+Memory guidance is allowed in Project Soul, but only as proposal guidance, not
+as persistence authority.
+
+```text
+Soul teaches the agent what is worth remembering.
+Runtime decides what is safe to persist.
+```
+
+The LLM/partner layer should notice durable memory candidates:
+
+- explicit user preferences;
+- project decisions;
+- repeated failures or successful repair patterns;
+- local environment constraints;
+- validated workflows;
+- assumptions that should be confirmed later.
+
+It should not propose memory for:
+
+- raw emotional chat logs;
+- one-off guesses;
+- secrets or credentials;
+- unverified claims;
+- broad motivational language;
+- runtime-enforceable safety rules.
+
+Every memory proposal should distinguish user-explicit facts from partner
+inference and include source evidence. Persistence remains controlled by the
+runtime memory gate: type validation, evidence validation, scope validation,
+deduplication, stale/conflict checks, sensitive-data filtering, and review
+policy. The default product posture is `review_required`; the agent may propose
+memory, but it should not silently write durable project memory unless policy
+explicitly allows it.
+
 ### 11.2 Project Memory
 
 Project Memory should be visible, scoped, and evidence-backed.
@@ -958,6 +992,14 @@ Implementation progress on 2026-05-25:
   `status=ok` and `failure_owner=none` for all three demo cases; latest scores
   were vague-local-MVP `98`, resume-with-memory `100`, and
   failure-memory-proposal `100`.
+- Promoted review-only memory proposals into first-class live-eval metrics:
+  reports now derive `memory_candidate_typed` and
+  `memory_candidate_has_evidence` from `memory.proposal` trace events, and expose
+  `memory_proposal_status`, candidate count, candidate kinds, evidence item
+  count, write policy, and `write_performed=false`. Re-collected the passing
+  project-partner demo reports; the suite now shows three recorded proposal
+  events, two typed/evidence-backed candidates, seventeen proposal evidence
+  items, and review-required write policy for all proposal events.
 - Added focused tests for assumptions, scope, validation commands, context
   budgets, executor context injection, weak-model profiles, profile-scoped tool
   exposure, execution report status mapping, review-only memory proposals,

@@ -1428,6 +1428,7 @@ from scripts.live_eval_report_parser import (
     derived_trajectory_metrics_from_events,
     evaluate_output_assertions,
     evaluate_trajectory_assertions,
+    memory_proposal_metrics_from_trace,
     normalized_runtime_spine_assertions,
     runtime_spine_metrics_from_events,
     score_live_eval_record,
@@ -1953,6 +1954,7 @@ import json
 import pathlib
 import sys
 from scripts.live_eval_report_parser import (
+    memory_proposal_metrics_from_trace,
     normalized_runtime_spine_assertions,
     runtime_spine_metrics_from_events,
 )
@@ -2037,17 +2039,9 @@ report_signal_text = "\n".join(
     ]
 ).lower()
 memory_record_used = "memory_record/" in report_signal_text
-memory_candidate_typed = (
-    "memory-id:" in report_signal_text
-    or "records.jsonl" in report_signal_text
-    or "typed memory record" in report_signal_text
-)
-memory_candidate_has_evidence = (
-    "evidence_status" in report_signal_text
-    or "memory_candidate_has_evidence=true" in report_signal_text
-    or "runtimeobservation" in report_signal_text
-    or "memoryevidencekind" in report_signal_text
-)
+memory_proposal = memory_proposal_metrics_from_trace(trace_events, report_signal_text)
+memory_candidate_typed = memory_proposal["memory_candidate_typed"] == "true"
+memory_candidate_has_evidence = memory_proposal["memory_candidate_has_evidence"] == "true"
 memory_use_count_updated = (
     "use_count" in report_signal_text
     or "last_used" in report_signal_text
@@ -2190,6 +2184,13 @@ print(f"memory_tool_calls: {len(memory_tools)}")
 print(f"retrieval_sources: {','.join(memory_sources) if memory_sources else 'none'}")
 print(f"memory_candidate_typed: {str(memory_candidate_typed).lower()}")
 print(f"memory_candidate_has_evidence: {str(memory_candidate_has_evidence).lower()}")
+print(f"memory_proposal_recorded: {memory_proposal['memory_proposal_recorded']}")
+print(f"memory_proposal_status: {memory_proposal['memory_proposal_status']}")
+print(f"memory_proposal_candidates: {memory_proposal['memory_proposal_candidates']}")
+print(f"memory_proposal_kinds: {memory_proposal['memory_proposal_kinds']}")
+print(f"memory_proposal_evidence_items: {memory_proposal['memory_proposal_evidence_items']}")
+print(f"memory_proposal_write_policy: {memory_proposal['memory_proposal_write_policy']}")
+print(f"memory_proposal_write_performed: {memory_proposal['memory_proposal_write_performed']}")
 print(f"memory_record_used: {str(memory_record_used).lower()}")
 print(f"memory_use_count_updated: {str(memory_use_count_updated).lower()}")
 print(f"memory_failure_lesson_promoted: {str(memory_failure_lesson_promoted).lower()}")
@@ -2359,6 +2360,14 @@ memory_active_tasks = sum(1 for row in rows if row["memory_active"] == "true")
 memory_changed_plan_tasks = sum(1 for row in rows if row["memory_changed_plan"] == "true")
 memory_recalled_items = sum(int(row["memory_recalled_items"]) for row in rows)
 memory_conflicts = sum(int(row["memory_conflicts"]) for row in rows)
+memory_candidate_typed_tasks = sum(1 for row in rows if row.get("memory_candidate_typed") == "true")
+memory_candidate_evidence_tasks = sum(1 for row in rows if row.get("memory_candidate_has_evidence") == "true")
+memory_proposal_tasks = sum(1 for row in rows if row.get("memory_proposal_recorded") == "true")
+memory_proposal_candidates = sum(as_int(row.get("memory_proposal_candidates")) for row in rows)
+memory_proposal_evidence_items = sum(as_int(row.get("memory_proposal_evidence_items")) for row in rows)
+memory_proposal_review_required_tasks = sum(
+    1 for row in rows if row.get("memory_proposal_write_policy") == "review_required"
+)
 skill_active_tasks = sum(1 for row in rows if row["skill_active"] == "true")
 skill_promotion_tasks = sum(1 for row in rows if row["skill_promotion_evidence"] == "true")
 behavior_assertion_tasks = sum(1 for row in rows if row["behavior_assertions"] != "none")
@@ -2440,6 +2449,12 @@ lines = [
     f"- Memory changed-plan tasks: `{memory_changed_plan_tasks}`",
     f"- Memory recalled items: `{memory_recalled_items}`",
     f"- Memory conflicts: `{memory_conflicts}`",
+    f"- Memory typed-candidate tasks: `{memory_candidate_typed_tasks}`",
+    f"- Memory evidence-backed candidate tasks: `{memory_candidate_evidence_tasks}`",
+    f"- Memory proposal tasks: `{memory_proposal_tasks}`",
+    f"- Memory proposal candidates: `{memory_proposal_candidates}`",
+    f"- Memory proposal evidence items: `{memory_proposal_evidence_items}`",
+    f"- Memory proposal review-required tasks: `{memory_proposal_review_required_tasks}`",
     f"- Skill active tasks: `{skill_active_tasks}`",
     f"- Skill promotion-evidence tasks: `{skill_promotion_tasks}`",
     f"- Behavior assertion tasks: `{behavior_assertion_tasks}`",
@@ -2521,6 +2536,12 @@ lines.extend([
     f"| memory_changed_plan_tasks | {memory_changed_plan_tasks} | Tasks where memory or learning signals reweighted planning. |",
     f"| memory_recalled_items | {memory_recalled_items} | Retrieved memory-backed context items across tasks. |",
     f"| memory_conflicts | {memory_conflicts} | Retrieval-context conflict count from memory-backed context. |",
+    f"| memory_candidate_typed_tasks | {memory_candidate_typed_tasks} | Tasks with typed memory candidates, including review-only MemoryProposal candidates. |",
+    f"| memory_candidate_evidence_tasks | {memory_candidate_evidence_tasks} | Tasks with evidence-backed memory candidates, including review-only MemoryProposal evidence. |",
+    f"| memory_proposal_tasks | {memory_proposal_tasks} | Tasks that emitted a review-only MemoryProposal trace event. |",
+    f"| memory_proposal_candidates | {memory_proposal_candidates} | Review-only MemoryProposal candidates proposed across tasks. |",
+    f"| memory_proposal_evidence_items | {memory_proposal_evidence_items} | Evidence items attached to review-only MemoryProposal candidates. |",
+    f"| memory_proposal_review_required_tasks | {memory_proposal_review_required_tasks} | MemoryProposal tasks that require review before persistence. |",
     f"| skill_active_tasks | {skill_active_tasks} | Tasks where skill tools or skill-specific signals were active. |",
     f"| skill_promotion_evidence_tasks | {skill_promotion_tasks} | Tasks with promotion-related skill evidence. |",
     f"| behavior_assertion_tasks | {behavior_assertion_tasks} | Tasks with explicit behavior assertions in the live-eval sample. |",

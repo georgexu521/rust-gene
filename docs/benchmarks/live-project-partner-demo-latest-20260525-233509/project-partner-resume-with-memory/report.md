@@ -5,7 +5,7 @@
 - Worktree: `target/live-evals/project-partner-demo-latest-20260525-233509/project-partner-resume-with-memory/worktree`
 - Isolated env: `/Users/georgexu/Desktop/rust-agent/target/live-evals/project-partner-demo-latest-20260525-233509/project-partner-resume-with-memory/env`
 - Test status: `ok`
-- Generated: `2026-05-25 23:36:51 +0800`
+- Generated: `2026-05-26 00:13:14 +0800`
 
 ## Git Status
 
@@ -184,6 +184,13 @@ memory_tool_calls: 0
 retrieval_sources: none
 memory_candidate_typed: false
 memory_candidate_has_evidence: false
+memory_proposal_recorded: true
+memory_proposal_status: not_applicable
+memory_proposal_candidates: 0
+memory_proposal_kinds: none
+memory_proposal_evidence_items: 0
+memory_proposal_write_policy: review_required
+memory_proposal_write_performed: false
 memory_record_used: false
 memory_use_count_updated: false
 memory_failure_lesson_promoted: false
