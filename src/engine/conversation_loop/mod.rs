@@ -420,6 +420,9 @@ impl ConversationLoop {
         if let Some(ref wt) = self.worktree_manager {
             ctx = ctx.with_worktree_manager(wt.clone());
         }
+        if let Some(ref memory) = self.memory_manager {
+            ctx = ctx.with_memory_manager(memory.clone());
+        }
         if let Some(servers) = self.allowed_mcp_servers.as_ref() {
             ctx.metadata
                 .insert("allowed_mcp_servers".to_string(), servers.join(","));
@@ -518,7 +521,7 @@ impl ConversationLoop {
         {
             TurnEntryGateFlow::Continue => {}
             TurnEntryGateFlow::Stop { content, status } => {
-                self.finish_trace(trace.clone(), status);
+                self.finish_trace(trace.clone(), status).await;
                 return Ok(LoopResult {
                     content,
                     tool_calls: Vec::new(),
@@ -585,7 +588,7 @@ impl ConversationLoop {
         })
         .await;
 
-        self.finish_trace(trace, TurnStatus::Completed);
+        self.finish_trace(trace, TurnStatus::Completed).await;
 
         Ok(result)
     }

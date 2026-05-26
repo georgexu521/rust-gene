@@ -55,7 +55,7 @@ pub(super) fn persist_turn_learning_event(
     )
 }
 
-pub(super) fn promote_trace_candidate_memories(
+pub(super) async fn promote_trace_candidate_memories(
     memory: &crate::memory::MemoryManager,
     trace: &crate::engine::trace::TurnTrace,
 ) -> usize {
@@ -110,10 +110,12 @@ pub(super) fn promote_trace_candidate_memories(
                 confidence,
             ));
         candidate.source_experience_ids.push(trace.trace_id.clone());
-        let outcome = memory.submit_candidate(
-            candidate,
-            crate::memory::MemoryWriteTarget::Topic("strategy-failures".to_string()),
-        );
+        let outcome = memory
+            .submit_candidate_with_provider_notifications(
+                candidate,
+                crate::memory::MemoryWriteTarget::Topic("strategy-failures".to_string()),
+            )
+            .await;
         if matches!(
             outcome.status,
             crate::memory::manager::MemoryWriteOutcomeStatus::Saved
@@ -409,8 +411,8 @@ mod tests {
     use crate::tools::{ToolErrorCode, ToolResult};
     use serde_json::json;
 
-    #[test]
-    fn promotes_stop_failure_candidate_memory() {
+    #[tokio::test]
+    async fn promotes_stop_failure_candidate_memory() {
         let base = std::env::temp_dir().join(format!(
             "priority-agent-turn-recording-memory-{}",
             std::process::id()
@@ -436,7 +438,7 @@ mod tests {
             next_action: Some("run targeted validation first".to_string()),
         });
 
-        let promoted = promote_trace_candidate_memories(&memory, &trace);
+        let promoted = promote_trace_candidate_memories(&memory, &trace).await;
 
         assert_eq!(promoted, 1);
         let records = memory.memory_records();

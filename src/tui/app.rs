@@ -2246,6 +2246,9 @@ impl TuiApp {
             if let Some(mcp_manager) = engine.mcp_manager() {
                 context = context.with_mcp_manager(mcp_manager);
             }
+            if let Some(memory_manager) = engine.memory_manager() {
+                context = context.with_memory_manager(memory_manager);
+            }
         }
         context
     }

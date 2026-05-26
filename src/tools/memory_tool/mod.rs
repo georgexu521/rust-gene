@@ -793,7 +793,6 @@ impl Tool for MemorySaveTool {
         let target = params["target"].as_str().unwrap_or("auto");
         let topic = params["topic"].as_str().unwrap_or("").trim();
 
-        let manager = crate::memory::MemoryManager::new();
         let mut candidate = crate::memory::MemoryCandidate::new(
             content,
             category,
@@ -834,7 +833,17 @@ impl Tool for MemorySaveTool {
             crate::memory::MemoryWriteTarget::Auto
         };
 
-        let outcome = manager.submit_candidate(candidate, write_target);
+        let outcome = if let Some(memory_manager) = context.memory_manager.as_ref() {
+            let manager = memory_manager.lock().await;
+            manager
+                .submit_candidate_with_provider_notifications(candidate, write_target)
+                .await
+        } else {
+            let manager = crate::memory::MemoryManager::new();
+            manager
+                .submit_candidate_with_provider_notifications(candidate, write_target)
+                .await
+        };
         let path = outcome
             .path
             .as_ref()

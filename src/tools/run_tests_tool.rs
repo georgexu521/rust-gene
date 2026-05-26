@@ -248,6 +248,7 @@ mod tests {
             file_cache: None,
             diagnostic_tracker: None,
             checkpoint_manager: None,
+            memory_manager: None,
         }
     }
 

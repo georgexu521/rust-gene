@@ -677,7 +677,7 @@ impl EvidenceLedger {
                         .as_deref()
                         .is_some_and(|family| !family.trim().is_empty())
             });
-        let parent_verified = self.parent_verified_subagent_result(required_rollup.as_ref());
+        let parent_verified = self.parent_verified_subagent_result();
 
         VerificationProofSupportContext {
             task_type,
@@ -699,7 +699,7 @@ impl EvidenceLedger {
             .collect::<BTreeSet<_>>();
         let has_explicit_kinds = !kinds.is_empty();
 
-        if self.parent_verified_subagent_result(required_rollup) {
+        if self.parent_verified_subagent_result() {
             kinds.insert(VerificationProofKind::ParentVerifiedSubagentResult);
         }
 
@@ -719,13 +719,8 @@ impl EvidenceLedger {
         kinds.into_iter().collect()
     }
 
-    fn parent_verified_subagent_result(
-        &self,
-        required_rollup: Option<&RequiredValidationRollup>,
-    ) -> bool {
+    fn parent_verified_subagent_result(&self) -> bool {
         self.explicit_parent_verified_subagent_result()
-            || (self.passed_subagent_claim()
-                && self.parent_runtime_validation_passed(required_rollup))
     }
 
     fn explicit_parent_verified_subagent_result(&self) -> bool {
@@ -733,39 +728,6 @@ impl EvidenceLedger {
             fact.passed
                 && fact.parent_verified == Some(true)
                 && fact.proof_kind == Some(VerificationProofKind::ParentVerifiedSubagentResult)
-        })
-    }
-
-    fn passed_subagent_claim(&self) -> bool {
-        self.validation_facts.iter().any(|fact| {
-            fact.passed && fact.proof_kind == Some(VerificationProofKind::SubagentClaimOnly)
-        })
-    }
-
-    fn parent_runtime_validation_passed(
-        &self,
-        required_rollup: Option<&RequiredValidationRollup>,
-    ) -> bool {
-        if required_rollup.is_some_and(|rollup| {
-            rollup.total > 0 && rollup.missing == 0 && rollup.failed == 0 && rollup.passed > 0
-        }) {
-            return true;
-        }
-
-        self.validation_facts.iter().any(|fact| {
-            fact.passed
-                && !matches!(
-                    fact.proof_kind,
-                    Some(
-                        VerificationProofKind::SubagentClaimOnly
-                            | VerificationProofKind::ParentVerifiedSubagentResult
-                    )
-                )
-                && fact.validation_family.as_deref() != Some("subagent")
-                && fact
-                    .command
-                    .as_deref()
-                    .is_some_and(|command| !normalize_command_identity(command).is_empty())
         })
     }
 
@@ -3036,7 +2998,7 @@ mod tests {
     }
 
     #[test]
-    fn parent_runtime_validation_promotes_subagent_claim_to_parent_verified_result() {
+    fn parent_runtime_validation_does_not_promote_subagent_claim_without_explicit_parent_record() {
         let mut ledger = EvidenceLedger::new();
         let subagent_result = ToolResult::success_with_data(
             "Sub-agent agent_1 completed with status: Completed",
@@ -3075,14 +3037,14 @@ mod tests {
         assert!(proof
             .proof_kinds
             .contains(&VerificationProofKind::SubagentClaimOnly));
-        assert!(proof
+        assert!(!proof
             .proof_kinds
             .contains(&VerificationProofKind::ParentVerifiedSubagentResult));
         assert_eq!(
             proof.derived_support.status,
-            VerificationProofStatus::Verified
+            VerificationProofStatus::Partial
         );
-        assert!(proof.derived_support.supports_verified);
+        assert!(!proof.derived_support.supports_verified);
     }
 
     #[test]

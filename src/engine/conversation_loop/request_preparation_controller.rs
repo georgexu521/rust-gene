@@ -77,9 +77,7 @@ impl RequestPreparationController {
         Self::inject_task_state_zone(&mut request_messages, agent_task_state);
         Self::inject_task_contract_zone(&mut request_messages, task_contract, context_pack);
         Self::inject_mva_candidate_action_hint(&mut request_messages);
-        if let Some(prompt) = focused_repair_prompt {
-            request_messages.push(prompt);
-        }
+        Self::inject_focused_repair_zone(&mut request_messages, focused_repair_prompt);
         Self::inject_context_ledger_hint(&mut request_messages, session_store, session_id);
 
         let mut memory_context = MemoryPrefetchContext {
@@ -186,6 +184,35 @@ impl RequestPreparationController {
             .rposition(|message| matches!(message, Message::User { .. }))
             .unwrap_or(request_messages.len());
         request_messages.insert(insert_pos, Message::system(hint));
+    }
+
+    fn inject_focused_repair_zone(
+        request_messages: &mut Vec<Message>,
+        focused_repair_prompt: Option<Message>,
+    ) {
+        let Some(prompt) = focused_repair_prompt else {
+            return;
+        };
+        let content = match prompt {
+            Message::System { content }
+            | Message::User { content }
+            | Message::Assistant { content, .. }
+            | Message::Tool { content, .. } => content,
+        };
+        let content = content.trim();
+        if content.is_empty() {
+            return;
+        }
+
+        let block = format!(
+            "<recent_observation>\n- Focused repair guidance from the runtime. Treat this as turn-scoped repair context, not stable system policy.\n- {}\n</recent_observation>",
+            content
+        );
+        let insert_pos = request_messages
+            .iter()
+            .rposition(|message| matches!(message, Message::User { .. }))
+            .unwrap_or(request_messages.len());
+        request_messages.insert(insert_pos, Message::system(block));
     }
 
     fn inject_context_ledger_hint(
@@ -924,7 +951,7 @@ fn compact_text(value: &str, max_chars: usize) -> String {
 mod tests {
     use super::*;
     use crate::engine::task_contract::TaskContractBundleExt;
-    use crate::engine::trace::TurnTrace;
+    use crate::engine::trace::{TraceEvent, TurnTrace};
 
     fn tool(name: &str) -> Tool {
         Tool {
@@ -936,7 +963,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn prepare_appends_focused_prompt_and_records_request_budget() {
+    async fn prepare_wraps_focused_prompt_as_dynamic_recent_observation() {
         let trace =
             TraceCollector::new(TurnTrace::new("session-test".to_string(), 1, "update code"));
         let mut runtime_diet = RuntimeDietSnapshot::new(true);
@@ -964,12 +991,30 @@ mod tests {
         assert_eq!(prepared.request.model, "test-model");
         assert_eq!(prepared.request.messages.len(), 2);
         assert!(matches!(
+            prepared.request.messages.first(),
+            Some(Message::System { content })
+                if content.starts_with("<context_zones")
+                    && content.contains("<recent_observation>")
+                    && content.contains("Focused repair guidance from the runtime")
+                    && content.contains("focused repair prompt")
+        ));
+        assert!(matches!(
             prepared.request.messages.last(),
-            Some(Message::System { content }) if content == "focused repair prompt"
+            Some(Message::User { content }) if content == "change src/lib.rs"
         ));
         assert_eq!(prepared.request.tools.as_ref().map(Vec::len), Some(2));
         assert_eq!(runtime_diet.exposed_tools, 2);
         assert!(runtime_diet.total_request_tokens > 0);
+
+        let finished = trace.finish(crate::engine::trace::TurnStatus::Completed);
+        assert!(finished.events.iter().any(|event| matches!(
+            event,
+            TraceEvent::ContextZonesMaterialized {
+                stable_prefix_tokens,
+                recent_observation_items,
+                ..
+            } if *stable_prefix_tokens == 0 && *recent_observation_items >= 1
+        )));
     }
 
     #[tokio::test]

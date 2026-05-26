@@ -1174,6 +1174,8 @@ pub struct ToolContext {
     /// Checkpoint 管理器（文件修改快照）
     pub checkpoint_manager:
         Option<std::sync::Arc<tokio::sync::Mutex<crate::engine::checkpoint::CheckpointManager>>>,
+    /// Persistent memory manager shared with the active conversation.
+    pub memory_manager: Option<std::sync::Arc<tokio::sync::Mutex<crate::memory::MemoryManager>>>,
 }
 
 impl std::fmt::Debug for ToolContext {
@@ -1225,6 +1227,10 @@ impl std::fmt::Debug for ToolContext {
                 "file_cache",
                 &self.file_cache.as_ref().map(|_| "<FileStateCache>"),
             )
+            .field(
+                "memory_manager",
+                &self.memory_manager.as_ref().map(|_| "<MemoryManager>"),
+            )
             .finish()
     }
 }
@@ -1254,6 +1260,7 @@ impl ToolContext {
             file_cache: None,
             diagnostic_tracker: None,
             checkpoint_manager: None,
+            memory_manager: None,
         }
     }
 
@@ -1371,6 +1378,15 @@ impl ToolContext {
         manager: std::sync::Arc<tokio::sync::Mutex<crate::engine::checkpoint::CheckpointManager>>,
     ) -> Self {
         self.checkpoint_manager = Some(manager);
+        self
+    }
+
+    /// 设置共享记忆管理器
+    pub fn with_memory_manager(
+        mut self,
+        manager: std::sync::Arc<tokio::sync::Mutex<crate::memory::MemoryManager>>,
+    ) -> Self {
+        self.memory_manager = Some(manager);
         self
     }
 

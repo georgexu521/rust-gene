@@ -653,7 +653,7 @@ impl ConversationLoop {
         }
     }
 
-    pub(super) fn finish_trace(&self, trace: TraceCollector, status: TurnStatus) {
+    pub(super) async fn finish_trace(&self, trace: TraceCollector, status: TurnStatus) {
         let trace = trace.finish(status);
         if let Some(store) = &self.trace_store {
             store.push(trace.clone());
@@ -667,17 +667,13 @@ impl ConversationLoop {
             }
         }
         if let Some(memory_manager) = &self.memory_manager {
-            match memory_manager.try_lock() {
-                Ok(memory) => {
-                    let promoted = promote_trace_candidate_memories(&memory, &trace);
-                    if promoted > 0 {
-                        debug!(
-                            "Promoted {} trace candidate memories from turn outcome",
-                            promoted
-                        );
-                    }
-                }
-                Err(_) => debug!("Skipped candidate memory promotion because memory lock was busy"),
+            let memory = memory_manager.lock().await;
+            let promoted = promote_trace_candidate_memories(&memory, &trace).await;
+            if promoted > 0 {
+                debug!(
+                    "Promoted {} trace candidate memories from turn outcome",
+                    promoted
+                );
             }
         }
     }

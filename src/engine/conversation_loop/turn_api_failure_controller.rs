@@ -18,7 +18,7 @@ pub(super) struct TurnApiFailureContext<'a> {
 pub(super) struct TurnApiFailureController;
 
 impl TurnApiFailureController {
-    pub(super) fn record(context: TurnApiFailureContext<'_>) {
+    pub(super) async fn record(context: TurnApiFailureContext<'_>) {
         context.trace.record(TraceEvent::Error {
             message: context.error_message.to_string(),
         });
@@ -41,7 +41,8 @@ impl TurnApiFailureController {
         );
         context
             .conversation
-            .finish_trace(context.trace.clone(), TurnStatus::Failed);
+            .finish_trace(context.trace.clone(), TurnStatus::Failed)
+            .await;
     }
 }
 
@@ -90,8 +91,8 @@ mod tests {
         )
     }
 
-    #[test]
-    fn record_marks_api_error_and_finishes_failed_trace() {
+    #[tokio::test]
+    async fn record_marks_api_error_and_finishes_failed_trace() {
         let conversation = conversation();
         let route = IntentRouter::new().route("fix it");
         let task_bundle = TaskContextBundle::new("fix it", ".", route.clone(), None);
@@ -106,7 +107,8 @@ mod tests {
             code_workflow: &code_workflow,
             runtime_diet: &mut runtime_diet,
             error_message: "provider unavailable",
-        });
+        })
+        .await;
 
         assert_eq!(runtime_diet.validation_evidence, "api_error");
         let finished = trace.finish(TurnStatus::Failed);
@@ -121,8 +123,8 @@ mod tests {
             .any(|event| matches!(event, TraceEvent::RuntimeDietReport { .. })));
     }
 
-    #[test]
-    fn provider_protocol_failure_records_typed_recovery_plan() {
+    #[tokio::test]
+    async fn provider_protocol_failure_records_typed_recovery_plan() {
         let conversation = conversation();
         let route = IntentRouter::new().route("fix it");
         let task_bundle = TaskContextBundle::new("fix it", ".", route.clone(), None);
@@ -137,7 +139,8 @@ mod tests {
             code_workflow: &code_workflow,
             runtime_diet: &mut runtime_diet,
             error_message: "bad_request_error: tool call result does not follow tool call",
-        });
+        })
+        .await;
 
         let finished = trace.finish(TurnStatus::Failed);
         assert!(finished.events.iter().any(|event| matches!(

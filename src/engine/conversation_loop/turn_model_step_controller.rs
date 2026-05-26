@@ -108,7 +108,8 @@ impl TurnModelStepController {
                     code_workflow: context.code_workflow,
                     runtime_diet: &mut context.turn_state.runtime_diet,
                     error_message: &error_message,
-                });
+                })
+                .await;
                 return Err(e);
             }
         };
