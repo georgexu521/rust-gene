@@ -26,6 +26,7 @@ pub(super) struct TurnIterationLoopContext<'a> {
     pub(super) turn_retrieval_context: Option<&'a RetrievalContext>,
     pub(super) retained_context: &'a ToolContextRetainedContext,
     pub(super) base_tools: &'a [Tool],
+    pub(super) available_tools: &'a [Tool],
     pub(super) loop_state: &'a mut TurnLoopState,
     pub(super) turn_state: &'a mut TurnRuntimeState,
     pub(super) no_diff_audit_closeout_allowed: bool,
@@ -58,6 +59,7 @@ impl TurnIterationLoopController {
                 turn_retrieval_context: context.turn_retrieval_context,
                 retained_context: context.retained_context,
                 base_tools: context.base_tools,
+                available_tools: context.available_tools,
                 loop_state: &mut *context.loop_state,
                 turn_state: &mut *context.turn_state,
                 no_diff_audit_closeout_allowed: context.no_diff_audit_closeout_allowed,
@@ -157,6 +159,7 @@ mod tests {
         let mut messages = vec![Message::user("hello")];
         let trace = TraceCollector::new(TurnTrace::new("session", 1, "hello"));
         let base_tools = Vec::new();
+        let available_tools = Vec::new();
         let retained_context = ToolContextRetainedContext::default();
 
         TurnIterationLoopController::run(TurnIterationLoopContext {
@@ -167,6 +170,7 @@ mod tests {
             turn_retrieval_context: None,
             retained_context: &retained_context,
             base_tools: &base_tools,
+            available_tools: &available_tools,
             loop_state: &mut loop_state,
             turn_state: &mut turn_state,
             no_diff_audit_closeout_allowed: false,

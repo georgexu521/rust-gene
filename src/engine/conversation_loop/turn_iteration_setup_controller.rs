@@ -8,7 +8,7 @@ use crate::engine::task_contract::ModelProfileMode;
 use crate::engine::trace::TraceCollector;
 use crate::memory::MemoryManager;
 use crate::services::api::Tool;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -24,6 +24,7 @@ pub(super) struct TurnIterationSetupContext<'a> {
     pub(super) task_stage: AgentTaskStage,
     pub(super) baseline_git_status_files: &'a HashSet<PathBuf>,
     pub(super) base_tools: &'a [Tool],
+    pub(super) available_tools: &'a [Tool],
     pub(super) required_validation_commands_present: bool,
     pub(super) model_profile: ModelProfileMode,
 }
@@ -75,8 +76,13 @@ impl TurnIterationSetupController {
         let has_changes_before_request =
             crate::engine::code_change_workflow::is_programming_workflow(context.route_workflow)
                 && WorkflowChangeTracker::has_changes_since(context.baseline_git_status_files);
+        let base_tools = route_recovered_base_tools(
+            context.base_tools,
+            context.available_tools,
+            &context.turn_state.route_recovery,
+        );
         ToolExposurePlan::build(ToolExposureRequest {
-            base_tools: context.base_tools,
+            base_tools: &base_tools,
             programming_workflow: crate::engine::code_change_workflow::is_programming_workflow(
                 context.route_workflow,
             ),
@@ -95,6 +101,34 @@ impl TurnIterationSetupController {
                 .action_checkpoint_requires_patch_before_validation,
         })
     }
+}
+
+fn route_recovered_base_tools(
+    base_tools: &[Tool],
+    available_tools: &[Tool],
+    recovery: &crate::engine::route_recovery::RouteRecoveryRuntimeState,
+) -> Vec<Tool> {
+    if !recovery.read_search_expanded {
+        return base_tools.to_vec();
+    }
+
+    let mut tools = base_tools.to_vec();
+    let mut indexes = tools
+        .iter()
+        .enumerate()
+        .map(|(index, tool)| (tool.name.clone(), index))
+        .collect::<HashMap<_, _>>();
+    for tool in available_tools {
+        if !crate::engine::route_recovery::is_safe_read_search_tool(&tool.name) {
+            continue;
+        }
+        if indexes.contains_key(&tool.name) {
+            continue;
+        }
+        indexes.insert(tool.name.clone(), tools.len());
+        tools.push(tool.clone());
+    }
+    tools
 }
 
 #[cfg(test)]
@@ -131,6 +165,7 @@ mod tests {
             task_stage: AgentTaskStage::Understand,
             baseline_git_status_files: &HashSet::new(),
             base_tools: &[tool("file_read")],
+            available_tools: &[tool("file_read")],
             required_validation_commands_present: false,
             model_profile: ModelProfileMode::Standard,
         })
@@ -157,6 +192,7 @@ mod tests {
             task_stage: AgentTaskStage::Understand,
             baseline_git_status_files: &HashSet::new(),
             base_tools: &[tool("file_read"), tool("bash")],
+            available_tools: &[tool("file_read"), tool("bash")],
             required_validation_commands_present: false,
             model_profile: ModelProfileMode::Standard,
         })
@@ -176,5 +212,45 @@ mod tests {
             crate::engine::trace::TraceEvent::WorkflowFallback { error }
                 if error.contains("using reserved repair round")
         )));
+    }
+
+    #[tokio::test]
+    async fn route_recovery_expands_only_read_search_tools() {
+        let trace = trace();
+        let mut turn_state = TurnRuntimeState::new(true);
+        turn_state.route_recovery.read_search_expanded = true;
+        let base_tools = vec![tool("ask_user")];
+        let available_tools = vec![
+            tool("ask_user"),
+            tool("file_read"),
+            tool("grep"),
+            tool("file_edit"),
+            tool("bash"),
+        ];
+
+        let flow = TurnIterationSetupController::run(TurnIterationSetupContext {
+            iteration: 0,
+            max_iterations: 2,
+            turn_state: &mut turn_state,
+            memory_manager: None,
+            trace: &trace,
+            route_workflow: WorkflowKind::Direct,
+            task_stage: AgentTaskStage::Understand,
+            baseline_git_status_files: &HashSet::new(),
+            base_tools: &base_tools,
+            available_tools: &available_tools,
+            required_validation_commands_present: false,
+            model_profile: ModelProfileMode::Standard,
+        })
+        .await;
+
+        let TurnIterationSetupFlow::Continue { exposure_plan } = flow else {
+            panic!("route recovery should continue");
+        };
+        assert!(exposure_plan.exposed_tool_names.contains("ask_user"));
+        assert!(exposure_plan.exposed_tool_names.contains("file_read"));
+        assert!(exposure_plan.exposed_tool_names.contains("grep"));
+        assert!(!exposure_plan.exposed_tool_names.contains("file_edit"));
+        assert!(!exposure_plan.exposed_tool_names.contains("bash"));
     }
 }

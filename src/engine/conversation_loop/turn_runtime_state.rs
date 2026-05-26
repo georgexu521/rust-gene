@@ -1,6 +1,7 @@
 use super::runtime_diet::RuntimeDietSnapshot;
 use super::tool_call_lifecycle::ToolCallLifecycle;
 use crate::engine::evidence_ledger::EvidenceLedger;
+use crate::engine::route_recovery::RouteRecoveryRuntimeState;
 use std::collections::HashMap;
 
 pub(super) struct TurnRuntimeState {
@@ -8,6 +9,7 @@ pub(super) struct TurnRuntimeState {
     pub(super) runtime_diet: RuntimeDietSnapshot,
     pub(super) tool_lifecycle: ToolCallLifecycle,
     pub(super) focused_repair: FocusedRepairRuntimeState,
+    pub(super) route_recovery: RouteRecoveryRuntimeState,
     pub(super) iterations_used: usize,
     pub(super) effective_iterations: usize,
     pub(super) acceptance_repair_attempts: usize,
@@ -37,6 +39,7 @@ impl TurnRuntimeState {
             runtime_diet: RuntimeDietSnapshot::new(route_scoped_tools_enabled),
             tool_lifecycle: ToolCallLifecycle::default(),
             focused_repair: FocusedRepairRuntimeState::default(),
+            route_recovery: RouteRecoveryRuntimeState::default(),
             iterations_used: 0,
             effective_iterations: 0,
             acceptance_repair_attempts: 0,

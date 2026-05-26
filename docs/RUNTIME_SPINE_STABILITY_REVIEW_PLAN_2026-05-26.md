@@ -1049,3 +1049,54 @@ ruby -ryaml -e 'ARGV.each { |path| YAML.load_file(path); puts path }' evalsets/l
   可以继续加入时间顺序、changed-file scope 和 child artifact id 绑定。
 - 下一批建议转向 P1 route/task-mode recovery，或继续补 context zone
   deterministic ordering / provenance dedupe。
+
+### 2026-05-26 第七批落地
+
+已完成:
+
+- 新增 `src/engine/route_recovery.rs`，把 route/task-mode recovery 做成独立
+  runtime policy:
+  - 记录 `HiddenReadSearchToolRequested` 和 `HiddenMutationToolRequested` 两类
+    drift signal；
+  - read/search recovery 只允许一次性扩大 `project_list`、`glob`、`grep`、
+    `file_read`、`lsp`、`symbol_query`、`ask_user`；
+  - mutation drift 只记录 recovery plan，不自动暴露 `file_edit`、`file_write`、
+    `file_patch`、`format`、`install_dependencies`、`git`、`worktree` 等破坏性工具。
+- `TurnRuntimeState` 增加 `route_recovery` 状态，用于跨 iteration 记住已启用
+  的 bounded recovery。
+- `TurnLoopBootstrapController` 现在同时保留:
+  - route-scoped `base_tools`，用于初始请求；
+  - permission-filtered `available_tools`，只在 recovery policy 允许时补入安全工具。
+- `TurnIterationSetupController` 在下一轮 exposure plan 中应用 recovery:
+  - 初始 route 不变；
+  - 只有当 `read_search_expanded=true` 时，从 `available_tools` 补入安全读/搜工具；
+  - 不补入 mutation/shell/install 等工具。
+- `ToolBatchResultProcessor` 现在会从 unexposed-tool failure 中派生 recovery:
+  - unexposed `file_read` / `grep` / `glob` 等安全工具 -> 生成
+    `RecoveryPlan`，把 task mode 从 `Direct` 升级到 `Light`，并给下一轮
+    暴露 read/search tools；
+  - unexposed mutation tool -> 生成 `no_silent_mutation_expansion` recovery
+    plan，要求 re-plan 或用户明确授权，不改变 tool exposure。
+
+已验证:
+
+```bash
+cargo test -q route_recovery
+cargo test -q turn_iteration_setup_controller
+cargo test -q tool_batch_result_processor
+cargo test -q route_scoped_tools
+cargo test -q runtime_spine_behavior_tests
+cargo fmt --check
+cargo check -q
+git diff --check
+```
+
+第七批之后的状态:
+
+- P1 Route And Task-Mode Recovery 已完成第一段主链路: route drift 可以恢复到
+  更强理解能力，但不会静默扩大写入/破坏能力。
+- 目前 recovery 主要覆盖 unexposed-tool drift。后续可以继续加入:
+  - code-change 多轮无 diff -> replan/repair owner；
+  - action review 反复 revise/deny -> route/task-mode signal；
+  - tool failure 暗示缺少 retrieval -> retrieval expansion；
+  - route recovery metrics 进入 live-eval aggregate。

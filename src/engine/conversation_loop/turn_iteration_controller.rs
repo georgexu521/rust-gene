@@ -49,6 +49,7 @@ pub(super) struct TurnIterationContext<'a> {
     pub(super) turn_retrieval_context: Option<&'a RetrievalContext>,
     pub(super) retained_context: &'a ToolContextRetainedContext,
     pub(super) base_tools: &'a [Tool],
+    pub(super) available_tools: &'a [Tool],
     pub(super) loop_state: &'a mut TurnLoopState,
     pub(super) turn_state: &'a mut TurnRuntimeState,
     pub(super) no_diff_audit_closeout_allowed: bool,
@@ -89,6 +90,7 @@ impl TurnIterationController {
             task_stage: context.task_bundle.agent_state.stage,
             baseline_git_status_files: context.baseline_git_status_files,
             base_tools: context.base_tools,
+            available_tools: context.available_tools,
             required_validation_commands_present: !context.required_validation_commands.is_empty(),
             model_profile,
         })
@@ -1087,6 +1089,7 @@ mod tests {
         let mut messages = vec![Message::user("hello")];
         let trace = TraceCollector::new(TurnTrace::new("session", 1, "hello"));
         let base_tools = Vec::new();
+        let available_tools = Vec::new();
         let baseline_git_status_files = HashSet::new();
         let retained_context = crate::tools::ToolContextRetainedContext::default();
 
@@ -1099,6 +1102,7 @@ mod tests {
             turn_retrieval_context: None,
             retained_context: &retained_context,
             base_tools: &base_tools,
+            available_tools: &available_tools,
             loop_state: &mut loop_state,
             turn_state: &mut turn_state,
             no_diff_audit_closeout_allowed: false,

@@ -28,6 +28,7 @@ pub(super) struct TurnLoopBootstrapContext<'a> {
 
 pub(super) struct TurnLoopBootstrap {
     pub(super) base_tools: Vec<Tool>,
+    pub(super) available_tools: Vec<Tool>,
     pub(super) loop_state: TurnLoopState,
 }
 
@@ -35,6 +36,7 @@ pub(super) struct TurnLoopBootstrapController;
 
 impl TurnLoopBootstrapController {
     pub(super) async fn run(context: TurnLoopBootstrapContext<'_>) -> TurnLoopBootstrap {
+        let available_tools = context.conversation.get_tools();
         let base_tools = context.conversation.get_tools_for_route(context.route);
         let loop_state = TurnLoopStateController::initial_state();
 
@@ -61,6 +63,7 @@ impl TurnLoopBootstrapController {
 
         TurnLoopBootstrap {
             base_tools,
+            available_tools,
             loop_state,
         }
     }
@@ -134,6 +137,10 @@ mod tests {
         assert_eq!(
             bootstrap.base_tools.len(),
             conversation.get_tools_for_route(&route).len()
+        );
+        assert_eq!(
+            bootstrap.available_tools.len(),
+            conversation.get_tools().len()
         );
         assert!(bootstrap.loop_state.final_content.is_empty());
         assert!(bootstrap.loop_state.final_tool_calls.is_empty());

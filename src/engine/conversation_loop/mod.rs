@@ -541,6 +541,7 @@ impl ConversationLoop {
         })
         .await;
         let base_tools = turn_loop_bootstrap.base_tools;
+        let available_tools = turn_loop_bootstrap.available_tools;
         let mut loop_state = turn_loop_bootstrap.loop_state;
 
         TurnIterationLoopController::run(TurnIterationLoopContext {
@@ -551,6 +552,7 @@ impl ConversationLoop {
             turn_retrieval_context: turn_retrieval_context.as_ref(),
             retained_context: &retained_context,
             base_tools: &base_tools,
+            available_tools: &available_tools,
             loop_state: &mut loop_state,
             turn_state: &mut turn_state,
             no_diff_audit_closeout_allowed,

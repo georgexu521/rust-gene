@@ -8,7 +8,7 @@ use super::validation_runner::RequiredValidationController;
 use super::workflow_change_tracker::WorkflowChangeTracker;
 use super::ConversationLoop;
 use crate::engine::destructive_scope::DestructiveScopeContract;
-use crate::engine::task_context::TaskContextBundle;
+use crate::engine::task_context::{AgentTaskMode, TaskContextBundle};
 use crate::engine::trace::{TraceCollector, TraceEvent};
 use crate::services::api::{Message, ToolCall};
 use std::collections::{HashMap, HashSet};
@@ -148,6 +148,15 @@ impl ToolBatchResultProcessor {
             task_bundle
                 .agent_state
                 .observe_tool_context_evidence(tc, result);
+            Self::apply_route_recovery_if_needed(
+                tc,
+                result,
+                &mut outcome,
+                turn_state,
+                task_bundle,
+                trace,
+                messages,
+            );
 
             if result.success && matches!(tc.name.as_str(), "file_edit" | "file_write") {
                 outcome.successful_write_tool = true;
@@ -297,6 +306,48 @@ impl ToolBatchResultProcessor {
         ));
     }
 
+    fn apply_route_recovery_if_needed(
+        tool_call: &ToolCall,
+        result: &crate::tools::ToolResult,
+        outcome: &mut ToolBatchProcessingOutcome,
+        turn_state: &mut TurnRuntimeState,
+        task_bundle: &mut TaskContextBundle,
+        trace: &TraceCollector,
+        messages: &mut Vec<Message>,
+    ) {
+        if result.success {
+            return;
+        }
+        let error = result
+            .error
+            .as_deref()
+            .filter(|error| !error.trim().is_empty())
+            .unwrap_or(result.content.as_str());
+        if !crate::engine::route_recovery::is_unexposed_tool_error(error) {
+            return;
+        }
+
+        let mode_before = task_bundle.agent_state.mode;
+        let Some(decision) = turn_state.route_recovery.observe_unexposed_tool_request(
+            task_bundle.route.workflow,
+            task_mode_label(mode_before),
+            &tool_call.name,
+            error,
+        ) else {
+            return;
+        };
+
+        if decision.mode_escalates_to_light && mode_before == AgentTaskMode::Direct {
+            task_bundle.agent_state.mode = AgentTaskMode::Light;
+        }
+
+        super::turn_recording::record_recovery_plan(trace, &decision.plan);
+        messages.push(Message::system(decision.correction.clone()));
+        outcome.tool_results_text.push('\n');
+        outcome.tool_results_text.push_str(&decision.correction);
+        outcome.tool_results_text.push('\n');
+    }
+
     fn append_destructive_scope_guard(
         outcome: &mut ToolBatchProcessingOutcome,
         tool_batch: &ToolExecutionBatch,
@@ -378,6 +429,15 @@ fn ledger_summary_from_result(result: &crate::tools::ToolResult) -> Option<Strin
     None
 }
 
+fn task_mode_label(mode: AgentTaskMode) -> &'static str {
+    match mode {
+        AgentTaskMode::Direct => "direct",
+        AgentTaskMode::Light => "light",
+        AgentTaskMode::Full => "full",
+        AgentTaskMode::HighRisk => "high_risk",
+    }
+}
+
 fn bounded_duplicate_read_only_result(text: &str) -> String {
     let trimmed = text.trim();
     let mut preview = String::new();
@@ -434,6 +494,11 @@ mod tests {
     fn task_bundle() -> TaskContextBundle {
         let route = crate::engine::intent_router::IntentRouter::new().route("modify src/lib.rs");
         TaskContextBundle::new("modify src/lib.rs", ".", route, None)
+    }
+
+    fn direct_task_bundle() -> TaskContextBundle {
+        let route = crate::engine::intent_router::IntentRouter::new().route("hello");
+        TaskContextBundle::new("hello", ".", route, None)
     }
 
     #[tokio::test]
@@ -642,5 +707,156 @@ mod tests {
             second_outcome.duplicate_successful_read_only_results[0].result_text,
             "1 | # PhageMatch\n   2 | first full result"
         );
+    }
+
+    #[tokio::test]
+    async fn unexposed_read_tool_triggers_safe_route_recovery() {
+        let call = tool_call(
+            "call_1",
+            "file_read",
+            serde_json::json!({"path": "README.md"}),
+        );
+        let mut batch = ToolExecutionBatch::new(
+            vec![(
+                call.clone(),
+                ToolResult::error(
+                    "Tool 'file_read' was not exposed in the current request and cannot be executed.",
+                ),
+            )],
+            Vec::new(),
+        );
+        let mut turn_state = TurnRuntimeState::new(true);
+        let trace = trace();
+        let mut companion_keys = HashSet::new();
+        let mut failed_fingerprints = HashMap::new();
+        let mut failed_names = HashMap::new();
+        let mut successful_required = HashSet::new();
+        let mut task_bundle = direct_task_bundle();
+        let destructive_scope = destructive_scope();
+        let baseline = HashSet::new();
+        assert_eq!(
+            task_bundle.agent_state.mode,
+            crate::engine::task_context::AgentTaskMode::Direct
+        );
+        let mut messages = Vec::new();
+
+        let outcome = ToolBatchResultProcessor::process(ToolBatchProcessingContext {
+            tool_calls: std::slice::from_ref(&call),
+            tool_batch: &mut batch,
+            turn_state: &mut turn_state,
+            task_bundle: &mut task_bundle,
+            messages: &mut messages,
+            trace: &trace,
+            is_programming_workflow: false,
+            working_dir: Path::new("."),
+            last_user_preview: "read README",
+            companion_context_keys: &mut companion_keys,
+            failed_tool_fingerprints: &mut failed_fingerprints,
+            failed_tool_names: &mut failed_names,
+            required_validation_commands: &[],
+            successful_required_validation_commands: &mut successful_required,
+            action_checkpoint_active: false,
+            destructive_scope: &destructive_scope,
+            baseline_git_status_files: &baseline,
+        })
+        .await;
+
+        assert!(turn_state.route_recovery.read_search_expanded);
+        assert_eq!(turn_state.route_recovery.read_search_expansions, 1);
+        assert_eq!(
+            task_bundle.agent_state.mode,
+            crate::engine::task_context::AgentTaskMode::Light
+        );
+        assert!(outcome.tool_results_text.contains("Route recovery"));
+        assert!(messages.iter().any(|message| {
+            matches!(message, Message::System { content } if content.contains("read/search tools only"))
+        }));
+        assert!(trace.snapshot().events.iter().any(|event| {
+            matches!(
+                event,
+                TraceEvent::RecoveryPlan {
+                    source,
+                    recovery_kind,
+                    safe_retry,
+                    ..
+                } if source == "route_recovery"
+                    && recovery_kind == "expand_read_search_only"
+                    && *safe_retry
+            )
+        }));
+    }
+
+    #[tokio::test]
+    async fn unexposed_mutation_tool_does_not_expand_route_recovery_tools() {
+        let call = tool_call(
+            "call_1",
+            "file_edit",
+            serde_json::json!({"path": "README.md", "old_string": "a", "new_string": "b"}),
+        );
+        let mut batch = ToolExecutionBatch::new(
+            vec![(
+                call.clone(),
+                ToolResult::error(
+                    "Tool 'file_edit' was not exposed in the current request and cannot be executed.",
+                ),
+            )],
+            Vec::new(),
+        );
+        let mut turn_state = TurnRuntimeState::new(true);
+        let trace = trace();
+        let mut companion_keys = HashSet::new();
+        let mut failed_fingerprints = HashMap::new();
+        let mut failed_names = HashMap::new();
+        let mut successful_required = HashSet::new();
+        let mut task_bundle = direct_task_bundle();
+        let destructive_scope = destructive_scope();
+        let baseline = HashSet::new();
+        let mut messages = Vec::new();
+
+        let outcome = ToolBatchResultProcessor::process(ToolBatchProcessingContext {
+            tool_calls: std::slice::from_ref(&call),
+            tool_batch: &mut batch,
+            turn_state: &mut turn_state,
+            task_bundle: &mut task_bundle,
+            messages: &mut messages,
+            trace: &trace,
+            is_programming_workflow: false,
+            working_dir: Path::new("."),
+            last_user_preview: "edit README",
+            companion_context_keys: &mut companion_keys,
+            failed_tool_fingerprints: &mut failed_fingerprints,
+            failed_tool_names: &mut failed_names,
+            required_validation_commands: &[],
+            successful_required_validation_commands: &mut successful_required,
+            action_checkpoint_active: false,
+            destructive_scope: &destructive_scope,
+            baseline_git_status_files: &baseline,
+        })
+        .await;
+
+        assert!(!turn_state.route_recovery.read_search_expanded);
+        assert_eq!(turn_state.route_recovery.blocked_mutation_requests, 1);
+        assert_eq!(
+            task_bundle.agent_state.mode,
+            crate::engine::task_context::AgentTaskMode::Direct
+        );
+        assert!(outcome
+            .tool_results_text
+            .contains("cannot silently expand mutation authority"));
+        assert!(trace.snapshot().events.iter().any(|event| {
+            matches!(
+                event,
+                TraceEvent::RecoveryPlan {
+                    source,
+                    recovery_kind,
+                    safe_retry,
+                    requires_user_decision,
+                    ..
+                } if source == "route_recovery"
+                    && recovery_kind == "no_silent_mutation_expansion"
+                    && !*safe_retry
+                    && *requires_user_decision
+            )
+        }));
     }
 }

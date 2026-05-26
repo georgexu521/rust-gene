@@ -54,6 +54,7 @@ pub mod reflection_pass;
 pub mod repair_spec;
 pub mod resource_policy;
 pub mod retrieval_context;
+pub mod route_recovery;
 #[cfg(test)]
 mod runtime_spine_behavior_tests;
 pub mod scenario_matrix;
