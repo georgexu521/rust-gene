@@ -10,6 +10,7 @@ use crate::memory::provider::{
     MemoryProvider, MemoryProviderCallOutcome, MemoryProviderRegistry, MemoryTurn,
 };
 use crate::memory::quality::assess_memory_candidate;
+use crate::memory::search_index::{MemorySearchDocument, MemorySearchHit, MemorySearchIndex};
 use crate::memory::types::{
     MemoryCandidate, MemoryEvidenceKind, MemoryEvidenceRef, MemoryKind, MemoryProjection,
     MemoryProvenance, MemoryRecord, MemoryScope, MemoryStatus, MemoryStrategyMetadata,
@@ -760,6 +761,12 @@ pub struct MemoryMatch {
     pub snippet: String,
 }
 
+#[derive(Debug, Clone)]
+pub struct MemorySearchIndexReport {
+    pub path: PathBuf,
+    pub documents_indexed: usize,
+}
+
 /// 记忆维护结果。
 #[derive(Debug, Clone, Default)]
 pub struct MemoryMaintenanceReport {
@@ -1054,6 +1061,8 @@ pub struct MemoryManager {
     decision_log_path: PathBuf,
     /// typed memory record sidecar (`memory/records.jsonl`)
     records_path: PathBuf,
+    /// rebuildable local SQLite FTS search index
+    search_index_path: PathBuf,
     /// durable memory flush lifecycle log
     flush_log_path: PathBuf,
     /// 冻结快照（会话开始时捕获，整个会话不变）
@@ -1124,6 +1133,7 @@ impl MemoryManager {
             user_path: base.join("USER.md"),
             decision_log_path: base.join(MEMORY_DIR_NAME).join("decisions.jsonl"),
             records_path: base.join(MEMORY_DIR_NAME).join(MEMORY_RECORDS_FILE),
+            search_index_path: base.join(MEMORY_DIR_NAME).join("search.sqlite"),
             flush_log_path: base.join(MEMORY_DIR_NAME).join(MEMORY_FLUSH_LOG_FILE),
             memory_dir,
             frozen_memory: None,
@@ -1150,6 +1160,10 @@ impl MemoryManager {
 
     pub fn records_path(&self) -> &Path {
         &self.records_path
+    }
+
+    pub fn search_index_path(&self) -> &Path {
+        &self.search_index_path
     }
 
     pub fn memory_provider_names(&self) -> Vec<String> {
@@ -1256,6 +1270,78 @@ impl MemoryManager {
             .into_iter()
             .filter(|record| persisted_memory_record_is_safe(record))
             .collect()
+    }
+
+    pub fn rebuild_search_index(&self) -> anyhow::Result<MemorySearchIndexReport> {
+        let documents = self.search_index_documents();
+        let index = MemorySearchIndex::new(self.search_index_path.clone());
+        let documents_indexed = index.rebuild(&documents)?;
+        Ok(MemorySearchIndexReport {
+            path: index.path().to_path_buf(),
+            documents_indexed,
+        })
+    }
+
+    pub fn search_memory_index(
+        &self,
+        query: &str,
+        max_results: usize,
+    ) -> anyhow::Result<Vec<MemoryMatch>> {
+        let report = self.rebuild_search_index()?;
+        if report.documents_indexed == 0 {
+            return Ok(Vec::new());
+        }
+        let index = MemorySearchIndex::new(report.path);
+        let hits = index.search(query, max_results)?;
+        Ok(search_hits_to_memory_matches(hits))
+    }
+
+    fn search_index_documents(&self) -> Vec<MemorySearchDocument> {
+        let mut documents = Vec::new();
+        if let Ok(content) = std::fs::read_to_string(&self.memory_path) {
+            if let Some(content) = safe_memory_content_for_load("MEMORY.md", &content) {
+                documents.push(MemorySearchDocument {
+                    source: "MEMORY.md".to_string(),
+                    title: "Project Memory".to_string(),
+                    content,
+                    kind: "project_file".to_string(),
+                    scope: memory_scope_label(&self.active_scope),
+                });
+            }
+        }
+        if let Ok(content) = std::fs::read_to_string(&self.user_path) {
+            if let Some(content) = safe_memory_content_for_load("USER.md", &content) {
+                documents.push(MemorySearchDocument {
+                    source: "USER.md".to_string(),
+                    title: "User Preferences".to_string(),
+                    content,
+                    kind: "user_file".to_string(),
+                    scope: memory_scope_label(&self.active_scope),
+                });
+            }
+        }
+        for file in load_memory_files(&self.memory_dir) {
+            documents.push(MemorySearchDocument {
+                source: format!("memory/{}", file.relative_path),
+                title: memory_file_title(&file),
+                content: file.content,
+                kind: "topic_file".to_string(),
+                scope: memory_scope_label(&self.active_scope),
+            });
+        }
+        for record in self.memory_records() {
+            if !matches!(record.status, MemoryStatus::Accepted) {
+                continue;
+            }
+            documents.push(MemorySearchDocument {
+                source: record_source(&record),
+                title: record.summary.clone(),
+                content: record.content.clone(),
+                kind: format!("{:?}", record.kind),
+                scope: memory_scope_label(&record.scope),
+            });
+        }
+        documents
     }
 
     pub fn memory_record_summary(&self) -> MemoryRecordSummary {
@@ -1860,6 +1946,9 @@ impl MemoryManager {
         let memory_records = self.memory_records();
 
         let mut matches = Vec::new();
+        if let Ok(index_matches) = self.search_memory_index(user_message, max_results * 2) {
+            matches.extend(index_matches);
+        }
         matches.extend(rank_memory_records(&memory_records, &keywords));
         matches.extend(rank_memory_paragraphs(
             "MEMORY.md",
@@ -1867,6 +1956,7 @@ impl MemoryManager {
             &keywords,
         ));
         matches.extend(rank_memory_files(&memory_files, &keywords));
+        dedupe_memory_matches(&mut matches);
         matches.sort_by(|a, b| b.score.cmp(&a.score).then_with(|| a.source.cmp(&b.source)));
         matches.truncate(max_results);
         matches
@@ -2931,6 +3021,20 @@ fn persisted_memory_record_is_safe(record: &MemoryRecord) -> bool {
     }
 }
 
+fn search_hits_to_memory_matches(hits: Vec<MemorySearchHit>) -> Vec<MemoryMatch> {
+    hits.into_iter()
+        .map(|hit| {
+            let scaled = (hit.score * 100.0).round();
+            MemoryMatch {
+                source: format!("search_index:{}", hit.source),
+                score: scaled.max(1.0) as usize,
+                rerank_score: None,
+                snippet: hit.snippet,
+            }
+        })
+        .collect()
+}
+
 fn load_memory_files(memory_dir: &Path) -> Vec<MemoryFileSnapshot> {
     let mut files = Vec::new();
     collect_memory_files(memory_dir, memory_dir, &mut files);
@@ -3731,6 +3835,14 @@ fn rank_memory_records(records: &[MemoryRecord], keywords: &[String]) -> Vec<Mem
         .collect()
 }
 
+fn dedupe_memory_matches(matches: &mut Vec<MemoryMatch>) {
+    let mut seen = HashSet::new();
+    matches.retain(|entry| {
+        let key = format!("{}:{}", entry.source, entry.snippet);
+        seen.insert(key)
+    });
+}
+
 fn record_source(record: &MemoryRecord) -> String {
     let projection = record
         .projection
@@ -4474,6 +4586,50 @@ Always check logs first.
         assert!(prefetch.contains("not user instruction text"));
         assert!(prefetch.contains("memory/build.md"));
         assert!(prefetch.contains("cargo check"));
+
+        let _ = std::fs::remove_dir_all(base);
+    }
+
+    #[test]
+    fn test_memory_search_index_builds_from_files_and_records() {
+        let base = temp_memory_base("search-index");
+        let memory_dir = base.join(MEMORY_DIR_NAME);
+        std::fs::create_dir_all(&memory_dir).unwrap();
+        std::fs::write(
+            base.join("MEMORY.md"),
+            "Project convention: run cargo check after prompt changes.",
+        )
+        .unwrap();
+        std::fs::write(
+            memory_dir.join("build.md"),
+            "# Build Notes\nRun cargo test after cargo check passes.",
+        )
+        .unwrap();
+
+        let mgr = MemoryManager::with_base_dir(base.clone());
+        let mut record = MemoryRecord::new(
+            "Tool quirk: cargo check catches prompt-context compile errors.",
+            MemoryKind::ToolQuirk,
+            MemoryScope::local("search-index"),
+            MemoryProvenance::local("test"),
+        );
+        record.status = MemoryStatus::Accepted;
+        write_memory_records(&mgr.records_path, &[record]).unwrap();
+
+        let report = mgr.rebuild_search_index().unwrap();
+        let matches = mgr.search_memory_index("cargo check prompt", 8).unwrap();
+
+        assert!(report.documents_indexed >= 3);
+        assert!(mgr.search_index_path().exists());
+        assert!(matches
+            .iter()
+            .any(|entry| entry.source.contains("MEMORY.md")));
+        assert!(matches
+            .iter()
+            .any(|entry| entry.source.contains("memory/build.md")));
+        assert!(matches
+            .iter()
+            .any(|entry| entry.source.contains("memory_record/")));
 
         let _ = std::fs::remove_dir_all(base);
     }

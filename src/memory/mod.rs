@@ -5,6 +5,7 @@ pub mod quality;
 pub mod recall;
 pub mod safety;
 pub mod scoring;
+pub mod search_index;
 pub mod types;
 
 pub use calibration::{

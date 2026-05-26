@@ -76,6 +76,11 @@ cleanup:
   `USER.md`, topic memory files, and typed records containing prompt-injection
   or secret-like content are skipped during load/retrieval/snapshot assembly
   rather than being injected as background context.
+- Added a rebuildable local SQLite FTS5 memory search index at
+  `memory/search.sqlite`. It indexes safe `MEMORY.md`, `USER.md`, topic memory
+  files, and accepted typed memory records, then feeds search-index hits back
+  into the existing memory retrieval ranking. The Markdown files and
+  `records.jsonl` remain canonical; the SQLite index is rebuildable cache.
 
 2026-05-25 implementation batch completed the planned memory-system alignment
 slice across all eight phases:
@@ -136,7 +141,7 @@ cargo clippy --all-features -- -D warnings
 | Memory layers: user, project, task, strategy | `USER.md`, `MEMORY.md`, topic files, pending session learnings, agent role JSON, and session learning events exist. | Partial | Strategy memory is implicit in categories and learning events, not a first-class durable layer with success/failure counts. |
 | Lifecycle: generate, verify, store, retrieve, use, update, decay/delete | Generation, store, retrieve, use, flush, archive, and conflict hints exist. | Partial | Verification, use telemetry, update/supersede, last_verified, and per-record decay are incomplete. |
 | Memory should carry evidence, confidence, last_verified | `MemoryRecord` has confidence/provenance/status/tags; `LearningEventRecord` has confidence/payload. | Partial | `MemoryRecord` is not the canonical local store, and it lacks evidence, importance, last_verified, last_used, and use_count. |
-| Retrieval can be simple: keyword/tag/project/importance/recency top 3-5 | Keyword search, semantic aliases, topic files, LLM rerank, conflicts, and top-k retrieval exist. | Partial | Retrieval does not yet use structured tags, project id, importance, last_used/use_count, or verified freshness. |
+| Retrieval can be simple: keyword/tag/project/importance/recency top 3-5 | Keyword search, semantic aliases, topic files, SQLite FTS5 search-index hits, LLM rerank, conflicts, and top-k retrieval exist. | Strong partial | Retrieval ranking can still use structured scope/tag/recency signals more directly, especially for CJK and cross-project memory. |
 | Write only on important events | Memory sync is throttled; manual `memory_save`, flush, background extraction, and session-end extraction exist. | Partial | Write surfaces do not share one typed candidate contract, and task-end reflection is still bullet-oriented. |
 | LLM may propose candidates, system filters | Quality/safety gate exists and background LLM extraction is gated. | Partial | LLM output is free-form bullets, not structured memory candidates with type/evidence/confidence/importance/tags. |
 | Memory should affect action weights | Learning-aware routing/planning and live-eval `memory_changed_plan` exist. | Partial | Action decision/review does not consume strategy/failure memory as explicit value/risk modifiers. |

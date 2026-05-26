@@ -43,7 +43,11 @@ Current stage:
   `unbound-session` in normal turns. Phase 5 has started by applying the memory
   safety scanner on persisted load paths: unsafe `MEMORY.md`, `USER.md`, topic
   memory files, and typed records are skipped during snapshot/retrieval loading
-  instead of being injected as background context.
+  instead of being injected as background context. Phase 6 has started with a
+  rebuildable local SQLite FTS5 index at `memory/search.sqlite`; it indexes safe
+  project/user/topic memory plus accepted typed records and feeds hits into the
+  existing memory retrieval ranking while keeping Markdown and `records.jsonl`
+  as canonical storage.
 - `docs/LLM_RUNTIME_SIMPLIFICATION_PLAN_2026-05-08.md` is complete through its
   follow-up implementation phases. Future runtime-diet work should come from
   live-use gaps, release-hardening gates, or a newly reviewed plan.
