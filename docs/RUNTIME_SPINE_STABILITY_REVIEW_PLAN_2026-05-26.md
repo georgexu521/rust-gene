@@ -1555,3 +1555,57 @@ cargo fmt --check
 - Markdown projection 和 lifecycle 仍由 `MemoryManager::submit_candidate` 负责，
   provider hook 收到的是已经通过 manager transaction 的 typed record；这样先
   建立 provider bridge，再逐步抽 manager 内部实现，避免双写和 projection drift。
+
+### 2026-05-26 第十七批收束判定
+
+本计划的代码主线已经完成到一个安全收束点:
+
+- P0a/P0b runtime-spine matrix 已有 deterministic case spec、golden trace、
+  fast gate 和扩展场景覆盖。
+- Gate outcome instrumentation 已进入 live-eval summary / aggregate summary，
+  并能区分 protective / friction / unrecovered / suspected false positive /
+  UX-costly 等结果。
+- Proof semantics 已从文档表推进到 runtime enum、derived support policy、
+  closeout/evidence ledger 测试和 report parser oracle。
+- Context zone convergence 已接入 primary request envelope，并有 stable
+  fingerprint、source/provenance/dedupe、hostile content fence、aggregate metrics
+  覆盖。
+- Route/task-mode recovery 已覆盖 hidden read/search drift 和 code-change
+  no-diff replan drift，且保持安全单调性: 可以扩大理解能力，不能静默扩大
+  mutation authority。
+- Subagent verification-first policy 已和 proof semantics 绑定:
+  child claim 只能先是 `SubagentClaimOnly`，parent runtime verification 才能产生
+  `ParentVerifiedSubagentResult`。
+- Memory provider boundary 已完成 registry/fanout、safe snapshot prompt block、
+  scope-filtered prefetch/search、provider session-end hook、async write
+  notification、local provider idempotent write、active scope propagation 和
+  hostile persisted memory skip。
+- P3 wording cleanup 已落到 README，明确 active memory、skills、subagents 和
+  verified/partial/not_verified closeout 的边界。
+
+对 P2 Memory Provider Boundary 剩余条目的决策:
+
+- 不在本计划继续把 Markdown projection、record lifecycle、search-index rebuild
+  从 `MemoryManager::submit_candidate` 中硬拆出去。
+- 原因:
+  - 这些行为属于同一个 local write transaction: typed record append、quality
+    decision、projection write、lifecycle supersede、search index freshness 必须保持
+    一个 owner；
+  - 当前 provider contract 还没有 transaction-level commit/rollback 语义；
+  - 直接搬迁会制造 manager/provider 双写、external provider 半成功、projection
+    drift 和 closeout trace 不一致的风险；
+  - 第十六批已经建立 post-transaction provider bridge，external provider 可以先
+    收到已通过 manager transaction 的 typed record。
+- 后续如果继续抽象，应该先新增一个明确的 local write transaction API，例如:
+  `prepare_candidate` -> `commit_local_record` -> `project_markdown` ->
+  `refresh_search_index` -> `notify_external_providers`，并为每一步定义 rollback /
+  retry / failure owner；这应作为下一份专门的 memory persistence migration 计划，
+  不混入本 runtime-spine 稳定性计划。
+
+最终验收状态:
+
+- 本文档提出的可靠性/收敛方向已经完成主要 runtime 落地。
+- 本阶段没有通过扩大 prompt、放宽 validation、放宽 permission、放宽 checkpoint
+  或把 subagent 输出直接当 verified proof 来换取“看起来完成”。
+- 仍保留的 memory persistence 内部拆分是有意保守边界，不是 runtime-spine
+  稳定性计划的未完成项。
