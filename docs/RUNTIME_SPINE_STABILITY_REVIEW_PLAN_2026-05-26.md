@@ -1010,3 +1010,42 @@ ruby -ryaml -e 'ARGV.each { |path| YAML.load_file(path); puts path }' evalsets/l
 - 仍未完成真实父 runtime 复验 workflow；下一批应实现显式
   `ParentVerifiedSubagentResult` 生成路径，随后把对应 P0b fixture 从
   child-claim-only oracle 升级为 parent-verified oracle。
+
+### 2026-05-26 第六批落地
+
+已完成:
+
+- 在 `src/engine/evidence_ledger.rs` 增加父 runtime 复验派生路径:
+  - child subagent 结果仍先记录为 `SubagentClaimOnly`；
+  - 只有当同一 ledger 里还有父 runtime 独立验证通过时，才派生
+    `ParentVerifiedSubagentResult`；
+  - 独立验证目前限定为 required validation 全部通过，或父进程记录的
+    非 subagent validation command 通过。
+- `VerificationProofSupportContext.parent_verified` 现在来自同一套 ledger
+  事实，而不是 child 输出文字。
+- 新增 ledger unit tests:
+  - child claim + 父验证命令通过 -> proof kinds 同时包含
+    `subagent_claim_only` 和 `parent_verified_subagent_result`，support
+    可达 verified；
+  - child claim + 非验证命令 -> 仍保持 partial，不能支持 verified。
+- 更新 `runtime-spine-p0b-isolated-worktree-implementer` fixture:
+  - oracle 从 child-claim-only partial 升级为 parent-verified proof；
+  - 同时要求 `SubagentClaimOnly` 和 `ParentVerifiedSubagentResult` 出现在
+    proof kinds；
+  - support status 期望为 verified 且 `supports_verified=true`。
+
+已验证:
+
+```bash
+cargo test -q evidence_ledger
+ruby -ryaml -e 'ARGV.each { |path| YAML.load_file(path); puts path }' evalsets/live_tasks/runtime-spine-p0b-isolated-worktree-implementer.yaml
+```
+
+第六批之后的状态:
+
+- P2 Subagent Verification-First Policy 的核心证据链已经闭环: child claim
+  不能自行 verified，但父 runtime 验证可以显式升级为 parent-verified proof。
+- 当前实现先使用“同一 ledger 内存在父验证证据”的保守判据；后续如果需要更硬，
+  可以继续加入时间顺序、changed-file scope 和 child artifact id 绑定。
+- 下一批建议转向 P1 route/task-mode recovery，或继续补 context zone
+  deterministic ordering / provenance dedupe。

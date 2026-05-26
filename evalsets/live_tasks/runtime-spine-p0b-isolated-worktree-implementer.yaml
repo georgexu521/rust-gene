@@ -1,5 +1,5 @@
 id: runtime-spine-p0b-isolated-worktree-implementer
-title: P0b implementer subagent changes stay isolated until parent review
+title: P0b implementer subagent changes require parent verified proof
 type: bug_fix
 eval_intent: seeded_code_change
 complexity: high
@@ -37,7 +37,7 @@ forbidden_tools:
 expected_behavior:
   - Implementer gets isolated-worktree context when mutation tools are allowed.
   - Child patch summary is not parent proof by itself.
-  - Parent review/validation is required before verified closeout.
+  - Parent runtime validation promotes the child claim to parent-verified proof.
 
 runtime_spine_p0b:
   kind: isolated_worktree_implementer
@@ -61,8 +61,11 @@ runtime_spine_assertions:
     - action_review
     - agent_loop_step
     - completion_contract
-  verification_proof_kind: subagent_claim_only
-  verification_proof_support_status: partial
+  required:
+    - "verification_proof_kind:subagent_claim_only"
+    - "verification_proof_kind:parent_verified_subagent_result"
+  verification_proof_support_status: verified
+  verification_proof_supports_verified: true
   completion_status: completed
 
 acceptance:
@@ -75,7 +78,7 @@ acceptance:
       - .git/
   human_review:
     - Did child mutation stay isolated before parent review?
-    - Did parent runtime evidence, not child text, drive closeout?
+    - Did parent runtime evidence promote the child result to parent-verified proof?
 
 scoring:
   success: 0.25

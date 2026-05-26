@@ -677,10 +677,7 @@ impl EvidenceLedger {
                         .as_deref()
                         .is_some_and(|family| !family.trim().is_empty())
             });
-        let parent_verified = self
-            .validation_facts
-            .iter()
-            .any(|fact| fact.parent_verified == Some(true));
+        let parent_verified = self.parent_verified_subagent_result(required_rollup.as_ref());
 
         VerificationProofSupportContext {
             task_type,
@@ -702,6 +699,10 @@ impl EvidenceLedger {
             .collect::<BTreeSet<_>>();
         let has_explicit_kinds = !kinds.is_empty();
 
+        if self.parent_verified_subagent_result(required_rollup) {
+            kinds.insert(VerificationProofKind::ParentVerifiedSubagentResult);
+        }
+
         if required_rollup.is_some_and(|rollup| {
             rollup.total > 0 && rollup.missing == 0 && rollup.failed == 0 && rollup.passed > 0
         }) {
@@ -716,6 +717,56 @@ impl EvidenceLedger {
         }
 
         kinds.into_iter().collect()
+    }
+
+    fn parent_verified_subagent_result(
+        &self,
+        required_rollup: Option<&RequiredValidationRollup>,
+    ) -> bool {
+        self.explicit_parent_verified_subagent_result()
+            || (self.passed_subagent_claim()
+                && self.parent_runtime_validation_passed(required_rollup))
+    }
+
+    fn explicit_parent_verified_subagent_result(&self) -> bool {
+        self.validation_facts.iter().any(|fact| {
+            fact.passed
+                && fact.parent_verified == Some(true)
+                && fact.proof_kind == Some(VerificationProofKind::ParentVerifiedSubagentResult)
+        })
+    }
+
+    fn passed_subagent_claim(&self) -> bool {
+        self.validation_facts.iter().any(|fact| {
+            fact.passed && fact.proof_kind == Some(VerificationProofKind::SubagentClaimOnly)
+        })
+    }
+
+    fn parent_runtime_validation_passed(
+        &self,
+        required_rollup: Option<&RequiredValidationRollup>,
+    ) -> bool {
+        if required_rollup.is_some_and(|rollup| {
+            rollup.total > 0 && rollup.missing == 0 && rollup.failed == 0 && rollup.passed > 0
+        }) {
+            return true;
+        }
+
+        self.validation_facts.iter().any(|fact| {
+            fact.passed
+                && !matches!(
+                    fact.proof_kind,
+                    Some(
+                        VerificationProofKind::SubagentClaimOnly
+                            | VerificationProofKind::ParentVerifiedSubagentResult
+                    )
+                )
+                && fact.validation_family.as_deref() != Some("subagent")
+                && fact
+                    .command
+                    .as_deref()
+                    .is_some_and(|command| !normalize_command_identity(command).is_empty())
+        })
     }
 
     fn required_validation_rollup(
@@ -2982,6 +3033,100 @@ mod tests {
         assert!(proof
             .proof_kinds
             .contains(&VerificationProofKind::SubagentClaimOnly));
+    }
+
+    #[test]
+    fn parent_runtime_validation_promotes_subagent_claim_to_parent_verified_result() {
+        let mut ledger = EvidenceLedger::new();
+        let subagent_result = ToolResult::success_with_data(
+            "Sub-agent agent_1 completed with status: Completed",
+            serde_json::json!({
+                "agent_id": "agent_1",
+                "source_agent": "agent_1",
+                "status": "completed",
+                "result": "review says the target behavior is present",
+                "verification_proof_kind": "subagent_claim_only",
+                "subagent_output_kind": "SubagentVerificationClaim",
+                "parent_verified": false,
+                "scope": "subagent_result",
+            }),
+        );
+        ledger.record_tool_result(
+            &tool_call(
+                "agent",
+                serde_json::json!({"description": "review", "prompt": "check"}),
+            ),
+            &subagent_result,
+        );
+
+        ledger.record_tool_result(
+            &tool_call("bash", serde_json::json!({"command": "cargo check -q"})),
+            &ToolResult::success("cargo check finished successfully"),
+        );
+
+        let proof = ledger.verification_proof(VerificationProofRequest {
+            required_commands: &[],
+            requires_validation: true,
+            task_verification_status: crate::engine::task_context::VerificationStatus::Pending,
+            support_context: ledger
+                .verification_proof_support_context(VerificationProofTaskType::SubagentReview, &[]),
+        });
+
+        assert!(proof
+            .proof_kinds
+            .contains(&VerificationProofKind::SubagentClaimOnly));
+        assert!(proof
+            .proof_kinds
+            .contains(&VerificationProofKind::ParentVerifiedSubagentResult));
+        assert_eq!(
+            proof.derived_support.status,
+            VerificationProofStatus::Verified
+        );
+        assert!(proof.derived_support.supports_verified);
+    }
+
+    #[test]
+    fn non_validation_parent_command_does_not_promote_subagent_claim() {
+        let mut ledger = EvidenceLedger::new();
+        let subagent_result = ToolResult::success_with_data(
+            "Sub-agent agent_1 completed with status: Completed",
+            serde_json::json!({
+                "agent_id": "agent_1",
+                "status": "completed",
+                "result": "review says the target behavior is present",
+                "verification_proof_kind": "subagent_claim_only",
+                "subagent_output_kind": "SubagentVerificationClaim",
+                "parent_verified": false,
+            }),
+        );
+        ledger.record_tool_result(
+            &tool_call(
+                "agent",
+                serde_json::json!({"description": "review", "prompt": "check"}),
+            ),
+            &subagent_result,
+        );
+        ledger.record_tool_result(
+            &tool_call("bash", serde_json::json!({"command": "echo inspected"})),
+            &ToolResult::success("inspected"),
+        );
+
+        let proof = ledger.verification_proof(VerificationProofRequest {
+            required_commands: &[],
+            requires_validation: true,
+            task_verification_status: crate::engine::task_context::VerificationStatus::Pending,
+            support_context: ledger
+                .verification_proof_support_context(VerificationProofTaskType::SubagentReview, &[]),
+        });
+
+        assert!(!proof
+            .proof_kinds
+            .contains(&VerificationProofKind::ParentVerifiedSubagentResult));
+        assert_eq!(
+            proof.derived_support.status,
+            VerificationProofStatus::Partial
+        );
+        assert!(!proof.derived_support.supports_verified);
     }
 
     #[test]
