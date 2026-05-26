@@ -36,9 +36,9 @@ Current stage:
   single external provider registration, and fanout wrappers for initialize,
   prompt blocks, prefetch, queued prefetch, turn sync, session end,
   pre-compress, write notifications, and shutdown. Local provider extraction now
-  covers safe snapshot prompt blocks, scope-filtered typed-record prefetch, and
-  idempotent typed-record write notifications, with `MemoryManager` registering
-  a base-bound `LocalMemoryProvider`. Phase 4 has started by adding an active
+  covers safe snapshot prompt blocks, scope-filtered typed-record prefetch and
+  search, and idempotent typed-record write notifications, with `MemoryManager`
+  registering a base-bound `LocalMemoryProvider`. Phase 4 has started by adding an active
   `MemoryScope` to `MemoryManager` and setting it from the conversation session
   id and working directory during turn bootstrap, and streaming flush paths
   without a persistent session id now skip memory writes instead of falling back

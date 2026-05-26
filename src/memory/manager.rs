@@ -1202,6 +1202,17 @@ impl MemoryManager {
         self.provider_registry.prefetch_all(query, scope).await
     }
 
+    pub async fn provider_search(
+        &self,
+        query: &str,
+        scope: &MemoryScope,
+        max_results: usize,
+    ) -> (Vec<MemoryRecord>, Vec<MemoryProviderCallOutcome>) {
+        self.provider_registry
+            .search_all(query, scope, max_results)
+            .await
+    }
+
     pub async fn queue_memory_provider_prefetch(
         &self,
         query: &str,
@@ -4247,6 +4258,16 @@ mod tests {
         assert_eq!(outcomes.len(), 1);
         assert_eq!(
             outcomes[0].status,
+            crate::memory::provider::MemoryProviderCallStatus::Ok
+        );
+
+        let (search_records, search_outcomes) =
+            manager.provider_search("cargo check", &scope, 1).await;
+        assert_eq!(search_records.len(), 1);
+        assert_eq!(search_records[0].id, record.id);
+        assert_eq!(search_outcomes.len(), 1);
+        assert_eq!(
+            search_outcomes[0].status,
             crate::memory::provider::MemoryProviderCallStatus::Ok
         );
 

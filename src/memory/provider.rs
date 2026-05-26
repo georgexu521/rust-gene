@@ -41,6 +41,17 @@ pub trait MemoryProvider: Send + Sync {
         Ok(Vec::new())
     }
 
+    async fn search(
+        &self,
+        query: &str,
+        scope: &MemoryScope,
+        max_results: usize,
+    ) -> anyhow::Result<Vec<MemoryRecord>> {
+        let mut records = self.prefetch(query, scope).await?;
+        records.truncate(max_results);
+        Ok(records)
+    }
+
     async fn queue_prefetch(&self, _query: &str, _scope: &MemoryScope) -> anyhow::Result<()> {
         Ok(())
     }
@@ -327,6 +338,39 @@ impl MemoryProviderRegistry {
         (records, outcomes)
     }
 
+    pub async fn search_all(
+        &self,
+        query: &str,
+        scope: &MemoryScope,
+        max_results: usize,
+    ) -> (Vec<MemoryRecord>, Vec<MemoryProviderCallOutcome>) {
+        let mut records = Vec::new();
+        let mut outcomes = Vec::new();
+        for provider in self.providers() {
+            if !provider.is_available() {
+                outcomes.push(MemoryProviderCallOutcome::skipped(
+                    provider.as_ref(),
+                    "search",
+                ));
+                continue;
+            }
+            match provider.search(query, scope, max_results).await {
+                Ok(mut next) => {
+                    records.append(&mut next);
+                    outcomes.push(MemoryProviderCallOutcome::ok(provider.as_ref(), "search"));
+                }
+                Err(error) => outcomes.push(MemoryProviderCallOutcome::failed(
+                    provider.as_ref(),
+                    "search",
+                    error,
+                )),
+            }
+        }
+        records.sort_by(local_provider_record_order);
+        records.truncate(max_results);
+        (records, outcomes)
+    }
+
     pub async fn on_pre_compress_all(
         &self,
         messages: &[Message],
@@ -430,15 +474,19 @@ impl MemoryProvider for LocalMemoryProvider {
         let Some(path) = self.records_path() else {
             return Ok(Vec::new());
         };
-        let mut records = read_local_memory_records(&path)?
-            .into_iter()
-            .filter(local_provider_record_visible)
-            .filter(|record| local_provider_scope_matches(scope, record))
-            .filter(|record| local_provider_query_matches(query, record))
-            .collect::<Vec<_>>();
-        records.sort_by(local_provider_record_order);
-        records.truncate(8);
-        Ok(records)
+        local_provider_search_records(&path, query, scope, 8)
+    }
+
+    async fn search(
+        &self,
+        query: &str,
+        scope: &MemoryScope,
+        max_results: usize,
+    ) -> anyhow::Result<Vec<MemoryRecord>> {
+        let Some(path) = self.records_path() else {
+            return Ok(Vec::new());
+        };
+        local_provider_search_records(&path, query, scope, max_results)
     }
 
     async fn on_memory_write(
@@ -553,6 +601,23 @@ fn read_local_memory_records(path: &Path) -> anyhow::Result<Vec<MemoryRecord>> {
             records.push(record);
         }
     }
+    Ok(records)
+}
+
+fn local_provider_search_records(
+    path: &Path,
+    query: &str,
+    scope: &MemoryScope,
+    max_results: usize,
+) -> anyhow::Result<Vec<MemoryRecord>> {
+    let mut records = read_local_memory_records(path)?
+        .into_iter()
+        .filter(local_provider_record_visible)
+        .filter(|record| local_provider_scope_matches(scope, record))
+        .filter(|record| local_provider_query_matches(query, record))
+        .collect::<Vec<_>>();
+    records.sort_by(local_provider_record_order);
+    records.truncate(max_results);
     Ok(records)
 }
 
@@ -844,6 +909,49 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn registry_search_collects_records_and_isolates_provider_failure() {
+        let mut scope = MemoryScope::local("session-provider-search");
+        scope.project_root = Some(std::path::PathBuf::from("/tmp/provider-search-project"));
+        let mut high_utility = MemoryRecord::new(
+            "Use cargo check before closeout",
+            MemoryKind::WorkflowConvention,
+            scope.clone(),
+            crate::memory::types::MemoryProvenance::local("test"),
+        );
+        high_utility.utility = 0.9;
+        let mut low_utility = MemoryRecord::new(
+            "Use cargo check before opening a pull request",
+            MemoryKind::WorkflowConvention,
+            scope.clone(),
+            crate::memory::types::MemoryProvenance::local("test"),
+        );
+        low_utility.utility = 0.1;
+        let local = Arc::new(TestProvider::with_prefetch_record(
+            "local-test",
+            high_utility.clone(),
+        ));
+        local
+            .prefetch_records
+            .lock()
+            .unwrap()
+            .push(low_utility.clone());
+        let external = Arc::new(TestProvider::failing_prefetch("external-test"));
+        let mut registry = MemoryProviderRegistry::with_local_for_tests(local.clone());
+        registry.register_external(external.clone()).unwrap();
+
+        let (records, outcomes) = registry.search_all("cargo check", &scope, 1).await;
+
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].id, high_utility.id);
+        assert_eq!(outcomes.len(), 2);
+        assert_eq!(outcomes[0].status, MemoryProviderCallStatus::Ok);
+        assert_eq!(outcomes[0].hook, "search");
+        assert_eq!(outcomes[1].status, MemoryProviderCallStatus::Failed);
+        assert_eq!(outcomes[1].hook, "search");
+        assert_eq!(local.observed_scopes.lock().unwrap().as_slice(), &[scope]);
+    }
+
+    #[tokio::test]
     async fn local_provider_prefetch_reads_safe_accepted_typed_records() {
         let base = std::env::temp_dir().join(format!(
             "priority-agent-local-provider-prefetch-{}",
@@ -892,6 +1000,10 @@ mod tests {
         assert_eq!(records.len(), 1);
         assert_eq!(records[0].id, accepted.id);
         assert_eq!(records[0].scope, scope);
+
+        let search_records = provider.search("cargo check", &scope, 1).await.unwrap();
+        assert_eq!(search_records.len(), 1);
+        assert_eq!(search_records[0].id, accepted.id);
 
         let _ = std::fs::remove_dir_all(&base);
     }

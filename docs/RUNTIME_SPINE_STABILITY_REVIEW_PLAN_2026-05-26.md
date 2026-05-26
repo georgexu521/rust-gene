@@ -1400,3 +1400,41 @@ scripts/runtime-spine-fast-gate.sh
   projection、session-end extraction、search index rebuild 等主写路径；这些路径
   牵涉 quality gate、projection、lifecycle 和 search index，适合后续拆成更小的
   provider method，而不是在一个 PR 里改写全部 memory persistence。
+
+### 2026-05-26 第十三批落地
+
+已完成:
+
+- provider contract 增加 typed-record `search` hook:
+  - `MemoryProvider::search(query, scope, max_results)` 成为显式接口；
+  - default implementation 复用 provider prefetch，避免 external provider
+    立刻需要新增实现；
+  - `MemoryProviderRegistry::search_all` fanout 到 local/external providers，
+    记录 `hook=search` outcome，并按 utility/confidence/id 稳定排序和截断；
+  - `MemoryManager::provider_search` 暴露 manager-level orchestrator 方法。
+- `LocalMemoryProvider` 的 typed-record search 与 prefetch 共享同一套
+  query/status/safety/scope/order 规则:
+  - search parity 不再只能通过 manager 私有 `search()` 文本路径验证；
+  - external provider search failure 被隔离为 provider outcome，不影响 local
+    search records；
+  - manager-level provider search 能从 base-bound local provider 读到同一条
+    typed record。
+- `docs/PROJECT_STATUS.md` 同步说明 local provider 已覆盖 scope-filtered
+  typed-record prefetch 和 search。
+
+已验证:
+
+```bash
+cargo test -q registry_search_collects_records_and_isolates_provider_failure
+cargo test -q provider
+cargo test -q manager_local_provider_prefetch_reads_typed_records
+```
+
+第十三批之后的状态:
+
+- P2 Memory Provider Boundary 的 local provider write/read/search parity 已有
+  provider contract 层测试。
+- 仍未迁移的部分主要是 candidate submission / quality gate / Markdown
+  projection / session-end sync / search-index rebuild 的主路径抽象，这些需要先
+  明确 provider write transaction 语义，否则容易和现有
+  `MemoryManager::submit_candidate` 形成双写或 projection drift。
