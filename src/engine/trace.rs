@@ -332,6 +332,14 @@ pub enum TraceEvent {
         current_decision_request_empty: bool,
         relevant_material_items: usize,
         recent_observation_items: usize,
+        #[serde(default)]
+        zone_envelope_messages: usize,
+        #[serde(default)]
+        zone_source_messages: usize,
+        #[serde(default)]
+        zone_duplicate_blocks_removed: usize,
+        #[serde(default)]
+        zone_provenance_markers: usize,
     },
     MemoryBoundaryEvaluated {
         read_status: String,
@@ -1257,8 +1265,12 @@ impl TraceEvent {
                 current_decision_request_empty,
                 relevant_material_items,
                 recent_observation_items,
+                zone_envelope_messages,
+                zone_source_messages,
+                zone_duplicate_blocks_removed,
+                zone_provenance_markers,
             } => format!(
-                "context zones: stable={}t/{} task_state={}t/{} relevant={}t/{}/{} items observation={}t/{}/{} items decision={}t/{} empty_task={} empty_decision={} fp={}/{}/{}/{}/{} overflow={}/{}/{}/{}/{}",
+                "context zones: stable={}t/{} task_state={}t/{} relevant={}t/{}/{} items observation={}t/{}/{} items decision={}t/{} empty_task={} empty_decision={} envelope={} source_msgs={} dedupe_removed={} provenance={} fp={}/{}/{}/{}/{} overflow={}/{}/{}/{}/{}",
                 stable_prefix_tokens,
                 stable_prefix_budget_tokens,
                 task_state_tokens,
@@ -1273,6 +1285,10 @@ impl TraceEvent {
                 current_decision_request_budget_tokens,
                 task_state_empty,
                 current_decision_request_empty,
+                zone_envelope_messages,
+                zone_source_messages,
+                zone_duplicate_blocks_removed,
+                zone_provenance_markers,
                 preview(stable_prefix_fingerprint),
                 preview(task_state_fingerprint),
                 preview(relevant_material_fingerprint),

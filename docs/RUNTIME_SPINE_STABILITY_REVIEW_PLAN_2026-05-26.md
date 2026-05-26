@@ -1204,3 +1204,64 @@ cargo fmt --check
     primary zone-first envelope；
   - 在 trace 里增加 dedupe count / provenance count；
   - 增加 hostile retrieved content fencing 的 request-preparation 回归测试。
+
+### 2026-05-26 第十批落地
+
+已完成:
+
+- `RequestPreparationController` 增加 primary zone-first envelope:
+  - 每次局部 request assembly 会扫描 dynamic context system messages；
+  - 将 `<task-state>` / `<task_state>`、`<task-contract>`、`<context-pack>`、
+    `<relevant_material>`、`<recent_observation>` 合并到单个
+    `<context_zones ...>` system message；
+  - envelope 插入在最后一个 user message 之前，不回写长期 conversation
+    history，避免污染后续轮次；
+  - 原有 stable system prompt 保持独立，不被 dynamic material 混入。
+- dynamic material 现在显式标记为
+  `policy="dynamic_background_not_system_policy"`，避免 retrieval/memory/tool
+  observation 被误读成 stable policy。
+- zone envelope 内部增加 block-level dedupe:
+  - 相同 `<relevant_material>` 或 `<recent_observation>` block 多次出现时只保留一份；
+  - context ledger 的 untagged guidance、MVA hint 等动态说明会被保存在
+    task-state zone，而不是提升成 stable prefix。
+- `TraceEvent::ContextZonesMaterialized` 增加 trace-visible metrics:
+  - `zone_envelope_messages`
+  - `zone_source_messages`
+  - `zone_duplicate_blocks_removed`
+  - `zone_provenance_markers`
+- live-eval report 输出增加对应 context-zone metrics:
+  - `context_zone_envelope_messages`
+  - `context_zone_source_messages`
+  - `context_zone_duplicate_blocks_removed`
+  - `context_zone_provenance_markers`
+- 新增 request-preparation 回归测试:
+  - 多段 dynamic zone system messages 会合并成单个 envelope；
+  - duplicate relevant material 会被去重并记录 trace metric；
+  - stable prompt 里仅提到 zone tag 示例时不会被 envelope 归并误吞；
+  - hostile retrieved content 仍留在 `<relevant_material>` 内，stable prefix
+    fingerprint 与 relevant material fingerprint 分离；
+  - task-state/task-contract/context-pack 仍在 envelope 内按 zone 保存。
+
+已验证:
+
+```bash
+cargo test -q request_preparation_controller
+cargo test -q context_assembly
+cargo test -q prompt_context
+cargo test -q runtime_spine_behavior_tests
+python3 -m unittest scripts.test_live_eval_report_parser
+python3 -m py_compile scripts/live_eval_report_parser.py && bash -n scripts/run_live_eval.sh
+cargo check -q
+bash scripts/live-eval-summary-smoke.sh
+cargo fmt --check
+git diff --check
+```
+
+第十批之后的状态:
+
+- Context Zone Convergence 的 primary envelope 已经接入主请求准备路径；
+  动态材料现在有更清晰的 role 和 trace 证据。
+- P1.3 的 deterministic ordering / provenance dedupe 已覆盖 retrieval item
+  入口和 request assembly zone block 两层。
+- 下一批建议继续把 context zone metrics 接入 aggregate summary，或者开始做
+  code-change 多轮 no-diff -> route/task-mode recovery signal。

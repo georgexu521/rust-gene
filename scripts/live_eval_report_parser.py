@@ -1623,6 +1623,10 @@ def runtime_spine_metrics_from_events(events, report_text="", assertions=None):
         f"context_pack_recorded={bool_text(bool(context_pack_events))} "
         f"execution_report_recorded={bool_text(bool(execution_report_events))} "
         f"memory_proposal_recorded={bool_text(bool(memory_proposal_events))} "
+        f"context_zone_envelope_messages={latest_context_zones.get('zone_envelope_messages', 0)} "
+        f"context_zone_source_messages={latest_context_zones.get('zone_source_messages', 0)} "
+        f"context_zone_duplicate_blocks_removed={latest_context_zones.get('zone_duplicate_blocks_removed', 0)} "
+        f"context_zone_provenance_markers={latest_context_zones.get('zone_provenance_markers', 0)} "
         f"agent_loop_steps={len(agent_loop_events)} "
         f"context_zones={len(context_zone_events)} "
         f"completion_contract={token(latest_completion_contract.get('status', 'missing'))}"
@@ -1687,6 +1691,10 @@ def runtime_spine_metrics_from_events(events, report_text="", assertions=None):
         "context_zone_observation_items": str(latest_context_zones.get("recent_observation_items", "missing")),
         "context_zone_task_state_empty": bool_text(bool(latest_context_zones.get("task_state_empty"))),
         "context_zone_current_decision_request_empty": bool_text(bool(latest_context_zones.get("current_decision_request_empty"))),
+        "context_zone_envelope_messages": str(latest_context_zones.get("zone_envelope_messages", "0")),
+        "context_zone_source_messages": str(latest_context_zones.get("zone_source_messages", "0")),
+        "context_zone_duplicate_blocks_removed": str(latest_context_zones.get("zone_duplicate_blocks_removed", "0")),
+        "context_zone_provenance_markers": str(latest_context_zones.get("zone_provenance_markers", "0")),
         "observer_outcome_recorded": bool_text(bool(tool_observation_events)),
         "observer_outcome_latest_status": str((tool_observation_events[-1] if tool_observation_events else {}).get("status", "missing")),
         "observer_outcome_latest_findings": str((tool_observation_events[-1] if tool_observation_events else {}).get("key_findings", "missing")),
@@ -1790,6 +1798,10 @@ def runtime_spine_metrics(task_dir, report_text):
         "context_zone_observation_items",
         "context_zone_task_state_empty",
         "context_zone_current_decision_request_empty",
+        "context_zone_envelope_messages",
+        "context_zone_source_messages",
+        "context_zone_duplicate_blocks_removed",
+        "context_zone_provenance_markers",
         "observer_outcome_recorded",
         "observer_outcome_latest_status",
         "observer_outcome_latest_findings",
