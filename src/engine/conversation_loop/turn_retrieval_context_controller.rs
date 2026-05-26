@@ -4,6 +4,9 @@ use super::retrieval_context_builder::{
 use crate::engine::intent_router::RetrievalPolicy;
 use crate::engine::retrieval_context::RetrievalContext;
 use crate::engine::trace::{TraceCollector, TraceEvent};
+use crate::memory::active::{
+    run_active_memory_worker, ActiveMemoryConfig, ActiveMemoryEnvironment, ActiveMemoryRequest,
+};
 use crate::memory::MemoryManager;
 use crate::services::api::LlmProvider;
 use crate::session_store::SessionStore;
@@ -16,6 +19,7 @@ pub(super) struct TurnRetrievalContextRequest<'a> {
     pub(super) working_dir: &'a Path,
     pub(super) retrieval_policy: RetrievalPolicy,
     pub(super) session_store: Option<Arc<SessionStore>>,
+    pub(super) session_id: Option<&'a str>,
     pub(super) memory_manager: Option<&'a Arc<Mutex<MemoryManager>>>,
     pub(super) provider: &'a dyn LlmProvider,
     pub(super) model: &'a str,
@@ -50,6 +54,9 @@ impl TurnRetrievalContextController {
                 Self::record_memory_prefetch(context.trace, &memory_ctx);
                 Self::merge_context(&mut turn_retrieval_context, memory_ctx);
             }
+            if let Some(active_memory_ctx) = Self::build_active_memory_context(&context).await {
+                Self::merge_context(&mut turn_retrieval_context, active_memory_ctx);
+            }
         }
 
         if let Some(ref ctx) = turn_retrieval_context {
@@ -73,6 +80,43 @@ impl TurnRetrievalContextController {
                 context.retrieval_policy,
             )
             .await
+    }
+
+    async fn build_active_memory_context(
+        context: &TurnRetrievalContextRequest<'_>,
+    ) -> Option<RetrievalContext> {
+        let config = ActiveMemoryConfig::from_env();
+        let request = ActiveMemoryRequest {
+            query: context.last_user_preview,
+            retrieval_policy: context.retrieval_policy,
+            session_id: context.session_id,
+            memory_enabled: context.memory_manager.is_some(),
+            user_facing: true,
+            timeout_budget_available: config.timeout.as_millis() > 0,
+            environment: ActiveMemoryEnvironment::from_process(),
+        };
+        let Some(memory_manager) = context.memory_manager else {
+            let gate = crate::memory::active::evaluate_active_memory_gate(request, config);
+            context.trace.record(TraceEvent::ActiveMemoryEvaluated {
+                status: "skipped".to_string(),
+                reason: gate.reason,
+                items: 0,
+                timeout_ms: config.timeout.as_millis() as u64,
+                elapsed_ms: 0,
+            });
+            return None;
+        };
+
+        let memory = memory_manager.lock().await;
+        let outcome = run_active_memory_worker(&memory, request, config).await;
+        context.trace.record(TraceEvent::ActiveMemoryEvaluated {
+            status: outcome.status.clone(),
+            reason: outcome.reason.clone(),
+            items: outcome.items,
+            timeout_ms: outcome.timeout_ms,
+            elapsed_ms: outcome.elapsed_ms,
+        });
+        outcome.context
     }
 
     fn merge_context(
@@ -209,6 +253,7 @@ mod tests {
             working_dir: Path::new("/tmp"),
             retrieval_policy: RetrievalPolicy::None,
             session_store: None,
+            session_id: Some("session-test"),
             memory_manager: None,
             provider: &provider,
             model: "mock-model",

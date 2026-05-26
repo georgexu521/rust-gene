@@ -52,7 +52,12 @@ Current stage:
   user-configured roots load after workspace roots, bundled skills remain the
   fallback, third-party and URL-loaded skills pass through a scanner and
   optional `PRIORITY_AGENT_SKILL_ALLOWLIST`, loaded skills carry source/trust
-  metadata, and `docs/SKILL_ROOTS_AND_TRUST.md` documents the trust model.
+  metadata, and `docs/SKILL_ROOTS_AND_TRUST.md` documents the trust model. Phase
+  8 now has an opt-in active-memory prototype: `PRIORITY_AGENT_ACTIVE_MEMORY=1`
+  enables a gated, read-only local FTS worker only for user-facing persistent
+  sessions, skips eval/headless/automation/internal paths, fences output as
+  untrusted retrieval context, records `memory.active` trace events, and is
+  documented in `docs/ACTIVE_MEMORY_PROTOTYPE.md`.
 - `docs/LLM_RUNTIME_SIMPLIFICATION_PLAN_2026-05-08.md` is complete through its
   follow-up implementation phases. Future runtime-diet work should come from
   live-use gaps, release-hardening gates, or a newly reviewed plan.

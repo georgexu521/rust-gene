@@ -273,6 +273,13 @@ pub enum TraceEvent {
     MemoryPrefetch {
         chars: usize,
     },
+    ActiveMemoryEvaluated {
+        status: String,
+        reason: String,
+        items: usize,
+        timeout_ms: u64,
+        elapsed_ms: u128,
+    },
     RetrievalContextBuilt {
         policy: String,
         sources: Vec<String>,
@@ -754,6 +761,7 @@ impl TraceEvent {
             TraceEvent::AdaptiveWorkflowTriggered { .. } => "workflow.trigger",
             TraceEvent::MemorySnapshotInjected { .. } => "memory.snapshot",
             TraceEvent::MemoryPrefetch { .. } => "memory.prefetch",
+            TraceEvent::ActiveMemoryEvaluated { .. } => "memory.active",
             TraceEvent::RetrievalContextBuilt { .. } => "retrieval.context",
             TraceEvent::ContextZonesMaterialized { .. } => "context.zones",
             TraceEvent::MemoryBoundaryEvaluated { .. } => "memory.boundary",
@@ -1176,6 +1184,16 @@ impl TraceEvent {
                 format!("memory snapshot injected: {} chars", chars)
             }
             TraceEvent::MemoryPrefetch { chars } => format!("memory prefetch: {} chars", chars),
+            TraceEvent::ActiveMemoryEvaluated {
+                status,
+                reason,
+                items,
+                timeout_ms,
+                elapsed_ms,
+            } => format!(
+                "active memory: status={} items={} elapsed={}ms timeout={}ms reason={}",
+                status, items, elapsed_ms, timeout_ms, reason
+            ),
             TraceEvent::RetrievalContextBuilt {
                 policy,
                 sources,
@@ -2267,6 +2285,7 @@ fn control_loop_phase_for_event(event: &TraceEvent) -> Option<&'static str> {
         | TraceEvent::ContextPackMaterialized { .. }
         | TraceEvent::MemorySnapshotInjected { .. }
         | TraceEvent::MemoryPrefetch { .. }
+        | TraceEvent::ActiveMemoryEvaluated { .. }
         | TraceEvent::RetrievalContextBuilt { .. }
         | TraceEvent::ContextZonesMaterialized { .. }
         | TraceEvent::MemoryBoundaryEvaluated { .. }

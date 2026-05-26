@@ -46,6 +46,7 @@ impl TurnContextBootstrapController {
                 working_dir: context.working_dir,
                 retrieval_policy: context.route.retrieval,
                 session_store: context.conversation.session_store.clone(),
+                session_id: Some(&context.conversation.session_id),
                 memory_manager: context.conversation.memory_manager.as_ref(),
                 provider: context.conversation.provider.as_ref(),
                 model: &context.conversation.model,
