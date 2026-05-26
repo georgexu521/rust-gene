@@ -1268,7 +1268,7 @@ impl MemoryManager {
         let content = std::fs::read_to_string(&self.records_path).unwrap_or_default();
         memory_records_from_jsonl(&content)
             .into_iter()
-            .filter(|record| persisted_memory_record_is_safe(record))
+            .filter(persisted_memory_record_is_safe)
             .collect()
     }
 

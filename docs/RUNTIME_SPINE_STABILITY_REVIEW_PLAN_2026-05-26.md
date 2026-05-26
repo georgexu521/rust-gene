@@ -888,8 +888,75 @@ bash scripts/live-eval-summary-smoke.sh
   - support status 说明这些 proof kinds 在当前任务上下文里能不能支撑 verified。
 - `DiffReviewed` 这类 evidence 不再会因为 generic validation pass 被静默升级为
   verified support。
-- subagent 相关 proof kinds 已有 policy 语义，但还没有和真实 subagent manager
-  输出绑定。
+- subagent 相关 proof kinds 已有 policy 语义；第四批已开始和真实 subagent
+  manager 输出绑定。
+
+### 2026-05-26 第四批落地
+
+已完成:
+
+- `src/tools/agent_tool/mod.rs` 的真实 subagent 输出现在会携带结构化 proof
+  metadata:
+  - `proof_kind` / `verification_proof_kind`
+  - `source_agent`
+  - `parent_verified`
+  - `subagent_output_kind`
+  - `scope`
+  - `related_to_changed_files`
+  - `residual_risk`
+- 单 agent、resume、parallel subtasks 和 fork branch 结果都会标注为
+  `SubagentClaimOnly`，除非未来有父 runtime 复验链路显式写入
+  `ParentVerifiedSubagentResult`。
+- `subagent_output_kind` 先按输出性质归类:
+  - `SubagentFinding`
+  - `SubagentVerificationClaim`
+  - `SubagentPatchSummary`
+  - `SubagentBlocked`
+- `src/engine/evidence_ledger.rs` 现在会读取 agent tool 的 proof metadata，
+  把 child 输出记录为 validation fact，但 proof kind 仍是
+  `SubagentClaimOnly`。
+- agent tool 的 subagent proof 会进入 tool execution relevance:
+  - `validation=true`
+  - `closeout=true`
+  这样 trace/closeout 诊断能看到子 agent claim 参与了证据面。
+- `EvidenceLedger` 已覆盖两种关键语义:
+  - child-only claim: ledger proof status 可以是 passed，但 derived support
+    只能是 partial，不能支持 verified closeout。
+  - parent-verified subagent result: 只有 `parent_verified=true` 且 proof kind
+    是 `ParentVerifiedSubagentResult` 时，derived support 才能 scoped verified。
+- `src/engine/scenario_matrix.rs` 增加 P0b extended deterministic matrix:
+  - permission required
+  - test failure repair
+  - route mistake recovery
+  - subagent verifier
+  - isolated worktree implementer
+  - memory retrieval conflict
+  - skill guidance
+- P0b cases 现在有 route/tool/mutation/validation/closeout/failure-owner/gate
+  outcome/friction/golden-trace oracle，后续可以升级为 live-eval fixtures。
+
+已验证:
+
+```bash
+cargo test -q scenario_matrix
+cargo test -q agent_tool
+cargo test -q evidence_ledger
+cargo test -q verification_proof
+cargo test -q gate_outcome
+cargo test -q memory
+bash scripts/runtime-spine-fast-gate.sh
+cargo clippy --all-features -- -D warnings
+```
+
+第四批之后的状态:
+
+- P2 Subagent Verification-First Policy 已完成第一段代码接线: child output
+  不再是 opaque text，而是进入同一套 proof semantics。
+- P0b 扩展矩阵已完成 deterministic spec，复杂控制面不再只停留在文档表格。
+- 目前仍没有自动“父 runtime 复验生成 ParentVerifiedSubagentResult”的完整
+  workflow；本批只把结构化入口和 policy gate 打好。
+- 下一步应把 P0b spec 转成 live-eval fixture / golden trace，并把父 runtime
+  复验动作变成显式 evidence-producing step。
 
 后续保持:
 
@@ -897,7 +964,7 @@ bash scripts/live-eval-summary-smoke.sh
   P0a 八个 case 全部做成 live-eval sample fixtures。
 - Gate outcome 已经进入 report/aggregate；下一步应结合 `RuntimeSpineCaseSpec`
   做 suspected false positive 和 UX-cost oracle。
-- Proof support 已经进入 closeout/report；下一步应该把 subagent proof binding
-  和 P0b live-eval fixtures 接上。
-- P0b、route recovery、context zone convergence、subagent proof binding 和
-  memory provider boundary 仍按本计划后续推进。
+- Proof support 已经进入 closeout/report；subagent proof binding 已完成第一段，
+  下一步应该接 P0b live-eval fixtures 和父 runtime 复验 workflow。
+- P0b、route recovery、context zone convergence、subagent parent verification
+  workflow 和 memory provider boundary 仍按本计划后续推进。

@@ -76,16 +76,16 @@ pub fn derive_gate_outcomes(trace: &TurnTrace) -> Vec<GateOutcomeRecord> {
                 recovery,
                 ..
             } => {
-                let outcome = classify_action_review(
+                let outcome = classify_action_review(ActionReviewGateInput {
                     decision,
                     reason,
-                    permission.as_deref(),
-                    *scope_allowed,
-                    *budget_allowed,
+                    permission: permission.as_deref(),
+                    scope_allowed: *scope_allowed,
+                    budget_allowed: *budget_allowed,
                     checkpoint,
                     recovery,
-                    final_status.as_deref(),
-                );
+                    final_status: final_status.as_deref(),
+                });
                 Some(GateOutcomeRecord {
                     gate: GateKind::ActionReview,
                     decision: decision.clone(),
@@ -196,16 +196,28 @@ fn count(records: &[GateOutcomeRecord], outcome: RuntimeSpineGateOutcomeClass) -
         .count()
 }
 
-fn classify_action_review(
-    decision: &str,
-    reason: &str,
-    permission: Option<&str>,
+struct ActionReviewGateInput<'a> {
+    decision: &'a str,
+    reason: &'a str,
+    permission: Option<&'a str>,
     scope_allowed: bool,
     budget_allowed: bool,
-    checkpoint: &str,
-    recovery: &str,
-    final_status: Option<&str>,
-) -> RuntimeSpineGateOutcomeClass {
+    checkpoint: &'a str,
+    recovery: &'a str,
+    final_status: Option<&'a str>,
+}
+
+fn classify_action_review(input: ActionReviewGateInput<'_>) -> RuntimeSpineGateOutcomeClass {
+    let ActionReviewGateInput {
+        decision,
+        reason,
+        permission,
+        scope_allowed,
+        budget_allowed,
+        checkpoint,
+        recovery,
+        final_status,
+    } = input;
     let decision = decision.to_ascii_lowercase();
     let reason = reason.to_ascii_lowercase();
     let checkpoint = checkpoint.to_ascii_lowercase();

@@ -7,12 +7,15 @@ use crate::agent::envelope::{AgentTaskEnvelope, AgentTaskPriority};
 use crate::agent::manager::AgentResult as ManagerAgentResult;
 use crate::agent::profiles::{AgentContextMode, AgentDefinition, AgentProfile};
 use crate::agent::roles::AgentRole;
-use crate::agent::types::{AgentId, AgentMessage, AgentMessageType};
+use crate::agent::types::{AgentId, AgentMessage, AgentMessageType, AgentStatus};
 use crate::tools::{Tool, ToolContext, ToolOperationKind, ToolResult};
 use async_trait::async_trait;
 use serde_json::json;
 use std::path::{Path, PathBuf};
 use tracing::{info, warn};
+
+const SUBAGENT_CLAIM_PROOF_KIND: &str = "subagent_claim_only";
+const PARENT_VERIFIED_SUBAGENT_PROOF_KIND: &str = "parent_verified_subagent_result";
 
 /// 子代理模板
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -277,6 +280,61 @@ fn agent_wait_failure_status(error: &anyhow::Error) -> &'static str {
     }
 }
 
+fn subagent_output_kind(
+    status: AgentStatus,
+    role: AgentRole,
+    template: Option<AgentTemplate>,
+    allowed_tools: &[String],
+) -> &'static str {
+    if status != AgentStatus::Completed {
+        return "SubagentBlocked";
+    }
+    if tools_allow_file_mutation(allowed_tools) {
+        return "SubagentPatchSummary";
+    }
+    if matches!(
+        template,
+        Some(AgentTemplate::Verify | AgentTemplate::CodeReview)
+    ) || role == AgentRole::Verification
+    {
+        return "SubagentVerificationClaim";
+    }
+    "SubagentFinding"
+}
+
+fn attach_subagent_proof_metadata(
+    data: &mut serde_json::Value,
+    result: &ManagerAgentResult,
+    role: AgentRole,
+    template: Option<AgentTemplate>,
+    allowed_tools: &[String],
+    parent_verified: bool,
+) {
+    let proof_kind = if parent_verified {
+        PARENT_VERIFIED_SUBAGENT_PROOF_KIND
+    } else {
+        SUBAGENT_CLAIM_PROOF_KIND
+    };
+    let output_kind = subagent_output_kind(result.status, role, template, allowed_tools);
+    let related_to_changed_files = if tools_allow_file_mutation(allowed_tools) {
+        "unknown_child_worktree"
+    } else {
+        "none"
+    };
+    data["proof_kind"] = json!(proof_kind);
+    data["verification_proof_kind"] = json!(proof_kind);
+    data["source_agent"] = json!(result.agent_id.to_string());
+    data["parent_verified"] = json!(parent_verified);
+    data["subagent_output_kind"] = json!(output_kind);
+    data["scope"] = json!("subagent_result");
+    data["related_to_changed_files"] = json!(related_to_changed_files);
+    data["residual_risk"] = json!(if parent_verified {
+        "parent runtime verified subagent result"
+    } else {
+        "subagent output is a claim until parent runtime verification"
+    });
+}
+
 /// 创建并等待单个子 Agent 完成
 #[allow(clippy::too_many_arguments)]
 async fn spawn_single_agent(
@@ -527,6 +585,9 @@ fn synthesize_results(
     description: &str,
     results: Vec<ManagerAgentResult>,
     files: &[String],
+    role: AgentRole,
+    template: Option<AgentTemplate>,
+    allowed_tools: &[String],
 ) -> ToolResult {
     let files_info = if files.is_empty() {
         String::new()
@@ -566,18 +627,36 @@ fn synthesize_results(
         ));
     }
 
-    let data = json!({
+    let mut result_items = Vec::with_capacity(results.len());
+    for result in &results {
+        let mut item = json!({
+            "agent_id": result.agent_id.to_string(),
+            "status": format!("{:?}", result.status).to_lowercase(),
+            "content": result.content.clone(),
+        });
+        attach_subagent_proof_metadata(&mut item, result, role, template, allowed_tools, false);
+        result_items.push(item);
+    }
+
+    let mut data = json!({
         "description": description,
         "total": results.len(),
         "succeeded": success_count,
         "failed": fail_count,
-        "results": results.iter().map(|r| json!({
-            "agent_id": r.agent_id.to_string(),
-            "status": format!("{:?}", r.status).to_lowercase(),
-            "content": r.content,
-        })).collect::<Vec<_>>(),
+        "results": result_items,
         "files": files,
     });
+    if let Some(first_result) = results.first() {
+        attach_subagent_proof_metadata(
+            &mut data,
+            first_result,
+            role,
+            template,
+            allowed_tools,
+            false,
+        );
+        data["scope"] = json!("subagent_result_set");
+    }
 
     ToolResult::success_with_data(output, data)
 }
@@ -827,17 +906,27 @@ async fn handle_resume(
     match agent_manager.get_result(&agent_id).await {
         Some(result) => {
             let status_str = format!("{:?}", result.status);
+            let allowed_tools = Vec::<String>::new();
+            let mut data = json!({
+                "agent_id": agent_id.to_string(),
+                "status": status_str.to_lowercase(),
+                "result": result.content.clone(),
+                "resumed": true,
+            });
+            attach_subagent_proof_metadata(
+                &mut data,
+                &result,
+                AgentRole::Default,
+                None,
+                &allowed_tools,
+                false,
+            );
             ToolResult::success_with_data(
                 format!(
                     "Resumed agent {}\nStatus: {}\n\nResult:\n{}",
                     agent_id, status_str, result.content
                 ),
-                json!({
-                    "agent_id": agent_id.to_string(),
-                    "status": status_str.to_lowercase(),
-                    "result": result.content,
-                    "resumed": true,
-                }),
+                data,
             )
         }
         None => ToolResult::error(format!(
@@ -1179,12 +1268,22 @@ async fn handle_fork_branches(ctx: ExecuteParams<'_>) -> ToolResult {
                     branch_memory.merge(parent_mem).await;
                 }
 
-                results.push(json!({
+                let mut branch_result = json!({
                     "branch_name": branch_name,
                     "agent_id": result.agent_id.to_string(),
                     "status": format!("{:?}", result.status).to_lowercase(),
-                    "content": result.content,
-                }));
+                    "content": result.content.clone(),
+                });
+                attach_subagent_proof_metadata(
+                    &mut branch_result,
+                    &result,
+                    ctx.role,
+                    ctx.template,
+                    &ctx.allowed_tools,
+                    false,
+                );
+                branch_result["scope"] = json!("subagent_branch_result");
+                results.push(branch_result);
             }
             Err(e) => {
                 results.push(json!({
@@ -1221,16 +1320,41 @@ async fn handle_fork_branches(ctx: ExecuteParams<'_>) -> ToolResult {
         }
     }
 
-    ToolResult::success_with_data(
-        output,
-        json!({
-            "description": description,
-            "total_branches": branches_array.len(),
-            "succeeded": success_count,
-            "failed": branches_array.len() - success_count,
-            "branches": results,
-        }),
-    )
+    let mut data = json!({
+        "description": description,
+        "total_branches": branches_array.len(),
+        "succeeded": success_count,
+        "failed": branches_array.len() - success_count,
+        "branches": results,
+    });
+    if let Some(first_branch) = data
+        .get("branches")
+        .and_then(serde_json::Value::as_array)
+        .and_then(|branches| {
+            branches
+                .iter()
+                .find(|branch| branch.get("content").is_some())
+        })
+        .cloned()
+    {
+        data["proof_kind"] = first_branch
+            .get("proof_kind")
+            .cloned()
+            .unwrap_or_else(|| json!(SUBAGENT_CLAIM_PROOF_KIND));
+        data["verification_proof_kind"] = first_branch
+            .get("verification_proof_kind")
+            .cloned()
+            .unwrap_or_else(|| json!(SUBAGENT_CLAIM_PROOF_KIND));
+        data["parent_verified"] = first_branch
+            .get("parent_verified")
+            .cloned()
+            .unwrap_or(serde_json::Value::Bool(false));
+        data["scope"] = json!("subagent_branch_result_set");
+        data["residual_risk"] =
+            json!("subagent branch outputs require parent runtime verification");
+    }
+
+    ToolResult::success_with_data(output, data)
 }
 
 /// 处理并行子任务
@@ -1352,7 +1476,14 @@ async fn handle_subtasks(ctx: ExecuteParams<'_>) -> ToolResult {
         })
         .unwrap_or_default();
 
-    synthesize_results(description, results, &files)
+    synthesize_results(
+        description,
+        results,
+        &files,
+        ctx.role,
+        ctx.template,
+        &ctx.allowed_tools,
+    )
 }
 
 /// 处理单个代理
@@ -1434,29 +1565,39 @@ async fn handle_single_agent(ctx: ExecuteParams<'_>) -> ToolResult {
                 );
             }
 
+            let mut data = json!({
+                "agent_id": result.agent_id.to_string(),
+                "description": description,
+                "status": status_str.to_lowercase(),
+                "result": result.content.clone(),
+                "parent_session": ctx.context.session_id,
+                "files": files,
+                "role": ctx.role.display_name(),
+                "template": ctx.params["template"].as_str().unwrap_or(""),
+                "profile": ctx.definition.as_ref().map(|definition| definition.name.clone()),
+                "agent_definition": ctx.definition.as_ref(),
+                "context_mode": effective_context_mode.map(|mode| mode.to_string()),
+                "permission_mode": ctx.definition.as_ref().map(|definition| definition.permission_mode.to_string()),
+                "risk_policy": ctx.definition.as_ref().map(|definition| definition.risk_policy.to_string()),
+                "output_contract": ctx.definition.as_ref().map(|definition| definition.output_contract.to_string()),
+                "allowed_tools": ctx.allowed_tools.clone(),
+                "completed_at": result.completed_at.elapsed().as_secs()
+            });
+            attach_subagent_proof_metadata(
+                &mut data,
+                &result,
+                ctx.role,
+                ctx.template,
+                &ctx.allowed_tools,
+                false,
+            );
+
             ToolResult::success_with_data(
                 format!(
                     "Sub-agent {} completed with status: {}\n\nTask: {}{}\n\nResult:\n{}",
                     result.agent_id, status_str, description, files_info, result.content
                 ),
-                json!({
-                    "agent_id": result.agent_id.to_string(),
-                    "description": description,
-                    "status": status_str.to_lowercase(),
-                    "result": result.content,
-                    "parent_session": ctx.context.session_id,
-                    "files": files,
-                    "role": ctx.role.display_name(),
-                    "template": ctx.params["template"].as_str().unwrap_or(""),
-                    "profile": ctx.definition.as_ref().map(|definition| definition.name.clone()),
-                    "agent_definition": ctx.definition.as_ref(),
-                    "context_mode": effective_context_mode.map(|mode| mode.to_string()),
-                    "permission_mode": ctx.definition.as_ref().map(|definition| definition.permission_mode.to_string()),
-                    "risk_policy": ctx.definition.as_ref().map(|definition| definition.risk_policy.to_string()),
-                    "output_contract": ctx.definition.as_ref().map(|definition| definition.output_contract.to_string()),
-                    "allowed_tools": ctx.allowed_tools,
-                    "completed_at": result.completed_at.elapsed().as_secs()
-                }),
+                data,
             )
         }
         Err(e) => {
@@ -1847,6 +1988,19 @@ impl Tool for AgentTool {
 mod tests {
     use super::*;
     use std::sync::Arc;
+    use std::time::Instant;
+
+    fn completed_agent_result(agent_id: &str) -> ManagerAgentResult {
+        ManagerAgentResult {
+            agent_id: AgentId(agent_id.to_string()),
+            status: AgentStatus::Completed,
+            content: "checked the implementation".to_string(),
+            completed_at: Instant::now(),
+            tools_used: vec!["bash".to_string()],
+            confidence: 0.8,
+            has_conflict: false,
+        }
+    }
 
     #[test]
     fn agent_tool_contract_discourages_blocking_delegation() {
@@ -1895,6 +2049,84 @@ mod tests {
         assert!(planner.contains(&"plan".to_string()));
         assert!(planner.contains(&"todo_write".to_string()));
         assert!(!planner.contains(&"bash".to_string()));
+    }
+
+    #[test]
+    fn subagent_proof_metadata_marks_child_output_as_claim_only() {
+        let result = completed_agent_result("agent_1");
+        let allowed_tools = vec![
+            "grep".to_string(),
+            "file_read".to_string(),
+            "bash".to_string(),
+        ];
+        let mut data = json!({
+            "agent_id": result.agent_id.to_string(),
+            "status": "completed",
+            "result": result.content.clone(),
+        });
+
+        attach_subagent_proof_metadata(
+            &mut data,
+            &result,
+            AgentRole::Verification,
+            Some(AgentTemplate::Verify),
+            &allowed_tools,
+            false,
+        );
+
+        assert_eq!(data["proof_kind"], "subagent_claim_only");
+        assert_eq!(data["verification_proof_kind"], "subagent_claim_only");
+        assert_eq!(data["parent_verified"], false);
+        assert_eq!(data["source_agent"], "agent_1");
+        assert_eq!(data["subagent_output_kind"], "SubagentVerificationClaim");
+        assert_eq!(data["related_to_changed_files"], "none");
+    }
+
+    #[test]
+    fn mutating_subagent_metadata_is_patch_summary_but_still_claim_only() {
+        let result = completed_agent_result("agent_2");
+        let allowed_tools = vec!["file_edit".to_string(), "bash".to_string()];
+        let mut data = json!({"agent_id": "agent_2", "status": "completed"});
+
+        attach_subagent_proof_metadata(
+            &mut data,
+            &result,
+            AgentRole::Specialist,
+            Some(AgentTemplate::Debug),
+            &allowed_tools,
+            false,
+        );
+
+        assert_eq!(data["subagent_output_kind"], "SubagentPatchSummary");
+        assert_eq!(data["verification_proof_kind"], "subagent_claim_only");
+        assert_eq!(data["related_to_changed_files"], "unknown_child_worktree");
+    }
+
+    #[test]
+    fn synthesized_subtask_results_include_subagent_proof_metadata() {
+        let result = completed_agent_result("agent_3");
+        let allowed_tools = vec!["bash".to_string()];
+
+        let tool_result = synthesize_results(
+            "verify change",
+            vec![result],
+            &[],
+            AgentRole::Verification,
+            Some(AgentTemplate::Verify),
+            &allowed_tools,
+        );
+        let data = tool_result.data.expect("subtask result data");
+
+        assert_eq!(data["verification_proof_kind"], "subagent_claim_only");
+        assert_eq!(data["scope"], "subagent_result_set");
+        assert_eq!(
+            data["results"][0]["subagent_output_kind"],
+            "SubagentVerificationClaim"
+        );
+        assert_eq!(
+            data["results"][0]["verification_proof_kind"],
+            "subagent_claim_only"
+        );
     }
 
     #[test]

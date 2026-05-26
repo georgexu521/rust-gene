@@ -420,6 +420,9 @@ impl EvidenceLedger {
         if tool_call.name == "bash" {
             self.record_bash_tool_result(tool_call, result);
         }
+        if tool_call.name == "agent" {
+            self.record_agent_tool_result(result);
+        }
     }
 
     pub fn record_changed_files(&mut self, changed_files: &[PathBuf]) {
@@ -1308,6 +1311,79 @@ impl EvidenceLedger {
             summary: preview(&summary),
         });
     }
+
+    fn record_agent_tool_result(&mut self, result: &ToolResult) {
+        let Some(data) = result.data.as_ref() else {
+            return;
+        };
+
+        let mut recorded = false;
+        for key in ["results", "branches"] {
+            let Some(items) = data.get(key).and_then(serde_json::Value::as_array) else {
+                continue;
+            };
+            for item in items {
+                if self.record_subagent_validation_fact(result.success, item, result) {
+                    recorded = true;
+                }
+            }
+        }
+        if !recorded {
+            self.record_subagent_validation_fact(result.success, data, result);
+        }
+    }
+
+    fn record_subagent_validation_fact(
+        &mut self,
+        tool_success: bool,
+        data: &serde_json::Value,
+        result: &ToolResult,
+    ) -> bool {
+        let Some(proof_kind) = subagent_proof_kind(data) else {
+            return false;
+        };
+        let source_agent = json_string(data, "source_agent")
+            .or_else(|| json_string(data, "agent_id"))
+            .unwrap_or_else(|| "unknown".to_string());
+        let status = json_string(data, "status").unwrap_or_else(|| {
+            if tool_success {
+                "completed".to_string()
+            } else {
+                "failed".to_string()
+            }
+        });
+        let parent_verified = data
+            .get("parent_verified")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false);
+        let passed =
+            tool_success && matches!(status.as_str(), "completed" | "success" | "verified");
+        let output_kind = json_string(data, "subagent_output_kind")
+            .unwrap_or_else(|| "SubagentFinding".to_string());
+        let content = json_string(data, "result")
+            .or_else(|| json_string(data, "content"))
+            .unwrap_or_else(|| result_summary(result));
+        let summary = format!(
+            "subagent {source_agent} {output_kind} status={status} parent_verified={parent_verified}: {content}"
+        );
+        let command_status = if passed { "passed" } else { "failed" };
+
+        self.validation_facts.push(ValidationEvidence {
+            source: format!("agent:{source_agent}"),
+            command: None,
+            passed,
+            summary: preview(&summary),
+            proof_kind: Some(proof_kind),
+            scope: json_string(data, "scope").or_else(|| Some("subagent_result".to_string())),
+            command_status: Some(command_status.to_string()),
+            validation_family: Some("subagent".to_string()),
+            source_agent: Some(source_agent),
+            parent_verified: Some(parent_verified),
+            related_to_changed_files: json_string(data, "related_to_changed_files"),
+            residual_risk: json_string(data, "residual_risk"),
+        });
+        true
+    }
 }
 
 fn tool_arguments_hash(arguments: &serde_json::Value) -> String {
@@ -1428,6 +1504,32 @@ fn permission_source_label(permission_request: &serde_json::Value) -> Option<Str
         })
 }
 
+fn subagent_proof_kind(data: &serde_json::Value) -> Option<VerificationProofKind> {
+    let label = data
+        .get("verification_proof_kind")
+        .or_else(|| data.get("proof_kind"))
+        .and_then(serde_json::Value::as_str)?;
+    let value = serde_json::Value::String(label.to_string());
+    let proof_kind = serde_json::from_value::<VerificationProofKind>(value).ok()?;
+    match proof_kind {
+        VerificationProofKind::SubagentClaimOnly
+        | VerificationProofKind::ParentVerifiedSubagentResult => Some(proof_kind),
+        _ => None,
+    }
+}
+
+fn result_has_subagent_proof(data: &serde_json::Value) -> bool {
+    subagent_proof_kind(data).is_some()
+        || data
+            .get("results")
+            .and_then(serde_json::Value::as_array)
+            .is_some_and(|items| items.iter().any(result_has_subagent_proof))
+        || data
+            .get("branches")
+            .and_then(serde_json::Value::as_array)
+            .is_some_and(|items| items.iter().any(result_has_subagent_proof))
+}
+
 fn tool_output_metadata_record(result: &ToolResult) -> ToolOutputMetadataRecord {
     let data = result.data.as_ref();
     let summary = data
@@ -1542,7 +1644,9 @@ fn tool_execution_relevance(
     permission: Option<&ToolPermissionRecord>,
     route: Option<&ToolRouteRecord>,
 ) -> ToolExecutionRelevance {
-    let validation = safe_for_closeout.unwrap_or(false) || validation_family.is_some();
+    let subagent_proof = result.data.as_ref().is_some_and(result_has_subagent_proof);
+    let validation =
+        safe_for_closeout.unwrap_or(false) || validation_family.is_some() || subagent_proof;
     let closeout = validation || !changed_paths.is_empty() || permission.is_some();
     let repair = !result.success || !changed_paths.is_empty();
     let mut closeout_reasons = Vec::new();
@@ -2819,6 +2923,108 @@ mod tests {
             ledger.runtime_validation_label().as_deref(),
             Some("passed:1/1")
         );
+    }
+
+    #[test]
+    fn records_agent_tool_result_as_subagent_claim_only_proof() {
+        let mut ledger = EvidenceLedger::new();
+        let result = ToolResult::success_with_data(
+            "Sub-agent agent_1 completed with status: Completed",
+            serde_json::json!({
+                "agent_id": "agent_1",
+                "source_agent": "agent_1",
+                "status": "completed",
+                "result": "review says tests look good",
+                "proof_kind": "subagent_claim_only",
+                "verification_proof_kind": "subagent_claim_only",
+                "subagent_output_kind": "SubagentVerificationClaim",
+                "parent_verified": false,
+                "scope": "subagent_result",
+                "related_to_changed_files": "none",
+                "residual_risk": "subagent output is a claim until parent runtime verification"
+            }),
+        );
+
+        ledger.record_tool_result(
+            &tool_call(
+                "agent",
+                serde_json::json!({"description": "review", "prompt": "check"}),
+            ),
+            &result,
+        );
+
+        let facts = ledger.validation_facts();
+        assert_eq!(facts.len(), 1);
+        assert_eq!(facts[0].source, "agent:agent_1");
+        assert!(facts[0].passed);
+        assert_eq!(
+            facts[0].proof_kind,
+            Some(VerificationProofKind::SubagentClaimOnly)
+        );
+        assert_eq!(facts[0].source_agent.as_deref(), Some("agent_1"));
+        assert_eq!(facts[0].parent_verified, Some(false));
+        assert!(ledger.tool_execution_records()[0].relevance.validation);
+        assert!(ledger.tool_execution_records()[0].relevance.closeout);
+
+        let proof = ledger.verification_proof(VerificationProofRequest {
+            required_commands: &[],
+            requires_validation: true,
+            task_verification_status: crate::engine::task_context::VerificationStatus::Pending,
+            support_context: VerificationProofSupportContext::code_change(),
+        });
+
+        assert_eq!(proof.status, VerificationProofStatus::Verified);
+        assert_eq!(
+            proof.derived_support.status,
+            VerificationProofStatus::Partial
+        );
+        assert!(!proof.derived_support.supports_verified);
+        assert!(proof
+            .proof_kinds
+            .contains(&VerificationProofKind::SubagentClaimOnly));
+    }
+
+    #[test]
+    fn records_parent_verified_subagent_result_as_verified_support() {
+        let mut ledger = EvidenceLedger::new();
+        let result = ToolResult::success_with_data(
+            "Parent runtime verified sub-agent agent_1",
+            serde_json::json!({
+                "agent_id": "agent_1",
+                "source_agent": "agent_1",
+                "status": "verified",
+                "result": "parent reran focused checks",
+                "verification_proof_kind": "parent_verified_subagent_result",
+                "subagent_output_kind": "SubagentVerificationClaim",
+                "parent_verified": true,
+                "scope": "parent_runtime_verification",
+                "related_to_changed_files": "yes",
+                "residual_risk": "parent runtime verified subagent result"
+            }),
+        );
+
+        ledger.record_tool_result(
+            &tool_call("agent", serde_json::json!({"action": "resume"})),
+            &result,
+        );
+
+        let proof = ledger.verification_proof(VerificationProofRequest {
+            required_commands: &[],
+            requires_validation: true,
+            task_verification_status: crate::engine::task_context::VerificationStatus::Pending,
+            support_context: ledger
+                .verification_proof_support_context(VerificationProofTaskType::SubagentReview, &[]),
+        });
+
+        assert_eq!(proof.status, VerificationProofStatus::Verified);
+        assert_eq!(
+            proof.derived_support.status,
+            VerificationProofStatus::Verified
+        );
+        assert!(proof.derived_support.supports_verified);
+        assert!(proof
+            .proof_kinds
+            .contains(&VerificationProofKind::ParentVerifiedSubagentResult));
     }
 
     #[test]
