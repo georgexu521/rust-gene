@@ -27,7 +27,11 @@ Current stage:
   persona/user/tool context only and cannot override runtime, sandbox,
   permission, validation, checkpoint, or tool-safety rules. Prompt-context
   reports now surface these root context layers, and
-  `docs/SOUL_USER_TOOLS_CONTEXT.md` documents their intended use.
+  `docs/SOUL_USER_TOOLS_CONTEXT.md` documents their intended use. Phase 2 has
+  also started: turn-level retrieval context is now injected as an explicit
+  `<relevant_material>` zone before the current user request, and
+  context-zone tracing excludes dynamic zone system messages from the stable
+  prefix fingerprint.
 - `docs/LLM_RUNTIME_SIMPLIFICATION_PLAN_2026-05-08.md` is complete through its
   follow-up implementation phases. Future runtime-diet work should come from
   live-use gaps, release-hardening gates, or a newly reviewed plan.

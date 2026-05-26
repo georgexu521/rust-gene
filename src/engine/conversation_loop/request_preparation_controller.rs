@@ -501,7 +501,9 @@ impl RequestPreparationController {
         let stable_prefix = request_messages
             .iter()
             .find_map(|message| match message {
-                Message::System { content } => Some(content.as_str()),
+                Message::System { content } if !is_dynamic_context_system_message(content) => {
+                    Some(content.as_str())
+                }
                 _ => None,
             })
             .unwrap_or("");
@@ -586,6 +588,22 @@ fn tagged_content(messages: &[Message], tag: &str) -> Option<String> {
         }
     }
     (!blocks.is_empty()).then(|| blocks.join("\n"))
+}
+
+fn is_dynamic_context_system_message(content: &str) -> bool {
+    let trimmed = content.trim_start();
+    [
+        "<task-state>",
+        "<task_state>",
+        "<task-contract>",
+        "<context-pack>",
+        "<relevant_material>",
+        "<recent_observation>",
+        "<retrieval-context",
+        "MVA profile:",
+    ]
+    .iter()
+    .any(|prefix| trimmed.starts_with(prefix))
 }
 
 fn zone_item_count(content: &str) -> usize {
@@ -773,6 +791,52 @@ mod tests {
             &prepared.request.messages[1],
             Message::User { .. }
         ));
+    }
+
+    #[tokio::test]
+    async fn prepare_records_relevant_material_without_counting_it_as_stable_prefix() {
+        let trace = TraceCollector::new(TurnTrace::new(
+            "session-zones".to_string(),
+            1,
+            "use retrieved context",
+        ));
+        let mut runtime_diet = RuntimeDietSnapshot::new(true);
+
+        let prepared = RequestPreparationController::prepare(RequestPreparationContext {
+            messages: &[
+                Message::system("<relevant_material>\n- memory fact\n</relevant_material>"),
+                Message::user("use retrieved context"),
+            ],
+            focused_repair_prompt: None,
+            agent_task_state: None,
+            task_contract: None,
+            context_pack: None,
+            turn_retrieval_context: None,
+            retrieval_policy: RetrievalPolicy::None,
+            memory_manager: None,
+            provider: None,
+            session_store: None,
+            session_id: "session-zones",
+            model: "test-model",
+            tools: &[],
+            trace: &trace,
+            runtime_diet: &mut runtime_diet,
+        })
+        .await;
+
+        assert_eq!(prepared.request.messages.len(), 2);
+        let trace = trace.finish(crate::engine::trace::TurnStatus::Completed);
+        assert!(trace.events.iter().any(|event| matches!(
+            event,
+            TraceEvent::ContextZonesMaterialized {
+                stable_prefix_tokens,
+                relevant_material_items,
+                current_decision_request_tokens,
+                ..
+            } if *stable_prefix_tokens == 0
+                && *relevant_material_items == 1
+                && *current_decision_request_tokens > 0
+        )));
     }
 
     #[tokio::test]

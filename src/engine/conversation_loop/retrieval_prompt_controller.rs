@@ -18,14 +18,24 @@ impl RetrievalPromptController {
     }
 
     fn inject_block(messages: &mut Vec<Message>, block: &str) -> bool {
+        let block = block.trim();
         if block.is_empty()
             || messages
                 .iter()
-                .any(|message| matches!(message, Message::System { content } if content.contains("project.index:")))
+                .any(|message| matches!(message, Message::System { content } if content.contains("<retrieval-context") || content.contains("project.index:")))
         {
             return false;
         }
-        messages.push(Message::system(block));
+        let block = if block.contains("<relevant_material>") {
+            block.to_string()
+        } else {
+            format!("<relevant_material>\n{block}\n</relevant_material>")
+        };
+        let insert_pos = messages
+            .iter()
+            .rposition(|message| matches!(message, Message::User { .. }))
+            .unwrap_or(messages.len());
+        messages.insert(insert_pos, Message::system(block));
         true
     }
 }
@@ -35,18 +45,29 @@ mod tests {
     use super::*;
 
     #[test]
-    fn injects_nonempty_retrieval_block() {
-        let mut messages = vec![Message::user("inspect repo")];
+    fn injects_nonempty_retrieval_block_as_relevant_material_before_user() {
+        let mut messages = vec![
+            Message::system("base system prompt"),
+            Message::user("inspect repo"),
+        ];
 
         assert!(RetrievalPromptController::inject_block(
             &mut messages,
             "<retrieval-context>\nproject.index: src/main.rs\n</retrieval-context>",
         ));
 
-        assert_eq!(messages.len(), 2);
+        assert_eq!(messages.len(), 3);
         assert!(matches!(
             &messages[1],
-            Message::System { content } if content.contains("project.index: src/main.rs")
+            Message::System { content }
+                if content.contains("<relevant_material>")
+                    && content.contains("<retrieval-context>")
+                    && content.contains("project.index: src/main.rs")
+                    && content.contains("</relevant_material>")
+        ));
+        assert!(matches!(
+            &messages[2],
+            Message::User { content } if content == "inspect repo"
         ));
     }
 
