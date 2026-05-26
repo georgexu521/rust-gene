@@ -1089,6 +1089,8 @@ pub struct MemoryManager {
     /// Provider lifecycle registry. Local storage still lives in this manager
     /// during the first provider-boundary phase.
     provider_registry: MemoryProviderRegistry,
+    /// Active scope for memory candidates created by manager-owned write paths.
+    active_scope: MemoryScope,
 }
 
 impl MemoryManager {
@@ -1142,6 +1144,7 @@ impl MemoryManager {
             cache_hits: 0,
             cache_misses: 0,
             provider_registry: MemoryProviderRegistry::new(),
+            active_scope: MemoryScope::local("unknown"),
         }
     }
 
@@ -1237,6 +1240,14 @@ impl MemoryManager {
 
     pub async fn shutdown_memory_providers(&self) -> Vec<MemoryProviderCallOutcome> {
         self.provider_registry.shutdown_all().await
+    }
+
+    pub fn active_scope(&self) -> MemoryScope {
+        self.active_scope.clone()
+    }
+
+    pub fn set_active_scope(&mut self, scope: MemoryScope) {
+        self.active_scope = scope;
     }
 
     pub fn memory_records(&self) -> Vec<MemoryRecord> {
@@ -1447,7 +1458,7 @@ impl MemoryManager {
         let mut candidate = MemoryCandidate::new(
             content,
             category,
-            MemoryScope::local("unbound-session"),
+            self.active_scope.clone(),
             MemoryProvenance::local(source),
         )
         .with_tags(infer_memory_tags(content, category))
@@ -4045,6 +4056,25 @@ mod tests {
         let manager = MemoryManager::with_base_dir(base.clone());
 
         assert_eq!(manager.memory_provider_names(), vec!["local".to_string()]);
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn candidate_from_content_uses_active_scope() {
+        let base = temp_memory_base("active-scope");
+        let mut manager = MemoryManager::with_base_dir(base.clone());
+        let mut scope = MemoryScope::local("session-active");
+        scope.project_root = Some(base.clone());
+        manager.set_active_scope(scope.clone());
+
+        let candidate = manager.candidate_from_content(
+            "Project convention: run cargo check",
+            "project",
+            "test",
+        );
+
+        assert_eq!(candidate.scope, scope);
 
         let _ = std::fs::remove_dir_all(&base);
     }

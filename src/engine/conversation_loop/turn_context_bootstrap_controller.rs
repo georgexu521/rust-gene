@@ -12,6 +12,7 @@ use crate::engine::resource_policy::ResourcePolicy;
 use crate::engine::retrieval_context::RetrievalContext;
 use crate::engine::task_context::TaskContextBundle;
 use crate::engine::trace::TraceCollector;
+use crate::memory::MemoryScope;
 use crate::skills::SkillRuntime;
 use crate::tools::{ToolContextRetainedContext, ToolContextSkillTrigger};
 use std::path::Path;
@@ -38,6 +39,7 @@ pub(super) struct TurnContextBootstrapController;
 
 impl TurnContextBootstrapController {
     pub(super) async fn run(context: TurnContextBootstrapContext<'_>) -> TurnContextBootstrap {
+        Self::set_active_memory_scope(&context).await;
         let retrieval_context =
             TurnRetrievalContextController::build(TurnRetrievalContextRequest {
                 last_user_preview: context.last_user_preview,
@@ -80,6 +82,16 @@ impl TurnContextBootstrapController {
             code_workflow: task_context_setup.code_workflow,
             turn_state: task_context_setup.turn_state,
         }
+    }
+
+    async fn set_active_memory_scope(context: &TurnContextBootstrapContext<'_>) {
+        let Some(memory_manager) = context.conversation.memory_manager.as_ref() else {
+            return;
+        };
+        let mut scope = MemoryScope::local(context.conversation.session_id.clone());
+        scope.project_root = Some(context.working_dir.to_path_buf());
+        scope.platform = "cli".to_string();
+        memory_manager.lock().await.set_active_scope(scope);
     }
 
     fn build_retained_context(
@@ -182,6 +194,40 @@ mod tests {
             bootstrap.turn_state.runtime_diet.route_scoped_tools,
             ConversationLoop::route_scoped_tools_enabled()
         );
+    }
+
+    #[tokio::test]
+    async fn bootstraps_active_memory_scope_from_session_and_working_dir() {
+        let base = std::env::temp_dir().join(format!(
+            "turn-context-memory-scope-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&base).unwrap();
+        let memory_manager = Arc::new(Mutex::new(crate::memory::MemoryManager::with_base_dir(
+            base.join("memory"),
+        )));
+        let conversation = conversation().with_memory_manager(memory_manager.clone());
+        let route = IntentRouter::new().route("你好");
+        let resource_policy = ResourcePolicy::from_route(&route);
+        let trace = TraceCollector::new(TurnTrace::new("session", 1, "你好"));
+
+        let _bootstrap = TurnContextBootstrapController::run(TurnContextBootstrapContext {
+            conversation: &conversation,
+            last_user_preview: "你好",
+            route: &route,
+            resource_policy: &resource_policy,
+            working_dir: &base,
+            required_validation_commands: &[],
+            trace: &trace,
+        })
+        .await;
+
+        let scope = memory_manager.lock().await.active_scope();
+        assert_eq!(scope.session_id, conversation.session_id);
+        assert_eq!(scope.project_root, Some(base.clone()));
+        assert_eq!(scope.platform, "cli");
+
+        let _ = std::fs::remove_dir_all(&base);
     }
 
     #[tokio::test]

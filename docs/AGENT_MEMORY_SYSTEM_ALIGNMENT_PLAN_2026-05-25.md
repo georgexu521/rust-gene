@@ -67,6 +67,11 @@ cleanup:
 - Turn retrieval context is now injected as an explicit `<relevant_material>`
   zone before the current user request, and dynamic zone system messages are
   excluded from the stable-prefix context trace.
+- `MemoryManager` now carries an active `MemoryScope`, and manager-owned
+  candidate creation uses that scope instead of defaulting to
+  `unbound-session`. Conversation turn bootstrap sets the active scope from the
+  current CLI session id and working directory before retrieval and later
+  memory operations run.
 
 2026-05-25 implementation batch completed the planned memory-system alignment
 slice across all eight phases:

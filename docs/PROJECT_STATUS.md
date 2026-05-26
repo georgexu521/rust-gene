@@ -36,7 +36,11 @@ Current stage:
   single external provider registration, and fanout wrappers for initialize,
   prompt blocks, prefetch, queued prefetch, turn sync, session end,
   pre-compress, write notifications, and shutdown; local storage migration
-  behind `LocalMemoryProvider` remains the next memory-boundary step.
+  behind `LocalMemoryProvider` remains the next memory-boundary step. Phase 4
+  has started by adding an active `MemoryScope` to `MemoryManager` and setting
+  it from the conversation session id and working directory during turn
+  bootstrap, so manager-owned memory candidates no longer default to
+  `unbound-session` in normal turns.
 - `docs/LLM_RUNTIME_SIMPLIFICATION_PLAN_2026-05-08.md` is complete through its
   follow-up implementation phases. Future runtime-diet work should come from
   live-use gaps, release-hardening gates, or a newly reviewed plan.
