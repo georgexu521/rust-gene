@@ -72,6 +72,10 @@ cleanup:
   `unbound-session`. Conversation turn bootstrap sets the active scope from the
   current CLI session id and working directory before retrieval and later
   memory operations run.
+- Persisted memory load paths now reuse the memory safety scanner. `MEMORY.md`,
+  `USER.md`, topic memory files, and typed records containing prompt-injection
+  or secret-like content are skipped during load/retrieval/snapshot assembly
+  rather than being injected as background context.
 
 2026-05-25 implementation batch completed the planned memory-system alignment
 slice across all eight phases:
@@ -128,7 +132,7 @@ cargo clippy --all-features -- -D warnings
 | Context, State, Memory must be separate | `RetrievalContext`, `<task-state>`, `MemoryManager`, context ledger, and learning events are separate runtime surfaces. | Strong partial | Retrieval is now zoned as `<relevant_material>`; remaining work is to fully render every live request from the zone plan instead of mixed controller-level system messages. |
 | Memory is not all history in prompt | Frozen snapshot, relevant memory prefetch, top-k retrieval, and retrieval policy gating exist. | Strong | Good foundation; tune ranking and metadata rather than replace it. |
 | Store user preference, project fact, strategy, failure lesson, stable constraint | `MemoryKind` covers preferences, project facts, conventions, tool quirks, failure patterns, successful fixes, decisions, skill candidates, and notes. | Partial | Markdown output does not preserve typed kind/evidence/importance/verification fields consistently. |
-| Do not store logs, stale facts, secrets, unverified guesses | `scan_memory_content`, quality scoring, duplicate gates, prompt-injection fences, and memory calibration tests exist. | Strong partial | Evidence and verified-vs-inferred state are not first-class in stored records. Staleness is mostly file-level maintenance, not per-memory lifecycle. |
+| Do not store logs, stale facts, secrets, unverified guesses | `scan_memory_content`, quality scoring, duplicate gates, prompt-injection fences, load-time safety scanning, and memory calibration tests exist. | Strong partial | Staleness is still mostly file-level maintenance, not per-memory lifecycle. |
 | Memory layers: user, project, task, strategy | `USER.md`, `MEMORY.md`, topic files, pending session learnings, agent role JSON, and session learning events exist. | Partial | Strategy memory is implicit in categories and learning events, not a first-class durable layer with success/failure counts. |
 | Lifecycle: generate, verify, store, retrieve, use, update, decay/delete | Generation, store, retrieve, use, flush, archive, and conflict hints exist. | Partial | Verification, use telemetry, update/supersede, last_verified, and per-record decay are incomplete. |
 | Memory should carry evidence, confidence, last_verified | `MemoryRecord` has confidence/provenance/status/tags; `LearningEventRecord` has confidence/payload. | Partial | `MemoryRecord` is not the canonical local store, and it lacks evidence, importance, last_verified, last_used, and use_count. |

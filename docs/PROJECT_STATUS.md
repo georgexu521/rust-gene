@@ -40,7 +40,10 @@ Current stage:
   has started by adding an active `MemoryScope` to `MemoryManager` and setting
   it from the conversation session id and working directory during turn
   bootstrap, so manager-owned memory candidates no longer default to
-  `unbound-session` in normal turns.
+  `unbound-session` in normal turns. Phase 5 has started by applying the memory
+  safety scanner on persisted load paths: unsafe `MEMORY.md`, `USER.md`, topic
+  memory files, and typed records are skipped during snapshot/retrieval loading
+  instead of being injected as background context.
 - `docs/LLM_RUNTIME_SIMPLIFICATION_PLAN_2026-05-08.md` is complete through its
   follow-up implementation phases. Future runtime-diet work should come from
   live-use gaps, release-hardening gates, or a newly reviewed plan.
