@@ -99,6 +99,7 @@ impl PromptContextAssembler {
         let final_prompt = assembly_plan.render_legacy_system_prompt();
         let stable_prompt = &assembly_plan.stable_prefix.content;
         let instruction_layers = crate::instructions::load_instruction_layers(&self.working_dir);
+        let root_context_layers = crate::instructions::load_root_context_layers(&self.working_dir);
 
         let mut layers = Vec::new();
         layers.push(layer_report("base system prompt", &self.base_prompt));
@@ -110,6 +111,20 @@ impl PromptContextAssembler {
                     "AGENTS.md [{}:{}{}]",
                     layer.source,
                     layer.selection.label(),
+                    truncated
+                ),
+                &layer.content,
+            ));
+        }
+
+        for layer in root_context_layers {
+            let truncated = if layer.truncated { ",truncated" } else { "" };
+            layers.push(layer_report(
+                format!(
+                    "{} [{}:{}{}]",
+                    layer.kind.file_name(),
+                    layer.source,
+                    layer.kind.label(),
                     truncated
                 ),
                 &layer.content,
@@ -291,6 +306,33 @@ mod tests {
             .iter()
             .any(|l| l.name == "AGENTS.md [project:runtime-guidance]"));
         assert!(!report.layers.iter().any(|l| l.name.contains("fallback")));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn report_labels_root_context_layers() {
+        let dir = std::env::temp_dir().join(format!("prompt-context-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::create_dir_all(dir.join(".git")).unwrap();
+        std::fs::write(dir.join("SOUL.md"), "Liz is direct").unwrap();
+        std::fs::write(dir.join("USER.md"), "gex prefers autonomous execution").unwrap();
+        std::fs::write(dir.join("TOOLS.md"), "cargo test -q prompt_context").unwrap();
+        let assembler = PromptContextAssembler::new("base prompt", &dir);
+
+        let report = assembler.report_for_turn("hello", &[]);
+
+        assert!(report
+            .layers
+            .iter()
+            .any(|l| l.name == "SOUL.md [project:soul]"));
+        assert!(report
+            .layers
+            .iter()
+            .any(|l| l.name == "USER.md [project:user]"));
+        assert!(report
+            .layers
+            .iter()
+            .any(|l| l.name == "TOOLS.md [project:tools]"));
         let _ = std::fs::remove_dir_all(&dir);
     }
 

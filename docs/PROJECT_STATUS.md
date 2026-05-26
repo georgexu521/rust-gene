@@ -1,6 +1,6 @@
 # Project Status
 
-Last updated: 2026-05-25
+Last updated: 2026-05-26
 
 ## Summary
 
@@ -19,6 +19,15 @@ habits, validation loops, and local workflow. See
 
 Current stage:
 
+- OpenClaw/Hermes reference implementation has started from
+  `docs/OPENCLAW_HERMES_REFERENCE_AUDIT_2026-05-26.md`. Phase 1 is implemented:
+  the instruction loader now supports optional project-root `SOUL.md`,
+  `USER.md`, and `TOOLS.md` as compact supplemental context after `AGENTS.md`.
+  `AGENTS.md` remains the runtime-policy source; supplemental files are labelled
+  persona/user/tool context only and cannot override runtime, sandbox,
+  permission, validation, checkpoint, or tool-safety rules. Prompt-context
+  reports now surface these root context layers, and
+  `docs/SOUL_USER_TOOLS_CONTEXT.md` documents their intended use.
 - `docs/LLM_RUNTIME_SIMPLIFICATION_PLAN_2026-05-08.md` is complete through its
   follow-up implementation phases. Future runtime-diet work should come from
   live-use gaps, release-hardening gates, or a newly reviewed plan.
