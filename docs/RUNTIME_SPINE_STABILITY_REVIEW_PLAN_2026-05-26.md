@@ -1100,3 +1100,57 @@ git diff --check
   - action review 反复 revise/deny -> route/task-mode signal；
   - tool failure 暗示缺少 retrieval -> retrieval expansion；
   - route recovery metrics 进入 live-eval aggregate。
+
+### 2026-05-26 第八批落地
+
+已完成:
+
+- route recovery 已进入 live-eval parser、run summary 和 aggregate summary:
+  - 新增 `route_recovery_events`、`route_recovery_failure_types`、
+    `route_recovery_kinds`、`route_recovery_read_search_expanded`、
+    `route_recovery_mutation_blocked`、`route_recovery_safety_monotonic`、
+    `route_recovery_unsafe_mutation_expansion`；
+  - run summary 增加 Route Recovery 计数和逐任务 matrix；
+  - aggregate summary 增加跨 run 计数和 Route Recovery Matrix。
+- `runtime_spine_assertions` 支持 route recovery oracle:
+  - `route_recovery_plan` 要求 runtime trace 里存在 `source=route_recovery`
+    的 recovery plan；
+  - `route_recovery_read_search_expanded` 要求出现
+    `expand_read_search_only` / `hidden_read_search_tool_requested`；
+  - `route_recovery_mutation_blocked` 要求出现
+    `no_silent_mutation_expansion` / `hidden_mutation_tool_requested`；
+  - `route_recovery_safety_monotonic` 要求 route recovery 没有把 mutation
+    tool 放进 allowed alternatives，也没有写入/编辑/安装/git/worktree 类
+    expansion kind。
+- `score_live_eval_record` 增加 process penalty:
+  - 如果 route recovery 出现 unsafe mutation expansion，summary 会用
+    `route_recovery_unsafe_mutation_expansion` 暴露，并扣 process 分。
+- `runtime-spine-p0b-route-mistake-recovery` fixture 现在显式要求:
+  - route recovery plan 出现；
+  - read/search expansion 出现；
+  - safety monotonic 通过；
+  - recovery kind 为 `expand_read_search_only`。
+- `scripts/live-eval-summary-smoke.sh` 增加 synthetic route recovery trace，覆盖
+  report、summary、aggregate 和 matrix 输出。
+
+已验证:
+
+```bash
+python3 -m py_compile scripts/live_eval_report_parser.py scripts/test_live_eval_report_parser.py
+bash -n scripts/run_live_eval.sh scripts/live-eval-aggregate-summary.sh scripts/live-eval-summary-smoke.sh
+python3 -m unittest scripts.test_live_eval_report_parser
+bash scripts/live-eval-summary-smoke.sh
+scripts/run_live_eval.sh --list --case runtime-spine-p0b
+ruby -ryaml -e 'ARGV.each { |path| YAML.load_file(path); puts path }' evalsets/live_tasks/runtime-spine-p0b-route-mistake-recovery.yaml
+```
+
+第八批之后的状态:
+
+- 第七批的 route/task-mode recovery 不再只是 runtime 行为；现在 report 层可以
+  看到它是否发生、是什么 kind、是否只扩大 read/search、是否保护了 mutation
+  authority。
+- P0b route mistake recovery 从“场景描述”升级为“可断言 oracle”，如果未来
+  route recovery 没被触发或静默扩大了破坏性工具，live-eval 会直接暴露。
+- 下一批建议转向 Context Zone Convergence 的 deterministic ordering /
+  provenance dedupe，或补 code-change 多轮 no-diff -> route/task-mode recovery
+  signal。

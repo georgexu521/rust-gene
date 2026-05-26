@@ -1742,6 +1742,14 @@ print(f"gate_outcome_suspected_false_positives: {runtime_spine['gate_outcome_sus
 print(f"gate_outcome_policy_correct_but_ux_costly: {runtime_spine['gate_outcome_policy_correct_but_ux_costly']}")
 print(f"gate_outcome_harmless_passes: {runtime_spine['gate_outcome_harmless_passes']}")
 print(f"gate_outcome_failure_owners: {runtime_spine['gate_outcome_failure_owners']}")
+print(f"route_recovery: {runtime_spine['route_recovery']}")
+print(f"route_recovery_events: {runtime_spine['route_recovery_events']}")
+print(f"route_recovery_failure_types: {runtime_spine['route_recovery_failure_types']}")
+print(f"route_recovery_kinds: {runtime_spine['route_recovery_kinds']}")
+print(f"route_recovery_read_search_expanded: {runtime_spine['route_recovery_read_search_expanded']}")
+print(f"route_recovery_mutation_blocked: {runtime_spine['route_recovery_mutation_blocked']}")
+print(f"route_recovery_safety_monotonic: {runtime_spine['route_recovery_safety_monotonic']}")
+print(f"route_recovery_unsafe_mutation_expansion: {runtime_spine['route_recovery_unsafe_mutation_expansion']}")
 print(f"agent_loop_steps: {runtime_spine['agent_loop_steps']}")
 print(f"context_zones_materialized: {runtime_spine['context_zones_materialized']}")
 print(f"context_zone_task_state_empty: {runtime_spine['context_zone_task_state_empty']}")
@@ -2446,6 +2454,20 @@ runtime_spine_risky_tool_reviewed = sum(as_int(row["risky_tool_reviewed"]) for r
 runtime_spine_risky_missing_review_tasks = sum(
     1 for row in rows if row["risky_tool_missing_action_review"] != "none"
 )
+route_recovery_tasks = sum(1 for row in rows if as_int(row.get("route_recovery_events")) > 0)
+route_recovery_events = sum(as_int(row.get("route_recovery_events")) for row in rows)
+route_recovery_read_search_tasks = sum(
+    1 for row in rows if row.get("route_recovery_read_search_expanded") == "true"
+)
+route_recovery_mutation_blocked_tasks = sum(
+    1 for row in rows if row.get("route_recovery_mutation_blocked") == "true"
+)
+route_recovery_safety_monotonic_tasks = sum(
+    1 for row in rows if row.get("route_recovery_safety_monotonic") == "true"
+)
+route_recovery_unsafe_mutation_expansion_tasks = sum(
+    1 for row in rows if row.get("route_recovery_unsafe_mutation_expansion") == "true"
+)
 gate_outcome_tasks = sum(1 for row in rows if as_int(row.get("gate_outcome_total")) > 0)
 gate_outcome_total = sum(as_int(row.get("gate_outcome_total")) for row in rows)
 gate_outcome_protective_blocks = sum(as_int(row.get("gate_outcome_protective_blocks")) for row in rows)
@@ -2542,6 +2564,12 @@ lines = [
     f"- Runtime-spine risky tool runs: `{runtime_spine_risky_tool_runs}`",
     f"- Runtime-spine risky tool reviewed: `{runtime_spine_risky_tool_reviewed}`",
     f"- Runtime-spine risky missing-review tasks: `{runtime_spine_risky_missing_review_tasks}`",
+    f"- Route recovery tasks: `{route_recovery_tasks}`",
+    f"- Route recovery events: `{route_recovery_events}`",
+    f"- Route recovery read/search expansions: `{route_recovery_read_search_tasks}`",
+    f"- Route recovery mutation blocks: `{route_recovery_mutation_blocked_tasks}`",
+    f"- Route recovery safety-monotonic tasks: `{route_recovery_safety_monotonic_tasks}`",
+    f"- Route recovery unsafe mutation-expansion tasks: `{route_recovery_unsafe_mutation_expansion_tasks}`",
     f"- Gate outcome tasks: `{gate_outcome_tasks}`",
     f"- Gate outcome records: `{gate_outcome_total}`",
     f"- Gate outcome protective blocks: `{gate_outcome_protective_blocks}`",
@@ -2646,6 +2674,12 @@ lines.extend([
     f"| runtime_spine_risky_tool_runs | {runtime_spine_risky_tool_runs} | Risky tool executions observed from trace or agent events. |",
     f"| runtime_spine_risky_tool_reviewed | {runtime_spine_risky_tool_reviewed} | Risky tool executions with matching action.review trace evidence. |",
     f"| runtime_spine_risky_missing_review_tasks | {runtime_spine_risky_missing_review_tasks} | Tasks with risky tool executions missing matching action.review evidence. |",
+    f"| route_recovery_tasks | {route_recovery_tasks} | Tasks with route-recovery plans emitted by the runtime. |",
+    f"| route_recovery_events | {route_recovery_events} | Route-recovery plans observed across task traces. |",
+    f"| route_recovery_read_search_expansions | {route_recovery_read_search_tasks} | Tasks where route recovery expanded only read/search understanding tools. |",
+    f"| route_recovery_mutation_blocks | {route_recovery_mutation_blocked_tasks} | Tasks where route recovery explicitly blocked silent mutation expansion. |",
+    f"| route_recovery_safety_monotonic_tasks | {route_recovery_safety_monotonic_tasks} | Tasks where route recovery preserved destructive-tool authority. |",
+    f"| route_recovery_unsafe_mutation_expansion_tasks | {route_recovery_unsafe_mutation_expansion_tasks} | Tasks where route recovery exposed mutation alternatives and should be investigated. |",
     f"| gate_outcome_tasks | {gate_outcome_tasks} | Tasks with derived gate-outcome records from trace or report fields. |",
     f"| gate_outcome_records | {gate_outcome_total} | Total gate-outcome records derived across action review, permission, and closeout gates. |",
     f"| gate_outcome_protective_blocks | {gate_outcome_protective_blocks} | Gate blocks that protected policy, scope, budget, checkpoint, or closeout invariants. |",
@@ -2692,6 +2726,24 @@ if rows:
         )
 else:
     lines.append("| none | missing | missing | false | false | none | none |")
+
+lines.extend([
+    "",
+    "### Route Recovery Matrix",
+    "",
+    "| task | events | kinds | failure_types | read_search | mutation_blocked | safety_monotonic | unsafe_mutation_expansion | summary |",
+    "|------|--------|-------|---------------|-------------|------------------|------------------|---------------------------|---------|",
+])
+
+if rows:
+    for row in rows:
+        lines.append(
+            "| {task} | {route_recovery_events} | {route_recovery_kinds} | {route_recovery_failure_types} | {route_recovery_read_search_expanded} | {route_recovery_mutation_blocked} | {route_recovery_safety_monotonic} | {route_recovery_unsafe_mutation_expansion} | {route_recovery} |".format(
+                **{key: md_cell(value) for key, value in row.items()}
+            )
+        )
+else:
+    lines.append("| none | 0 | none | none | false | false | missing | false | events=0, read_search=false, mutation_blocked=false, safety=missing |")
 
 lines.extend([
     "",

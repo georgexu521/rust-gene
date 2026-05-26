@@ -57,6 +57,11 @@ runtime_spine_assertions:
     - action_review
     - agent_loop_step
     - completion_contract
+  required:
+    - route_recovery_plan
+    - route_recovery_read_search_expanded
+    - route_recovery_safety_monotonic
+  route_recovery_kind: expand_read_search_only
   completion_status: completed
 
 acceptance:

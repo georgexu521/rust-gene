@@ -58,6 +58,14 @@ def table_rows(text):
                 "verification": record.get("verification_status", record.get("verification", "unknown")),
                 "closeout": record.get("closeout", "missing"),
                 "runtime_spine": record.get("runtime_spine", "coverage=0/7, status=none, missing=none"),
+                "route_recovery": record.get("route_recovery", "events=0, read_search=false, mutation_blocked=false, safety=missing"),
+                "route_recovery_events": record.get("route_recovery_events", "0"),
+                "route_recovery_failure_types": record.get("route_recovery_failure_types", "none"),
+                "route_recovery_kinds": record.get("route_recovery_kinds", "none"),
+                "route_recovery_read_search_expanded": record.get("route_recovery_read_search_expanded", "false"),
+                "route_recovery_mutation_blocked": record.get("route_recovery_mutation_blocked", "false"),
+                "route_recovery_safety_monotonic": record.get("route_recovery_safety_monotonic", "missing"),
+                "route_recovery_unsafe_mutation_expansion": record.get("route_recovery_unsafe_mutation_expansion", "false"),
                 "outcome_score": record.get("outcome_score", "missing"),
                 "process_score": record.get("process_score", "missing"),
                 "efficiency_score": record.get("efficiency_score", "missing"),
@@ -232,6 +240,14 @@ for run_dir in sorted(benchmarks.glob(run_glob)):
                 summary_field(row.get("runtime_spine", ""), "missing", "none"),
             ),
             "runtime_spine_trace_present": row.get("runtime_spine_trace_present", "false"),
+            "route_recovery": row.get("route_recovery", "events=0, read_search=false, mutation_blocked=false, safety=missing"),
+            "route_recovery_events": row.get("route_recovery_events", "0"),
+            "route_recovery_failure_types": row.get("route_recovery_failure_types", "none"),
+            "route_recovery_kinds": row.get("route_recovery_kinds", "none"),
+            "route_recovery_read_search_expanded": row.get("route_recovery_read_search_expanded", "false"),
+            "route_recovery_mutation_blocked": row.get("route_recovery_mutation_blocked", "false"),
+            "route_recovery_safety_monotonic": row.get("route_recovery_safety_monotonic", "missing"),
+            "route_recovery_unsafe_mutation_expansion": row.get("route_recovery_unsafe_mutation_expansion", "false"),
             "gate_outcomes": row.get("gate_outcomes", "total=0, protective_block=0, recoverable_friction=0, unrecovered_block=0, suspected_false_positive=0, policy_correct_but_ux_costly=0, harmless_pass=0"),
             "gate_outcome_records": row.get("gate_outcome_records", "none"),
             "gate_outcome_total": row.get("gate_outcome_total", "0"),
@@ -363,6 +379,20 @@ runtime_spine_stage_transition_tasks = sum(
 )
 runtime_spine_completion_contract_tasks = sum(
     1 for record in task_records if record["completion_contract_status"] not in {"", "missing", "none"}
+)
+route_recovery_tasks = sum(1 for record in task_records if as_int(record["route_recovery_events"]) > 0)
+route_recovery_events = sum(as_int(record["route_recovery_events"]) for record in task_records)
+route_recovery_read_search_tasks = sum(
+    1 for record in task_records if record["route_recovery_read_search_expanded"] == "true"
+)
+route_recovery_mutation_blocked_tasks = sum(
+    1 for record in task_records if record["route_recovery_mutation_blocked"] == "true"
+)
+route_recovery_safety_monotonic_tasks = sum(
+    1 for record in task_records if record["route_recovery_safety_monotonic"] == "true"
+)
+route_recovery_unsafe_mutation_expansion_tasks = sum(
+    1 for record in task_records if record["route_recovery_unsafe_mutation_expansion"] == "true"
 )
 gate_outcome_tasks = sum(1 for record in task_records if as_int(record["gate_outcome_total"]) > 0)
 gate_outcome_total = sum(as_int(record["gate_outcome_total"]) for record in task_records)
@@ -639,6 +669,12 @@ lines.extend(md_table(
         ["runtime_spine_context_zone_tasks", runtime_spine_context_zone_tasks, pct(runtime_spine_context_zone_tasks, total_tasks)],
         ["runtime_spine_stage_transition_tasks", runtime_spine_stage_transition_tasks, pct(runtime_spine_stage_transition_tasks, total_tasks)],
         ["runtime_spine_completion_contract_tasks", runtime_spine_completion_contract_tasks, pct(runtime_spine_completion_contract_tasks, total_tasks)],
+        ["route_recovery_tasks", route_recovery_tasks, pct(route_recovery_tasks, total_tasks)],
+        ["route_recovery_events", route_recovery_events, "n/a"],
+        ["route_recovery_read_search_expansions", route_recovery_read_search_tasks, pct(route_recovery_read_search_tasks, total_tasks)],
+        ["route_recovery_mutation_blocks", route_recovery_mutation_blocked_tasks, pct(route_recovery_mutation_blocked_tasks, total_tasks)],
+        ["route_recovery_safety_monotonic_tasks", route_recovery_safety_monotonic_tasks, pct(route_recovery_safety_monotonic_tasks, total_tasks)],
+        ["route_recovery_unsafe_mutation_expansion_tasks", route_recovery_unsafe_mutation_expansion_tasks, pct(route_recovery_unsafe_mutation_expansion_tasks, total_tasks)],
         ["gate_outcome_tasks", gate_outcome_tasks, pct(gate_outcome_tasks, total_tasks)],
         ["gate_outcome_records", gate_outcome_total, "n/a"],
         ["gate_outcome_protective_blocks", gate_outcome_protective_blocks, "n/a"],
@@ -658,6 +694,36 @@ lines.extend(md_table(
         ["observer_outcome_tasks", observer_outcome_tasks, pct(observer_outcome_tasks, total_tasks)],
         ["memory_boundary_tasks", memory_boundary_tasks, pct(memory_boundary_tasks, total_tasks)],
     ],
+))
+
+lines.extend(["", "### Route Recovery Matrix", ""])
+lines.extend(md_table(
+    [
+        "run",
+        "task",
+        "events",
+        "kinds",
+        "failure_types",
+        "read_search",
+        "mutation_blocked",
+        "safety",
+        "unsafe_mutation_expansion",
+    ],
+    [
+        [
+            record["run"],
+            record["task"],
+            record["route_recovery_events"],
+            record["route_recovery_kinds"],
+            record["route_recovery_failure_types"],
+            record["route_recovery_read_search_expanded"],
+            record["route_recovery_mutation_blocked"],
+            record["route_recovery_safety_monotonic"],
+            record["route_recovery_unsafe_mutation_expansion"],
+        ]
+        for record in task_records
+        if as_int(record["route_recovery_events"]) > 0
+    ] or [["none", "none", 0, "none", "none", "false", "false", "missing", "false"]],
 ))
 
 lines.extend(["", "## Evaluation Scores", ""])

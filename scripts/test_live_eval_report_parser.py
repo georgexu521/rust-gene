@@ -131,5 +131,123 @@ class RuntimeSpineProofAssertionTest(unittest.TestCase):
         )
 
 
+class RuntimeSpineRouteRecoveryAssertionTest(unittest.TestCase):
+    def test_route_recovery_read_search_assertions_pass_from_trace(self):
+        assertions = normalized_runtime_spine_assertions(
+            {
+                "runtime_spine_assertions": {
+                    "route_recovery_plan": True,
+                    "route_recovery_read_search_expanded": True,
+                    "route_recovery_safety_monotonic": True,
+                    "route_recovery_kind": "expand_read_search_only",
+                }
+            }
+        )
+        events = [
+            {
+                "event": "trace_summary",
+                "trace": {
+                    "events": [
+                        {
+                            "type": "recovery_plan",
+                            "source": "route_recovery",
+                            "failure_type": "hidden_read_search_tool_requested",
+                            "recovery_kind": "expand_read_search_only",
+                            "safe_retry": True,
+                            "allowed_alternatives": ["project_list", "grep", "file_read"],
+                            "status": "Applied",
+                        }
+                    ]
+                },
+            }
+        ]
+
+        metrics = runtime_spine_metrics_from_events(events, assertions=assertions)
+
+        self.assertEqual(metrics["runtime_spine_status"], "passed")
+        self.assertEqual(metrics["runtime_spine_missing"], "none")
+        self.assertEqual(metrics["route_recovery_events"], "1")
+        self.assertEqual(metrics["route_recovery_read_search_expanded"], "true")
+        self.assertEqual(metrics["route_recovery_mutation_blocked"], "false")
+        self.assertEqual(metrics["route_recovery_safety_monotonic"], "true")
+        self.assertEqual(metrics["route_recovery_unsafe_mutation_expansion"], "false")
+
+    def test_route_recovery_mutation_block_preserves_safety_monotonicity(self):
+        assertions = normalized_runtime_spine_assertions(
+            {
+                "runtime_spine_assertions": {
+                    "route_recovery_plan": True,
+                    "route_recovery_mutation_blocked": True,
+                    "route_recovery_safety_monotonic": True,
+                    "route_recovery_kind": "no_silent_mutation_expansion",
+                }
+            }
+        )
+        events = [
+            {
+                "event": "trace_summary",
+                "trace": {
+                    "events": [
+                        {
+                            "type": "recovery_plan",
+                            "source": "route_recovery",
+                            "failure_type": "hidden_mutation_tool_requested",
+                            "recovery_kind": "no_silent_mutation_expansion",
+                            "safe_retry": False,
+                            "allowed_alternatives": ["project_list", "grep", "file_read"],
+                            "requires_user_decision": True,
+                            "status": "Planned",
+                        }
+                    ]
+                },
+            }
+        ]
+
+        metrics = runtime_spine_metrics_from_events(events, assertions=assertions)
+
+        self.assertEqual(metrics["runtime_spine_status"], "passed")
+        self.assertEqual(metrics["route_recovery_mutation_blocked"], "true")
+        self.assertEqual(metrics["route_recovery_safety_monotonic"], "true")
+        self.assertEqual(metrics["route_recovery_unsafe_mutation_expansion"], "false")
+
+    def test_route_recovery_safety_assertion_fails_on_mutation_alternatives(self):
+        assertions = normalized_runtime_spine_assertions(
+            {
+                "runtime_spine_assertions": {
+                    "route_recovery_plan": True,
+                    "route_recovery_safety_monotonic": True,
+                }
+            }
+        )
+        events = [
+            {
+                "event": "trace_summary",
+                "trace": {
+                    "events": [
+                        {
+                            "type": "recovery_plan",
+                            "source": "route_recovery",
+                            "failure_type": "hidden_read_search_tool_requested",
+                            "recovery_kind": "expand_read_search_only",
+                            "safe_retry": True,
+                            "allowed_alternatives": ["file_read", "file_edit"],
+                            "status": "Applied",
+                        }
+                    ]
+                },
+            }
+        ]
+
+        metrics = runtime_spine_metrics_from_events(events, assertions=assertions)
+
+        self.assertEqual(metrics["runtime_spine_status"], "failed")
+        self.assertEqual(metrics["route_recovery_unsafe_mutation_expansion"], "true")
+        self.assertEqual(metrics["route_recovery_safety_monotonic"], "false")
+        self.assertIn(
+            "special:route_recovery_safety_monotonic",
+            metrics["runtime_spine_missing"],
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
