@@ -38,11 +38,13 @@ Current stage:
   pre-compress, write notifications, and shutdown. Local provider extraction now
   covers safe snapshot prompt blocks, scope-filtered typed-record prefetch and
   search, and idempotent typed-record write notifications, with `MemoryManager`
-  registering a base-bound `LocalMemoryProvider`. Phase 4 has started by adding an active
-  `MemoryScope` to `MemoryManager` and setting it from the conversation session
-  id and working directory during turn bootstrap, and streaming flush paths
-  without a persistent session id now skip memory writes instead of falling back
-  to `unbound-session`. Phase 5 has
+  registering a base-bound `LocalMemoryProvider`. Phase 4 has started by adding
+  an active `MemoryScope` to `MemoryManager` and setting it from the conversation
+  session id and working directory during turn bootstrap; turn-level LLM
+  extraction, forked background extraction, and trailing session extraction now
+  inherit that active scope, and streaming flush paths without a persistent
+  session id skip memory writes instead of falling back to `unbound-session`.
+  Phase 5 has
   started by applying the memory
   safety scanner on persisted load paths: unsafe `MEMORY.md`, `USER.md`, topic
   memory files, and typed records are skipped during snapshot/retrieval loading

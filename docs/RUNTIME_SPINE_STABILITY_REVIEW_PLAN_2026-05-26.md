@@ -1438,3 +1438,41 @@ cargo test -q manager_local_provider_prefetch_reads_typed_records
   projection / session-end sync / search-index rebuild 的主路径抽象，这些需要先
   明确 provider write transaction 语义，否则容易和现有
   `MemoryManager::submit_candidate` 形成双写或 projection drift。
+
+### 2026-05-26 第十四批落地
+
+已完成:
+
+- auto/background/trailing LLM memory extraction 不再使用硬编码伪 session:
+  - turn-level LLM extraction 使用 `MemoryManager.active_scope`；
+  - forked background heuristic write 捕获并继承 spawn 前的 active scope；
+  - forked background LLM extraction 使用同一 active scope，并把临时 manager
+    也设置到该 scope；
+  - trailing session extraction 使用 active scope。
+- `write_background_memory_candidate` 增加显式 `MemoryScope` 参数:
+  - 后台启发式写入不再重新创建 `MemoryManager` 后落回默认 scope；
+  - 测试确认背景写入产生的 typed record 保留传入 scope。
+- scope discipline 测试补强:
+  - LLM memory extraction 解析出的 candidates 保留当前 session/project scope；
+  - background memory candidate safety/duplicate gate 仍正常；
+  - `rg` 确认 `background-llm`、`llm-memory-extraction`、
+    `trailing-memory-extraction` 这些伪 session 不再出现在 manager 写入路径。
+
+已验证:
+
+```bash
+rg -n "background-llm|llm-memory-extraction|trailing-memory-extraction|MemoryScope::local\\(\"unknown\"" src/memory/manager.rs
+cargo test -q llm_memory_extraction_uses_active_scope
+cargo test -q background_memory_candidate
+cargo test -q memory
+cargo check -q
+```
+
+第十四批之后的状态:
+
+- P2 Scope Discipline 的 auto extraction / background learning /
+  session-end sync 主路径已经继承 authoritative `MemoryScope`，不再制造独立伪
+  session id。
+- `MemoryManager::with_base_dir` 的初始化默认仍保留 `MemoryScope::local("unknown")`
+  作为未 bootstrap 前的 inert fallback；conversation turn bootstrap 和本批
+  extraction path 都会覆盖为真实 session/project scope。

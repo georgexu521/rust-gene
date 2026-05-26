@@ -71,12 +71,14 @@ fn write_background_memory_candidate(
     path: &Path,
     candidate: &str,
     source: &str,
+    scope: &MemoryScope,
 ) -> BackgroundMemoryWriteDecision {
     let base = path
         .parent()
         .map(Path::to_path_buf)
         .unwrap_or_else(|| PathBuf::from("."));
-    let manager = MemoryManager::with_base_dir(base);
+    let mut manager = MemoryManager::with_base_dir(base);
+    manager.set_active_scope(scope.clone());
     let mut memory_candidate = manager.candidate_from_content(candidate, "learned", source);
     memory_candidate.provenance.source = source.to_string();
     let outcome = manager.submit_candidate(memory_candidate, MemoryWriteTarget::Index);
@@ -2102,6 +2104,7 @@ impl MemoryManager {
         // 在 spawn 之前提取需要的字段，避免生命周期问题
         let forked_mode = self.forked_mode;
         let path = self.memory_path.clone();
+        let active_scope = self.active_scope.clone();
 
         tokio::spawn(async move {
             // 小延迟，让主对话先完成响应
@@ -2114,8 +2117,12 @@ impl MemoryManager {
             if forked_mode && !heuristic.is_empty() {
                 // Forked 模式：先写启发式结果（作为 cache hit）
                 for learning in &heuristic {
-                    let decision =
-                        write_background_memory_candidate(&path, learning, "background_heuristic");
+                    let decision = write_background_memory_candidate(
+                        &path,
+                        learning,
+                        "background_heuristic",
+                        &active_scope,
+                    );
                     if decision.wrote {
                         debug!(
                             "Background heuristic memory accepted (quality={:?})",
@@ -2163,10 +2170,11 @@ Only include facts supported by the turn. Do not save task progress, command his
                             .parent()
                             .map(Path::to_path_buf)
                             .unwrap_or_else(|| PathBuf::from("."));
-                        let manager = MemoryManager::with_base_dir(base);
+                        let mut manager = MemoryManager::with_base_dir(base);
+                        manager.set_active_scope(active_scope.clone());
                         let candidates = parse_llm_memory_candidates(
                             text,
-                            MemoryScope::local("background-llm"),
+                            active_scope.clone(),
                             MemoryProvenance::local("background_llm"),
                         );
                         debug!(
@@ -2221,7 +2229,7 @@ Only include facts supported by the turn. Do not save task progress, command his
                 }
                 let candidates = parse_llm_memory_candidates(
                     text,
-                    MemoryScope::local("llm-memory-extraction"),
+                    self.active_scope.clone(),
                     MemoryProvenance::local("turn_llm_memory_extraction"),
                 );
                 debug!("LLM extracted {} memory candidates", candidates.len());
@@ -2465,7 +2473,7 @@ Do not save task progress, command history, or repeatable procedures; procedures
                     if !text.eq_ignore_ascii_case("NONE") && !text.is_empty() {
                         let candidates = parse_llm_memory_candidates(
                             text,
-                            MemoryScope::local("trailing-memory-extraction"),
+                            self.active_scope.clone(),
                             MemoryProvenance::local("trailing_llm_memory_extraction"),
                         );
 
@@ -4326,6 +4334,35 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn llm_memory_extraction_uses_active_scope() {
+        let base = temp_memory_base("llm-memory-active-scope");
+        let mut manager = MemoryManager::with_base_dir(base.clone());
+        let mut scope = MemoryScope::local("session-llm-scope");
+        scope.project_root = Some(base.clone());
+        manager.set_active_scope(scope.clone());
+        let provider = MockRankProvider {
+            response: Mutex::new(
+                r#"{"memory_candidates":[{"type":"note","content":"Project convention: run cargo check before closeout","evidence":"assistant summary","confidence":0.8,"importance":3,"tags":["validation"]}]}"#
+                    .to_string(),
+            ),
+        };
+
+        let candidates = manager
+            .extract_memory_candidates_with_llm(
+                "remember this",
+                "cargo check matters",
+                &provider,
+                "mock-model",
+            )
+            .await;
+
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0].scope, scope);
+
+        let _ = std::fs::remove_dir_all(base);
+    }
+
     #[test]
     fn test_extract_keywords() {
         let keywords = extract_keywords("How do I implement authentication in Rust?");
@@ -5178,8 +5215,10 @@ Always check logs first.
         let base = temp_memory_base("background-memory-quality-gate");
         let path = base.join("MEMORY.md");
         let sensitive = "The API token is sk-123456789012345678901234";
+        let scope = MemoryScope::local("background-memory-quality-gate");
 
-        let decision = write_background_memory_candidate(&path, sensitive, "background_heuristic");
+        let decision =
+            write_background_memory_candidate(&path, sensitive, "background_heuristic", &scope);
 
         assert!(!decision.wrote);
         assert_eq!(decision.status, MemoryStatus::Rejected);
@@ -5198,10 +5237,11 @@ Always check logs first.
         let path = base.join("MEMORY.md");
         let content =
             "Project convention: run cargo test --quiet before committing Rust workflow changes.";
+        let scope = MemoryScope::local("background-memory-duplicate-gate");
 
-        let first = write_background_memory_candidate(&path, content, "background_llm");
+        let first = write_background_memory_candidate(&path, content, "background_llm", &scope);
         let before = std::fs::read_to_string(&path).unwrap_or_default();
-        let second = write_background_memory_candidate(&path, content, "background_llm");
+        let second = write_background_memory_candidate(&path, content, "background_llm", &scope);
         let after = std::fs::read_to_string(&path).unwrap_or_default();
 
         assert!(first.wrote);
@@ -5209,6 +5249,11 @@ Always check logs first.
         assert!(second.duplicate);
         assert_eq!(second.reason, "duplicate_memory");
         assert_eq!(before, after);
+        let records = memory_records_from_jsonl(
+            &std::fs::read_to_string(base.join("memory").join("records.jsonl")).unwrap_or_default(),
+        );
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].scope, scope);
 
         let _ = std::fs::remove_dir_all(base);
     }
