@@ -1336,3 +1336,67 @@ bash -n scripts/run_live_eval.sh scripts/live-eval-aggregate-summary.sh scripts/
 - P3 wording cleanup 已有用户可见 README 边界说明。
 - Memory provider boundary 的 `unbound-session` 普通路径已清理；local provider
   真实抽象仍可继续分阶段推进，但不再有 src 里的 `unbound-session` fallback。
+
+### 2026-05-26 第十二批落地
+
+已完成:
+
+- `LocalMemoryProvider` 不再只是 marker:
+  - `MemoryManager::with_base_dir` 注册 base-bound local provider；
+  - local provider 可以从 `memory/records.jsonl` 读取 safe accepted typed
+    records；
+  - prefetch 走 provider contract，并按 query / status / safety /
+    `MemoryScope` 过滤；
+  - local provider snapshot hook 可以读取安全的 `MEMORY.md`、`USER.md` 和
+    topic memory file index，输出 fenced `<memory-context>` background block；
+  - unsafe persisted `MEMORY.md` / `USER.md` / topic memory file 不进入
+    provider prompt block。
+- scope discipline 继续收口:
+  - provider prefetch / write 要求 profile 和 user 兼容；
+  - project-root mismatch 优先阻断，即使 session id 看起来相关也不会跨项目
+    泄漏；
+  - parent-child session tree 允许在同 project scope 内共享 verifier/worker
+    typed memory；
+  - global `UserPreference` typed records 可以作为无 project-root 的跨项目偏好
+    被召回。
+- provider write parity 补第一段:
+  - `LocalMemoryProvider::on_memory_write` 对 typed record 做 safety gate；
+  - 写入 active provider scope 之外的 record 会失败；
+  - 同 id record 已存在时视为幂等成功，避免 manager 主写路径和 provider
+    notification 未来接线时重复追加。
+- provider contract 测试覆盖:
+  - local typed record prefetch；
+  - hostile / proposed persisted records 不被 prefetch；
+  - cross-project records 被 scope gate 跳过；
+  - parent-child session scoped record 可以召回；
+  - snapshot prompt block 只注入 safe persisted memory；
+  - local write hook 幂等、scope-mismatch 失败、unsafe record 失败；
+  - manager 的 `provider_prefetch` 能读到 base-bound local provider 的 typed
+    record。
+- `docs/PROJECT_STATUS.md` 更新 Phase 3/4 memory provider 状态，避免继续把
+  local provider 描述成仅有 registry marker。
+
+已验证:
+
+```bash
+cargo test -q local_provider_prefetch_reads_safe_accepted_typed_records
+cargo test -q local_provider_prefetch
+cargo test -q local_provider
+cargo test -q provider
+cargo test -q manager_local_provider_prefetch_reads_typed_records
+cargo test -q memory
+cargo check -q
+cargo fmt --check
+git diff --check
+scripts/runtime-spine-fast-gate.sh
+```
+
+第十二批之后的状态:
+
+- P2 Memory Provider Boundary 已从 registry/fanout 进入 local provider
+  read/write contract: snapshot read、prefetch、safety gate、scope gate、typed
+  record write notification 已有代码和测试。
+- 仍刻意没有一次性迁移 `MemoryManager::submit_candidate`、Markdown
+  projection、session-end extraction、search index rebuild 等主写路径；这些路径
+  牵涉 quality gate、projection、lifecycle 和 search index，适合后续拆成更小的
+  provider method，而不是在一个 PR 里改写全部 memory persistence。

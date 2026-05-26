@@ -7,7 +7,8 @@
 //! - 会话结束提取：session 过期时批量提取学习内容
 
 use crate::memory::provider::{
-    MemoryProvider, MemoryProviderCallOutcome, MemoryProviderRegistry, MemoryTurn,
+    LocalMemoryProvider, MemoryProvider, MemoryProviderCallOutcome, MemoryProviderRegistry,
+    MemoryTurn,
 };
 use crate::memory::quality::assess_memory_candidate;
 use crate::memory::search_index::{MemorySearchDocument, MemorySearchHit, MemorySearchIndex};
@@ -1153,7 +1154,9 @@ impl MemoryManager {
             trailing_completed: false,
             cache_hits: 0,
             cache_misses: 0,
-            provider_registry: MemoryProviderRegistry::new(),
+            provider_registry: MemoryProviderRegistry::with_local(Arc::new(
+                LocalMemoryProvider::with_base_dir(base.clone()),
+            )),
             active_scope: MemoryScope::local("unknown"),
         }
     }
@@ -4215,6 +4218,37 @@ mod tests {
         let manager = MemoryManager::with_base_dir(base.clone());
 
         assert_eq!(manager.memory_provider_names(), vec!["local".to_string()]);
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[tokio::test]
+    async fn manager_local_provider_prefetch_reads_typed_records() {
+        let base = temp_memory_base("manager-local-provider-prefetch");
+        let manager = MemoryManager::with_base_dir(base.clone());
+        let scope = MemoryScope::local("session-local-provider");
+        let mut record = MemoryRecord::new(
+            "Project convention: run cargo check before closeout",
+            MemoryKind::WorkflowConvention,
+            scope.clone(),
+            MemoryProvenance::local("test"),
+        );
+        record.status = MemoryStatus::Accepted;
+        std::fs::write(
+            manager.records_path(),
+            format!("{}\n", serde_json::to_string(&record).unwrap()),
+        )
+        .unwrap();
+
+        let (records, outcomes) = manager.provider_prefetch("cargo check", &scope).await;
+
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].id, record.id);
+        assert_eq!(outcomes.len(), 1);
+        assert_eq!(
+            outcomes[0].status,
+            crate::memory::provider::MemoryProviderCallStatus::Ok
+        );
 
         let _ = std::fs::remove_dir_all(&base);
     }
