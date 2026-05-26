@@ -93,11 +93,21 @@ PROJECT_PARTNER_DEMO_CASES=(
   project-partner-failure-memory-proposal
 )
 
+RUNTIME_SPINE_P0B_CASES=(
+  runtime-spine-p0b-permission-required
+  runtime-spine-p0b-test-failure-repair
+  runtime-spine-p0b-route-mistake-recovery
+  runtime-spine-p0b-subagent-verifier
+  runtime-spine-p0b-isolated-worktree-implementer
+  runtime-spine-p0b-memory-retrieval-conflict
+  runtime-spine-p0b-skill-guidance
+)
+
 usage() {
   cat <<'EOF'
 Usage:
   scripts/run_live_eval.sh --list
-  scripts/run_live_eval.sh --case <id|recommended|core-coding-quality|real-project-coding|release-dogfood|mvp-weighted-agent|project-partner-demo|all> --mode <prepare|api-plan|agent-run|collect|full> [options]
+  scripts/run_live_eval.sh --case <id|recommended|core-coding-quality|real-project-coding|release-dogfood|mvp-weighted-agent|project-partner-demo|runtime-spine-p0b|all> --mode <prepare|api-plan|agent-run|collect|full> [options]
   scripts/run_live_eval.sh --mode summary --run-id <id>
 
 Modes:
@@ -112,7 +122,8 @@ Modes:
 Options:
   --case ID          Live task id, "recommended", "core-coding-quality",
                      "real-project-coding", "release-dogfood",
-                     "mvp-weighted-agent", "project-partner-demo", or "all".
+                     "mvp-weighted-agent", "project-partner-demo",
+                     "runtime-spine-p0b", or "all".
                      With --list, a suite name lists only that suite.
   --mode MODE        list, prepare, api-plan, agent-run, collect, or full.
   --workdir DIR      Existing task worktree for collect mode.
@@ -512,6 +523,19 @@ project_partner_demo_task_files() {
   return "$missing"
 }
 
+runtime_spine_p0b_task_files() {
+  local id file missing=0
+  for id in "${RUNTIME_SPINE_P0B_CASES[@]}"; do
+    if file="$(find_task_file "$id")"; then
+      echo "$file"
+    else
+      echo "Runtime-spine P0b live task missing: $id" >&2
+      missing=1
+    fi
+  done
+  return "$missing"
+}
+
 task_group_files() {
   local group="$1"
   case "$group" in
@@ -532,6 +556,9 @@ task_group_files() {
       ;;
     project-partner-demo)
       project_partner_demo_task_files
+      ;;
+    runtime-spine-p0b)
+      runtime_spine_p0b_task_files
       ;;
     *)
       return 1
@@ -2823,7 +2850,7 @@ run_one() {
 
 main() {
   if [[ "$MODE" == "list" ]]; then
-    if [[ "$CASE_ID" == "recommended" || "$CASE_ID" == "core-coding-quality" || "$CASE_ID" == "real-project-coding" || "$CASE_ID" == "release-dogfood" || "$CASE_ID" == "mvp-weighted-agent" || "$CASE_ID" == "project-partner-demo" ]]; then
+    if [[ "$CASE_ID" == "recommended" || "$CASE_ID" == "core-coding-quality" || "$CASE_ID" == "real-project-coding" || "$CASE_ID" == "release-dogfood" || "$CASE_ID" == "mvp-weighted-agent" || "$CASE_ID" == "project-partner-demo" || "$CASE_ID" == "runtime-spine-p0b" ]]; then
       need_yaml
       list_task_group "$CASE_ID"
     else
@@ -2848,9 +2875,9 @@ main() {
 
   mkdir -p "$REPORT_DIR" "$WORK_ROOT/$RUN_ID"
 
-  if [[ "$CASE_ID" == "all" || "$CASE_ID" == "recommended" || "$CASE_ID" == "core-coding-quality" || "$CASE_ID" == "real-project-coding" || "$CASE_ID" == "release-dogfood" || "$CASE_ID" == "mvp-weighted-agent" || "$CASE_ID" == "project-partner-demo" ]]; then
+  if [[ "$CASE_ID" == "all" || "$CASE_ID" == "recommended" || "$CASE_ID" == "core-coding-quality" || "$CASE_ID" == "real-project-coding" || "$CASE_ID" == "release-dogfood" || "$CASE_ID" == "mvp-weighted-agent" || "$CASE_ID" == "project-partner-demo" || "$CASE_ID" == "runtime-spine-p0b" ]]; then
     local file files failures=0
-    if [[ "$CASE_ID" == "recommended" || "$CASE_ID" == "core-coding-quality" || "$CASE_ID" == "real-project-coding" || "$CASE_ID" == "release-dogfood" || "$CASE_ID" == "mvp-weighted-agent" || "$CASE_ID" == "project-partner-demo" ]]; then
+    if [[ "$CASE_ID" == "recommended" || "$CASE_ID" == "core-coding-quality" || "$CASE_ID" == "real-project-coding" || "$CASE_ID" == "release-dogfood" || "$CASE_ID" == "mvp-weighted-agent" || "$CASE_ID" == "project-partner-demo" || "$CASE_ID" == "runtime-spine-p0b" ]]; then
       if ! files="$(task_group_files "$CASE_ID")"; then
         exit 1
       fi

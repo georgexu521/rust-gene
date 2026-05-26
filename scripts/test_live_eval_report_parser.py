@@ -1,6 +1,11 @@
 import unittest
+from textwrap import dedent
 
-from scripts.live_eval_report_parser import memory_proposal_metrics_from_trace
+from scripts.live_eval_report_parser import (
+    memory_proposal_metrics_from_trace,
+    normalized_runtime_spine_assertions,
+    runtime_spine_metrics_from_events,
+)
 
 
 class MemoryProposalMetricsFromTraceTest(unittest.TestCase):
@@ -67,6 +72,63 @@ class MemoryProposalMetricsFromTraceTest(unittest.TestCase):
         self.assertEqual(metrics["memory_candidate_typed"], "true")
         self.assertEqual(metrics["memory_candidate_has_evidence"], "true")
         self.assertEqual(metrics["memory_proposal_recorded"], "false")
+
+
+class RuntimeSpineProofAssertionTest(unittest.TestCase):
+    def test_subagent_claim_assertions_can_pass_from_report_text_without_trace(self):
+        assertions = normalized_runtime_spine_assertions(
+            {
+                "runtime_spine_assertions": {
+                    "verification_proof_kind": "subagent_claim_only",
+                    "verification_proof_support_status": "partial",
+                    "verification_proof_supports_verified": "false",
+                }
+            }
+        )
+        report_text = dedent("""
+        verification_proof_status: verified
+        verification_proof_kinds: subagent_claim_only
+        verification_proof_support_status: partial
+        verification_proof_supports_verified: false
+        """)
+
+        metrics = runtime_spine_metrics_from_events(
+            [], report_text=report_text, assertions=assertions
+        )
+
+        self.assertEqual(metrics["runtime_spine_status"], "passed")
+        self.assertEqual(metrics["runtime_spine_missing"], "none")
+
+    def test_parent_verified_subagent_assertions_fail_when_only_child_claim_exists(self):
+        assertions = normalized_runtime_spine_assertions(
+            {
+                "runtime_spine_assertions": {
+                    "verification_proof_kind": "parent_verified_subagent_result",
+                    "verification_proof_support_status": "verified",
+                    "verification_proof_supports_verified": "true",
+                }
+            }
+        )
+        report_text = dedent("""
+        verification_proof_status: verified
+        verification_proof_kinds: subagent_claim_only
+        verification_proof_support_status: partial
+        verification_proof_supports_verified: false
+        """)
+
+        metrics = runtime_spine_metrics_from_events(
+            [], report_text=report_text, assertions=assertions
+        )
+
+        self.assertEqual(metrics["runtime_spine_status"], "failed")
+        self.assertIn(
+            "verification_proof_kind:parent_verified_subagent_result",
+            metrics["runtime_spine_missing"],
+        )
+        self.assertIn(
+            "verification_proof_support_status:verified",
+            metrics["runtime_spine_missing"],
+        )
 
 
 if __name__ == "__main__":

@@ -968,3 +968,45 @@ cargo clippy --all-features -- -D warnings
   下一步应该接 P0b live-eval fixtures 和父 runtime 复验 workflow。
 - P0b、route recovery、context zone convergence、subagent parent verification
   workflow 和 memory provider boundary 仍按本计划后续推进。
+
+### 2026-05-26 第五批落地
+
+已完成:
+
+- 增加 `runtime-spine-p0b` live-eval suite，可通过
+  `scripts/run_live_eval.sh --list --case runtime-spine-p0b` 列出。
+- 把 P0b 7 个复杂控制面场景落成 live-eval YAML fixtures:
+  - `runtime-spine-p0b-permission-required`
+  - `runtime-spine-p0b-test-failure-repair`
+  - `runtime-spine-p0b-route-mistake-recovery`
+  - `runtime-spine-p0b-subagent-verifier`
+  - `runtime-spine-p0b-isolated-worktree-implementer`
+  - `runtime-spine-p0b-memory-retrieval-conflict`
+  - `runtime-spine-p0b-skill-guidance`
+- `scripts/live_eval_report_parser.py` 的 runtime-spine assertion 语言新增:
+  - `verification_proof_kind:<kind>`
+  - `verification_proof_support_status:<status>`
+  - `verification_proof_supports_verified:<true|false>`
+- 新增 parser unit tests，证明:
+  - child-only subagent claim 可以被 fixture 断言为
+    `subagent_claim_only + partial + supports_verified=false`；
+  - 只有 child claim 时，`parent_verified_subagent_result + verified`
+    断言会失败。
+
+已验证:
+
+```bash
+python3 -m py_compile scripts/live_eval_report_parser.py scripts/test_live_eval_report_parser.py
+python3 -m unittest scripts.test_live_eval_report_parser
+bash -n scripts/run_live_eval.sh scripts/live-eval-summary-smoke.sh
+scripts/run_live_eval.sh --list --case runtime-spine-p0b
+ruby -ryaml -e 'ARGV.each { |path| YAML.load_file(path); puts path }' evalsets/live_tasks/runtime-spine-p0b-*.yaml
+```
+
+第五批之后的状态:
+
+- P0b 已经从 deterministic Rust spec 推进到 live-eval fixture asset。
+- Subagent proof binding 现在能被 live-eval report parser 直接断言。
+- 仍未完成真实父 runtime 复验 workflow；下一批应实现显式
+  `ParentVerifiedSubagentResult` 生成路径，随后把对应 P0b fixture 从
+  child-claim-only oracle 升级为 parent-verified oracle。

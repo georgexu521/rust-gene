@@ -1,0 +1,85 @@
+id: runtime-spine-p0b-isolated-worktree-implementer
+title: P0b implementer subagent changes stay isolated until parent review
+type: bug_fix
+eval_intent: seeded_code_change
+complexity: high
+risk: high
+
+repo:
+  fixture: priority-agent
+  base_ref: "HEAD"
+  prepare_commands:
+    - |
+      mkdir -p fixtures/runtime_spine_p0b/isolated_worktree_implementer
+      cat > fixtures/runtime_spine_p0b/isolated_worktree_implementer/status.txt <<'TXT'
+      ready = false
+      TXT
+
+prompt: |
+  委派 implementer 子 agent 在隔离 worktree 中把
+  `fixtures/runtime_spine_p0b/isolated_worktree_implementer/status.txt`
+  改成 `ready = true`。父 agent 必须审查 child patch，并在父 runtime
+  记录验证后才能把主任务 closeout 为 verified。
+
+allowed_tools:
+  - agent
+  - grep
+  - file_read
+  - file_edit
+  - bash
+  - git_diff
+  - worktree
+
+forbidden_tools:
+  - install_dependencies
+  - git_push
+
+expected_behavior:
+  - Implementer gets isolated-worktree context when mutation tools are allowed.
+  - Child patch summary is not parent proof by itself.
+  - Parent review/validation is required before verified closeout.
+
+runtime_spine_p0b:
+  kind: isolated_worktree_implementer
+  expected_failure_owners:
+    - subagent
+    - tool_runtime
+    - evidence_ledger
+    - closeout
+
+runtime_spine_assertions:
+  required_phases:
+    - context
+    - decision
+    - tool_execution
+    - state_update
+    - verification
+    - closeout
+  required_events:
+    - context_zones
+    - action_decision
+    - action_review
+    - agent_loop_step
+    - completion_contract
+  verification_proof_kind: subagent_claim_only
+  verification_proof_support_status: partial
+  completion_status: completed
+
+acceptance:
+  required_commands:
+    - rg '^ready = true$' fixtures/runtime_spine_p0b/isolated_worktree_implementer/status.txt
+  diff_constraints:
+    max_files_changed: 2
+    forbidden_paths:
+      - target/
+      - .git/
+  human_review:
+    - Did child mutation stay isolated before parent review?
+    - Did parent runtime evidence, not child text, drive closeout?
+
+scoring:
+  success: 0.25
+  isolation: 0.25
+  parent_verification: 0.25
+  runtime_spine: 0.15
+  closeout_quality: 0.10

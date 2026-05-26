@@ -199,6 +199,10 @@ RUNTIME_SPINE_ASSERTION_ALIASES = {
     "verification_proof": "special:verification_proof",
     "verification_proof_present": "special:verification_proof",
     "verification_proof_verified": "special:verification_proof_verified",
+    "subagent_claim_only": "verification_proof_kind:subagent_claim_only",
+    "parent_verified_subagent_result": "verification_proof_kind:parent_verified_subagent_result",
+    "verification_proof_support_partial": "verification_proof_support_status:partial",
+    "verification_proof_support_verified": "verification_proof_support_status:verified",
 }
 
 LOW_RISK_TOOL_NAMES = {
@@ -823,7 +827,15 @@ def normalize_runtime_spine_assertion(value):
             "current_decision_request_non_empty",
         }:
             return f"special:{name}"
-        if prefix in {"completion_status", "terminal_status", "verification_proof_status"}:
+        if prefix in {
+            "completion_status",
+            "terminal_status",
+            "verification_proof_status",
+            "verification_proof_kind",
+            "verification_proof_kinds",
+            "verification_proof_support_status",
+            "verification_proof_supports_verified",
+        }:
             return f"{prefix}:{name}"
     normalized = token(raw.removeprefix("runtime_spine_"))
     return RUNTIME_SPINE_ASSERTION_ALIASES.get(normalized, f"unknown:{normalized}")
@@ -844,7 +856,15 @@ def normalized_runtime_spine_assertions(sample):
             values.append(f"event:{event}")
         for item in raw.get("required") or raw.get("assertions") or []:
             values.append(item)
-        for field in ("completion_status", "terminal_status", "verification_proof_status"):
+        for field in (
+            "completion_status",
+            "terminal_status",
+            "verification_proof_status",
+            "verification_proof_kind",
+            "verification_proof_kinds",
+            "verification_proof_support_status",
+            "verification_proof_supports_verified",
+        ):
             expected = raw.get(field) or raw.get(f"expected_{field}")
             if expected:
                 values.append(f"{field}:{expected}")
@@ -1364,6 +1384,20 @@ def runtime_spine_metrics_from_events(events, report_text="", assertions=None):
                 or proof_status
             )
             if proof != name:
+                missing.append(assertion)
+        elif kind in {"verification_proof_kind", "verification_proof_kinds"}:
+            proof_kinds = {
+                token(item)
+                for item in re.split(r"[,;\s]+", str(proof_kind_summary))
+                if token(item)
+            }
+            if name not in proof_kinds:
+                missing.append(assertion)
+        elif kind == "verification_proof_support_status":
+            if token(proof_support_status) != name:
+                missing.append(assertion)
+        elif kind == "verification_proof_supports_verified":
+            if token(proof_supports_verified) != name:
                 missing.append(assertion)
         else:
             missing.append(assertion)

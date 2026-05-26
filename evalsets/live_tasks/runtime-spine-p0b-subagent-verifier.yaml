@@ -1,0 +1,83 @@
+id: runtime-spine-p0b-subagent-verifier
+title: P0b subagent verifier claim remains non-authoritative without parent proof
+type: audit
+eval_intent: read_only_audit
+complexity: medium
+risk: medium
+
+repo:
+  fixture: priority-agent
+  base_ref: "HEAD"
+  prepare_commands:
+    - |
+      mkdir -p fixtures/runtime_spine_p0b/subagent_verifier
+      cat > fixtures/runtime_spine_p0b/subagent_verifier/claim.txt <<'TXT'
+      invariant: verifier output must be treated as a claim until parent runtime evidence exists
+      TXT
+
+prompt: |
+  使用 verifier 子 agent 审查
+  `fixtures/runtime_spine_p0b/subagent_verifier/claim.txt`，但父 agent 不要把
+  子 agent 的文字结论直接当成 verified proof。请最终说明子 agent claim
+  是否已经有父 runtime 证据支持。
+
+allowed_tools:
+  - agent
+  - grep
+  - file_read
+  - bash
+
+forbidden_tools:
+  - file_edit
+  - file_write
+  - file_patch
+  - git_push
+
+expected_behavior:
+  - Agent tool output carries subagent proof metadata.
+  - SubagentClaimOnly appears as proof kind.
+  - Closeout is partial/not verified unless parent runtime verification exists.
+
+runtime_spine_p0b:
+  kind: subagent_verifier
+  expected_failure_owners:
+    - subagent
+    - evidence_ledger
+    - closeout
+
+runtime_spine_assertions:
+  required_phases:
+    - context
+    - decision
+    - tool_execution
+    - state_update
+    - closeout
+  required_events:
+    - context_zones
+    - action_decision
+    - action_review
+    - agent_loop_step
+    - completion_contract
+  verification_proof_kind: subagent_claim_only
+  verification_proof_support_status: partial
+  verification_proof_supports_verified: false
+  completion_status: completed
+
+acceptance:
+  required_commands: []
+  harness_commands:
+    - test -f fixtures/runtime_spine_p0b/subagent_verifier/claim.txt
+  diff_constraints:
+    max_files_changed: 0
+    forbidden_paths:
+      - target/
+      - .git/
+  human_review:
+    - Did the final answer distinguish child claim from parent proof?
+    - Did closeout avoid verified status when only child text exists?
+
+scoring:
+  success: 0.25
+  subagent_proof_discipline: 0.40
+  runtime_spine: 0.25
+  closeout_quality: 0.10
