@@ -7,8 +7,8 @@
 //! - 会话结束提取：session 过期时批量提取学习内容
 
 use crate::memory::provider::{
-    LocalMemoryProvider, MemoryProvider, MemoryProviderCallOutcome, MemoryProviderRegistry,
-    MemoryTurn,
+    LocalMemoryProvider, MemoryProvider, MemoryProviderCallOutcome, MemoryProviderCallStatus,
+    MemoryProviderRegistry, MemoryTurn,
 };
 use crate::memory::quality::assess_memory_candidate;
 use crate::memory::search_index::{MemorySearchDocument, MemorySearchHit, MemorySearchIndex};
@@ -2432,6 +2432,18 @@ Only include facts supported by the turn. Do not save task progress, command his
             "Running trailing memory extraction for {} messages",
             messages.len()
         );
+        let provider_outcomes = self
+            .provider_registry
+            .on_session_end_all(messages, &self.active_scope)
+            .await;
+        for outcome in provider_outcomes {
+            if outcome.status != MemoryProviderCallStatus::Ok {
+                debug!(
+                    "Memory provider session-end hook {:?}: provider={} error={:?}",
+                    outcome.status, outcome.provider, outcome.error
+                );
+            }
+        }
 
         // 收集会话中的 user/assistant 对话内容
         let mut conversation_context = String::new();
@@ -4334,6 +4346,32 @@ mod tests {
         }
     }
 
+    #[derive(Debug, Default)]
+    struct RecordingSessionEndProvider {
+        scopes: Mutex<Vec<MemoryScope>>,
+        transcript_lengths: Mutex<Vec<usize>>,
+    }
+
+    #[async_trait::async_trait]
+    impl MemoryProvider for RecordingSessionEndProvider {
+        fn name(&self) -> &str {
+            "recording-session-end"
+        }
+
+        async fn on_session_end(
+            &self,
+            transcript: &[Message],
+            scope: &MemoryScope,
+        ) -> anyhow::Result<()> {
+            self.scopes.lock().unwrap().push(scope.clone());
+            self.transcript_lengths
+                .lock()
+                .unwrap()
+                .push(transcript.len());
+            Ok(())
+        }
+    }
+
     #[tokio::test]
     async fn llm_memory_extraction_uses_active_scope() {
         let base = temp_memory_base("llm-memory-active-scope");
@@ -4359,6 +4397,32 @@ mod tests {
 
         assert_eq!(candidates.len(), 1);
         assert_eq!(candidates[0].scope, scope);
+
+        let _ = std::fs::remove_dir_all(base);
+    }
+
+    #[tokio::test]
+    async fn trailing_run_notifies_memory_providers_with_active_scope() {
+        let base = temp_memory_base("trailing-provider-scope");
+        let mut manager = MemoryManager::with_base_dir(base.clone());
+        manager.trailing_mode = true;
+        let mut scope = MemoryScope::local("session-trailing-scope");
+        scope.project_root = Some(base.clone());
+        manager.set_active_scope(scope.clone());
+        let provider = Arc::new(RecordingSessionEndProvider::default());
+        manager
+            .register_external_memory_provider(provider.clone())
+            .unwrap();
+        let messages = vec![
+            Message::user("Project convention: run cargo fmt before tests."),
+            Message::assistant("I will remember that validation convention for this project."),
+        ];
+
+        manager.trailing_run(&messages, None, "mock-model").await;
+
+        assert_eq!(provider.scopes.lock().unwrap().as_slice(), &[scope]);
+        assert_eq!(provider.transcript_lengths.lock().unwrap().as_slice(), &[2]);
+        assert!(manager.is_trailing_completed());
 
         let _ = std::fs::remove_dir_all(base);
     }

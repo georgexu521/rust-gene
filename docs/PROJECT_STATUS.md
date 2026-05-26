@@ -42,9 +42,9 @@ Current stage:
   an active `MemoryScope` to `MemoryManager` and setting it from the conversation
   session id and working directory during turn bootstrap; turn-level LLM
   extraction, forked background extraction, and trailing session extraction now
-  inherit that active scope, and streaming flush paths without a persistent
-  session id skip memory writes instead of falling back to `unbound-session`.
-  Phase 5 has
+  inherit that active scope, trailing runs notify memory providers through
+  `on_session_end`, and streaming flush paths without a persistent session id
+  skip memory writes instead of falling back to `unbound-session`. Phase 5 has
   started by applying the memory
   safety scanner on persisted load paths: unsafe `MEMORY.md`, `USER.md`, topic
   memory files, and typed records are skipped during snapshot/retrieval loading

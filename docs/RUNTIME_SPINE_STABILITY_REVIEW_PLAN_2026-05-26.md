@@ -1476,3 +1476,38 @@ cargo check -q
 - `MemoryManager::with_base_dir` 的初始化默认仍保留 `MemoryScope::local("unknown")`
   作为未 bootstrap 前的 inert fallback；conversation turn bootstrap 和本批
   extraction path 都会覆盖为真实 session/project scope。
+
+### 2026-05-26 第十五批落地
+
+已完成:
+
+- trailing session-end sync 接入 provider lifecycle:
+  - `MemoryManager::trailing_run` 在 trailing mode 下调用
+    `provider_registry.on_session_end_all(messages, active_scope)`；
+  - local provider 当前保持 no-op，external provider 可以在同一 hook 内同步
+    transcript；
+  - provider session-end failure 会被 debug 记录，不阻断 trailing closeout。
+- scope propagation 测试补齐:
+  - synthetic external memory provider 记录 `on_session_end` 收到的
+    `MemoryScope` 和 transcript length；
+  - trailing run 测试确认 provider hook 收到当前 active session/project scope，
+    而不是默认/伪 session。
+- `docs/PROJECT_STATUS.md` 同步说明 trailing runs 现在会通过
+  `on_session_end` 通知 memory providers。
+
+已验证:
+
+```bash
+cargo test -q trailing_run_notifies_memory_providers_with_active_scope
+cargo test -q memory
+cargo check -q
+cargo fmt --check
+```
+
+第十五批之后的状态:
+
+- P2 Scope Discipline 覆盖 retrieval/preload 以外的 session-end provider hook；
+  provider boundary 现在能看到同一 authoritative `MemoryScope`。
+- remaining high-risk migration 仍是 candidate submission / quality gate /
+  Markdown projection / search-index rebuild 的 transaction 语义，下一步应先把
+  write transaction owner 定清楚，再做主路径迁移。
