@@ -7,6 +7,7 @@
 use crate::engine::intent_router::RetrievalPolicy;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use std::cmp::Ordering;
 use std::hash::{Hash, Hasher};
 
 const PREVIEW_CHARS: usize = 1200;
@@ -108,19 +109,32 @@ impl RetrievalContext {
     }
 
     pub fn add_item(&mut self, item: RetrievalItem) {
-        self.token_estimate = self.token_estimate.saturating_add(item.token_estimate);
-        self.items.push(item);
-        self.items.sort_by(|a, b| {
-            b.score
-                .partial_cmp(&a.score)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
+        let dedupe_key = retrieval_item_dedupe_key(&item);
+        if let Some(existing) = self
+            .items
+            .iter_mut()
+            .find(|existing| retrieval_item_dedupe_key(existing) == dedupe_key)
+        {
+            *existing = merge_duplicate_retrieval_items(existing.clone(), item);
+        } else {
+            self.items.push(item);
+        }
+        self.sort_and_recount();
     }
 
     pub fn extend(&mut self, other: RetrievalContext) {
         for item in other.items {
             self.add_item(item);
         }
+    }
+
+    fn sort_and_recount(&mut self) {
+        self.items.sort_by(compare_retrieval_items);
+        self.token_estimate = self
+            .items
+            .iter()
+            .map(|item| item.token_estimate)
+            .sum::<usize>();
     }
 
     pub fn from_memory_prefetch(
@@ -363,6 +377,161 @@ fn retrieval_item_id(
     provenance.hash(&mut hasher);
     content.hash(&mut hasher);
     format!("ret_{:016x}", hasher.finish())
+}
+
+fn retrieval_item_dedupe_key(item: &RetrievalItem) -> String {
+    let content = normalized_fact_key(&item.content_preview);
+    if content.chars().count() >= 12 {
+        return format!("content:{content}");
+    }
+    format!(
+        "title:{}:{}",
+        source_rank(item.source),
+        normalized_fact_key(&item.title)
+    )
+}
+
+fn normalized_fact_key(value: &str) -> String {
+    value
+        .split_whitespace()
+        .map(|part| {
+            part.trim_matches(|ch: char| {
+                matches!(
+                    ch,
+                    '"' | '\'' | '`' | ',' | '.' | ';' | ':' | '(' | ')' | '[' | ']' | '{' | '}'
+                )
+            })
+            .to_ascii_lowercase()
+        })
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn compare_retrieval_items(left: &RetrievalItem, right: &RetrievalItem) -> Ordering {
+    score_key(right.score)
+        .cmp(&score_key(left.score))
+        .then_with(|| left.conflict.cmp(&right.conflict))
+        .then_with(|| trust_rank(right.trust).cmp(&trust_rank(left.trust)))
+        .then_with(|| freshness_rank(right).cmp(&freshness_rank(left)))
+        .then_with(|| source_rank(right.source).cmp(&source_rank(left.source)))
+        .then_with(|| normalized_fact_key(&left.title).cmp(&normalized_fact_key(&right.title)))
+        .then_with(|| left.provenance.cmp(&right.provenance))
+        .then_with(|| left.id.cmp(&right.id))
+}
+
+fn score_key(score: f32) -> i32 {
+    (score.clamp(0.0, 1.0) * 1000.0).round() as i32
+}
+
+fn trust_rank(trust: TrustLevel) -> u8 {
+    match trust {
+        TrustLevel::High => 3,
+        TrustLevel::Medium => 2,
+        TrustLevel::Low => 1,
+    }
+}
+
+fn source_rank(source: RetrievalSource) -> u8 {
+    match source {
+        RetrievalSource::Project => 7,
+        RetrievalSource::File => 6,
+        RetrievalSource::Tool => 5,
+        RetrievalSource::Session => 4,
+        RetrievalSource::Memory => 3,
+        RetrievalSource::Mcp => 2,
+        RetrievalSource::Web => 1,
+    }
+}
+
+fn freshness_rank(item: &RetrievalItem) -> (u8, String) {
+    let freshness = item
+        .freshness
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_ascii_lowercase);
+    match freshness {
+        Some(value) => (1, value),
+        None => (0, String::new()),
+    }
+}
+
+fn merge_duplicate_retrieval_items(left: RetrievalItem, right: RetrievalItem) -> RetrievalItem {
+    let (mut primary, secondary) = if compare_retrieval_items(&right, &left) == Ordering::Less {
+        (right, left)
+    } else {
+        (left, right)
+    };
+    primary.provenance = merged_provenance(&primary, &secondary);
+    primary.reason = merged_reason(&primary, &secondary);
+    primary.conflict = primary.conflict && secondary.conflict;
+    primary
+}
+
+fn merged_provenance(primary: &RetrievalItem, secondary: &RetrievalItem) -> String {
+    let primary_entry = primary_provenance_entry(primary);
+    let mut alternates = Vec::new();
+    for entry in provenance_entries(primary)
+        .into_iter()
+        .chain(provenance_entries(secondary))
+    {
+        if entry != primary_entry && !alternates.contains(&entry) {
+            alternates.push(entry);
+        }
+    }
+    alternates.sort();
+    if alternates.is_empty() {
+        return primary.provenance.clone();
+    }
+    let mut parts = vec![format!("primary={primary_entry}")];
+    parts.extend(alternates.into_iter().map(|entry| format!("also={entry}")));
+    parts.join("; ")
+}
+
+fn primary_provenance_entry(item: &RetrievalItem) -> String {
+    provenance_entries(item)
+        .into_iter()
+        .next()
+        .unwrap_or_else(|| provenance_entry(item))
+}
+
+fn provenance_entries(item: &RetrievalItem) -> Vec<String> {
+    let provenance = item.provenance.trim();
+    if provenance.starts_with("primary=") {
+        return provenance
+            .split(';')
+            .filter_map(|part| {
+                part.trim()
+                    .strip_prefix("primary=")
+                    .or_else(|| part.trim().strip_prefix("also="))
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .map(ToString::to_string)
+            })
+            .collect();
+    }
+    vec![provenance_entry(item)]
+}
+
+fn provenance_entry(item: &RetrievalItem) -> String {
+    format!("{:?}:{}", item.source, item.provenance.trim())
+}
+
+fn merged_reason(primary: &RetrievalItem, secondary: &RetrievalItem) -> String {
+    let mut reasons = vec![primary.reason.trim().to_string()];
+    let secondary_reason = secondary.reason.trim().to_string();
+    if !secondary_reason.is_empty() && !reasons.contains(&secondary_reason) {
+        reasons.push(secondary_reason);
+    }
+    if reasons.len() == 1 {
+        return reasons[0].clone();
+    }
+    format!(
+        "{}; corroborated_by={}",
+        reasons[0],
+        reasons[1..].join(" | ")
+    )
 }
 
 fn memory_retrieval_score(item: &crate::memory::manager::MemoryMatch, conflict: bool) -> f32 {
@@ -675,6 +844,144 @@ mod tests {
             TrustLevel::High,
         ));
         assert_eq!(ctx.items[0].title, "high");
+    }
+
+    #[test]
+    fn equal_score_items_have_deterministic_ordering() {
+        let build = |reverse: bool| {
+            let mut ctx = RetrievalContext::new("query", RetrievalPolicy::Full);
+            let project = RetrievalItem::new(
+                RetrievalSource::Project,
+                "Project settings",
+                "mode = production",
+                0.8,
+                "project.index:/repo",
+                TrustLevel::High,
+            );
+            let session = RetrievalItem::new(
+                RetrievalSource::Session,
+                "Session note",
+                "use compact status bars",
+                0.8,
+                "session.message:s1:1",
+                TrustLevel::Medium,
+            );
+            if reverse {
+                ctx.add_item(session);
+                ctx.add_item(project);
+            } else {
+                ctx.add_item(project);
+                ctx.add_item(session);
+            }
+            ctx
+        };
+        let first = build(false);
+        let second = build(true);
+
+        assert_eq!(
+            first
+                .items
+                .iter()
+                .map(|item| item.title.as_str())
+                .collect::<Vec<_>>(),
+            second
+                .items
+                .iter()
+                .map(|item| item.title.as_str())
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(first.format_for_prompt(), second.format_for_prompt());
+    }
+
+    #[test]
+    fn freshness_breaks_otherwise_equal_ordering_toward_newer_context() {
+        let mut old = RetrievalItem::new(
+            RetrievalSource::Session,
+            "Older session",
+            "older context",
+            0.8,
+            "session.message:s1:1",
+            TrustLevel::Medium,
+        );
+        old.freshness = Some("2026-05-24T00:00:00Z".to_string());
+        let mut new = RetrievalItem::new(
+            RetrievalSource::Session,
+            "Newer session",
+            "newer context",
+            0.8,
+            "session.message:s1:2",
+            TrustLevel::Medium,
+        );
+        new.freshness = Some("2026-05-26T00:00:00Z".to_string());
+
+        let mut ctx = RetrievalContext::new("query", RetrievalPolicy::Full);
+        ctx.add_item(old);
+        ctx.add_item(new);
+
+        assert_eq!(ctx.items[0].title, "Newer session");
+    }
+
+    #[test]
+    fn duplicate_facts_keep_one_primary_item_and_merge_provenance() {
+        let build = |reverse: bool| {
+            let mut ctx = RetrievalContext::new("query", RetrievalPolicy::Full);
+            let memory = RetrievalItem::new(
+                RetrievalSource::Memory,
+                "Memory preference",
+                "Use compact status bars.",
+                0.8,
+                "memory.match:memory/cli.md",
+                TrustLevel::Medium,
+            );
+            let project = RetrievalItem::new(
+                RetrievalSource::Project,
+                "Project convention",
+                "Use compact status bars.",
+                0.8,
+                "project.index:/repo",
+                TrustLevel::High,
+            );
+            let session = RetrievalItem::new(
+                RetrievalSource::Session,
+                "Session recap",
+                "Use compact status bars.",
+                0.8,
+                "session.message:s1:7",
+                TrustLevel::Medium,
+            );
+            if reverse {
+                ctx.add_item(session);
+                ctx.add_item(project);
+                ctx.add_item(memory);
+            } else {
+                ctx.add_item(memory);
+                ctx.add_item(project);
+                ctx.add_item(session);
+            }
+            ctx
+        };
+        let ctx = build(false);
+        let reversed = build(true);
+
+        assert_eq!(ctx.items.len(), 1);
+        assert_eq!(ctx.format_for_prompt(), reversed.format_for_prompt());
+        assert_eq!(ctx.items[0].source, RetrievalSource::Project);
+        assert!(ctx.items[0]
+            .provenance
+            .contains("primary=Project:project.index:/repo"));
+        assert!(ctx.items[0]
+            .provenance
+            .contains("also=Memory:memory.match:memory/cli.md"));
+        assert!(ctx.items[0]
+            .provenance
+            .contains("also=Session:session.message:s1:7"));
+        assert_eq!(ctx.token_estimate, ctx.items[0].token_estimate);
+        assert_eq!(
+            ctx.format_for_prompt()
+                .matches("Use compact status bars.")
+                .count(),
+            1
+        );
     }
 
     #[test]

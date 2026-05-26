@@ -1154,3 +1154,53 @@ ruby -ryaml -e 'ARGV.each { |path| YAML.load_file(path); puts path }' evalsets/l
 - 下一批建议转向 Context Zone Convergence 的 deterministic ordering /
   provenance dedupe，或补 code-change 多轮 no-diff -> route/task-mode recovery
   signal。
+
+### 2026-05-26 第九批落地
+
+已完成:
+
+- `RetrievalContext` 的动态材料入口增加 deterministic ordering:
+  - 排序不再只依赖 score；
+  - 显式使用 score、conflict、trust、freshness、source priority、title、
+    provenance、id 作为稳定 tie-breaker；
+  - 相同 retrieval/memory/session/project 输入即使插入顺序不同，
+    `format_for_prompt()` 也保持一致。
+- `RetrievalContext::add_item` / `extend` 增加 provenance dedupe:
+  - 对 normalized content preview 形成 fact-level dedupe key；
+  - 同一事实从 memory、project、session 等多个来源进入时，只保留一个
+    primary display item；
+  - 其他来源合并到 `provenance` 的 `also=` 列表，而不是重复喂给模型；
+  - token estimate 会按去重后的 primary item 重新计算，避免重复材料膨胀预算。
+- primary 选择遵循保守 runtime 规则:
+  - 更高 score 优先；
+  - 非 conflict 优先；
+  - trust 更高优先；
+  - freshness/source priority 用作 tie-breaker；
+  - workspace/project/file/tool/session 证据优先于 memory/web 的旧背景材料。
+- 新增 retrieval context unit tests:
+  - 同分项目/session items 反序插入仍得到同样顺序和 prompt；
+  - memory + project + session 的同一事实只展示一次；
+  - merged provenance 同时保留 primary project evidence 和 memory/session
+    `also=` provenance；
+  - 反序插入的 duplicate facts 也得到同一个 prompt。
+
+已验证:
+
+```bash
+cargo test -q retrieval_context
+cargo test -q context_assembly
+cargo fmt --check
+```
+
+第九批之后的状态:
+
+- P1.3 Deterministic Ordering 和 Provenance Dedupe 已在 retrieval/material
+  入口落第一段主链路，后续 memory/project/session 混合输入不会因为来源顺序
+  不稳定而改变 relevant material prompt。
+- 这批还没有重写 request message 的 zone-first primary envelope；它先把
+  最大 token 膨胀风险的 retrieval material 入口收稳。
+- 下一批建议继续 Context Zone Convergence:
+  - 将 `<relevant_material>` / `<recent_observation>` 多段 system message 合并为
+    primary zone-first envelope；
+  - 在 trace 里增加 dedupe count / provenance count；
+  - 增加 hostile retrieved content fencing 的 request-preparation 回归测试。
