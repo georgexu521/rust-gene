@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::{Arc, RwLock};
 use tokio::sync::mpsc;
-use tracing::warn;
+use tracing::{debug, warn};
 
 fn turn_execution_timeout() -> std::time::Duration {
     let secs = std::env::var("PRIORITY_AGENT_TURN_TIMEOUT_SECS")
@@ -435,9 +435,10 @@ impl StreamingQueryEngine {
         let Some(mem_mutex) = &self.memory_manager else {
             return;
         };
-        let session_id = self
-            .current_session_id()
-            .unwrap_or_else(|| "unbound-session".to_string());
+        let Some(session_id) = self.current_session_id() else {
+            debug!("Skipping memory flush: no persistent session id is bound");
+            return;
+        };
         let messages = self.get_history().await;
         if messages.is_empty() {
             return;
@@ -1135,15 +1136,15 @@ impl StreamingQueryEngine {
 
             // 6. 自动 flush 记忆（每次查询结束后自动写入）
             if let Some(ref mem_mutex) = engine.memory_manager {
+                let Some(session_id) = engine.session_id.clone() else {
+                    debug!("Skipping memory flush: no persistent session id is bound");
+                    return;
+                };
                 let flush_history = {
                     let hist = history.lock().await;
                     hist.clone()
                 };
                 let mut mem = mem_mutex.lock().await;
-                let session_id = engine
-                    .session_id
-                    .clone()
-                    .unwrap_or_else(|| "unbound-session".to_string());
                 mem.flush_session_with_reason_async(
                     session_id,
                     crate::memory::MemoryFlushReason::SessionEnd,

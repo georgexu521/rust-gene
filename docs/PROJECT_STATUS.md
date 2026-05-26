@@ -39,8 +39,9 @@ Current stage:
   behind `LocalMemoryProvider` remains the next memory-boundary step. Phase 4
   has started by adding an active `MemoryScope` to `MemoryManager` and setting
   it from the conversation session id and working directory during turn
-  bootstrap, so manager-owned memory candidates no longer default to
-  `unbound-session` in normal turns. Phase 5 has started by applying the memory
+  bootstrap, and streaming flush paths without a persistent session id now skip
+  memory writes instead of falling back to `unbound-session`. Phase 5 has
+  started by applying the memory
   safety scanner on persisted load paths: unsafe `MEMORY.md`, `USER.md`, topic
   memory files, and typed records are skipped during snapshot/retrieval loading
   instead of being injected as background context. Phase 6 has started with a

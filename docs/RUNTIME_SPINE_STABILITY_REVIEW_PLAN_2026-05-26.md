@@ -1265,3 +1265,74 @@ git diff --check
   入口和 request assembly zone block 两层。
 - 下一批建议继续把 context zone metrics 接入 aggregate summary，或者开始做
   code-change 多轮 no-diff -> route/task-mode recovery signal。
+
+### 2026-05-26 第十一批落地
+
+已完成:
+
+- context-zone envelope metrics 进入 run summary 和 aggregate summary:
+  - run summary 增加 context-zone envelope/source/dedupe/provenance 总数；
+  - Runtime Spine Evidence 表增加对应 rows；
+  - 新增 per-task Context Zone Matrix；
+  - aggregate summary 增加跨 run context-zone totals 和 Context Zone Matrix；
+  - summary fallback parser 保留 context-zone 字段，避免只读 summary 时丢失。
+- `scripts/live-eval-summary-smoke.sh` 增加 context-zone synthetic evidence，
+  覆盖:
+  - context-zone envelope task count；
+  - source message count；
+  - duplicate block removal count；
+  - provenance marker count；
+  - run summary 和 aggregate matrix 输出。
+- route/task-mode recovery 增加 code-change no-diff drift signal:
+  - 新增 `RouteRecoveryDriftSignal::CodeChangeNoDiffAfterRepeatedProgress`；
+  - action checkpoint 在 code-change 多轮 no-diff / existing diff repair /
+    focused repair stalled 时记录 `source=route_recovery` 的
+    `code_change_no_diff_replan` recovery plan；
+  - 该 recovery plan 不把 `file_edit` / `file_write` / `file_patch` 等
+    mutation tools 放入 allowed alternatives，只要求在已有 task contract 下
+    re-plan、targeted lookup 或 honest `not_verified` closeout；
+  - live-eval parser 可用既有 `route_recovery_kind` oracle 断言
+    `code_change_no_diff_replan`，并继续用 safety monotonic 检查 mutation
+    authority 没有静默扩大。
+- P3 产品文案收口落到 README:
+  - active memory 是 opt-in/local/bounded/read-only retrieval；
+  - skill evolution 只产生 reviewed candidates，不自动启用 trusted skills；
+  - subagents 是 scoped workers，child claims 不是 verified proof；
+  - `verified` closeout 代表 runtime evidence，`partial` / `failed` /
+    `not_verified` 是合法诚实状态。
+- Memory provider boundary 补一个实际 scope 清理:
+  - streaming memory flush 不再 fallback 到 `unbound-session`；
+  - 没有 persistent session id 时直接跳过 memory flush，避免无作用域写入。
+- provider contract 测试补强:
+  - `prefetch_all` 会收集可用 provider 的 records；
+  - external provider prefetch failure 被隔离为 outcome，不会丢弃 local
+    provider records；
+  - provider 收到的 `MemoryScope` 保留 session id 和 project root。
+
+已验证:
+
+```bash
+bash scripts/live-eval-summary-smoke.sh
+python3 -m unittest scripts.test_live_eval_report_parser
+cargo test -q route_recovery
+cargo test -q action_checkpoint
+cargo test -q streaming
+cargo test -q provider
+cargo test -q memory_scope
+scripts/runtime-spine-fast-gate.sh
+cargo check -q
+python3 -m py_compile scripts/live_eval_report_parser.py
+bash -n scripts/run_live_eval.sh scripts/live-eval-aggregate-summary.sh scripts/live-eval-summary-smoke.sh
+```
+
+第十一批之后的状态:
+
+- Context Zone Convergence 的 trace/report/aggregate 观察面闭环完成；
+  后续 context 改动可以直接看到 envelope 和 dedupe 是否漂移。
+- Route recovery 现在覆盖两类主要 drift:
+  - hidden read/search tool -> bounded read/search expansion；
+  - code-change 多轮 no-diff -> trace-visible replan signal，不扩大 mutation
+    authority。
+- P3 wording cleanup 已有用户可见 README 边界说明。
+- Memory provider boundary 的 `unbound-session` 普通路径已清理；local provider
+  真实抽象仍可继续分阶段推进，但不再有 src 里的 `unbound-session` fallback。

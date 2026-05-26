@@ -142,6 +142,19 @@ User prompt
 - Permissions with project/global/user rule sources.
 - HTTP API, WebSocket, SSE, and platform adapter framework.
 
+## Product Boundaries
+
+- Active memory is opt-in, local, bounded, and read-only retrieval context. It
+  does not call an LLM, write memory, invoke tools, or act as a background
+  planning agent.
+- Skill evolution proposes reviewed candidates; candidates are not trusted or
+  active until they pass gates and are explicitly applied.
+- Subagents are scoped workers with profile/tool boundaries. Their claims are
+  evidence inputs, not verified closeout proof unless the parent runtime
+  verifies them.
+- `verified` closeout means runtime evidence exists. `partial`, `failed`, and
+  `not_verified` are valid honest outcomes when proof is incomplete or blocked.
+
 ## Development
 
 ```bash

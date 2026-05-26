@@ -400,6 +400,7 @@ impl MemoryProvider for LocalMemoryProvider {
 mod tests {
     use super::*;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use std::sync::Mutex;
 
     #[derive(Debug)]
     struct TestProvider {
@@ -408,6 +409,9 @@ mod tests {
         initialize_calls: AtomicUsize,
         queue_calls: AtomicUsize,
         fail_initialize: bool,
+        fail_prefetch: bool,
+        prefetch_records: Mutex<Vec<MemoryRecord>>,
+        observed_scopes: Mutex<Vec<MemoryScope>>,
     }
 
     impl TestProvider {
@@ -418,6 +422,9 @@ mod tests {
                 initialize_calls: AtomicUsize::new(0),
                 queue_calls: AtomicUsize::new(0),
                 fail_initialize: false,
+                fail_prefetch: false,
+                prefetch_records: Mutex::new(Vec::new()),
+                observed_scopes: Mutex::new(Vec::new()),
             }
         }
 
@@ -432,6 +439,19 @@ mod tests {
                 fail_initialize: true,
                 ..Self::new(name)
             }
+        }
+
+        fn failing_prefetch(name: &'static str) -> Self {
+            Self {
+                fail_prefetch: true,
+                ..Self::new(name)
+            }
+        }
+
+        fn with_prefetch_record(name: &'static str, record: MemoryRecord) -> Self {
+            let provider = Self::new(name);
+            provider.prefetch_records.lock().unwrap().push(record);
+            provider
         }
     }
 
@@ -457,6 +477,19 @@ mod tests {
         async fn queue_prefetch(&self, _query: &str, _scope: &MemoryScope) -> anyhow::Result<()> {
             self.queue_calls.fetch_add(1, Ordering::SeqCst);
             Ok(())
+        }
+
+        async fn prefetch(
+            &self,
+            _query: &str,
+            scope: &MemoryScope,
+        ) -> anyhow::Result<Vec<MemoryRecord>> {
+            self.observed_scopes.lock().unwrap().push(scope.clone());
+            if self.fail_prefetch {
+                Err(anyhow!("prefetch failed"))
+            } else {
+                Ok(self.prefetch_records.lock().unwrap().clone())
+            }
         }
     }
 
@@ -514,5 +547,35 @@ mod tests {
         assert_eq!(outcomes[1].status, MemoryProviderCallStatus::Failed);
         assert_eq!(local.initialize_calls.load(Ordering::SeqCst), 0);
         assert_eq!(external.initialize_calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn registry_prefetch_collects_records_and_isolates_provider_failure() {
+        let mut scope = MemoryScope::local("session-provider-prefetch");
+        scope.project_root = Some(std::path::PathBuf::from("/tmp/provider-project"));
+        let record = MemoryRecord::new(
+            "Use cargo check before closeout",
+            crate::memory::types::MemoryKind::WorkflowConvention,
+            scope.clone(),
+            crate::memory::types::MemoryProvenance::local("test"),
+        );
+        let local = Arc::new(TestProvider::with_prefetch_record("local-test", record));
+        let external = Arc::new(TestProvider::failing_prefetch("external-test"));
+        let mut registry = MemoryProviderRegistry::with_local_for_tests(local.clone());
+        registry.register_external(external.clone()).unwrap();
+
+        let (records, outcomes) = registry.prefetch_all("cargo check", &scope).await;
+
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].scope, scope);
+        assert_eq!(outcomes.len(), 2);
+        assert_eq!(outcomes[0].status, MemoryProviderCallStatus::Ok);
+        assert_eq!(outcomes[1].status, MemoryProviderCallStatus::Failed);
+        assert!(outcomes[1]
+            .error
+            .as_deref()
+            .unwrap_or_default()
+            .contains("prefetch failed"));
+        assert_eq!(local.observed_scopes.lock().unwrap().as_slice(), &[scope]);
     }
 }

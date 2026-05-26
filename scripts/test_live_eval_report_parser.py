@@ -210,6 +210,53 @@ class RuntimeSpineRouteRecoveryAssertionTest(unittest.TestCase):
         self.assertEqual(metrics["route_recovery_safety_monotonic"], "true")
         self.assertEqual(metrics["route_recovery_unsafe_mutation_expansion"], "false")
 
+    def test_route_recovery_no_diff_replan_is_safety_monotonic(self):
+        assertions = normalized_runtime_spine_assertions(
+            {
+                "runtime_spine_assertions": {
+                    "route_recovery_plan": True,
+                    "route_recovery_safety_monotonic": True,
+                    "route_recovery_kind": "code_change_no_diff_replan",
+                }
+            }
+        )
+        events = [
+            {
+                "event": "trace_summary",
+                "trace": {
+                    "events": [
+                        {
+                            "type": "recovery_plan",
+                            "source": "route_recovery",
+                            "failure_type": "code_change_no_diff_after_repeated_progress",
+                            "recovery_kind": "code_change_no_diff_replan",
+                            "safe_retry": True,
+                            "allowed_alternatives": [
+                                "replan_under_code_change_contract",
+                                "targeted_lookup_if_missing_anchor",
+                                "honest_not_verified_closeout",
+                            ],
+                            "status": "Applied",
+                        }
+                    ]
+                },
+            }
+        ]
+
+        metrics = runtime_spine_metrics_from_events(events, assertions=assertions)
+
+        self.assertEqual(metrics["runtime_spine_status"], "passed")
+        self.assertEqual(metrics["route_recovery_events"], "1")
+        self.assertEqual(
+            metrics["route_recovery_failure_types"],
+            "code_change_no_diff_after_repeated_progress",
+        )
+        self.assertEqual(metrics["route_recovery_kinds"], "code_change_no_diff_replan")
+        self.assertEqual(metrics["route_recovery_read_search_expanded"], "false")
+        self.assertEqual(metrics["route_recovery_mutation_blocked"], "false")
+        self.assertEqual(metrics["route_recovery_safety_monotonic"], "true")
+        self.assertEqual(metrics["route_recovery_unsafe_mutation_expansion"], "false")
+
     def test_route_recovery_safety_assertion_fails_on_mutation_alternatives(self):
         assertions = normalized_runtime_spine_assertions(
             {

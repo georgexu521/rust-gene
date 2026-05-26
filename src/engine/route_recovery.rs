@@ -34,6 +34,7 @@ const MUTATION_TOOLS: &[&str] = &[
 pub enum RouteRecoveryDriftSignal {
     HiddenReadSearchToolRequested,
     HiddenMutationToolRequested,
+    CodeChangeNoDiffAfterRepeatedProgress,
 }
 
 impl RouteRecoveryDriftSignal {
@@ -41,6 +42,9 @@ impl RouteRecoveryDriftSignal {
         match self {
             Self::HiddenReadSearchToolRequested => "hidden_read_search_tool_requested",
             Self::HiddenMutationToolRequested => "hidden_mutation_tool_requested",
+            Self::CodeChangeNoDiffAfterRepeatedProgress => {
+                "code_change_no_diff_after_repeated_progress"
+            }
         }
     }
 }
@@ -213,6 +217,51 @@ fn blocked_mutation_decision(
     }
 }
 
+pub fn no_diff_code_change_decision(
+    route_workflow: WorkflowKind,
+    no_code_progress_rounds: usize,
+    reason: &str,
+) -> RouteRecoveryDecision {
+    let signal = RouteRecoveryDriftSignal::CodeChangeNoDiffAfterRepeatedProgress;
+    let action = format!(
+        "recover code-change no-diff drift without expanding mutation authority; route_workflow={:?} no_code_progress_rounds={}",
+        route_workflow, no_code_progress_rounds
+    );
+    RouteRecoveryDecision {
+        signal,
+        expanded_read_search: false,
+        mode_escalates_to_light: false,
+        plan: RecoveryPlan {
+            id: format!("route_recovery_{}", uuid::Uuid::new_v4().simple()),
+            source: "route_recovery".to_string(),
+            category: "route_drift".to_string(),
+            failure_type: signal.label().to_string(),
+            recovery_kind: "code_change_no_diff_replan".to_string(),
+            primary_error: truncate(reason, 240),
+            action: action.clone(),
+            retryable: true,
+            safe_retry: true,
+            allowed_alternatives: vec![
+                "replan_under_code_change_contract".to_string(),
+                "targeted_lookup_if_missing_anchor".to_string(),
+                "honest_not_verified_closeout".to_string(),
+            ],
+            retry_budget: Some(1),
+            side_effect_uncertain: false,
+            requires_user_decision: false,
+            suggested_command: None,
+            user_note:
+                "Route recovery recorded code-change no-diff drift; it does not expand mutation tools."
+                    .to_string(),
+            status: RecoveryStatus::Applied,
+        },
+        correction: format!(
+            "Route recovery: this {:?} task has made {} successful no-diff progress round(s). Re-plan under the existing task contract, make the smallest scoped patch if safe, or close out as not_verified with a concrete blocker. This does not grant any new mutation authority.",
+            route_workflow, no_code_progress_rounds
+        ),
+    }
+}
+
 fn truncate(text: &str, max: usize) -> String {
     let mut out = text.chars().take(max).collect::<String>();
     if text.chars().count() > max {
@@ -289,5 +338,28 @@ mod tests {
             "Tool 'bash' was not exposed in the current request and cannot be executed."
         ));
         assert!(!is_unexposed_tool_error("command exited with status 101"));
+    }
+
+    #[test]
+    fn no_diff_code_change_recovery_does_not_add_mutation_alternatives() {
+        let decision = no_diff_code_change_decision(
+            WorkflowKind::CodeChange,
+            3,
+            "code-change task made no edit after repeated inspection",
+        );
+
+        assert_eq!(
+            decision.signal,
+            RouteRecoveryDriftSignal::CodeChangeNoDiffAfterRepeatedProgress
+        );
+        assert!(!decision.expanded_read_search);
+        assert_eq!(decision.plan.recovery_kind, "code_change_no_diff_replan");
+        assert!(decision.plan.safe_retry);
+        assert!(!decision.plan.requires_user_decision);
+        assert!(decision
+            .plan
+            .allowed_alternatives
+            .iter()
+            .all(|tool| !is_mutation_tool(tool)));
     }
 }

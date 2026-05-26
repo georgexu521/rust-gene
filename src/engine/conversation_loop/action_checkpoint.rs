@@ -218,6 +218,12 @@ impl ProgressCheckpointActionApplier {
                 no_code_progress_rounds: rounds,
             } => {
                 Self::activate_repeated_no_code_progress(context.trace, context.code_workflow);
+                Self::record_no_diff_route_recovery(
+                    context.trace,
+                    context.workflow,
+                    rounds,
+                    "existing diff still needs repair after repeated read-only rounds",
+                );
                 let checkpoint = format!(
                     "Workflow acceptance repair checkpoint: this {:?} task already has code changes, but {} consecutive successful tool rounds made no additional edit. Use the evidence already gathered to synthesize the smallest remaining file_edit/file_write/file_patch change now. If multiple independent acceptance-critical bypasses are visible, fix them together; otherwise stop with a Closeout status of not_verified and name the blocker.",
                     context.workflow, rounds
@@ -246,6 +252,12 @@ impl ProgressCheckpointActionApplier {
                 no_code_progress_rounds: rounds,
             } => {
                 Self::activate_repeated_no_code_progress(context.trace, context.code_workflow);
+                Self::record_no_diff_route_recovery(
+                    context.trace,
+                    context.workflow,
+                    rounds,
+                    "code-change task made no edit after repeated inspection",
+                );
                 let lookup_rule = ConversationLoop::targeted_lookup_budget_rule(0);
                 let checkpoint = format!(
                     "Workflow action checkpoint: this is a {:?} task and {} consecutive successful tool rounds produced no code change. On the next response, use file_edit or file_write to apply the smallest safe patch, then run validation after the file changes. If prior grep/file_read results include line numbers, prefer file_edit with line_start/line_end or exact old_string copied from that current source context. Do not call glob/project_list or repeat broad inspection. If a specific symbol, test, or call site is still missing, use the focused lookup budget, then patch. {} If a scorer/decision object already returns final status, use that status directly instead of reimplementing acceptance gates. If you cannot patch safely from the evidence already gathered, stop with a Closeout status of not_verified and a concrete blocker.",
@@ -276,6 +288,12 @@ impl ProgressCheckpointActionApplier {
                 });
             }
             ProgressCheckpointAction::FocusedRepairStalled => {
+                Self::record_no_diff_route_recovery(
+                    context.trace,
+                    context.workflow,
+                    3,
+                    "focused repair lookup did not produce a patch",
+                );
                 context.trace.record(TraceEvent::WorkflowFallback {
                     error:
                         "action checkpoint entered patch synthesis after repeated focused repair reads"
@@ -283,6 +301,20 @@ impl ProgressCheckpointActionApplier {
                 });
             }
         }
+    }
+
+    fn record_no_diff_route_recovery(
+        trace: &TraceCollector,
+        workflow: WorkflowKind,
+        no_code_progress_rounds: usize,
+        reason: &str,
+    ) {
+        let decision = crate::engine::route_recovery::no_diff_code_change_decision(
+            workflow,
+            no_code_progress_rounds,
+            reason,
+        );
+        super::turn_recording::record_recovery_plan(trace, &decision.plan);
     }
 
     fn activate_repeated_no_code_progress(
@@ -779,6 +811,64 @@ mod tests {
             event,
             TraceEvent::AdaptiveWorkflowTriggered { trigger, .. }
                 if trigger == "repeated_no_code_progress"
+        )));
+        assert!(finished.events.iter().any(|event| matches!(
+            event,
+            TraceEvent::RecoveryPlan {
+                source,
+                failure_type,
+                recovery_kind,
+                allowed_alternatives,
+                ..
+            } if source == "route_recovery"
+                && failure_type == "code_change_no_diff_after_repeated_progress"
+                && recovery_kind == "code_change_no_diff_replan"
+                && allowed_alternatives
+                    .iter()
+                    .all(|tool| !crate::engine::route_recovery::is_mutation_tool(tool))
+        )));
+    }
+
+    #[test]
+    fn no_diff_action_checkpoint_records_route_recovery_without_mutation_expansion() {
+        let trace = trace();
+        let mut code_workflow = code_workflow("modify CLI status");
+        let mut messages = Vec::new();
+        let mut tool_results_text = String::new();
+
+        ProgressCheckpointActionApplier::apply(ProgressCheckpointActionContext {
+            action: ProgressCheckpointAction::EnterActionCheckpoint {
+                no_code_progress_rounds: 3,
+            },
+            workflow: WorkflowKind::CodeChange,
+            trace: &trace,
+            code_workflow: &mut code_workflow,
+            messages: &mut messages,
+            tool_results_text: &mut tool_results_text,
+        });
+
+        assert!(tool_results_text.contains("Workflow action checkpoint"));
+        let finished = trace.finish(crate::engine::trace::TurnStatus::Completed);
+        assert!(finished.events.iter().any(|event| matches!(
+            event,
+            TraceEvent::RecoveryPlan {
+                source,
+                category,
+                failure_type,
+                recovery_kind,
+                safe_retry,
+                requires_user_decision,
+                allowed_alternatives,
+                ..
+            } if source == "route_recovery"
+                && category == "route_drift"
+                && failure_type == "code_change_no_diff_after_repeated_progress"
+                && recovery_kind == "code_change_no_diff_replan"
+                && *safe_retry
+                && !*requires_user_decision
+                && allowed_alternatives
+                    .iter()
+                    .all(|tool| !crate::engine::route_recovery::is_mutation_tool(tool))
         )));
     }
 

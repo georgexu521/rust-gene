@@ -2476,6 +2476,11 @@ route_recovery_safety_monotonic_tasks = sum(
 route_recovery_unsafe_mutation_expansion_tasks = sum(
     1 for row in rows if row.get("route_recovery_unsafe_mutation_expansion") == "true"
 )
+context_zone_envelope_tasks = sum(1 for row in rows if as_int(row.get("context_zone_envelope_messages")) > 0)
+context_zone_envelope_messages = sum(as_int(row.get("context_zone_envelope_messages")) for row in rows)
+context_zone_source_messages = sum(as_int(row.get("context_zone_source_messages")) for row in rows)
+context_zone_duplicate_blocks_removed = sum(as_int(row.get("context_zone_duplicate_blocks_removed")) for row in rows)
+context_zone_provenance_markers = sum(as_int(row.get("context_zone_provenance_markers")) for row in rows)
 gate_outcome_tasks = sum(1 for row in rows if as_int(row.get("gate_outcome_total")) > 0)
 gate_outcome_total = sum(as_int(row.get("gate_outcome_total")) for row in rows)
 gate_outcome_protective_blocks = sum(as_int(row.get("gate_outcome_protective_blocks")) for row in rows)
@@ -2578,6 +2583,11 @@ lines = [
     f"- Route recovery mutation blocks: `{route_recovery_mutation_blocked_tasks}`",
     f"- Route recovery safety-monotonic tasks: `{route_recovery_safety_monotonic_tasks}`",
     f"- Route recovery unsafe mutation-expansion tasks: `{route_recovery_unsafe_mutation_expansion_tasks}`",
+    f"- Context-zone envelope tasks: `{context_zone_envelope_tasks}`",
+    f"- Context-zone envelope messages: `{context_zone_envelope_messages}`",
+    f"- Context-zone source messages: `{context_zone_source_messages}`",
+    f"- Context-zone duplicate blocks removed: `{context_zone_duplicate_blocks_removed}`",
+    f"- Context-zone provenance markers: `{context_zone_provenance_markers}`",
     f"- Gate outcome tasks: `{gate_outcome_tasks}`",
     f"- Gate outcome records: `{gate_outcome_total}`",
     f"- Gate outcome protective blocks: `{gate_outcome_protective_blocks}`",
@@ -2688,6 +2698,11 @@ lines.extend([
     f"| route_recovery_mutation_blocks | {route_recovery_mutation_blocked_tasks} | Tasks where route recovery explicitly blocked silent mutation expansion. |",
     f"| route_recovery_safety_monotonic_tasks | {route_recovery_safety_monotonic_tasks} | Tasks where route recovery preserved destructive-tool authority. |",
     f"| route_recovery_unsafe_mutation_expansion_tasks | {route_recovery_unsafe_mutation_expansion_tasks} | Tasks where route recovery exposed mutation alternatives and should be investigated. |",
+    f"| context_zone_envelope_tasks | {context_zone_envelope_tasks} | Tasks where dynamic context was consolidated into a primary zone-first envelope. |",
+    f"| context_zone_envelope_messages | {context_zone_envelope_messages} | Consolidated context-zone envelope messages observed across tasks. |",
+    f"| context_zone_source_messages | {context_zone_source_messages} | Dynamic source messages consumed into context-zone envelopes. |",
+    f"| context_zone_duplicate_blocks_removed | {context_zone_duplicate_blocks_removed} | Duplicate dynamic zone blocks removed during request assembly. |",
+    f"| context_zone_provenance_markers | {context_zone_provenance_markers} | Provenance markers preserved inside context-zone envelopes. |",
     f"| gate_outcome_tasks | {gate_outcome_tasks} | Tasks with derived gate-outcome records from trace or report fields. |",
     f"| gate_outcome_records | {gate_outcome_total} | Total gate-outcome records derived across action review, permission, and closeout gates. |",
     f"| gate_outcome_protective_blocks | {gate_outcome_protective_blocks} | Gate blocks that protected policy, scope, budget, checkpoint, or closeout invariants. |",
@@ -2734,6 +2749,24 @@ if rows:
         )
 else:
     lines.append("| none | missing | missing | false | false | none | none |")
+
+lines.extend([
+    "",
+    "### Context Zone Matrix",
+    "",
+    "| task | materialized | envelopes | sources | dedupe_removed | provenance | task_state_empty | current_request_empty |",
+    "|------|--------------|-----------|---------|----------------|------------|------------------|-----------------------|",
+])
+
+if rows:
+    for row in rows:
+        lines.append(
+            "| {task} | {context_zones_materialized} | {context_zone_envelope_messages} | {context_zone_source_messages} | {context_zone_duplicate_blocks_removed} | {context_zone_provenance_markers} | {context_zone_task_state_empty} | {context_zone_current_decision_request_empty} |".format(
+                **{key: md_cell(value) for key, value in row.items()}
+            )
+        )
+else:
+    lines.append("| none | false | 0 | 0 | 0 | 0 | false | false |")
 
 lines.extend([
     "",

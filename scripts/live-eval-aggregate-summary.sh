@@ -66,6 +66,13 @@ def table_rows(text):
                 "route_recovery_mutation_blocked": record.get("route_recovery_mutation_blocked", "false"),
                 "route_recovery_safety_monotonic": record.get("route_recovery_safety_monotonic", "missing"),
                 "route_recovery_unsafe_mutation_expansion": record.get("route_recovery_unsafe_mutation_expansion", "false"),
+                "context_zones_materialized": record.get("context_zones_materialized", "false"),
+                "context_zone_task_state_empty": record.get("context_zone_task_state_empty", "false"),
+                "context_zone_current_decision_request_empty": record.get("context_zone_current_decision_request_empty", "false"),
+                "context_zone_envelope_messages": record.get("context_zone_envelope_messages", "0"),
+                "context_zone_source_messages": record.get("context_zone_source_messages", "0"),
+                "context_zone_duplicate_blocks_removed": record.get("context_zone_duplicate_blocks_removed", "0"),
+                "context_zone_provenance_markers": record.get("context_zone_provenance_markers", "0"),
                 "outcome_score": record.get("outcome_score", "missing"),
                 "process_score": record.get("process_score", "missing"),
                 "efficiency_score": record.get("efficiency_score", "missing"),
@@ -297,6 +304,10 @@ for run_dir in sorted(benchmarks.glob(run_glob)):
         record["context_zones_materialized"] = row.get("context_zones_materialized", "false")
         record["context_zone_task_state_empty"] = row.get("context_zone_task_state_empty", "false")
         record["context_zone_current_decision_request_empty"] = row.get("context_zone_current_decision_request_empty", "false")
+        record["context_zone_envelope_messages"] = row.get("context_zone_envelope_messages", "0")
+        record["context_zone_source_messages"] = row.get("context_zone_source_messages", "0")
+        record["context_zone_duplicate_blocks_removed"] = row.get("context_zone_duplicate_blocks_removed", "0")
+        record["context_zone_provenance_markers"] = row.get("context_zone_provenance_markers", "0")
         record["state_transition_recorded"] = row.get("state_transition_recorded", "false")
         record["completion_contract_status"] = row.get("completion_contract_status", "missing")
         record["candidate_score_calibrated"] = row.get("candidate_score_calibrated", "false")
@@ -373,6 +384,21 @@ runtime_spine_trace_present = sum(
 runtime_spine_agent_loop_steps = sum(record["agent_loop_steps"] for record in task_records)
 runtime_spine_context_zone_tasks = sum(
     1 for record in task_records if record["context_zones_materialized"] == "true"
+)
+context_zone_envelope_tasks = sum(
+    1 for record in task_records if as_int(record["context_zone_envelope_messages"]) > 0
+)
+context_zone_envelope_messages = sum(
+    as_int(record["context_zone_envelope_messages"]) for record in task_records
+)
+context_zone_source_messages = sum(
+    as_int(record["context_zone_source_messages"]) for record in task_records
+)
+context_zone_duplicate_blocks_removed = sum(
+    as_int(record["context_zone_duplicate_blocks_removed"]) for record in task_records
+)
+context_zone_provenance_markers = sum(
+    as_int(record["context_zone_provenance_markers"]) for record in task_records
 )
 runtime_spine_stage_transition_tasks = sum(
     1 for record in task_records if record["state_transition_recorded"] == "true"
@@ -667,6 +693,11 @@ lines.extend(md_table(
         ["runtime_spine_trace_present_tasks", runtime_spine_trace_present, pct(runtime_spine_trace_present, total_tasks)],
         ["runtime_spine_agent_loop_steps", runtime_spine_agent_loop_steps, "n/a"],
         ["runtime_spine_context_zone_tasks", runtime_spine_context_zone_tasks, pct(runtime_spine_context_zone_tasks, total_tasks)],
+        ["context_zone_envelope_tasks", context_zone_envelope_tasks, pct(context_zone_envelope_tasks, total_tasks)],
+        ["context_zone_envelope_messages", context_zone_envelope_messages, "n/a"],
+        ["context_zone_source_messages", context_zone_source_messages, "n/a"],
+        ["context_zone_duplicate_blocks_removed", context_zone_duplicate_blocks_removed, "n/a"],
+        ["context_zone_provenance_markers", context_zone_provenance_markers, "n/a"],
         ["runtime_spine_stage_transition_tasks", runtime_spine_stage_transition_tasks, pct(runtime_spine_stage_transition_tasks, total_tasks)],
         ["runtime_spine_completion_contract_tasks", runtime_spine_completion_contract_tasks, pct(runtime_spine_completion_contract_tasks, total_tasks)],
         ["route_recovery_tasks", route_recovery_tasks, pct(route_recovery_tasks, total_tasks)],
@@ -694,6 +725,37 @@ lines.extend(md_table(
         ["observer_outcome_tasks", observer_outcome_tasks, pct(observer_outcome_tasks, total_tasks)],
         ["memory_boundary_tasks", memory_boundary_tasks, pct(memory_boundary_tasks, total_tasks)],
     ],
+))
+
+lines.extend(["", "### Context Zone Matrix", ""])
+lines.extend(md_table(
+    [
+        "run",
+        "task",
+        "materialized",
+        "envelopes",
+        "sources",
+        "dedupe_removed",
+        "provenance",
+        "task_state_empty",
+        "current_request_empty",
+    ],
+    [
+        [
+            record["run"],
+            record["task"],
+            record["context_zones_materialized"],
+            record["context_zone_envelope_messages"],
+            record["context_zone_source_messages"],
+            record["context_zone_duplicate_blocks_removed"],
+            record["context_zone_provenance_markers"],
+            record["context_zone_task_state_empty"],
+            record["context_zone_current_decision_request_empty"],
+        ]
+        for record in task_records
+        if record["context_zones_materialized"] == "true"
+        or as_int(record["context_zone_envelope_messages"]) > 0
+    ] or [["none", "none", "false", 0, 0, 0, 0, "false", "false"]],
 ))
 
 lines.extend(["", "### Route Recovery Matrix", ""])

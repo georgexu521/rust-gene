@@ -43,6 +43,13 @@ runtime_spine_phase_coverage: 7/7
 runtime_spine_assertions: phase:context,event:action_decision_evaluated,special:verification_proof
 runtime_spine_status: passed
 runtime_spine_missing: none
+context_zones_materialized: true
+context_zone_task_state_empty: false
+context_zone_current_decision_request_empty: false
+context_zone_envelope_messages: 1
+context_zone_source_messages: 3
+context_zone_duplicate_blocks_removed: 1
+context_zone_provenance_markers: 2
 verification_proof_status: verified
 verification_proof_kinds: command_passed,required_validation_passed
 verification_proof_support_status: verified
@@ -115,6 +122,14 @@ verification_proof_support_status: partial
 verification_proof_support_summary: partial support only from diff_reviewed
 verification_proof_supports_verified: false
 verification_proof_residual_risk: true
+route_recovery: events=1, read_search=false, mutation_blocked=false, safety=true
+route_recovery_events: 1
+route_recovery_failure_types: code_change_no_diff_after_repeated_progress
+route_recovery_kinds: code_change_no_diff_replan
+route_recovery_read_search_expanded: false
+route_recovery_mutation_blocked: false
+route_recovery_safety_monotonic: true
+route_recovery_unsafe_mutation_expansion: false
 gate_outcomes: total=2, protective_block=1, recoverable_friction=0, unrecovered_block=1, suspected_false_positive=0, policy_correct_but_ux_costly=0, harmless_pass=0
 gate_outcome_records: action_review:revise:protective_block,closeout:not_verified:unrecovered_block
 gate_outcome_total: 2
@@ -170,12 +185,17 @@ grep -q 'Runtime-spine assertions passed: `1`' "$summary_path"
 grep -q 'Runtime-spine assertions failed: `1`' "$summary_path"
 grep -q 'Runtime-spine full coverage tasks: `1`' "$summary_path"
 grep -q 'Runtime-spine trace-present tasks: `2`' "$summary_path"
-grep -q 'Route recovery tasks: `1`' "$summary_path"
-grep -q 'Route recovery events: `1`' "$summary_path"
+grep -q 'Route recovery tasks: `2`' "$summary_path"
+grep -q 'Route recovery events: `2`' "$summary_path"
 grep -q 'Route recovery read/search expansions: `1`' "$summary_path"
 grep -q 'Route recovery mutation blocks: `0`' "$summary_path"
-grep -q 'Route recovery safety-monotonic tasks: `1`' "$summary_path"
+grep -q 'Route recovery safety-monotonic tasks: `2`' "$summary_path"
 grep -q 'Route recovery unsafe mutation-expansion tasks: `0`' "$summary_path"
+grep -q 'Context-zone envelope tasks: `1`' "$summary_path"
+grep -q 'Context-zone envelope messages: `1`' "$summary_path"
+grep -q 'Context-zone source messages: `3`' "$summary_path"
+grep -q 'Context-zone duplicate blocks removed: `1`' "$summary_path"
+grep -q 'Context-zone provenance markers: `2`' "$summary_path"
 grep -q 'Gate outcome tasks: `2`' "$summary_path"
 grep -q 'Gate outcome records: `4`' "$summary_path"
 grep -q 'Gate outcome protective blocks: `1`' "$summary_path"
@@ -215,12 +235,17 @@ grep -q '| runtime_spine_assertions_passed | 1 | Runtime-spine assertion tasks w
 grep -q '| runtime_spine_assertions_failed | 1 | Runtime-spine assertion tasks missing required trace/control-loop signals. |' "$summary_path"
 grep -q '| runtime_spine_full_coverage_tasks | 1 | Tasks whose trace touched all runtime-spine phases. |' "$summary_path"
 grep -q '| runtime_spine_trace_present_tasks | 2 | Tasks with a trace summary available to the report parser. |' "$summary_path"
-grep -q '| route_recovery_tasks | 1 | Tasks with route-recovery plans emitted by the runtime. |' "$summary_path"
-grep -q '| route_recovery_events | 1 | Route-recovery plans observed across task traces. |' "$summary_path"
+grep -q '| route_recovery_tasks | 2 | Tasks with route-recovery plans emitted by the runtime. |' "$summary_path"
+grep -q '| route_recovery_events | 2 | Route-recovery plans observed across task traces. |' "$summary_path"
 grep -q '| route_recovery_read_search_expansions | 1 | Tasks where route recovery expanded only read/search understanding tools. |' "$summary_path"
 grep -q '| route_recovery_mutation_blocks | 0 | Tasks where route recovery explicitly blocked silent mutation expansion. |' "$summary_path"
-grep -q '| route_recovery_safety_monotonic_tasks | 1 | Tasks where route recovery preserved destructive-tool authority. |' "$summary_path"
+grep -q '| route_recovery_safety_monotonic_tasks | 2 | Tasks where route recovery preserved destructive-tool authority. |' "$summary_path"
 grep -q '| route_recovery_unsafe_mutation_expansion_tasks | 0 | Tasks where route recovery exposed mutation alternatives and should be investigated. |' "$summary_path"
+grep -q '| context_zone_envelope_tasks | 1 | Tasks where dynamic context was consolidated into a primary zone-first envelope. |' "$summary_path"
+grep -q '| context_zone_envelope_messages | 1 | Consolidated context-zone envelope messages observed across tasks. |' "$summary_path"
+grep -q '| context_zone_source_messages | 3 | Dynamic source messages consumed into context-zone envelopes. |' "$summary_path"
+grep -q '| context_zone_duplicate_blocks_removed | 1 | Duplicate dynamic zone blocks removed during request assembly. |' "$summary_path"
+grep -q '| context_zone_provenance_markers | 2 | Provenance markers preserved inside context-zone envelopes. |' "$summary_path"
 grep -q '| gate_outcome_tasks | 2 | Tasks with derived gate-outcome records from trace or report fields. |' "$summary_path"
 grep -q '| gate_outcome_records | 4 | Total gate-outcome records derived across action review, permission, and closeout gates. |' "$summary_path"
 grep -q '| gate_outcome_protective_blocks | 1 | Gate blocks that protected policy, scope, budget, checkpoint, or closeout invariants. |' "$summary_path"
@@ -233,8 +258,9 @@ grep -q '| task-code-pass | 2 | 0 | 0 | 0 | 0 | 0 | 2 | action_review:allow:harm
 grep -q '| task-seeded-fail | 2 | 1 | 0 | 1 | 0 | 0 | 0 | action_review:revise:protective_block,closeout:not_verified:unrecovered_block | action_review |' "$summary_path"
 grep -q '| task-code-pass | verified | verified | true | false | command_passed,required_validation_passed | verified by command_passed,required_validation_passed |' "$summary_path"
 grep -q '| task-seeded-fail | missing | partial | false | true | diff_reviewed | partial support only from diff_reviewed |' "$summary_path"
+grep -q '| task-code-pass | true | 1 | 3 | 1 | 2 | false | false |' "$summary_path"
 grep -q '| task-code-pass | 1 | expand_read_search_only | hidden_read_search_tool_requested | true | false | true | false | events=1, read_search=true, mutation_blocked=false, safety=true |' "$summary_path"
-grep -q '| task-seeded-fail | 0 | none | none | false | false | missing | false | events=0, read_search=false, mutation_blocked=false, safety=missing |' "$summary_path"
+grep -q '| task-seeded-fail | 1 | code_change_no_diff_replan | code_change_no_diff_after_repeated_progress | false | false | true | false | events=1, read_search=false, mutation_blocked=false, safety=true |' "$summary_path"
 grep -q '| task-code-pass | passed | seeded_code_change | none | none | ok | none | agent-run | passed | passed | coverage=7/7, status=passed, missing=none | missing | missing | missing | memory_quality_gate,memory_conflict_precision | passed | required_validation,first_code_change | 2 | yes | active=true, recalled=2, conflicts=1, changed_plan=true | active=false, tool_calls=0, usage_events=0, promotion=false | none |' "$summary_path"
 grep -q '| task-plan-pass | passed | audit_or_regression_check | missing | none | skipped | ok | plan-only | unknown | missing | coverage=0/7, status=none, missing=none | missing | missing | missing | skill_promotion_gate | passed | none | none | no | active=false, recalled=0, conflicts=0, changed_plan=false | active=true, tool_calls=1, usage_events=2, promotion=true | none |' "$summary_path"
 grep -q '| task-seeded-fail | failed | seeded_code_change | agent_flow | runtime_spine,file_state,llm_reasoning | failed | none | agent-run | failed | not_verified | coverage=3/7, status=failed, missing=event:action_decision_evaluated,special:verification_proof | missing | missing | missing | memory_write_safety | failed | repeated_no_code_progress | none | no | active=false, recalled=0, conflicts=0, changed_plan=false | active=false, tool_calls=0, usage_events=0, promotion=false | no_code_diff,action_checkpoint_no_patch |' "$summary_path"
@@ -270,12 +296,17 @@ grep -q '| runtime_spine_assertions_passed | 1 | 50.0% |' "$aggregate_path"
 grep -q '| runtime_spine_assertions_failed | 1 | 50.0% |' "$aggregate_path"
 grep -q '| runtime_spine_full_coverage_tasks | 1 | 25.0% |' "$aggregate_path"
 grep -q '| runtime_spine_trace_present_tasks | 2 | 50.0% |' "$aggregate_path"
-grep -q '| route_recovery_tasks | 1 | 25.0% |' "$aggregate_path"
-grep -q '| route_recovery_events | 1 | n/a |' "$aggregate_path"
+grep -q '| route_recovery_tasks | 2 | 50.0% |' "$aggregate_path"
+grep -q '| route_recovery_events | 2 | n/a |' "$aggregate_path"
 grep -q '| route_recovery_read_search_expansions | 1 | 25.0% |' "$aggregate_path"
 grep -q '| route_recovery_mutation_blocks | 0 | 0.0% |' "$aggregate_path"
-grep -q '| route_recovery_safety_monotonic_tasks | 1 | 25.0% |' "$aggregate_path"
+grep -q '| route_recovery_safety_monotonic_tasks | 2 | 50.0% |' "$aggregate_path"
 grep -q '| route_recovery_unsafe_mutation_expansion_tasks | 0 | 0.0% |' "$aggregate_path"
+grep -q '| context_zone_envelope_tasks | 1 | 25.0% |' "$aggregate_path"
+grep -q '| context_zone_envelope_messages | 1 | n/a |' "$aggregate_path"
+grep -q '| context_zone_source_messages | 3 | n/a |' "$aggregate_path"
+grep -q '| context_zone_duplicate_blocks_removed | 1 | n/a |' "$aggregate_path"
+grep -q '| context_zone_provenance_markers | 2 | n/a |' "$aggregate_path"
 grep -q '| gate_outcome_tasks | 2 | 50.0% |' "$aggregate_path"
 grep -q '| gate_outcome_records | 4 | n/a |' "$aggregate_path"
 grep -q '| gate_outcome_protective_blocks | 1 | n/a |' "$aggregate_path"
@@ -287,6 +318,9 @@ grep -q '| proof_support_partial_tasks | 1 | 25.0% |' "$aggregate_path"
 grep -q '| proof_support_not_verified_tasks | 0 | 0.0% |' "$aggregate_path"
 grep -q '| proof_support_residual_risk_tasks | 1 | 25.0% |' "$aggregate_path"
 grep -q '| task-code-pass | 1 | expand_read_search_only | hidden_read_search_tool_requested | true | false | true | false |' "$aggregate_path"
+grep -q '| task-seeded-fail | 1 | code_change_no_diff_replan | code_change_no_diff_after_repeated_progress | false | false | true | false |' "$aggregate_path"
+grep -q '| summary-smoke-' "$aggregate_path"
+grep -q '| task-code-pass | true | 1 | 3 | 1 | 2 | false | false |' "$aggregate_path"
 grep -q '| runtime_spine_assertions_not_passing | 1 |' "$aggregate_path"
 grep -q '| task-seeded-fail | seeded_code_change | agent_flow | agent_flow | failed | failed | no | coverage=3/7, status=failed, missing=event:action_decision_evaluated,special:verification_proof | memory_write_safety | failed | active=false, recalled=0, conflicts=0, changed_plan=false | active=false, tool_calls=0, usage_events=0, promotion=false | repeated_no_code_progress | no_code_diff,action_checkpoint_no_patch |' "$aggregate_path"
 
