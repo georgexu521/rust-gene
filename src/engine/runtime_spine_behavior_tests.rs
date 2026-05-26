@@ -11,7 +11,10 @@ use crate::engine::task_context::{
     VerificationStatus,
 };
 use crate::engine::trace::{format_trace_summary, TraceCollector, TraceEvent, TurnTrace};
-use crate::engine::verification_proof::{VerificationProofRequest, VerificationProofStatus};
+use crate::engine::verification_proof::{
+    VerificationProofKind, VerificationProofRequest, VerificationProofStatus,
+    VerificationProofSupportContext,
+};
 use crate::services::api::ToolCall;
 use crate::tools::{FileEditTool, ToolResult};
 use std::collections::HashSet;
@@ -144,6 +147,7 @@ fn runtime_spine_behavior_contract_covers_context_action_progress_stop_and_proof
         required_commands: &required,
         requires_validation: true,
         task_verification_status: VerificationStatus::Pending,
+        support_context: VerificationProofSupportContext::code_change(),
     });
     assert_eq!(missing.status, VerificationProofStatus::NotRun);
     assert_eq!(
@@ -156,9 +160,47 @@ fn runtime_spine_behavior_contract_covers_context_action_progress_stop_and_proof
         required_commands: &required,
         requires_validation: true,
         task_verification_status: VerificationStatus::Verified,
+        support_context: VerificationProofSupportContext::code_change(),
     });
     assert_eq!(verified.status, VerificationProofStatus::Verified);
     assert_eq!(verified.required_passed, 1);
+}
+
+#[test]
+fn runtime_spine_behavior_contract_carries_additive_proof_kinds() {
+    let mut ledger = EvidenceLedger::new();
+    ledger.record_validation_result_with_kind(
+        "bash",
+        Some("cargo test -q closeout"),
+        true,
+        "required closeout tests passed",
+        Some(VerificationProofKind::RequiredValidationPassed),
+    );
+
+    let required = vec!["cargo test -q closeout".to_string()];
+    let proof = ledger.verification_proof(VerificationProofRequest {
+        required_commands: &required,
+        requires_validation: true,
+        task_verification_status: VerificationStatus::Verified,
+        support_context: VerificationProofSupportContext::code_change(),
+    });
+
+    assert_eq!(proof.status, VerificationProofStatus::Verified);
+    assert_eq!(
+        proof.derived_support.status,
+        VerificationProofStatus::Verified
+    );
+    assert_eq!(
+        proof.proof_kinds,
+        vec![
+            VerificationProofKind::CommandPassed,
+            VerificationProofKind::RequiredValidationPassed
+        ]
+    );
+    assert_eq!(
+        ledger.validation_facts()[0].command_status.as_deref(),
+        Some("passed")
+    );
 }
 
 #[test]

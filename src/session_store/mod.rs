@@ -1500,6 +1500,13 @@ mod tests {
                     tool_evidence: Some(format!("tool evidence: records={}", turn_index)),
                     verification_proof_status: Some("verified".to_string()),
                     verification_proof_summary: Some("validation passed".to_string()),
+                    verification_proof_kind_summary: Some("command_passed".to_string()),
+                    verification_proof_support_status: Some("verified".to_string()),
+                    verification_proof_support_summary: Some(
+                        "verified by command_passed".to_string(),
+                    ),
+                    verification_proof_supports_verified: Some(true),
+                    verification_proof_residual_risk: Some(false),
                     acceptance_items: 1,
                     residual_risks: 0,
                 });

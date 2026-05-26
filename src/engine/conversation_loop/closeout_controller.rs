@@ -3,11 +3,12 @@ use crate::engine::code_change_workflow::{
     CodeChangeWorkflowRunner, StageValidationStatus, WorkflowCloseout,
 };
 use crate::engine::evidence_ledger::EvidenceLedger;
+use crate::engine::intent_router::WorkflowKind;
 use crate::engine::task_context::TaskContextBundle;
 use crate::engine::task_contract::{ExecutionReport, MemoryProposal, TaskContractBundleExt};
 use crate::engine::trace::{TraceCollector, TraceEvent};
 use crate::engine::verification_proof::{
-    VerificationProof, VerificationProofRequest, VerificationProofStatus,
+    VerificationProof, VerificationProofRequest, VerificationProofStatus, VerificationProofTaskType,
 };
 use crate::services::api::ToolCall;
 use tokio::sync::mpsc;
@@ -44,10 +45,15 @@ impl CloseoutEvaluator {
     ) -> CloseoutEvaluation {
         let validation_required =
             closeout_validation_required(code_workflow, task_bundle, required_validation_commands);
+        let support_context = evidence_ledger.verification_proof_support_context(
+            verification_proof_task_type(task_bundle),
+            required_validation_commands,
+        );
         let verification_proof = evidence_ledger.verification_proof(VerificationProofRequest {
             required_commands: required_validation_commands,
             requires_validation: validation_required,
             task_verification_status: task_bundle.agent_state.verification_plan.status,
+            support_context,
         });
         let runtime_validation_label = evidence_ledger
             .runtime_required_validation_label(required_validation_commands)
@@ -75,6 +81,16 @@ impl CloseoutEvaluator {
             tool_evidence_summary,
             verification_proof,
         }
+    }
+}
+
+fn verification_proof_task_type(task_bundle: &TaskContextBundle) -> VerificationProofTaskType {
+    match task_bundle.route.workflow {
+        WorkflowKind::Direct => VerificationProofTaskType::DirectAnswer,
+        WorkflowKind::Research | WorkflowKind::Planning => VerificationProofTaskType::ReadOnlyAudit,
+        WorkflowKind::CodeChange => VerificationProofTaskType::CodeChange,
+        WorkflowKind::BugFix => VerificationProofTaskType::BugFix,
+        WorkflowKind::Delegation => VerificationProofTaskType::SubagentReview,
     }
 }
 
@@ -114,13 +130,26 @@ fn apply_verification_proof_to_closeout(
             closeout.validation.push(line);
         }
     }
+    if validation_required || proof.derived_support.status != VerificationProofStatus::NotApplicable
+    {
+        let line = proof.support_line();
+        if !closeout.validation.iter().any(|item| item == &line) {
+            closeout.validation.push(line);
+        }
+    }
 
     if !proof.status.blocks_verified_closeout() {
+        apply_proof_support_to_closeout(closeout, proof);
         return;
     }
 
     match proof.status {
         VerificationProofStatus::Failed => closeout.status = StageValidationStatus::Failed,
+        VerificationProofStatus::Partial => {
+            if closeout.status == StageValidationStatus::Passed {
+                closeout.status = StageValidationStatus::Partial;
+            }
+        }
         VerificationProofStatus::NotRun
             if !validation_required && closeout.status != StageValidationStatus::Passed => {}
         VerificationProofStatus::NotRun
@@ -138,6 +167,39 @@ fn apply_verification_proof_to_closeout(
         "Verification proof is {}: {}",
         proof.status.label(),
         proof.summary
+    );
+    if !closeout.residual_risks.iter().any(|item| item == &residual) {
+        closeout.residual_risks.push(residual);
+    }
+    apply_proof_support_to_closeout(closeout, proof);
+}
+
+fn apply_proof_support_to_closeout(closeout: &mut WorkflowCloseout, proof: &VerificationProof) {
+    match proof.derived_support.status {
+        VerificationProofStatus::Verified | VerificationProofStatus::NotApplicable => {}
+        VerificationProofStatus::Failed => closeout.status = StageValidationStatus::Failed,
+        VerificationProofStatus::Partial => {
+            if closeout.status == StageValidationStatus::Passed {
+                closeout.status = StageValidationStatus::Partial;
+            }
+        }
+        VerificationProofStatus::NotRun
+        | VerificationProofStatus::Blocked
+        | VerificationProofStatus::UserDeferred
+        | VerificationProofStatus::Unavailable => {
+            if closeout.status == StageValidationStatus::Passed {
+                closeout.status = StageValidationStatus::NotVerified;
+            }
+        }
+    }
+
+    if !proof.derived_support.residual_risk {
+        return;
+    }
+    let residual = format!(
+        "Verification proof support is {}: {}",
+        proof.derived_support.status.label(),
+        proof.derived_support.summary
     );
     if !closeout.residual_risks.iter().any(|item| item == &residual) {
         closeout.residual_risks.push(residual);
@@ -221,6 +283,23 @@ impl FinalCloseoutController {
                 tool_evidence: tool_evidence_summary.clone(),
                 verification_proof_status: Some(verification_proof.status_label().to_string()),
                 verification_proof_summary: Some(verification_proof.summary.clone()),
+                verification_proof_kind_summary: Some(verification_proof.proof_kind_summary()),
+                verification_proof_support_status: Some(
+                    verification_proof
+                        .derived_support
+                        .status
+                        .label()
+                        .to_string(),
+                ),
+                verification_proof_support_summary: Some(
+                    verification_proof.derived_support.summary.clone(),
+                ),
+                verification_proof_supports_verified: Some(
+                    verification_proof.derived_support.supports_verified,
+                ),
+                verification_proof_residual_risk: Some(
+                    verification_proof.derived_support.residual_risk,
+                ),
                 acceptance_items: closeout.acceptance.len(),
                 residual_risks: closeout.residual_risks.len(),
             });
@@ -346,8 +425,19 @@ fn mva_direct_closeout(
 ) -> WorkflowCloseout {
     let status = match verification_proof.status {
         VerificationProofStatus::Verified | VerificationProofStatus::NotApplicable => {
-            StageValidationStatus::Passed
+            match verification_proof.derived_support.status {
+                VerificationProofStatus::Partial => StageValidationStatus::Partial,
+                VerificationProofStatus::Failed => StageValidationStatus::Failed,
+                VerificationProofStatus::NotRun
+                | VerificationProofStatus::Blocked
+                | VerificationProofStatus::UserDeferred
+                | VerificationProofStatus::Unavailable => StageValidationStatus::NotVerified,
+                VerificationProofStatus::Verified | VerificationProofStatus::NotApplicable => {
+                    StageValidationStatus::Passed
+                }
+            }
         }
+        VerificationProofStatus::Partial => StageValidationStatus::Partial,
         VerificationProofStatus::Failed => StageValidationStatus::Failed,
         VerificationProofStatus::NotRun
         | VerificationProofStatus::Blocked
@@ -364,6 +454,12 @@ fn mva_direct_closeout(
     }
     if verification_proof.status != VerificationProofStatus::NotApplicable {
         let line = verification_proof.validation_line();
+        if !validation.iter().any(|item| item == &line) {
+            validation.push(line);
+        }
+    }
+    if verification_proof.derived_support.status != VerificationProofStatus::NotApplicable {
+        let line = verification_proof.support_line();
         if !validation.iter().any(|item| item == &line) {
             validation.push(line);
         }
@@ -392,14 +488,24 @@ fn mva_direct_closeout(
         );
     }
 
-    let residual_risks = if status == StageValidationStatus::Passed {
+    let residual_risks = if status == StageValidationStatus::Passed
+        && !verification_proof.derived_support.residual_risk
+    {
         vec!["none recorded".to_string()]
     } else {
-        vec![format!(
+        let mut risks = vec![format!(
             "Verification proof is {}: {}",
             verification_proof.status.label(),
             verification_proof.summary
-        )]
+        )];
+        if verification_proof.derived_support.residual_risk {
+            risks.push(format!(
+                "Verification proof support is {}: {}",
+                verification_proof.derived_support.status.label(),
+                verification_proof.derived_support.summary
+            ));
+        }
+        risks
     };
 
     WorkflowCloseout {
@@ -491,6 +597,7 @@ mod tests {
         StopAction, StopCheckReason, StopCheckRecord, StopCheckStatus,
     };
     use crate::engine::trace::{TurnStatus, TurnTrace};
+    use crate::engine::verification_proof::VerificationProofKind;
     use crate::test_utils::env_guard::EnvVarGuard;
     use std::path::PathBuf;
 
@@ -557,6 +664,39 @@ mod tests {
             .validation
             .iter()
             .any(|item| item == "required validation: passed (passed:1/1)"));
+    }
+
+    #[test]
+    fn evaluator_downgrades_verified_status_when_proof_kind_support_is_partial() {
+        let mut bundle = TaskContextBundle::new("审查已有 diff", ".", audit_route(), None);
+        bundle.add_acceptance_check("diff was reviewed");
+        let code_workflow = CodeChangeWorkflowRunner::new(&bundle);
+        let mut evidence_ledger = EvidenceLedger::new();
+        evidence_ledger.record_validation_result_with_kind(
+            "code_review",
+            None,
+            true,
+            "diff reviewed",
+            Some(VerificationProofKind::DiffReviewed),
+        );
+
+        let evaluation =
+            CloseoutEvaluator::evaluate(&code_workflow, &bundle, &evidence_ledger, &[]);
+        let closeout = evaluation.closeout.expect("closeout");
+
+        assert_eq!(
+            evaluation.verification_proof.status,
+            VerificationProofStatus::Verified
+        );
+        assert_eq!(
+            evaluation.verification_proof.derived_support.status,
+            VerificationProofStatus::Partial
+        );
+        assert_eq!(closeout.status, StageValidationStatus::Partial);
+        assert!(closeout
+            .validation
+            .iter()
+            .any(|item| item.contains("verification proof support: partial")));
     }
 
     #[tokio::test]

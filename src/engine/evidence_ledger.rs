@@ -5,7 +5,8 @@
 //! without mixing raw tool metadata into model-visible text.
 
 use crate::engine::verification_proof::{
-    VerificationProof, VerificationProofRequest, VerificationProofStatus,
+    VerificationProof, VerificationProofKind, VerificationProofRequest, VerificationProofStatus,
+    VerificationProofSupportContext, VerificationProofTaskType,
 };
 use crate::services::api::ToolCall;
 use crate::tools::ToolResult;
@@ -282,6 +283,22 @@ pub struct ValidationEvidence {
     pub command: Option<String>,
     pub passed: bool,
     pub summary: String,
+    #[serde(default)]
+    pub proof_kind: Option<VerificationProofKind>,
+    #[serde(default)]
+    pub scope: Option<String>,
+    #[serde(default)]
+    pub command_status: Option<String>,
+    #[serde(default)]
+    pub validation_family: Option<String>,
+    #[serde(default)]
+    pub source_agent: Option<String>,
+    #[serde(default)]
+    pub parent_verified: Option<bool>,
+    #[serde(default)]
+    pub related_to_changed_files: Option<String>,
+    #[serde(default)]
+    pub residual_risk: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -418,11 +435,30 @@ impl EvidenceLedger {
         passed: bool,
         summary: impl AsRef<str>,
     ) {
+        self.record_validation_result_with_kind(source, command, passed, summary, None);
+    }
+
+    pub fn record_validation_result_with_kind(
+        &mut self,
+        source: impl Into<String>,
+        command: Option<&str>,
+        passed: bool,
+        summary: impl AsRef<str>,
+        proof_kind: Option<VerificationProofKind>,
+    ) {
         self.validation_facts.push(ValidationEvidence {
             source: source.into(),
             command: command.map(str::to_string),
             passed,
             summary: preview(summary.as_ref()),
+            proof_kind,
+            scope: None,
+            command_status: Some(if passed { "passed" } else { "failed" }.to_string()),
+            validation_family: None,
+            source_agent: None,
+            parent_verified: None,
+            related_to_changed_files: None,
+            residual_risk: None,
         });
     }
 
@@ -490,6 +526,8 @@ impl EvidenceLedger {
 
         let required_rollup = self.required_validation_rollup(request.required_commands);
         let validation_rollup = self.current_validation_rollup();
+        let proof_kinds =
+            self.proof_kinds_for_rollups(required_rollup.as_ref(), validation_rollup.as_ref());
         let mut proof = if let Some(rollup) = required_rollup.as_ref() {
             if rollup.missing > 0 {
                 VerificationProof::new(
@@ -610,7 +648,71 @@ impl EvidenceLedger {
             proof.recovered_failed = proof.recovered_failed.max(rollup.recovered_failed);
         }
         proof.evidence_items = self.validation_facts.len();
+        proof.proof_kinds = proof_kinds;
+        proof.apply_derived_support(request.support_context);
         proof
+    }
+
+    pub fn verification_proof_support_context(
+        &self,
+        task_type: VerificationProofTaskType,
+        required_commands: &[String],
+    ) -> VerificationProofSupportContext {
+        let required_rollup = self.required_validation_rollup(required_commands);
+        let validation_rollup = self.current_validation_rollup();
+        let required_passed = required_rollup.as_ref().is_some_and(|rollup| {
+            rollup.total > 0 && rollup.missing == 0 && rollup.failed == 0 && rollup.passed > 0
+        });
+        let validation_passed = validation_rollup.is_some_and(|rollup| {
+            rollup.current_total > 0 && rollup.current_failed == 0 && rollup.current_passed > 0
+        });
+        let accepted_validation_family = required_passed
+            || self.validation_facts.iter().any(|fact| {
+                fact.passed
+                    && fact
+                        .validation_family
+                        .as_deref()
+                        .is_some_and(|family| !family.trim().is_empty())
+            });
+        let parent_verified = self
+            .validation_facts
+            .iter()
+            .any(|fact| fact.parent_verified == Some(true));
+
+        VerificationProofSupportContext {
+            task_type,
+            accepted_validation_family,
+            focused_validation_passed: required_passed || validation_passed,
+            parent_verified,
+        }
+    }
+
+    fn proof_kinds_for_rollups(
+        &self,
+        required_rollup: Option<&RequiredValidationRollup>,
+        validation_rollup: Option<&ValidationRollup>,
+    ) -> Vec<VerificationProofKind> {
+        let mut kinds = self
+            .validation_facts
+            .iter()
+            .filter_map(|fact| fact.proof_kind)
+            .collect::<BTreeSet<_>>();
+        let has_explicit_kinds = !kinds.is_empty();
+
+        if required_rollup.is_some_and(|rollup| {
+            rollup.total > 0 && rollup.missing == 0 && rollup.failed == 0 && rollup.passed > 0
+        }) {
+            kinds.insert(VerificationProofKind::RequiredValidationPassed);
+            kinds.insert(VerificationProofKind::CommandPassed);
+        } else if !has_explicit_kinds
+            && validation_rollup.is_some_and(|rollup| {
+                rollup.current_total > 0 && rollup.current_failed == 0 && rollup.current_passed > 0
+            })
+        {
+            kinds.insert(VerificationProofKind::CommandPassed);
+        }
+
+        kinds.into_iter().collect()
     }
 
     fn required_validation_rollup(
@@ -2623,6 +2725,7 @@ mod tests {
             required_commands: &required,
             requires_validation: true,
             task_verification_status: crate::engine::task_context::VerificationStatus::Pending,
+            support_context: VerificationProofSupportContext::code_change(),
         });
 
         assert_eq!(proof.status, VerificationProofStatus::NotRun);
@@ -2653,9 +2756,20 @@ mod tests {
             required_commands: &required,
             requires_validation: true,
             task_verification_status: crate::engine::task_context::VerificationStatus::UserDeferred,
+            support_context: VerificationProofSupportContext::code_change(),
         });
 
         assert_eq!(proof.status, VerificationProofStatus::Verified);
+        assert_eq!(
+            proof.derived_support.status,
+            VerificationProofStatus::Verified
+        );
+        assert!(proof
+            .proof_kinds
+            .contains(&VerificationProofKind::CommandPassed));
+        assert!(proof
+            .proof_kinds
+            .contains(&VerificationProofKind::RequiredValidationPassed));
         assert_eq!(proof.required_passed, 1);
         assert!(proof.summary.contains("required validation passed 1/1"));
     }
@@ -2668,6 +2782,7 @@ mod tests {
             required_commands: &[],
             requires_validation: true,
             task_verification_status: crate::engine::task_context::VerificationStatus::Verified,
+            support_context: VerificationProofSupportContext::code_change(),
         });
 
         assert_eq!(proof.status, VerificationProofStatus::Unavailable);

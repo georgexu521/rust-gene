@@ -232,6 +232,21 @@ for run_dir in sorted(benchmarks.glob(run_glob)):
                 summary_field(row.get("runtime_spine", ""), "missing", "none"),
             ),
             "runtime_spine_trace_present": row.get("runtime_spine_trace_present", "false"),
+            "gate_outcomes": row.get("gate_outcomes", "total=0, protective_block=0, recoverable_friction=0, unrecovered_block=0, suspected_false_positive=0, policy_correct_but_ux_costly=0, harmless_pass=0"),
+            "gate_outcome_records": row.get("gate_outcome_records", "none"),
+            "gate_outcome_total": row.get("gate_outcome_total", "0"),
+            "gate_outcome_protective_blocks": row.get("gate_outcome_protective_blocks", "0"),
+            "gate_outcome_recoverable_friction": row.get("gate_outcome_recoverable_friction", "0"),
+            "gate_outcome_unrecovered_blocks": row.get("gate_outcome_unrecovered_blocks", "0"),
+            "gate_outcome_suspected_false_positives": row.get("gate_outcome_suspected_false_positives", "0"),
+            "gate_outcome_policy_correct_but_ux_costly": row.get("gate_outcome_policy_correct_but_ux_costly", "0"),
+            "gate_outcome_harmless_passes": row.get("gate_outcome_harmless_passes", "0"),
+            "gate_outcome_failure_owners": row.get("gate_outcome_failure_owners", "none"),
+            "verification_proof_status": row.get("verification_proof_status", "missing"),
+            "verification_proof_kinds": row.get("verification_proof_kinds", "none"),
+            "verification_proof_support_status": row.get("verification_proof_support_status", "missing"),
+            "verification_proof_supports_verified": row.get("verification_proof_supports_verified", "false"),
+            "verification_proof_residual_risk": row.get("verification_proof_residual_risk", "false"),
             "runtime_profile": row.get("runtime_profile", "none"),
             "mva_profile_active": row.get("mva_profile_active", "false"),
             "behavior_assertions": row.get("behavior_assertions", "none"),
@@ -348,6 +363,41 @@ runtime_spine_stage_transition_tasks = sum(
 )
 runtime_spine_completion_contract_tasks = sum(
     1 for record in task_records if record["completion_contract_status"] not in {"", "missing", "none"}
+)
+gate_outcome_tasks = sum(1 for record in task_records if as_int(record["gate_outcome_total"]) > 0)
+gate_outcome_total = sum(as_int(record["gate_outcome_total"]) for record in task_records)
+gate_outcome_protective_blocks = sum(
+    as_int(record["gate_outcome_protective_blocks"]) for record in task_records
+)
+gate_outcome_recoverable_friction = sum(
+    as_int(record["gate_outcome_recoverable_friction"]) for record in task_records
+)
+gate_outcome_unrecovered_blocks = sum(
+    as_int(record["gate_outcome_unrecovered_blocks"]) for record in task_records
+)
+gate_outcome_suspected_false_positives = sum(
+    as_int(record["gate_outcome_suspected_false_positives"]) for record in task_records
+)
+gate_outcome_policy_correct_but_ux_costly = sum(
+    as_int(record["gate_outcome_policy_correct_but_ux_costly"]) for record in task_records
+)
+gate_outcome_harmless_passes = sum(
+    as_int(record["gate_outcome_harmless_passes"]) for record in task_records
+)
+proof_support_verified_tasks = sum(
+    1 for record in task_records if record["verification_proof_support_status"] == "verified"
+)
+proof_support_partial_tasks = sum(
+    1 for record in task_records if record["verification_proof_support_status"] == "partial"
+)
+proof_support_not_verified_tasks = sum(
+    1
+    for record in task_records
+    if record["verification_proof_support_status"]
+    in {"failed", "not_run", "blocked", "user_deferred", "unavailable"}
+)
+proof_support_residual_risk_tasks = sum(
+    1 for record in task_records if record["verification_proof_residual_risk"] == "true"
 )
 mva_profile_tasks = sum(1 for record in task_records if record["mva_profile_active"] == "true")
 mva_profile_runtime_spine_passed = sum(
@@ -589,6 +639,18 @@ lines.extend(md_table(
         ["runtime_spine_context_zone_tasks", runtime_spine_context_zone_tasks, pct(runtime_spine_context_zone_tasks, total_tasks)],
         ["runtime_spine_stage_transition_tasks", runtime_spine_stage_transition_tasks, pct(runtime_spine_stage_transition_tasks, total_tasks)],
         ["runtime_spine_completion_contract_tasks", runtime_spine_completion_contract_tasks, pct(runtime_spine_completion_contract_tasks, total_tasks)],
+        ["gate_outcome_tasks", gate_outcome_tasks, pct(gate_outcome_tasks, total_tasks)],
+        ["gate_outcome_records", gate_outcome_total, "n/a"],
+        ["gate_outcome_protective_blocks", gate_outcome_protective_blocks, "n/a"],
+        ["gate_outcome_recoverable_friction", gate_outcome_recoverable_friction, "n/a"],
+        ["gate_outcome_unrecovered_blocks", gate_outcome_unrecovered_blocks, "n/a"],
+        ["gate_outcome_suspected_false_positives", gate_outcome_suspected_false_positives, "n/a"],
+        ["gate_outcome_policy_correct_but_ux_costly", gate_outcome_policy_correct_but_ux_costly, "n/a"],
+        ["gate_outcome_harmless_passes", gate_outcome_harmless_passes, "n/a"],
+        ["proof_support_verified_tasks", proof_support_verified_tasks, pct(proof_support_verified_tasks, total_tasks)],
+        ["proof_support_partial_tasks", proof_support_partial_tasks, pct(proof_support_partial_tasks, total_tasks)],
+        ["proof_support_not_verified_tasks", proof_support_not_verified_tasks, pct(proof_support_not_verified_tasks, total_tasks)],
+        ["proof_support_residual_risk_tasks", proof_support_residual_risk_tasks, pct(proof_support_residual_risk_tasks, total_tasks)],
         ["mva_profile_tasks", mva_profile_tasks, pct(mva_profile_tasks, total_tasks)],
         ["mva_profile_runtime_spine_passed", mva_profile_runtime_spine_passed, pct(mva_profile_runtime_spine_passed, mva_profile_tasks)],
         ["candidate_score_calibrated_tasks", candidate_score_calibrated_tasks, pct(candidate_score_calibrated_tasks, total_tasks)],

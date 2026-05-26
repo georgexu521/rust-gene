@@ -274,6 +274,15 @@ RISKY_TOOL_NAMES = {
     "worktree",
 }
 
+GATE_OUTCOME_CLASSES = [
+    "protective_block",
+    "recoverable_friction",
+    "unrecovered_block",
+    "suspected_false_positive",
+    "policy_correct_but_ux_costly",
+    "harmless_pass",
+]
+
 
 def read(path):
     path = pathlib.Path(path)
@@ -585,6 +594,173 @@ def risky_tool_action_review_gaps(events):
     }
 
 
+def latest_trace_value(trace_items, event_type, field):
+    event_type = token(event_type)
+    for event in reversed(trace_items):
+        if token(event.get("type", "")) != event_type:
+            continue
+        value = event.get(field)
+        if value is not None:
+            return str(value)
+    return None
+
+
+def gate_outcome_from_action_review(event, final_status):
+    decision = token(event.get("decision", ""))
+    reason = token(event.get("reason", ""))
+    checkpoint = token(event.get("checkpoint", ""))
+    recovery = str(event.get("recovery", "")).lower()
+    permission = token(event.get("permission", ""))
+    scope_allowed = event.get("scope_allowed", True) is not False
+    budget_allowed = event.get("budget_allowed", True) is not False
+    final_status = token(final_status or "")
+
+    if decision in {"allow", "allowed"}:
+        return "harmless_pass"
+
+    if (
+        not scope_allowed
+        or not budget_allowed
+        or "required" in checkpoint
+        or permission == "ask"
+        or "destructive" in reason
+        or "scope" in reason
+        or "checkpoint" in reason
+    ):
+        return "recoverable_friction" if final_status in {"completed", "passed"} else "protective_block"
+
+    if "alternative" in recovery or final_status in {"completed", "passed"}:
+        return "recoverable_friction"
+    return "unrecovered_block"
+
+
+def gate_failure_owner(outcome):
+    if outcome in {"unrecovered_block", "suspected_false_positive", "policy_correct_but_ux_costly"}:
+        return "action_review"
+    return "none"
+
+
+def gate_outcome_records_from_events(events):
+    trace_items = trace_events(events)
+    final_status = latest_trace_value(trace_items, "completion_contract_evaluated", "status")
+    recovered = token(final_status or "") in {"completed", "passed"}
+    route = (
+        latest_trace_value(trace_items, "agent_loop_step_evaluated", "route_workflow")
+        or latest_trace_value(trace_items, "intent_routed", "workflow")
+        or "missing"
+    )
+    risk = (
+        latest_trace_value(trace_items, "agent_loop_step_evaluated", "route_risk")
+        or latest_trace_value(trace_items, "intent_routed", "risk")
+        or "missing"
+    )
+    records = []
+
+    for event in trace_items:
+        event_type = token(event.get("type", ""))
+        if event_type == "action_reviewed":
+            outcome = gate_outcome_from_action_review(event, final_status)
+            records.append({
+                "gate": "action_review",
+                "decision": token(event.get("decision", "")) or "missing",
+                "outcome": outcome,
+                "reason": token(event.get("reason", "")) or "missing",
+                "tool": token(event_tool_name(event)) or "missing",
+                "route": token(route) or "missing",
+                "risk": token(risk) or "missing",
+                "recovered_after_gate": bool_text(recovered),
+                "final_status": token(final_status or "") or "missing",
+                "failure_owner": gate_failure_owner(outcome),
+            })
+        elif event_type == "permission_resolved":
+            approved = event.get("approved") is True or parse_boolish(event.get("approved"))
+            if approved:
+                outcome = "harmless_pass"
+            elif recovered:
+                outcome = "recoverable_friction"
+            else:
+                outcome = "unrecovered_block"
+            records.append({
+                "gate": "permission",
+                "decision": token(event.get("decision", "")) or ("approved" if approved else "denied"),
+                "outcome": outcome,
+                "reason": "permission_approved" if approved else "permission_denied",
+                "tool": token(event_tool_name(event)) or "missing",
+                "route": token(route) or "missing",
+                "risk": token(risk) or "missing",
+                "recovered_after_gate": bool_text(recovered),
+                "final_status": token(final_status or "") or "missing",
+                "failure_owner": gate_failure_owner(outcome),
+            })
+        elif event_type == "final_closeout_prepared":
+            status = token(event.get("status", ""))
+            proof_status = event.get("verification_proof_status")
+            proof_token = token(proof_status or "")
+            failure_type = meaningful_token(event.get("failure_type", ""))
+            if status in {"passed", "completed"} and (
+                proof_status is None or proof_token in {"verified", "not_applicable"}
+            ):
+                outcome = "harmless_pass"
+            elif failure_type:
+                outcome = "protective_block"
+            else:
+                outcome = "unrecovered_block"
+            records.append({
+                "gate": "closeout",
+                "decision": status or "missing",
+                "outcome": outcome,
+                "reason": proof_token or "no_verification_proof_status",
+                "tool": "none",
+                "route": token(route) or "missing",
+                "risk": token(risk) or "missing",
+                "recovered_after_gate": bool_text(recovered),
+                "final_status": token(final_status or "") or "missing",
+                "failure_owner": gate_failure_owner(outcome),
+            })
+    return records
+
+
+def gate_outcome_metrics_from_records(records):
+    counts = {klass: 0 for klass in GATE_OUTCOME_CLASSES}
+    for record in records:
+        outcome = record.get("outcome", "missing")
+        if outcome in counts:
+            counts[outcome] += 1
+    record_text = ",".join(
+        f"{record['gate']}:{record['decision']}:{record['outcome']}"
+        for record in records[:12]
+    )
+    if not record_text:
+        record_text = "none"
+    if len(records) > 12:
+        record_text += f",+{len(records) - 12}"
+    summary = (
+        f"total={len(records)}, protective_block={counts['protective_block']}, "
+        f"recoverable_friction={counts['recoverable_friction']}, "
+        f"unrecovered_block={counts['unrecovered_block']}, "
+        f"suspected_false_positive={counts['suspected_false_positive']}, "
+        f"policy_correct_but_ux_costly={counts['policy_correct_but_ux_costly']}, "
+        f"harmless_pass={counts['harmless_pass']}"
+    )
+    failure_owners = unique_items(
+        record.get("failure_owner", "")
+        for record in records
+        if record.get("failure_owner") not in {"", "none", None}
+    )
+    return {
+        "gate_outcomes": summary,
+        "gate_outcome_records": record_text,
+        "gate_outcome_total": str(len(records)),
+        "gate_outcome_protective_blocks": str(counts["protective_block"]),
+        "gate_outcome_recoverable_friction": str(counts["recoverable_friction"]),
+        "gate_outcome_unrecovered_blocks": str(counts["unrecovered_block"]),
+        "gate_outcome_suspected_false_positives": str(counts["suspected_false_positive"]),
+        "gate_outcome_policy_correct_but_ux_costly": str(counts["policy_correct_but_ux_costly"]),
+        "gate_outcome_harmless_passes": str(counts["harmless_pass"]),
+        "gate_outcome_failure_owners": ",".join(failure_owners) if failure_owners else "none",
+    }
+
+
 def report_run_status(tool_boundary, quality_status, test_status, plan_quality):
     if quality_status == "failed" or test_status == "failed" or plan_quality == "failed":
         return "failed"
@@ -798,6 +974,9 @@ def runtime_spine_metrics_from_events(events, report_text="", assertions=None):
     risky_tool_missing_reviews = [
         candidate["identity"] for candidate in risky_review_gaps["missing"]
     ]
+    gate_outcome_metrics = gate_outcome_metrics_from_records(
+        gate_outcome_records_from_events(events)
+    )
 
     latest_closeout = next(
         (
@@ -809,10 +988,29 @@ def runtime_spine_metrics_from_events(events, report_text="", assertions=None):
     )
     proof_status = report_value(report_text, "verification_proof_status", "")
     proof_summary = report_value(report_text, "verification_proof_summary", "")
+    proof_kind_summary = report_value(report_text, "verification_proof_kinds", "")
+    proof_support_status = report_value(report_text, "verification_proof_support_status", "")
+    proof_support_summary = report_value(report_text, "verification_proof_support_summary", "")
+    proof_supports_verified = report_value(report_text, "verification_proof_supports_verified", "")
+    proof_residual_risk = report_value(report_text, "verification_proof_residual_risk", "")
     if not proof_status:
         proof_status = str(latest_closeout.get("verification_proof_status", "missing"))
     if not proof_summary:
         proof_summary = str(latest_closeout.get("verification_proof_summary", "missing"))
+    if not proof_kind_summary:
+        proof_kind_summary = str(latest_closeout.get("verification_proof_kind_summary", "none"))
+    if not proof_support_status:
+        proof_support_status = str(latest_closeout.get("verification_proof_support_status", "missing"))
+    if not proof_support_summary:
+        proof_support_summary = str(latest_closeout.get("verification_proof_support_summary", "missing"))
+    if not proof_supports_verified:
+        proof_supports_verified = bool_text(
+            latest_closeout.get("verification_proof_supports_verified") is True
+        )
+    if not proof_residual_risk:
+        proof_residual_risk = bool_text(
+            latest_closeout.get("verification_proof_residual_risk") is True
+        )
 
     latest_stop = stop_check_events[-1] if stop_check_events else {}
     stop_terminal_status = str(
@@ -1191,6 +1389,7 @@ def runtime_spine_metrics_from_events(events, report_text="", assertions=None):
         f"{detail} risky_tool_runs={risky_tool_runs} "
         f"risky_tool_reviewed={risky_tool_reviewed} "
         f"risky_tool_missing_action_review={risky_tool_missing_text} "
+        f"gate_outcomes={gate_outcome_metrics['gate_outcomes']} "
         f"stop_reason={stop_reason} stop_terminal_status={stop_terminal_status} "
         f"stop_action={stop_action} stop_failure_type={stop_failure_type} "
         f"rollback_recommended={bool_text(rollback_recommended)} "
@@ -1237,6 +1436,7 @@ def runtime_spine_metrics_from_events(events, report_text="", assertions=None):
         "risky_tool_runs": str(risky_tool_runs),
         "risky_tool_reviewed": str(risky_tool_reviewed),
         "risky_tool_missing_action_review": risky_tool_missing_text,
+        **gate_outcome_metrics,
         "stop_reason": stop_reason,
         "stop_terminal_status": stop_terminal_status,
         "stop_action": stop_action,
@@ -1293,6 +1493,11 @@ def runtime_spine_metrics_from_events(events, report_text="", assertions=None):
         "completion_contract_proof_status": str(latest_completion_contract.get("verification_proof_status", "missing")),
         "verification_proof_status": proof_status,
         "verification_proof_summary": proof_summary,
+        "verification_proof_kinds": proof_kind_summary,
+        "verification_proof_support_status": proof_support_status,
+        "verification_proof_support_summary": proof_support_summary,
+        "verification_proof_supports_verified": proof_supports_verified,
+        "verification_proof_residual_risk": proof_residual_risk,
     }
 
 
@@ -1317,6 +1522,16 @@ def runtime_spine_metrics(task_dir, report_text):
         "risky_tool_runs",
         "risky_tool_reviewed",
         "risky_tool_missing_action_review",
+        "gate_outcomes",
+        "gate_outcome_records",
+        "gate_outcome_total",
+        "gate_outcome_protective_blocks",
+        "gate_outcome_recoverable_friction",
+        "gate_outcome_unrecovered_blocks",
+        "gate_outcome_suspected_false_positives",
+        "gate_outcome_policy_correct_but_ux_costly",
+        "gate_outcome_harmless_passes",
+        "gate_outcome_failure_owners",
         "stop_reason",
         "stop_terminal_status",
         "stop_action",
@@ -1373,6 +1588,11 @@ def runtime_spine_metrics(task_dir, report_text):
         "completion_contract_proof_status",
         "verification_proof_status",
         "verification_proof_summary",
+        "verification_proof_kinds",
+        "verification_proof_support_status",
+        "verification_proof_support_summary",
+        "verification_proof_supports_verified",
+        "verification_proof_residual_risk",
     ]:
         value = report_value(report_text, key, "")
         if value:

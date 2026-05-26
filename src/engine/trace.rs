@@ -717,6 +717,16 @@ pub enum TraceEvent {
         verification_proof_status: Option<String>,
         #[serde(default)]
         verification_proof_summary: Option<String>,
+        #[serde(default)]
+        verification_proof_kind_summary: Option<String>,
+        #[serde(default)]
+        verification_proof_support_status: Option<String>,
+        #[serde(default)]
+        verification_proof_support_summary: Option<String>,
+        #[serde(default)]
+        verification_proof_supports_verified: Option<bool>,
+        #[serde(default)]
+        verification_proof_residual_risk: Option<bool>,
         acceptance_items: usize,
         residual_risks: usize,
     },
@@ -1941,10 +1951,15 @@ impl TraceEvent {
                 tool_evidence,
                 verification_proof_status,
                 verification_proof_summary,
+                verification_proof_kind_summary,
+                verification_proof_support_status,
+                verification_proof_support_summary,
+                verification_proof_supports_verified,
+                verification_proof_residual_risk,
                 acceptance_items,
                 residual_risks,
             } => format!(
-                "final closeout status={} terminal={} stop_reason={} stop_action={} failure={} recovery={} rollback={} files={} validation={} tool_records={} tool_evidence={} proof={} proof_summary={} acceptance={} risks={}",
+                "final closeout status={} terminal={} stop_reason={} stop_action={} failure={} recovery={} rollback={} files={} validation={} tool_records={} tool_evidence={} proof={} proof_summary={} proof_kinds={} proof_support={} proof_supports_verified={} proof_residual_risk={} proof_support_summary={} acceptance={} risks={}",
                 status,
                 terminal_status.as_deref().unwrap_or("none"),
                 stop_reason.as_deref().unwrap_or("none"),
@@ -1958,6 +1973,15 @@ impl TraceEvent {
                 tool_evidence.as_deref().unwrap_or("none"),
                 verification_proof_status.as_deref().unwrap_or("none"),
                 verification_proof_summary.as_deref().unwrap_or("none"),
+                verification_proof_kind_summary.as_deref().unwrap_or("none"),
+                verification_proof_support_status.as_deref().unwrap_or("none"),
+                verification_proof_supports_verified
+                    .map(|value| value.to_string())
+                    .unwrap_or_else(|| "none".to_string()),
+                verification_proof_residual_risk
+                    .map(|value| value.to_string())
+                    .unwrap_or_else(|| "none".to_string()),
+                verification_proof_support_summary.as_deref().unwrap_or("none"),
                 acceptance_items,
                 residual_risks
             ),
@@ -2578,6 +2602,11 @@ mod tests {
             tool_evidence: None,
             verification_proof_status: Some("verified".to_string()),
             verification_proof_summary: Some("validation passed".to_string()),
+            verification_proof_kind_summary: Some("command_passed".to_string()),
+            verification_proof_support_status: Some("verified".to_string()),
+            verification_proof_support_summary: Some("verified by command_passed".to_string()),
+            verification_proof_supports_verified: Some(true),
+            verification_proof_residual_risk: Some(false),
             acceptance_items: 1,
             residual_risks: 0,
         });
@@ -2799,6 +2828,11 @@ mod tests {
             tool_evidence: Some("tool evidence: records=3 completed=3".to_string()),
             verification_proof_status: Some("verified".to_string()),
             verification_proof_summary: Some("validation passed 1/1 current checks".to_string()),
+            verification_proof_kind_summary: Some("command_passed".to_string()),
+            verification_proof_support_status: Some("verified".to_string()),
+            verification_proof_support_summary: Some("verified by command_passed".to_string()),
+            verification_proof_supports_verified: Some(true),
+            verification_proof_residual_risk: Some(false),
             acceptance_items: 1,
             residual_risks: 0,
         });

@@ -1705,6 +1705,16 @@ print(f"runtime_spine_missing: {runtime_spine['runtime_spine_missing']}")
 print(f"risky_tool_runs: {runtime_spine['risky_tool_runs']}")
 print(f"risky_tool_reviewed: {runtime_spine['risky_tool_reviewed']}")
 print(f"risky_tool_missing_action_review: {runtime_spine['risky_tool_missing_action_review']}")
+print(f"gate_outcomes: {runtime_spine['gate_outcomes']}")
+print(f"gate_outcome_records: {runtime_spine['gate_outcome_records']}")
+print(f"gate_outcome_total: {runtime_spine['gate_outcome_total']}")
+print(f"gate_outcome_protective_blocks: {runtime_spine['gate_outcome_protective_blocks']}")
+print(f"gate_outcome_recoverable_friction: {runtime_spine['gate_outcome_recoverable_friction']}")
+print(f"gate_outcome_unrecovered_blocks: {runtime_spine['gate_outcome_unrecovered_blocks']}")
+print(f"gate_outcome_suspected_false_positives: {runtime_spine['gate_outcome_suspected_false_positives']}")
+print(f"gate_outcome_policy_correct_but_ux_costly: {runtime_spine['gate_outcome_policy_correct_but_ux_costly']}")
+print(f"gate_outcome_harmless_passes: {runtime_spine['gate_outcome_harmless_passes']}")
+print(f"gate_outcome_failure_owners: {runtime_spine['gate_outcome_failure_owners']}")
 print(f"agent_loop_steps: {runtime_spine['agent_loop_steps']}")
 print(f"context_zones_materialized: {runtime_spine['context_zones_materialized']}")
 print(f"context_zone_task_state_empty: {runtime_spine['context_zone_task_state_empty']}")
@@ -1718,6 +1728,11 @@ print(f"observer_outcome_recorded: {runtime_spine['observer_outcome_recorded']}"
 print(f"memory_boundary_recorded: {runtime_spine['memory_boundary_recorded']}")
 print(f"verification_proof_status: {runtime_spine['verification_proof_status']}")
 print(f"verification_proof_summary: {runtime_spine['verification_proof_summary']}")
+print(f"verification_proof_kinds: {runtime_spine['verification_proof_kinds']}")
+print(f"verification_proof_support_status: {runtime_spine['verification_proof_support_status']}")
+print(f"verification_proof_support_summary: {runtime_spine['verification_proof_support_summary']}")
+print(f"verification_proof_supports_verified: {runtime_spine['verification_proof_supports_verified']}")
+print(f"verification_proof_residual_risk: {runtime_spine['verification_proof_residual_risk']}")
 for key in (
     "premature_edit_count",
     "evidence_before_first_edit",
@@ -2162,6 +2177,16 @@ print(f"runtime_spine_missing: {runtime_spine['runtime_spine_missing']}")
 print(f"risky_tool_runs: {runtime_spine['risky_tool_runs']}")
 print(f"risky_tool_reviewed: {runtime_spine['risky_tool_reviewed']}")
 print(f"risky_tool_missing_action_review: {runtime_spine['risky_tool_missing_action_review']}")
+print(f"gate_outcomes: {runtime_spine['gate_outcomes']}")
+print(f"gate_outcome_records: {runtime_spine['gate_outcome_records']}")
+print(f"gate_outcome_total: {runtime_spine['gate_outcome_total']}")
+print(f"gate_outcome_protective_blocks: {runtime_spine['gate_outcome_protective_blocks']}")
+print(f"gate_outcome_recoverable_friction: {runtime_spine['gate_outcome_recoverable_friction']}")
+print(f"gate_outcome_unrecovered_blocks: {runtime_spine['gate_outcome_unrecovered_blocks']}")
+print(f"gate_outcome_suspected_false_positives: {runtime_spine['gate_outcome_suspected_false_positives']}")
+print(f"gate_outcome_policy_correct_but_ux_costly: {runtime_spine['gate_outcome_policy_correct_but_ux_costly']}")
+print(f"gate_outcome_harmless_passes: {runtime_spine['gate_outcome_harmless_passes']}")
+print(f"gate_outcome_failure_owners: {runtime_spine['gate_outcome_failure_owners']}")
 print(f"agent_loop_steps: {runtime_spine['agent_loop_steps']}")
 print(f"context_zones_materialized: {runtime_spine['context_zones_materialized']}")
 print(f"context_zone_task_state_empty: {runtime_spine['context_zone_task_state_empty']}")
@@ -2174,6 +2199,12 @@ print(f"candidate_score_disagreement: {runtime_spine['candidate_score_disagreeme
 print(f"observer_outcome_recorded: {runtime_spine['observer_outcome_recorded']}")
 print(f"memory_boundary_recorded: {runtime_spine['memory_boundary_recorded']}")
 print(f"verification_proof_status: {runtime_spine['verification_proof_status']}")
+print(f"verification_proof_summary: {runtime_spine['verification_proof_summary']}")
+print(f"verification_proof_kinds: {runtime_spine['verification_proof_kinds']}")
+print(f"verification_proof_support_status: {runtime_spine['verification_proof_support_status']}")
+print(f"verification_proof_support_summary: {runtime_spine['verification_proof_support_summary']}")
+print(f"verification_proof_supports_verified: {runtime_spine['verification_proof_supports_verified']}")
+print(f"verification_proof_residual_risk: {runtime_spine['verification_proof_residual_risk']}")
 risk_entry = entry_risk_signal.get("level", "missing") if entry_risk_signal else "missing"
 risk_runtime = runtime_risk_signal.get("level", "none") if runtime_risk_signal else "none"
 print(f"risk_signal: entry={risk_entry} runtime={risk_runtime}")
@@ -2388,6 +2419,23 @@ runtime_spine_risky_tool_reviewed = sum(as_int(row["risky_tool_reviewed"]) for r
 runtime_spine_risky_missing_review_tasks = sum(
     1 for row in rows if row["risky_tool_missing_action_review"] != "none"
 )
+gate_outcome_tasks = sum(1 for row in rows if as_int(row.get("gate_outcome_total")) > 0)
+gate_outcome_total = sum(as_int(row.get("gate_outcome_total")) for row in rows)
+gate_outcome_protective_blocks = sum(as_int(row.get("gate_outcome_protective_blocks")) for row in rows)
+gate_outcome_recoverable_friction = sum(as_int(row.get("gate_outcome_recoverable_friction")) for row in rows)
+gate_outcome_unrecovered_blocks = sum(as_int(row.get("gate_outcome_unrecovered_blocks")) for row in rows)
+gate_outcome_suspected_false_positives = sum(as_int(row.get("gate_outcome_suspected_false_positives")) for row in rows)
+gate_outcome_policy_correct_but_ux_costly = sum(as_int(row.get("gate_outcome_policy_correct_but_ux_costly")) for row in rows)
+gate_outcome_harmless_passes = sum(as_int(row.get("gate_outcome_harmless_passes")) for row in rows)
+proof_support_verified_tasks = sum(1 for row in rows if row.get("verification_proof_support_status") == "verified")
+proof_support_partial_tasks = sum(1 for row in rows if row.get("verification_proof_support_status") == "partial")
+proof_support_not_verified_tasks = sum(
+    1
+    for row in rows
+    if row.get("verification_proof_support_status")
+    in {"failed", "not_run", "blocked", "user_deferred", "unavailable"}
+)
+proof_support_residual_risk_tasks = sum(1 for row in rows if row.get("verification_proof_residual_risk") == "true")
 scored_score_rows = [row for row in rows if row.get("agent_score", "missing") != "missing"]
 avg_outcome_score = (
     sum(as_int(row.get("outcome_score")) for row in scored_score_rows) / len(scored_score_rows)
@@ -2467,6 +2515,16 @@ lines = [
     f"- Runtime-spine risky tool runs: `{runtime_spine_risky_tool_runs}`",
     f"- Runtime-spine risky tool reviewed: `{runtime_spine_risky_tool_reviewed}`",
     f"- Runtime-spine risky missing-review tasks: `{runtime_spine_risky_missing_review_tasks}`",
+    f"- Gate outcome tasks: `{gate_outcome_tasks}`",
+    f"- Gate outcome records: `{gate_outcome_total}`",
+    f"- Gate outcome protective blocks: `{gate_outcome_protective_blocks}`",
+    f"- Gate outcome recoverable friction: `{gate_outcome_recoverable_friction}`",
+    f"- Gate outcome unrecovered blocks: `{gate_outcome_unrecovered_blocks}`",
+    f"- Gate outcome harmless passes: `{gate_outcome_harmless_passes}`",
+    f"- Proof support verified tasks: `{proof_support_verified_tasks}`",
+    f"- Proof support partial tasks: `{proof_support_partial_tasks}`",
+    f"- Proof support not-verified tasks: `{proof_support_not_verified_tasks}`",
+    f"- Proof support residual-risk tasks: `{proof_support_residual_risk_tasks}`",
     f"- Average outcome score: `{avg_outcome_score:.1f}`",
     f"- Average process score: `{avg_process_score:.1f}`",
     f"- Average efficiency score: `{avg_efficiency_score:.1f}`",
@@ -2561,6 +2619,54 @@ lines.extend([
     f"| runtime_spine_risky_tool_runs | {runtime_spine_risky_tool_runs} | Risky tool executions observed from trace or agent events. |",
     f"| runtime_spine_risky_tool_reviewed | {runtime_spine_risky_tool_reviewed} | Risky tool executions with matching action.review trace evidence. |",
     f"| runtime_spine_risky_missing_review_tasks | {runtime_spine_risky_missing_review_tasks} | Tasks with risky tool executions missing matching action.review evidence. |",
+    f"| gate_outcome_tasks | {gate_outcome_tasks} | Tasks with derived gate-outcome records from trace or report fields. |",
+    f"| gate_outcome_records | {gate_outcome_total} | Total gate-outcome records derived across action review, permission, and closeout gates. |",
+    f"| gate_outcome_protective_blocks | {gate_outcome_protective_blocks} | Gate blocks that protected policy, scope, budget, checkpoint, or closeout invariants. |",
+    f"| gate_outcome_recoverable_friction | {gate_outcome_recoverable_friction} | Gate friction followed by a completed or passed runtime outcome. |",
+    f"| gate_outcome_unrecovered_blocks | {gate_outcome_unrecovered_blocks} | Gate blocks without later runtime recovery evidence. |",
+    f"| gate_outcome_suspected_false_positives | {gate_outcome_suspected_false_positives} | Scenario-oracle suspected gate false positives. |",
+    f"| gate_outcome_policy_correct_but_ux_costly | {gate_outcome_policy_correct_but_ux_costly} | Policy-correct gate decisions that still created measurable UX cost. |",
+    f"| gate_outcome_harmless_passes | {gate_outcome_harmless_passes} | Gate decisions that passed without measurable friction. |",
+    f"| proof_support_verified_tasks | {proof_support_verified_tasks} | Tasks whose proof-kind policy supports verified closeout. |",
+    f"| proof_support_partial_tasks | {proof_support_partial_tasks} | Tasks with useful proof evidence that cannot support verified closeout. |",
+    f"| proof_support_not_verified_tasks | {proof_support_not_verified_tasks} | Tasks whose proof policy blocks verified closeout. |",
+    f"| proof_support_residual_risk_tasks | {proof_support_residual_risk_tasks} | Tasks whose proof support carries residual risk. |",
+    "",
+    "### Gate Outcome Matrix",
+    "",
+    "| task | total | protective | recoverable | unrecovered | suspected_false_positive | policy_correct_but_ux_costly | harmless | records | owners |",
+    "|------|-------|------------|-------------|-------------|--------------------------|------------------------------|----------|---------|--------|",
+])
+
+if rows:
+    for row in rows:
+        lines.append(
+            "| {task} | {gate_outcome_total} | {gate_outcome_protective_blocks} | {gate_outcome_recoverable_friction} | {gate_outcome_unrecovered_blocks} | {gate_outcome_suspected_false_positives} | {gate_outcome_policy_correct_but_ux_costly} | {gate_outcome_harmless_passes} | {gate_outcome_records} | {gate_outcome_failure_owners} |".format(
+                **{key: md_cell(value) for key, value in row.items()}
+            )
+        )
+else:
+    lines.append("| none | 0 | 0 | 0 | 0 | 0 | 0 | 0 | none | none |")
+
+lines.extend([
+    "",
+    "### Proof Support Matrix",
+    "",
+    "| task | proof_status | support_status | supports_verified | residual_risk | proof_kinds | support_summary |",
+    "|------|--------------|----------------|-------------------|---------------|-------------|-----------------|",
+])
+
+if rows:
+    for row in rows:
+        lines.append(
+            "| {task} | {verification_proof_status} | {verification_proof_support_status} | {verification_proof_supports_verified} | {verification_proof_residual_risk} | {verification_proof_kinds} | {verification_proof_support_summary} |".format(
+                **{key: md_cell(value) for key, value in row.items()}
+            )
+        )
+else:
+    lines.append("| none | missing | missing | false | false | none | none |")
+
+lines.extend([
     "",
     "## Evaluation Scores",
     "",

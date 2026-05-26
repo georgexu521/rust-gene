@@ -430,6 +430,11 @@ fn verification_proof_payload(trace: &TurnTrace) -> Value {
                 validation_items,
                 verification_proof_status,
                 verification_proof_summary,
+                verification_proof_kind_summary,
+                verification_proof_support_status,
+                verification_proof_support_summary,
+                verification_proof_supports_verified,
+                verification_proof_residual_risk,
                 acceptance_items,
                 residual_risks,
                 ..
@@ -438,6 +443,17 @@ fn verification_proof_payload(trace: &TurnTrace) -> Value {
                 "summary": verification_proof_summary
                     .as_deref()
                     .unwrap_or("no verification proof summary recorded"),
+                "proof_kinds": verification_proof_kind_summary
+                    .as_deref()
+                    .unwrap_or("none"),
+                "support_status": verification_proof_support_status
+                    .as_deref()
+                    .unwrap_or("missing"),
+                "support_summary": verification_proof_support_summary
+                    .as_deref()
+                    .unwrap_or("missing"),
+                "supports_verified": verification_proof_supports_verified.unwrap_or(false),
+                "residual_risk": verification_proof_residual_risk.unwrap_or(false),
                 "closeout_status": status,
                 "changed_files": changed_files,
                 "validation_items": validation_items,
