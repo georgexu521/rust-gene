@@ -79,10 +79,11 @@ pub fn handle_quick(app: &mut TuiApp) -> String {
         .and_then(|trace| crate::engine::trace::latest_memory_proposal_summary(&trace))
         .map(|line| compact_inline(&line, 120))
         .unwrap_or_else(|| "none".to_string());
+    let active_task_plan = active_task_plan_for_app(app);
     let a2a_line = latest_a2a_transcript_label();
 
     format!(
-        "Quick Panel\n\nStatus:\n- Agent mode: {}\n- UI mode: {:?}\n- Querying: {}\n- Pending prompts: {}\n- Messages: {}\n- Session: {}\n- Goal: {}\n- Goal drift: {}\n\nRuntime:\n- Provider: {}\n- Model: {}\n- Permissions: {}\n- Resource policy: {}\n- Runtime diet: {}\n- Recent commands: {}\n\nContracts:\n- State: {}\n- Plan: {}\n- Stage: {}\n- Retrieval: {}\n- Reflection: {}\n- Acceptance: {}\n- Guided debug: {}\n- Closeout: {}\n- Memory proposal: {}\n- A2A: {}\n\nWorkspace:\n- Project: {}\n- Path: {}\n- {}\n\nNext actions:\n1. /mode          switch auto/build/plan/explore/review\n2. /resource      inspect latest resource budget\n3. /goal          inspect or pin the active goal\n4. /project pulse inspect the next project step\n5. /doctor        run environment diagnostics\n6. /permissions   inspect or edit permission rules\n7. Ctrl+P         open command palette",
+        "Quick Panel\n\nStatus:\n- Agent mode: {}\n- UI mode: {:?}\n- Querying: {}\n- Pending prompts: {}\n- Messages: {}\n- Session: {}\n- Goal: {}\n- Goal drift: {}\n\nActive task:\n{}\n\nRuntime:\n- Provider: {}\n- Model: {}\n- Permissions: {}\n- Resource policy: {}\n- Runtime diet: {}\n- Recent commands: {}\n\nContracts:\n- State: {}\n- Plan: {}\n- Stage: {}\n- Retrieval: {}\n- Reflection: {}\n- Acceptance: {}\n- Guided debug: {}\n- Closeout: {}\n- Memory proposal: {}\n- A2A: {}\n\nWorkspace:\n- Project: {}\n- Path: {}\n- {}\n\nNext actions:\n1. /active-task   inspect unified task/progress state\n2. /memory-proposals review memory candidates\n3. /mode          switch auto/build/plan/explore/review\n4. /resource      inspect latest resource budget\n5. /goal          inspect or pin the active goal\n6. /project pulse inspect the next project step\n7. /doctor        run environment diagnostics",
         app.current_agent_mode_label(),
         app.mode,
         app.is_querying,
@@ -91,6 +92,7 @@ pub fn handle_quick(app: &mut TuiApp) -> String {
         &session[..8.min(session.len())],
         goal_line,
         drift_line,
+        active_task_plan.format(),
         app.current_provider_label(),
         app.current_model_label(),
         app.current_permission_label(),
@@ -110,6 +112,23 @@ pub fn handle_quick(app: &mut TuiApp) -> String {
         workspace,
         cwd.display(),
         quick_git_line(&cwd)
+    )
+}
+
+/// /active-task - Unified current task/progress panel
+pub fn handle_active_task(app: &mut TuiApp) -> String {
+    active_task_plan_for_app(app).format()
+}
+
+fn active_task_plan_for_app(app: &mut TuiApp) -> crate::engine::active_task_plan::ActiveTaskPlan {
+    let goal = app
+        .streaming_engine
+        .as_ref()
+        .and_then(|engine| engine.goal_manager().current());
+    let trace = latest_trace_for_app(app);
+    crate::engine::active_task_plan::ActiveTaskPlan::from_goal_and_trace(
+        goal.as_ref(),
+        trace.as_ref(),
     )
 }
 
@@ -631,6 +650,7 @@ pub fn handle_evolution(app: &mut TuiApp, args: &str) -> String {
     let mut parts = args.split_whitespace();
     let action = parts.next().unwrap_or("audit");
     match action {
+        "status" | "panel" => format_evolution_status_panel(app),
         "audit" | "list" | "" => {
             let limit = parts
                 .next()
@@ -694,7 +714,7 @@ pub fn handle_evolution(app: &mut TuiApp, args: &str) -> String {
                 Err(e) => format!("Evolution event unavailable: {}", e),
             }
         }
-        _ => "Usage: /evolution [audit [limit]|json [limit]|show <id>]".to_string(),
+        _ => "Usage: /evolution [status|audit [limit]|json [limit]|show <id>]".to_string(),
     }
 }
 
@@ -707,6 +727,95 @@ fn is_evolution_learning_event(event: &crate::session_store::LearningEventRecord
         || source.contains("improvement")
         || source.contains("skill_evolution")
         || source.contains("skill_proposals")
+}
+
+fn format_evolution_status_panel(app: &mut TuiApp) -> String {
+    let improvements = crate::engine::improvement::ImprovementStore::default().list();
+    let skill_store = crate::engine::skill_evolution::SkillProposalStore::default();
+    let skill_proposals = skill_store.list();
+    let backups = disabled_skill_backups(&user_skill_root(), None);
+    let audit_events = app
+        .session_manager
+        .recent_learning_events(200)
+        .map(|events| {
+            events
+                .into_iter()
+                .filter(is_evolution_learning_event)
+                .count()
+        })
+        .unwrap_or(0);
+
+    let improvement_status =
+        count_debug_values(improvements.iter().map(|proposal| proposal.status));
+    let improvement_eval =
+        count_debug_values(improvements.iter().map(|proposal| proposal.eval_status));
+    let skill_status = count_debug_values(skill_proposals.iter().map(|proposal| proposal.status));
+    let skill_trust = count_debug_values(skill_proposals.iter().map(|proposal| proposal.trust));
+    let memory_write_policy = std::env::var("PRIORITY_AGENT_AUTO_MEMORY_WRITE")
+        .unwrap_or_else(|_| "review_only".to_string());
+
+    let mut lines = vec![
+        "Evolution Status".to_string(),
+        "Flow: proposal -> eval -> accept/apply -> rollback".to_string(),
+        format!(
+            "Memory: provider lifecycle visible via memory_load doctor_json; auto-write policy={}",
+            memory_write_policy
+        ),
+        format!(
+            "Improvements: total={} status={} eval={}",
+            improvements.len(),
+            format_counts(&improvement_status),
+            format_counts(&improvement_eval)
+        ),
+        format!(
+            "Skills: total={} status={} trust={} rollback_backups={}",
+            skill_proposals.len(),
+            format_counts(&skill_status),
+            format_counts(&skill_trust),
+            backups.len()
+        ),
+        format!("Audit events: {}", audit_events),
+        "".to_string(),
+        "Commands:".to_string(),
+        "- /improvements scan | eval <id> | accept <id> | apply <id> | rollback <id>".to_string(),
+        "- /skill-proposals scan | eval <id> | accept <id> | apply <id> | rollback <name> --yes"
+            .to_string(),
+        "- memory_load {\"action\":\"doctor_json\"}".to_string(),
+    ];
+
+    if let Some(proposal) = improvements.first() {
+        lines.push("".to_string());
+        lines.push(format!(
+            "Latest improvement: {}",
+            format_improvement_line(proposal)
+        ));
+    }
+    if let Some(proposal) = skill_proposals.first() {
+        lines.push(format!(
+            "Latest skill proposal: {}",
+            format_skill_proposal_line(proposal)
+        ));
+    }
+    lines.join("\n")
+}
+
+fn count_debug_values<T: std::fmt::Debug>(values: impl Iterator<Item = T>) -> Vec<(String, usize)> {
+    let mut counts = std::collections::BTreeMap::<String, usize>::new();
+    for value in values {
+        *counts.entry(format!("{:?}", value)).or_default() += 1;
+    }
+    counts.into_iter().collect()
+}
+
+fn format_counts(counts: &[(String, usize)]) -> String {
+    if counts.is_empty() {
+        return "none".to_string();
+    }
+    counts
+        .iter()
+        .map(|(label, count)| format!("{}={}", label, count))
+        .collect::<Vec<_>>()
+        .join(",")
 }
 
 fn format_experience_event(event: &crate::session_store::LearningEventRecord) -> String {
@@ -726,9 +835,129 @@ fn format_experience_event(event: &crate::session_store::LearningEventRecord) ->
     )
 }
 
+/// /memory-proposals - Review closeout-generated memory candidates
+pub fn handle_memory_proposals(_app: &mut TuiApp, args: &str) -> String {
+    use crate::engine::task_contract::{MemoryProposalReviewStore, MemoryProposalStatus};
+
+    let mut parts = args.split_whitespace();
+    let action = parts.next().unwrap_or("list");
+    let store = MemoryProposalReviewStore::default();
+
+    match action {
+        "list" | "" => {
+            let proposals = store.list();
+            if proposals.is_empty() {
+                return "Memory Proposals\n- none yet".to_string();
+            }
+            let mut lines = vec![format!("Memory Proposals ({} total)", proposals.len())];
+            for proposal in proposals.iter().take(20) {
+                lines.push(format_memory_proposal_line(proposal));
+            }
+            lines.join("\n")
+        }
+        "show" => {
+            let Some(id) = parts.next() else {
+                return "Usage: /memory-proposals show <task-id>".to_string();
+            };
+            match store.get(id) {
+                Some(proposal) => format_memory_proposal_detail(&proposal),
+                None => format!("No memory proposal matching '{}'.", id),
+            }
+        }
+        "accept" | "reject" => {
+            let Some(id) = parts.next() else {
+                return format!("Usage: /memory-proposals {} <task-id>", action);
+            };
+            let status = if action == "accept" {
+                MemoryProposalStatus::Accepted
+            } else {
+                MemoryProposalStatus::Rejected
+            };
+            match store.update_status(id, status) {
+                Ok(Some(proposal)) => {
+                    format!("Updated memory proposal\n{}", format_memory_proposal_line(&proposal))
+                }
+                Ok(None) => format!("No memory proposal matching '{}'.", id),
+                Err(e) => format!("Failed to update memory proposal: {}", e),
+            }
+        }
+        "apply" => {
+            let Some(id) = parts.next() else {
+                return "Usage: /memory-proposals apply <task-id>".to_string();
+            };
+            let mut memory = crate::memory::MemoryManager::new();
+            match store.apply(id, &mut memory) {
+                Ok(Some((proposal, applied))) => format!(
+                    "Applied memory proposal {}\n- candidates applied: {}\n{}",
+                    proposal.task_id,
+                    applied,
+                    format_memory_proposal_line(&proposal)
+                ),
+                Ok(None) => format!("No memory proposal matching '{}'.", id),
+                Err(e) => format!("Failed to apply memory proposal: {}", e),
+            }
+        }
+        _ => {
+            "Usage: /memory-proposals [list|show <task-id>|accept <task-id>|reject <task-id>|apply <task-id>]"
+                .to_string()
+        }
+    }
+}
+
+fn format_memory_proposal_line(proposal: &crate::engine::task_contract::MemoryProposal) -> String {
+    format!(
+        "- {} [{}] candidates={} kinds={} evidence={} wrote={} reason={}",
+        proposal.task_id,
+        proposal.status.label(),
+        proposal.candidates.len(),
+        if proposal.candidates.is_empty() {
+            "none".to_string()
+        } else {
+            proposal.candidate_kinds().join("+")
+        },
+        proposal.evidence_items(),
+        proposal.write_performed,
+        compact_inline(&proposal.reason, 80)
+    )
+}
+
+fn format_memory_proposal_detail(
+    proposal: &crate::engine::task_contract::MemoryProposal,
+) -> String {
+    let candidates = if proposal.candidates.is_empty() {
+        "- none".to_string()
+    } else {
+        proposal
+            .candidates
+            .iter()
+            .enumerate()
+            .map(|(idx, candidate)| {
+                format!(
+                    "{}. kind={} scope={} evidence={}\n   {}",
+                    idx + 1,
+                    candidate.kind,
+                    candidate.scope,
+                    candidate.evidence.len(),
+                    compact_inline(&candidate.content, 220)
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    format!(
+        "Memory Proposal {}\nStatus: {}\nWrite policy: {}\nWrite performed: {}\nReason: {}\n\nCandidates:\n{}",
+        proposal.task_id,
+        proposal.status.label(),
+        proposal.write_policy,
+        proposal.write_performed,
+        proposal.reason,
+        candidates
+    )
+}
+
 /// /improvements - Controlled self-evolution proposals
 pub fn handle_improvements(app: &mut TuiApp, args: &str) -> String {
-    use crate::engine::improvement::{ImprovementStore, ProposalStatus};
+    use crate::engine::improvement::{ImprovementStore, ProposalEvalStatus, ProposalStatus};
 
     let mut parts = args.split_whitespace();
     let action = parts.next().unwrap_or("list");
@@ -783,7 +1012,50 @@ pub fn handle_improvements(app: &mut TuiApp, args: &str) -> String {
                 None => format!("No improvement proposal matching '{}'.", id),
             }
         }
-        "accept" | "reject" | "apply" => {
+        "bind-eval" => {
+            let Some(id) = parts.next() else {
+                return "Usage: /improvements bind-eval <id> <evalset-name>".to_string();
+            };
+            let Some(evalset) = parts.next() else {
+                return "Usage: /improvements bind-eval <id> <evalset-name>".to_string();
+            };
+            match store.bind_evalset(id, evalset) {
+                Ok(Some(updated)) => format!(
+                    "Bound evalset '{}' to improvement proposal {}\n{}",
+                    evalset,
+                    updated.id,
+                    format_improvement_line(&updated)
+                ),
+                Ok(None) => format!("No improvement proposal matching '{}'.", id),
+                Err(e) => format!("Failed to bind evalset: {}", e),
+            }
+        }
+        "eval" => {
+            let Some(id) = parts.next() else {
+                return "Usage: /improvements eval <id>".to_string();
+            };
+            let Some(current) = store.get(id) else {
+                return format!("No improvement proposal matching '{}'.", id);
+            };
+            let eval = evaluate_improvement_proposal_for_apply(&current);
+            match store.record_eval(
+                id,
+                if eval.passed {
+                    ProposalEvalStatus::Passed
+                } else {
+                    ProposalEvalStatus::Failed
+                },
+                eval.summary.clone(),
+            ) {
+                Ok(Some(updated)) => {
+                    persist_improvement_learning_event(app, &updated, "eval");
+                    format!("{}\n\n{}", eval.summary, format_improvement_line(&updated))
+                }
+                Ok(None) => format!("No improvement proposal matching '{}'.", id),
+                Err(e) => format!("Failed to record improvement eval: {}", e),
+            }
+        }
+        "accept" | "reject" | "apply" | "rollback" => {
             let Some(id) = parts.next() else {
                 return format!("Usage: /improvements {} <id>", action);
             };
@@ -791,15 +1063,30 @@ pub fn handle_improvements(app: &mut TuiApp, args: &str) -> String {
                 "accept" => ProposalStatus::Accepted,
                 "reject" => ProposalStatus::Rejected,
                 "apply" => ProposalStatus::Applied,
+                "rollback" => ProposalStatus::RolledBack,
                 _ => unreachable!(),
             };
             let Some(current) = store.get(id) else {
                 return format!("No improvement proposal matching '{}'.", id);
             };
+            if desired == ProposalStatus::RolledBack && current.status != ProposalStatus::Applied {
+                return format!(
+                    "Proposal {} is {:?}. Only applied proposals can be rolled back.",
+                    current.id, current.status
+                );
+            }
             if desired == ProposalStatus::Applied && current.status != ProposalStatus::Accepted {
                 return format!(
                     "Proposal {} is {:?}. Accept it before applying. High-risk and behavior-changing proposals require explicit approval.",
                     current.id, current.status
+                );
+            }
+            if desired == ProposalStatus::Applied
+                && current.eval_status != ProposalEvalStatus::Passed
+            {
+                return format!(
+                    "Proposal {} has eval={:?}. Run /improvements eval {} before applying.",
+                    current.id, current.eval_status, current.id
                 );
             }
             if desired == ProposalStatus::Applied {
@@ -821,6 +1108,9 @@ pub fn handle_improvements(app: &mut TuiApp, args: &str) -> String {
                     if desired == ProposalStatus::Applied {
                         record_evolution_update(improvement_target(&updated));
                     }
+                    if desired == ProposalStatus::RolledBack {
+                        record_evolution_update(improvement_target(&updated));
+                    }
                     persist_improvement_learning_event(app, &updated, action);
                     format!(
                         "Updated proposal {}\n{}",
@@ -833,7 +1123,7 @@ pub fn handle_improvements(app: &mut TuiApp, args: &str) -> String {
             }
         }
         _ => {
-            "Usage: /improvements [list|scan [limit]|show <id>|accept <id>|reject <id>|apply <id>]"
+            "Usage: /improvements [list|scan [limit]|show <id>|bind-eval <id> <evalset>|eval <id>|accept <id>|reject <id>|apply <id>|rollback <id>]"
                 .to_string()
         }
     }
@@ -841,11 +1131,18 @@ pub fn handle_improvements(app: &mut TuiApp, args: &str) -> String {
 
 fn format_improvement_line(proposal: &crate::engine::improvement::ImprovementProposal) -> String {
     format!(
-        "- {} [{:?}/{:?}/{:?}] events={}: {}",
+        "- {} [{:?}/{:?}/{:?}] eval={:?} evalsets={} stage={} events={}: {}",
         proposal.id,
         proposal.status,
         proposal.target,
         proposal.risk,
+        proposal.eval_status,
+        if proposal.evalset_bindings.is_empty() {
+            "none".to_string()
+        } else {
+            proposal.evalset_bindings.join(",")
+        },
+        proposal.lifecycle_stage(),
         proposal.trigger_event_ids.len(),
         proposal.proposed_change
     )
@@ -853,11 +1150,21 @@ fn format_improvement_line(proposal: &crate::engine::improvement::ImprovementPro
 
 fn format_improvement_detail(proposal: &crate::engine::improvement::ImprovementProposal) -> String {
     format!(
-        "Improvement Proposal {}\n\nStatus: {:?}\nTarget: {:?}\nRisk: {:?}\nEvents: {:?}\n\nProposed change:\n{}\n\nExpected benefit:\n{}\n\nValidation plan:\n{}\n\nEvidence:\n{}",
+        "Improvement Proposal {}\n\nStatus: {:?}\nStage: {}\nTarget: {:?}\nRisk: {:?}\nEval: {:?}\nEvalSets: {}\nEval summary: {}\nApplied ref: {}\nRollback ref: {}\nEvents: {:?}\n\nProposed change:\n{}\n\nExpected benefit:\n{}\n\nValidation plan:\n{}\n\nRollback plan:\n{}\n\nEvidence:\n{}",
         proposal.id,
         proposal.status,
+        proposal.lifecycle_stage(),
         proposal.target,
         proposal.risk,
+        proposal.eval_status,
+        if proposal.evalset_bindings.is_empty() {
+            "none".to_string()
+        } else {
+            proposal.evalset_bindings.join(", ")
+        },
+        proposal.eval_summary.as_deref().unwrap_or("none"),
+        proposal.applied_ref.as_deref().unwrap_or("none"),
+        proposal.rollback_ref.as_deref().unwrap_or("none"),
         proposal.trigger_event_ids,
         proposal.proposed_change,
         proposal.expected_benefit,
@@ -867,6 +1174,7 @@ fn format_improvement_detail(proposal: &crate::engine::improvement::ImprovementP
             .map(|item| format!("- {}", item))
             .collect::<Vec<_>>()
             .join("\n"),
+        proposal.rollback_plan,
         proposal
             .evidence
             .iter()
@@ -874,6 +1182,110 @@ fn format_improvement_detail(proposal: &crate::engine::improvement::ImprovementP
             .collect::<Vec<_>>()
             .join("\n")
     )
+}
+
+struct ImprovementEvalSummary {
+    passed: bool,
+    summary: String,
+}
+
+fn evaluate_improvement_proposal_for_apply(
+    proposal: &crate::engine::improvement::ImprovementProposal,
+) -> ImprovementEvalSummary {
+    let has_validation = !proposal.validation.is_empty();
+    let has_evidence = !proposal.evidence.is_empty();
+    let gate = improvement_evolution_gate(proposal);
+    let gate_allows = !matches!(
+        gate.action,
+        crate::engine::evolution_controller::EvolutionAction::Reject
+            | crate::engine::evolution_controller::EvolutionAction::Monitor
+    );
+    let bound_report = run_bound_improvement_evalsets(proposal);
+    let bound_ok = bound_report
+        .as_ref()
+        .map(|report| report.ok)
+        .unwrap_or(true);
+    let passed = has_validation && has_evidence && gate_allows && bound_ok;
+    let mut lines = vec![format!(
+        "Improvement Eval {}: {}",
+        proposal.id,
+        if passed { "passed" } else { "failed" }
+    )];
+    lines.push(format!(
+        "- validation_plan={} evidence={} gate={:?} score={:.2}",
+        proposal.validation.len(),
+        proposal.evidence.len(),
+        gate.action,
+        gate.score
+    ));
+    if !has_validation {
+        lines.push("- missing validation plan".to_string());
+    }
+    if !has_evidence {
+        lines.push("- missing evidence".to_string());
+    }
+    if !gate_allows {
+        lines.push("- evolution gate did not allow apply".to_string());
+    }
+    if let Some(report) = bound_report {
+        lines.push(format!(
+            "- bound_evalsets: {}/{} passed, failed={}",
+            report.passed, report.total, report.failed
+        ));
+        if !report.ok {
+            lines.push(report.summary);
+        }
+    }
+    for reason in gate.reasons.iter().take(3) {
+        lines.push(format!("- gate: {}", reason));
+    }
+    ImprovementEvalSummary {
+        passed,
+        summary: lines.join("\n"),
+    }
+}
+
+fn run_bound_improvement_evalsets(
+    proposal: &crate::engine::improvement::ImprovementProposal,
+) -> Option<BoundSkillEvalReport> {
+    if proposal.evalset_bindings.is_empty() {
+        return None;
+    }
+    let eval_dir = std::env::current_dir().ok()?.join("evalsets");
+    let mut summaries = Vec::new();
+    let mut ok = true;
+    let mut total = 0usize;
+    let mut passed = 0usize;
+    let mut failed = 0usize;
+    for binding in &proposal.evalset_bindings {
+        match crate::engine::evalset::run_evalsets_from_dir(&eval_dir, Some(binding)) {
+            Ok(reports) if reports.is_empty() => {
+                ok = false;
+                summaries.push(format!("- {}: no matching evalset", binding));
+            }
+            Ok(reports) => {
+                let binding_ok = reports.iter().all(|report| report.ok());
+                ok &= binding_ok;
+                for report in &reports {
+                    total += report.total;
+                    passed += report.passed;
+                    failed += report.failed;
+                }
+                summaries.push(crate::engine::evalset::format_reports(&reports));
+            }
+            Err(e) => {
+                ok = false;
+                summaries.push(format!("- {}: {}", binding, e));
+            }
+        }
+    }
+    Some(BoundSkillEvalReport {
+        ok,
+        summary: summaries.join("\n\n"),
+        total,
+        passed,
+        failed,
+    })
 }
 
 fn persist_improvement_learning_event(

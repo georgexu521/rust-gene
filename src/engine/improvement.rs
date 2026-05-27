@@ -27,6 +27,15 @@ pub enum ProposalStatus {
     Accepted,
     Rejected,
     Applied,
+    RolledBack,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProposalEvalStatus {
+    Pending,
+    Passed,
+    Failed,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -38,8 +47,20 @@ pub struct ImprovementProposal {
     pub expected_benefit: String,
     pub risk: RiskLevel,
     pub validation: Vec<String>,
+    #[serde(default = "default_proposal_eval_status")]
+    pub eval_status: ProposalEvalStatus,
+    #[serde(default)]
+    pub eval_summary: Option<String>,
+    #[serde(default)]
+    pub evalset_bindings: Vec<String>,
     pub status: ProposalStatus,
     pub evidence: Vec<String>,
+    #[serde(default = "default_rollback_plan")]
+    pub rollback_plan: String,
+    #[serde(default)]
+    pub applied_ref: Option<String>,
+    #[serde(default)]
+    pub rollback_ref: Option<String>,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -83,7 +104,60 @@ impl ImprovementStore {
         let Some(mut proposal) = self.get(id_or_prefix) else {
             return Ok(None);
         };
+        if status == ProposalStatus::Applied && proposal.eval_status != ProposalEvalStatus::Passed {
+            return Err(anyhow::anyhow!(
+                "proposal must pass eval before apply; run /improvements eval {} first",
+                proposal.id
+            ));
+        }
         proposal.status = status;
+        match status {
+            ProposalStatus::Applied => {
+                proposal.applied_ref = Some(format!("manual:/improvements apply {}", proposal.id));
+                proposal.rollback_ref = None;
+            }
+            ProposalStatus::RolledBack => {
+                proposal.rollback_ref =
+                    Some(format!("manual:/improvements rollback {}", proposal.id));
+            }
+            ProposalStatus::Proposed | ProposalStatus::Accepted | ProposalStatus::Rejected => {}
+        }
+        proposal.updated_at = chrono::Utc::now().to_rfc3339();
+        self.upsert(&proposal)?;
+        Ok(Some(proposal))
+    }
+
+    pub fn record_eval(
+        &self,
+        id_or_prefix: &str,
+        status: ProposalEvalStatus,
+        summary: impl Into<String>,
+    ) -> anyhow::Result<Option<ImprovementProposal>> {
+        let Some(mut proposal) = self.get(id_or_prefix) else {
+            return Ok(None);
+        };
+        proposal.eval_status = status;
+        proposal.eval_summary = Some(summary.into());
+        proposal.updated_at = chrono::Utc::now().to_rfc3339();
+        self.upsert(&proposal)?;
+        Ok(Some(proposal))
+    }
+
+    pub fn bind_evalset(
+        &self,
+        id_or_prefix: &str,
+        evalset_name: &str,
+    ) -> anyhow::Result<Option<ImprovementProposal>> {
+        let Some(mut proposal) = self.get(id_or_prefix) else {
+            return Ok(None);
+        };
+        if !proposal
+            .evalset_bindings
+            .iter()
+            .any(|binding| binding == evalset_name)
+        {
+            proposal.evalset_bindings.push(evalset_name.to_string());
+        }
         proposal.updated_at = chrono::Utc::now().to_rfc3339();
         self.upsert(&proposal)?;
         Ok(Some(proposal))
@@ -120,6 +194,19 @@ impl Default for ImprovementStore {
 impl ImprovementProposal {
     fn dedupe_key(&self) -> String {
         format!("{:?}:{}", self.target, self.proposed_change.to_lowercase())
+    }
+
+    pub fn lifecycle_stage(&self) -> &'static str {
+        match self.status {
+            ProposalStatus::Proposed if self.eval_status == ProposalEvalStatus::Pending => {
+                "proposal"
+            }
+            ProposalStatus::Proposed => "eval",
+            ProposalStatus::Accepted => "accept",
+            ProposalStatus::Applied => "apply",
+            ProposalStatus::RolledBack => "rollback",
+            ProposalStatus::Rejected => "rejected",
+        }
     }
 }
 
@@ -234,12 +321,27 @@ impl ImprovementProposal {
             expected_benefit: expected_benefit.into(),
             risk,
             validation,
+            eval_status: ProposalEvalStatus::Pending,
+            eval_summary: None,
+            evalset_bindings: Vec::new(),
             status: ProposalStatus::Proposed,
             evidence,
+            rollback_plan: default_rollback_plan(),
+            applied_ref: None,
+            rollback_ref: None,
             created_at: now.clone(),
             updated_at: now,
         }
     }
+}
+
+fn default_proposal_eval_status() -> ProposalEvalStatus {
+    ProposalEvalStatus::Pending
+}
+
+fn default_rollback_plan() -> String {
+    "Keep the change as an inspectable proposal until eval and explicit apply; rollback records a rolled_back proposal state and audit event instead of letting the model mutate long-term behavior directly."
+        .to_string()
 }
 
 fn stable_proposal_id(target: &ImprovementTarget, proposed_change: &str) -> String {
@@ -348,12 +450,88 @@ mod tests {
         );
         store.upsert(&proposal).unwrap();
         let short = &proposal.id[..10];
+        store
+            .record_eval(short, ProposalEvalStatus::Passed, "manual test passed")
+            .unwrap();
         let updated = store
             .update_status(short, ProposalStatus::Accepted)
             .unwrap()
             .unwrap();
         assert_eq!(updated.status, ProposalStatus::Accepted);
         assert_eq!(store.list()[0].status, ProposalStatus::Accepted);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn apply_requires_passed_eval_and_records_rollback_refs() {
+        let path = std::env::temp_dir().join(format!(
+            "priority-agent-improvements-{}.jsonl",
+            uuid::Uuid::new_v4()
+        ));
+        let store = ImprovementStore::new(path.clone());
+        let proposal = ImprovementProposal::new(
+            vec![1],
+            ImprovementTarget::ToolGuidance,
+            "Improve repeated bash failure guidance.".to_string(),
+            "Better recovery.",
+            RiskLevel::Medium,
+            vec!["Run tool regression.".to_string()],
+            vec!["evidence".to_string()],
+        );
+        store.upsert(&proposal).unwrap();
+        assert!(store
+            .update_status(&proposal.id, ProposalStatus::Applied)
+            .is_err());
+        store
+            .record_eval(&proposal.id, ProposalEvalStatus::Passed, "preflight passed")
+            .unwrap();
+        let applied = store
+            .update_status(&proposal.id, ProposalStatus::Applied)
+            .unwrap()
+            .unwrap();
+        assert_eq!(applied.status, ProposalStatus::Applied);
+        assert!(applied
+            .applied_ref
+            .as_deref()
+            .unwrap_or("")
+            .contains("apply"));
+        let rolled_back = store
+            .update_status(&proposal.id, ProposalStatus::RolledBack)
+            .unwrap()
+            .unwrap();
+        assert_eq!(rolled_back.lifecycle_stage(), "rollback");
+        assert!(rolled_back
+            .rollback_ref
+            .as_deref()
+            .unwrap_or("")
+            .contains("rollback"));
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn store_binds_evalset_to_improvement_proposal() {
+        let path = std::env::temp_dir().join(format!(
+            "priority-agent-improvements-{}.jsonl",
+            uuid::Uuid::new_v4()
+        ));
+        let store = ImprovementStore::new(path.clone());
+        let proposal = ImprovementProposal::new(
+            vec![1],
+            ImprovementTarget::Routing,
+            "Increase retrieval before risky routing.".to_string(),
+            "Better routing.",
+            RiskLevel::Medium,
+            vec!["Run routing evalset.".to_string()],
+            vec!["evidence".to_string()],
+        );
+        store.upsert(&proposal).unwrap();
+
+        let updated = store
+            .bind_evalset(&proposal.id, "routing-smoke")
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(updated.evalset_bindings, vec!["routing-smoke"]);
         let _ = std::fs::remove_file(path);
     }
 }

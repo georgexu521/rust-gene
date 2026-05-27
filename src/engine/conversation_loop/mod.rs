@@ -669,7 +669,7 @@ mod tests {
         let output = shell_output_with_timeout(
             "printf '%s:%s' \"${PRIORITY_AGENT_AUTO_TEST:-unset}\" \"${PRIORITY_AGENT_EVAL_EVENTS:-unset}\"",
             tmp.path(),
-            std::time::Duration::from_secs(5),
+            Some(std::time::Duration::from_secs(5)),
         )
         .await
         .expect("run shell command");

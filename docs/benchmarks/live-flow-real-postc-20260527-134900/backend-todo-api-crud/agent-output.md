@@ -1,0 +1,39 @@
+
+
+Closeout:
+- Status: failed
+- Evidence: changed_files=1 validation_passed=0 validation_failed=3 validation_partial=0 validation_not_verified=0 acceptance_passed=0 acceptance_rejected=3 acceptance_pending=0
+- Changed: fixtures/live_backend/todo_api/todo_api.py
+- Verified:
+  - Inspect test file to understand API contract: failed (python3 -m py_compile fixtures/live_backend/todo_api/todo_api.py found 1 error(s), 0 warning(s): [error] unknown: Sorry: IndentationErro)
+  - Adaptive triggers: risk_signal_high, required_validation, first_code_change, verification_failed, acceptance_rejected
+  - verification proof: failed (required validation failed 2/2 commands)
+  - verification proof support: failed (supports_verified=false residual_risk=true kinds=none; verification proof status failed blocks verified closeout before proof-kind policy)
+  - tool evidence: records=97 completed=6 failed=91 denied=0 validation=0 closeout=4 repair=95 changed=4 workflows=code_change commands=none
+- Acceptance:
+  - accepted=false confidence=High unresolved=10
+  - accepted=false confidence=High unresolved=7
+  - accepted=false confidence=High unresolved=12
+- Risk:
+  - HTTP routing layer appears unimplemented - all routes returning 404
+  - 4 TODO comments remain in todo_api.py
+  - 2 unit tests failing due to 404 responses
+  - The diff only shows TodoStore class implementation, not the HTTP request handler (do_GET/do_POST/etc)
+  - The actual HTTP API endpoints are not evidenced as implemented
+  - Test failures indicate routing layer is missing entirely
+  - PATCH /todos/<id> handler not implemented (do_PATCH method missing)
+  - DELETE /todos/<id> handler not implemented (do_DELETE method missing)
+  - Unit test failure likely due to missing PATCH/DELETE handlers causing 404 responses
+  - Test suite will continue to fail until PATCH and DELETE endpoints are wired up
+  - TODOs indicate incomplete implementation that cannot be accepted
+  - IndentationError at line 41: duplicate code block appended causing syntax error
+  - do_PATCH method has TODO comment and no implementation
+  - do_DELETE method has TODO comment and no implementation
+  - Duplicate update() and delete() method implementations visible in diff
+  - Module fails to import, blocking all unit test verification
+  - Syntax error will prevent any runtime usage
+  - PATCH and DELETE endpoints are unimplemented
+  - Code has apparent merge conflicts or duplicate code blocks
+  - Workflow finished with unresolved validation or acceptance risk
+  - Verification proof is failed: required validation failed 2/2 commands
+  - Verification proof support is failed: verification proof status failed blocks verified closeout before proof-kind policy

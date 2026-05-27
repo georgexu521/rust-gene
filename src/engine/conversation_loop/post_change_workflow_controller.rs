@@ -6,6 +6,7 @@ use super::post_edit_verification_controller::{
     PostEditVerificationContext, PostEditVerificationController,
 };
 use super::turn_runtime_state::TurnRuntimeState;
+use super::validation_runner::RequiredValidationController;
 use super::ConversationLoop;
 use crate::engine::code_change_workflow::CodeChangeWorkflowRunner;
 use crate::engine::intent_router::IntentRoute;
@@ -43,6 +44,45 @@ pub(super) struct PostChangeWorkflowController;
 impl PostChangeWorkflowController {
     pub(super) async fn run(context: PostChangeWorkflowContext<'_>) -> PostChangeWorkflowOutcome {
         if context.changed_files.is_empty() {
+            if !context.required_validation_commands.is_empty() {
+                let working_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+                let required_run = RequiredValidationController::run_pending_commands(
+                    &working_dir,
+                    context.required_validation_commands,
+                    context.successful_validation_commands,
+                    &*context.successful_required_validation_commands,
+                )
+                .await;
+                let required_application =
+                    RequiredValidationController::application_for_run(required_run);
+                let required_source_context = if required_application.passed {
+                    None
+                } else {
+                    RequiredValidationController::source_context_from_evidence(
+                        &working_dir,
+                        &required_application.post_edit_evidence,
+                    )
+                };
+                for command in required_application.successful_commands {
+                    context
+                        .successful_required_validation_commands
+                        .insert(command);
+                }
+                for record in required_application.ledger_records {
+                    context.turn_state.evidence_ledger.record_validation_result(
+                        "required_validation",
+                        Some(&record.command),
+                        record.success,
+                        &record.dialog_text,
+                    );
+                }
+                for text in required_application.post_edit_evidence {
+                    append_system_text(context.tool_results_text, context.messages, text);
+                }
+                if let Some(source_context) = required_source_context {
+                    append_system_text(context.tool_results_text, context.messages, source_context);
+                }
+            }
             return PostChangeWorkflowOutcome {
                 should_closeout_after_verified_change: context
                     .should_closeout_after_verified_change,
@@ -111,6 +151,16 @@ impl PostChangeWorkflowController {
                 .should_closeout_after_verified_change,
             break_loop: post_edit_repair_outcome.break_loop,
         }
+    }
+}
+
+fn append_system_text(tool_results_text: &mut String, messages: &mut Vec<Message>, text: String) {
+    if !text.trim().is_empty() {
+        if !tool_results_text.is_empty() {
+            tool_results_text.push_str("\n\n");
+        }
+        tool_results_text.push_str(&text);
+        messages.push(Message::system(text));
     }
 }
 
@@ -199,5 +249,48 @@ mod tests {
         assert!(tool_results_text.is_empty());
         assert!(final_content.is_empty());
         assert!(successful_required_validation_commands.is_empty());
+    }
+
+    #[tokio::test]
+    async fn runs_required_validation_even_without_changed_files() {
+        let conversation = conversation();
+        let route = IntentRouter::new().route("audit only");
+        let mut task_bundle = TaskContextBundle::new("audit only", ".", route.clone(), None);
+        let mut code_workflow = CodeChangeWorkflowRunner::new(&task_bundle);
+        let trace = TraceCollector::new(TurnTrace::new("session", 1, "audit only"));
+        let mut turn_state = TurnRuntimeState::new(true);
+        let mut successful_required_validation_commands = HashSet::new();
+        let mut final_content = String::new();
+        let mut tool_results_text = String::new();
+        let mut messages = Vec::new();
+        let changed_files = Vec::new();
+        let required_validation_commands = vec!["true".to_string()];
+        let successful_validation_commands = Vec::new();
+
+        let outcome = PostChangeWorkflowController::run(PostChangeWorkflowContext {
+            conversation: &conversation,
+            trace: &trace,
+            route: &route,
+            code_workflow: &mut code_workflow,
+            task_bundle: &mut task_bundle,
+            changed_files: &changed_files,
+            required_validation_commands: &required_validation_commands,
+            successful_validation_commands: &successful_validation_commands,
+            successful_required_validation_commands: &mut successful_required_validation_commands,
+            turn_state: &mut turn_state,
+            should_closeout_after_verified_change: false,
+            final_content: &mut final_content,
+            tool_results_text: &mut tool_results_text,
+            messages: &mut messages,
+            last_user_preview: "audit only",
+        })
+        .await;
+
+        assert!(!outcome.break_loop);
+        assert!(successful_required_validation_commands.contains("true"));
+        assert!(turn_state
+            .evidence_ledger
+            .runtime_required_validation_label(&required_validation_commands)
+            .is_some_and(|label| label.contains("passed:1/1")));
     }
 }

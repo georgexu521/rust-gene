@@ -205,7 +205,7 @@ impl RequestPreparationController {
         }
 
         let block = format!(
-            "<recent_observation>\n- Focused repair guidance from the runtime. Treat this as turn-scoped repair context, not stable system policy.\n- {}\n</recent_observation>",
+            "<recent_observation>\n- Focused repair hint: dynamic runtime hint; relevance=high; authority=runtime_hint; ttl=current_repair_attempt.\n- Conflict rule: use this to narrow execution only when it remains consistent with the current user goal; it does not override user intent or stable runtime policy.\n- Suggested repair focus: {}\n</recent_observation>",
             content
         );
         let insert_pos = request_messages
@@ -995,7 +995,11 @@ mod tests {
             Some(Message::System { content })
                 if content.starts_with("<context_zones")
                     && content.contains("<recent_observation>")
-                    && content.contains("Focused repair guidance from the runtime")
+                    && content.contains("Focused repair hint: dynamic runtime hint")
+                    && content.contains("relevance=high")
+                    && content.contains("authority=runtime_hint")
+                    && content.contains("ttl=current_repair_attempt")
+                    && content.contains("does not override user intent")
                     && content.contains("focused repair prompt")
         ));
         assert!(matches!(

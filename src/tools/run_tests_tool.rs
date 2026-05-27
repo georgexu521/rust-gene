@@ -4,6 +4,7 @@ use crate::tools::bash_tool::command_classifier::{classify_command, CommandKind}
 use crate::tools::{Tool, ToolContext, ToolErrorCode, ToolOperationKind, ToolResult};
 use async_trait::async_trait;
 use serde_json::json;
+use std::path::Path;
 use std::process::Stdio;
 use std::time::Instant;
 use tokio::process::Command;
@@ -43,19 +44,24 @@ impl Tool for RunTestsTool {
     }
 
     async fn execute(&self, params: serde_json::Value, context: ToolContext) -> ToolResult {
-        let command = params["command"].as_str().unwrap_or_default().trim();
-        if command.is_empty() {
+        let requested_command = params["command"].as_str().unwrap_or_default().trim();
+        if requested_command.is_empty() {
             return ToolResult::error("command is required");
         }
+        let normalized_command =
+            normalize_validation_command(requested_command, &context.working_dir);
+        let command = normalized_command.as_str();
         let classification = classify_command(command);
         if !command_allowed_for_run_tests(&classification) {
             let mut result = ToolResult::error(format!(
-                "run_tests only accepts safe validation commands; rejected: {command}"
+                "run_tests only accepts safe validation commands; rejected: {requested_command}"
             ));
             result.error_code = Some(ToolErrorCode::InvalidParams);
             result.data = Some(json!({
                 "tool": "run_tests",
                 "failure": "unsafe_validation_command",
+                "requested_command": requested_command,
+                "normalized_command": command,
                 "command_classification": classification,
             }));
             return result;
@@ -88,6 +94,7 @@ impl Tool for RunTestsTool {
                     "tool": "run_tests",
                     "shell_result": {
                         "command": command,
+                        "requested_command": requested_command,
                         "cwd": context.working_dir.display().to_string(),
                         "exit_code": exit_code,
                         "stdout_bytes": output.stdout.len(),
@@ -117,6 +124,7 @@ impl Tool for RunTestsTool {
                     "tool": "run_tests",
                     "shell_result": {
                         "command": command,
+                        "requested_command": requested_command,
                         "cwd": context.working_dir.display().to_string(),
                         "exit_code": null,
                         "stdout_bytes": 0,
@@ -136,6 +144,7 @@ impl Tool for RunTestsTool {
                     "tool": "run_tests",
                     "shell_result": {
                         "command": command,
+                        "requested_command": requested_command,
                         "cwd": context.working_dir.display().to_string(),
                         "exit_code": null,
                         "stdout_bytes": 0,
@@ -198,6 +207,44 @@ fn command_allowed_for_run_tests(
         && classification.mutation_indicators.is_empty()
         && !classification.command_plan.has_write_redirection
         && !classification.command_plan.fail_closed
+}
+
+fn normalize_validation_command(command: &str, working_dir: &Path) -> String {
+    let trimmed = command.trim();
+    let Some((lhs, rhs)) = trimmed.split_once("&&") else {
+        return trimmed.to_string();
+    };
+    let lhs = lhs.trim();
+    let Some(target) = lhs.strip_prefix("cd ") else {
+        return trimmed.to_string();
+    };
+    let target = target.trim().trim_matches('"').trim_matches('\'');
+    if !same_working_dir(target, working_dir) {
+        return trimmed.to_string();
+    }
+    let rhs = rhs.trim();
+    if rhs.is_empty() {
+        trimmed.to_string()
+    } else {
+        rhs.to_string()
+    }
+}
+
+fn same_working_dir(target: &str, working_dir: &Path) -> bool {
+    if target == "." {
+        return true;
+    }
+    let target_path = Path::new(target);
+    if !target_path.is_absolute() {
+        return false;
+    }
+    match (
+        std::fs::canonicalize(target_path),
+        std::fs::canonicalize(working_dir),
+    ) {
+        (Ok(a), Ok(b)) => a == b,
+        _ => target_path == working_dir,
+    }
 }
 
 fn validation_output(command: &str, exit_code: Option<i32>, stdout: &str, stderr: &str) -> String {
@@ -284,5 +331,46 @@ mod tests {
             "python3 -m py_compile scripts/live_eval_report_parser.py"
         );
         assert_eq!(data["validation_result"]["status"], "passed");
+    }
+
+    #[tokio::test]
+    async fn run_tests_accepts_safe_command_with_workdir_cd_prefix() {
+        let tool = RunTestsTool;
+        let cwd = std::env::current_dir().unwrap();
+        let result = tool
+            .execute(
+                json!({
+                    "command": format!(
+                        "cd {} && python3 -m py_compile scripts/live_eval_report_parser.py",
+                        cwd.display()
+                    ),
+                    "timeout_secs": 30
+                }),
+                context(),
+            )
+            .await;
+
+        assert!(result.success, "{}", result.content);
+        let data = result.data.expect("metadata");
+        assert_eq!(
+            data["shell_result"]["command"],
+            "python3 -m py_compile scripts/live_eval_report_parser.py"
+        );
+    }
+
+    #[tokio::test]
+    async fn run_tests_rejects_cd_to_different_absolute_directory() {
+        let tool = RunTestsTool;
+        let result = tool
+            .execute(
+                json!({
+                    "command": "cd /tmp && python3 -m py_compile scripts/live_eval_report_parser.py"
+                }),
+                context(),
+            )
+            .await;
+
+        assert!(!result.success);
+        assert_eq!(result.error_code, Some(ToolErrorCode::InvalidParams));
     }
 }

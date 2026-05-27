@@ -299,6 +299,18 @@ pub struct ValidationEvidence {
     pub related_to_changed_files: Option<String>,
     #[serde(default)]
     pub residual_risk: Option<String>,
+    #[serde(default)]
+    pub claim_id: Option<String>,
+    #[serde(default)]
+    pub claim_type: Option<String>,
+    #[serde(default)]
+    pub parent_command: Option<String>,
+    #[serde(default)]
+    pub artifact_ids: Vec<String>,
+    #[serde(default)]
+    pub verification_verdict: Option<String>,
+    #[serde(default)]
+    pub verified_at: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -462,6 +474,12 @@ impl EvidenceLedger {
             parent_verified: None,
             related_to_changed_files: None,
             residual_risk: None,
+            claim_id: None,
+            claim_type: None,
+            parent_command: None,
+            artifact_ids: Vec::new(),
+            verification_verdict: None,
+            verified_at: None,
         });
     }
 
@@ -1352,7 +1370,7 @@ impl EvidenceLedger {
         data: &serde_json::Value,
         result: &ToolResult,
     ) -> bool {
-        let Some(proof_kind) = subagent_proof_kind(data) else {
+        let Some(raw_proof_kind) = subagent_proof_kind(data) else {
             return false;
         };
         let source_agent = json_string(data, "source_agent")
@@ -1369,6 +1387,33 @@ impl EvidenceLedger {
             .get("parent_verified")
             .and_then(serde_json::Value::as_bool)
             .unwrap_or(false);
+        let claim_id = json_string(data, "claim_id");
+        let claim_type = json_string(data, "claim_type");
+        let parent_command = json_string(data, "parent_command");
+        let artifact_ids = subagent_parent_artifact_ids(data);
+        let verification_verdict =
+            json_string(data, "verification_verdict").or_else(|| json_string(data, "verdict"));
+        let verified_at = json_string(data, "verified_at");
+        let bound_parent_verification = raw_proof_kind
+            == VerificationProofKind::ParentVerifiedSubagentResult
+            && parent_verification_record_is_bound(ParentVerificationBindingInput {
+                data,
+                source_agent: &source_agent,
+                parent_verified,
+                claim_id: claim_id.as_deref(),
+                claim_type: claim_type.as_deref(),
+                artifact_ids: &artifact_ids,
+                verification_verdict: verification_verdict.as_deref(),
+                verified_at: verified_at.as_deref(),
+            });
+        let proof_kind = if raw_proof_kind == VerificationProofKind::ParentVerifiedSubagentResult
+            && !bound_parent_verification
+        {
+            VerificationProofKind::SubagentClaimOnly
+        } else {
+            raw_proof_kind
+        };
+        let parent_verified_for_proof = parent_verified && bound_parent_verification;
         let passed =
             tool_success && matches!(status.as_str(), "completed" | "success" | "verified");
         let output_kind = json_string(data, "subagent_output_kind")
@@ -1377,9 +1422,16 @@ impl EvidenceLedger {
             .or_else(|| json_string(data, "content"))
             .unwrap_or_else(|| result_summary(result));
         let summary = format!(
-            "subagent {source_agent} {output_kind} status={status} parent_verified={parent_verified}: {content}"
+            "subagent {source_agent} {output_kind} status={status} parent_verified={parent_verified_for_proof}: {content}"
         );
         let command_status = if passed { "passed" } else { "failed" };
+        let residual_risk = json_string(data, "residual_risk").or_else(|| {
+            (raw_proof_kind == VerificationProofKind::ParentVerifiedSubagentResult
+                && !bound_parent_verification)
+                .then(|| {
+                    "parent verification record missing explicit binding; downgraded to subagent claim only".to_string()
+                })
+        });
 
         self.validation_facts.push(ValidationEvidence {
             source: format!("agent:{source_agent}"),
@@ -1391,9 +1443,15 @@ impl EvidenceLedger {
             command_status: Some(command_status.to_string()),
             validation_family: Some("subagent".to_string()),
             source_agent: Some(source_agent),
-            parent_verified: Some(parent_verified),
+            parent_verified: Some(parent_verified_for_proof),
             related_to_changed_files: json_string(data, "related_to_changed_files"),
-            residual_risk: json_string(data, "residual_risk"),
+            residual_risk,
+            claim_id,
+            claim_type,
+            parent_command,
+            artifact_ids,
+            verification_verdict,
+            verified_at,
         });
         true
     }
@@ -1529,6 +1587,76 @@ fn subagent_proof_kind(data: &serde_json::Value) -> Option<VerificationProofKind
         | VerificationProofKind::ParentVerifiedSubagentResult => Some(proof_kind),
         _ => None,
     }
+}
+
+struct ParentVerificationBindingInput<'a> {
+    data: &'a serde_json::Value,
+    source_agent: &'a str,
+    parent_verified: bool,
+    claim_id: Option<&'a str>,
+    claim_type: Option<&'a str>,
+    artifact_ids: &'a [String],
+    verification_verdict: Option<&'a str>,
+    verified_at: Option<&'a str>,
+}
+
+fn parent_verification_record_is_bound(input: ParentVerificationBindingInput<'_>) -> bool {
+    input.parent_verified
+        && !matches!(input.source_agent.trim(), "" | "unknown")
+        && json_string(input.data, "scope").as_deref() == Some("parent_runtime_verification")
+        && input.claim_id.is_some_and(|value| !value.trim().is_empty())
+        && input
+            .claim_type
+            .is_some_and(|value| !value.trim().is_empty())
+        && !input.artifact_ids.is_empty()
+        && related_to_changed_files_is_bound(input.data)
+        && input
+            .verification_verdict
+            .is_some_and(|value| value.trim().to_ascii_lowercase().starts_with("verified"))
+        && input
+            .verified_at
+            .is_some_and(|value| !value.trim().is_empty())
+}
+
+fn related_to_changed_files_is_bound(data: &serde_json::Value) -> bool {
+    match data.get("related_to_changed_files") {
+        Some(serde_json::Value::Bool(_)) => true,
+        Some(serde_json::Value::String(value)) => {
+            let normalized = value.trim().to_ascii_lowercase();
+            !normalized.is_empty()
+                && !matches!(
+                    normalized.as_str(),
+                    "unknown" | "unknown_child_worktree" | "unbound"
+                )
+        }
+        _ => false,
+    }
+}
+
+fn subagent_parent_artifact_ids(data: &serde_json::Value) -> Vec<String> {
+    let mut ids = json_string_array(data, "artifact_ids");
+    for key in ["artifact_id", "tool_run_id", "parent_tool_run_id"] {
+        if let Some(id) = json_identifier(data, key) {
+            ids.push(id);
+        }
+    }
+    ids.sort();
+    ids.dedup();
+    ids
+}
+
+fn json_identifier(value: &serde_json::Value, key: &str) -> Option<String> {
+    let value = value.get(key)?;
+    if let Some(text) = value.as_str().filter(|value| !value.trim().is_empty()) {
+        return Some(text.to_string());
+    }
+    if let Some(number) = value.as_i64() {
+        return Some(number.to_string());
+    }
+    if let Some(number) = value.as_u64() {
+        return Some(number.to_string());
+    }
+    None
 }
 
 fn result_has_subagent_proof(data: &serde_json::Value) -> bool {
@@ -3105,6 +3233,12 @@ mod tests {
                 "subagent_output_kind": "SubagentVerificationClaim",
                 "parent_verified": true,
                 "scope": "parent_runtime_verification",
+                "claim_id": "claim_agent_1_compile",
+                "claim_type": "compile_check",
+                "parent_command": "cargo check -q",
+                "artifact_ids": ["tool_run_789"],
+                "verification_verdict": "verified_for_compile_only",
+                "verified_at": "2026-05-26T00:00:00Z",
                 "related_to_changed_files": "yes",
                 "residual_risk": "parent runtime verified subagent result"
             }),
@@ -3132,6 +3266,63 @@ mod tests {
         assert!(proof
             .proof_kinds
             .contains(&VerificationProofKind::ParentVerifiedSubagentResult));
+        let fact = &ledger.validation_facts()[0];
+        assert_eq!(fact.claim_id.as_deref(), Some("claim_agent_1_compile"));
+        assert_eq!(fact.artifact_ids, vec!["tool_run_789".to_string()]);
+        assert_eq!(
+            fact.verification_verdict.as_deref(),
+            Some("verified_for_compile_only")
+        );
+    }
+
+    #[test]
+    fn unbound_parent_verified_subagent_record_is_downgraded_to_claim_only() {
+        let mut ledger = EvidenceLedger::new();
+        let result = ToolResult::success_with_data(
+            "Parent runtime verified sub-agent agent_1",
+            serde_json::json!({
+                "agent_id": "agent_1",
+                "source_agent": "agent_1",
+                "status": "verified",
+                "result": "parent says checks passed but does not bind the claim",
+                "verification_proof_kind": "parent_verified_subagent_result",
+                "subagent_output_kind": "SubagentVerificationClaim",
+                "parent_verified": true,
+                "scope": "parent_runtime_verification",
+                "related_to_changed_files": "yes"
+            }),
+        );
+
+        ledger.record_tool_result(
+            &tool_call("agent", serde_json::json!({"action": "resume"})),
+            &result,
+        );
+
+        let proof = ledger.verification_proof(VerificationProofRequest {
+            required_commands: &[],
+            requires_validation: true,
+            task_verification_status: crate::engine::task_context::VerificationStatus::Pending,
+            support_context: ledger
+                .verification_proof_support_context(VerificationProofTaskType::SubagentReview, &[]),
+        });
+
+        assert!(proof
+            .proof_kinds
+            .contains(&VerificationProofKind::SubagentClaimOnly));
+        assert!(!proof
+            .proof_kinds
+            .contains(&VerificationProofKind::ParentVerifiedSubagentResult));
+        assert_eq!(
+            proof.derived_support.status,
+            VerificationProofStatus::Partial
+        );
+        assert!(!proof.derived_support.supports_verified);
+        let fact = &ledger.validation_facts()[0];
+        assert_eq!(
+            fact.proof_kind,
+            Some(VerificationProofKind::SubagentClaimOnly)
+        );
+        assert_eq!(fact.parent_verified, Some(false));
     }
 
     #[test]

@@ -24,7 +24,8 @@ pub(super) struct ToolExposurePlan {
 
 impl ToolExposurePlan {
     pub(super) fn build(request: ToolExposureRequest<'_>) -> Self {
-        let validation_allowed_before_request = request.has_changes_before_request
+        let validation_allowed_before_request = (request.has_changes_before_request
+            || request.required_validation_commands_present)
             && !request.action_checkpoint_requires_patch_before_validation;
         let allow_targeted_lookup = request.action_checkpoint_lookup_count
             < ConversationLoop::ACTION_CHECKPOINT_TARGETED_LOOKUP_BUDGET;
@@ -187,18 +188,20 @@ fn phase_allows_tool(
                 | "todo_write"
                 | "ask_user"
         ),
-        AgentTaskStage::Edit => matches!(
-            name,
-            "project_list"
-                | "glob"
-                | "grep"
-                | "file_read"
-                | "file_write"
-                | "file_edit"
-                | "file_patch"
-                | "todo_write"
-                | "ask_user"
-        ),
+        AgentTaskStage::Edit => {
+            matches!(
+                name,
+                "project_list"
+                    | "glob"
+                    | "grep"
+                    | "file_read"
+                    | "file_write"
+                    | "file_edit"
+                    | "file_patch"
+                    | "todo_write"
+                    | "ask_user"
+            ) || (required_validation_commands_present && matches!(name, "bash" | "run_tests"))
+        }
         AgentTaskStage::Validate => matches!(
             name,
             "file_read"
@@ -416,6 +419,25 @@ mod tests {
     }
 
     #[test]
+    fn action_checkpoint_keeps_validation_tools_when_required_commands_exist_without_changes() {
+        let base_tools = base_tools();
+        let plan = ToolExposurePlan::build(ToolExposureRequest {
+            base_tools: &base_tools,
+            programming_workflow: true,
+            task_stage: Some(AgentTaskStage::Repair),
+            has_changes_before_request: false,
+            required_validation_commands_present: true,
+            model_profile: ModelProfileMode::Standard,
+            action_checkpoint_active: true,
+            action_checkpoint_lookup_count: 0,
+            action_checkpoint_requires_patch_before_validation: false,
+        });
+
+        assert!(plan.exposed_tool_names.contains("run_tests"));
+        assert!(plan.exposed_tool_names.contains("bash"));
+    }
+
+    #[test]
     fn programming_understand_stage_exposes_only_inspection_tools() {
         let mut base_tools = base_tools();
         base_tools.push(tool("ask_user"));
@@ -491,6 +513,25 @@ mod tests {
         assert!(!plan.exposed_tool_names.contains("install_dependencies"));
         assert!(!plan.exposed_tool_names.contains("git_status"));
         assert!(!plan.exposed_tool_names.contains("git_diff"));
+    }
+
+    #[test]
+    fn programming_edit_stage_keeps_validation_tools_when_required_commands_exist() {
+        let base_tools = base_tools();
+        let plan = ToolExposurePlan::build(ToolExposureRequest {
+            base_tools: &base_tools,
+            programming_workflow: true,
+            task_stage: Some(AgentTaskStage::Edit),
+            has_changes_before_request: false,
+            required_validation_commands_present: true,
+            model_profile: ModelProfileMode::Standard,
+            action_checkpoint_active: false,
+            action_checkpoint_lookup_count: 0,
+            action_checkpoint_requires_patch_before_validation: false,
+        });
+
+        assert!(plan.exposed_tool_names.contains("bash"));
+        assert!(plan.exposed_tool_names.contains("run_tests"));
     }
 
     #[test]

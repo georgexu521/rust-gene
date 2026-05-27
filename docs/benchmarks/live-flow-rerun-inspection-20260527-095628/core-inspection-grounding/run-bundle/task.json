@@ -1,0 +1,29 @@
+{
+  "schema": "agent_run_bundle.v1",
+  "task_id": "core-inspection-grounding",
+  "run_id": "flow-rerun-inspection-20260527-095628",
+  "generated_at": "2026-05-27T01:57:08.426406+00:00",
+  "goal_summary": "audit_or_regression_check",
+  "mode": "agent-run",
+  "final_status": "failed",
+  "terminal_status": "failed",
+  "stop_reason": "consecutive_validation_failures",
+  "modified_files": "0",
+  "validation_status": "ok",
+  "verification_status": "failed",
+  "closeout_status": "failed",
+  "scores": {
+    "outcome": "40",
+    "process": "80",
+    "efficiency": "75",
+    "agent": "59",
+    "penalties": "run_failed,verification_failed,closeout_not_successful,invalid_action,failed_actions"
+  },
+  "artifacts": {
+    "source_report": "docs/benchmarks/live-flow-rerun-inspection-20260527-095628/core-inspection-grounding/report.md",
+    "source_events": "docs/benchmarks/live-flow-rerun-inspection-20260527-095628/core-inspection-grounding/agent-events.jsonl",
+    "steps": "docs/benchmarks/live-flow-rerun-inspection-20260527-095628/core-inspection-grounding/run-bundle/steps.jsonl",
+    "events": "docs/benchmarks/live-flow-rerun-inspection-20260527-095628/core-inspection-grounding/run-bundle/events.jsonl",
+    "final_report": "docs/benchmarks/live-flow-rerun-inspection-20260527-095628/core-inspection-grounding/run-bundle/final_report.md"
+  }
+}

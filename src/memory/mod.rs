@@ -19,7 +19,8 @@ pub use manager::{
 };
 pub use provider::{
     LocalMemoryProvider, MemoryProvider, MemoryProviderCallOutcome, MemoryProviderCallStatus,
-    MemoryProviderRegistry,
+    MemoryProviderLifecycleEntry, MemoryProviderLifecycleReport, MemoryProviderRegistry,
+    MEMORY_PROVIDER_LIFECYCLE_HOOKS,
 };
 pub use quality::{assess_memory_candidate, MemoryQualityAssessment};
 pub use recall::{score_recall, RecallDecision, RecallFactors, RecallScore};

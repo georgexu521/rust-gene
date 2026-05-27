@@ -316,6 +316,7 @@ fn attach_subagent_proof_metadata(
         SUBAGENT_CLAIM_PROOF_KIND
     };
     let output_kind = subagent_output_kind(result.status, role, template, allowed_tools);
+    let claim_id = format!("subagent:{}:{}", result.agent_id, output_kind);
     let related_to_changed_files = if tools_allow_file_mutation(allowed_tools) {
         "unknown_child_worktree"
     } else {
@@ -326,6 +327,8 @@ fn attach_subagent_proof_metadata(
     data["source_agent"] = json!(result.agent_id.to_string());
     data["parent_verified"] = json!(parent_verified);
     data["subagent_output_kind"] = json!(output_kind);
+    data["claim_id"] = json!(claim_id);
+    data["claim_type"] = json!(output_kind);
     data["scope"] = json!("subagent_result");
     data["related_to_changed_files"] = json!(related_to_changed_files);
     data["residual_risk"] = json!(if parent_verified {
@@ -2079,6 +2082,11 @@ mod tests {
         assert_eq!(data["parent_verified"], false);
         assert_eq!(data["source_agent"], "agent_1");
         assert_eq!(data["subagent_output_kind"], "SubagentVerificationClaim");
+        assert_eq!(
+            data["claim_id"],
+            "subagent:agent_1:SubagentVerificationClaim"
+        );
+        assert_eq!(data["claim_type"], "SubagentVerificationClaim");
         assert_eq!(data["related_to_changed_files"], "none");
     }
 
@@ -2099,6 +2107,8 @@ mod tests {
 
         assert_eq!(data["subagent_output_kind"], "SubagentPatchSummary");
         assert_eq!(data["verification_proof_kind"], "subagent_claim_only");
+        assert_eq!(data["claim_id"], "subagent:agent_2:SubagentPatchSummary");
+        assert_eq!(data["claim_type"], "SubagentPatchSummary");
         assert_eq!(data["related_to_changed_files"], "unknown_child_worktree");
     }
 

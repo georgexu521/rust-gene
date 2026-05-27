@@ -510,6 +510,12 @@ impl CheckpointReviewVerdict {
                 if side_effects.external_side_effect
                     == ExternalSideEffect::LocalWorkspaceMutation =>
             {
+                if allow_bash_artifact_prep_without_checkpoint(tool_call, contract, side_effects) {
+                    return Self::required_and_present(
+                        "local_files",
+                        "bounded bash artifact preparation is allowed when checkpoint-managed file tools are not exposed",
+                    );
+                }
                 return Self::checkpoint_wrapper_required(
                     "local_files",
                     "raw bash workspace mutation must use a checkpoint-managed wrapper",
@@ -667,6 +673,45 @@ fn mutation_requires_checkpoint(
             contract.operation_kind.as_deref(),
             Some("write" | "edit" | "patch" | "shell")
         ) && contract.destructive.unwrap_or(false)
+}
+
+fn allow_bash_artifact_prep_without_checkpoint(
+    tool_call: &ToolCall,
+    _contract: &ToolContractReview,
+    side_effects: &ActionSideEffectProfile,
+) -> bool {
+    if tool_call.name != "bash"
+        || side_effects.external_side_effect != ExternalSideEffect::LocalWorkspaceMutation
+    {
+        return false;
+    }
+    if side_effects.paths.iter().any(|path| {
+        !path.inside_workspace
+            || matches!(
+                path.class,
+                crate::engine::action_policy::WorkspacePathClass::External
+                    | crate::engine::action_policy::WorkspacePathClass::System
+                    | crate::engine::action_policy::WorkspacePathClass::HomePrivate
+                    | crate::engine::action_policy::WorkspacePathClass::RepoMetadata
+                    | crate::engine::action_policy::WorkspacePathClass::Credential
+            )
+    }) {
+        return false;
+    }
+    let Some(command) = tool_call.arguments["command"].as_str() else {
+        return false;
+    };
+    let normalized =
+        crate::tools::bash_tool::command_classifier::normalize_command_for_match(command)
+            .to_ascii_lowercase();
+    if normalized.is_empty() {
+        return false;
+    }
+    normalized.starts_with("python -m venv .venv")
+        || normalized.starts_with("python3 -m venv .venv")
+        || normalized.contains(
+            "fixtures/core_quality/long_output/generate_log.py > fixtures/core_quality/long_output/output.log",
+        )
 }
 
 fn final_decision(
@@ -1612,6 +1657,30 @@ mod tests {
         );
         assert!(review.model_recovery.contains("checkpoint-managed"));
         assert!(review.model_recovery.contains("raw bash"));
+    }
+
+    #[test]
+    fn bounded_bash_artifact_prep_is_allowed_without_file_edit_tools() {
+        let tool = BashTool;
+        let tool_call = call(
+            "bash",
+            serde_json::json!({"command": "python3 fixtures/core_quality/long_output/generate_log.py > fixtures/core_quality/long_output/output.log"}),
+        );
+        let review = review(
+            &tool_call,
+            Some(&tool),
+            HashSet::from(["bash".to_string(), "file_read".to_string()]),
+        );
+
+        assert_eq!(review.checkpoint.status, "required_and_present");
+        assert_eq!(
+            review.checkpoint.enforcement,
+            "tool_managed_before_mutation"
+        );
+        assert_ne!(
+            review.primary_reason,
+            ActionReviewReason::CheckpointRequired
+        );
     }
 
     #[test]

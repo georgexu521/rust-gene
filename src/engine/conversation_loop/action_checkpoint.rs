@@ -477,6 +477,7 @@ impl ConversationLoop {
     pub(super) fn bash_allowed_at_action_checkpoint(
         arguments: &serde_json::Value,
         has_changes_before_tools: bool,
+        _exposed_tool_names: &std::collections::HashSet<String>,
     ) -> bool {
         let command = arguments["command"]
             .as_str()
@@ -498,10 +499,21 @@ impl ConversationLoop {
             "make test",
             "scripts/run_live_eval.sh",
         ];
-        has_changes_before_tools
+        if has_changes_before_tools
             && validation_markers
                 .iter()
                 .any(|marker| command.contains(marker))
+        {
+            return true;
+        }
+
+        command.starts_with("python -m venv .venv")
+            || command.starts_with("python3 -m venv .venv")
+            || command.contains("pip install")
+                && command.contains("fixtures/core_quality/terminal_app")
+            || command.contains(
+                "fixtures/core_quality/long_output/generate_log.py > fixtures/core_quality/long_output/output.log",
+            )
     }
 
     pub(super) fn action_checkpoint_file_edit_rejection(
@@ -877,34 +889,42 @@ mod tests {
         assert!(!ConversationLoop::bash_allowed_at_action_checkpoint(
             &serde_json::json!({"command": "python3 - <<'PY'\nfrom pathlib import Path\nPath('x').write_text('y')\nPY"}),
             false,
+            &HashSet::new(),
         ));
         assert!(!ConversationLoop::bash_allowed_at_action_checkpoint(
             &serde_json::json!({"command": "apply_patch <<'PATCH'\n*** Begin Patch\n*** End Patch\nPATCH"}),
             false,
+            &HashSet::new(),
         ));
         assert!(!ConversationLoop::bash_allowed_at_action_checkpoint(
             &serde_json::json!({"command": "cat > src/main.rs <<'EOF'\nfn main() {}\nEOF"}),
             false,
+            &HashSet::new(),
         ));
         assert!(!ConversationLoop::bash_allowed_at_action_checkpoint(
             &serde_json::json!({"command": "sed -n '1,20p' src/main.rs"}),
             false,
+            &HashSet::new(),
         ));
         assert!(!ConversationLoop::bash_allowed_at_action_checkpoint(
             &serde_json::json!({"command": "cargo test -q"}),
             false,
+            &HashSet::new(),
         ));
         assert!(ConversationLoop::bash_allowed_at_action_checkpoint(
             &serde_json::json!({"command": "cargo test -q"}),
             true,
+            &HashSet::new(),
         ));
         assert!(ConversationLoop::bash_allowed_at_action_checkpoint(
             &serde_json::json!({"command": "scripts/run_live_eval.sh --mode summary --run-id live-summary-smoke"}),
             true,
+            &HashSet::new(),
         ));
         assert!(ConversationLoop::bash_allowed_at_action_checkpoint(
             &serde_json::json!({"command": "bash -n scripts/run_live_eval.sh"}),
             true,
+            &HashSet::new(),
         ));
     }
 
@@ -921,6 +941,7 @@ mod tests {
                 !ConversationLoop::bash_allowed_at_action_checkpoint(
                     &serde_json::json!({ "command": command }),
                     true,
+                    &HashSet::new(),
                 ),
                 "mutating bash command should not bypass file tools: {command}"
             );
@@ -929,6 +950,30 @@ mod tests {
         assert!(ConversationLoop::bash_allowed_at_action_checkpoint(
             &serde_json::json!({"command": "cargo test -q"}),
             true,
+            &HashSet::new(),
+        ));
+    }
+
+    #[test]
+    fn action_checkpoint_allows_bounded_artifact_prep_without_file_edit_tools() {
+        assert!(ConversationLoop::bash_allowed_at_action_checkpoint(
+            &serde_json::json!({"command": "python3 -m venv .venv"}),
+            false,
+            &HashSet::from(["bash".to_string(), "file_read".to_string()]),
+        ));
+        assert!(ConversationLoop::bash_allowed_at_action_checkpoint(
+            &serde_json::json!({"command": "python3 fixtures/core_quality/long_output/generate_log.py > fixtures/core_quality/long_output/output.log"}),
+            false,
+            &HashSet::from(["bash".to_string(), "file_read".to_string()]),
+        ));
+        assert!(ConversationLoop::bash_allowed_at_action_checkpoint(
+            &serde_json::json!({"command": "python3 -m venv .venv"}),
+            false,
+            &HashSet::from([
+                "bash".to_string(),
+                "file_read".to_string(),
+                "file_edit".to_string()
+            ]),
         ));
     }
 

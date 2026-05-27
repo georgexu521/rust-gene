@@ -6,6 +6,7 @@
 pub mod action_decision;
 pub mod action_policy;
 pub mod action_review;
+pub mod active_task_plan;
 pub mod agent_mode;
 pub mod auto_verify;
 pub mod batch_refactor;

@@ -2,6 +2,7 @@ use crate::memory::types::{MemoryKind, MemoryRecord, MemoryScope, MemoryStatus};
 use crate::services::api::Message;
 use anyhow::anyhow;
 use async_trait::async_trait;
+use serde::{Deserialize, Serialize};
 use std::future::Future;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -10,6 +11,18 @@ use std::sync::Arc;
 const LOCAL_PROVIDER_MEMORY_CHAR_LIMIT: usize = 8_000;
 const LOCAL_PROVIDER_USER_CHAR_LIMIT: usize = 4_000;
 const LOCAL_PROVIDER_MEMORY_FILE_INDEX_CHAR_LIMIT: usize = 4_000;
+pub const MEMORY_PROVIDER_LIFECYCLE_HOOKS: &[&str] = &[
+    "initialize",
+    "system_prompt_block",
+    "prefetch",
+    "search",
+    "queue_prefetch",
+    "sync_turn",
+    "on_session_end",
+    "on_pre_compress",
+    "on_memory_write",
+    "shutdown",
+];
 
 #[derive(Debug, Clone)]
 pub struct MemoryTurn {
@@ -20,6 +33,8 @@ pub struct MemoryTurn {
 #[async_trait]
 pub trait MemoryProvider: Send + Sync {
     fn name(&self) -> &str;
+
+    fn as_any(&self) -> &dyn std::any::Any;
 
     fn is_available(&self) -> bool {
         true
@@ -139,6 +154,21 @@ pub struct MemoryProviderRegistry {
     external: Option<Arc<dyn MemoryProvider>>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MemoryProviderLifecycleEntry {
+    pub name: String,
+    pub kind: String,
+    pub available: bool,
+    pub hooks: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MemoryProviderLifecycleReport {
+    pub providers: Vec<MemoryProviderLifecycleEntry>,
+    pub external_provider: Option<String>,
+    pub lifecycle_hooks: Vec<String>,
+}
+
 impl std::fmt::Debug for MemoryProviderRegistry {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("MemoryProviderRegistry")
@@ -183,6 +213,44 @@ impl MemoryProviderRegistry {
         self.external
             .as_ref()
             .map(|provider| provider.name().to_string())
+    }
+
+    pub fn lifecycle_report(&self) -> MemoryProviderLifecycleReport {
+        let mut providers = vec![MemoryProviderLifecycleEntry {
+            name: self.local.name().to_string(),
+            kind: "local".to_string(),
+            available: self.local.is_available(),
+            hooks: lifecycle_hooks(),
+        }];
+        if let Some(external) = self.external.as_ref() {
+            providers.push(MemoryProviderLifecycleEntry {
+                name: external.name().to_string(),
+                kind: "external".to_string(),
+                available: external.is_available(),
+                hooks: lifecycle_hooks(),
+            });
+        }
+        MemoryProviderLifecycleReport {
+            providers,
+            external_provider: self.external_provider_name(),
+            lifecycle_hooks: lifecycle_hooks(),
+        }
+    }
+
+    pub fn local_memory_records(&self) -> anyhow::Result<Vec<MemoryRecord>> {
+        self.local_memory_records_raw().map(|records| {
+            records
+                .into_iter()
+                .filter(local_provider_record_safe)
+                .collect()
+        })
+    }
+
+    pub fn local_memory_records_raw(&self) -> anyhow::Result<Vec<MemoryRecord>> {
+        let Some(local) = self.local.as_any().downcast_ref::<LocalMemoryProvider>() else {
+            return Ok(Vec::new());
+        };
+        local.memory_records()
     }
 
     pub fn register_external(&mut self, provider: Arc<dyn MemoryProvider>) -> anyhow::Result<()> {
@@ -434,6 +502,13 @@ impl MemoryProviderRegistry {
     }
 }
 
+fn lifecycle_hooks() -> Vec<String> {
+    MEMORY_PROVIDER_LIFECYCLE_HOOKS
+        .iter()
+        .map(|hook| (*hook).to_string())
+        .collect()
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct LocalMemoryProvider {
     base_dir: Option<PathBuf>,
@@ -451,12 +526,23 @@ impl LocalMemoryProvider {
             .as_ref()
             .map(|base| base.join("memory").join("records.jsonl"))
     }
+
+    pub fn memory_records(&self) -> anyhow::Result<Vec<MemoryRecord>> {
+        let Some(path) = self.records_path() else {
+            return Ok(Vec::new());
+        };
+        read_local_memory_records(&path)
+    }
 }
 
 #[async_trait]
 impl MemoryProvider for LocalMemoryProvider {
     fn name(&self) -> &str {
         "local"
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
     }
 
     async fn system_prompt_block(&self, _scope: &MemoryScope) -> anyhow::Result<Option<String>> {
@@ -647,8 +733,11 @@ fn ensure_local_provider_record_safe(record: &MemoryRecord) -> anyhow::Result<()
 }
 
 fn local_provider_record_visible(record: &MemoryRecord) -> bool {
-    matches!(record.status, MemoryStatus::Accepted)
-        && ensure_local_provider_record_safe(record).is_ok()
+    matches!(record.status, MemoryStatus::Accepted) && local_provider_record_safe(record)
+}
+
+fn local_provider_record_safe(record: &MemoryRecord) -> bool {
+    ensure_local_provider_record_safe(record).is_ok()
 }
 
 fn local_provider_scope_matches(scope: &MemoryScope, record: &MemoryRecord) -> bool {
@@ -790,6 +879,10 @@ mod tests {
             self.name
         }
 
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+
         fn is_available(&self) -> bool {
             self.available.load(Ordering::SeqCst)
         }
@@ -855,6 +948,25 @@ mod tests {
         assert!(error
             .to_string()
             .contains("external memory provider 'external-one' already registered"));
+    }
+
+    #[test]
+    fn registry_lifecycle_report_lists_provider_panel_fields() {
+        let local = Arc::new(TestProvider::new("local-test"));
+        let external = Arc::new(TestProvider::unavailable("external-test"));
+        let mut registry = MemoryProviderRegistry::with_local_for_tests(local);
+        registry.register_external(external).unwrap();
+
+        let report = registry.lifecycle_report();
+
+        assert_eq!(report.external_provider.as_deref(), Some("external-test"));
+        assert_eq!(report.providers.len(), 2);
+        assert_eq!(report.providers[0].kind, "local");
+        assert_eq!(report.providers[1].kind, "external");
+        assert!(!report.providers[1].available);
+        assert!(report
+            .lifecycle_hooks
+            .contains(&"on_memory_write".to_string()));
     }
 
     #[tokio::test]

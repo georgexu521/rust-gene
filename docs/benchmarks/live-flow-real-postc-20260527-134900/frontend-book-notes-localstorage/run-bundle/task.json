@@ -1,0 +1,29 @@
+{
+  "schema": "agent_run_bundle.v1",
+  "task_id": "frontend-book-notes-localstorage",
+  "run_id": "flow-real-postc-20260527-134900",
+  "generated_at": "2026-05-27T05:27:09.716147+00:00",
+  "goal_summary": "seeded_code_change",
+  "mode": "agent-run",
+  "final_status": "passed",
+  "terminal_status": "completed",
+  "stop_reason": "no_issue",
+  "modified_files": "1",
+  "validation_status": "ok",
+  "verification_status": "passed",
+  "closeout_status": "passed",
+  "scores": {
+    "outcome": "100",
+    "process": "65",
+    "efficiency": "80",
+    "agent": "86",
+    "penalties": "repeated_action,invalid_action,repeated_actions"
+  },
+  "artifacts": {
+    "source_report": "docs/benchmarks/live-flow-real-postc-20260527-134900/frontend-book-notes-localstorage/report.md",
+    "source_events": "docs/benchmarks/live-flow-real-postc-20260527-134900/frontend-book-notes-localstorage/agent-events.jsonl",
+    "steps": "docs/benchmarks/live-flow-real-postc-20260527-134900/frontend-book-notes-localstorage/run-bundle/steps.jsonl",
+    "events": "docs/benchmarks/live-flow-real-postc-20260527-134900/frontend-book-notes-localstorage/run-bundle/events.jsonl",
+    "final_report": "docs/benchmarks/live-flow-real-postc-20260527-134900/frontend-book-notes-localstorage/run-bundle/final_report.md"
+  }
+}

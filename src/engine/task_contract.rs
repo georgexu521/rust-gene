@@ -12,6 +12,9 @@ use crate::engine::retrieval_context::{RetrievalSource, TrustLevel};
 use crate::engine::task_context::{AgentTaskMode, TaskContextBundle, VerificationStatus};
 use crate::engine::workflow_contract::ProgrammingWorkflowJudgment;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::io::Write;
+use std::path::PathBuf;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -121,6 +124,9 @@ impl ExecutionReportStatus {
 #[serde(rename_all = "snake_case")]
 pub enum MemoryProposalStatus {
     Proposed,
+    Accepted,
+    Rejected,
+    Applied,
     NotApplicable,
 }
 
@@ -128,6 +134,9 @@ impl MemoryProposalStatus {
     pub fn label(self) -> &'static str {
         match self {
             Self::Proposed => "proposed",
+            Self::Accepted => "accepted",
+            Self::Rejected => "rejected",
+            Self::Applied => "applied",
             Self::NotApplicable => "not_applicable",
         }
     }
@@ -288,6 +297,17 @@ pub struct MemoryProposal {
     pub write_policy: String,
     pub write_performed: bool,
     pub reason: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MemoryProposalReviewRecord {
+    pub proposal: MemoryProposal,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct MemoryProposalReviewStore {
+    path: PathBuf,
 }
 
 impl TaskContract {
@@ -732,6 +752,141 @@ impl MemoryProposal {
     }
 }
 
+impl MemoryProposalReviewStore {
+    pub fn default_path() -> PathBuf {
+        dirs::home_dir()
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join(".priority-agent")
+            .join("memory_proposals.jsonl")
+    }
+
+    pub fn new(path: PathBuf) -> Self {
+        Self { path }
+    }
+
+    pub fn list(&self) -> Vec<MemoryProposal> {
+        let content = std::fs::read_to_string(&self.path).unwrap_or_default();
+        let mut latest = HashMap::<String, MemoryProposalReviewRecord>::new();
+        for line in content
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty())
+        {
+            let Ok(record) = serde_json::from_str::<MemoryProposalReviewRecord>(line) else {
+                continue;
+            };
+            latest.insert(record.proposal.task_id.clone(), record);
+        }
+        let mut proposals = latest
+            .into_values()
+            .map(|record| record.proposal)
+            .collect::<Vec<_>>();
+        proposals.sort_by(|a, b| a.task_id.cmp(&b.task_id));
+        proposals
+    }
+
+    pub fn get(&self, id_or_prefix: &str) -> Option<MemoryProposal> {
+        self.list().into_iter().find(|proposal| {
+            proposal.task_id == id_or_prefix || proposal.task_id.starts_with(id_or_prefix)
+        })
+    }
+
+    pub fn upsert(&self, proposal: &MemoryProposal) -> anyhow::Result<()> {
+        if proposal.status == MemoryProposalStatus::NotApplicable {
+            return Ok(());
+        }
+        if let Some(parent) = self.path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let record = MemoryProposalReviewRecord {
+            proposal: proposal.clone(),
+            updated_at: chrono::Utc::now().to_rfc3339(),
+        };
+        let mut file = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&self.path)?;
+        writeln!(file, "{}", serde_json::to_string(&record)?)?;
+        Ok(())
+    }
+
+    pub fn update_status(
+        &self,
+        id_or_prefix: &str,
+        status: MemoryProposalStatus,
+    ) -> anyhow::Result<Option<MemoryProposal>> {
+        let Some(mut proposal) = self.get(id_or_prefix) else {
+            return Ok(None);
+        };
+        proposal.status = status;
+        proposal.reason = match status {
+            MemoryProposalStatus::Accepted => "accepted for memory apply".to_string(),
+            MemoryProposalStatus::Rejected => "rejected by review".to_string(),
+            MemoryProposalStatus::Applied => "applied to long-term memory".to_string(),
+            MemoryProposalStatus::Proposed => {
+                "candidate memory requires review before persistence".to_string()
+            }
+            MemoryProposalStatus::NotApplicable => {
+                "no durable evidence-backed memory candidate was produced".to_string()
+            }
+        };
+        self.upsert(&proposal)?;
+        Ok(Some(proposal))
+    }
+
+    pub fn apply(
+        &self,
+        id_or_prefix: &str,
+        memory: &mut crate::memory::MemoryManager,
+    ) -> anyhow::Result<Option<(MemoryProposal, usize)>> {
+        let Some(mut proposal) = self.get(id_or_prefix) else {
+            return Ok(None);
+        };
+        if proposal.status != MemoryProposalStatus::Accepted {
+            anyhow::bail!(
+                "memory proposal {} is {}; accept it before apply",
+                proposal.task_id,
+                proposal.status.label()
+            );
+        }
+        let mut applied = 0usize;
+        for candidate in &proposal.candidates {
+            let memory_candidate = memory
+                .candidate_from_content(
+                    &candidate.content,
+                    &candidate.kind,
+                    "memory_proposal_review",
+                )
+                .explicit(true);
+            let target = match candidate.scope.as_str() {
+                "user" => crate::memory::MemoryWriteTarget::User,
+                "topic" => crate::memory::MemoryWriteTarget::Topic(candidate.kind.clone()),
+                "project" => crate::memory::MemoryWriteTarget::Index,
+                _ => crate::memory::MemoryWriteTarget::Auto,
+            };
+            let outcome = memory.submit_candidate(memory_candidate, target);
+            if matches!(
+                outcome.status,
+                crate::memory::manager::MemoryWriteOutcomeStatus::Saved
+                    | crate::memory::manager::MemoryWriteOutcomeStatus::Duplicate
+            ) {
+                applied += 1;
+            }
+        }
+        proposal.status = MemoryProposalStatus::Applied;
+        proposal.write_performed = applied > 0;
+        proposal.reason = format!("applied {} candidate(s) to long-term memory", applied);
+        self.upsert(&proposal)?;
+        Ok(Some((proposal, applied)))
+    }
+}
+
+impl Default for MemoryProposalReviewStore {
+    fn default() -> Self {
+        Self::new(Self::default_path())
+    }
+}
+
 pub trait TaskContractBundleExt {
     fn task_contract(&self, required_validation_commands: &[String]) -> TaskContract;
     fn context_pack(&self, contract: &TaskContract) -> ContextPack;
@@ -1160,6 +1315,40 @@ mod tests {
         assert_eq!(proposal.status, MemoryProposalStatus::NotApplicable);
         assert!(proposal.candidates.is_empty());
         assert!(!proposal.write_performed);
+    }
+
+    #[test]
+    fn memory_proposal_review_store_tracks_status_by_prefix() {
+        let path = std::env::temp_dir().join(format!(
+            "priority-agent-memory-proposals-{}.jsonl",
+            uuid::Uuid::new_v4()
+        ));
+        let store = MemoryProposalReviewStore::new(path.clone());
+        let report = ExecutionReport {
+            task_id: "task-review-123".to_string(),
+            objective: "fix parser".to_string(),
+            status: ExecutionReportStatus::Success,
+            changed_files: vec!["src/parser.rs".to_string()],
+            validation_evidence: vec!["cargo test parser: passed".to_string()],
+            risks: Vec::new(),
+            next_steps: Vec::new(),
+            assumptions: Vec::new(),
+        };
+        let proposal = MemoryProposal::from_execution_report(&report);
+
+        store.upsert(&proposal).unwrap();
+        let updated = store
+            .update_status("task-review", MemoryProposalStatus::Accepted)
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(updated.status, MemoryProposalStatus::Accepted);
+        assert_eq!(store.list().len(), 1);
+        assert_eq!(
+            store.get("task-review").unwrap().status,
+            MemoryProposalStatus::Accepted
+        );
+        let _ = std::fs::remove_file(path);
     }
 
     #[test]

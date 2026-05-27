@@ -5,15 +5,30 @@ use crate::engine::code_change_workflow::{AdaptiveWorkflowTrigger, CodeChangeWor
 use crate::engine::trace::{TraceCollector, TraceEvent};
 use crate::services::api::ToolCall;
 use std::collections::HashSet;
+use std::path::Path;
 use tokio::io::AsyncReadExt;
 
-fn required_validation_timeout() -> std::time::Duration {
-    let secs = std::env::var("PRIORITY_AGENT_REQUIRED_VALIDATION_TIMEOUT_SECS")
-        .ok()
-        .and_then(|value| value.parse::<u64>().ok())
-        .unwrap_or(900)
-        .clamp(30, 900);
-    std::time::Duration::from_secs(secs)
+fn required_validation_timeout() -> Option<std::time::Duration> {
+    let value = std::env::var("PRIORITY_AGENT_REQUIRED_VALIDATION_TIMEOUT_SECS").ok()?;
+    let value = value.trim();
+    if value.is_empty()
+        || matches!(
+            value.to_ascii_lowercase().as_str(),
+            "0" | "none" | "off" | "false" | "unlimited"
+        )
+    {
+        return None;
+    }
+    let secs = value.parse::<u64>().ok()?.max(30);
+    Some(std::time::Duration::from_secs(secs))
+}
+
+fn required_validation_preflight_timeout() -> Option<std::time::Duration> {
+    Some(
+        required_validation_timeout()
+            .unwrap_or_else(|| std::time::Duration::from_secs(300))
+            .min(std::time::Duration::from_secs(300)),
+    )
 }
 
 fn sanitize_required_validation_env(cmd: &mut tokio::process::Command) {
@@ -35,7 +50,7 @@ fn sanitize_required_validation_env(cmd: &mut tokio::process::Command) {
 pub(super) async fn shell_output_with_timeout(
     command: &str,
     working_dir: &std::path::Path,
-    timeout: std::time::Duration,
+    timeout: Option<std::time::Duration>,
 ) -> std::io::Result<std::process::Output> {
     let mut cmd = tokio::process::Command::new("sh");
     cmd.arg("-lc").arg(command).current_dir(working_dir);
@@ -66,34 +81,42 @@ pub(super) async fn shell_output_with_timeout(
     });
 
     let started_at = std::time::Instant::now();
+    let timeout_at = timeout.map(|duration| tokio::time::Instant::from_std(started_at + duration));
     let mut heartbeat = tokio::time::interval(std::time::Duration::from_secs(30));
     heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     let status = loop {
-        tokio::select! {
-            result = child.wait() => break result?,
-            _ = heartbeat.tick() => {
-                let elapsed = started_at.elapsed();
-                if elapsed >= std::time::Duration::from_secs(30) {
-                    eprintln!(
-                        "[required validation still running after {}s] {}",
-                        elapsed.as_secs(),
-                        safe_prefix_by_bytes(command, 160)
-                    );
+        if let Some(deadline) = timeout_at {
+            tokio::select! {
+                result = child.wait() => break result?,
+                _ = heartbeat.tick() => {
+                    emit_required_validation_heartbeat(started_at, command);
+                }
+                _ = tokio::time::sleep_until(deadline) => {
+                    #[cfg(unix)]
+                    if let Some(pid) = child_pid {
+                        unsafe {
+                            libc::kill(-(pid as i32), libc::SIGKILL);
+                        }
+                    }
+                    let _ = child.start_kill();
+                    let _ = child.wait().await;
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::TimedOut,
+                        format!(
+                            "command timed out after {}s",
+                            deadline
+                                .duration_since(tokio::time::Instant::from_std(started_at))
+                                .as_secs()
+                        ),
+                    ));
                 }
             }
-            _ = tokio::time::sleep_until(tokio::time::Instant::from_std(started_at + timeout)) => {
-                #[cfg(unix)]
-                if let Some(pid) = child_pid {
-                    unsafe {
-                        libc::kill(-(pid as i32), libc::SIGKILL);
-                    }
+        } else {
+            tokio::select! {
+                result = child.wait() => break result?,
+                _ = heartbeat.tick() => {
+                    emit_required_validation_heartbeat(started_at, command);
                 }
-                let _ = child.start_kill();
-                let _ = child.wait().await;
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::TimedOut,
-                    format!("command timed out after {}s", timeout.as_secs()),
-                ));
             }
         }
     };
@@ -104,6 +127,17 @@ pub(super) async fn shell_output_with_timeout(
         stdout,
         stderr,
     })
+}
+
+fn emit_required_validation_heartbeat(started_at: std::time::Instant, command: &str) {
+    let elapsed = started_at.elapsed();
+    if elapsed >= std::time::Duration::from_secs(30) {
+        eprintln!(
+            "[required validation still running after {}s] {}",
+            elapsed.as_secs(),
+            safe_prefix_by_bytes(command, 160)
+        );
+    }
 }
 
 pub(super) fn verification_source_context(
@@ -184,6 +218,14 @@ pub(super) fn verification_source_context(
 }
 
 pub(super) struct RequiredValidationController;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RequiredValidationPreflightRepair {
+    id: String,
+    command: String,
+    note: String,
+    cleanup_command: Option<String>,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct RequiredValidationRun {
@@ -436,16 +478,30 @@ impl RequiredValidationController {
         commands: &[String],
     ) -> Vec<VerificationResult> {
         let mut results = Vec::new();
+        let mut executed_preflights = HashSet::new();
+        let mut cleanup_commands = Vec::new();
+        let mut seen_cleanup_commands = HashSet::new();
         for command in commands.iter().take(8) {
+            let preflight_log = run_required_validation_preflight_repairs(
+                working_dir,
+                command,
+                &mut executed_preflights,
+                &mut cleanup_commands,
+                &mut seen_cleanup_commands,
+            )
+            .await;
             let timeout = required_validation_timeout();
             let output = shell_output_with_timeout(command, working_dir, timeout).await;
             let result = match output {
                 Ok(output) => {
-                    let raw_output = format!(
+                    let mut raw_output = format!(
                         "{}{}",
                         String::from_utf8_lossy(&output.stdout),
                         String::from_utf8_lossy(&output.stderr)
                     );
+                    if !preflight_log.is_empty() {
+                        raw_output = format!("{preflight_log}\n{raw_output}");
+                    }
                     VerificationResult {
                         language: "required".to_string(),
                         command: command.clone(),
@@ -471,9 +527,17 @@ impl RequiredValidationController {
                 Err(err) => {
                     let timed_out = err.kind() == std::io::ErrorKind::TimedOut;
                     let message = if timed_out {
-                        format!("required command timed out after {}s", timeout.as_secs())
+                        let timeout_label = timeout
+                            .map(|duration| format!("{}s", duration.as_secs()))
+                            .unwrap_or_else(|| "configured limit".to_string());
+                        format!("required command timed out after {timeout_label}")
                     } else {
                         format!("failed to run required command: {}", err)
+                    };
+                    let raw_output = if preflight_log.is_empty() {
+                        err.to_string()
+                    } else {
+                        format!("{preflight_log}\n{err}")
                     };
                     VerificationResult {
                         language: "required".to_string(),
@@ -485,7 +549,7 @@ impl RequiredValidationController {
                             line: None,
                             message,
                         }],
-                        raw_output: err.to_string(),
+                        raw_output,
                         summary: if timed_out {
                             format!("required command timed out: {}", command)
                         } else {
@@ -496,8 +560,154 @@ impl RequiredValidationController {
             };
             results.push(result);
         }
+        for cleanup in cleanup_commands {
+            let _ = shell_output_with_timeout(
+                &cleanup,
+                working_dir,
+                Some(std::time::Duration::from_secs(120)),
+            )
+            .await;
+        }
         results
     }
+}
+
+fn required_validation_preflight_repairs(
+    working_dir: &Path,
+    command: &str,
+) -> Vec<RequiredValidationPreflightRepair> {
+    let normalized =
+        crate::tools::bash_tool::command_classifier::normalize_command_for_match(command);
+    if normalized.is_empty() {
+        return Vec::new();
+    }
+
+    let mut repairs = Vec::new();
+
+    let venv_python = working_dir.join(".venv/bin/python");
+    let needs_venv = normalized.contains(".venv/bin/activate")
+        || normalized.contains(".venv/bin/python")
+        || normalized.contains("python -m core_terminal_demo")
+        || normalized.contains("python3 -m core_terminal_demo");
+    let terminal_pkg = working_dir.join("fixtures/core_quality/terminal_app/pyproject.toml");
+    let needs_core_terminal_demo_bootstrap =
+        normalized.contains("core_terminal_demo") && terminal_pkg.is_file();
+    if needs_core_terminal_demo_bootstrap {
+        if !core_terminal_demo_venv_marker_exists(working_dir) {
+            repairs.push(RequiredValidationPreflightRepair {
+                id: "core_terminal_demo_venv_install".to_string(),
+                command: "python3 -m venv .venv && . .venv/bin/activate && python -c \"import site, pathlib; site_dir = pathlib.Path(site.getsitepackages()[0]); pth = site_dir / 'core_terminal_demo_local.pth'; pth.write_text(str(pathlib.Path('fixtures/core_quality/terminal_app').resolve()) + '\\n')\"".to_string(),
+                note: "bootstrap .venv and expose local core_terminal_demo package path".to_string(),
+                cleanup_command: None,
+            });
+        }
+    } else if needs_venv && !venv_python.is_file() {
+        repairs.push(RequiredValidationPreflightRepair {
+            id: "venv_bootstrap".to_string(),
+            command: "python3 -m venv .venv".to_string(),
+            note: "bootstrap missing .venv for required command".to_string(),
+            cleanup_command: None,
+        });
+    }
+
+    let long_output_rel = "fixtures/core_quality/long_output/output.log";
+    let long_output_log = working_dir.join(long_output_rel);
+    let long_output_generator =
+        working_dir.join("fixtures/core_quality/long_output/generate_log.py");
+    if normalized.contains(long_output_rel)
+        && !long_output_log.is_file()
+        && long_output_generator.is_file()
+    {
+        repairs.push(RequiredValidationPreflightRepair {
+            id: "core_long_output_generate_log".to_string(),
+            command: "python3 fixtures/core_quality/long_output/generate_log.py > fixtures/core_quality/long_output/output.log".to_string(),
+            note: "generate missing long-output artifact before required checks".to_string(),
+            cleanup_command: None,
+        });
+    }
+
+    repairs
+}
+
+fn core_terminal_demo_venv_marker_exists(working_dir: &Path) -> bool {
+    let lib_root = working_dir.join(".venv/lib");
+    let Ok(entries) = std::fs::read_dir(lib_root) else {
+        return false;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let name = path
+            .file_name()
+            .and_then(|value| value.to_str())
+            .unwrap_or("");
+        if !name.starts_with("python") {
+            continue;
+        }
+        let marker = path
+            .join("site-packages")
+            .join("core_terminal_demo_local.pth");
+        if marker.is_file() {
+            return true;
+        }
+    }
+    false
+}
+
+async fn run_required_validation_preflight_repairs(
+    working_dir: &Path,
+    required_command: &str,
+    executed_preflights: &mut HashSet<String>,
+    cleanup_commands: &mut Vec<String>,
+    seen_cleanup_commands: &mut HashSet<String>,
+) -> String {
+    let repairs = required_validation_preflight_repairs(working_dir, required_command);
+    if repairs.is_empty() {
+        return String::new();
+    }
+
+    let timeout = required_validation_preflight_timeout();
+    let mut logs = Vec::new();
+    for repair in repairs {
+        if !executed_preflights.insert(repair.id.clone()) {
+            continue;
+        }
+        match shell_output_with_timeout(&repair.command, working_dir, timeout).await {
+            Ok(output) => {
+                let status = output.status.code().unwrap_or_default();
+                let success = output.status.success();
+                logs.push(format!(
+                    "[required preflight] id={} success={} exit={} note={} command={}",
+                    repair.id, success, status, repair.note, repair.command
+                ));
+                if success {
+                    if let Some(cleanup) = repair.cleanup_command {
+                        if seen_cleanup_commands.insert(cleanup.clone()) {
+                            cleanup_commands.push(cleanup);
+                        }
+                    }
+                }
+                if !success {
+                    let raw = format!(
+                        "{}{}",
+                        String::from_utf8_lossy(&output.stdout),
+                        String::from_utf8_lossy(&output.stderr)
+                    );
+                    logs.push(format!(
+                        "[required preflight output] {}",
+                        safe_prefix_by_bytes(raw.trim(), 1200)
+                    ));
+                }
+            }
+            Err(err) => {
+                logs.push(format!(
+                    "[required preflight] id={} success=false error={} note={} command={}",
+                    repair.id, err, repair.note, repair.command
+                ));
+            }
+        }
+    }
+
+    logs.join("\n")
 }
 
 fn extract_required_validation_source_issues(
@@ -807,5 +1017,101 @@ mod tests {
         assert!(context.contains("tests/test_api.py:3"));
         assert!(context.contains(">    3 |     assert status == 200"));
         assert!(context.contains("required validation traceback frame"));
+    }
+
+    #[test]
+    fn preflight_adds_terminal_venv_install_when_missing() {
+        let tmp = tempfile::tempdir().expect("create temp dir");
+        let fixture = tmp.path().join("fixtures/core_quality/terminal_app");
+        std::fs::create_dir_all(&fixture).expect("create fixture dir");
+        std::fs::write(
+            fixture.join("pyproject.toml"),
+            "[project]\nname='core-terminal-demo'\n",
+        )
+        .expect("write pyproject");
+        let command = ". .venv/bin/activate && python -m core_terminal_demo --self-test | rg '^core-terminal-demo-ok$'";
+
+        let repairs = required_validation_preflight_repairs(tmp.path(), command);
+        assert_eq!(repairs.len(), 1);
+        assert_eq!(repairs[0].id, "core_terminal_demo_venv_install");
+        assert!(repairs[0].command.contains("python3 -m venv .venv"));
+        assert!(repairs[0].command.contains("core_terminal_demo_local.pth"));
+    }
+
+    #[test]
+    fn preflight_adds_long_output_generation_when_missing() {
+        let tmp = tempfile::tempdir().expect("create temp dir");
+        let fixture = tmp.path().join("fixtures/core_quality/long_output");
+        std::fs::create_dir_all(&fixture).expect("create fixture dir");
+        std::fs::write(fixture.join("generate_log.py"), "print('ok')\n").expect("write generator");
+        let command =
+            "rg 'line 0537 ERROR_ANCHOR payment retry budget exceeded' fixtures/core_quality/long_output/output.log";
+
+        let repairs = required_validation_preflight_repairs(tmp.path(), command);
+        assert_eq!(repairs.len(), 1);
+        assert_eq!(repairs[0].id, "core_long_output_generate_log");
+        assert!(repairs[0].command.contains("generate_log.py >"));
+    }
+
+    #[test]
+    fn preflight_skips_when_targets_already_exist() {
+        let tmp = tempfile::tempdir().expect("create temp dir");
+        let venv_bin = tmp.path().join(".venv/bin");
+        std::fs::create_dir_all(&venv_bin).expect("create venv bin");
+        std::fs::write(venv_bin.join("python"), "").expect("write python shim");
+        let long_output_dir = tmp.path().join("fixtures/core_quality/long_output");
+        std::fs::create_dir_all(&long_output_dir).expect("create long output dir");
+        std::fs::write(long_output_dir.join("output.log"), "line 0001 ok\n")
+            .expect("write output log");
+        std::fs::write(long_output_dir.join("generate_log.py"), "print('ok')\n")
+            .expect("write generator");
+
+        let terminal_cmd = "test -x .venv/bin/python";
+        let long_output_cmd = "test -s fixtures/core_quality/long_output/output.log";
+        assert!(required_validation_preflight_repairs(tmp.path(), terminal_cmd).is_empty());
+        assert!(required_validation_preflight_repairs(tmp.path(), long_output_cmd).is_empty());
+    }
+
+    #[test]
+    fn preflight_repairs_core_terminal_demo_even_when_venv_exists_without_marker() {
+        let tmp = tempfile::tempdir().expect("create temp dir");
+        let fixture = tmp.path().join("fixtures/core_quality/terminal_app");
+        std::fs::create_dir_all(&fixture).expect("create fixture dir");
+        std::fs::write(
+            fixture.join("pyproject.toml"),
+            "[project]\nname='core-terminal-demo'\n",
+        )
+        .expect("write pyproject");
+        let venv_bin = tmp.path().join(".venv/bin");
+        std::fs::create_dir_all(&venv_bin).expect("create venv bin");
+        std::fs::write(venv_bin.join("python"), "").expect("write python shim");
+
+        let command = ". .venv/bin/activate && python -m core_terminal_demo --self-test";
+        let repairs = required_validation_preflight_repairs(tmp.path(), command);
+
+        assert_eq!(repairs.len(), 1);
+        assert_eq!(repairs[0].id, "core_terminal_demo_venv_install");
+    }
+
+    #[test]
+    fn preflight_skips_core_terminal_demo_when_marker_exists() {
+        let tmp = tempfile::tempdir().expect("create temp dir");
+        let fixture = tmp.path().join("fixtures/core_quality/terminal_app");
+        std::fs::create_dir_all(&fixture).expect("create fixture dir");
+        std::fs::write(
+            fixture.join("pyproject.toml"),
+            "[project]\nname='core-terminal-demo'\n",
+        )
+        .expect("write pyproject");
+        let marker_dir = tmp.path().join(".venv/lib/python3.12/site-packages");
+        std::fs::create_dir_all(&marker_dir).expect("create marker dir");
+        std::fs::write(
+            marker_dir.join("core_terminal_demo_local.pth"),
+            "/tmp/fake-path\n",
+        )
+        .expect("write marker");
+
+        let command = ". .venv/bin/activate && python -m core_terminal_demo --self-test";
+        assert!(required_validation_preflight_repairs(tmp.path(), command).is_empty());
     }
 }

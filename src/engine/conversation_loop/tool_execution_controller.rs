@@ -1132,6 +1132,7 @@ impl<'a> ToolExecutionGate<'a> {
             && !ConversationLoop::bash_allowed_at_action_checkpoint(
                 &tool_call.arguments,
                 self.has_changes_before_tools,
+                self.exposed_tool_names,
             )
         {
             return Some(

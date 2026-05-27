@@ -331,6 +331,7 @@ struct MemoryDoctorJson {
     root: String,
     documents: MemoryDoctorDocumentsJson,
     records: MemoryRecordSummaryJson,
+    provider_lifecycle: MemoryProviderLifecyclePanelJson,
     decisions: MemoryDecisionCountsJson,
     flushes: MemoryFlushCountsJson,
     quality_gates: MemoryQualityGatesJson,
@@ -361,6 +362,14 @@ struct MemoryRecordSummaryJson {
     projection_drift: usize,
 }
 
+#[derive(Debug, Clone, serde::Serialize)]
+struct MemoryProviderLifecyclePanelJson {
+    active_scope: String,
+    providers: Vec<crate::memory::MemoryProviderLifecycleEntry>,
+    external_provider: Option<String>,
+    lifecycle_hooks: Vec<String>,
+}
+
 #[derive(Debug, serde::Serialize)]
 struct MemoryDecisionCountsJson {
     accepted: usize,
@@ -376,6 +385,7 @@ struct MemoryFlushCountsJson {
     running: usize,
     failed: usize,
     skipped_duplicate: usize,
+    skipped_review_only: usize,
     total: usize,
 }
 
@@ -432,6 +442,7 @@ fn load_memory_flush_summary() -> crate::memory::MemoryFlushSummary {
             crate::memory::MemoryFlushStatus::Completed => summary.completed += 1,
             crate::memory::MemoryFlushStatus::Failed => summary.failed += 1,
             crate::memory::MemoryFlushStatus::SkippedDuplicate => summary.skipped_duplicate += 1,
+            crate::memory::MemoryFlushStatus::SkippedReviewOnly => summary.skipped_review_only += 1,
         }
     }
     summary
@@ -458,7 +469,49 @@ fn memory_decision_counts_from_jsonl(content: &str) -> MemoryDecisionCounts {
     counts
 }
 
-fn format_memory_doctor(docs: &[MemoryDocument], conflicts: &[String]) -> String {
+async fn memory_provider_lifecycle_panel(
+    context: &ToolContext,
+) -> MemoryProviderLifecyclePanelJson {
+    if let Some(memory_manager) = context.memory_manager.as_ref() {
+        let manager = memory_manager.lock().await;
+        let report = manager.memory_provider_lifecycle_report();
+        return MemoryProviderLifecyclePanelJson {
+            active_scope: memory_scope_label_for_tool(&manager.active_scope()),
+            providers: report.providers,
+            external_provider: report.external_provider,
+            lifecycle_hooks: report.lifecycle_hooks,
+        };
+    }
+
+    default_memory_provider_lifecycle_panel()
+}
+
+fn default_memory_provider_lifecycle_panel() -> MemoryProviderLifecyclePanelJson {
+    let manager = crate::memory::MemoryManager::new();
+    let report = manager.memory_provider_lifecycle_report();
+    MemoryProviderLifecyclePanelJson {
+        active_scope: memory_scope_label_for_tool(&manager.active_scope()),
+        providers: report.providers,
+        external_provider: report.external_provider,
+        lifecycle_hooks: report.lifecycle_hooks,
+    }
+}
+
+fn memory_scope_label_for_tool(scope: &crate::memory::MemoryScope) -> String {
+    if let Some(root) = &scope.project_root {
+        return format!("project:{}", root.display());
+    }
+    if !scope.session_id.trim().is_empty() {
+        return format!("session:{}", scope.session_id);
+    }
+    format!("{}:{}", scope.platform, scope.profile)
+}
+
+fn format_memory_doctor(
+    docs: &[MemoryDocument],
+    conflicts: &[String],
+    provider_lifecycle: &MemoryProviderLifecyclePanelJson,
+) -> String {
     let counts = load_memory_decision_counts();
     let flushes = load_memory_flush_summary();
     let calibration = crate::memory::run_memory_calibration_samples();
@@ -496,13 +549,36 @@ fn format_memory_doctor(docs: &[MemoryDocument], conflicts: &[String]) -> String
         record_summary.projection_drift
     ));
     out.push_str(&format!(
-        "  Flushes: {} completed · {} pending · {} running · {} failed · {} skipped\n",
+        "  Flushes: {} completed · {} pending · {} running · {} failed · {} duplicate-skipped · {} review-skipped\n",
         flushes.completed,
         flushes.pending,
         flushes.running,
         flushes.failed,
-        flushes.skipped_duplicate
+        flushes.skipped_duplicate,
+        flushes.skipped_review_only
     ));
+    out.push_str(&format!(
+        "  Providers: {} total · external={} · active_scope={}\n",
+        provider_lifecycle.providers.len(),
+        provider_lifecycle
+            .external_provider
+            .as_deref()
+            .unwrap_or("none"),
+        provider_lifecycle.active_scope
+    ));
+    out.push_str(&format!(
+        "  Lifecycle: {}\n",
+        provider_lifecycle.lifecycle_hooks.join(" -> ")
+    ));
+    for provider in &provider_lifecycle.providers {
+        out.push_str(&format!(
+            "    {} ({}) available={} hooks={}\n",
+            provider.name,
+            provider.kind,
+            provider.available,
+            provider.hooks.len()
+        ));
+    }
     out.push_str("  Quality gates: accept>=0.65 · propose>=0.45 · explicit>=0.60 with safety/duplicate hard stops\n");
     out.push_str(&format!(
         "  Calibration: {}/{} passed\n",
@@ -546,7 +622,11 @@ fn format_memory_doctor(docs: &[MemoryDocument], conflicts: &[String]) -> String
     out
 }
 
-fn memory_doctor_json(docs: &[MemoryDocument], conflicts: &[String]) -> serde_json::Value {
+fn memory_doctor_json(
+    docs: &[MemoryDocument],
+    conflicts: &[String],
+    provider_lifecycle: &MemoryProviderLifecyclePanelJson,
+) -> serde_json::Value {
     let counts = load_memory_decision_counts();
     let flushes = load_memory_flush_summary();
     let calibration = crate::memory::run_memory_calibration_samples();
@@ -587,6 +667,7 @@ fn memory_doctor_json(docs: &[MemoryDocument], conflicts: &[String]) -> serde_js
             used: record_summary.used,
             projection_drift: record_summary.projection_drift,
         },
+        provider_lifecycle: provider_lifecycle.clone(),
         decisions: MemoryDecisionCountsJson {
             accepted: counts.accepted,
             proposed: counts.proposed,
@@ -599,6 +680,7 @@ fn memory_doctor_json(docs: &[MemoryDocument], conflicts: &[String]) -> serde_js
             running: flushes.running,
             failed: flushes.failed,
             skipped_duplicate: flushes.skipped_duplicate,
+            skipped_review_only: flushes.skipped_review_only,
             total: flushes.total,
         },
         quality_gates: MemoryQualityGatesJson {
@@ -925,17 +1007,30 @@ impl Tool for MemoryLoadTool {
         })
     }
 
-    async fn execute(&self, params: serde_json::Value, _context: ToolContext) -> ToolResult {
+    async fn execute(&self, params: serde_json::Value, context: ToolContext) -> ToolResult {
         let docs = load_memory_documents();
         let include_conflicts = params["include_conflicts"].as_bool().unwrap_or(true);
         let action = params["action"].as_str().unwrap_or("load");
+        let provider_lifecycle = if matches!(action, "doctor" | "doctor_json" | "review") {
+            Some(memory_provider_lifecycle_panel(&context).await)
+        } else {
+            None
+        };
 
         if docs.is_empty() {
             if action == "doctor_json" {
-                return ToolResult::success(memory_doctor_json(&docs, &[]).to_string());
+                let provider_lifecycle = provider_lifecycle
+                    .as_ref()
+                    .expect("provider lifecycle is loaded for doctor_json");
+                return ToolResult::success(
+                    memory_doctor_json(&docs, &[], &provider_lifecycle).to_string(),
+                );
             }
             if matches!(action, "doctor" | "review") {
-                return ToolResult::success(format_memory_doctor(&docs, &[]));
+                let provider_lifecycle = provider_lifecycle
+                    .as_ref()
+                    .expect("provider lifecycle is loaded for doctor/review");
+                return ToolResult::success(format_memory_doctor(&docs, &[], &provider_lifecycle));
             }
             return ToolResult::success("Memory is empty.");
         }
@@ -948,11 +1043,23 @@ impl Tool for MemoryLoadTool {
         };
 
         if action == "doctor" {
-            return ToolResult::success(format_memory_doctor(&docs, &conflicts));
+            let provider_lifecycle = provider_lifecycle
+                .as_ref()
+                .expect("provider lifecycle is loaded for doctor");
+            return ToolResult::success(format_memory_doctor(
+                &docs,
+                &conflicts,
+                &provider_lifecycle,
+            ));
         }
 
         if action == "doctor_json" {
-            return ToolResult::success(memory_doctor_json(&docs, &conflicts).to_string());
+            let provider_lifecycle = provider_lifecycle
+                .as_ref()
+                .expect("provider lifecycle is loaded for doctor_json");
+            return ToolResult::success(
+                memory_doctor_json(&docs, &conflicts, &provider_lifecycle).to_string(),
+            );
         }
 
         if action == "conflicts" {
@@ -964,7 +1071,14 @@ impl Tool for MemoryLoadTool {
         }
 
         if action == "review" {
-            return ToolResult::success(format_memory_doctor(&docs, &conflicts));
+            let provider_lifecycle = provider_lifecycle
+                .as_ref()
+                .expect("provider lifecycle is loaded for review");
+            return ToolResult::success(format_memory_doctor(
+                &docs,
+                &conflicts,
+                &provider_lifecycle,
+            ));
         }
 
         if action == "explain" {
@@ -1169,9 +1283,16 @@ mod tests {
             path: "MEMORY.md".to_string(),
             content: "language: Chinese".to_string(),
         }];
-        let doctor = format_memory_doctor(&docs, &["- key 'language' conflicts".to_string()]);
+        let lifecycle = default_memory_provider_lifecycle_panel();
+        let doctor = format_memory_doctor(
+            &docs,
+            &["- key 'language' conflicts".to_string()],
+            &lifecycle,
+        );
         assert!(doctor.contains("Memory Doctor"));
         assert!(doctor.contains("Documents: 1 total"));
+        assert!(doctor.contains("Providers:"));
+        assert!(doctor.contains("Lifecycle:"));
         assert!(doctor.contains("Conflicts: 1"));
         assert!(doctor.contains("Quality gates:"));
         assert!(doctor.contains("Calibration:"));
@@ -1184,8 +1305,13 @@ mod tests {
             path: "MEMORY.md".to_string(),
             content: "language: Chinese".to_string(),
         }];
-        let report = memory_doctor_json(&docs, &[]);
+        let lifecycle = default_memory_provider_lifecycle_panel();
+        let report = memory_doctor_json(&docs, &[], &lifecycle);
         assert_eq!(report["documents"]["total"].as_u64(), Some(1));
+        assert_eq!(
+            report["provider_lifecycle"]["providers"][0]["name"].as_str(),
+            Some("local")
+        );
         assert!(report["calibration"]["total"].as_u64().unwrap_or(0) >= 1);
         let accept_threshold = report["quality_gates"]["accept_threshold"]
             .as_f64()

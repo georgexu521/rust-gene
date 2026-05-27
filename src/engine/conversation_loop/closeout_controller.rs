@@ -5,7 +5,9 @@ use crate::engine::code_change_workflow::{
 use crate::engine::evidence_ledger::EvidenceLedger;
 use crate::engine::intent_router::WorkflowKind;
 use crate::engine::task_context::TaskContextBundle;
-use crate::engine::task_contract::{ExecutionReport, MemoryProposal, TaskContractBundleExt};
+use crate::engine::task_contract::{
+    ExecutionReport, MemoryProposal, MemoryProposalReviewStore, TaskContractBundleExt,
+};
 use crate::engine::trace::{TraceCollector, TraceEvent};
 use crate::engine::verification_proof::{
     VerificationProof, VerificationProofRequest, VerificationProofStatus, VerificationProofTaskType,
@@ -308,6 +310,7 @@ impl FinalCloseoutController {
                 .task_contract(context.required_validation_commands);
             let report = ExecutionReport::from_closeout(&contract, &closeout);
             let memory_proposal = MemoryProposal::from_execution_report(&report);
+            let _ = MemoryProposalReviewStore::default().upsert(&memory_proposal);
             context.trace.record(TraceEvent::ExecutionReportPrepared {
                 task_id: report.task_id.clone(),
                 status: report.status.label().to_string(),

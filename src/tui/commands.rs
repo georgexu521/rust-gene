@@ -1484,6 +1484,14 @@ pub const CMD_SHORTCUTS: CommandDef = CommandDef::new(
 pub const CMD_QUICK: CommandDef =
     CommandDef::new("/quick", &[], "General", "/quick", "Quick actions menu");
 
+pub const CMD_ACTIVE_TASK: CommandDef = CommandDef::new(
+    "/active-task",
+    &["/progress"],
+    "General",
+    "/active-task",
+    "Inspect unified task plan, progress, verification, closeout, and memory proposal state",
+);
+
 pub const CMD_GOAL: CommandDef = CommandDef::new(
     "/goal",
     &[],
@@ -1508,19 +1516,27 @@ pub const CMD_EXPERIENCE: CommandDef = CommandDef::new(
     "Inspect structured experience ledger records",
 );
 
+pub const CMD_MEMORY_PROPOSALS: CommandDef = CommandDef::new(
+    "/memory-proposals",
+    &["/memory-proposal"],
+    "General",
+    "/memory-proposals [list|show|accept|reject|apply]",
+    "Review closeout-generated memory candidates before persistence",
+);
+
 pub const CMD_EVOLUTION: CommandDef = CommandDef::new(
     "/evolution",
     &[],
     "General",
-    "/evolution [audit|json|show <id>]",
-    "Inspect controlled self-evolution audit events",
+    "/evolution [status|audit|json|show <id>]",
+    "Inspect controlled self-evolution state and audit events",
 );
 
 pub const CMD_IMPROVEMENTS: CommandDef = CommandDef::new(
     "/improvements",
     &[],
     "General",
-    "/improvements [list|scan|show|accept|reject|apply]",
+    "/improvements [list|scan|show|bind-eval|eval|accept|reject|apply|rollback]",
     "Review controlled self-evolution proposals",
 );
 
@@ -1687,9 +1703,11 @@ pub fn default_command_registry() -> CommandRegistry {
     registry.register(&CMD_THEME);
     registry.register(&CMD_SHORTCUTS);
     registry.register(&CMD_QUICK);
+    registry.register(&CMD_ACTIVE_TASK);
     registry.register(&CMD_GOAL);
     registry.register(&CMD_LEARN);
     registry.register(&CMD_EXPERIENCE);
+    registry.register(&CMD_MEMORY_PROPOSALS);
     registry.register(&CMD_EVOLUTION);
     registry.register(&CMD_IMPROVEMENTS);
     registry.register(&CMD_SKILL_PROPOSALS);
@@ -1837,9 +1855,11 @@ pub const ALL_COMMANDS: &[&CommandDef] = &[
     &CMD_THEME,
     &CMD_SHORTCUTS,
     &CMD_QUICK,
+    &CMD_ACTIVE_TASK,
     &CMD_GOAL,
     &CMD_LEARN,
     &CMD_EXPERIENCE,
+    &CMD_MEMORY_PROPOSALS,
     &CMD_EVOLUTION,
     &CMD_IMPROVEMENTS,
     &CMD_SKILL_PROPOSALS,

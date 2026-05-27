@@ -1,0 +1,29 @@
+{
+  "schema": "agent_run_bundle.v1",
+  "task_id": "core-provider-roundtrip",
+  "run_id": "flow-fix-provider-20260527-102908",
+  "generated_at": "2026-05-27T02:33:24.209443+00:00",
+  "goal_summary": "audit_or_regression_check",
+  "mode": "agent-run",
+  "final_status": "failed",
+  "terminal_status": "partial",
+  "stop_reason": "repeated_tool_failure",
+  "modified_files": "0",
+  "validation_status": "ok",
+  "verification_status": "failed",
+  "closeout_status": "not_verified",
+  "scores": {
+    "outcome": "40",
+    "process": "100",
+    "efficiency": "84",
+    "agent": "67",
+    "penalties": "run_failed,verification_failed,closeout_not_successful,failed_actions"
+  },
+  "artifacts": {
+    "source_report": "docs/benchmarks/live-flow-fix-provider-20260527-102908/core-provider-roundtrip/report.md",
+    "source_events": "docs/benchmarks/live-flow-fix-provider-20260527-102908/core-provider-roundtrip/agent-events.jsonl",
+    "steps": "docs/benchmarks/live-flow-fix-provider-20260527-102908/core-provider-roundtrip/run-bundle/steps.jsonl",
+    "events": "docs/benchmarks/live-flow-fix-provider-20260527-102908/core-provider-roundtrip/run-bundle/events.jsonl",
+    "final_report": "docs/benchmarks/live-flow-fix-provider-20260527-102908/core-provider-roundtrip/run-bundle/final_report.md"
+  }
+}

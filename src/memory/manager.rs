@@ -8,7 +8,7 @@
 
 use crate::memory::provider::{
     LocalMemoryProvider, MemoryProvider, MemoryProviderCallOutcome, MemoryProviderCallStatus,
-    MemoryProviderRegistry, MemoryTurn,
+    MemoryProviderLifecycleReport, MemoryProviderRegistry, MemoryTurn,
 };
 use crate::memory::quality::assess_memory_candidate;
 use crate::memory::search_index::{MemorySearchDocument, MemorySearchHit, MemorySearchIndex};
@@ -426,15 +426,6 @@ fn memory_flush_records_from_jsonl(content: &str) -> HashMap<String, MemoryFlush
         records.insert(record.id.clone(), record);
     }
     records
-}
-
-fn memory_records_from_jsonl(content: &str) -> Vec<MemoryRecord> {
-    content
-        .lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty())
-        .filter_map(|line| serde_json::from_str::<MemoryRecord>(line).ok())
-        .collect()
 }
 
 fn append_memory_record(path: &Path, record: &MemoryRecord) -> std::io::Result<()> {
@@ -1006,6 +997,7 @@ pub enum MemoryFlushStatus {
     Completed,
     Failed,
     SkippedDuplicate,
+    SkippedReviewOnly,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1031,18 +1023,20 @@ pub struct MemoryFlushSummary {
     pub completed: usize,
     pub failed: usize,
     pub skipped_duplicate: usize,
+    pub skipped_review_only: usize,
     pub total: usize,
 }
 
 impl MemoryFlushSummary {
     pub fn format(&self) -> String {
         format!(
-            "Memory Flushes:\n  Completed: {}\n  Pending: {}\n  Running: {}\n  Failed: {}\n  Skipped duplicate: {}\n  Total: {}",
+            "Memory Flushes:\n  Completed: {}\n  Pending: {}\n  Running: {}\n  Failed: {}\n  Skipped duplicate: {}\n  Skipped review-only: {}\n  Total: {}",
             self.completed,
             self.pending,
             self.running,
             self.failed,
             self.skipped_duplicate,
+            self.skipped_review_only,
             self.total
         )
     }
@@ -1202,6 +1196,10 @@ impl MemoryManager {
         self.provider_registry.provider_names()
     }
 
+    pub fn memory_provider_lifecycle_report(&self) -> MemoryProviderLifecycleReport {
+        self.provider_registry.lifecycle_report()
+    }
+
     pub fn register_external_memory_provider(
         &mut self,
         provider: Arc<dyn MemoryProvider>,
@@ -1308,11 +1306,12 @@ impl MemoryManager {
     }
 
     pub fn memory_records(&self) -> Vec<MemoryRecord> {
-        let content = std::fs::read_to_string(&self.records_path).unwrap_or_default();
-        memory_records_from_jsonl(&content)
-            .into_iter()
-            .filter(persisted_memory_record_is_safe)
-            .collect()
+        self.provider_registry
+            .local_memory_records()
+            .unwrap_or_else(|error| {
+                warn!("failed to read local memory provider records: {error}");
+                Vec::new()
+            })
     }
 
     pub fn rebuild_search_index(&self) -> anyhow::Result<MemorySearchIndexReport> {
@@ -2451,6 +2450,14 @@ Only include facts supported by the turn. Do not save task progress, command his
 
     /// 会话结束时批量提取学习内容（同步版本）
     pub fn flush_session(&mut self, messages: &[Message]) {
+        if !Self::legacy_auto_memory_write_enabled() {
+            debug!("Skipping direct memory flush in review-only default policy");
+            return;
+        }
+        self.flush_session_unchecked(messages);
+    }
+
+    fn flush_session_unchecked(&mut self, messages: &[Message]) {
         let session_learnings = extract_session_learnings(messages);
         self.ingest_learnings(session_learnings, MAX_LEARNINGS_PER_SESSION_EXTRACT);
 
@@ -2465,6 +2472,14 @@ Only include facts supported by the turn. Do not save task progress, command his
 
     /// 会话结束时批量提取学习内容（异步版本）
     pub async fn flush_session_async(&mut self, messages: &[Message]) {
+        if !Self::legacy_auto_memory_write_enabled() {
+            debug!("Skipping direct async memory flush in review-only default policy");
+            return;
+        }
+        self.flush_session_async_unchecked(messages).await;
+    }
+
+    async fn flush_session_async_unchecked(&mut self, messages: &[Message]) {
         let session_learnings = extract_session_learnings(messages);
         self.ingest_learnings(session_learnings, MAX_LEARNINGS_PER_SESSION_EXTRACT);
 
@@ -2637,6 +2652,7 @@ Do not save task progress, command history, or repeatable procedures; procedures
                 MemoryFlushStatus::Completed => summary.completed += 1,
                 MemoryFlushStatus::Failed => summary.failed += 1,
                 MemoryFlushStatus::SkippedDuplicate => summary.skipped_duplicate += 1,
+                MemoryFlushStatus::SkippedReviewOnly => summary.skipped_review_only += 1,
             }
         }
         summary
@@ -2658,13 +2674,21 @@ Do not save task progress, command history, or repeatable procedures; procedures
             return record;
         }
 
+        if !Self::session_flush_can_persist(reason) {
+            record.status = MemoryFlushStatus::SkippedReviewOnly;
+            record.completed_at = Some(chrono::Utc::now().to_rfc3339());
+            record.updated_at = record.completed_at.clone().unwrap_or(record.updated_at);
+            self.append_flush_record(&record);
+            return record;
+        }
+
         self.append_flush_record(&record);
         record.status = MemoryFlushStatus::Running;
         record.attempts = 1;
         record.updated_at = chrono::Utc::now().to_rfc3339();
         self.append_flush_record(&record);
 
-        self.flush_session(messages);
+        self.flush_session_unchecked(messages);
 
         record.status = MemoryFlushStatus::Completed;
         record.completed_at = Some(chrono::Utc::now().to_rfc3339());
@@ -2689,13 +2713,21 @@ Do not save task progress, command history, or repeatable procedures; procedures
             return record;
         }
 
+        if !Self::session_flush_can_persist(reason) {
+            record.status = MemoryFlushStatus::SkippedReviewOnly;
+            record.completed_at = Some(chrono::Utc::now().to_rfc3339());
+            record.updated_at = record.completed_at.clone().unwrap_or(record.updated_at);
+            self.append_flush_record(&record);
+            return record;
+        }
+
         self.append_flush_record(&record);
         record.status = MemoryFlushStatus::Running;
         record.attempts = 1;
         record.updated_at = chrono::Utc::now().to_rfc3339();
         self.append_flush_record(&record);
 
-        self.flush_session_async(messages).await;
+        self.flush_session_async_unchecked(messages).await;
 
         record.status = MemoryFlushStatus::Completed;
         record.completed_at = Some(chrono::Utc::now().to_rfc3339());
@@ -2727,6 +2759,24 @@ Do not save task progress, command history, or repeatable procedures; procedures
         // throttle：每 N 轮提取一次
         let interval = Self::llm_extraction_interval();
         self.turn_count - self.last_llm_extraction_turn >= interval
+    }
+
+    fn session_flush_can_persist(reason: MemoryFlushReason) -> bool {
+        if matches!(reason, MemoryFlushReason::Manual) {
+            return true;
+        }
+        Self::legacy_auto_memory_write_enabled()
+    }
+
+    fn legacy_auto_memory_write_enabled() -> bool {
+        matches!(
+            std::env::var("PRIORITY_AGENT_AUTO_MEMORY_WRITE")
+                .unwrap_or_default()
+                .trim()
+                .to_ascii_lowercase()
+                .as_str(),
+            "legacy" | "unsafe" | "all" | "1" | "true" | "on"
+        )
     }
 
     /// 记录一次 LLM/forked 记忆提取已启动，用于 throttle 和 telemetry。
@@ -3046,7 +3096,10 @@ Do not save task progress, command history, or repeatable procedures; procedures
                 record.session_id == candidate.session_id
                     && record.reason == candidate.reason
                     && record.messages_hash == candidate.messages_hash
-                    && record.status == MemoryFlushStatus::Completed
+                    && matches!(
+                        record.status,
+                        MemoryFlushStatus::Completed | MemoryFlushStatus::SkippedReviewOnly
+                    )
             })
     }
 
@@ -3109,19 +3162,6 @@ fn safe_memory_content_for_load(source: &str, content: &str) -> Option<String> {
                 source, issue.code, issue.message
             );
             None
-        }
-    }
-}
-
-fn persisted_memory_record_is_safe(record: &MemoryRecord) -> bool {
-    match crate::memory::safety::scan_memory_content(&record.content) {
-        Ok(_) => true,
-        Err(issue) => {
-            warn!(
-                "Skipping persisted memory record {} during load: {}: {}",
-                record.id, issue.code, issue.message
-            );
-            false
         }
     }
 }
@@ -4429,6 +4469,10 @@ mod tests {
             "recording-session-end"
         }
 
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+
         async fn on_session_end(
             &self,
             transcript: &[Message],
@@ -4453,6 +4497,10 @@ mod tests {
     impl MemoryProvider for RecordingWriteProvider {
         fn name(&self) -> &str {
             "recording-write"
+        }
+
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
         }
 
         async fn on_memory_write(
@@ -5441,9 +5489,9 @@ Always check logs first.
         assert!(second.duplicate);
         assert_eq!(second.reason, "duplicate_memory");
         assert_eq!(before, after);
-        let records = memory_records_from_jsonl(
-            &std::fs::read_to_string(base.join("memory").join("records.jsonl")).unwrap_or_default(),
-        );
+        let records = LocalMemoryProvider::with_base_dir(base.clone())
+            .memory_records()
+            .unwrap();
         assert_eq!(records.len(), 1);
         assert_eq!(records[0].scope, scope);
 
@@ -5698,6 +5746,8 @@ Always check logs first.
 
     #[test]
     fn test_flush_with_reason_records_completed_and_skips_duplicate() {
+        let mut env = crate::test_utils::env_guard::EnvVarGuard::acquire_blocking();
+        env.remove("PRIORITY_AGENT_AUTO_MEMORY_WRITE");
         let base = temp_memory_base("memory-flush-record");
         let mut mgr = MemoryManager::with_base_dir(base.clone());
         let messages = vec![
@@ -5708,10 +5758,12 @@ Always check logs first.
         let first = mgr.flush_session_with_reason("sess_test", MemoryFlushReason::Exit, &messages);
         let second = mgr.flush_session_with_reason("sess_test", MemoryFlushReason::Exit, &messages);
 
-        assert_eq!(first.status, MemoryFlushStatus::Completed);
+        assert_eq!(first.status, MemoryFlushStatus::SkippedReviewOnly);
+        assert!(first.error.is_none());
         assert_eq!(second.status, MemoryFlushStatus::SkippedDuplicate);
         let summary = mgr.memory_flush_summary();
-        assert_eq!(summary.completed, 1);
+        assert_eq!(summary.completed, 0);
+        assert_eq!(summary.skipped_review_only, 1);
         assert_eq!(summary.skipped_duplicate, 1);
 
         let _ = std::fs::remove_dir_all(base);
@@ -5719,6 +5771,8 @@ Always check logs first.
 
     #[tokio::test]
     async fn test_flush_with_reason_async_records_completed() {
+        let mut env = crate::test_utils::env_guard::EnvVarGuard::acquire().await;
+        env.remove("PRIORITY_AGENT_AUTO_MEMORY_WRITE");
         let base = temp_memory_base("memory-flush-async");
         let mut mgr = MemoryManager::with_base_dir(base.clone());
         let messages = vec![
@@ -5734,10 +5788,12 @@ Always check logs first.
             )
             .await;
 
-        assert_eq!(record.status, MemoryFlushStatus::Completed);
+        assert_eq!(record.status, MemoryFlushStatus::SkippedReviewOnly);
+        assert!(record.error.is_none());
         let summary = mgr.memory_flush_summary();
-        assert_eq!(summary.completed, 1);
-        assert!(summary.format().contains("Completed: 1"));
+        assert_eq!(summary.completed, 0);
+        assert_eq!(summary.skipped_review_only, 1);
+        assert!(summary.format().contains("Skipped review-only: 1"));
 
         let _ = std::fs::remove_dir_all(base);
     }

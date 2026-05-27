@@ -15,8 +15,10 @@ WORKDIR=""
 REPORT_DIR="docs/benchmarks"
 SKIP_BUILD=0
 RUN_TESTS=0
-AGENT_TIMEOUT_SECS="${PRIORITY_AGENT_LIVE_EVAL_TIMEOUT_SECS:-1800}"
-AGENT_IDLE_SECS="${PRIORITY_AGENT_LIVE_EVAL_IDLE_SECS:-300}"
+AGENT_TIMEOUT_SECS="${PRIORITY_AGENT_LIVE_EVAL_TIMEOUT_SECS:-0}"
+AGENT_IDLE_SECS="${PRIORITY_AGENT_LIVE_EVAL_IDLE_SECS:-0}"
+AGENT_MONITOR_INTERVAL_SECS="${PRIORITY_AGENT_LIVE_EVAL_MONITOR_INTERVAL_SECS:-30}"
+MIN_FREE_GB="${PRIORITY_AGENT_LIVE_EVAL_MIN_FREE_GB:-8}"
 OVERLAY_WORKTREE="${PRIORITY_AGENT_LIVE_EVAL_OVERLAY_WORKTREE:-0}"
 SKIP_PROVIDER_HEALTH="${PRIORITY_AGENT_LIVE_EVAL_SKIP_PROVIDER_HEALTH:-0}"
 
@@ -136,9 +138,11 @@ Options:
   --overlay-working-tree
                      Apply tracked local working-tree changes to the isolated
                      worktree and commit them as the task baseline.
-  --timeout SECS     Timeout for agent-run mode (default: 1800).
+  --timeout SECS     Wall-clock timeout for agent-run mode. 0 disables it
+                     (default: 0; rely on idle/liveness monitoring).
   --idle-timeout SECS
-                     Kill agent-run if output/events/stderr stay idle (default: 300).
+                     Kill agent-run if output/events/stderr stay idle. 0 disables it
+                     (default: 0; monitor log still records liveness).
   -h, --help         Show this help.
 
 MiniMax:
@@ -409,7 +413,41 @@ task_cargo_target_dir() {
   if [[ -n "${PRIORITY_AGENT_LIVE_EVAL_CARGO_TARGET_DIR:-}" ]]; then
     echo "$PRIORITY_AGENT_LIVE_EVAL_CARGO_TARGET_DIR"
   else
-    echo "$(task_env_base "$id")/cargo-target"
+    echo "$ROOT_DIR/$WORK_ROOT/$RUN_ID/shared-cargo-target"
+  fi
+}
+
+available_kb_for_path() {
+  local path="$1"
+  mkdir -p "$path"
+  df -Pk "$path" | awk 'NR == 2 { print $4 }'
+}
+
+ensure_live_eval_disk_space() {
+  local path="${1:-$ROOT_DIR}" min_gb="${MIN_FREE_GB:-0}" available_kb min_kb
+  if [[ "$min_gb" == "0" || "$min_gb" == "0.0" ]]; then
+    return 0
+  fi
+  available_kb="$(available_kb_for_path "$path")"
+  min_kb="$(python3 - "$min_gb" <<'PY'
+import sys
+print(int(float(sys.argv[1]) * 1024 * 1024))
+PY
+)"
+  if [[ -z "$available_kb" || "$available_kb" -lt "$min_kb" ]]; then
+    python3 - "$available_kb" "$min_kb" "$path" <<'PY' >&2
+import sys
+available_kb = int(sys.argv[1] or 0)
+min_kb = int(sys.argv[2])
+path = sys.argv[3]
+print(
+    "live-eval disk preflight failed: "
+    f"{available_kb / 1024 / 1024:.1f}GiB available under {path}, "
+    f"requires at least {min_kb / 1024 / 1024:.1f}GiB. "
+    "Clear target/live-evals or lower PRIORITY_AGENT_LIVE_EVAL_MIN_FREE_GB."
+)
+PY
+    return 1
   fi
 }
 
@@ -1084,13 +1122,14 @@ PY
 
 agent_run_task() {
   local file="$1" task_workdir="$2"
-  local id report_dir agent_stdout agent_stderr agent_output agent_events exit_file prompt_file env_base cargo_target_dir runtime_profile
+  local id report_dir agent_stdout agent_stderr agent_monitor agent_output agent_events exit_file prompt_file env_base cargo_target_dir runtime_profile
   id="$(yaml_get "$file" id)"
   runtime_profile="$(yaml_get "$file" runtime_profile "")"
   report_dir="$REPORT_DIR/live-$RUN_ID/$id"
   mkdir -p "$report_dir"
   agent_stdout="$report_dir/agent-stdout.log"
   agent_stderr="$report_dir/agent-stderr.log"
+  agent_monitor="$report_dir/agent-monitor.log"
   agent_output="$ROOT_DIR/$report_dir/agent-output.md"
   agent_events="$ROOT_DIR/$report_dir/agent-events.jsonl"
   exit_file="$report_dir/agent-exit-status.txt"
@@ -1122,9 +1161,11 @@ agent_run_task() {
   python3 - \
     "$AGENT_TIMEOUT_SECS" \
     "$AGENT_IDLE_SECS" \
+    "$AGENT_MONITOR_INTERVAL_SECS" \
     "$task_workdir" \
     "$agent_stdout" \
     "$agent_stderr" \
+    "$agent_monitor" \
     "$ROOT_DIR/target/release/priority-agent" \
     "$prompt_file" \
     "$agent_output" \
@@ -1139,16 +1180,18 @@ import time
 
 timeout = int(sys.argv[1])
 idle_timeout = int(sys.argv[2])
-workdir = sys.argv[3]
-stdout_path = sys.argv[4]
-stderr_path = sys.argv[5]
-binary = sys.argv[6]
-prompt_file = sys.argv[7]
-output_file = sys.argv[8]
-events_file = sys.argv[9]
-env_base = sys.argv[10]
-cargo_target_dir = sys.argv[11]
-runtime_profile = sys.argv[12]
+monitor_interval = int(sys.argv[3])
+workdir = sys.argv[4]
+stdout_path = sys.argv[5]
+stderr_path = sys.argv[6]
+monitor_path = sys.argv[7]
+binary = sys.argv[8]
+prompt_file = sys.argv[9]
+output_file = sys.argv[10]
+events_file = sys.argv[11]
+env_base = sys.argv[12]
+cargo_target_dir = sys.argv[13]
+runtime_profile = sys.argv[14]
 
 env = os.environ.copy()
 real_home = env.get("HOME", "")
@@ -1230,7 +1273,13 @@ def activity_signature():
 
 started_at = time.monotonic()
 last_activity_at = started_at
+last_monitor_at = started_at
 last_signature = activity_signature()
+
+def append_monitor(message):
+    timestamp = time.strftime("%Y-%m-%dT%H:%M:%S%z")
+    with open(monitor_path, "a", encoding="utf-8") as monitor:
+        monitor.write(f"[{timestamp}] {message}\n")
 
 with open(stdout_path, "wb") as stdout, open(stderr_path, "wb") as stderr:
     proc = subprocess.Popen(
@@ -1253,7 +1302,19 @@ with open(stdout_path, "wb") as stdout, open(stderr_path, "wb") as stderr:
         if status is not None:
             break
 
-        if now - started_at > timeout:
+        if monitor_interval > 0 and now - last_monitor_at >= monitor_interval:
+            last_monitor_at = now
+            append_monitor(
+                "agent-run still running "
+                f"elapsed={int(now - started_at)}s "
+                f"idle_for={int(now - last_activity_at)}s "
+                f"stdout_bytes={file_signature(stdout_path)[0]} "
+                f"stderr_bytes={file_signature(stderr_path)[0]} "
+                f"output_bytes={file_signature(output_file)[0]} "
+                f"events_bytes={file_signature(events_file)[0]}"
+            )
+
+        if timeout > 0 and now - started_at > timeout:
             proc.terminate()
             try:
                 proc.wait(timeout=10)
@@ -1261,6 +1322,7 @@ with open(stdout_path, "wb") as stdout, open(stderr_path, "wb") as stderr:
                 proc.kill()
                 proc.wait()
             stderr.write(f"\n[timeout after {timeout}s]\n".encode())
+            append_monitor(f"agent-run timeout elapsed={int(now - started_at)}s")
             status = 124
             break
 
@@ -1272,6 +1334,7 @@ with open(stdout_path, "wb") as stdout, open(stderr_path, "wb") as stderr:
                 proc.kill()
                 proc.wait()
             stderr.write(f"\n[idle timeout after {idle_timeout}s without stdout/stderr/output/event growth]\n".encode())
+            append_monitor(f"agent-run idle timeout idle_for={int(now - last_activity_at)}s")
             status = 125
             break
 
@@ -1423,6 +1486,11 @@ File.write(json_path, JSON.generate(YAML.load_file(sample_path) || {}) + "\n")
       fi
       if [[ -f "$report_dir/agent-events.jsonl" ]]; then
         echo "- Events: \`$report_dir/agent-events.jsonl\`"
+      fi
+      if [[ -f "$report_dir/agent-monitor.log" ]]; then
+        echo "- Monitor: \`$report_dir/agent-monitor.log\`"
+      fi
+      if [[ -f "$report_dir/agent-events.jsonl" ]]; then
         echo
         echo "Event counts:"
         echo
@@ -1513,6 +1581,16 @@ for line in diff.splitlines():
         path = path[2:]
     if path not in diff_files:
         diff_files.append(path)
+
+def should_ignore_generated_dependency_path(path: str) -> bool:
+    normalized = path.strip().lower()
+    if normalized.startswith("./"):
+        normalized = normalized[2:]
+    return normalized.startswith(".venv/") or "/.venv/" in normalized
+
+diff_files_for_limit = [
+    path for path in diff_files if not should_ignore_generated_dependency_path(path)
+]
 diff_constraints = (sample.get("acceptance") or {}).get("diff_constraints") or {}
 max_files_changed = diff_constraints.get("max_files_changed")
 try:
@@ -1654,7 +1732,9 @@ if (
 
 print(f"output_chars: {len(output)}")
 print(f"diff_chars: {len(diff)}")
-print(f"diff_files_changed: {len(diff_files)}")
+print(f"diff_files_changed: {len(diff_files_for_limit)}")
+print(f"diff_files_changed_raw: {len(diff_files)}")
+print(f"generated_dependency_files_ignored: {len(diff_files) - len(diff_files_for_limit)}")
 print(f"tool_executions: {tool_done}")
 print(f"first_write_tool_index: {first_write_tool_index if first_write_tool_index is not None else 'none'}")
 print(f"forbidden_tool_uses: {','.join(forbidden_tool_uses) if forbidden_tool_uses else 'none'}")
@@ -1826,7 +1906,7 @@ if legacy_workflow_hijack:
 if forbidden_tool_uses:
     print("warning: forbidden_tool_used")
     failures.append("forbidden_tool_used")
-if max_files_changed is not None and len(diff_files) > max_files_changed:
+if max_files_changed is not None and len(diff_files_for_limit) > max_files_changed:
     print("warning: max_files_changed_exceeded")
     failures.append("max_files_changed_exceeded")
 if verification_events and any(event.get("passed") is not True for event in verification_events[:-1]):
@@ -2316,6 +2396,14 @@ PY
         echo
         echo '```text'
         tail -80 "$report_dir/agent-stderr.log"
+        echo '```'
+      fi
+      if [[ -f "$report_dir/agent-monitor.log" && -s "$report_dir/agent-monitor.log" ]]; then
+        echo
+        echo "Agent monitor tail:"
+        echo
+        echo '```text'
+        tail -40 "$report_dir/agent-monitor.log"
         echo '```'
       fi
       echo
@@ -2884,6 +2972,7 @@ PY
 run_one() {
   local file="$1" id task_workdir plan_path report_path
   id="$(yaml_get "$file" id)"
+  ensure_live_eval_disk_space "$ROOT_DIR/$WORK_ROOT" || return 2
   case "$MODE" in
     prepare)
       task_workdir="$(prepare_task "$file")"
@@ -2967,6 +3056,7 @@ main() {
   fi
 
   mkdir -p "$REPORT_DIR" "$WORK_ROOT/$RUN_ID"
+  ensure_live_eval_disk_space "$ROOT_DIR/$WORK_ROOT"
 
   if [[ "$CASE_ID" == "all" || "$CASE_ID" == "recommended" || "$CASE_ID" == "core-coding-quality" || "$CASE_ID" == "real-project-coding" || "$CASE_ID" == "release-dogfood" || "$CASE_ID" == "mvp-weighted-agent" || "$CASE_ID" == "project-partner-demo" || "$CASE_ID" == "runtime-spine-p0b" ]]; then
     local file files failures=0
@@ -2978,7 +3068,13 @@ main() {
       files="$(task_files)"
     fi
     for file in $files; do
-      if ! run_one "$file"; then
+      local task_status=0
+      run_one "$file" || task_status=$?
+      if [[ "$task_status" -eq 2 ]]; then
+        echo "Live eval stopped before $(yaml_get "$file" id) due to infrastructure preflight failure." >&2
+        exit 2
+      fi
+      if [[ "$task_status" -ne 0 ]]; then
         echo "Live eval task failed: $(yaml_get "$file" id)" >&2
         failures=$((failures + 1))
       fi

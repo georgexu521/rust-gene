@@ -18,6 +18,27 @@ Current implementation status:
 - 2026-04-27: Automatic memory decisions are now recorded to a lightweight
   `decisions.jsonl` journal so accepted, proposed, rejected, and blocked writes
   can be inspected by `/memory doctor` and future LearningEvent integration.
+- 2026-05-27: Closeout-time and lifecycle-flush memory sync now default to a
+  review-only boundary. `MemoryProposal`, skipped-review-only flush records, and
+  execution/progress evidence remain visible, but legacy turn/session extraction
+  no longer silently persists long-term memory unless explicitly enabled with
+  `PRIORITY_AGENT_AUTO_MEMORY_WRITE=legacy`. A narrower experimental policy,
+  `PRIORITY_AGENT_AUTO_MEMORY_WRITE=narrow`, only allows explicit user
+  preference statements to auto-persist during turn closeout; manual flushes
+  remain a user-confirmed write path.
+- 2026-05-27: The Hermes-style provider lifecycle is now inspectable through
+  the memory doctor JSON/text panel: provider name/kind/availability, active
+  scope, external provider, and lifecycle hooks are exposed without calling
+  provider hooks. Controlled self-evolution is also normalized around
+  `proposal -> eval -> accept/apply -> rollback`: improvement proposals now
+  record eval status and rollback refs, `/improvements apply` requires a passed
+  eval, and `/evolution status` summarizes improvement/skill evolution state.
+- 2026-05-27: The next memory/self-evolution slice landed the first cleaner
+  ownership boundaries: `MemoryManager` delegates local typed-record reads to
+  `LocalMemoryProvider`, closeout memory proposals are persisted to a review
+  queue, `/memory-proposals` supports `list/show/accept/reject/apply`,
+  `/active-task` provides one combined progress panel, and improvement proposals
+  can bind named evalsets before apply.
 
 ## Sources Reviewed
 
@@ -59,6 +80,13 @@ Priority Agent already has more memory infrastructure than a simple coding CLI:
 frozen memory snapshots, pre-turn memory prefetch, LLM-assisted extraction,
 topic memory files, namespace search, conflict hints, session FTS search,
 LearningEvent records, RetrievalContext, workflow reflection, and skills.
+The default write posture is now intentionally stricter than Hermes: execution
+closeout proposes memory and records progress evidence, while durable automatic
+long-term writes require an explicit policy opt-in or an explicit `memory_save`
+tool call.
+The provider lifecycle and self-evolution state are now inspectable rather than
+implicit: `memory_load` doctor output reports the memory provider panel, and
+`/evolution status` shows the shared proposal/eval/apply/rollback control loop.
 
 The main gap is that these pieces are not yet a productized self-evolution
 system. Hermes treats memory as a provider lifecycle with hooks, quality
@@ -531,9 +559,10 @@ Status: implemented for proposal generation and user-gated lifecycle. Runtime
 LearningEvents can now be scanned into `ImprovementProposal` records stored in
 `~/.priority-agent/improvements.jsonl`. Proposals target memory, skill, prompt,
 routing, or tool guidance; include trigger event ids, evidence, expected
-benefit, risk, and a validation plan; and can be listed, shown, accepted,
-rejected, or applied through `/improvements`. Applying requires prior explicit
-acceptance, so high-risk or behavior-changing suggestions are never applied
+benefit, risk, validation plan, and optional evalset bindings; and can be
+listed, shown, accepted, rejected, bound to evalsets, or applied through
+`/improvements`. Applying requires prior explicit acceptance and passed
+evaluation, so high-risk or behavior-changing suggestions are never applied
 automatically. Proposal outcomes are persisted back as LearningEvents.
 
 Tasks:
@@ -547,6 +576,7 @@ Tasks:
    - show ✅
    - accept ✅
    - reject ✅
+   - bind-eval ✅
    - apply ✅
 4. Require validation plans for prompt, skill, routing, and tool guidance
    changes. ✅
@@ -557,7 +587,8 @@ Acceptance criteria:
 - The agent can propose a memory, skill, or routing improvement without applying
   it automatically. ✅
 - High-risk changes require user approval. ✅
-- Accepted proposals are tied to evidence and validation results. ✅
+- Accepted proposals are tied to evidence, validation results, and optional
+  bound evalsets. ✅
 
 ### Phase 5: Skill Evolution
 

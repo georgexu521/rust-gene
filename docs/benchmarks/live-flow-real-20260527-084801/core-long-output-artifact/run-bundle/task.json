@@ -1,0 +1,29 @@
+{
+  "schema": "agent_run_bundle.v1",
+  "task_id": "core-long-output-artifact",
+  "run_id": "flow-real-20260527-084801",
+  "generated_at": "2026-05-27T00:58:58.100439+00:00",
+  "goal_summary": "audit_or_regression_check",
+  "mode": "agent-run",
+  "final_status": "failed",
+  "terminal_status": "partial",
+  "stop_reason": "no_issue",
+  "modified_files": "0",
+  "validation_status": "failed",
+  "verification_status": "failed",
+  "closeout_status": "not_verified",
+  "scores": {
+    "outcome": "15",
+    "process": "100",
+    "efficiency": "92",
+    "agent": "56",
+    "penalties": "run_failed,required_commands_failed,verification_failed,closeout_not_successful,failed_actions"
+  },
+  "artifacts": {
+    "source_report": "docs/benchmarks/live-flow-real-20260527-084801/core-long-output-artifact/report.md",
+    "source_events": "docs/benchmarks/live-flow-real-20260527-084801/core-long-output-artifact/agent-events.jsonl",
+    "steps": "docs/benchmarks/live-flow-real-20260527-084801/core-long-output-artifact/run-bundle/steps.jsonl",
+    "events": "docs/benchmarks/live-flow-real-20260527-084801/core-long-output-artifact/run-bundle/events.jsonl",
+    "final_report": "docs/benchmarks/live-flow-real-20260527-084801/core-long-output-artifact/run-bundle/final_report.md"
+  }
+}

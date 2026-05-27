@@ -63,7 +63,26 @@ Current stage:
   enables a gated, read-only local FTS worker only for user-facing persistent
   sessions, skips eval/headless/automation/internal paths, fences output as
   untrusted retrieval context, records `memory.active` trace events, and is
-  documented in `docs/ACTIVE_MEMORY_PROTOTYPE.md`.
+  documented in `docs/ACTIVE_MEMORY_PROTOTYPE.md`. Closeout-time and lifecycle
+  memory writes now default to review-only: the runtime surfaces
+  `MemoryProposal`, skipped-review-only flush records, and execution/progress
+  evidence, while legacy automatic persistence requires
+  `PRIORITY_AGENT_AUTO_MEMORY_WRITE=legacy`; the
+  narrower `PRIORITY_AGENT_AUTO_MEMORY_WRITE=narrow` policy only auto-persists
+  explicit user preference statements during turn closeout. The memory doctor
+  panel now exposes provider lifecycle state (`initialize`, prompt block,
+  prefetch/search, turn/session sync, pre-compress, write notification, and
+  shutdown) with provider kind/availability and active scope. `MemoryManager`
+  now delegates local typed-record reads to the base-bound `LocalMemoryProvider`
+  instead of owning the JSONL implementation directly. Memory proposals are
+  persisted into a review queue and can be inspected or moved through
+  `list/show/accept/reject/apply` with `/memory-proposals`. `/active-task`
+  exposes one combined progress surface from goal state, workflow trace,
+  verification/closeout, and memory proposal evidence. Controlled self-evolution
+  now uses the explicit `proposal -> eval -> accept/apply -> rollback` loop for
+  improvement proposals, with `/evolution status` summarizing improvement and
+  skill evolution state; improvement proposals can also be bound to named
+  evalsets before apply.
 - `docs/LLM_RUNTIME_SIMPLIFICATION_PLAN_2026-05-08.md` is complete through its
   follow-up implementation phases. Future runtime-diet work should come from
   live-use gaps, release-hardening gates, or a newly reviewed plan.

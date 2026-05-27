@@ -572,6 +572,9 @@ fn bash_network_verdict(tool_call: &ToolCall) -> NetworkPolicyVerdict {
     if classification.category
         == crate::tools::bash_tool::command_classifier::ShellCommandCategory::PackageInstall
     {
+        if is_local_only_package_install_command(command) {
+            return NetworkPolicyVerdict::none();
+        }
         return NetworkPolicyVerdict {
             class: NetworkAccessClass::PackageInstall,
             target: Some(classification.normalized_command),
@@ -619,6 +622,62 @@ fn bash_external_side_effect(
         return ExternalSideEffect::NetworkRead;
     }
     ExternalSideEffect::None
+}
+
+fn is_local_only_package_install_command(command: &str) -> bool {
+    let normalized =
+        crate::tools::bash_tool::command_classifier::normalize_command_for_match(command);
+    if normalized.is_empty() {
+        return false;
+    }
+    let tokens = normalized.split_whitespace().collect::<Vec<_>>();
+    let install_index = match tokens.as_slice() {
+        ["pip" | "pip3", "install", ..] => Some(2usize),
+        ["python" | "python3", "-m", "pip", "install", ..] => Some(4usize),
+        ["uv", "pip", "install", ..] => Some(3usize),
+        _ => None,
+    };
+    let Some(mut index) = install_index else {
+        return false;
+    };
+    let mut targets = Vec::new();
+    while index < tokens.len() {
+        let token = tokens[index];
+        if token == "-e" || token == "--editable" {
+            index += 1;
+            if index < tokens.len() {
+                targets.push(tokens[index]);
+            }
+            index += 1;
+            continue;
+        }
+        if token.starts_with('-') {
+            index += 1;
+            continue;
+        }
+        targets.push(token);
+        index += 1;
+    }
+
+    !targets.is_empty()
+        && targets
+            .iter()
+            .all(|target| looks_like_local_install_target(target))
+}
+
+fn looks_like_local_install_target(target: &str) -> bool {
+    if target.starts_with("http://")
+        || target.starts_with("https://")
+        || target.starts_with("git+")
+        || target.starts_with("ssh://")
+    {
+        return false;
+    }
+    target == "."
+        || target.starts_with("./")
+        || target.starts_with("../")
+        || target.starts_with('/')
+        || target.contains('/')
 }
 
 fn contains_database_or_deploy_marker(command: &str) -> bool {
@@ -712,7 +771,8 @@ fn trusted_workspace_roots(working_dir: &Path) -> Vec<PathBuf> {
 
 fn is_live_eval_worktree_path(path: &Path) -> bool {
     let lower = path.to_string_lossy().to_ascii_lowercase();
-    lower.contains("/target/live-evals/") && lower.contains("/worktree/")
+    lower.contains("/target/live-evals/")
+        && (lower.contains("/worktree/") || lower.ends_with("/worktree"))
 }
 
 fn contains_credential_marker(path: &str) -> bool {
@@ -825,6 +885,18 @@ mod tests {
     }
 
     #[test]
+    fn live_eval_worktree_root_path_is_workspace_not_dependency_path() {
+        let working_dir = Path::new("/repo/target/live-evals/run-123/minimum-agent-loop/worktree");
+        let verdict = WorkspaceBoundaryPolicy::classify_path(
+            "/repo/target/live-evals/run-123/minimum-agent-loop/worktree",
+            working_dir,
+        );
+
+        assert_eq!(verdict.class, WorkspacePathClass::Workspace);
+        assert!(verdict.inside_workspace);
+    }
+
+    #[test]
     fn classifies_bash_network_command() {
         let profile = ActionSideEffectProfile::from_tool_call(
             &call("bash", json!({"command": "curl https://example.com"})),
@@ -839,6 +911,29 @@ mod tests {
             profile.external_side_effect,
             ExternalSideEffect::NetworkRead
         );
+    }
+
+    #[test]
+    fn local_pip_install_is_not_classified_as_network_package_install() {
+        let profile = ActionSideEffectProfile::from_tool_call(
+            &call(
+                "bash",
+                json!({"command": "python -m pip install -q fixtures/core_quality/terminal_app"}),
+            ),
+            None,
+            Path::new("/repo"),
+        );
+        assert_eq!(profile.network.class, NetworkAccessClass::None);
+    }
+
+    #[test]
+    fn remote_pip_install_remains_package_install() {
+        let profile = ActionSideEffectProfile::from_tool_call(
+            &call("bash", json!({"command": "pip install requests"})),
+            None,
+            Path::new("/repo"),
+        );
+        assert_eq!(profile.network.class, NetworkAccessClass::PackageInstall);
     }
 
     #[test]
