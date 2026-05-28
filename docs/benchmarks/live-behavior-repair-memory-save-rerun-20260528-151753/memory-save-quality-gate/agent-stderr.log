@@ -1,0 +1,8 @@
+2026-05-28T07:23:51.231164Z  WARN priority_agent::engine::conversation_loop::workflow_contract_controller: Workflow judgment analysis failed: workflow judgment timed out after 180s
+[required validation still running after 30s] cargo test -q memory -- --test-threads=1
+[required validation still running after 60s] cargo test -q memory -- --test-threads=1
+[required validation still running after 90s] cargo test -q memory -- --test-threads=1
+[required validation still running after 120s] cargo test -q memory -- --test-threads=1
+[required validation still running after 150s] cargo test -q memory -- --test-threads=1
+[required validation still running after 180s] cargo test -q memory -- --test-threads=1
+[required validation still running after 30s] cargo test -q memory -- --test-threads=1

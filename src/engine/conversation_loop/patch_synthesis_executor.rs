@@ -11,7 +11,7 @@ use crate::engine::streaming::StreamEvent;
 use crate::engine::trace::TraceCollector;
 use crate::services::api::{Message, ToolCall};
 use std::collections::{HashMap, HashSet};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use tokio::sync::mpsc;
 
 pub(super) struct PatchSynthesisExecutionContext<'a> {
@@ -69,6 +69,12 @@ impl PatchSynthesisExecutor {
     async fn execute_batch(context: &mut PatchSynthesisExecutionContext<'_>) -> ToolExecutionBatch {
         let exposed_synth_tools =
             HashSet::from(["file_edit".to_string(), "file_write".to_string()]);
+        let working_dir = context.conversation.create_tool_context().working_dir;
+        Self::mark_synthesized_edit_targets_read(
+            &context.conversation.session_id,
+            &working_dir,
+            context.tool_calls,
+        );
         ToolExecutionController::new(ToolExecutionContext::from_conversation(
             context.conversation,
         ))
@@ -96,6 +102,55 @@ impl PatchSynthesisExecutor {
             lifecycle: &mut context.turn_state.tool_lifecycle,
         })
         .await
+    }
+
+    fn mark_synthesized_edit_targets_read(
+        session_id: &str,
+        working_dir: &Path,
+        tool_calls: &[ToolCall],
+    ) {
+        for tool_call in tool_calls {
+            if tool_call.name != "file_edit" {
+                continue;
+            }
+            let Some(path) = tool_call.arguments["path"].as_str() else {
+                continue;
+            };
+            let trimmed = path.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            let raw_path = Path::new(trimmed);
+            let candidate = if raw_path.is_absolute() {
+                raw_path.to_path_buf()
+            } else {
+                working_dir.join(raw_path)
+            };
+            let Ok(canonical) = candidate.canonicalize() else {
+                continue;
+            };
+            if !canonical.is_file() {
+                continue;
+            }
+            let canonical_working_dir = working_dir
+                .canonicalize()
+                .unwrap_or_else(|_| working_dir.to_path_buf());
+            if !canonical.starts_with(&canonical_working_dir) {
+                continue;
+            }
+            let Ok(content) = std::fs::read_to_string(&canonical) else {
+                continue;
+            };
+            let modified = std::fs::metadata(&canonical)
+                .and_then(|metadata| metadata.modified())
+                .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+            crate::tools::file_tool::mark_file_read_with_state(
+                session_id,
+                &canonical.to_string_lossy(),
+                &content,
+                modified,
+            );
+        }
     }
 
     async fn collect_batch_results(
@@ -152,6 +207,41 @@ mod tests {
             name: "file_write".to_string(),
             arguments: serde_json::json!({"path": path, "content": "updated"}),
         }
+    }
+
+    fn file_edit_call(path: &str) -> ToolCall {
+        ToolCall {
+            id: "call_1".to_string(),
+            name: "file_edit".to_string(),
+            arguments: serde_json::json!({
+                "path": path,
+                "old_string": "old",
+                "new_string": "new",
+                "expected_replacements": 1
+            }),
+        }
+    }
+
+    #[test]
+    fn marks_synthesized_file_edit_targets_as_read() {
+        let tmp = tempfile::tempdir().expect("create tempdir");
+        let session_id = format!("patch-synthesis-read-{}", uuid::Uuid::new_v4().simple());
+        let file_path = tmp.path().join("src/lib.rs");
+        std::fs::create_dir_all(file_path.parent().unwrap()).expect("create src dir");
+        std::fs::write(&file_path, "old\n").expect("write file");
+        let call = file_edit_call("src/lib.rs");
+
+        PatchSynthesisExecutor::mark_synthesized_edit_targets_read(
+            &session_id,
+            tmp.path(),
+            &[call],
+        );
+
+        let canonical = file_path.canonicalize().expect("canonical file");
+        assert!(crate::tools::file_tool::is_file_read(
+            &session_id,
+            &canonical.to_string_lossy()
+        ));
     }
 
     #[tokio::test]

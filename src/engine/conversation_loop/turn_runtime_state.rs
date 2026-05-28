@@ -30,6 +30,7 @@ pub(super) struct FocusedRepairRuntimeState {
     pub(super) no_diff_audit_validation_checkpoint_sent: bool,
     pub(super) code_write_forbidden_checkpoint_sent: bool,
     pub(super) file_edit_failure_retry_used: bool,
+    pub(super) no_effective_diff_repair_rounds: usize,
 }
 
 impl TurnRuntimeState {
