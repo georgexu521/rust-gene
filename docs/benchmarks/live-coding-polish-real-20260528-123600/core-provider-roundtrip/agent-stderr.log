@@ -1,0 +1,5 @@
+[required validation still running after 30s] cargo test -q provider_health -- --test-threads=1
+[required validation still running after 60s] cargo test -q provider_health -- --test-threads=1
+[required validation still running after 90s] cargo test -q provider_health -- --test-threads=1
+[required validation still running after 120s] cargo test -q provider_health -- --test-threads=1
+2026-05-28T05:02:14.882961Z  WARN priority_agent::engine::conversation_loop::turn_iteration_setup_controller: Effective iteration budget exhausted (10/10)

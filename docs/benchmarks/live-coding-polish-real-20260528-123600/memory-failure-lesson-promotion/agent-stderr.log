@@ -1,0 +1,8 @@
+[required validation still running after 30s] cargo test -q turn_recording -- --test-threads=1
+[required validation still running after 60s] cargo test -q turn_recording -- --test-threads=1
+[required validation still running after 90s] cargo test -q turn_recording -- --test-threads=1
+[required validation still running after 120s] cargo test -q turn_recording -- --test-threads=1
+[required validation still running after 150s] cargo test -q turn_recording -- --test-threads=1
+[required validation still running after 180s] cargo test -q turn_recording -- --test-threads=1
+[required validation still running after 210s] cargo test -q turn_recording -- --test-threads=1
+[required validation still running after 240s] cargo test -q turn_recording -- --test-threads=1

@@ -218,6 +218,9 @@ impl QueryEngine {
         let mut lp = self
             .create_loop_with_allowed_tools(options.allowed_tools.clone())
             .with_max_iterations(options.max_tool_iterations.unwrap_or(self.max_iterations));
+        if let Some(temperature) = options.temperature {
+            lp = lp.with_temperature(temperature);
+        }
         if let Some(working_dir) = working_dir {
             lp = lp.with_working_dir(working_dir);
         }
@@ -318,6 +321,11 @@ impl QueryOptions {
         self
     }
 
+    pub fn with_temperature(mut self, temperature: f32) -> Self {
+        self.temperature = Some(temperature.clamp(0.0, 2.0));
+        self
+    }
+
     pub fn with_working_dir(mut self, working_dir: impl Into<PathBuf>) -> Self {
         self.working_dir = Some(working_dir.into());
         self
@@ -353,10 +361,12 @@ mod tests {
     fn test_query_options() {
         let opts = QueryOptions::new()
             .with_max_iterations(5)
+            .with_temperature(0.7)
             .with_working_dir("/tmp/isolated-agent")
             .with_allowed_mcp_servers(vec!["filesystem".to_string()]);
 
         assert_eq!(opts.max_tool_iterations, Some(5));
+        assert_eq!(opts.temperature, Some(0.7));
         assert_eq!(opts.working_dir, Some(PathBuf::from("/tmp/isolated-agent")));
         assert_eq!(
             opts.allowed_mcp_servers,

@@ -167,6 +167,7 @@ pub struct ConversationLoop {
     tool_registry: Arc<ToolRegistry>,
     cost_tracker: Arc<Mutex<crate::cost_tracker::CostTracker>>,
     model: String,
+    temperature: f32,
     /// 会话 ID（固定，用于追踪 checkpoint、记忆等）
     session_id: String,
     max_iterations: usize,
@@ -236,6 +237,7 @@ impl ConversationLoop {
             tool_registry,
             cost_tracker,
             model,
+            temperature: 0.2,
             max_iterations: 10,
             agent_manager: None,
             mcp_manager: None,
@@ -289,6 +291,11 @@ impl ConversationLoop {
 
     pub fn with_max_iterations(mut self, max: usize) -> Self {
         self.max_iterations = max;
+        self
+    }
+
+    pub fn with_temperature(mut self, temperature: f32) -> Self {
+        self.temperature = temperature.clamp(0.0, 2.0);
         self
     }
 

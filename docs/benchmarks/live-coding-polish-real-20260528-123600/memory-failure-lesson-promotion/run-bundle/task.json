@@ -1,0 +1,29 @@
+{
+  "schema": "agent_run_bundle.v1",
+  "task_id": "memory-failure-lesson-promotion",
+  "run_id": "coding-polish-real-20260528-123600",
+  "generated_at": "2026-05-28T06:07:07.535147+00:00",
+  "goal_summary": "seeded_code_change",
+  "mode": "agent-run",
+  "final_status": "failed",
+  "terminal_status": "failed",
+  "stop_reason": "focused_repair_stalled",
+  "modified_files": "0",
+  "validation_status": "failed",
+  "verification_status": "failed",
+  "closeout_status": "failed",
+  "scores": {
+    "outcome": "0",
+    "process": "65",
+    "efficiency": "64",
+    "agent": "32",
+    "penalties": "run_failed,required_commands_failed,verification_failed,closeout_not_successful,behavior_assertions_failed,expected_code_diff_missing,repeated_action,invalid_action,failed_actions,repeated_actions"
+  },
+  "artifacts": {
+    "source_report": "docs/benchmarks/live-coding-polish-real-20260528-123600/memory-failure-lesson-promotion/report.md",
+    "source_events": "docs/benchmarks/live-coding-polish-real-20260528-123600/memory-failure-lesson-promotion/agent-events.jsonl",
+    "steps": "docs/benchmarks/live-coding-polish-real-20260528-123600/memory-failure-lesson-promotion/run-bundle/steps.jsonl",
+    "events": "docs/benchmarks/live-coding-polish-real-20260528-123600/memory-failure-lesson-promotion/run-bundle/events.jsonl",
+    "final_report": "docs/benchmarks/live-coding-polish-real-20260528-123600/memory-failure-lesson-promotion/run-bundle/final_report.md"
+  }
+}

@@ -21,6 +21,7 @@ use tracing::debug;
 
 pub(super) struct RequestPreparationContext<'a> {
     pub(super) messages: &'a [Message],
+    pub(super) working_dir: &'a std::path::Path,
     pub(super) focused_repair_prompt: Option<Message>,
     pub(super) agent_task_state: Option<&'a AgentTaskState>,
     pub(super) task_contract: Option<&'a TaskContract>,
@@ -32,6 +33,7 @@ pub(super) struct RequestPreparationContext<'a> {
     pub(super) session_store: Option<&'a Arc<SessionStore>>,
     pub(super) session_id: &'a str,
     pub(super) model: &'a str,
+    pub(super) temperature: f32,
     pub(super) tools: &'a [Tool],
     pub(super) trace: &'a TraceCollector,
     pub(super) runtime_diet: &'a mut RuntimeDietSnapshot,
@@ -57,6 +59,7 @@ impl RequestPreparationController {
     pub(super) async fn prepare(context: RequestPreparationContext<'_>) -> PreparedRequest {
         let RequestPreparationContext {
             messages,
+            working_dir,
             focused_repair_prompt,
             agent_task_state,
             task_contract,
@@ -68,6 +71,7 @@ impl RequestPreparationController {
             session_store,
             session_id,
             model,
+            temperature,
             tools,
             trace,
             runtime_diet,
@@ -77,7 +81,7 @@ impl RequestPreparationController {
         Self::inject_task_state_zone(&mut request_messages, agent_task_state);
         Self::inject_task_contract_zone(&mut request_messages, task_contract, context_pack);
         Self::inject_mva_candidate_action_hint(&mut request_messages);
-        Self::inject_self_evolution_guidance_zone(&mut request_messages, trace);
+        Self::inject_self_evolution_guidance_zone(&mut request_messages, trace, working_dir);
         Self::inject_focused_repair_zone(&mut request_messages, focused_repair_prompt);
         Self::inject_context_ledger_hint(&mut request_messages, session_store, session_id);
 
@@ -101,7 +105,7 @@ impl RequestPreparationController {
             request: ChatRequest::new(model)
                 .with_messages(request_messages)
                 .with_tools(tools.to_vec())
-                .with_temperature(0.2),
+                .with_temperature(temperature),
         }
     }
 
@@ -190,6 +194,7 @@ impl RequestPreparationController {
     fn inject_self_evolution_guidance_zone(
         request_messages: &mut Vec<Message>,
         trace: &TraceCollector,
+        working_dir: &std::path::Path,
     ) {
         if request_messages.iter().any(
             |message| matches!(message, Message::System { content } if content.contains("<self-evolution-guidance>")),
@@ -205,8 +210,10 @@ impl RequestPreparationController {
         let Message::User { content } = &request_messages[last_user_idx] else {
             return;
         };
-        let Some(block) = crate::engine::improvement::format_active_guidance_for_prompt(content)
-        else {
+        let Some(block) = crate::engine::improvement::format_active_guidance_for_prompt_in_project(
+            content,
+            working_dir,
+        ) else {
             return;
         };
         let records = block.matches("id=guidance_").count();
@@ -1009,6 +1016,7 @@ mod tests {
         let tools = vec![tool("file_edit"), tool("file_read")];
         let prepared = RequestPreparationController::prepare(RequestPreparationContext {
             messages: &[Message::user("change src/lib.rs")],
+            working_dir: std::path::Path::new("."),
             focused_repair_prompt: Some(focused_prompt),
             agent_task_state: None,
             task_contract: None,
@@ -1020,6 +1028,7 @@ mod tests {
             session_store: None,
             session_id: "session-test",
             model: "test-model",
+            temperature: 0.73,
             tools: &tools,
             trace: &trace,
             runtime_diet: &mut runtime_diet,
@@ -1027,6 +1036,7 @@ mod tests {
         .await;
 
         assert_eq!(prepared.request.model, "test-model");
+        assert_eq!(prepared.request.temperature, Some(0.73));
         assert_eq!(prepared.request.messages.len(), 2);
         assert!(matches!(
             prepared.request.messages.first(),
@@ -1070,6 +1080,7 @@ mod tests {
         let tools = vec![tool("file_read")];
         let prepared = RequestPreparationController::prepare(RequestPreparationContext {
             messages: &[Message::user("remembered context should not be injected")],
+            working_dir: std::path::Path::new("."),
             focused_repair_prompt: None,
             agent_task_state: None,
             task_contract: None,
@@ -1081,6 +1092,7 @@ mod tests {
             session_store: None,
             session_id: "session-test",
             model: "test-model",
+            temperature: 0.2,
             tools: &tools,
             trace: &trace,
             runtime_diet: &mut runtime_diet,
@@ -1128,6 +1140,7 @@ mod tests {
         let mut runtime_diet = RuntimeDietSnapshot::new(true);
         let prepared = RequestPreparationController::prepare(RequestPreparationContext {
             messages: &[Message::user("summarize README")],
+            working_dir: std::path::Path::new("."),
             focused_repair_prompt: None,
             agent_task_state: None,
             task_contract: None,
@@ -1139,6 +1152,7 @@ mod tests {
             session_store: Some(&store),
             session_id: "session-ledger",
             model: "test-model",
+            temperature: 0.2,
             tools: &[],
             trace: &trace,
             runtime_diet: &mut runtime_diet,
@@ -1174,6 +1188,7 @@ mod tests {
                 Message::system("<relevant_material>\n- memory fact\n</relevant_material>"),
                 Message::user("use retrieved context"),
             ],
+            working_dir: std::path::Path::new("."),
             focused_repair_prompt: None,
             agent_task_state: None,
             task_contract: None,
@@ -1185,6 +1200,7 @@ mod tests {
             session_store: None,
             session_id: "session-zones",
             model: "test-model",
+            temperature: 0.2,
             tools: &[],
             trace: &trace,
             runtime_diet: &mut runtime_diet,
@@ -1229,6 +1245,7 @@ mod tests {
                 ),
                 Message::user("use retrieved context"),
             ],
+            working_dir: std::path::Path::new("."),
             focused_repair_prompt: None,
             agent_task_state: None,
             task_contract: None,
@@ -1240,6 +1257,7 @@ mod tests {
             session_store: None,
             session_id: "session-zone-envelope",
             model: "test-model",
+            temperature: 0.2,
             tools: &[],
             trace: &trace,
             runtime_diet: &mut runtime_diet,
@@ -1299,6 +1317,7 @@ mod tests {
                 Message::system("<relevant_material>\n- fact\n</relevant_material>"),
                 Message::user("use retrieved context"),
             ],
+            working_dir: std::path::Path::new("."),
             focused_repair_prompt: None,
             agent_task_state: None,
             task_contract: None,
@@ -1310,6 +1329,7 @@ mod tests {
             session_store: None,
             session_id: "session-zone-stable-mention",
             model: "test-model",
+            temperature: 0.2,
             tools: &[],
             trace: &trace,
             runtime_diet: &mut runtime_diet,
@@ -1361,6 +1381,7 @@ mod tests {
                 )),
                 Message::user("inspect retrieved context"),
             ],
+            working_dir: std::path::Path::new("."),
             focused_repair_prompt: None,
             agent_task_state: None,
             task_contract: None,
@@ -1372,6 +1393,7 @@ mod tests {
             session_store: None,
             session_id: "session-hostile-retrieval",
             model: "test-model",
+            temperature: 0.2,
             tools: &[],
             trace: &trace,
             runtime_diet: &mut runtime_diet,
@@ -1496,6 +1518,7 @@ mod tests {
         let mut runtime_diet = RuntimeDietSnapshot::new(true);
         let prepared = RequestPreparationController::prepare(RequestPreparationContext {
             messages: &[Message::user("continue changes")],
+            working_dir: std::path::Path::new("."),
             focused_repair_prompt: None,
             agent_task_state: None,
             task_contract: None,
@@ -1507,6 +1530,7 @@ mod tests {
             session_store: Some(&store),
             session_id: "session-ledger-evidence",
             model: "test-model",
+            temperature: 0.2,
             tools: &[],
             trace: &trace,
             runtime_diet: &mut runtime_diet,
@@ -1556,6 +1580,7 @@ mod tests {
                 Message::system("base system prompt"),
                 Message::user("change"),
             ],
+            working_dir: std::path::Path::new("."),
             focused_repair_prompt: None,
             agent_task_state: Some(&task_bundle.agent_state),
             task_contract: None,
@@ -1567,6 +1592,7 @@ mod tests {
             session_store: None,
             session_id: "session-test",
             model: "test-model",
+            temperature: 0.2,
             tools: &[],
             trace: &trace,
             runtime_diet: &mut runtime_diet,
@@ -1623,6 +1649,7 @@ mod tests {
                 Message::system("base system prompt"),
                 Message::user("change"),
             ],
+            working_dir: std::path::Path::new("."),
             focused_repair_prompt: None,
             agent_task_state: Some(&task_bundle.agent_state),
             task_contract: Some(&contract),
@@ -1634,6 +1661,7 @@ mod tests {
             session_store: None,
             session_id: "session-test",
             model: "test-model",
+            temperature: 0.2,
             tools: &[],
             trace: &trace,
             runtime_diet: &mut runtime_diet,

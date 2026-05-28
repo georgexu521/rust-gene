@@ -1,0 +1,29 @@
+{
+  "schema": "agent_run_bundle.v1",
+  "task_id": "core-inspection-grounding",
+  "run_id": "coding-polish-real-20260528-123600",
+  "generated_at": "2026-05-28T04:56:32.702058+00:00",
+  "goal_summary": "audit_or_regression_check",
+  "mode": "agent-run",
+  "final_status": "passed",
+  "terminal_status": "completed",
+  "stop_reason": "consecutive_validation_failures",
+  "modified_files": "0",
+  "validation_status": "ok",
+  "verification_status": "passed",
+  "closeout_status": "passed",
+  "scores": {
+    "outcome": "100",
+    "process": "80",
+    "efficiency": "75",
+    "agent": "89",
+    "penalties": "invalid_action,failed_actions"
+  },
+  "artifacts": {
+    "source_report": "docs/benchmarks/live-coding-polish-real-20260528-123600/core-inspection-grounding/report.md",
+    "source_events": "docs/benchmarks/live-coding-polish-real-20260528-123600/core-inspection-grounding/agent-events.jsonl",
+    "steps": "docs/benchmarks/live-coding-polish-real-20260528-123600/core-inspection-grounding/run-bundle/steps.jsonl",
+    "events": "docs/benchmarks/live-coding-polish-real-20260528-123600/core-inspection-grounding/run-bundle/events.jsonl",
+    "final_report": "docs/benchmarks/live-coding-polish-real-20260528-123600/core-inspection-grounding/run-bundle/final_report.md"
+  }
+}

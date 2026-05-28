@@ -68,6 +68,11 @@ impl TurnModelStepController {
         let context_pack = context.task_bundle.context_pack(&task_contract);
         let prepared_request = RequestPreparationController::prepare(RequestPreparationContext {
             messages: context.messages,
+            working_dir: context
+                .conversation
+                .working_dir_override
+                .as_deref()
+                .unwrap_or_else(|| std::path::Path::new(".")),
             focused_repair_prompt: context.focused_repair_prompt,
             agent_task_state: Some(&context.task_bundle.agent_state),
             task_contract: Some(&task_contract),
@@ -79,6 +84,7 @@ impl TurnModelStepController {
             session_store: context.conversation.session_store.as_ref(),
             session_id: &context.conversation.session_id,
             model: &context.conversation.model,
+            temperature: context.conversation.temperature,
             tools: context.tools,
             trace: context.trace,
             runtime_diet: &mut context.turn_state.runtime_diet,

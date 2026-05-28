@@ -1,0 +1,29 @@
+{
+  "schema": "agent_run_bundle.v1",
+  "task_id": "core-rollback-product-path",
+  "run_id": "coding-polish-real-20260528-123600",
+  "generated_at": "2026-05-28T05:06:48.826409+00:00",
+  "goal_summary": "audit_or_regression_check",
+  "mode": "agent-run",
+  "final_status": "passed",
+  "terminal_status": "completed",
+  "stop_reason": "consecutive_permission_blocks",
+  "modified_files": "0",
+  "validation_status": "ok",
+  "verification_status": "passed",
+  "closeout_status": "passed",
+  "scores": {
+    "outcome": "100",
+    "process": "64",
+    "efficiency": "29",
+    "agent": "75",
+    "penalties": "repeated_action,invalid_action,tool_budget_exceeded,failed_actions,repeated_actions,user_questions,llm_call_budget_pressure"
+  },
+  "artifacts": {
+    "source_report": "docs/benchmarks/live-coding-polish-real-20260528-123600/core-rollback-product-path/report.md",
+    "source_events": "docs/benchmarks/live-coding-polish-real-20260528-123600/core-rollback-product-path/agent-events.jsonl",
+    "steps": "docs/benchmarks/live-coding-polish-real-20260528-123600/core-rollback-product-path/run-bundle/steps.jsonl",
+    "events": "docs/benchmarks/live-coding-polish-real-20260528-123600/core-rollback-product-path/run-bundle/events.jsonl",
+    "final_report": "docs/benchmarks/live-coding-polish-real-20260528-123600/core-rollback-product-path/run-bundle/final_report.md"
+  }
+}

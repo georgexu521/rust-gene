@@ -137,6 +137,7 @@ pub struct ConversationLoopBuilder {
     tool_registry: std::sync::Arc<crate::tools::ToolRegistry>,
     cost_tracker: std::sync::Arc<tokio::sync::Mutex<crate::cost_tracker::CostTracker>>,
     model: String,
+    temperature: f32,
     max_iterations: usize,
     agent_manager: Option<std::sync::Arc<crate::agent::AgentManager>>,
     mcp_manager: Option<std::sync::Arc<self::mcp::McpManager>>,
@@ -173,6 +174,7 @@ impl ConversationLoopBuilder {
             tool_registry,
             cost_tracker,
             model: model.into(),
+            temperature: 0.2,
             max_iterations: 10,
             agent_manager: None,
             mcp_manager: None,
@@ -198,6 +200,11 @@ impl ConversationLoopBuilder {
 
     pub fn with_max_iterations(mut self, max: usize) -> Self {
         self.max_iterations = max;
+        self
+    }
+
+    pub fn with_temperature(mut self, temperature: f32) -> Self {
+        self.temperature = temperature.clamp(0.0, 2.0);
         self
     }
 
@@ -357,6 +364,7 @@ impl ConversationLoopBuilder {
             self.model,
         )
         .with_max_iterations(self.max_iterations)
+        .with_temperature(self.temperature)
         .with_permission_mode(self.permission_mode)
         .with_session_permission_rules(self.session_permission_rules)
         .with_llm_memory_extraction(self.llm_memory_extraction)

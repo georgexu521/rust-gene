@@ -46,11 +46,12 @@ impl PostChangeWorkflowController {
         if context.changed_files.is_empty() {
             if !context.required_validation_commands.is_empty() {
                 let working_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-                let required_run = RequiredValidationController::run_pending_commands(
+                let required_run = RequiredValidationController::run_pending_commands_with_trace(
                     &working_dir,
                     context.required_validation_commands,
                     context.successful_validation_commands,
                     &*context.successful_required_validation_commands,
+                    Some(context.trace),
                 )
                 .await;
                 let required_application =
@@ -106,6 +107,7 @@ impl PostChangeWorkflowController {
             successful_validation_commands: context.successful_validation_commands,
             successful_required_validation_commands: context
                 .successful_required_validation_commands,
+            trace: context.trace,
             evidence_ledger: &mut context.turn_state.evidence_ledger,
             tool_results_text: context.tool_results_text,
             messages: context.messages,

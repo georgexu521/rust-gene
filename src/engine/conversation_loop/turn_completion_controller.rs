@@ -102,12 +102,36 @@ fn runtime_diagnostic_payload(trace: &TraceCollector, task_bundle: &TaskContextB
         "mva_state_snapshot": serde_json::to_value(task_bundle.mva_state_snapshot()).unwrap_or(Value::Null),
         "task_state": task_state_payload(task_bundle),
         "verification_proof": verification_proof_payload(&trace_snapshot),
+        "required_validation": required_validation_payload(&trace_snapshot),
         "completion_contract": completion_contract_payload(&trace_snapshot),
         "control_loop": {
             "coverage": coverage,
             "summary": summary,
             "phases": control_loop.phases,
         },
+    })
+}
+
+fn required_validation_payload(trace: &TurnTrace) -> Value {
+    let latest_heartbeat = trace.events.iter().rev().find_map(|event| {
+        if let TraceEvent::RequiredValidationHeartbeat {
+            command_preview,
+            elapsed_secs,
+            timeout_secs,
+        } = event
+        {
+            Some(json!({
+                "command_preview": command_preview,
+                "elapsed_secs": elapsed_secs,
+                "timeout_secs": timeout_secs,
+            }))
+        } else {
+            None
+        }
+    });
+
+    json!({
+        "latest_heartbeat": latest_heartbeat.unwrap_or(Value::Null),
     })
 }
 
@@ -647,6 +671,11 @@ mod tests {
         let mut final_content = "hello".to_string();
         let final_tool_calls = Vec::new();
         let (tx, mut rx) = mpsc::channel(4);
+        trace.record(TraceEvent::RequiredValidationHeartbeat {
+            command_preview: "cargo test -q".to_string(),
+            elapsed_secs: 30,
+            timeout_secs: None,
+        });
 
         let result = TurnCompletionController::complete(TurnCompletionContext {
             trace: &trace,
@@ -703,6 +732,18 @@ mod tests {
                 .pointer("/completion_contract/status")
                 .and_then(Value::as_str),
             Some("completed")
+        );
+        assert_eq!(
+            diagnostic
+                .pointer("/required_validation/latest_heartbeat/command_preview")
+                .and_then(Value::as_str),
+            Some("cargo test -q")
+        );
+        assert_eq!(
+            diagnostic
+                .pointer("/required_validation/latest_heartbeat/elapsed_secs")
+                .and_then(Value::as_u64),
+            Some(30)
         );
         assert!(matches!(rx.recv().await, Some(StreamEvent::Complete)));
 

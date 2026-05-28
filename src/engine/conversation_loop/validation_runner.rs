@@ -52,6 +52,15 @@ pub(super) async fn shell_output_with_timeout(
     working_dir: &std::path::Path,
     timeout: Option<std::time::Duration>,
 ) -> std::io::Result<std::process::Output> {
+    shell_output_with_timeout_and_trace(command, working_dir, timeout, None).await
+}
+
+pub(super) async fn shell_output_with_timeout_and_trace(
+    command: &str,
+    working_dir: &std::path::Path,
+    timeout: Option<std::time::Duration>,
+    trace: Option<&TraceCollector>,
+) -> std::io::Result<std::process::Output> {
     let mut cmd = tokio::process::Command::new("sh");
     cmd.arg("-lc").arg(command).current_dir(working_dir);
     sanitize_required_validation_env(&mut cmd);
@@ -89,7 +98,7 @@ pub(super) async fn shell_output_with_timeout(
             tokio::select! {
                 result = child.wait() => break result?,
                 _ = heartbeat.tick() => {
-                    emit_required_validation_heartbeat(started_at, command);
+                    emit_required_validation_heartbeat(started_at, command, timeout, trace);
                 }
                 _ = tokio::time::sleep_until(deadline) => {
                     #[cfg(unix)]
@@ -115,7 +124,7 @@ pub(super) async fn shell_output_with_timeout(
             tokio::select! {
                 result = child.wait() => break result?,
                 _ = heartbeat.tick() => {
-                    emit_required_validation_heartbeat(started_at, command);
+                    emit_required_validation_heartbeat(started_at, command, timeout, trace);
                 }
             }
         }
@@ -129,14 +138,36 @@ pub(super) async fn shell_output_with_timeout(
     })
 }
 
-fn emit_required_validation_heartbeat(started_at: std::time::Instant, command: &str) {
+fn emit_required_validation_heartbeat(
+    started_at: std::time::Instant,
+    command: &str,
+    timeout: Option<std::time::Duration>,
+    trace: Option<&TraceCollector>,
+) {
     let elapsed = started_at.elapsed();
+    emit_required_validation_heartbeat_elapsed(elapsed, command, timeout, trace);
+}
+
+fn emit_required_validation_heartbeat_elapsed(
+    elapsed: std::time::Duration,
+    command: &str,
+    timeout: Option<std::time::Duration>,
+    trace: Option<&TraceCollector>,
+) {
     if elapsed >= std::time::Duration::from_secs(30) {
+        let command_preview = safe_prefix_by_bytes(command, 160).to_string();
         eprintln!(
             "[required validation still running after {}s] {}",
             elapsed.as_secs(),
-            safe_prefix_by_bytes(command, 160)
+            command_preview
         );
+        if let Some(trace) = trace {
+            trace.record(TraceEvent::RequiredValidationHeartbeat {
+                command_preview,
+                elapsed_secs: elapsed.as_secs(),
+                timeout_secs: timeout.map(|duration| duration.as_secs()),
+            });
+        }
     }
 }
 
@@ -387,18 +418,19 @@ impl RequiredValidationController {
         commands
     }
 
-    pub(super) async fn run_pending_commands(
+    pub(super) async fn run_pending_commands_with_trace(
         working_dir: &std::path::Path,
         required_validation_commands: &[String],
         successful_validation_commands: &[String],
         successful_required_validation_commands: &HashSet<String>,
+        trace: Option<&TraceCollector>,
     ) -> RequiredValidationRun {
         let pending = Self::pending_commands(
             required_validation_commands,
             successful_validation_commands,
             successful_required_validation_commands,
         );
-        Self::summarize_results(Self::run_commands(working_dir, &pending).await)
+        Self::summarize_results(Self::run_commands(working_dir, &pending, trace).await)
     }
 
     pub(super) fn summarize_results(results: Vec<VerificationResult>) -> RequiredValidationRun {
@@ -476,6 +508,7 @@ impl RequiredValidationController {
     pub(super) async fn run_commands(
         working_dir: &std::path::Path,
         commands: &[String],
+        trace: Option<&TraceCollector>,
     ) -> Vec<VerificationResult> {
         let mut results = Vec::new();
         let mut executed_preflights = HashSet::new();
@@ -491,7 +524,8 @@ impl RequiredValidationController {
             )
             .await;
             let timeout = required_validation_timeout();
-            let output = shell_output_with_timeout(command, working_dir, timeout).await;
+            let output =
+                shell_output_with_timeout_and_trace(command, working_dir, timeout, trace).await;
             let result = match output {
                 Ok(output) => {
                     let mut raw_output = format!(
@@ -946,6 +980,46 @@ mod tests {
             TraceEvent::WorkflowFallback { error }
                 if error == "adaptive workflow trigger activated: required_validation commands=1"
         )));
+    }
+
+    #[test]
+    fn required_validation_heartbeat_records_trace_after_threshold() {
+        let trace = trace();
+
+        emit_required_validation_heartbeat_elapsed(
+            std::time::Duration::from_secs(31),
+            "cargo test -q",
+            None,
+            Some(&trace),
+        );
+
+        let finished = trace.finish(TurnStatus::Completed);
+        assert!(finished.events.iter().any(|event| matches!(
+            event,
+            TraceEvent::RequiredValidationHeartbeat {
+                command_preview,
+                elapsed_secs: 31,
+                timeout_secs: None,
+            } if command_preview == "cargo test -q"
+        )));
+    }
+
+    #[test]
+    fn required_validation_heartbeat_skips_trace_before_threshold() {
+        let trace = trace();
+
+        emit_required_validation_heartbeat_elapsed(
+            std::time::Duration::from_secs(29),
+            "cargo test -q",
+            Some(std::time::Duration::from_secs(300)),
+            Some(&trace),
+        );
+
+        let finished = trace.finish(TurnStatus::Completed);
+        assert!(!finished
+            .events
+            .iter()
+            .any(|event| matches!(event, TraceEvent::RequiredValidationHeartbeat { .. })));
     }
 
     #[test]

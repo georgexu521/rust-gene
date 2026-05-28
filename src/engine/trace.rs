@@ -634,6 +634,11 @@ pub enum TraceEvent {
         #[serde(default)]
         failed_commands: Vec<String>,
     },
+    RequiredValidationHeartbeat {
+        command_preview: String,
+        elapsed_secs: u64,
+        timeout_secs: Option<u64>,
+    },
     AcceptanceReviewCompleted {
         accepted: bool,
         confidence: String,
@@ -809,6 +814,7 @@ impl TraceEvent {
             TraceEvent::SubagentStarted { .. } => "subagent.start",
             TraceEvent::SubagentCompleted { .. } => "subagent.done",
             TraceEvent::VerificationCompleted { .. } => "verify.done",
+            TraceEvent::RequiredValidationHeartbeat { .. } => "required_validation.heartbeat",
             TraceEvent::AcceptanceReviewCompleted { .. } => "acceptance.review",
             TraceEvent::GuidedDebuggingCompleted { .. } => "guided.debug",
             TraceEvent::RecoveryApplied { .. } => "recovery",
@@ -1859,6 +1865,18 @@ impl TraceEvent {
                 review_passed,
                 failed_commands.len()
             ),
+            TraceEvent::RequiredValidationHeartbeat {
+                command_preview,
+                elapsed_secs,
+                timeout_secs,
+            } => format!(
+                "required validation still running: elapsed={}s timeout={} command={}",
+                elapsed_secs,
+                timeout_secs
+                    .map(|secs| format!("{secs}s"))
+                    .unwrap_or_else(|| "unlimited".to_string()),
+                preview(command_preview)
+            ),
             TraceEvent::AcceptanceReviewCompleted {
                 accepted,
                 confidence,
@@ -2394,6 +2412,7 @@ fn control_loop_phase_for_event(event: &TraceEvent) -> Option<&'static str> {
         TraceEvent::StageValidationCompleted { .. }
         | TraceEvent::ReflectionPassCompleted { .. }
         | TraceEvent::VerificationCompleted { .. }
+        | TraceEvent::RequiredValidationHeartbeat { .. }
         | TraceEvent::AcceptanceReviewCompleted { .. }
         | TraceEvent::GuidedDebuggingCompleted { .. } => Some("verification"),
         TraceEvent::WorkflowCompleted { .. }

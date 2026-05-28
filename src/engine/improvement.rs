@@ -102,6 +102,10 @@ pub struct AppliedGuidanceRecord {
     pub proposal_id: String,
     pub target: ImprovementTarget,
     pub scope: GuidanceScope,
+    #[serde(default)]
+    pub project_id: Option<String>,
+    #[serde(default)]
+    pub project_root: Option<String>,
     pub content: String,
     pub activation: GuidanceActivation,
     pub evalsets: Vec<String>,
@@ -348,9 +352,12 @@ impl AppliedGuidanceStore {
         let mut record = self
             .get(&proposal.id)
             .unwrap_or_else(|| AppliedGuidanceRecord::from_proposal(proposal, now.clone()));
+        let project = current_project_identity();
         record.status = AppliedGuidanceStatus::Active;
         record.content = proposal.proposed_change.clone();
         record.evalsets = proposal.evalset_bindings.clone();
+        record.project_id = project.as_ref().map(|project| project.id.clone());
+        record.project_root = project.as_ref().map(|project| project.root.clone());
         record.updated_at = now;
         append_guidance_jsonl(&self.path, &record)?;
         Ok(record)
@@ -466,11 +473,21 @@ impl Default for ImprovementEffectStore {
 
 impl AppliedGuidanceRecord {
     pub fn from_proposal(proposal: &ImprovementProposal, now: String) -> Self {
+        Self::from_proposal_with_project(proposal, now, current_project_identity())
+    }
+
+    fn from_proposal_with_project(
+        proposal: &ImprovementProposal,
+        now: String,
+        project: Option<ProjectIdentity>,
+    ) -> Self {
         Self {
             id: stable_guidance_id(&proposal.id),
             proposal_id: proposal.id.clone(),
             target: proposal.target,
             scope: guidance_scope_for_proposal(proposal),
+            project_id: project.as_ref().map(|project| project.id.clone()),
+            project_root: project.as_ref().map(|project| project.root.clone()),
             content: proposal.proposed_change.clone(),
             activation: guidance_activation_for_target(proposal.target),
             evalsets: proposal.evalset_bindings.clone(),
@@ -482,10 +499,25 @@ impl AppliedGuidanceRecord {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ProjectIdentity {
+    id: String,
+    root: String,
+}
+
 pub fn format_active_guidance_for_prompt(user_message: &str) -> Option<String> {
-    format_active_guidance_records_for_prompt(
+    let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    format_active_guidance_for_prompt_in_project(user_message, &cwd)
+}
+
+pub fn format_active_guidance_for_prompt_in_project(
+    user_message: &str,
+    working_dir: &std::path::Path,
+) -> Option<String> {
+    format_active_guidance_records_for_prompt_in_project(
         &AppliedGuidanceStore::default().active(),
         user_message,
+        project_identity_for_path(working_dir).as_ref(),
     )
 }
 
@@ -493,10 +525,19 @@ pub fn format_active_guidance_records_for_prompt(
     records: &[AppliedGuidanceRecord],
     user_message: &str,
 ) -> Option<String> {
+    let project = current_project_identity();
+    format_active_guidance_records_for_prompt_in_project(records, user_message, project.as_ref())
+}
+
+fn format_active_guidance_records_for_prompt_in_project(
+    records: &[AppliedGuidanceRecord],
+    user_message: &str,
+    project: Option<&ProjectIdentity>,
+) -> Option<String> {
     let user_message = user_message.to_lowercase();
     let mut lines = Vec::new();
     for record in records {
-        if !guidance_matches_turn(record, &user_message) {
+        if !guidance_matches_turn(record, &user_message, project) {
             continue;
         }
         let content = record
@@ -693,6 +734,31 @@ fn stable_guidance_id(proposal_id: &str) -> String {
     format!("guidance_{}", proposal_id.trim_start_matches("imp_"))
 }
 
+fn current_project_identity() -> Option<ProjectIdentity> {
+    std::env::current_dir()
+        .ok()
+        .and_then(|path| project_identity_for_path(&path))
+}
+
+fn project_identity_for_path(path: &std::path::Path) -> Option<ProjectIdentity> {
+    let root = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    let root = root.to_string_lossy().trim().to_string();
+    if root.is_empty() {
+        return None;
+    }
+    Some(ProjectIdentity {
+        id: stable_project_id(&root),
+        root,
+    })
+}
+
+fn stable_project_id(root: &str) -> String {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    root.hash(&mut hasher);
+    format!("project_{:016x}", hasher.finish())
+}
+
 fn guidance_activation_for_target(target: ImprovementTarget) -> GuidanceActivation {
     match target {
         ImprovementTarget::ToolGuidance => GuidanceActivation::ToolContractHint,
@@ -749,8 +815,15 @@ fn infer_tool_label(content: &str) -> Option<String> {
     None
 }
 
-fn guidance_matches_turn(record: &AppliedGuidanceRecord, user_message: &str) -> bool {
+fn guidance_matches_turn(
+    record: &AppliedGuidanceRecord,
+    user_message: &str,
+    project: Option<&ProjectIdentity>,
+) -> bool {
     if record.status != AppliedGuidanceStatus::Active {
+        return false;
+    }
+    if !guidance_matches_project(record, project) {
         return false;
     }
     match record.activation {
@@ -776,6 +849,21 @@ fn guidance_matches_turn(record: &AppliedGuidanceRecord, user_message: &str) -> 
                     || user_message.contains("测试"))
         }
     }
+}
+
+fn guidance_matches_project(
+    record: &AppliedGuidanceRecord,
+    project: Option<&ProjectIdentity>,
+) -> bool {
+    if record.scope.kind == "global_runtime" {
+        return true;
+    }
+    let Some(record_project_id) = record.project_id.as_deref() else {
+        return false;
+    };
+    project
+        .map(|project| project.id == record_project_id)
+        .unwrap_or(false)
 }
 
 fn read_latest_proposals(path: &Path) -> Vec<ImprovementProposal> {
@@ -1074,6 +1162,82 @@ mod tests {
         assert!(prompt.contains("cannot override"));
         assert!(prompt.contains("bash"));
         assert!(prompt.chars().count() < 1_200);
+    }
+
+    #[test]
+    fn active_guidance_is_project_scoped() {
+        let mut proposal = ImprovementProposal::new(
+            vec![1, 2],
+            ImprovementTarget::ToolGuidance,
+            "Add guidance for repeated bash failures: inspect arguments before retrying."
+                .to_string(),
+            "Better recovery.",
+            RiskLevel::Medium,
+            vec!["Run tool regression.".to_string()],
+            vec!["evidence".to_string()],
+        );
+        proposal.evalset_bindings = vec!["tool-guidance-smoke".to_string()];
+        proposal.eval_status = ProposalEvalStatus::Passed;
+        let project_a = ProjectIdentity {
+            id: "project_a".to_string(),
+            root: "/tmp/project-a".to_string(),
+        };
+        let project_b = ProjectIdentity {
+            id: "project_b".to_string(),
+            root: "/tmp/project-b".to_string(),
+        };
+        let record = AppliedGuidanceRecord::from_proposal_with_project(
+            &proposal,
+            "2026-05-28T00:00:00Z".to_string(),
+            Some(project_a.clone()),
+        );
+
+        assert!(format_active_guidance_records_for_prompt_in_project(
+            &[record.clone()],
+            "run bash validation",
+            Some(&project_a)
+        )
+        .is_some());
+        assert!(format_active_guidance_records_for_prompt_in_project(
+            &[record],
+            "run bash validation",
+            Some(&project_b)
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn legacy_tool_guidance_without_project_is_not_injected() {
+        let mut proposal = ImprovementProposal::new(
+            vec![1],
+            ImprovementTarget::ToolGuidance,
+            "Improve repeated bash failure guidance.".to_string(),
+            "Better recovery.",
+            RiskLevel::Medium,
+            vec!["Run tool regression.".to_string()],
+            vec!["evidence".to_string()],
+        );
+        proposal.evalset_bindings = vec!["tool-guidance-smoke".to_string()];
+        proposal.eval_status = ProposalEvalStatus::Passed;
+        let mut record = AppliedGuidanceRecord::from_proposal_with_project(
+            &proposal,
+            "2026-05-28T00:00:00Z".to_string(),
+            None,
+        );
+        record.project_id = None;
+        record.project_root = None;
+
+        let project = ProjectIdentity {
+            id: "project_a".to_string(),
+            root: "/tmp/project-a".to_string(),
+        };
+
+        assert!(format_active_guidance_records_for_prompt_in_project(
+            &[record],
+            "run bash validation",
+            Some(&project)
+        )
+        .is_none());
     }
 
     #[test]

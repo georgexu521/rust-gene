@@ -15,6 +15,7 @@ pub(super) struct PostEditVerificationContext<'a> {
     pub(super) required_validation_commands: &'a [String],
     pub(super) successful_validation_commands: &'a [String],
     pub(super) successful_required_validation_commands: &'a mut HashSet<String>,
+    pub(super) trace: &'a TraceCollector,
     pub(super) evidence_ledger: &'a mut EvidenceLedger,
     pub(super) tool_results_text: &'a mut String,
     pub(super) messages: &'a mut Vec<Message>,
@@ -88,11 +89,12 @@ impl PostEditVerificationController {
 
         let mut required_validation_passed = true;
         if !context.required_validation_commands.is_empty() {
-            let required_run = RequiredValidationController::run_pending_commands(
+            let required_run = RequiredValidationController::run_pending_commands_with_trace(
                 context.working_dir,
                 context.required_validation_commands,
                 context.successful_validation_commands,
                 &*context.successful_required_validation_commands,
+                Some(context.trace),
             )
             .await;
             let required_application =
