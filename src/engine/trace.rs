@@ -280,6 +280,11 @@ pub enum TraceEvent {
         timeout_ms: u64,
         elapsed_ms: u128,
     },
+    SelfEvolutionGuidanceInjected {
+        records: usize,
+        chars: usize,
+        provenance: Vec<String>,
+    },
     RetrievalContextBuilt {
         policy: String,
         sources: Vec<String>,
@@ -780,6 +785,7 @@ impl TraceEvent {
             TraceEvent::MemorySnapshotInjected { .. } => "memory.snapshot",
             TraceEvent::MemoryPrefetch { .. } => "memory.prefetch",
             TraceEvent::ActiveMemoryEvaluated { .. } => "memory.active",
+            TraceEvent::SelfEvolutionGuidanceInjected { .. } => "self_evolution.guidance",
             TraceEvent::RetrievalContextBuilt { .. } => "retrieval.context",
             TraceEvent::ContextZonesMaterialized { .. } => "context.zones",
             TraceEvent::MemoryBoundaryEvaluated { .. } => "memory.boundary",
@@ -1211,6 +1217,25 @@ impl TraceEvent {
             } => format!(
                 "active memory: status={} items={} elapsed={}ms timeout={}ms reason={}",
                 status, items, elapsed_ms, timeout_ms, reason
+            ),
+            TraceEvent::SelfEvolutionGuidanceInjected {
+                records,
+                chars,
+                provenance,
+            } => format!(
+                "self-evolution guidance injected: records={} chars={} provenance={}",
+                records,
+                chars,
+                if provenance.is_empty() {
+                    "none".to_string()
+                } else {
+                    provenance
+                        .iter()
+                        .take(3)
+                        .map(|item| preview(item))
+                        .collect::<Vec<_>>()
+                        .join(" | ")
+                }
             ),
             TraceEvent::RetrievalContextBuilt {
                 policy,
@@ -2326,6 +2351,7 @@ fn control_loop_phase_for_event(event: &TraceEvent) -> Option<&'static str> {
         | TraceEvent::MemorySnapshotInjected { .. }
         | TraceEvent::MemoryPrefetch { .. }
         | TraceEvent::ActiveMemoryEvaluated { .. }
+        | TraceEvent::SelfEvolutionGuidanceInjected { .. }
         | TraceEvent::RetrievalContextBuilt { .. }
         | TraceEvent::ContextZonesMaterialized { .. }
         | TraceEvent::MemoryBoundaryEvaluated { .. }

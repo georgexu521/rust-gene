@@ -48,17 +48,50 @@ Already implemented:
 - `/skill-proposals` review/apply/rollback surfaces;
 - memory eval suite and memory lifecycle observability.
 
-Current weakness:
+First batch changes:
 
-- eval binding exists, but the first self-evolution loop is not yet a hard
-  product path;
-- `apply` mostly records state instead of changing an explicit guidance artifact;
-- no clear applied-guidance registry exists for active runtime behavior;
-- no before/after measurement ties a proposal to later live-eval improvements;
-- `/improvements` does not yet tell the user enough about effect size,
-  regression risk, and rollback confidence;
-- skill evolution has richer fitness concepts than improvement evolution, but
-  the two paths are not unified.
+- first implementation batch now makes eval binding a hard apply gate;
+- `apply` writes an explicit applied-guidance artifact instead of only changing
+  proposal state;
+- active guidance has a local registry, runtime injection surface, and trace
+  event;
+- effect records can now attach positive/neutral/negative outcomes to applied
+  proposals and recommend rollback after repeated regressions;
+- `/improvements` now exposes active guidance, effect summaries, manual effect
+  recording, deactivation, and doctor output;
+- `/evolution status` now summarizes improvement and skill evolution in one
+  lifecycle panel.
+
+Remaining weakness:
+
+- eval command metadata is still lightweight (`run_id` plus formatted evalset
+  result), not a full persisted eval artifact bundle;
+- effect tracking is manual/command-driven first; automatic live-eval import is
+  still a follow-up;
+- skill evolution and improvement evolution share lifecycle concepts in UX, but
+  their storage models are still separate.
+
+## Implementation Status: 2026-05-28
+
+Implemented in the first self-evolution eval-loop batch:
+
+- `AppliedGuidanceStore` backed by local JSONL next to `improvements.jsonl`;
+- `AppliedGuidanceRecord`, `GuidanceScope`, `GuidanceActivation`, and
+  `AppliedGuidanceStatus`;
+- `ImprovementEffectStore`, `ImprovementEffectRecord`, and effect summaries;
+- apply gate requiring both passed eval and at least one bound evalset;
+- apply/rollback integration that activates and deactivates guidance records;
+- bounded `<self-evolution-guidance>` runtime context for matching active
+  guidance;
+- trace event `self_evolution.guidance` with record count, character count, and
+  provenance;
+- `/improvements active|doctor|effect|record-effect|deactivate`;
+- `/improvements show` includes applied guidance and effect state;
+- `/evolution status` includes active guidance, missing evalset blockers,
+  failed evals, rollback recommendations, and skill proposal status;
+- tests for evalset gating, active guidance rendering, duplicate apply
+  idempotency, corrupted registry input, rollback deactivation, effect
+  rollback recommendation, and slash-panel formatting.
 
 ## Design Principles
 
@@ -240,6 +273,8 @@ Definition of Done:
 - active guidance records are visible to doctor/status;
 - tests cover apply, duplicate apply, rollback, and corrupted registry input.
 
+Status: completed in the first implementation batch.
+
 ### Milestone B: Real Eval Binding
 
 Deliverables:
@@ -257,6 +292,10 @@ Definition of Done:
 - failed bound eval blocks apply;
 - eval failure owner appears in review output.
 
+Status: mostly completed. Apply now requires a bound evalset and a passed eval;
+missing or failing evalsets block apply and expose failure owner. Full persisted
+eval artifact bundles remain a follow-up.
+
 ### Milestone C: Tool-guidance Activation
 
 Deliverables:
@@ -271,6 +310,11 @@ Definition of Done:
 - matching tool guidance appears in runtime trace;
 - guidance has a strict char/token budget;
 - guidance cannot override permissions, validation gates, or tool schemas.
+
+Status: completed for the conservative first slice. Tool/workflow guidance is
+bounded, matching-only, trace-visible, and explicitly marked as unable to
+override user intent, permissions, validation gates, tool schemas, or safety
+policy.
 
 ### Milestone D: Effect Tracking
 
@@ -289,6 +333,9 @@ Definition of Done:
 - repeated regression marks proposal as rollback recommended;
 - doctor shows rollback-recommended improvements.
 
+Status: completed for manual/local effect records. Automatic import from
+live-eval summaries remains a follow-up.
+
 ### Milestone E: Skill Evolution Alignment
 
 Deliverables:
@@ -303,6 +350,10 @@ Definition of Done:
 - skill apply requires quality and promotion gate;
 - improvement apply requires eval and guidance gate;
 - rollback UX is consistent across both.
+
+Status: partially completed. `/evolution status` now gives a shared lifecycle
+panel for improvements and skill proposals. Storage and deeper fitness model
+unification remain future work.
 
 ## Evalsets To Reuse First
 
@@ -391,6 +442,29 @@ cargo test -q skill_evolution
 cargo test -q learning
 cargo clippy --all-features -- -D warnings
 ```
+
+Batch status: implemented. Current validation for the batch:
+
+```bash
+cargo fmt --check
+cargo check -q
+cargo test -q improvement
+cargo test -q learning
+```
+
+Additional validation completed:
+
+```bash
+cargo test -q skill_evolution
+cargo check --features experimental-api-server -q
+cargo clippy --all-features -- -D warnings
+git diff --check
+```
+
+Full `cargo test -q` reached 2067/2069 passing; the two failures were
+`run_tests_tool` tests that passed when rerun individually and as a filtered
+module (`cargo test -q run_tests_tool`), so the remaining issue appears to be
+full-suite test isolation/flakiness outside this self-evolution batch.
 
 ## Success Criteria
 

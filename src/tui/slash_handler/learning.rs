@@ -734,7 +734,31 @@ fn is_evolution_learning_event(event: &crate::session_store::LearningEventRecord
 }
 
 fn format_evolution_status_panel(app: &mut TuiApp) -> String {
-    let improvements = crate::engine::improvement::ImprovementStore::default().list();
+    let improvement_store = crate::engine::improvement::ImprovementStore::default();
+    let improvements = improvement_store.list();
+    let active_guidance = improvement_store.applied_guidance_store().active();
+    let blocked_missing_evalsets = improvements
+        .iter()
+        .filter(|proposal| {
+            proposal.status == crate::engine::improvement::ProposalStatus::Accepted
+                && proposal.evalset_bindings.is_empty()
+        })
+        .count();
+    let failed_eval = improvements
+        .iter()
+        .filter(|proposal| {
+            proposal.eval_status == crate::engine::improvement::ProposalEvalStatus::Failed
+        })
+        .count();
+    let rollback_recommended = improvements
+        .iter()
+        .filter(|proposal| {
+            improvement_store
+                .effect_store()
+                .summary(&proposal.id)
+                .rollback_recommended
+        })
+        .count();
     let skill_store = crate::engine::skill_evolution::SkillProposalStore::default();
     let skill_proposals = skill_store.list();
     let backups = disabled_skill_backups(&user_skill_root(), None);
@@ -766,10 +790,14 @@ fn format_evolution_status_panel(app: &mut TuiApp) -> String {
             memory_write_policy
         ),
         format!(
-            "Improvements: total={} status={} eval={}",
+            "Improvements: total={} status={} eval={} active_guidance={} blocked_missing_evalsets={} failed_eval={} rollback_recommended={}",
             improvements.len(),
             format_counts(&improvement_status),
-            format_counts(&improvement_eval)
+            format_counts(&improvement_eval),
+            active_guidance.len(),
+            blocked_missing_evalsets,
+            failed_eval,
+            rollback_recommended
         ),
         format!(
             "Skills: total={} status={} trust={} rollback_backups={}",
@@ -781,7 +809,7 @@ fn format_evolution_status_panel(app: &mut TuiApp) -> String {
         format!("Audit events: {}", audit_events),
         "".to_string(),
         "Commands:".to_string(),
-        "- /improvements scan | eval <id> | accept <id> | apply <id> | rollback <id>".to_string(),
+        "- /improvements scan | bind-eval <id> <evalset> | eval <id> | accept <id> | apply <id> | active | effect <id> | rollback <id>".to_string(),
         "- /skill-proposals scan | eval <id> | accept <id> | apply <id> | rollback <name> --yes"
             .to_string(),
         "- memory_load {\"action\":\"doctor_json\"}".to_string(),
@@ -1533,7 +1561,9 @@ fn memory_proposal_review_readiness(
 
 /// /improvements - Controlled self-evolution proposals
 pub fn handle_improvements(app: &mut TuiApp, args: &str) -> String {
-    use crate::engine::improvement::{ImprovementStore, ProposalEvalStatus, ProposalStatus};
+    use crate::engine::improvement::{
+        ImprovementEffectOutcome, ImprovementStore, ProposalEvalStatus, ProposalStatus,
+    };
 
     let mut parts = args.split_whitespace();
     let action = parts.next().unwrap_or("list");
@@ -1579,13 +1609,76 @@ pub fn handle_improvements(app: &mut TuiApp, args: &str) -> String {
                 lines.join("\n")
             }
         }
+        "active" => format_applied_guidance_list(&store.applied_guidance_store().active()),
+        "doctor" => format_improvement_doctor(&store),
         "show" => {
             let Some(id) = parts.next() else {
                 return "Usage: /improvements show <id>".to_string();
             };
             match store.get(id) {
-                Some(proposal) => format_improvement_detail(&proposal),
+                Some(proposal) => format_improvement_detail_with_state(&proposal, &store),
                 None => format!("No improvement proposal matching '{}'.", id),
+            }
+        }
+        "effect" => {
+            let Some(id) = parts.next() else {
+                return "Usage: /improvements effect <id>".to_string();
+            };
+            let Some(proposal) = store.get(id) else {
+                return format!("No improvement proposal matching '{}'.", id);
+            };
+            format_improvement_effect_summary(&store.effect_store().summary(&proposal.id))
+        }
+        "record-effect" => {
+            let Some(id) = parts.next() else {
+                return "Usage: /improvements record-effect <id> <positive|neutral|negative> <evalset> [reason]".to_string();
+            };
+            let Some(outcome) = parts.next().and_then(parse_improvement_effect_outcome) else {
+                return "Usage: /improvements record-effect <id> <positive|neutral|negative> <evalset> [reason]".to_string();
+            };
+            let Some(evalset) = parts.next() else {
+                return "Usage: /improvements record-effect <id> <positive|neutral|negative> <evalset> [reason]".to_string();
+            };
+            let Some(proposal) = store.get(id) else {
+                return format!("No improvement proposal matching '{}'.", id);
+            };
+            let reason = parts.collect::<Vec<_>>().join(" ");
+            let reason = if reason.trim().is_empty() {
+                "manual effect record".to_string()
+            } else {
+                reason
+            };
+            match store.effect_store().record(
+                proposal.id.clone(),
+                evalset,
+                format!("manual-{}", chrono::Utc::now().timestamp()),
+                outcome,
+                if outcome == ImprovementEffectOutcome::Negative {
+                    "framework"
+                } else {
+                    "none"
+                },
+                reason,
+            ) {
+                Ok(record) => format!(
+                    "Recorded improvement effect {}\n{}",
+                    record.id,
+                    format_improvement_effect_summary(&store.effect_store().summary(&proposal.id))
+                ),
+                Err(e) => format!("Failed to record improvement effect: {}", e),
+            }
+        }
+        "deactivate" => {
+            let Some(id) = parts.next() else {
+                return "Usage: /improvements deactivate <id>".to_string();
+            };
+            match store.applied_guidance_store().deactivate(id) {
+                Ok(Some(record)) => format!(
+                    "Deactivated applied guidance {}\nproposal={} status={:?}",
+                    record.id, record.proposal_id, record.status
+                ),
+                Ok(None) => format!("No applied guidance matching '{}'.", id),
+                Err(e) => format!("Failed to deactivate applied guidance: {}", e),
             }
         }
         "bind-eval" => {
@@ -1657,6 +1750,12 @@ pub fn handle_improvements(app: &mut TuiApp, args: &str) -> String {
                     current.id, current.status
                 );
             }
+            if desired == ProposalStatus::Applied && current.evalset_bindings.is_empty() {
+                return format!(
+                    "Proposal {} has no bound evalset. Run /improvements bind-eval {} <evalset> before eval/apply.",
+                    current.id, current.id
+                );
+            }
             if desired == ProposalStatus::Applied
                 && current.eval_status != ProposalEvalStatus::Passed
             {
@@ -1699,7 +1798,7 @@ pub fn handle_improvements(app: &mut TuiApp, args: &str) -> String {
             }
         }
         _ => {
-            "Usage: /improvements [list|scan [limit]|show <id>|bind-eval <id> <evalset>|eval <id>|accept <id>|reject <id>|apply <id>|rollback <id>]"
+            "Usage: /improvements [list|scan [limit]|active|doctor|show <id>|bind-eval <id> <evalset>|eval <id>|accept <id>|reject <id>|apply <id>|rollback <id>|effect <id>|record-effect <id> <positive|neutral|negative> <evalset> [reason]|deactivate <id>]"
                 .to_string()
         }
     }
@@ -1760,6 +1859,152 @@ fn format_improvement_detail(proposal: &crate::engine::improvement::ImprovementP
     )
 }
 
+fn format_improvement_detail_with_state(
+    proposal: &crate::engine::improvement::ImprovementProposal,
+    store: &crate::engine::improvement::ImprovementStore,
+) -> String {
+    let mut detail = format_improvement_detail(proposal);
+    let guidance = store.applied_guidance_store().get(&proposal.id);
+    let effect = store.effect_store().summary(&proposal.id);
+    detail.push_str("\n\nApplied guidance:\n");
+    match guidance {
+        Some(record) => detail.push_str(&format!(
+            "- {} status={:?} activation={:?} scope={}:{} rollback={}",
+            record.id,
+            record.status,
+            record.activation,
+            record.scope.kind,
+            record.scope.label,
+            record.rollback_ref.as_deref().unwrap_or("none")
+        )),
+        None => detail.push_str("- none"),
+    }
+    detail.push_str("\n\nEffect summary:\n");
+    detail.push_str(&format_improvement_effect_summary(&effect));
+    detail
+}
+
+fn format_applied_guidance_list(
+    records: &[crate::engine::improvement::AppliedGuidanceRecord],
+) -> String {
+    if records.is_empty() {
+        return "Active Applied Guidance\n- none".to_string();
+    }
+    let mut lines = vec![format!("Active Applied Guidance ({} total)", records.len())];
+    for record in records.iter().take(20) {
+        lines.push(format!(
+            "- {} proposal={} target={:?} activation={:?} scope={}:{} evalsets={} updated={}",
+            record.id,
+            record.proposal_id,
+            record.target,
+            record.activation,
+            record.scope.kind,
+            record.scope.label,
+            if record.evalsets.is_empty() {
+                "none".to_string()
+            } else {
+                record.evalsets.join(",")
+            },
+            record.updated_at
+        ));
+        lines.push(format!(
+            "  {}",
+            record
+                .content
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ")
+                .chars()
+                .take(220)
+                .collect::<String>()
+        ));
+    }
+    lines.join("\n")
+}
+
+fn format_improvement_effect_summary(
+    summary: &crate::engine::improvement::ImprovementEffectSummary,
+) -> String {
+    let mut lines = vec![format!(
+        "Improvement Effect {}\n- total={} positive={} neutral={} negative={} rollback_recommended={}",
+        summary.proposal_id,
+        summary.total,
+        summary.positive,
+        summary.neutral,
+        summary.negative,
+        summary.rollback_recommended
+    )];
+    for record in &summary.recent {
+        lines.push(format!(
+            "- {} {:?} evalset={} run={} owner={} reason={}",
+            record.created_at,
+            record.outcome,
+            record.evalset,
+            record.run_id,
+            record.failure_owner,
+            record.reason
+        ));
+    }
+    lines.join("\n")
+}
+
+fn parse_improvement_effect_outcome(
+    value: &str,
+) -> Option<crate::engine::improvement::ImprovementEffectOutcome> {
+    match value.to_ascii_lowercase().as_str() {
+        "positive" | "pass" | "passed" | "improved" => {
+            Some(crate::engine::improvement::ImprovementEffectOutcome::Positive)
+        }
+        "neutral" | "same" => Some(crate::engine::improvement::ImprovementEffectOutcome::Neutral),
+        "negative" | "fail" | "failed" | "regressed" => {
+            Some(crate::engine::improvement::ImprovementEffectOutcome::Negative)
+        }
+        _ => None,
+    }
+}
+
+fn format_improvement_doctor(store: &crate::engine::improvement::ImprovementStore) -> String {
+    let proposals = store.list();
+    let active = store.applied_guidance_store().active();
+    let missing_evalsets = proposals
+        .iter()
+        .filter(|proposal| {
+            proposal.status == crate::engine::improvement::ProposalStatus::Accepted
+                && proposal.evalset_bindings.is_empty()
+        })
+        .count();
+    let failed_eval = proposals
+        .iter()
+        .filter(|proposal| {
+            proposal.eval_status == crate::engine::improvement::ProposalEvalStatus::Failed
+        })
+        .count();
+    let rollback_recommended = proposals
+        .iter()
+        .filter(|proposal| {
+            store
+                .effect_store()
+                .summary(&proposal.id)
+                .rollback_recommended
+        })
+        .count();
+    let last_eval = proposals
+        .iter()
+        .filter(|proposal| proposal.eval_summary.is_some())
+        .max_by(|left, right| left.updated_at.cmp(&right.updated_at));
+    format!(
+        "Improvement Doctor\n- proposals={}\n- active_guidance={}\n- blocked_missing_evalsets={}\n- failed_eval={}\n- rollback_recommended={}\n- last_eval={}",
+        proposals.len(),
+        active.len(),
+        missing_evalsets,
+        failed_eval,
+        rollback_recommended,
+        last_eval
+            .map(|proposal| format!("{} {:?}", proposal.id, proposal.eval_status))
+            .unwrap_or_else(|| "none".to_string())
+    )
+}
+
 struct ImprovementEvalSummary {
     passed: bool,
     summary: String,
@@ -1777,10 +2022,11 @@ fn evaluate_improvement_proposal_for_apply(
             | crate::engine::evolution_controller::EvolutionAction::Monitor
     );
     let bound_report = run_bound_improvement_evalsets(proposal);
+    let has_bound_evalset = !proposal.evalset_bindings.is_empty();
     let bound_ok = bound_report
         .as_ref()
         .map(|report| report.ok)
-        .unwrap_or(true);
+        .unwrap_or(false);
     let passed = has_validation && has_evidence && gate_allows && bound_ok;
     let mut lines = vec![format!(
         "Improvement Eval {}: {}",
@@ -1803,10 +2049,14 @@ fn evaluate_improvement_proposal_for_apply(
     if !gate_allows {
         lines.push("- evolution gate did not allow apply".to_string());
     }
+    if !has_bound_evalset {
+        lines.push("- missing bound evalset; bind at least one evalset before apply".to_string());
+        lines.push("- failure_owner=framework".to_string());
+    }
     if let Some(report) = bound_report {
         lines.push(format!(
-            "- bound_evalsets: {}/{} passed, failed={}",
-            report.passed, report.total, report.failed
+            "- bound_evalsets: {}/{} passed, failed={}, run_id={}, failure_owner={}",
+            report.passed, report.total, report.failed, report.run_id, report.failure_owner
         ));
         if !report.ok {
             lines.push(report.summary);
@@ -1833,10 +2083,13 @@ fn run_bound_improvement_evalsets(
     let mut total = 0usize;
     let mut passed = 0usize;
     let mut failed = 0usize;
+    let mut failure_owner = "none".to_string();
+    let run_id = format!("eval-{}", chrono::Utc::now().timestamp());
     for binding in &proposal.evalset_bindings {
         match crate::engine::evalset::run_evalsets_from_dir(&eval_dir, Some(binding)) {
             Ok(reports) if reports.is_empty() => {
                 ok = false;
+                failure_owner = "test_harness".to_string();
                 summaries.push(format!("- {}: no matching evalset", binding));
             }
             Ok(reports) => {
@@ -1847,10 +2100,14 @@ fn run_bound_improvement_evalsets(
                     passed += report.passed;
                     failed += report.failed;
                 }
+                if !binding_ok {
+                    failure_owner = "framework".to_string();
+                }
                 summaries.push(crate::engine::evalset::format_reports(&reports));
             }
             Err(e) => {
                 ok = false;
+                failure_owner = "test_harness".to_string();
                 summaries.push(format!("- {}: {}", binding, e));
             }
         }
@@ -1861,6 +2118,8 @@ fn run_bound_improvement_evalsets(
         total,
         passed,
         failed,
+        run_id,
+        failure_owner,
     })
 }
 
@@ -2495,6 +2754,8 @@ struct BoundSkillEvalReport {
     total: usize,
     passed: usize,
     failed: usize,
+    run_id: String,
+    failure_owner: String,
 }
 
 fn run_bound_skill_evalsets(
@@ -2509,10 +2770,13 @@ fn run_bound_skill_evalsets(
     let mut total = 0usize;
     let mut passed = 0usize;
     let mut failed = 0usize;
+    let mut failure_owner = "none".to_string();
+    let run_id = format!("eval-{}", chrono::Utc::now().timestamp());
     for binding in &proposal.evalset_bindings {
         match crate::engine::evalset::run_evalsets_from_dir(&eval_dir, Some(binding)) {
             Ok(reports) if reports.is_empty() => {
                 ok = false;
+                failure_owner = "test_harness".to_string();
                 summaries.push(format!("- {}: no matching evalset", binding));
             }
             Ok(reports) => {
@@ -2523,10 +2787,14 @@ fn run_bound_skill_evalsets(
                     passed += report.passed;
                     failed += report.failed;
                 }
+                if !binding_ok {
+                    failure_owner = "framework".to_string();
+                }
                 summaries.push(crate::engine::evalset::format_reports(&reports));
             }
             Err(e) => {
                 ok = false;
+                failure_owner = "test_harness".to_string();
                 summaries.push(format!("- {}: {}", binding, e));
             }
         }
@@ -2537,6 +2805,8 @@ fn run_bound_skill_evalsets(
         total,
         passed,
         failed,
+        run_id,
+        failure_owner,
     })
 }
 
@@ -3232,5 +3502,118 @@ mod tests {
         assert!(output.contains("- failed: 1"));
         assert!(output.contains("proposal-a, proposal-b"));
         assert!(output.contains("proposal-c: missing evidence"));
+    }
+
+    fn test_improvement_proposal() -> crate::engine::improvement::ImprovementProposal {
+        crate::engine::improvement::ImprovementProposal {
+            id: "imp_learning_test".to_string(),
+            trigger_event_ids: vec![1, 2],
+            target: crate::engine::improvement::ImprovementTarget::ToolGuidance,
+            proposed_change:
+                "Add guidance for repeated bash failures: inspect arguments before retrying."
+                    .to_string(),
+            expected_benefit: "Reduce repeated tool failures.".to_string(),
+            risk: crate::engine::intent_router::RiskLevel::Medium,
+            validation: vec!["Run tool guidance evalset.".to_string()],
+            eval_status: crate::engine::improvement::ProposalEvalStatus::Pending,
+            eval_summary: None,
+            evalset_bindings: Vec::new(),
+            status: crate::engine::improvement::ProposalStatus::Accepted,
+            evidence: vec!["learning event showed repeated bash failures".to_string()],
+            rollback_plan: "Deactivate applied guidance.".to_string(),
+            applied_ref: None,
+            rollback_ref: None,
+            created_at: "2026-05-28T00:00:00Z".to_string(),
+            updated_at: "2026-05-28T00:00:00Z".to_string(),
+        }
+    }
+
+    #[test]
+    fn improvement_eval_blocks_apply_without_bound_evalset() {
+        let proposal = test_improvement_proposal();
+
+        let eval = evaluate_improvement_proposal_for_apply(&proposal);
+
+        assert!(!eval.passed);
+        assert!(eval.summary.contains("missing bound evalset"));
+        assert!(eval.summary.contains("failure_owner=framework"));
+    }
+
+    #[test]
+    fn improvement_detail_shows_applied_guidance_and_effect_summary() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = crate::engine::improvement::ImprovementStore::new(
+            dir.path().join("improvements.jsonl"),
+        );
+        let mut proposal = test_improvement_proposal();
+        proposal.evalset_bindings = vec!["tool-guidance-smoke".to_string()];
+        proposal.eval_status = crate::engine::improvement::ProposalEvalStatus::Passed;
+        proposal.eval_summary = Some("eval passed".to_string());
+        store.upsert(&proposal).unwrap();
+        store
+            .update_status(
+                &proposal.id,
+                crate::engine::improvement::ProposalStatus::Applied,
+            )
+            .unwrap();
+        store
+            .effect_store()
+            .record(
+                &proposal.id,
+                "tool-guidance-smoke",
+                "run-1",
+                crate::engine::improvement::ImprovementEffectOutcome::Positive,
+                "none",
+                "reduced repeated tool failures",
+            )
+            .unwrap();
+        let applied = store.get(&proposal.id).unwrap();
+
+        let detail = format_improvement_detail_with_state(&applied, &store);
+
+        assert!(detail.contains("Applied guidance:"));
+        assert!(detail.contains("status=Active"));
+        assert!(detail.contains("Effect summary:"));
+        assert!(detail.contains("positive=1"));
+    }
+
+    #[test]
+    fn applied_guidance_panel_and_effect_panel_show_operational_state() {
+        let mut proposal = test_improvement_proposal();
+        proposal.evalset_bindings = vec!["tool-guidance-smoke".to_string()];
+        proposal.eval_status = crate::engine::improvement::ProposalEvalStatus::Passed;
+        let guidance = crate::engine::improvement::AppliedGuidanceRecord::from_proposal(
+            &proposal,
+            "2026-05-28T00:00:00Z".to_string(),
+        );
+        let list = format_applied_guidance_list(&[guidance]);
+
+        assert!(list.contains("Active Applied Guidance (1 total)"));
+        assert!(list.contains("activation=ToolContractHint"));
+        assert!(list.contains("evalsets=tool-guidance-smoke"));
+
+        let summary = crate::engine::improvement::ImprovementEffectSummary {
+            proposal_id: proposal.id.clone(),
+            total: 1,
+            positive: 0,
+            neutral: 0,
+            negative: 1,
+            rollback_recommended: false,
+            recent: vec![crate::engine::improvement::ImprovementEffectRecord {
+                id: "effect-1".to_string(),
+                proposal_id: proposal.id,
+                evalset: "tool-guidance-smoke".to_string(),
+                run_id: "run-1".to_string(),
+                outcome: crate::engine::improvement::ImprovementEffectOutcome::Negative,
+                failure_owner: "framework".to_string(),
+                reason: "regressed validation".to_string(),
+                created_at: "2026-05-28T00:01:00Z".to_string(),
+            }],
+        };
+        let effect = format_improvement_effect_summary(&summary);
+
+        assert!(effect.contains("negative=1"));
+        assert!(effect.contains("owner=framework"));
+        assert!(effect.contains("regressed validation"));
     }
 }

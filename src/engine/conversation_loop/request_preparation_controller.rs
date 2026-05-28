@@ -77,6 +77,7 @@ impl RequestPreparationController {
         Self::inject_task_state_zone(&mut request_messages, agent_task_state);
         Self::inject_task_contract_zone(&mut request_messages, task_contract, context_pack);
         Self::inject_mva_candidate_action_hint(&mut request_messages);
+        Self::inject_self_evolution_guidance_zone(&mut request_messages, trace);
         Self::inject_focused_repair_zone(&mut request_messages, focused_repair_prompt);
         Self::inject_context_ledger_hint(&mut request_messages, session_store, session_id);
 
@@ -184,6 +185,43 @@ impl RequestPreparationController {
             .rposition(|message| matches!(message, Message::User { .. }))
             .unwrap_or(request_messages.len());
         request_messages.insert(insert_pos, Message::system(hint));
+    }
+
+    fn inject_self_evolution_guidance_zone(
+        request_messages: &mut Vec<Message>,
+        trace: &TraceCollector,
+    ) {
+        if request_messages.iter().any(
+            |message| matches!(message, Message::System { content } if content.contains("<self-evolution-guidance>")),
+        ) {
+            return;
+        }
+        let Some(last_user_idx) = request_messages
+            .iter()
+            .rposition(|message| matches!(message, Message::User { .. }))
+        else {
+            return;
+        };
+        let Message::User { content } = &request_messages[last_user_idx] else {
+            return;
+        };
+        let Some(block) = crate::engine::improvement::format_active_guidance_for_prompt(content)
+        else {
+            return;
+        };
+        let records = block.matches("id=guidance_").count();
+        let chars = block.chars().count();
+        trace.record(TraceEvent::SelfEvolutionGuidanceInjected {
+            records,
+            chars,
+            provenance: block
+                .lines()
+                .filter(|line| line.trim_start().starts_with("- id="))
+                .take(4)
+                .map(|line| line.trim().to_string())
+                .collect(),
+        });
+        request_messages.insert(last_user_idx, Message::system(block));
     }
 
     fn inject_focused_repair_zone(

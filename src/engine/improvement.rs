@@ -10,6 +10,8 @@ use std::collections::HashMap;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
+const ACTIVE_GUIDANCE_PROMPT_CHAR_LIMIT: usize = 900;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ImprovementTarget {
@@ -70,6 +72,86 @@ pub struct ImprovementStore {
     path: PathBuf,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct GuidanceScope {
+    pub kind: String,
+    pub label: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GuidanceActivation {
+    DiagnosticOnly,
+    PromptContext,
+    ToolContractHint,
+    RoutePolicyHint,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AppliedGuidanceStatus {
+    Active,
+    Inactive,
+    RollbackRecommended,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AppliedGuidanceRecord {
+    pub id: String,
+    pub proposal_id: String,
+    pub target: ImprovementTarget,
+    pub scope: GuidanceScope,
+    pub content: String,
+    pub activation: GuidanceActivation,
+    pub evalsets: Vec<String>,
+    pub applied_at: String,
+    pub rollback_ref: Option<String>,
+    pub status: AppliedGuidanceStatus,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ImprovementEffectOutcome {
+    Positive,
+    Neutral,
+    Negative,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ImprovementEffectRecord {
+    pub id: String,
+    pub proposal_id: String,
+    pub evalset: String,
+    pub run_id: String,
+    pub outcome: ImprovementEffectOutcome,
+    pub failure_owner: String,
+    pub reason: String,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ImprovementEffectSummary {
+    pub proposal_id: String,
+    pub total: usize,
+    pub positive: usize,
+    pub neutral: usize,
+    pub negative: usize,
+    pub rollback_recommended: bool,
+    pub recent: Vec<ImprovementEffectRecord>,
+}
+
+#[derive(Debug, Clone)]
+pub struct AppliedGuidanceStore {
+    path: PathBuf,
+}
+
+#[derive(Debug, Clone)]
+pub struct ImprovementEffectStore {
+    path: PathBuf,
+}
+
 impl ImprovementStore {
     pub fn default_path() -> PathBuf {
         dirs::home_dir()
@@ -80,6 +162,24 @@ impl ImprovementStore {
 
     pub fn new(path: PathBuf) -> Self {
         Self { path }
+    }
+
+    pub fn applied_guidance_store(&self) -> AppliedGuidanceStore {
+        let path = self
+            .path
+            .parent()
+            .map(|parent| parent.join("applied_guidance.jsonl"))
+            .unwrap_or_else(AppliedGuidanceStore::default_path);
+        AppliedGuidanceStore::new(path)
+    }
+
+    pub fn effect_store(&self) -> ImprovementEffectStore {
+        let path = self
+            .path
+            .parent()
+            .map(|parent| parent.join("improvement_effects.jsonl"))
+            .unwrap_or_else(ImprovementEffectStore::default_path);
+        ImprovementEffectStore::new(path)
     }
 
     pub fn list(&self) -> Vec<ImprovementProposal> {
@@ -110,15 +210,26 @@ impl ImprovementStore {
                 proposal.id
             ));
         }
+        if status == ProposalStatus::Applied && proposal.evalset_bindings.is_empty() {
+            return Err(anyhow::anyhow!(
+                "proposal must have at least one bound evalset before apply; run /improvements bind-eval {} <evalset>",
+                proposal.id
+            ));
+        }
         proposal.status = status;
         match status {
             ProposalStatus::Applied => {
-                proposal.applied_ref = Some(format!("manual:/improvements apply {}", proposal.id));
+                let guidance = self.applied_guidance_store().apply_proposal(&proposal)?;
+                proposal.applied_ref = Some(format!("guidance:{}", guidance.id));
                 proposal.rollback_ref = None;
             }
             ProposalStatus::RolledBack => {
-                proposal.rollback_ref =
-                    Some(format!("manual:/improvements rollback {}", proposal.id));
+                let rollback = self
+                    .applied_guidance_store()
+                    .rollback_proposal(&proposal.id)?;
+                proposal.rollback_ref = rollback
+                    .map(|record| format!("guidance:{}", record.id))
+                    .or_else(|| Some(format!("manual:/improvements rollback {}", proposal.id)));
             }
             ProposalStatus::Proposed | ProposalStatus::Accepted | ProposalStatus::Rejected => {}
         }
@@ -189,6 +300,232 @@ impl Default for ImprovementStore {
     fn default() -> Self {
         Self::new(Self::default_path())
     }
+}
+
+impl AppliedGuidanceStore {
+    pub fn default_path() -> PathBuf {
+        dirs::home_dir()
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join(".priority-agent")
+            .join("applied_guidance.jsonl")
+    }
+
+    pub fn new(path: PathBuf) -> Self {
+        Self { path }
+    }
+
+    pub fn list(&self) -> Vec<AppliedGuidanceRecord> {
+        read_latest_guidance_records(&self.path)
+    }
+
+    pub fn active(&self) -> Vec<AppliedGuidanceRecord> {
+        self.list()
+            .into_iter()
+            .filter(|record| record.status == AppliedGuidanceStatus::Active)
+            .collect()
+    }
+
+    pub fn get(&self, id_or_proposal: &str) -> Option<AppliedGuidanceRecord> {
+        self.list().into_iter().find(|record| {
+            record.id == id_or_proposal
+                || record.id.starts_with(id_or_proposal)
+                || record.proposal_id == id_or_proposal
+                || record.proposal_id.starts_with(id_or_proposal)
+        })
+    }
+
+    pub fn apply_proposal(
+        &self,
+        proposal: &ImprovementProposal,
+    ) -> anyhow::Result<AppliedGuidanceRecord> {
+        if proposal.eval_status != ProposalEvalStatus::Passed {
+            anyhow::bail!("proposal must pass eval before applied guidance can be created");
+        }
+        if proposal.evalset_bindings.is_empty() {
+            anyhow::bail!("proposal must have at least one evalset before applied guidance");
+        }
+        let now = chrono::Utc::now().to_rfc3339();
+        let mut record = self
+            .get(&proposal.id)
+            .unwrap_or_else(|| AppliedGuidanceRecord::from_proposal(proposal, now.clone()));
+        record.status = AppliedGuidanceStatus::Active;
+        record.content = proposal.proposed_change.clone();
+        record.evalsets = proposal.evalset_bindings.clone();
+        record.updated_at = now;
+        append_guidance_jsonl(&self.path, &record)?;
+        Ok(record)
+    }
+
+    pub fn rollback_proposal(
+        &self,
+        id_or_proposal: &str,
+    ) -> anyhow::Result<Option<AppliedGuidanceRecord>> {
+        let Some(mut record) = self.get(id_or_proposal) else {
+            return Ok(None);
+        };
+        let now = chrono::Utc::now().to_rfc3339();
+        record.status = AppliedGuidanceStatus::Inactive;
+        record.rollback_ref = Some(format!(
+            "manual:/improvements rollback {}",
+            record.proposal_id
+        ));
+        record.updated_at = now;
+        append_guidance_jsonl(&self.path, &record)?;
+        Ok(Some(record))
+    }
+
+    pub fn deactivate(
+        &self,
+        id_or_proposal: &str,
+    ) -> anyhow::Result<Option<AppliedGuidanceRecord>> {
+        self.rollback_proposal(id_or_proposal)
+    }
+}
+
+impl Default for AppliedGuidanceStore {
+    fn default() -> Self {
+        Self::new(Self::default_path())
+    }
+}
+
+impl ImprovementEffectStore {
+    pub fn default_path() -> PathBuf {
+        dirs::home_dir()
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join(".priority-agent")
+            .join("improvement_effects.jsonl")
+    }
+
+    pub fn new(path: PathBuf) -> Self {
+        Self { path }
+    }
+
+    pub fn list(&self) -> Vec<ImprovementEffectRecord> {
+        read_effect_records(&self.path)
+    }
+
+    pub fn record(
+        &self,
+        proposal_id: impl Into<String>,
+        evalset: impl Into<String>,
+        run_id: impl Into<String>,
+        outcome: ImprovementEffectOutcome,
+        failure_owner: impl Into<String>,
+        reason: impl Into<String>,
+    ) -> anyhow::Result<ImprovementEffectRecord> {
+        let record = ImprovementEffectRecord {
+            id: format!("eff_{}", uuid::Uuid::new_v4().simple()),
+            proposal_id: proposal_id.into(),
+            evalset: evalset.into(),
+            run_id: run_id.into(),
+            outcome,
+            failure_owner: failure_owner.into(),
+            reason: reason.into(),
+            created_at: chrono::Utc::now().to_rfc3339(),
+        };
+        append_effect_jsonl(&self.path, &record)?;
+        Ok(record)
+    }
+
+    pub fn summary(&self, proposal_id: &str) -> ImprovementEffectSummary {
+        let mut matching = self
+            .list()
+            .into_iter()
+            .filter(|record| record.proposal_id == proposal_id)
+            .collect::<Vec<_>>();
+        matching.sort_by(|left, right| right.created_at.cmp(&left.created_at));
+        let positive = matching
+            .iter()
+            .filter(|record| record.outcome == ImprovementEffectOutcome::Positive)
+            .count();
+        let neutral = matching
+            .iter()
+            .filter(|record| record.outcome == ImprovementEffectOutcome::Neutral)
+            .count();
+        let negative = matching
+            .iter()
+            .filter(|record| record.outcome == ImprovementEffectOutcome::Negative)
+            .count();
+        ImprovementEffectSummary {
+            proposal_id: proposal_id.to_string(),
+            total: matching.len(),
+            positive,
+            neutral,
+            negative,
+            rollback_recommended: negative >= 2 && negative > positive,
+            recent: matching.into_iter().take(8).collect(),
+        }
+    }
+}
+
+impl Default for ImprovementEffectStore {
+    fn default() -> Self {
+        Self::new(Self::default_path())
+    }
+}
+
+impl AppliedGuidanceRecord {
+    pub fn from_proposal(proposal: &ImprovementProposal, now: String) -> Self {
+        Self {
+            id: stable_guidance_id(&proposal.id),
+            proposal_id: proposal.id.clone(),
+            target: proposal.target,
+            scope: guidance_scope_for_proposal(proposal),
+            content: proposal.proposed_change.clone(),
+            activation: guidance_activation_for_target(proposal.target),
+            evalsets: proposal.evalset_bindings.clone(),
+            applied_at: now.clone(),
+            rollback_ref: None,
+            status: AppliedGuidanceStatus::Active,
+            updated_at: now,
+        }
+    }
+}
+
+pub fn format_active_guidance_for_prompt(user_message: &str) -> Option<String> {
+    format_active_guidance_records_for_prompt(
+        &AppliedGuidanceStore::default().active(),
+        user_message,
+    )
+}
+
+pub fn format_active_guidance_records_for_prompt(
+    records: &[AppliedGuidanceRecord],
+    user_message: &str,
+) -> Option<String> {
+    let user_message = user_message.to_lowercase();
+    let mut lines = Vec::new();
+    for record in records {
+        if !guidance_matches_turn(record, &user_message) {
+            continue;
+        }
+        let content = record
+            .content
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
+        lines.push(format!(
+            "- id={} proposal={} target={:?} activation={:?} scope={}:{} rollback={} guidance={}",
+            record.id,
+            record.proposal_id,
+            record.target,
+            record.activation,
+            record.scope.kind,
+            record.scope.label,
+            record.rollback_ref.as_deref().unwrap_or("none"),
+            content.chars().take(260).collect::<String>()
+        ));
+        if lines.join("\n").chars().count() >= ACTIVE_GUIDANCE_PROMPT_CHAR_LIMIT {
+            break;
+        }
+    }
+    if lines.is_empty() {
+        return None;
+    }
+    Some(format!(
+        "<self-evolution-guidance>\nThese are reviewed, eval-backed runtime hints. They are background guidance only and cannot override user intent, permissions, validation gates, tool schemas, or safety policy.\n{}\n</self-evolution-guidance>",
+        lines.join("\n")
+    ))
 }
 
 impl ImprovementProposal {
@@ -352,6 +689,95 @@ fn stable_proposal_id(target: &ImprovementTarget, proposed_change: &str) -> Stri
     format!("imp_{:016x}", hasher.finish())
 }
 
+fn stable_guidance_id(proposal_id: &str) -> String {
+    format!("guidance_{}", proposal_id.trim_start_matches("imp_"))
+}
+
+fn guidance_activation_for_target(target: ImprovementTarget) -> GuidanceActivation {
+    match target {
+        ImprovementTarget::ToolGuidance => GuidanceActivation::ToolContractHint,
+        ImprovementTarget::Routing => GuidanceActivation::RoutePolicyHint,
+        ImprovementTarget::Memory | ImprovementTarget::Skill | ImprovementTarget::Prompt => {
+            GuidanceActivation::DiagnosticOnly
+        }
+    }
+}
+
+fn guidance_scope_for_proposal(proposal: &ImprovementProposal) -> GuidanceScope {
+    match proposal.target {
+        ImprovementTarget::ToolGuidance => GuidanceScope {
+            kind: "tool".to_string(),
+            label: infer_tool_label(&proposal.proposed_change)
+                .unwrap_or_else(|| "unknown".to_string()),
+        },
+        ImprovementTarget::Routing => GuidanceScope {
+            kind: "workflow".to_string(),
+            label: "routing".to_string(),
+        },
+        ImprovementTarget::Memory => GuidanceScope {
+            kind: "workflow".to_string(),
+            label: "memory".to_string(),
+        },
+        ImprovementTarget::Skill => GuidanceScope {
+            kind: "workflow".to_string(),
+            label: "skill".to_string(),
+        },
+        ImprovementTarget::Prompt => GuidanceScope {
+            kind: "global_runtime".to_string(),
+            label: "prompt".to_string(),
+        },
+    }
+}
+
+fn infer_tool_label(content: &str) -> Option<String> {
+    let lower = content.to_lowercase();
+    for tool in [
+        "bash",
+        "file_read",
+        "file_edit",
+        "file_write",
+        "file_patch",
+        "grep",
+        "glob",
+        "memory",
+        "web",
+    ] {
+        if lower.contains(tool) {
+            return Some(tool.to_string());
+        }
+    }
+    None
+}
+
+fn guidance_matches_turn(record: &AppliedGuidanceRecord, user_message: &str) -> bool {
+    if record.status != AppliedGuidanceStatus::Active {
+        return false;
+    }
+    match record.activation {
+        GuidanceActivation::DiagnosticOnly => false,
+        GuidanceActivation::PromptContext => true,
+        GuidanceActivation::RoutePolicyHint => {
+            user_message.contains("code")
+                || user_message.contains("test")
+                || user_message.contains("fix")
+                || user_message.contains("debug")
+                || user_message.contains("实现")
+                || user_message.contains("测试")
+                || user_message.contains("修")
+        }
+        GuidanceActivation::ToolContractHint => {
+            let label = record.scope.label.to_lowercase();
+            label != "unknown"
+                && (user_message.contains(&label)
+                    || user_message.contains("tool")
+                    || user_message.contains("工具")
+                    || user_message.contains("run")
+                    || user_message.contains("command")
+                    || user_message.contains("测试"))
+        }
+    }
+}
+
 fn read_latest_proposals(path: &Path) -> Vec<ImprovementProposal> {
     let content = std::fs::read_to_string(path).unwrap_or_default();
     let mut latest = HashMap::new();
@@ -383,6 +809,73 @@ fn append_jsonl(path: &Path, proposal: &ImprovementProposal) -> anyhow::Result<(
         .append(true)
         .open(path)?;
     writeln!(file, "{}", serde_json::to_string(proposal)?)?;
+    Ok(())
+}
+
+fn read_latest_guidance_records(path: &Path) -> Vec<AppliedGuidanceRecord> {
+    let content = std::fs::read_to_string(path).unwrap_or_default();
+    let mut latest = HashMap::new();
+    for line in content
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+    {
+        let Ok(record) = serde_json::from_str::<AppliedGuidanceRecord>(line) else {
+            continue;
+        };
+        latest.insert(record.id.clone(), record);
+    }
+    let mut records = latest.into_values().collect::<Vec<_>>();
+    records.sort_by(|a, b| {
+        b.updated_at
+            .cmp(&a.updated_at)
+            .then_with(|| a.id.cmp(&b.id))
+    });
+    records
+}
+
+fn read_effect_records(path: &Path) -> Vec<ImprovementEffectRecord> {
+    let content = std::fs::read_to_string(path).unwrap_or_default();
+    let mut records = Vec::new();
+    for line in content
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+    {
+        let Ok(record) = serde_json::from_str::<ImprovementEffectRecord>(line) else {
+            continue;
+        };
+        records.push(record);
+    }
+    records.sort_by(|a, b| {
+        b.created_at
+            .cmp(&a.created_at)
+            .then_with(|| a.id.cmp(&b.id))
+    });
+    records
+}
+
+fn append_guidance_jsonl(path: &Path, record: &AppliedGuidanceRecord) -> anyhow::Result<()> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)?;
+    writeln!(file, "{}", serde_json::to_string(record)?)?;
+    Ok(())
+}
+
+fn append_effect_jsonl(path: &Path, record: &ImprovementEffectRecord) -> anyhow::Result<()> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)?;
+    writeln!(file, "{}", serde_json::to_string(record)?)?;
     Ok(())
 }
 
@@ -464,6 +957,69 @@ mod tests {
 
     #[test]
     fn apply_requires_passed_eval_and_records_rollback_refs() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("improvements.jsonl");
+        let store = ImprovementStore::new(path.clone());
+        std::fs::write(
+            path.parent().unwrap().join("applied_guidance.jsonl"),
+            "not-json\n",
+        )
+        .unwrap();
+        let proposal = ImprovementProposal::new(
+            vec![1],
+            ImprovementTarget::ToolGuidance,
+            "Improve repeated bash failure guidance.".to_string(),
+            "Better recovery.",
+            RiskLevel::Medium,
+            vec!["Run tool regression.".to_string()],
+            vec!["evidence".to_string()],
+        );
+        store.upsert(&proposal).unwrap();
+        assert!(store
+            .update_status(&proposal.id, ProposalStatus::Applied)
+            .is_err());
+        assert!(store
+            .bind_evalset(&proposal.id, "tool-guidance-smoke")
+            .unwrap()
+            .is_some());
+        store
+            .record_eval(&proposal.id, ProposalEvalStatus::Passed, "preflight passed")
+            .unwrap();
+        let applied = store
+            .update_status(&proposal.id, ProposalStatus::Applied)
+            .unwrap()
+            .unwrap();
+        assert_eq!(applied.status, ProposalStatus::Applied);
+        assert!(applied
+            .applied_ref
+            .as_deref()
+            .unwrap_or("")
+            .contains("guidance:"));
+        let guidance = store.applied_guidance_store().active();
+        assert_eq!(guidance.len(), 1);
+        assert_eq!(guidance[0].proposal_id, proposal.id);
+        assert_eq!(guidance[0].activation, GuidanceActivation::ToolContractHint);
+        let applied_again = store
+            .update_status(&proposal.id, ProposalStatus::Applied)
+            .unwrap()
+            .unwrap();
+        assert_eq!(applied_again.status, ProposalStatus::Applied);
+        assert_eq!(store.applied_guidance_store().active().len(), 1);
+        let rolled_back = store
+            .update_status(&proposal.id, ProposalStatus::RolledBack)
+            .unwrap()
+            .unwrap();
+        assert_eq!(rolled_back.lifecycle_stage(), "rollback");
+        assert!(rolled_back
+            .rollback_ref
+            .as_deref()
+            .unwrap_or("")
+            .contains("guidance:"));
+        assert!(store.applied_guidance_store().active().is_empty());
+    }
+
+    #[test]
+    fn apply_requires_bound_evalset_even_after_eval_passes() {
         let path = std::env::temp_dir().join(format!(
             "priority-agent-improvements-{}.jsonl",
             uuid::Uuid::new_v4()
@@ -479,32 +1035,79 @@ mod tests {
             vec!["evidence".to_string()],
         );
         store.upsert(&proposal).unwrap();
-        assert!(store
-            .update_status(&proposal.id, ProposalStatus::Applied)
-            .is_err());
         store
             .record_eval(&proposal.id, ProposalEvalStatus::Passed, "preflight passed")
             .unwrap();
-        let applied = store
+
+        let error = store
             .update_status(&proposal.id, ProposalStatus::Applied)
-            .unwrap()
+            .expect_err("apply should require evalset binding");
+
+        assert!(error.to_string().contains("bound evalset"));
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn active_guidance_prompt_is_bounded_and_matching() {
+        let mut proposal = ImprovementProposal::new(
+            vec![1, 2],
+            ImprovementTarget::ToolGuidance,
+            "Add guidance for repeated bash failures: inspect arguments before retrying."
+                .to_string(),
+            "Better recovery.",
+            RiskLevel::Medium,
+            vec!["Run tool regression.".to_string()],
+            vec!["evidence".to_string()],
+        );
+        proposal.evalset_bindings = vec!["tool-guidance-smoke".to_string()];
+        proposal.eval_status = ProposalEvalStatus::Passed;
+        let record =
+            AppliedGuidanceRecord::from_proposal(&proposal, "2026-05-28T00:00:00Z".to_string());
+
+        let prompt = format_active_guidance_records_for_prompt(
+            &[record],
+            "run bash validation command for the fix",
+        )
+        .expect("matching guidance should render");
+
+        assert!(prompt.contains("<self-evolution-guidance>"));
+        assert!(prompt.contains("cannot override"));
+        assert!(prompt.contains("bash"));
+        assert!(prompt.chars().count() < 1_200);
+    }
+
+    #[test]
+    fn effect_summary_recommends_rollback_after_regressions() {
+        let path = std::env::temp_dir().join(format!(
+            "priority-agent-effects-{}.jsonl",
+            uuid::Uuid::new_v4()
+        ));
+        let store = ImprovementEffectStore::new(path.clone());
+        store
+            .record(
+                "imp_test",
+                "tool-guidance",
+                "run-a",
+                ImprovementEffectOutcome::Negative,
+                "framework",
+                "regressed validation",
+            )
             .unwrap();
-        assert_eq!(applied.status, ProposalStatus::Applied);
-        assert!(applied
-            .applied_ref
-            .as_deref()
-            .unwrap_or("")
-            .contains("apply"));
-        let rolled_back = store
-            .update_status(&proposal.id, ProposalStatus::RolledBack)
-            .unwrap()
+        store
+            .record(
+                "imp_test",
+                "tool-guidance",
+                "run-b",
+                ImprovementEffectOutcome::Negative,
+                "framework",
+                "regressed closeout",
+            )
             .unwrap();
-        assert_eq!(rolled_back.lifecycle_stage(), "rollback");
-        assert!(rolled_back
-            .rollback_ref
-            .as_deref()
-            .unwrap_or("")
-            .contains("rollback"));
+
+        let summary = store.summary("imp_test");
+
+        assert_eq!(summary.negative, 2);
+        assert!(summary.rollback_recommended);
         let _ = std::fs::remove_file(path);
     }
 
