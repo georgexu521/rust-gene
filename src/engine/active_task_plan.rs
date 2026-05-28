@@ -12,11 +12,20 @@ pub struct ActiveTaskPlan {
     pub verification: String,
     pub closeout: String,
     pub memory_proposal: String,
+    pub project_progress: String,
     pub next_action: String,
 }
 
 impl ActiveTaskPlan {
     pub fn from_goal_and_trace(goal: Option<&SessionGoal>, trace: Option<&TurnTrace>) -> Self {
+        Self::from_goal_trace_and_project_progress(goal, trace, None)
+    }
+
+    pub fn from_goal_trace_and_project_progress(
+        goal: Option<&SessionGoal>,
+        trace: Option<&TurnTrace>,
+        project_progress: Option<String>,
+    ) -> Self {
         let objective = goal
             .map(|goal| goal.title.clone())
             .or_else(|| latest_execution_objective(trace))
@@ -27,6 +36,9 @@ impl ActiveTaskPlan {
         let closeout = latest_closeout(trace).unwrap_or_else(|| "none".to_string());
         let memory_proposal = trace
             .and_then(latest_memory_proposal_summary)
+            .unwrap_or_else(|| "none".to_string());
+        let project_progress = project_progress
+            .filter(|value| !value.trim().is_empty())
             .unwrap_or_else(|| "none".to_string());
         let next_action = if closeout == "none" {
             active_step.clone()
@@ -43,19 +55,21 @@ impl ActiveTaskPlan {
             verification,
             closeout,
             memory_proposal,
+            project_progress,
             next_action,
         }
     }
 
     pub fn format(&self) -> String {
         format!(
-            "Active Task Plan\n- Objective: {}\n- Plan: {}\n- Active step: {}\n- Verification: {}\n- Closeout: {}\n- Memory proposal: {}\n- Next action: {}",
+            "Active Task Plan\n- Objective: {}\n- Plan: {}\n- Active step: {}\n- Verification: {}\n- Closeout: {}\n- Memory proposal: {}\n- Project progress: {}\n- Next action: {}",
             self.objective,
             self.plan_progress,
             self.active_step,
             self.verification,
             self.closeout,
             self.memory_proposal,
+            self.project_progress,
             self.next_action
         )
     }
@@ -183,5 +197,19 @@ mod tests {
         assert_eq!(plan.plan_progress, "1/3 steps");
         assert_eq!(plan.active_step, "run tests");
         assert!(plan.closeout.contains("partial"));
+        assert_eq!(plan.project_progress, "none");
+    }
+
+    #[test]
+    fn active_task_plan_can_include_project_progress_summary() {
+        let plan = ActiveTaskPlan::from_goal_trace_and_project_progress(
+            None,
+            None,
+            Some("success: memory PR1 files=2 validation=3 risks=0 next_steps=1".to_string()),
+        );
+
+        assert!(plan
+            .format()
+            .contains("Project progress: success: memory PR1"));
     }
 }

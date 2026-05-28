@@ -1,5 +1,6 @@
 pub mod active;
 pub mod calibration;
+pub mod eval;
 pub mod manager;
 pub mod provider;
 pub mod quality;
@@ -13,14 +14,17 @@ pub use calibration::{
     built_in_memory_calibration_samples, run_memory_calibration_samples, MemoryCalibrationActual,
     MemoryCalibrationExpectation, MemoryCalibrationResult, MemoryCalibrationSample,
 };
+pub use eval::{run_memory_eval_suite, MemoryEvalFailureOwner, MemoryEvalReport, MemoryEvalResult};
 pub use manager::{
     MemoryFlushReason, MemoryFlushRecord, MemoryFlushStatus, MemoryFlushSummary, MemoryManager,
-    MemoryRecordSummary, MemoryWriteTarget,
+    MemoryMigrationFileReport, MemoryMigrationReport, MemoryRecordSummary, MemorySnapshotReport,
+    MemoryWriteTarget,
 };
 pub use provider::{
-    LocalMemoryProvider, MemoryProvider, MemoryProviderCallOutcome, MemoryProviderCallStatus,
+    LocalMemoryProvider, LocalMemoryRecordWriteStatus, MemoryOperationJournalEntry, MemoryProvider,
+    MemoryProviderCallOutcome, MemoryProviderCallStatus, MemoryProviderCapabilities,
     MemoryProviderLifecycleEntry, MemoryProviderLifecycleReport, MemoryProviderRegistry,
-    MEMORY_PROVIDER_LIFECYCLE_HOOKS,
+    NoNetworkMemoryProvider, MEMORY_PROVIDER_LIFECYCLE_HOOKS,
 };
 pub use quality::{assess_memory_candidate, MemoryQualityAssessment};
 pub use recall::{score_recall, RecallDecision, RecallFactors, RecallScore};

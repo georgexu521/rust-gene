@@ -36,6 +36,10 @@ fn memory_flush_log_path() -> PathBuf {
     memory_dir().join("flush_queue.jsonl")
 }
 
+fn memory_retrieval_trace_path() -> PathBuf {
+    memory_dir().join("retrieval_trace.json")
+}
+
 #[derive(Debug, Clone)]
 struct MemoryDocument {
     namespace: String,
@@ -329,13 +333,20 @@ struct MemoryDecisionCounts {
 #[derive(Debug, serde::Serialize)]
 struct MemoryDoctorJson {
     root: String,
+    store_paths: MemoryStorePathsJson,
     documents: MemoryDoctorDocumentsJson,
+    snapshot: crate::memory::MemorySnapshotReport,
     records: MemoryRecordSummaryJson,
+    proposal_queue: MemoryProposalQueueJson,
+    last_background_review: Option<MemoryLastBackgroundReviewJson>,
+    last_retrieval_trace: Option<MemoryLastRetrievalTraceJson>,
+    operation_journal: Vec<MemoryOperationJournalJson>,
     provider_lifecycle: MemoryProviderLifecyclePanelJson,
     decisions: MemoryDecisionCountsJson,
     flushes: MemoryFlushCountsJson,
     quality_gates: MemoryQualityGatesJson,
     calibration: MemoryCalibrationReportJson,
+    eval_suite: crate::memory::MemoryEvalReport,
     conflicts: Vec<String>,
     maintenance: Vec<MemoryMaintenanceJson>,
 }
@@ -346,6 +357,19 @@ struct MemoryDoctorDocumentsJson {
     topic: usize,
     agent: usize,
     chars: usize,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+struct MemoryStorePathsJson {
+    memory_md: String,
+    user_md: String,
+    memory_dir: String,
+    records_jsonl: String,
+    operations_jsonl: String,
+    proposals_jsonl: String,
+    retrieval_trace_json: String,
+    decisions_jsonl: String,
+    flush_queue_jsonl: String,
 }
 
 #[derive(Debug, serde::Serialize)]
@@ -360,6 +384,101 @@ struct MemoryRecordSummaryJson {
     stale: usize,
     used: usize,
     projection_drift: usize,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+struct MemoryProposalQueueJson {
+    total: usize,
+    proposed: usize,
+    accepted: usize,
+    rejected: usize,
+    applied: usize,
+    background: usize,
+    closeout: usize,
+    conflict_groups: usize,
+    recent: Vec<MemoryProposalQueueItemJson>,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+struct MemoryProposalQueueItemJson {
+    id: String,
+    task_id: String,
+    status: String,
+    source: String,
+    project_id: Option<String>,
+    candidates: usize,
+    conflict_groups: usize,
+    updated_at: String,
+    reason: String,
+}
+
+#[derive(Debug, serde::Serialize)]
+struct MemoryOperationJournalJson {
+    id: String,
+    created_at: String,
+    operation: String,
+    record_id: Option<String>,
+    candidate_id: Option<String>,
+    status: String,
+    reason: String,
+    record_count: usize,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+struct MemoryLastBackgroundReviewJson {
+    id: String,
+    task_id: String,
+    status: String,
+    candidates: usize,
+    candidate_kinds: Vec<String>,
+    write_policy: String,
+    write_performed: bool,
+    conflict_groups: usize,
+    updated_at: String,
+    reason: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+struct MemoryLastRetrievalTraceJson {
+    updated_at: String,
+    created_at: String,
+    query: String,
+    policy: crate::engine::intent_router::RetrievalPolicy,
+    item_count: usize,
+    token_estimate: usize,
+    selected_records: usize,
+    selected_chars: usize,
+    max_chars: usize,
+    skipped_unrelated: usize,
+    skipped_unsafe: usize,
+    skipped_stale_conflict: usize,
+    skipped_budget: usize,
+    skipped_duplicate: usize,
+    per_scope: Vec<crate::engine::retrieval_context::MemoryRetrievalScopeTrace>,
+    decisions: Vec<MemoryLastRetrievalDecisionJson>,
+    selected_items: Vec<MemoryLastRetrievalItemJson>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+struct MemoryLastRetrievalDecisionJson {
+    source: String,
+    scope: String,
+    action: String,
+    reason: String,
+    score: usize,
+    chars: usize,
+    score_explanation: Option<crate::engine::retrieval_context::MemoryRetrievalScoreExplanation>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+struct MemoryLastRetrievalItemJson {
+    id: String,
+    title: String,
+    source: crate::engine::retrieval_context::RetrievalSource,
+    score: f32,
+    trust: crate::engine::retrieval_context::TrustLevel,
+    conflict: bool,
+    reason: String,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -448,6 +567,156 @@ fn load_memory_flush_summary() -> crate::memory::MemoryFlushSummary {
     summary
 }
 
+fn load_memory_operation_journal(limit: usize) -> Vec<MemoryOperationJournalJson> {
+    let mut entries = crate::memory::MemoryManager::new().memory_operation_journal();
+    entries.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+    entries
+        .into_iter()
+        .take(limit)
+        .map(|entry| MemoryOperationJournalJson {
+            id: entry.id,
+            created_at: entry.created_at,
+            operation: entry.operation,
+            record_id: entry.record_id,
+            candidate_id: entry.candidate_id,
+            status: entry.status,
+            reason: entry.reason,
+            record_count: entry.record_count,
+        })
+        .collect()
+}
+
+pub(crate) fn record_last_memory_retrieval_trace(
+    ctx: &crate::engine::retrieval_context::RetrievalContext,
+) -> std::io::Result<()> {
+    write_last_memory_retrieval_trace_to_path(&memory_retrieval_trace_path(), ctx)
+}
+
+fn write_last_memory_retrieval_trace_to_path(
+    path: &Path,
+    ctx: &crate::engine::retrieval_context::RetrievalContext,
+) -> std::io::Result<()> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let payload = last_memory_retrieval_trace_from_context(ctx);
+    let data = serde_json::to_vec_pretty(&payload).map_err(std::io::Error::other)?;
+    let tmp_path = path.with_extension("json.tmp");
+    std::fs::write(&tmp_path, data)?;
+    std::fs::rename(tmp_path, path)
+}
+
+fn load_last_memory_retrieval_trace() -> Option<MemoryLastRetrievalTraceJson> {
+    load_last_memory_retrieval_trace_from_path(&memory_retrieval_trace_path())
+}
+
+fn load_last_memory_retrieval_trace_from_path(path: &Path) -> Option<MemoryLastRetrievalTraceJson> {
+    let content = std::fs::read_to_string(path).ok()?;
+    serde_json::from_str(&content).ok()
+}
+
+fn last_memory_retrieval_trace_from_context(
+    ctx: &crate::engine::retrieval_context::RetrievalContext,
+) -> MemoryLastRetrievalTraceJson {
+    let trace = ctx.memory_trace.as_ref();
+    MemoryLastRetrievalTraceJson {
+        updated_at: chrono::Utc::now().to_rfc3339(),
+        created_at: ctx.created_at.to_rfc3339(),
+        query: ctx.query.clone(),
+        policy: ctx.policy,
+        item_count: ctx.items.len(),
+        token_estimate: ctx.token_estimate,
+        selected_records: trace.map(|trace| trace.selected_records).unwrap_or(0),
+        selected_chars: trace.map(|trace| trace.selected_chars).unwrap_or(0),
+        max_chars: trace.map(|trace| trace.max_chars).unwrap_or(0),
+        skipped_unrelated: trace.map(|trace| trace.skipped_unrelated).unwrap_or(0),
+        skipped_unsafe: trace.map(|trace| trace.skipped_unsafe).unwrap_or(0),
+        skipped_stale_conflict: trace.map(|trace| trace.skipped_stale_conflict).unwrap_or(0),
+        skipped_budget: trace.map(|trace| trace.skipped_budget).unwrap_or(0),
+        skipped_duplicate: trace.map(|trace| trace.skipped_duplicate).unwrap_or(0),
+        per_scope: trace
+            .map(|trace| trace.per_scope.clone())
+            .unwrap_or_default(),
+        decisions: trace
+            .map(|trace| {
+                trace
+                    .decisions
+                    .iter()
+                    .take(8)
+                    .map(|decision| MemoryLastRetrievalDecisionJson {
+                        source: decision.source.clone(),
+                        scope: decision.scope.clone(),
+                        action: decision.action.clone(),
+                        reason: decision.reason.clone(),
+                        score: decision.score,
+                        chars: decision.chars,
+                        score_explanation: decision.score_explanation.clone(),
+                    })
+                    .collect()
+            })
+            .unwrap_or_default(),
+        selected_items: ctx
+            .items
+            .iter()
+            .take(8)
+            .map(|item| MemoryLastRetrievalItemJson {
+                id: item.id.clone(),
+                title: item.title.clone(),
+                source: item.source,
+                score: item.score,
+                trust: item.trust,
+                conflict: item.conflict,
+                reason: item.reason.clone(),
+            })
+            .collect(),
+    }
+}
+
+fn format_last_memory_retrieval_trace(trace: Option<&MemoryLastRetrievalTraceJson>) -> String {
+    let Some(trace) = trace else {
+        return "  Last retrieval trace: none\n".to_string();
+    };
+
+    let mut out = format!(
+        "  Last retrieval trace: query={} · policy={:?} · items={} · selected={} · chars={}/{} · skipped unrelated={} unsafe={} stale_conflict={} budget={} duplicate={} · updated={}\n",
+        compact_line(&trace.query, 96),
+        trace.policy,
+        trace.item_count,
+        trace.selected_records,
+        trace.selected_chars,
+        trace.max_chars,
+        trace.skipped_unrelated,
+        trace.skipped_unsafe,
+        trace.skipped_stale_conflict,
+        trace.skipped_budget,
+        trace.skipped_duplicate,
+        trace.updated_at
+    );
+    for decision in trace.decisions.iter().take(3) {
+        let score = decision
+            .score_explanation
+            .as_ref()
+            .map(|explanation| {
+                format!(
+                    " final={:.2} scope_match={:.2} pinned_bonus={:.2}",
+                    explanation.final_score, explanation.scope_match, explanation.user_pinned_bonus
+                )
+            })
+            .unwrap_or_default();
+        out.push_str(&format!(
+            "    {} {} scope={} score={} chars={}{} reason={}\n",
+            decision.action,
+            decision.source,
+            decision.scope,
+            decision.score,
+            decision.chars,
+            score,
+            compact_line(&decision.reason, 96)
+        ));
+    }
+    out
+}
+
 fn memory_decision_counts_from_jsonl(content: &str) -> MemoryDecisionCounts {
     let mut counts = MemoryDecisionCounts::default();
     for line in content
@@ -486,6 +755,17 @@ async fn memory_provider_lifecycle_panel(
     default_memory_provider_lifecycle_panel()
 }
 
+async fn memory_snapshot_report_panel(
+    context: &ToolContext,
+) -> crate::memory::MemorySnapshotReport {
+    if let Some(memory_manager) = context.memory_manager.as_ref() {
+        let manager = memory_manager.lock().await;
+        return manager.memory_snapshot_report();
+    }
+
+    crate::memory::MemoryManager::new().memory_snapshot_report()
+}
+
 fn default_memory_provider_lifecycle_panel() -> MemoryProviderLifecyclePanelJson {
     let manager = crate::memory::MemoryManager::new();
     let report = manager.memory_provider_lifecycle_report();
@@ -498,25 +778,174 @@ fn default_memory_provider_lifecycle_panel() -> MemoryProviderLifecyclePanelJson
 }
 
 fn memory_scope_label_for_tool(scope: &crate::memory::MemoryScope) -> String {
-    if let Some(root) = &scope.project_root {
-        return format!("project:{}", root.display());
+    scope.identity_label()
+}
+
+fn memory_store_paths() -> MemoryStorePathsJson {
+    MemoryStorePathsJson {
+        memory_md: memory_path().display().to_string(),
+        user_md: user_path().display().to_string(),
+        memory_dir: memory_dir().display().to_string(),
+        records_jsonl: memory_dir().join("records.jsonl").display().to_string(),
+        operations_jsonl: memory_dir().join("operations.jsonl").display().to_string(),
+        proposals_jsonl: crate::engine::task_contract::MemoryProposalReviewStore::default_path()
+            .display()
+            .to_string(),
+        retrieval_trace_json: memory_retrieval_trace_path().display().to_string(),
+        decisions_jsonl: memory_decision_log_path().display().to_string(),
+        flush_queue_jsonl: memory_flush_log_path().display().to_string(),
     }
-    if !scope.session_id.trim().is_empty() {
-        return format!("session:{}", scope.session_id);
+}
+
+fn format_memory_store_paths(paths: &MemoryStorePathsJson) -> String {
+    format!(
+        "  Store paths:\n    MEMORY.md: {}\n    USER.md: {}\n    records: {}\n    operations: {}\n    proposals: {}\n    retrieval_trace: {}\n    decisions: {}\n    flush_queue: {}\n",
+        paths.memory_md,
+        paths.user_md,
+        paths.records_jsonl,
+        paths.operations_jsonl,
+        paths.proposals_jsonl,
+        paths.retrieval_trace_json,
+        paths.decisions_jsonl,
+        paths.flush_queue_jsonl
+    )
+}
+
+fn format_memory_snapshot(snapshot: &crate::memory::MemorySnapshotReport) -> String {
+    format!(
+        "Memory Snapshot\n  Status: {}\n  Snapshot id: {}\n  Fingerprint: {}\n  Scope: {}\n  Stable prompt chars: {}\n  Project chars: {}\n  User chars: {}\n  Memory files: {} ({} chars)\n  Skipped records: {} (status={} unsafe={} stale={} conflicts={})",
+        if snapshot.frozen { "frozen" } else { "live/not frozen" },
+        snapshot.snapshot_id,
+        snapshot.fingerprint,
+        snapshot.scope,
+        snapshot.char_count,
+        snapshot.project_chars,
+        snapshot.user_chars,
+        snapshot.memory_file_count,
+        snapshot.memory_file_chars,
+        snapshot.skipped_record_count,
+        snapshot.skipped_status_count,
+        snapshot.skipped_unsafe_count,
+        snapshot.skipped_stale_count,
+        snapshot.skipped_conflict_count
+    )
+}
+
+fn load_memory_proposal_queue() -> MemoryProposalQueueJson {
+    use crate::engine::task_contract::{MemoryProposalReviewStore, MemoryProposalStatus};
+
+    let records = MemoryProposalReviewStore::default().list_records();
+    let mut queue = MemoryProposalQueueJson {
+        total: records.len(),
+        proposed: 0,
+        accepted: 0,
+        rejected: 0,
+        applied: 0,
+        background: 0,
+        closeout: 0,
+        conflict_groups: 0,
+        recent: Vec::new(),
+    };
+    for record in &records {
+        queue.conflict_groups += record.conflict_groups.len();
+        match record.proposal.status {
+            MemoryProposalStatus::Proposed => queue.proposed += 1,
+            MemoryProposalStatus::Accepted => queue.accepted += 1,
+            MemoryProposalStatus::Rejected => queue.rejected += 1,
+            MemoryProposalStatus::Applied => queue.applied += 1,
+            MemoryProposalStatus::NotApplicable => {}
+        }
+        match record.source.as_str() {
+            "background" => queue.background += 1,
+            "closeout" => queue.closeout += 1,
+            _ => {}
+        }
     }
-    format!("{}:{}", scope.platform, scope.profile)
+    let mut recent = records;
+    recent.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+    queue.recent = recent
+        .into_iter()
+        .take(5)
+        .map(|record| MemoryProposalQueueItemJson {
+            id: record.id,
+            task_id: record.proposal.task_id.clone(),
+            status: record.proposal.status.label().to_string(),
+            source: record.source,
+            project_id: record.project_id,
+            candidates: record.proposal.candidates.len(),
+            conflict_groups: record.conflict_groups.len(),
+            updated_at: record.updated_at,
+            reason: compact_line(&record.proposal.reason, 120),
+        })
+        .collect();
+    queue
+}
+
+fn load_last_background_review() -> Option<MemoryLastBackgroundReviewJson> {
+    let records = crate::engine::task_contract::MemoryProposalReviewStore::default().list_records();
+    last_background_review_from_records(records)
+}
+
+fn last_background_review_from_records(
+    mut records: Vec<crate::engine::task_contract::MemoryProposalReviewRecord>,
+) -> Option<MemoryLastBackgroundReviewJson> {
+    records.sort_by(|left, right| right.updated_at.cmp(&left.updated_at));
+    records
+        .into_iter()
+        .find(|record| record.source == "background" || record.proposal.source == "background")
+        .map(|record| MemoryLastBackgroundReviewJson {
+            id: record.id,
+            task_id: record.proposal.task_id.clone(),
+            status: record.proposal.status.label().to_string(),
+            candidates: record.proposal.candidates.len(),
+            candidate_kinds: record.proposal.candidate_kinds(),
+            write_policy: record.proposal.write_policy,
+            write_performed: record.proposal.write_performed,
+            conflict_groups: record.conflict_groups.len(),
+            updated_at: record.updated_at,
+            reason: compact_line(&record.proposal.reason, 140),
+        })
+}
+
+fn format_last_background_review(review: Option<&MemoryLastBackgroundReviewJson>) -> String {
+    let Some(review) = review else {
+        return "  Last background review: none\n".to_string();
+    };
+    format!(
+        "  Last background review: {} [{}] candidates={} kinds={} conflicts={} write_policy={} write_performed={} updated={} reason={}\n",
+        review.task_id,
+        review.status,
+        review.candidates,
+        if review.candidate_kinds.is_empty() {
+            "none".to_string()
+        } else {
+            review.candidate_kinds.join("+")
+        },
+        review.conflict_groups,
+        review.write_policy,
+        review.write_performed,
+        review.updated_at,
+        review.reason
+    )
 }
 
 fn format_memory_doctor(
     docs: &[MemoryDocument],
     conflicts: &[String],
     provider_lifecycle: &MemoryProviderLifecyclePanelJson,
+    snapshot: &crate::memory::MemorySnapshotReport,
 ) -> String {
     let counts = load_memory_decision_counts();
     let flushes = load_memory_flush_summary();
+    let operation_journal = load_memory_operation_journal(5);
+    let proposal_queue = load_memory_proposal_queue();
+    let last_background_review = load_last_background_review();
+    let last_retrieval_trace = load_last_memory_retrieval_trace();
     let calibration = crate::memory::run_memory_calibration_samples();
+    let eval_suite = crate::memory::run_memory_eval_suite();
     let calibration_passed = calibration.iter().filter(|result| result.passed).count();
     let record_summary = crate::memory::MemoryManager::new().memory_record_summary();
+    let store_paths = memory_store_paths();
     let total_chars: usize = docs.iter().map(|doc| doc.content.chars().count()).sum();
     let topic_count = docs.iter().filter(|doc| doc.namespace == "topic").count();
     let agent_count = docs
@@ -527,12 +956,30 @@ fn format_memory_doctor(
     let mut out = String::new();
     out.push_str("Memory Doctor\n");
     out.push_str(&format!("  Root: {}\n", memory_root().display()));
+    out.push_str(&format_memory_store_paths(&store_paths));
     out.push_str(&format!(
         "  Documents: {} total · {} topic · {} agent · {} chars\n",
         docs.len(),
         topic_count,
         agent_count,
         total_chars
+    ));
+    out.push_str(&format!(
+        "  Snapshot: {} · fingerprint={} · scope={} · {} chars · {} files · skipped_records={} status={} unsafe={} stale={} conflicts={}\n",
+        if snapshot.frozen {
+            "frozen"
+        } else {
+            "live/not frozen"
+        },
+        snapshot.fingerprint,
+        snapshot.scope,
+        snapshot.char_count,
+        snapshot.memory_file_count,
+        snapshot.skipped_record_count,
+        snapshot.skipped_status_count,
+        snapshot.skipped_unsafe_count,
+        snapshot.skipped_stale_count,
+        snapshot.skipped_conflict_count
     ));
     out.push_str(&format!(
         "  Decisions: {} accepted · {} proposed · {} rejected · {} blocked\n",
@@ -549,6 +996,36 @@ fn format_memory_doctor(
         record_summary.projection_drift
     ));
     out.push_str(&format!(
+        "  Pending memory candidates: {} proposed · {} accepted · {} rejected · {} applied · {} background · {} closeout · {} conflict groups\n",
+        proposal_queue.proposed,
+        proposal_queue.accepted,
+        proposal_queue.rejected,
+        proposal_queue.applied,
+        proposal_queue.background,
+        proposal_queue.closeout,
+        proposal_queue.conflict_groups
+    ));
+    if !proposal_queue.recent.is_empty() {
+        out.push_str("  Recent memory candidates:\n");
+        for item in &proposal_queue.recent {
+            out.push_str(&format!(
+                "    {} [{}] source={} candidates={} conflicts={} reason={}\n",
+                item.id,
+                item.status,
+                item.source,
+                item.candidates,
+                item.conflict_groups,
+                item.reason
+            ));
+        }
+    }
+    out.push_str(&format_last_background_review(
+        last_background_review.as_ref(),
+    ));
+    out.push_str(&format_last_memory_retrieval_trace(
+        last_retrieval_trace.as_ref(),
+    ));
+    out.push_str(&format!(
         "  Flushes: {} completed · {} pending · {} running · {} failed · {} duplicate-skipped · {} review-skipped\n",
         flushes.completed,
         flushes.pending,
@@ -557,6 +1034,26 @@ fn format_memory_doctor(
         flushes.skipped_duplicate,
         flushes.skipped_review_only
     ));
+    if operation_journal.is_empty() {
+        out.push_str("  Operation journal: none\n");
+    } else {
+        out.push_str("  Operation journal:\n");
+        for entry in &operation_journal {
+            let target = entry
+                .record_id
+                .as_deref()
+                .or(entry.candidate_id.as_deref())
+                .unwrap_or("n/a");
+            out.push_str(&format!(
+                "    {} {} target={} count={} reason={}\n",
+                entry.operation,
+                entry.status,
+                target,
+                entry.record_count,
+                compact_line(&entry.reason, 96)
+            ));
+        }
+    }
     out.push_str(&format!(
         "  Providers: {} total · external={} · active_scope={}\n",
         provider_lifecycle.providers.len(),
@@ -572,11 +1069,12 @@ fn format_memory_doctor(
     ));
     for provider in &provider_lifecycle.providers {
         out.push_str(&format!(
-            "    {} ({}) available={} hooks={}\n",
+            "    {} ({}) available={} hooks={} capabilities={}\n",
             provider.name,
             provider.kind,
             provider.available,
-            provider.hooks.len()
+            provider.hooks.len(),
+            format_provider_capabilities(provider.capabilities)
         ));
     }
     out.push_str("  Quality gates: accept>=0.65 · propose>=0.45 · explicit>=0.60 with safety/duplicate hard stops\n");
@@ -585,6 +1083,23 @@ fn format_memory_doctor(
         calibration_passed,
         calibration.len()
     ));
+    out.push_str(&format!(
+        "  Memory evals: {}/{} passed\n",
+        eval_suite.passed, eval_suite.total
+    ));
+    for result in eval_suite
+        .results
+        .iter()
+        .filter(|result| !result.passed)
+        .take(5)
+    {
+        out.push_str(&format!(
+            "    FAIL {} owner={} reason={}\n",
+            result.id,
+            result.failure_owner.label(),
+            compact_line(&result.reason, 120)
+        ));
+    }
     for result in calibration.iter().filter(|result| !result.passed).take(5) {
         let score = result
             .score
@@ -622,14 +1137,56 @@ fn format_memory_doctor(
     out
 }
 
+fn format_provider_capabilities(capabilities: crate::memory::MemoryProviderCapabilities) -> String {
+    let mut labels = Vec::new();
+    if capabilities.prompt_block {
+        labels.push("prompt");
+    }
+    if capabilities.prefetch {
+        labels.push("prefetch");
+    }
+    if capabilities.search {
+        labels.push("search");
+    }
+    if capabilities.queue_prefetch {
+        labels.push("queue");
+    }
+    if capabilities.sync_turn {
+        labels.push("sync");
+    }
+    if capabilities.session_end {
+        labels.push("session_end");
+    }
+    if capabilities.pre_compress {
+        labels.push("pre_compress");
+    }
+    if capabilities.write_mirror {
+        labels.push("write_mirror");
+    }
+    if capabilities.tools {
+        labels.push("tools");
+    }
+    if labels.is_empty() {
+        "none".to_string()
+    } else {
+        labels.join(",")
+    }
+}
+
 fn memory_doctor_json(
     docs: &[MemoryDocument],
     conflicts: &[String],
     provider_lifecycle: &MemoryProviderLifecyclePanelJson,
+    snapshot: &crate::memory::MemorySnapshotReport,
 ) -> serde_json::Value {
     let counts = load_memory_decision_counts();
     let flushes = load_memory_flush_summary();
+    let operation_journal = load_memory_operation_journal(5);
+    let proposal_queue = load_memory_proposal_queue();
+    let last_background_review = load_last_background_review();
+    let last_retrieval_trace = load_last_memory_retrieval_trace();
     let calibration = crate::memory::run_memory_calibration_samples();
+    let eval_suite = crate::memory::run_memory_eval_suite();
     let calibration_passed = calibration.iter().filter(|result| result.passed).count();
     let total_chars: usize = docs.iter().map(|doc| doc.content.chars().count()).sum();
     let topic_count = docs.iter().filter(|doc| doc.namespace == "topic").count();
@@ -649,12 +1206,14 @@ fn memory_doctor_json(
     let record_summary = crate::memory::MemoryManager::new().memory_record_summary();
     let report = MemoryDoctorJson {
         root: memory_root().display().to_string(),
+        store_paths: memory_store_paths(),
         documents: MemoryDoctorDocumentsJson {
             total: docs.len(),
             topic: topic_count,
             agent: agent_count,
             chars: total_chars,
         },
+        snapshot: snapshot.clone(),
         records: MemoryRecordSummaryJson {
             total: record_summary.total,
             accepted: record_summary.accepted,
@@ -667,6 +1226,10 @@ fn memory_doctor_json(
             used: record_summary.used,
             projection_drift: record_summary.projection_drift,
         },
+        proposal_queue,
+        last_background_review,
+        last_retrieval_trace,
+        operation_journal,
         provider_lifecycle: provider_lifecycle.clone(),
         decisions: MemoryDecisionCountsJson {
             accepted: counts.accepted,
@@ -694,6 +1257,7 @@ fn memory_doctor_json(
             total: calibration.len(),
             results: calibration,
         },
+        eval_suite,
         conflicts: conflicts.to_vec(),
         maintenance,
     };
@@ -990,8 +1554,8 @@ impl Tool for MemoryLoadTool {
             "properties": {
                 "action": {
                     "type": "string",
-                    "description": "load returns memory content, search filters by query, doctor summarizes health, doctor_json returns machine-readable health, conflicts lists conflicts, review summarizes decisions/flushes/conflicts, explain shows why a matching memory was retrieved.",
-                    "enum": ["load", "search", "doctor", "doctor_json", "conflicts", "review", "explain"],
+                    "description": "load returns memory content, search filters by query, doctor summarizes health, doctor_json returns machine-readable health, snapshot reports the frozen prompt memory snapshot, eval runs deterministic memory lifecycle evals, conflicts lists conflicts, review summarizes decisions/flushes/conflicts, repair_proposals creates review-required proposals for projection drift, migrate_dry_run/migrate_backup/migrate_rollback manage conservative memory backups, explain shows why a matching memory was retrieved.",
+                    "enum": ["load", "search", "doctor", "doctor_json", "snapshot", "eval", "conflicts", "review", "repair_proposals", "migrate_dry_run", "migrate_backup", "migrate_rollback", "explain"],
                     "default": "load"
                 },
                 "query": {
@@ -1002,6 +1566,15 @@ impl Tool for MemoryLoadTool {
                     "type": "boolean",
                     "description": "Whether to include duplicate/conflicting key hints across memory namespaces.",
                     "default": true
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Maximum repair proposals to create for repair_proposals.",
+                    "default": 20
+                },
+                "backup_id": {
+                    "type": "string",
+                    "description": "Backup id for migrate_rollback."
                 }
             }
         })
@@ -1016,21 +1589,91 @@ impl Tool for MemoryLoadTool {
         } else {
             None
         };
+        let snapshot_report = if matches!(action, "doctor" | "doctor_json" | "review" | "snapshot")
+        {
+            Some(memory_snapshot_report_panel(&context).await)
+        } else {
+            None
+        };
+
+        if action == "snapshot" {
+            let snapshot = snapshot_report
+                .as_ref()
+                .expect("snapshot report is loaded for snapshot action");
+            return ToolResult::success(format_memory_snapshot(snapshot));
+        }
+
+        if action == "eval" {
+            return ToolResult::success(crate::memory::run_memory_eval_suite().format());
+        }
+
+        if action == "repair_proposals" {
+            let limit = params["limit"]
+                .as_u64()
+                .map(|value| value as usize)
+                .unwrap_or(20)
+                .clamp(1, 200);
+            let created =
+                crate::memory::MemoryManager::new().upsert_projection_repair_proposals(limit);
+            return ToolResult::success(format!(
+                "Memory repair proposal scan complete\n- projection drift proposals: {}\n- review: /memory-proposals list --source repair",
+                created
+            ));
+        }
+
+        if action == "migrate_dry_run" {
+            return ToolResult::success(
+                crate::memory::MemoryManager::new()
+                    .memory_migration_dry_run()
+                    .format(),
+            );
+        }
+
+        if action == "migrate_backup" {
+            return match crate::memory::MemoryManager::new().memory_migration_backup() {
+                Ok(report) => ToolResult::success(report.format()),
+                Err(error) => ToolResult::error(format!("memory migration backup failed: {error}")),
+            };
+        }
+
+        if action == "migrate_rollback" {
+            let backup_id = params["backup_id"].as_str().unwrap_or("");
+            if backup_id.trim().is_empty() {
+                return ToolResult::error("backup_id is required for migrate_rollback");
+            }
+            return match crate::memory::MemoryManager::new().memory_migration_rollback(backup_id) {
+                Ok(report) => ToolResult::success(report.format()),
+                Err(error) => {
+                    ToolResult::error(format!("memory migration rollback failed: {error}"))
+                }
+            };
+        }
 
         if docs.is_empty() {
             if action == "doctor_json" {
                 let provider_lifecycle = provider_lifecycle
                     .as_ref()
                     .expect("provider lifecycle is loaded for doctor_json");
+                let snapshot = snapshot_report
+                    .as_ref()
+                    .expect("snapshot report is loaded for doctor_json");
                 return ToolResult::success(
-                    memory_doctor_json(&docs, &[], &provider_lifecycle).to_string(),
+                    memory_doctor_json(&docs, &[], provider_lifecycle, snapshot).to_string(),
                 );
             }
             if matches!(action, "doctor" | "review") {
                 let provider_lifecycle = provider_lifecycle
                     .as_ref()
                     .expect("provider lifecycle is loaded for doctor/review");
-                return ToolResult::success(format_memory_doctor(&docs, &[], &provider_lifecycle));
+                let snapshot = snapshot_report
+                    .as_ref()
+                    .expect("snapshot report is loaded for doctor/review");
+                return ToolResult::success(format_memory_doctor(
+                    &docs,
+                    &[],
+                    provider_lifecycle,
+                    snapshot,
+                ));
             }
             return ToolResult::success("Memory is empty.");
         }
@@ -1046,10 +1689,14 @@ impl Tool for MemoryLoadTool {
             let provider_lifecycle = provider_lifecycle
                 .as_ref()
                 .expect("provider lifecycle is loaded for doctor");
+            let snapshot = snapshot_report
+                .as_ref()
+                .expect("snapshot report is loaded for doctor");
             return ToolResult::success(format_memory_doctor(
                 &docs,
                 &conflicts,
-                &provider_lifecycle,
+                provider_lifecycle,
+                snapshot,
             ));
         }
 
@@ -1057,8 +1704,11 @@ impl Tool for MemoryLoadTool {
             let provider_lifecycle = provider_lifecycle
                 .as_ref()
                 .expect("provider lifecycle is loaded for doctor_json");
+            let snapshot = snapshot_report
+                .as_ref()
+                .expect("snapshot report is loaded for doctor_json");
             return ToolResult::success(
-                memory_doctor_json(&docs, &conflicts, &provider_lifecycle).to_string(),
+                memory_doctor_json(&docs, &conflicts, provider_lifecycle, snapshot).to_string(),
             );
         }
 
@@ -1074,10 +1724,14 @@ impl Tool for MemoryLoadTool {
             let provider_lifecycle = provider_lifecycle
                 .as_ref()
                 .expect("provider lifecycle is loaded for review");
+            let snapshot = snapshot_report
+                .as_ref()
+                .expect("snapshot report is loaded for review");
             return ToolResult::success(format_memory_doctor(
                 &docs,
                 &conflicts,
-                &provider_lifecycle,
+                provider_lifecycle,
+                snapshot,
             ));
         }
 
@@ -1284,15 +1938,25 @@ mod tests {
             content: "language: Chinese".to_string(),
         }];
         let lifecycle = default_memory_provider_lifecycle_panel();
+        let snapshot = crate::memory::MemoryManager::new().memory_snapshot_report();
         let doctor = format_memory_doctor(
             &docs,
             &["- key 'language' conflicts".to_string()],
             &lifecycle,
+            &snapshot,
         );
         assert!(doctor.contains("Memory Doctor"));
         assert!(doctor.contains("Documents: 1 total"));
+        assert!(doctor.contains("Store paths:"));
+        assert!(doctor.contains("records:"));
+        assert!(doctor.contains("proposals:"));
+        assert!(doctor.contains("Snapshot:"));
+        assert!(doctor.contains("Pending memory candidates:"));
         assert!(doctor.contains("Providers:"));
         assert!(doctor.contains("Lifecycle:"));
+        assert!(doctor.contains("Operation journal:"));
+        assert!(doctor.contains("Last background review:"));
+        assert!(doctor.contains("Last retrieval trace:"));
         assert!(doctor.contains("Conflicts: 1"));
         assert!(doctor.contains("Quality gates:"));
         assert!(doctor.contains("Calibration:"));
@@ -1306,17 +1970,167 @@ mod tests {
             content: "language: Chinese".to_string(),
         }];
         let lifecycle = default_memory_provider_lifecycle_panel();
-        let report = memory_doctor_json(&docs, &[], &lifecycle);
+        let snapshot = crate::memory::MemoryManager::new().memory_snapshot_report();
+        let report = memory_doctor_json(&docs, &[], &lifecycle, &snapshot);
         assert_eq!(report["documents"]["total"].as_u64(), Some(1));
+        assert!(report["store_paths"]["records_jsonl"].is_string());
+        assert!(report["store_paths"]["proposals_jsonl"].is_string());
+        assert!(report["snapshot"]["fingerprint"].is_string());
+        assert!(report["proposal_queue"]["recent"].is_array());
+        assert!(report.get("last_background_review").is_some());
+        assert!(report.get("last_retrieval_trace").is_some());
         assert_eq!(
             report["provider_lifecycle"]["providers"][0]["name"].as_str(),
             Some("local")
         );
         assert!(report["calibration"]["total"].as_u64().unwrap_or(0) >= 1);
+        assert!(report["operation_journal"].is_array());
         let accept_threshold = report["quality_gates"]["accept_threshold"]
             .as_f64()
             .unwrap_or_default();
         assert!((accept_threshold - 0.65).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_last_background_review_uses_latest_background_record() {
+        let closeout = crate::engine::task_contract::MemoryProposalReviewRecord {
+            id: "closeout-1".to_string(),
+            proposal: crate::engine::task_contract::MemoryProposal {
+                task_id: "closeout-task".to_string(),
+                source: "closeout".to_string(),
+                status: crate::engine::task_contract::MemoryProposalStatus::Proposed,
+                candidates: Vec::new(),
+                write_policy: "review_required".to_string(),
+                write_performed: false,
+                reason: "closeout proposal".to_string(),
+            },
+            created_at: "2026-05-27T00:00:00Z".to_string(),
+            updated_at: "2026-05-27T00:00:00Z".to_string(),
+            source_session: None,
+            source_task: "closeout-task".to_string(),
+            source: "closeout".to_string(),
+            active_scope: "project".to_string(),
+            project_id: Some("project:rust-agent".to_string()),
+            project_labels: vec!["project_root:/tmp/rust-agent".to_string()],
+            gate_report: Vec::new(),
+            duplicate_conflict_summary: String::new(),
+            conflict_groups: Vec::new(),
+            status_history: Vec::new(),
+        };
+        let background = crate::engine::task_contract::MemoryProposalReviewRecord {
+            id: "background-1".to_string(),
+            proposal: crate::engine::task_contract::MemoryProposal {
+                task_id: "background-task".to_string(),
+                source: "background".to_string(),
+                status: crate::engine::task_contract::MemoryProposalStatus::Proposed,
+                candidates: vec![crate::engine::task_contract::MemoryProposalCandidate {
+                    kind: "next_step".to_string(),
+                    scope: "project".to_string(),
+                    content: "Continue Phase 7 doctor UX.".to_string(),
+                    evidence: vec!["closeout: next step".to_string()],
+                }],
+                write_policy: "review_required".to_string(),
+                write_performed: false,
+                reason: "background review produced review-required candidates".to_string(),
+            },
+            created_at: "2026-05-27T00:01:00Z".to_string(),
+            updated_at: "2026-05-27T00:01:00Z".to_string(),
+            source_session: None,
+            source_task: "background-task".to_string(),
+            source: "background".to_string(),
+            active_scope: "project".to_string(),
+            project_id: Some("project:rust-agent".to_string()),
+            project_labels: vec!["project_root:/tmp/rust-agent".to_string()],
+            gate_report: Vec::new(),
+            duplicate_conflict_summary: String::new(),
+            conflict_groups: Vec::new(),
+            status_history: Vec::new(),
+        };
+
+        let review = last_background_review_from_records(vec![closeout, background])
+            .expect("background review");
+
+        assert_eq!(review.task_id, "background-task");
+        assert_eq!(review.candidates, 1);
+        assert_eq!(review.candidate_kinds, vec!["next_step".to_string()]);
+        let formatted = format_last_background_review(Some(&review));
+        assert!(formatted.contains("Last background review: background-task"));
+        assert!(formatted.contains("write_performed=false"));
+    }
+
+    #[test]
+    fn test_last_memory_retrieval_trace_round_trips() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("retrieval_trace.json");
+        let mut item = crate::engine::retrieval_context::RetrievalItem::new(
+            crate::engine::retrieval_context::RetrievalSource::Memory,
+            "Project convention",
+            "Use cargo test -q before verified closeout.",
+            0.88,
+            "memory:records.jsonl#project",
+            crate::engine::retrieval_context::TrustLevel::High,
+        )
+        .with_reason("scope and lexical match");
+        item.id = "mem_project_test_gate".to_string();
+        let ctx = crate::engine::retrieval_context::RetrievalContext {
+            query: "test validation".to_string(),
+            policy: crate::engine::intent_router::RetrievalPolicy::Memory,
+            created_at: chrono::Utc::now(),
+            token_estimate: item.token_estimate,
+            items: vec![item],
+            memory_trace: Some(crate::engine::retrieval_context::MemoryRetrievalTrace {
+                query: "test validation".to_string(),
+                selected_records: 1,
+                selected_chars: 42,
+                max_records: 8,
+                max_chars: 4800,
+                skipped_unrelated: 2,
+                skipped_unsafe: 1,
+                skipped_stale_conflict: 1,
+                skipped_budget: 0,
+                skipped_duplicate: 0,
+                per_scope: vec![
+                    crate::engine::retrieval_context::MemoryRetrievalScopeTrace {
+                        scope: "project".to_string(),
+                        selected: 1,
+                        skipped: 0,
+                        cap: 4,
+                    },
+                ],
+                decisions: vec![crate::engine::retrieval_context::MemoryRetrievalDecision {
+                    source: "memory:records.jsonl#project".to_string(),
+                    scope: "project".to_string(),
+                    action: "selected".to_string(),
+                    reason: "scope and lexical match".to_string(),
+                    score: 88,
+                    chars: 42,
+                    score_explanation: Some(
+                        crate::engine::retrieval_context::MemoryRetrievalScoreExplanation {
+                            lexical_match: 0.9,
+                            recency: 0.7,
+                            scope_match: 1.0,
+                            confidence: 0.8,
+                            status: "accepted".to_string(),
+                            conflict_penalty: 0.0,
+                            user_pinned_bonus: 0.12,
+                            final_score: 0.88,
+                        },
+                    ),
+                }],
+            }),
+        };
+
+        write_last_memory_retrieval_trace_to_path(&path, &ctx).expect("write trace");
+        let loaded = load_last_memory_retrieval_trace_from_path(&path).expect("load trace");
+
+        assert_eq!(loaded.query, "test validation");
+        assert_eq!(loaded.selected_records, 1);
+        assert_eq!(loaded.skipped_unsafe, 1);
+        assert_eq!(loaded.decisions[0].action, "selected");
+        assert_eq!(loaded.selected_items[0].id, "mem_project_test_gate");
+        let formatted = format_last_memory_retrieval_trace(Some(&loaded));
+        assert!(formatted.contains("Last retrieval trace: query=test validation"));
+        assert!(formatted.contains("pinned_bonus=0.12"));
     }
 
     #[test]

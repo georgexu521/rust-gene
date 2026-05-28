@@ -1,6 +1,12 @@
 use rusqlite::{params, Connection};
 use std::path::{Path, PathBuf};
 
+#[derive(Debug, Clone)]
+pub struct MemorySearchIndexReport {
+    pub path: PathBuf,
+    pub documents_indexed: usize,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MemorySearchDocument {
     pub source: String,

@@ -595,8 +595,13 @@ pub const CMD_QUIT: CommandDef = CommandDef::new(
     "Exit the application",
 );
 
-pub const CMD_MEMORY: CommandDef =
-    CommandDef::new("/memory", &[], "Memory", "/memory", "Show saved memory");
+pub const CMD_MEMORY: CommandDef = CommandDef::new(
+    "/memory",
+    &[],
+    "Memory",
+    "/memory [search|snapshot|records [--scope project]|eval|doctor|review|migrate|repair-proposals|conflicts]",
+    "Show saved memory",
+);
 
 pub const CMD_SAVE: CommandDef =
     CommandDef::new("/save", &[], "Memory", "/save <text>", "Save to memory");
@@ -1238,7 +1243,7 @@ pub const CMD_PROJECT: CommandDef = CommandDef::new(
     "/project",
     &[],
     "Info",
-    "/project [info|soul|pulse|list|tree [depth]|init <name>]",
+    "/project [info|soul|pulse|progress|heartbeat|list|tree [depth]|init <name>]",
     "Project management",
 );
 
@@ -1520,7 +1525,7 @@ pub const CMD_MEMORY_PROPOSALS: CommandDef = CommandDef::new(
     "/memory-proposals",
     &["/memory-proposal"],
     "General",
-    "/memory-proposals [list|show|accept|reject|apply]",
+    "/memory-proposals [list [--source background|repair]|show|accept|reject|edit|apply|repair-drift]",
     "Review closeout-generated memory candidates before persistence",
 );
 

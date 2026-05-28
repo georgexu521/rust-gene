@@ -538,6 +538,54 @@ fn format_memory_retrieval_context(
         ),
         String::new(),
     ];
+    if let Some(trace) = &ctx.memory_trace {
+        lines.push(format!(
+            "Trace: selected={} chars={}/{} skipped unrelated={} unsafe={} stale_conflict={} budget={}",
+            trace.selected_records,
+            trace.selected_chars,
+            trace.max_chars,
+            trace.skipped_unrelated,
+            trace.skipped_unsafe,
+            trace.skipped_stale_conflict,
+            trace.skipped_budget
+        ));
+        for scope in &trace.per_scope {
+            lines.push(format!(
+                "  scope {}: selected={} skipped={} cap={}",
+                scope.scope, scope.selected, scope.skipped, scope.cap
+            ));
+        }
+        for decision in trace.decisions.iter().take(6) {
+            let score = decision
+                .score_explanation
+                .as_ref()
+                .map(|explanation| {
+                    format!(
+                        " lexical={:.2} recency={:.2} scope_match={:.2} confidence={:.2} status={} conflict_penalty={:.2} pinned_bonus={:.2} final={:.2}",
+                        explanation.lexical_match,
+                        explanation.recency,
+                        explanation.scope_match,
+                        explanation.confidence,
+                        explanation.status,
+                        explanation.conflict_penalty,
+                        explanation.user_pinned_bonus,
+                        explanation.final_score
+                    )
+                })
+                .unwrap_or_default();
+            lines.push(format!(
+                "  decision {} {} scope={} score={} chars={}{} reason={}",
+                decision.action,
+                decision.source,
+                decision.scope,
+                decision.score,
+                decision.chars,
+                score,
+                decision.reason
+            ));
+        }
+        lines.push(String::new());
+    }
     for item in &ctx.items {
         let preview = item
             .content_preview
@@ -563,6 +611,226 @@ fn format_memory_retrieval_context(
         ));
     }
     lines.join("\n")
+}
+
+fn format_memory_snapshot_report(snapshot: &crate::memory::MemorySnapshotReport) -> String {
+    format!(
+        "Memory Snapshot\n- Status: {}\n- Snapshot id: {}\n- Fingerprint: {}\n- Scope: {}\n- Stable prompt chars: {}\n- Project chars: {}\n- User chars: {}\n- Memory files: {} ({} chars)\n- Skipped records: {} (status={} unsafe={} stale={} conflicts={})",
+        if snapshot.frozen {
+            "frozen"
+        } else {
+            "live/not frozen"
+        },
+        snapshot.snapshot_id,
+        snapshot.fingerprint,
+        snapshot.scope,
+        snapshot.char_count,
+        snapshot.project_chars,
+        snapshot.user_chars,
+        snapshot.memory_file_count,
+        snapshot.memory_file_chars,
+        snapshot.skipped_record_count,
+        snapshot.skipped_status_count,
+        snapshot.skipped_unsafe_count,
+        snapshot.skipped_stale_count,
+        snapshot.skipped_conflict_count
+    )
+}
+
+fn format_memory_migration_command(mem: &crate::memory::MemoryManager, args: &str) -> String {
+    let mut parts = args.split_whitespace();
+    match parts.next().unwrap_or("--dry-run") {
+        "--dry-run" | "dry-run" | "status" => mem.memory_migration_dry_run().format(),
+        "--backup" | "backup" => match mem.memory_migration_backup() {
+            Ok(report) => report.format(),
+            Err(error) => format!("Memory migration backup failed: {}", error),
+        },
+        "--rollback" | "rollback" => {
+            let Some(backup_id) = parts.next() else {
+                return "Usage: /memory migrate --rollback <backup_id>".to_string();
+            };
+            match mem.memory_migration_rollback(backup_id) {
+                Ok(report) => report.format(),
+                Err(error) => format!("Memory migration rollback failed: {}", error),
+            }
+        }
+        _ => "Usage: /memory migrate [--dry-run|--backup|--rollback <backup_id>]".to_string(),
+    }
+}
+
+fn format_memory_records(records: &[crate::memory::MemoryRecord], args: &str) -> String {
+    let scope_filter = parse_memory_scope_filter(args);
+    let mut filtered = records
+        .iter()
+        .filter(|record| {
+            scope_filter
+                .as_deref()
+                .map(|scope| memory_record_scope_label(record).contains(scope))
+                .unwrap_or(true)
+        })
+        .collect::<Vec<_>>();
+    filtered.sort_by(|left, right| {
+        right
+            .updated_at
+            .cmp(&left.updated_at)
+            .then_with(|| left.id.cmp(&right.id))
+    });
+    if filtered.is_empty() {
+        return match scope_filter {
+            Some(scope) => format!("Memory Records\n- none for scope '{}'", scope),
+            None => "Memory Records\n- none".to_string(),
+        };
+    }
+    let mut lines = vec![format!(
+        "Memory Records ({} shown{})",
+        filtered.len().min(30),
+        scope_filter
+            .as_deref()
+            .map(|scope| format!(" · scope={scope}"))
+            .unwrap_or_default()
+    )];
+    for record in filtered.into_iter().take(30) {
+        lines.push(format!(
+            "- {} [{} {:?}] scope={} confidence={:.2} utility={:.2} evidence={} used={} updated={}",
+            record.id,
+            memory_status_label(record.status),
+            record.kind,
+            memory_record_scope_label(record),
+            record.confidence,
+            record.utility,
+            record.evidence.len(),
+            record.use_count,
+            record.updated_at.to_rfc3339()
+        ));
+        lines.push(format!(
+            "  {}",
+            record
+                .content
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ")
+                .chars()
+                .take(260)
+                .collect::<String>()
+        ));
+    }
+    lines.join("\n")
+}
+
+fn parse_memory_scope_filter(args: &str) -> Option<String> {
+    let parts = args.split_whitespace().collect::<Vec<_>>();
+    for (idx, part) in parts.iter().enumerate() {
+        if let Some(scope) = part.strip_prefix("--scope=") {
+            return Some(scope.to_ascii_lowercase());
+        }
+        if *part == "--scope" {
+            return parts.get(idx + 1).map(|scope| scope.to_ascii_lowercase());
+        }
+    }
+    parts
+        .first()
+        .filter(|value| !value.trim().is_empty())
+        .map(|value| value.to_ascii_lowercase())
+}
+
+fn memory_record_scope_label(record: &crate::memory::MemoryRecord) -> String {
+    if matches!(record.kind, crate::memory::MemoryKind::UserPreference) {
+        return "user".to_string();
+    }
+    if record.scope.project_root.is_some() {
+        return "project".to_string();
+    }
+    if !record.scope.session_id.trim().is_empty() {
+        return "session".to_string();
+    }
+    record.scope.platform.clone()
+}
+
+fn memory_status_label(status: crate::memory::MemoryStatus) -> &'static str {
+    match status {
+        crate::memory::MemoryStatus::Proposed => "proposed",
+        crate::memory::MemoryStatus::Accepted => "accepted",
+        crate::memory::MemoryStatus::Rejected => "rejected",
+        crate::memory::MemoryStatus::Superseded => "superseded",
+        crate::memory::MemoryStatus::Archived => "archived",
+    }
+}
+
+fn format_memory_proposal_queue() -> String {
+    let queue = memory_proposal_queue_json();
+    let mut lines = vec![format!(
+        "Pending memory candidates\n- Proposed: {} · accepted: {} · rejected: {} · applied: {} · background: {} · closeout: {}",
+        queue["proposed"].as_u64().unwrap_or(0),
+        queue["accepted"].as_u64().unwrap_or(0),
+        queue["rejected"].as_u64().unwrap_or(0),
+        queue["applied"].as_u64().unwrap_or(0),
+        queue["background"].as_u64().unwrap_or(0),
+        queue["closeout"].as_u64().unwrap_or(0)
+    )];
+    if let Some(recent) = queue["recent"].as_array() {
+        for item in recent.iter().take(5) {
+            lines.push(format!(
+                "- {} [{}] source={} candidates={} reason={}",
+                item["id"].as_str().unwrap_or("unknown"),
+                item["status"].as_str().unwrap_or("unknown"),
+                item["source"].as_str().unwrap_or("unknown"),
+                item["candidates"].as_u64().unwrap_or(0),
+                item["reason"].as_str().unwrap_or("")
+            ));
+        }
+    }
+    lines.join("\n")
+}
+
+fn memory_proposal_queue_json() -> serde_json::Value {
+    use crate::engine::task_contract::{MemoryProposalReviewStore, MemoryProposalStatus};
+
+    let mut records = MemoryProposalReviewStore::default().list_records();
+    let mut proposed = 0usize;
+    let mut accepted = 0usize;
+    let mut rejected = 0usize;
+    let mut applied = 0usize;
+    let mut background = 0usize;
+    let mut closeout = 0usize;
+    for record in &records {
+        match record.proposal.status {
+            MemoryProposalStatus::Proposed => proposed += 1,
+            MemoryProposalStatus::Accepted => accepted += 1,
+            MemoryProposalStatus::Rejected => rejected += 1,
+            MemoryProposalStatus::Applied => applied += 1,
+            MemoryProposalStatus::NotApplicable => {}
+        }
+        match record.source.as_str() {
+            "background" => background += 1,
+            "closeout" => closeout += 1,
+            _ => {}
+        }
+    }
+    records.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+    let recent = records
+        .into_iter()
+        .take(5)
+        .map(|record| {
+            serde_json::json!({
+                "id": record.proposal.task_id,
+                "status": record.proposal.status.label(),
+                "source": record.source,
+                "candidates": record.proposal.candidates.len(),
+                "updated_at": record.updated_at,
+                "reason": record.proposal.reason.chars().take(120).collect::<String>(),
+            })
+        })
+        .collect::<Vec<_>>();
+    serde_json::json!({
+        "total": proposed + accepted + rejected + applied,
+        "proposed": proposed,
+        "accepted": accepted,
+        "rejected": rejected,
+        "applied": applied,
+        "background": background,
+        "closeout": closeout,
+        "recent": recent,
+    })
 }
 
 fn explain_memory_retrieval_item(
@@ -2329,10 +2597,13 @@ impl TuiApp {
                         let decisions = mem.memory_decision_counts();
                         let flushes = mem.memory_flush_summary();
                         let calibration = crate::memory::run_memory_calibration_samples();
+                        let eval_suite = crate::memory::run_memory_eval_suite();
                         let calibration_passed =
                             calibration.iter().filter(|result| result.passed).count();
                         let conflicts = mem.memory_conflicts(8);
                         if doctor_json {
+                            let snapshot = mem.memory_snapshot_report();
+                            let proposal_queue = memory_proposal_queue_json();
                             serde_json::json!({
                                 "summary": {
                                     "project_memory_chars": summary.project_memory_chars,
@@ -2342,6 +2613,8 @@ impl TuiApp {
                                     "session_memory_items": summary.session_memory_items,
                                     "has_frozen_snapshot": summary.has_frozen_snapshot,
                                 },
+                                "snapshot": snapshot,
+                                "proposal_queue": proposal_queue,
                                 "decisions": decisions,
                                 "flushes": flushes,
                                 "quality_gates": {
@@ -2355,22 +2628,44 @@ impl TuiApp {
                                     "total": calibration.len(),
                                     "results": calibration,
                                 },
+                                "eval_suite": eval_suite,
                                 "conflicts": conflicts,
                             })
                             .to_string()
                         } else {
+                            let snapshot = mem.memory_snapshot_report();
+                            let proposal_queue = format_memory_proposal_queue();
                             format!(
-                                "# Memory Doctor\n\n{}\n\nDecisions:\n  Accepted: {}\n  Proposed: {}\n  Rejected: {}\n  Blocked: {}\n\n{}\n\nQuality gates:\n  accept>=0.65 · propose>=0.45 · explicit>=0.60 with safety/duplicate hard stops\n\nCalibration: {}/{} passed",
+                                "# Memory Doctor\n\n{}\n\n{}\n\n{}\n\nDecisions:\n  Accepted: {}\n  Proposed: {}\n  Rejected: {}\n  Blocked: {}\n\n{}\n\nQuality gates:\n  accept>=0.65 · propose>=0.45 · explicit>=0.60 with safety/duplicate hard stops\n\nCalibration: {}/{} passed\nMemory evals: {}/{} passed",
                                 summary.format(),
+                                format_memory_snapshot_report(&snapshot),
+                                proposal_queue,
                                 decisions.accepted,
                                 decisions.proposed,
                                 decisions.rejected,
                                 decisions.blocked,
                                 flushes.format(),
                                 calibration_passed,
-                                calibration.len()
+                                calibration.len(),
+                                eval_suite.passed,
+                                eval_suite.total
                             )
                         }
+                    } else if memory_action == "snapshot" {
+                        format_memory_snapshot_report(&mem.memory_snapshot_report())
+                    } else if memory_action == "eval" {
+                        crate::memory::run_memory_eval_suite().format()
+                    } else if memory_action == "records" {
+                        format_memory_records(&mem.memory_records(), memory_arg)
+                    } else if memory_action == "migrate" {
+                        format_memory_migration_command(&mem, memory_arg)
+                    } else if memory_action == "repair-proposals" {
+                        let limit = memory_arg.parse::<usize>().ok().unwrap_or(20).clamp(1, 200);
+                        let created = mem.upsert_projection_repair_proposals(limit);
+                        format!(
+                            "Memory repair proposal scan complete\n- projection drift proposals: {}\n- review: /memory-proposals list --source repair",
+                            created
+                        )
                     } else if memory_action == "conflicts" {
                         let conflicts = mem.memory_conflicts(20);
                         if conflicts.is_empty() {
@@ -2408,7 +2703,16 @@ impl TuiApp {
                             8,
                             crate::engine::intent_router::RetrievalPolicy::Memory,
                         ) {
-                            Some(ctx) => format_memory_retrieval_context(&ctx),
+                            Some(ctx) => {
+                                if let Err(error) =
+                                    crate::tools::memory_tool::record_last_memory_retrieval_trace(
+                                        &ctx,
+                                    )
+                                {
+                                    warn!("failed to write last memory retrieval trace: {}", error);
+                                }
+                                format_memory_retrieval_context(&ctx)
+                            }
                             None => format!("No memory retrieval hits for '{}'.", search_query),
                         }
                     } else if memory_action == "explain" {
@@ -2515,9 +2819,12 @@ impl TuiApp {
                         let decisions = mem.memory_decision_counts();
                         let flushes = mem.memory_flush_summary();
                         let calibration = crate::memory::run_memory_calibration_samples();
+                        let eval_suite = crate::memory::run_memory_eval_suite();
                         let calibration_passed =
                             calibration.iter().filter(|result| result.passed).count();
                         if doctor_json {
+                            let snapshot = mem.memory_snapshot_report();
+                            let proposal_queue = memory_proposal_queue_json();
                             serde_json::json!({
                                 "summary": {
                                     "project_memory_chars": summary.project_memory_chars,
@@ -2527,6 +2834,8 @@ impl TuiApp {
                                     "session_memory_items": summary.session_memory_items,
                                     "has_frozen_snapshot": summary.has_frozen_snapshot,
                                 },
+                                "snapshot": snapshot,
+                                "proposal_queue": proposal_queue,
                                 "decisions": decisions,
                                 "flushes": flushes,
                                 "quality_gates": {
@@ -2540,22 +2849,44 @@ impl TuiApp {
                                     "total": calibration.len(),
                                     "results": calibration,
                                 },
+                                "eval_suite": eval_suite,
                                 "conflicts": mem.memory_conflicts(8),
                             })
                             .to_string()
                         } else {
+                            let snapshot = mem.memory_snapshot_report();
+                            let proposal_queue = format_memory_proposal_queue();
                             format!(
-                                "# Memory Doctor\n\n{}\n\nDecisions:\n  Accepted: {}\n  Proposed: {}\n  Rejected: {}\n  Blocked: {}\n\n{}\n\nQuality gates:\n  accept>=0.65 · propose>=0.45 · explicit>=0.60 with safety/duplicate hard stops\n\nCalibration: {}/{} passed",
+                                "# Memory Doctor\n\n{}\n\n{}\n\n{}\n\nDecisions:\n  Accepted: {}\n  Proposed: {}\n  Rejected: {}\n  Blocked: {}\n\n{}\n\nQuality gates:\n  accept>=0.65 · propose>=0.45 · explicit>=0.60 with safety/duplicate hard stops\n\nCalibration: {}/{} passed\nMemory evals: {}/{} passed",
                                 summary.format(),
+                                format_memory_snapshot_report(&snapshot),
+                                proposal_queue,
                                 decisions.accepted,
                                 decisions.proposed,
                                 decisions.rejected,
                                 decisions.blocked,
                                 flushes.format(),
                                 calibration_passed,
-                                calibration.len()
+                                calibration.len(),
+                                eval_suite.passed,
+                                eval_suite.total
                             )
                         }
+                    } else if memory_action == "snapshot" {
+                        format_memory_snapshot_report(&mem.memory_snapshot_report())
+                    } else if memory_action == "eval" {
+                        crate::memory::run_memory_eval_suite().format()
+                    } else if memory_action == "records" {
+                        format_memory_records(&mem.memory_records(), memory_arg)
+                    } else if memory_action == "migrate" {
+                        format_memory_migration_command(&mem, memory_arg)
+                    } else if memory_action == "repair-proposals" {
+                        let limit = memory_arg.parse::<usize>().ok().unwrap_or(20).clamp(1, 200);
+                        let created = mem.upsert_projection_repair_proposals(limit);
+                        format!(
+                            "Memory repair proposal scan complete\n- projection drift proposals: {}\n- review: /memory-proposals list --source repair",
+                            created
+                        )
                     } else {
                         let summary = mem.memory_summary();
                         let project = mem.load_tier(crate::memory::manager::MemoryTier::Project);
@@ -3788,6 +4119,34 @@ mod tests {
     }
 
     #[test]
+    fn test_memory_snapshot_panel_includes_skip_reasons() {
+        let snapshot = crate::memory::MemorySnapshotReport {
+            frozen: true,
+            snapshot_id: "memsnap-test".to_string(),
+            fingerprint: "abc123".to_string(),
+            scope: "project".to_string(),
+            char_count: 120,
+            project_chars: 80,
+            user_chars: 40,
+            memory_file_count: 2,
+            memory_file_chars: 64,
+            skipped_record_count: 4,
+            skipped_status_count: 1,
+            skipped_unsafe_count: 1,
+            skipped_stale_count: 1,
+            skipped_conflict_count: 1,
+        };
+
+        let formatted = format_memory_snapshot_report(&snapshot);
+
+        assert!(formatted.contains("Skipped records: 4"));
+        assert!(formatted.contains("status=1"));
+        assert!(formatted.contains("unsafe=1"));
+        assert!(formatted.contains("stale=1"));
+        assert!(formatted.contains("conflicts=1"));
+    }
+
+    #[test]
     fn test_tui_reuses_engine_session_binding() {
         let store = Arc::new(crate::session_store::SessionStore::in_memory().unwrap());
         store
@@ -3903,6 +4262,30 @@ mod tests {
         assert!(rendered.contains("blocked for safety"));
         assert!(rendered.contains("secret_like_content"));
         assert!(!rendered.contains("Saved memory"));
+    }
+
+    #[test]
+    fn test_format_memory_records_filters_by_scope() {
+        let mut project = crate::memory::MemoryRecord::new(
+            "Project convention: run cargo test before commit.",
+            crate::memory::MemoryKind::ProjectFact,
+            crate::memory::MemoryScope::local("records-test"),
+            crate::memory::MemoryProvenance::local("test"),
+        );
+        project.status = crate::memory::MemoryStatus::Accepted;
+        let mut user = crate::memory::MemoryRecord::new(
+            "User preference: answer in Chinese.",
+            crate::memory::MemoryKind::UserPreference,
+            crate::memory::MemoryScope::local("records-test"),
+            crate::memory::MemoryProvenance::local("test"),
+        );
+        user.status = crate::memory::MemoryStatus::Accepted;
+
+        let rendered = format_memory_records(&[project, user], "--scope project");
+
+        assert!(rendered.contains("Memory Records"));
+        assert!(rendered.contains("Project convention"));
+        assert!(!rendered.contains("User preference"));
     }
 
     #[test]
@@ -4702,6 +5085,32 @@ mod tests {
         assert!(diff.contains("cargo test"));
         assert!(diff.contains("/tmp"));
         assert!(diff.contains("60s"));
+    }
+
+    #[test]
+    fn memory_search_output_shows_retrieval_score_explanation() {
+        let matches = vec![crate::memory::manager::MemoryMatch {
+            source: "USER.md".to_string(),
+            score: 36,
+            rerank_score: Some(0.92),
+            snippet: "User preference: answer concise Chinese status updates.".to_string(),
+        }];
+        let ctx = crate::engine::retrieval_context::RetrievalContext::from_memory_matches(
+            "Chinese status",
+            matches,
+            &[],
+            crate::engine::intent_router::RetrievalPolicy::Memory,
+        )
+        .expect("retrieval context");
+
+        let output = format_memory_retrieval_context(&ctx);
+
+        assert!(output.contains("decision selected USER.md"));
+        assert!(output.contains("lexical="));
+        assert!(output.contains("scope_match="));
+        assert!(output.contains("confidence="));
+        assert!(output.contains("conflict_penalty="));
+        assert!(output.contains("pinned_bonus="));
     }
 
     #[test]

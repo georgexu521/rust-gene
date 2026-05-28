@@ -400,6 +400,48 @@ fn project_memory_proposal_line(app: &TuiApp) -> String {
         .unwrap_or_else(|| "none".to_string())
 }
 
+fn project_progress_line() -> String {
+    crate::engine::project_progress::ProjectProgressLedger::default()
+        .latest_summary()
+        .map(|summary| compact_project_text(&summary, 180))
+        .unwrap_or_else(|| "none".to_string())
+}
+
+fn format_project_progress_panel() -> String {
+    let ledger = crate::engine::project_progress::ProjectProgressLedger::default();
+    let records = ledger.active_records();
+    if records.is_empty() {
+        return "Project Progress\n- none recorded yet".to_string();
+    }
+    let mut lines = vec![format!(
+        "Project Progress\nActive records: {}",
+        records.len()
+    )];
+    for record in records.iter().rev().take(12) {
+        let stale = if record.is_stale() { " stale" } else { "" };
+        lines.push(format!(
+            "- {}{} [{}] {}",
+            record.kind.label(),
+            stale,
+            record.task_status,
+            compact_project_text(&record.content, 220)
+        ));
+        if !record.evidence.is_empty() {
+            lines.push(format!(
+                "  evidence: {}",
+                compact_project_text(&record.evidence.join("; "), 220)
+            ));
+        }
+        if !record.stale_after.as_deref().unwrap_or("").is_empty() {
+            lines.push(format!(
+                "  stale_after: {}",
+                record.stale_after.as_deref().unwrap_or("unknown")
+            ));
+        }
+    }
+    lines.join("\n")
+}
+
 struct ProjectPulseView<'a> {
     name: &'a str,
     dir: &'a std::path::Path,
@@ -409,28 +451,72 @@ struct ProjectPulseView<'a> {
     goal: &'a str,
     memory: &'a str,
     memory_proposal: &'a str,
+    progress: &'a str,
 }
 
 fn format_project_pulse(view: ProjectPulseView<'_>) -> String {
-    let next_step = if view.dirty_count > 0 {
-        "Review the current diff and either finish, validate, or commit the scoped change."
-    } else if view.memory.contains("review=0") && view.memory.contains("stale=0") {
-        "Pick the next small TaskContract-worthy project step from /quick or the active goal."
-    } else {
-        "Run /memory review before relying on project memory for the next execution task."
-    };
+    let next_step = project_next_step_for_state(view.dirty_count, view.progress, view.memory);
     format!(
-        "Project Pulse\n\nState:\n- Project: {}\n- Path: {}\n- Git branch: {}\n- Git changes: {} ({})\n- Goal: {}\n- Memory: {}\n- Memory proposal: {}\n\nSmallest next step:\n- {}\n\nBoundaries:\n- Pull-first only; no reminder or background task was scheduled.\n- Pulse must stay tied to project state, memory review state, or execution evidence.",
+        "Project Pulse\n\nState:\n- Project: {}\n- Path: {}\n- Git branch: {}\n- Git changes: {} ({})\n- Goal: {}\n- Progress: {}\n- Memory: {}\n- Memory proposal: {}\n\nSmallest next step:\n- {}\n\nBoundaries:\n- Pull-first only; no reminder or background task was scheduled.\n- Pulse must stay tied to project state, memory review state, or execution evidence.",
         view.name,
         view.dir.display(),
         view.branch,
         view.dirty_count,
         view.dirty_summary,
         view.goal,
+        view.progress,
         view.memory,
         view.memory_proposal,
         next_step
     )
+}
+
+fn project_next_step_for_state(dirty_count: usize, progress: &str, memory: &str) -> &'static str {
+    if dirty_count > 0 {
+        "Review the current diff and either finish, validate, or commit the scoped change."
+    } else if progress != "none" {
+        "Use the project progress line to pick the next validation-backed step."
+    } else if memory.contains("review=0") && memory.contains("stale=0") {
+        "Pick the next small TaskContract-worthy project step from /quick or the active goal."
+    } else {
+        "Run /memory review before relying on project memory for the next execution task."
+    }
+}
+
+fn append_project_heartbeat(app: &TuiApp) -> String {
+    let dir = current_project_dir();
+    let name = project_name(&dir);
+    let branch = current_git_branch();
+    let (dirty_count, dirty_summary) = git_dirty_summary();
+    let goal = project_goal_line(app);
+    let memory = project_memory_pulse_line(app);
+    let memory_proposal = project_memory_proposal_line(app);
+    let progress = project_progress_line();
+    let next_step = project_next_step_for_state(dirty_count, &progress, &memory);
+    let record = crate::engine::project_progress::ProjectProgressRecord::heartbeat(
+        crate::engine::project_progress::ProjectHeartbeatInput {
+            project_name: &name,
+            project_root: &dir,
+            branch: &branch,
+            dirty_count,
+            dirty_summary: &dirty_summary,
+            goal: &goal,
+            memory: &memory,
+            memory_proposal: &memory_proposal,
+            progress: &progress,
+            next_step,
+        },
+    );
+    let ledger = crate::engine::project_progress::ProjectProgressLedger::default();
+    match ledger.append_heartbeat(record) {
+        Ok(()) => format!(
+            "Project heartbeat recorded.\n- Project: {}\n- Path: {}\n- Next step: {}\n- Reminder: none scheduled",
+            name,
+            dir.display(),
+            next_step
+        ),
+        Err(error) => format!("Failed to record project heartbeat: {}", error),
+    }
 }
 
 fn format_project_soul(name: &str, dir: &std::path::Path, branch: &str) -> String {
@@ -476,6 +562,7 @@ pub fn handle_project(app: &TuiApp, args: &str) -> String {
             let goal = project_goal_line(app);
             let memory = project_memory_pulse_line(app);
             let memory_proposal = project_memory_proposal_line(app);
+            let progress = project_progress_line();
             format_project_pulse(ProjectPulseView {
                 name: &name,
                 dir: &dir,
@@ -485,8 +572,11 @@ pub fn handle_project(app: &TuiApp, args: &str) -> String {
                 goal: &goal,
                 memory: &memory,
                 memory_proposal: &memory_proposal,
+                progress: &progress,
             })
         }
+        "progress" => format_project_progress_panel(),
+        "heartbeat" => append_project_heartbeat(app),
         "list" => {
             let dir = current_project_dir();
             match std::fs::read_dir(&dir) {
@@ -539,7 +629,8 @@ pub fn handle_project(app: &TuiApp, args: &str) -> String {
                 }
             }
         }
-        _ => "Usage: /project [info|soul|pulse|list|tree [depth]|init <name>]".to_string(),
+        _ => "Usage: /project [info|soul|pulse|progress|heartbeat|list|tree [depth]|init <name>]"
+            .to_string(),
     }
 }
 
@@ -809,13 +900,26 @@ mod tests {
             goal: "goal: finish MVP",
             memory: "records=4 review=1 proposed=1 stale=0 rejected=0",
             memory_proposal: "candidate_count=1 write_performed=false",
+            progress: "next_step: run cargo test",
         });
 
         assert!(pulse.contains("Project Pulse"));
         assert!(pulse.contains("Git changes: 2"));
+        assert!(pulse.contains("Progress: next_step"));
         assert!(pulse.contains("Memory: records=4 review=1"));
         assert!(pulse.contains("Memory proposal: candidate_count=1"));
         assert!(pulse.contains("Review the current diff"));
         assert!(pulse.contains("Pull-first only"));
+    }
+
+    #[test]
+    fn test_project_next_step_prefers_progress_when_worktree_clean() {
+        let next_step = project_next_step_for_state(
+            0,
+            "next_step: rerun memory eval",
+            "records=4 review=0 proposed=0 stale=0 rejected=0",
+        );
+
+        assert!(next_step.contains("project progress line"));
     }
 }

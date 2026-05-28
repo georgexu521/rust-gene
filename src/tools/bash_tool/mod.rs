@@ -1631,18 +1631,14 @@ mod tests {
 
     #[test]
     fn test_effective_timeout_floor_env_is_bounded() {
-        let previous = std::env::var("PRIORITY_AGENT_BASH_TIMEOUT_FLOOR_SECS").ok();
-        std::env::set_var("PRIORITY_AGENT_BASH_TIMEOUT_FLOOR_SECS", "600");
+        let mut env = EnvVarGuard::acquire_blocking();
+
+        env.set("PRIORITY_AGENT_BASH_TIMEOUT_FLOOR_SECS", "600");
         assert_eq!(effective_timeout_secs(Some(180)), 600);
         assert_eq!(effective_timeout_secs(Some(900)), 900);
 
-        std::env::set_var("PRIORITY_AGENT_BASH_TIMEOUT_FLOOR_SECS", "7200");
+        env.set("PRIORITY_AGENT_BASH_TIMEOUT_FLOOR_SECS", "7200");
         assert_eq!(effective_timeout_secs(Some(180)), 3600);
-
-        match previous {
-            Some(value) => std::env::set_var("PRIORITY_AGENT_BASH_TIMEOUT_FLOOR_SECS", value),
-            None => std::env::remove_var("PRIORITY_AGENT_BASH_TIMEOUT_FLOOR_SECS"),
-        }
     }
 
     #[test]

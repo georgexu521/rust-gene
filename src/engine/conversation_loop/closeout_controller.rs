@@ -4,9 +4,11 @@ use crate::engine::code_change_workflow::{
 };
 use crate::engine::evidence_ledger::EvidenceLedger;
 use crate::engine::intent_router::WorkflowKind;
+use crate::engine::project_progress::ProjectProgressLedger;
 use crate::engine::task_context::TaskContextBundle;
 use crate::engine::task_contract::{
-    ExecutionReport, MemoryProposal, MemoryProposalReviewStore, TaskContractBundleExt,
+    BackgroundMemoryReviewWorker, BackgroundReviewPacket, ExecutionReport, MemoryProposal,
+    MemoryProposalReviewStore, TaskContractBundleExt,
 };
 use crate::engine::trace::{TraceCollector, TraceEvent};
 use crate::engine::verification_proof::{
@@ -309,8 +311,20 @@ impl FinalCloseoutController {
                 .task_bundle
                 .task_contract(context.required_validation_commands);
             let report = ExecutionReport::from_closeout(&contract, &closeout);
+            let _ = ProjectProgressLedger::default().append_execution_report(&report);
             let memory_proposal = MemoryProposal::from_execution_report(&report);
-            let _ = MemoryProposalReviewStore::default().upsert(&memory_proposal);
+            let proposal_store = MemoryProposalReviewStore::default();
+            let recent_proposals = proposal_store.list();
+            let _ = proposal_store.upsert(&memory_proposal);
+            let background_packet =
+                BackgroundReviewPacket::from_execution_report(&report, &recent_proposals);
+            let background_output =
+                BackgroundMemoryReviewWorker::review_execution_report(&background_packet, &report);
+            let background_proposal = BackgroundMemoryReviewWorker::proposal_from_output(
+                &background_packet,
+                background_output,
+            );
+            let _ = proposal_store.upsert(&background_proposal);
             context.trace.record(TraceEvent::ExecutionReportPrepared {
                 task_id: report.task_id.clone(),
                 status: report.status.label().to_string(),
@@ -328,6 +342,16 @@ impl FinalCloseoutController {
                 write_policy: memory_proposal.write_policy.clone(),
                 write_performed: memory_proposal.write_performed,
                 reason: memory_proposal.reason.clone(),
+            });
+            context.trace.record(TraceEvent::MemoryProposalPrepared {
+                task_id: background_proposal.task_id.clone(),
+                status: background_proposal.status.label().to_string(),
+                candidates: background_proposal.candidates.len(),
+                candidate_kinds: background_proposal.candidate_kinds(),
+                evidence_items: background_proposal.evidence_items(),
+                write_policy: background_proposal.write_policy.clone(),
+                write_performed: background_proposal.write_performed,
+                reason: background_proposal.reason.clone(),
             });
             context.runtime_diet.closeout_visibility =
                 format!("{:?}", closeout.visibility_from_env()).to_ascii_lowercase();
