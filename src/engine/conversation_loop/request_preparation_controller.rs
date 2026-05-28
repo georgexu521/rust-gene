@@ -814,6 +814,9 @@ fn consume_context_zone_message(content: &str, builder: &mut ContextZoneEnvelope
     consumed |= consume_tagged_blocks(&mut rest, "recent_observation", |block| {
         builder.push_recent_observation(block);
     });
+    consumed |= consume_tagged_blocks(&mut rest, "self-evolution-guidance", |block| {
+        builder.push_recent_observation(block);
+    });
 
     let remainder = clean_context_zone_remainder(&rest);
     if content.trim_start().starts_with("<retrieval-context") && !remainder.is_empty() {
@@ -950,6 +953,7 @@ fn is_dynamic_context_system_message(content: &str) -> bool {
         "<context-pack>",
         "<relevant_material>",
         "<recent_observation>",
+        "<self-evolution-guidance>",
         "<context_zones",
         "<retrieval-context",
         "MVA profile:",
@@ -1624,6 +1628,60 @@ mod tests {
             &prepared.request.messages[2],
             Message::User { content } if content == "change"
         ));
+    }
+
+    #[tokio::test]
+    async fn prepare_treats_self_evolution_guidance_as_dynamic_context() {
+        let trace = TraceCollector::new(TurnTrace::new(
+            "session-self-evolution".to_string(),
+            1,
+            "run validation",
+        ));
+        let mut runtime_diet = RuntimeDietSnapshot::new(true);
+
+        let prepared = RequestPreparationController::prepare(RequestPreparationContext {
+            messages: &[
+                Message::system(
+                    "<self-evolution-guidance>\n- id=guidance_test guidance=prefer exact bash repair evidence\n</self-evolution-guidance>",
+                ),
+                Message::user("run validation"),
+            ],
+            working_dir: std::path::Path::new("."),
+            focused_repair_prompt: None,
+            agent_task_state: None,
+            task_contract: None,
+            context_pack: None,
+            turn_retrieval_context: None,
+            retrieval_policy: RetrievalPolicy::None,
+            memory_manager: None,
+            provider: None,
+            session_store: None,
+            session_id: "session-self-evolution",
+            model: "test-model",
+            temperature: 0.2,
+            tools: &[],
+            trace: &trace,
+            runtime_diet: &mut runtime_diet,
+        })
+        .await;
+
+        assert_eq!(prepared.request.messages.len(), 2);
+        assert!(matches!(
+            &prepared.request.messages[0],
+            Message::System { content }
+                if content.starts_with("<context_zones")
+                    && content.contains("<recent_observation>")
+                    && content.contains("guidance_test")
+        ));
+        let trace = trace.finish(crate::engine::trace::TurnStatus::Completed);
+        assert!(trace.events.iter().any(|event| matches!(
+            event,
+            TraceEvent::ContextZonesMaterialized {
+                stable_prefix_tokens,
+                recent_observation_items,
+                ..
+            } if *stable_prefix_tokens == 0 && *recent_observation_items >= 1
+        )));
     }
 
     #[tokio::test]

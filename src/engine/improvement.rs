@@ -741,13 +741,16 @@ fn current_project_identity() -> Option<ProjectIdentity> {
 }
 
 fn project_identity_for_path(path: &std::path::Path) -> Option<ProjectIdentity> {
-    let root = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    let root = canonical_project_root(path);
     let root = root.to_string_lossy().trim().to_string();
     if root.is_empty() {
         return None;
     }
+    let id_source = git_remote_identity_for_root(std::path::Path::new(&root))
+        .map(|remote| format!("git:{remote}"))
+        .unwrap_or_else(|| format!("path:{root}"));
     Some(ProjectIdentity {
-        id: stable_project_id(&root),
+        id: stable_project_id(&id_source),
         root,
     })
 }
@@ -757,6 +760,87 @@ fn stable_project_id(root: &str) -> String {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     root.hash(&mut hasher);
     format!("project_{:016x}", hasher.finish())
+}
+
+fn canonical_project_root(path: &std::path::Path) -> PathBuf {
+    let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    let start = if canonical.is_file() {
+        canonical
+            .parent()
+            .map(Path::to_path_buf)
+            .unwrap_or(canonical)
+    } else {
+        canonical
+    };
+    find_git_root(&start).unwrap_or(start)
+}
+
+fn find_git_root(path: &Path) -> Option<PathBuf> {
+    let mut current = Some(path);
+    while let Some(dir) = current {
+        if dir.join(".git").exists() {
+            return Some(dir.to_path_buf());
+        }
+        current = dir.parent();
+    }
+    None
+}
+
+fn git_remote_identity_for_root(root: &Path) -> Option<String> {
+    let dot_git = root.join(".git");
+    let config_path = if dot_git.is_dir() {
+        dot_git.join("config")
+    } else {
+        let git_file = std::fs::read_to_string(&dot_git).ok()?;
+        let git_dir = git_file
+            .trim()
+            .strip_prefix("gitdir:")
+            .map(str::trim)
+            .filter(|value| !value.is_empty())?;
+        let git_dir_path = Path::new(git_dir);
+        let git_dir_path = if git_dir_path.is_absolute() {
+            git_dir_path.to_path_buf()
+        } else {
+            root.join(git_dir_path)
+        };
+        git_dir_path.join("config")
+    };
+    let config = std::fs::read_to_string(config_path).ok()?;
+    parse_git_origin_url(&config).map(normalize_git_remote_identity)
+}
+
+fn parse_git_origin_url(config: &str) -> Option<String> {
+    let mut in_origin = false;
+    for line in config.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with('[') {
+            in_origin = trimmed == r#"[remote "origin"]"#;
+            continue;
+        }
+        if !in_origin {
+            continue;
+        }
+        if let Some((key, value)) = trimmed.split_once('=') {
+            if key.trim() == "url" {
+                let value = value.trim();
+                if !value.is_empty() {
+                    return Some(value.to_string());
+                }
+            }
+        }
+    }
+    None
+}
+
+fn normalize_git_remote_identity(remote: String) -> String {
+    remote
+        .trim()
+        .trim_end_matches(".git")
+        .trim_start_matches("https://")
+        .trim_start_matches("http://")
+        .trim_start_matches("git@")
+        .replace(':', "/")
+        .to_ascii_lowercase()
 }
 
 fn guidance_activation_for_target(target: ImprovementTarget) -> GuidanceActivation {
@@ -858,12 +942,31 @@ fn guidance_matches_project(
     if record.scope.kind == "global_runtime" {
         return true;
     }
+    let Some(project) = project else {
+        return false;
+    };
     let Some(record_project_id) = record.project_id.as_deref() else {
         return false;
     };
-    project
-        .map(|project| project.id == record_project_id)
-        .unwrap_or(false)
+    if project.id == record_project_id {
+        return true;
+    }
+    record
+        .project_root
+        .as_deref()
+        .is_some_and(|root| guidance_project_roots_overlap(root, &project.root))
+}
+
+fn guidance_project_roots_overlap(record_root: &str, current_root: &str) -> bool {
+    let record_root = Path::new(record_root);
+    let current_root = Path::new(current_root);
+    let record_root = record_root
+        .canonicalize()
+        .unwrap_or_else(|_| record_root.to_path_buf());
+    let current_root = current_root
+        .canonicalize()
+        .unwrap_or_else(|_| current_root.to_path_buf());
+    record_root == current_root || current_root.starts_with(&record_root)
 }
 
 fn read_latest_proposals(path: &Path) -> Vec<ImprovementProposal> {
@@ -1204,6 +1307,57 @@ mod tests {
             Some(&project_b)
         )
         .is_none());
+    }
+
+    #[test]
+    fn project_identity_uses_git_root_for_subdirectories() {
+        let tmp = tempfile::tempdir().expect("create temp dir");
+        let git_dir = tmp.path().join(".git");
+        std::fs::create_dir_all(&git_dir).expect("create git dir");
+        std::fs::write(
+            git_dir.join("config"),
+            "[remote \"origin\"]\n\turl = git@github.com:gex/priority-agent.git\n",
+        )
+        .expect("write git config");
+        let nested = tmp.path().join("src/engine");
+        std::fs::create_dir_all(&nested).expect("create nested dir");
+
+        let root_identity = project_identity_for_path(tmp.path()).expect("root identity");
+        let nested_identity = project_identity_for_path(&nested).expect("nested identity");
+
+        assert_eq!(root_identity.id, nested_identity.id);
+        assert_eq!(root_identity.root, nested_identity.root);
+    }
+
+    #[test]
+    fn guidance_project_match_accepts_legacy_root_overlap() {
+        let mut proposal = ImprovementProposal::new(
+            vec![1],
+            ImprovementTarget::ToolGuidance,
+            "Improve bash retry guidance.".to_string(),
+            "Better recovery.",
+            RiskLevel::Medium,
+            vec!["Run tool regression.".to_string()],
+            vec!["evidence".to_string()],
+        );
+        proposal.evalset_bindings = vec!["tool-guidance-smoke".to_string()];
+        proposal.eval_status = ProposalEvalStatus::Passed;
+        let tmp = tempfile::tempdir().expect("create temp dir");
+        let mut record = AppliedGuidanceRecord::from_proposal_with_project(
+            &proposal,
+            "2026-05-28T00:00:00Z".to_string(),
+            Some(ProjectIdentity {
+                id: "legacy_path_hash".to_string(),
+                root: tmp.path().display().to_string(),
+            }),
+        );
+        record.project_id = Some("legacy_path_hash".to_string());
+        let current = ProjectIdentity {
+            id: "new_git_hash".to_string(),
+            root: tmp.path().display().to_string(),
+        };
+
+        assert!(guidance_matches_project(&record, Some(&current)));
     }
 
     #[test]
