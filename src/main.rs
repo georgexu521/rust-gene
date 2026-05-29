@@ -116,7 +116,10 @@ async fn answer_pending_approval(
     false
 }
 
-async fn run_eval_task(args: &[String]) -> anyhow::Result<()> {
+async fn run_eval_task(
+    args: &[String],
+    components: &bootstrap::AppComponents,
+) -> anyhow::Result<()> {
     use futures::StreamExt;
     use priority_agent::engine::streaming::StreamEvent;
     use serde_json::json;
@@ -131,10 +134,6 @@ async fn run_eval_task(args: &[String]) -> anyhow::Result<()> {
         .map_err(|e| anyhow::anyhow!("failed to read prompt file '{}': {}", prompt_file, e))?;
 
     let working_dir = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-    let (provider, model) = bootstrap::init_provider()?;
-    let tool_registry = bootstrap::init_tool_registry(&working_dir);
-    let components =
-        bootstrap::init_components(provider, model, tool_registry, &working_dir).await?;
 
     let mut event_writer = if let Some(path) = events_file.as_ref() {
         if let Some(parent) = std::path::Path::new(path).parent() {
@@ -358,6 +357,25 @@ async fn run_provider_health_command(args: &[String]) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// 统一初始化应用组件，失败时打印错误并退出进程
+async fn init_app_or_exit(working_dir: &std::path::Path) -> bootstrap::AppComponents {
+    match bootstrap::init_app(working_dir).await {
+        Ok(components) => components,
+        Err(e) => {
+            let msg = e.to_string();
+            if msg.contains("No LLM provider configured") {
+                error!("Provider init failed: {}", e);
+                eprintln!("Failed to initialize LLM provider: {}", e);
+                eprintln!("Hint: set MOONSHOT_API_KEY or OPENAI_API_KEY environment variable.");
+            } else {
+                error!("Bootstrap failed: {}", e);
+                eprintln!("Failed to initialize components: {}", e);
+            }
+            std::process::exit(1);
+        }
+    }
+}
+
 #[tokio::main]
 async fn main() {
     // 解析命令行参数
@@ -387,6 +405,8 @@ async fn main() {
         debug!(".env file not loaded: {}", e);
     }
 
+    let working_dir = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+
     match startup_mode {
         StartupMode::Help => {
             print_help();
@@ -402,34 +422,14 @@ async fn main() {
                     .and_then(|p| p.parse::<u16>().ok())
                     .unwrap_or(8787);
                 info!("Starting API server on port {}...", port);
-                let working_dir =
-                    std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-                let (provider, model) = match bootstrap::init_provider() {
-                    Ok(p) => p,
-                    Err(e) => {
-                        error!("Provider init failed: {}", e);
-                        eprintln!("Failed to initialize LLM provider: {}", e);
-                        eprintln!(
-                            "Hint: set MOONSHOT_API_KEY or OPENAI_API_KEY environment variable."
-                        );
-                        std::process::exit(1);
-                    }
-                };
-                let tool_registry = bootstrap::init_tool_registry(&working_dir);
-                let mut lsp_manager = priority_agent::engine::lsp::LspManager::new();
-                lsp_manager.detect_servers(&working_dir);
-                let lsp_manager = std::sync::Arc::new(lsp_manager);
-                let worktree_manager = std::sync::Arc::new(
-                    priority_agent::engine::worktree::WorktreeManager::new().await,
-                );
-
+                let components = init_app_or_exit(&working_dir).await;
                 if let Err(e) = api::start_server(
-                    provider,
-                    model,
-                    tool_registry,
+                    components.provider,
+                    components.model,
+                    components.tool_registry,
                     port,
-                    Some(lsp_manager),
-                    Some(worktree_manager),
+                    Some(components.lsp_manager),
+                    Some(components.worktree_manager),
                 )
                 .await
                 {
@@ -454,30 +454,10 @@ async fn main() {
                 std::process::exit(1);
             }
             info!("Starting Priority Agent CLI...");
-            let working_dir =
-                std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-            let (provider, model) = match bootstrap::init_provider() {
-                Ok(p) => p,
-                Err(e) => {
-                    error!("Provider init failed: {}", e);
-                    eprintln!("Failed to initialize LLM provider: {}", e);
-                    eprintln!("Hint: set MOONSHOT_API_KEY or OPENAI_API_KEY environment variable.");
-                    std::process::exit(1);
-                }
-            };
-            let tool_registry = bootstrap::init_tool_registry(&working_dir);
-            match bootstrap::init_components(provider, model, tool_registry, &working_dir).await {
-                Ok(components) => {
-                    if let Err(e) = shell::run_shell(components.streaming_engine).await {
-                        error!("Priority Agent CLI failed: {}", e);
-                        std::process::exit(1);
-                    }
-                }
-                Err(e) => {
-                    error!("Bootstrap failed: {}", e);
-                    eprintln!("Failed to initialize components: {}", e);
-                    std::process::exit(1);
-                }
+            let components = init_app_or_exit(&working_dir).await;
+            if let Err(e) = shell::run_shell(components.streaming_engine).await {
+                error!("Priority Agent CLI failed: {}", e);
+                std::process::exit(1);
             }
         }
         StartupMode::Tui => {
@@ -487,40 +467,21 @@ async fn main() {
                 std::process::exit(1);
             }
             info!("Starting full-screen terminal interface...");
-            let working_dir =
-                std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-            let (provider, model) = match bootstrap::init_provider() {
-                Ok(p) => p,
-                Err(e) => {
-                    error!("Provider init failed: {}", e);
-                    eprintln!("Failed to initialize LLM provider: {}", e);
-                    eprintln!("Hint: set MOONSHOT_API_KEY or OPENAI_API_KEY environment variable.");
-                    std::process::exit(1);
-                }
-            };
-            let tool_registry = bootstrap::init_tool_registry(&working_dir);
-            match bootstrap::init_components(provider, model, tool_registry, &working_dir).await {
-                Ok(components) => {
-                    if let Err(e) = tui::run_tui(
-                        components.streaming_engine,
-                        Some(components.lsp_manager),
-                        Some(components.worktree_manager),
-                    )
-                    .await
-                    {
-                        error!("Legacy TUI failed: {}", e);
-                        std::process::exit(1);
-                    }
-                }
-                Err(e) => {
-                    error!("Bootstrap failed: {}", e);
-                    eprintln!("Failed to initialize components: {}", e);
-                    std::process::exit(1);
-                }
+            let components = init_app_or_exit(&working_dir).await;
+            if let Err(e) = tui::run_tui(
+                components.streaming_engine,
+                Some(components.lsp_manager),
+                Some(components.worktree_manager),
+            )
+            .await
+            {
+                error!("Legacy TUI failed: {}", e);
+                std::process::exit(1);
             }
         }
         StartupMode::EvalRun => {
-            if let Err(e) = run_eval_task(&args).await {
+            let components = init_app_or_exit(&working_dir).await;
+            if let Err(e) = run_eval_task(&args, &components).await {
                 error!("Evaluation run failed: {}", e);
                 eprintln!("Evaluation run failed: {}", e);
                 std::process::exit(1);

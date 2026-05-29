@@ -176,7 +176,14 @@ pub fn cleanup_old_snapshots() {
     }
 }
 
-/// 初始化所有应用组件
+/// 一键初始化所有应用组件（含 Provider + ToolRegistry + 全组件）
+pub async fn init_app(working_dir: &std::path::Path) -> Result<AppComponents> {
+    let (provider, model) = init_provider()?;
+    let tool_registry = init_tool_registry(working_dir);
+    init_components(provider, model, tool_registry, working_dir).await
+}
+
+/// 初始化所有应用组件（Provider 与 ToolRegistry 已就绪）
 pub async fn init_components(
     provider: Arc<dyn crate::services::api::LlmProvider>,
     model: String,
