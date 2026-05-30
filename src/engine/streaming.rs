@@ -1650,18 +1650,19 @@ mod tests {
 
     #[tokio::test]
     async fn streaming_history_does_not_persist_completed_tool_calls_as_final_assistant_calls() {
-        let target = std::env::temp_dir().join("priority_agent_streaming_history_tool_call.py");
-        let _ = tokio::fs::remove_file(&target).await;
+        let dir = tempfile::tempdir().unwrap();
+        tokio::fs::write(dir.path().join("marker.txt"), "marker-content\n")
+            .await
+            .unwrap();
         let provider = Arc::new(ToolTurnProvider {
             responses: StdMutex::new(VecDeque::from(vec![
                 crate::services::api::ChatResponse {
                     content: String::new(),
                     tool_calls: Some(vec![crate::services::api::ToolCall {
-                        id: "call_write".to_string(),
-                        name: "file_write".to_string(),
+                        id: "call_read".to_string(),
+                        name: "file_read".to_string(),
                         arguments: serde_json::json!({
-                            "path": target.to_string_lossy().to_string(),
-                            "content": "print('ok')\n"
+                            "path": "marker.txt"
                         }),
                     }]),
                     usage: None,
@@ -1684,13 +1685,12 @@ mod tests {
             ])),
         });
         let mut registry = ToolRegistry::new();
-        registry.register(crate::tools::file_tool::FileWriteTool);
+        registry.register(crate::tools::file_tool::FileReadTool);
         let engine = StreamingQueryEngine::new(provider, Arc::new(registry), "MiniMax-M2.7")
+            .with_working_dir(dir.path())
             .with_max_iterations(5);
 
-        let mut stream = engine
-            .query_stream("请写一个 python 文件，内容打印 ok")
-            .await;
+        let mut stream = engine.query_stream("请读取 marker 文件").await;
         while let Some(event) = stream.next().await {
             match event {
                 StreamEvent::Complete => break,
@@ -1723,8 +1723,6 @@ mod tests {
             )),
             "completed tool calls must not be persisted as pending provider tool calls: {history:?}"
         );
-
-        let _ = tokio::fs::remove_file(&target).await;
     }
 
     #[tokio::test]

@@ -1087,6 +1087,9 @@ impl BackgroundMemoryReviewWorker {
 
 impl MemoryProposalReviewStore {
     pub fn default_path() -> PathBuf {
+        if let Ok(path) = std::env::var("PRIORITY_AGENT_MEMORY_PROPOSALS_PATH") {
+            return PathBuf::from(path);
+        }
         dirs::home_dir()
             .unwrap_or_else(|| PathBuf::from("."))
             .join(".priority-agent")

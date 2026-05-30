@@ -855,6 +855,23 @@ mod tests {
     #[tokio::test]
     async fn project_partner_profile_surfaces_review_only_memory_proposal() {
         let mut env = EnvVarGuard::acquire().await;
+        let store_dir = tempfile::tempdir().unwrap();
+        env.set(
+            "PRIORITY_AGENT_PROJECT_PROGRESS_PATH",
+            store_dir
+                .path()
+                .join("project_progress.jsonl")
+                .to_str()
+                .unwrap(),
+        );
+        env.set(
+            "PRIORITY_AGENT_MEMORY_PROPOSALS_PATH",
+            store_dir
+                .path()
+                .join("memory_proposals.jsonl")
+                .to_str()
+                .unwrap(),
+        );
         env.set(
             "PRIORITY_AGENT_RUNTIME_PROFILE",
             "project_partner_alignment",

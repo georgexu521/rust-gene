@@ -113,6 +113,25 @@ impl Tool for AskUserQuestionTool {
             })
             .unwrap_or_default();
 
+        // Auto-approve in non-interactive/eval mode: respond immediately
+        // without waiting for user input. Controlled by PRIORITY_AGENT_AUTO_APPROVE
+        // (default "1" in eval-run mode, set to "0" to require user interaction).
+        if std::env::var("PRIORITY_AGENT_AUTO_APPROVE")
+            .unwrap_or_else(|_| "1".to_string())
+            .trim()
+            != "0"
+        {
+            let answer = if options.is_empty() {
+                "auto-approved (non-interactive mode)".to_string()
+            } else {
+                options.first().cloned().unwrap_or_else(|| "auto-approved".to_string())
+            };
+            return ToolResult::success(format!(
+                "Question: {}\nAnswer (auto): {}",
+                question, answer
+            ));
+        }
+
         match self.channel.ask(question, options).await {
             Ok(answer) => ToolResult::success(format!("User answered: {}", answer)),
             Err(e) => ToolResult::error(format!("Failed to get user response: {}", e)),

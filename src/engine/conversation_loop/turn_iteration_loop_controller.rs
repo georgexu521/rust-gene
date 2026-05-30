@@ -50,6 +50,13 @@ impl TurnIterationLoopController {
         let baseline_git_status_files = WorkflowChangeTracker::git_status_files();
 
         for iteration in 0..max_loop_iterations {
+            // Force summary: inject wrap-up instruction in the last 2 iterations
+            // so the model produces a final summary instead of looping or failing.
+            if super::force_summary::should_force_summary(iteration, max_loop_iterations) {
+                let msg = super::force_summary::force_summary_message();
+                context.messages.push(msg);
+            }
+
             match TurnIterationController::run(TurnIterationContext {
                 conversation: context.conversation,
                 iteration,

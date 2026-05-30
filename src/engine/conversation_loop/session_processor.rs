@@ -425,11 +425,18 @@ impl ConversationLoop {
 
                 for (i, tc) in collected_tool_calls.iter_mut().enumerate() {
                     if i < raw_args_accum.len() && !raw_args_accum[i].is_empty() {
-                        tc.arguments =
-                            serde_json::from_str(&raw_args_accum[i]).unwrap_or_else(|e| {
-                                warn!("Failed to parse tool args: {}", e);
-                                serde_json::Value::Null
-                            });
+                        tc.arguments = serde_json::from_str(&raw_args_accum[i])
+                            .or_else(|e| {
+                                warn!(
+                                    "Failed to parse tool args, attempting truncation repair: {}",
+                                    e
+                                );
+                                crate::engine::repair::truncation::repair_truncated_json(
+                                    &raw_args_accum[i],
+                                )
+                                .ok_or(e)
+                            })
+                            .unwrap_or(serde_json::Value::Null);
                         let _ = tx
                             .send(StreamEvent::ToolCallComplete { id: tc.id.clone() })
                             .await;

@@ -20,6 +20,7 @@ use crate::engine::action_review::{ActionReview, ActionReviewInput};
 use crate::engine::destructive_scope::DestructiveScopeContract;
 use crate::engine::hooks::HookDecision;
 use crate::engine::intent_router::{IntentRoute, RiskLevel, WorkflowKind};
+use crate::engine::repair::storm::{StormDecision, StormState};
 use crate::engine::resource_policy::ResourcePolicy;
 use crate::engine::streaming::StreamEvent;
 use crate::engine::task_context::{AgentTaskStage, AgentTaskState};
@@ -1700,10 +1701,10 @@ impl ToolExecutionController {
             lifecycle,
         } = request;
         let execution = &self.context;
-        let mut read_only_jobs = Vec::new();
+        let mut parallel_jobs: Vec<(usize, _)> = Vec::new();
+        let mut serial_items: Vec<(usize, ToolCall, ActionReview)> = Vec::new();
         let mut results: Vec<(ToolCall, ToolResult)> = Vec::new();
         let mut scheduled_count = 0usize;
-        let mut serial_boundary_seen = false;
         lifecycle.pending_batch(tool_calls);
         let runtime_context = ToolRuntimeContext::new(ToolRuntimeContextInput {
             route,
@@ -1735,42 +1736,28 @@ impl ToolExecutionController {
         let concurrency =
             read_only_tool_concurrency().min(resource_policy.parallelism_limit.max(1));
 
+        let mut storm_state = StormState::default();
+
+        // ── Phase 1: scan and categorize ──
         for (i, tc) in tool_calls.iter().enumerate() {
             if tc.name.is_empty() {
                 continue;
             }
 
-            let concurrency_safe = tool_call_is_concurrency_safe(
-                execution.tool_registry.as_ref(),
-                &tc.name,
-                &tc.arguments,
-            );
-            if !concurrency_safe && !read_only_jobs.is_empty() {
-                let read_only_results = self
-                    .collect_read_only_results(
-                        std::mem::take(&mut read_only_jobs),
-                        concurrency,
-                        tx,
-                        lifecycle,
-                    )
-                    .await;
-                results.extend(read_only_results);
+            // Storm breaker: check for repeated calls before dispatching.
+            match storm_state.check(&tc.name, &tc.arguments) {
+                StormDecision::Suppress(reason) => {
+                    let storm_result = crate::tools::ToolResult::error(reason);
+                    results.push((tc.clone(), storm_result));
+                    scheduled_count += 1;
+                    continue;
+                }
+                StormDecision::Allow => {}
             }
 
             let action_review = match gate.evaluate(tc, scheduled_count) {
                 ToolExecutionGateOutcome::Allow(review) => *review,
                 ToolExecutionGateOutcome::Deny(result) => {
-                    if !read_only_jobs.is_empty() {
-                        let read_only_results = self
-                            .collect_read_only_results(
-                                std::mem::take(&mut read_only_jobs),
-                                concurrency,
-                                tx,
-                                lifecycle,
-                            )
-                            .await;
-                        results.extend(read_only_results);
-                    }
                     persist_tool_outcome_learning_event(
                         execution.session_store.as_ref(),
                         &execution.session_id,
@@ -1780,23 +1767,12 @@ impl ToolExecutionController {
                     lifecycle.denied(tc);
                     results.push((tc.clone(), result));
                     scheduled_count += 1;
-                    serial_boundary_seen = true;
                     continue;
                 }
             };
 
-            if let Some(pre_result) = pre_executed.get(&i).filter(|_| !serial_boundary_seen) {
-                if !read_only_jobs.is_empty() {
-                    let read_only_results = self
-                        .collect_read_only_results(
-                            std::mem::take(&mut read_only_jobs),
-                            concurrency,
-                            tx,
-                            lifecycle,
-                        )
-                        .await;
-                    results.extend(read_only_results);
-                }
+            // Pre-executed results from streaming phase: use directly.
+            if let Some(pre_result) = pre_executed.get(&i) {
                 let mut pre_result = pre_result.clone();
                 attach_tool_execution_metadata(tc, &mut pre_result);
                 if let Some(tool) = execution.tool_registry.get(&tc.name) {
@@ -1853,6 +1829,12 @@ impl ToolExecutionController {
                 continue;
             }
 
+            let concurrency_safe = tool_call_is_concurrency_safe(
+                execution.tool_registry.as_ref(),
+                &tc.name,
+                &tc.arguments,
+            );
+
             if concurrency_safe {
                 lifecycle.running(tc, true, false);
                 if let Some(tx) = tx {
@@ -1864,7 +1846,7 @@ impl ToolExecutionController {
                         })
                         .await;
                 }
-                read_only_jobs.push((
+                parallel_jobs.push((
                     i,
                     self.read_only_job(ReadOnlyJobInput {
                         trace: &trace,
@@ -1878,32 +1860,37 @@ impl ToolExecutionController {
                 ));
                 scheduled_count += 1;
             } else {
-                let read_write_results = self
-                    .execute_read_write_calls(
-                        vec![(tc.clone(), action_review)],
-                        ReadWriteExecutionContext {
-                            tx,
-                            trace: &trace,
-                            runtime_context: &runtime_context,
-                            retained_context,
-                            task_state,
-                            parent_tool_calls: tool_calls,
-                            parent_assistant_content,
-                        },
-                        lifecycle,
-                    )
-                    .await;
-                results.extend(read_write_results);
+                serial_items.push((i, tc.clone(), action_review));
                 scheduled_count += 1;
-                serial_boundary_seen = true;
             }
         }
 
-        if !read_only_jobs.is_empty() {
-            let read_only_results = self
-                .collect_read_only_results(read_only_jobs, concurrency, tx, lifecycle)
+        // ── Phase 2: execute all parallel jobs concurrently ──
+        if !parallel_jobs.is_empty() {
+            let parallel_results = self
+                .collect_read_only_results(parallel_jobs, concurrency, tx, lifecycle)
                 .await;
-            results.extend(read_only_results);
+            results.extend(parallel_results);
+        }
+
+        // ── Phase 3: execute serial (write) tools sequentially ──
+        for (_i, tc, action_review) in serial_items {
+            let read_write_results = self
+                .execute_read_write_calls(
+                    vec![(tc, action_review)],
+                    ReadWriteExecutionContext {
+                        tx,
+                        trace: &trace,
+                        runtime_context: &runtime_context,
+                        retained_context,
+                        task_state,
+                        parent_tool_calls: tool_calls,
+                        parent_assistant_content,
+                    },
+                    lifecycle,
+                )
+                .await;
+            results.extend(read_write_results);
         }
 
         let lifecycle_snapshot = lifecycle.snapshot();

@@ -19,6 +19,7 @@ mod direct_task_behavior_tests;
 mod first_code_change_controller;
 mod focused_repair_recovery;
 mod focused_repair_state_controller;
+mod force_summary;
 mod iteration_budget_controller;
 mod legacy_workflow_gate_controller;
 mod memory_snapshot_controller;
@@ -146,6 +147,39 @@ use tokio::sync::{mpsc, Mutex};
 use super::context_compressor::ContextCompressor;
 use super::hooks::ToolHookManager;
 use super::streaming::StreamEvent;
+
+/// Self-correction: replace the last assistant message when the user steers.
+///
+/// When the user interrupts with a correction, the previous assistant response
+/// (which may contain incorrect tool calls or reasoning) stays in the message
+/// history and wastes tokens. This function replaces the last assistant message
+/// with a corrected version, so the model sees a clean context.
+///
+/// Controlled by `PRIORITY_AGENT_SELF_CORRECTION` (default on, set to "0" to disable).
+pub fn replace_last_assistant_message(messages: &mut Vec<Message>, correction: &str) {
+    if std::env::var("PRIORITY_AGENT_SELF_CORRECTION")
+        .unwrap_or_else(|_| "1".to_string())
+        .trim()
+        == "0"
+    {
+        return;
+    }
+
+    // Find the last assistant message (with or without tool_calls).
+    if let Some(pos) = messages
+        .iter()
+        .rposition(|m| matches!(m, Message::Assistant { .. }))
+    {
+        let replacement = format!(
+            "[The user corrected the previous response. The correct approach:]\n{}",
+            correction
+        );
+        messages[pos] = Message::Assistant {
+            content: replacement,
+            tool_calls: None,
+        };
+    }
+}
 
 fn should_use_nonstreaming_tools(
     provider: &dyn LlmProvider,
@@ -480,6 +514,18 @@ impl ConversationLoop {
         mut messages: Vec<Message>,
         tx: Option<&mpsc::Sender<StreamEvent>>,
     ) -> Result<LoopResult> {
+        // Self-correction: if the user message looks like a correction/drift
+        // signal, replace the previous (likely incorrect) assistant response.
+        let drift_text: Option<String> = messages.iter().rev().find_map(|m| match m {
+            Message::User { content } if is_drift_interruption_signal(content) => {
+                Some(content.clone())
+            }
+            _ => None,
+        });
+        if let Some(correction) = drift_text {
+            replace_last_assistant_message(&mut messages, &correction);
+        }
+
         let setup = TurnSetupController::prepare(TurnSetupContext {
             conversation: self,
             messages: &messages,

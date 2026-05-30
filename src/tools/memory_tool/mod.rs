@@ -412,7 +412,7 @@ struct MemoryProposalQueueItemJson {
     reason: String,
 }
 
-#[derive(Debug, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize)]
 struct MemoryOperationJournalJson {
     id: String,
     created_at: String,
@@ -529,6 +529,31 @@ struct MemoryMaintenanceJson {
     score: f32,
     action: String,
     reason: String,
+}
+
+#[derive(Debug, Clone)]
+struct MemoryDoctorDiagnostics {
+    counts: MemoryDecisionCounts,
+    flushes: crate::memory::MemoryFlushSummary,
+    operation_journal: Vec<MemoryOperationJournalJson>,
+    proposal_queue: MemoryProposalQueueJson,
+    last_background_review: Option<MemoryLastBackgroundReviewJson>,
+    last_retrieval_trace: Option<MemoryLastRetrievalTraceJson>,
+    record_summary: crate::memory::MemoryRecordSummary,
+    store_paths: MemoryStorePathsJson,
+}
+
+fn load_memory_doctor_diagnostics() -> MemoryDoctorDiagnostics {
+    MemoryDoctorDiagnostics {
+        counts: load_memory_decision_counts(),
+        flushes: load_memory_flush_summary(),
+        operation_journal: load_memory_operation_journal(5),
+        proposal_queue: load_memory_proposal_queue(),
+        last_background_review: load_last_background_review(),
+        last_retrieval_trace: load_last_memory_retrieval_trace(),
+        record_summary: crate::memory::MemoryManager::new().memory_record_summary(),
+        store_paths: memory_store_paths(),
+    }
 }
 
 fn load_memory_decision_counts() -> MemoryDecisionCounts {
@@ -935,17 +960,37 @@ fn format_memory_doctor(
     provider_lifecycle: &MemoryProviderLifecyclePanelJson,
     snapshot: &crate::memory::MemorySnapshotReport,
 ) -> String {
-    let counts = load_memory_decision_counts();
-    let flushes = load_memory_flush_summary();
-    let operation_journal = load_memory_operation_journal(5);
-    let proposal_queue = load_memory_proposal_queue();
-    let last_background_review = load_last_background_review();
-    let last_retrieval_trace = load_last_memory_retrieval_trace();
-    let calibration = crate::memory::run_memory_calibration_samples();
-    let eval_suite = crate::memory::run_memory_eval_suite();
+    format_memory_doctor_with_reports(
+        docs,
+        conflicts,
+        provider_lifecycle,
+        snapshot,
+        crate::memory::run_memory_calibration_samples(),
+        crate::memory::run_memory_eval_suite(),
+        load_memory_doctor_diagnostics(),
+    )
+}
+
+fn format_memory_doctor_with_reports(
+    docs: &[MemoryDocument],
+    conflicts: &[String],
+    provider_lifecycle: &MemoryProviderLifecyclePanelJson,
+    snapshot: &crate::memory::MemorySnapshotReport,
+    calibration: Vec<crate::memory::MemoryCalibrationResult>,
+    eval_suite: crate::memory::MemoryEvalReport,
+    diagnostics: MemoryDoctorDiagnostics,
+) -> String {
+    let MemoryDoctorDiagnostics {
+        counts,
+        flushes,
+        operation_journal,
+        proposal_queue,
+        last_background_review,
+        last_retrieval_trace,
+        record_summary,
+        store_paths,
+    } = diagnostics;
     let calibration_passed = calibration.iter().filter(|result| result.passed).count();
-    let record_summary = crate::memory::MemoryManager::new().memory_record_summary();
-    let store_paths = memory_store_paths();
     let total_chars: usize = docs.iter().map(|doc| doc.content.chars().count()).sum();
     let topic_count = docs.iter().filter(|doc| doc.namespace == "topic").count();
     let agent_count = docs
@@ -1179,14 +1224,36 @@ fn memory_doctor_json(
     provider_lifecycle: &MemoryProviderLifecyclePanelJson,
     snapshot: &crate::memory::MemorySnapshotReport,
 ) -> serde_json::Value {
-    let counts = load_memory_decision_counts();
-    let flushes = load_memory_flush_summary();
-    let operation_journal = load_memory_operation_journal(5);
-    let proposal_queue = load_memory_proposal_queue();
-    let last_background_review = load_last_background_review();
-    let last_retrieval_trace = load_last_memory_retrieval_trace();
-    let calibration = crate::memory::run_memory_calibration_samples();
-    let eval_suite = crate::memory::run_memory_eval_suite();
+    memory_doctor_json_with_reports(
+        docs,
+        conflicts,
+        provider_lifecycle,
+        snapshot,
+        crate::memory::run_memory_calibration_samples(),
+        crate::memory::run_memory_eval_suite(),
+        load_memory_doctor_diagnostics(),
+    )
+}
+
+fn memory_doctor_json_with_reports(
+    docs: &[MemoryDocument],
+    conflicts: &[String],
+    provider_lifecycle: &MemoryProviderLifecyclePanelJson,
+    snapshot: &crate::memory::MemorySnapshotReport,
+    calibration: Vec<crate::memory::MemoryCalibrationResult>,
+    eval_suite: crate::memory::MemoryEvalReport,
+    diagnostics: MemoryDoctorDiagnostics,
+) -> serde_json::Value {
+    let MemoryDoctorDiagnostics {
+        counts,
+        flushes,
+        operation_journal,
+        proposal_queue,
+        last_background_review,
+        last_retrieval_trace,
+        record_summary,
+        store_paths,
+    } = diagnostics;
     let calibration_passed = calibration.iter().filter(|result| result.passed).count();
     let total_chars: usize = docs.iter().map(|doc| doc.content.chars().count()).sum();
     let topic_count = docs.iter().filter(|doc| doc.namespace == "topic").count();
@@ -1203,10 +1270,9 @@ fn memory_doctor_json(
             reason: decision.reason,
         })
         .collect();
-    let record_summary = crate::memory::MemoryManager::new().memory_record_summary();
     let report = MemoryDoctorJson {
         root: memory_root().display().to_string(),
-        store_paths: memory_store_paths(),
+        store_paths,
         documents: MemoryDoctorDocumentsJson {
             total: docs.len(),
             topic: topic_count,
@@ -1930,6 +1996,98 @@ mod tests {
         assert_eq!(counts.rejected, 1);
     }
 
+    fn sample_memory_calibration_results() -> Vec<crate::memory::MemoryCalibrationResult> {
+        vec![crate::memory::MemoryCalibrationResult {
+            id: "sample_project_fact".to_string(),
+            expected: crate::memory::MemoryCalibrationExpectation::Accepted,
+            actual: crate::memory::MemoryCalibrationActual::Accepted,
+            score: Some(0.9),
+            passed: true,
+            reason: "sample accepted".to_string(),
+            rationale: "unit test fixture".to_string(),
+        }]
+    }
+
+    fn sample_memory_eval_report() -> crate::memory::MemoryEvalReport {
+        crate::memory::MemoryEvalReport {
+            total: 1,
+            passed: 1,
+            failed: 0,
+            results: vec![crate::memory::MemoryEvalResult {
+                id: "sample_eval".to_string(),
+                category: "memory_doctor".to_string(),
+                passed: true,
+                failure_owner: crate::memory::MemoryEvalFailureOwner::None,
+                reason: "unit test fixture".to_string(),
+            }],
+        }
+    }
+
+    fn sample_memory_snapshot_report() -> crate::memory::MemorySnapshotReport {
+        crate::memory::MemorySnapshotReport {
+            frozen: false,
+            snapshot_id: "memsnap-test".to_string(),
+            fingerprint: "test-fingerprint".to_string(),
+            scope: "global".to_string(),
+            char_count: 16,
+            project_chars: 16,
+            user_chars: 0,
+            memory_file_count: 1,
+            memory_file_chars: 16,
+            skipped_record_count: 0,
+            skipped_status_count: 0,
+            skipped_unsafe_count: 0,
+            skipped_stale_count: 0,
+            skipped_conflict_count: 0,
+        }
+    }
+
+    fn sample_memory_doctor_diagnostics() -> MemoryDoctorDiagnostics {
+        MemoryDoctorDiagnostics {
+            counts: MemoryDecisionCounts {
+                accepted: 1,
+                proposed: 0,
+                rejected: 0,
+                blocked: 0,
+            },
+            flushes: crate::memory::MemoryFlushSummary {
+                completed: 1,
+                total: 1,
+                ..Default::default()
+            },
+            operation_journal: Vec::new(),
+            proposal_queue: MemoryProposalQueueJson {
+                total: 0,
+                proposed: 0,
+                accepted: 0,
+                rejected: 0,
+                applied: 0,
+                background: 0,
+                closeout: 0,
+                conflict_groups: 0,
+                recent: Vec::new(),
+            },
+            last_background_review: None,
+            last_retrieval_trace: None,
+            record_summary: crate::memory::MemoryRecordSummary {
+                total: 1,
+                accepted: 1,
+                ..Default::default()
+            },
+            store_paths: MemoryStorePathsJson {
+                memory_md: "MEMORY.md".to_string(),
+                user_md: "USER.md".to_string(),
+                memory_dir: "memory".to_string(),
+                records_jsonl: "memory/records.jsonl".to_string(),
+                operations_jsonl: "memory/operations.jsonl".to_string(),
+                proposals_jsonl: "memory/proposals.jsonl".to_string(),
+                retrieval_trace_json: "memory/retrieval_trace.json".to_string(),
+                decisions_jsonl: "memory/decisions.jsonl".to_string(),
+                flush_queue_jsonl: "memory/flush_queue.jsonl".to_string(),
+            },
+        }
+    }
+
     #[test]
     fn test_format_memory_doctor_includes_conflicts_and_counts() {
         let docs = vec![MemoryDocument {
@@ -1938,12 +2096,15 @@ mod tests {
             content: "language: Chinese".to_string(),
         }];
         let lifecycle = default_memory_provider_lifecycle_panel();
-        let snapshot = crate::memory::MemoryManager::new().memory_snapshot_report();
-        let doctor = format_memory_doctor(
+        let snapshot = sample_memory_snapshot_report();
+        let doctor = format_memory_doctor_with_reports(
             &docs,
             &["- key 'language' conflicts".to_string()],
             &lifecycle,
             &snapshot,
+            sample_memory_calibration_results(),
+            sample_memory_eval_report(),
+            sample_memory_doctor_diagnostics(),
         );
         assert!(doctor.contains("Memory Doctor"));
         assert!(doctor.contains("Documents: 1 total"));
@@ -1970,8 +2131,16 @@ mod tests {
             content: "language: Chinese".to_string(),
         }];
         let lifecycle = default_memory_provider_lifecycle_panel();
-        let snapshot = crate::memory::MemoryManager::new().memory_snapshot_report();
-        let report = memory_doctor_json(&docs, &[], &lifecycle, &snapshot);
+        let snapshot = sample_memory_snapshot_report();
+        let report = memory_doctor_json_with_reports(
+            &docs,
+            &[],
+            &lifecycle,
+            &snapshot,
+            sample_memory_calibration_results(),
+            sample_memory_eval_report(),
+            sample_memory_doctor_diagnostics(),
+        );
         assert_eq!(report["documents"]["total"].as_u64(), Some(1));
         assert!(report["store_paths"]["records_jsonl"].is_string());
         assert!(report["store_paths"]["proposals_jsonl"].is_string());

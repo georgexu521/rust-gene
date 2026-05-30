@@ -468,6 +468,31 @@ pub fn is_file_read(session_id: &str, file_path: &str) -> bool {
     tracker.is_file_read(session_id, file_path)
 }
 
+/// Read-before-edit enforcement gate (env: PRIORITY_AGENT_READ_BEFORE_EDIT, default on).
+fn read_before_edit_enabled() -> bool {
+    std::env::var("PRIORITY_AGENT_READ_BEFORE_EDIT")
+        .unwrap_or_else(|_| "1".to_string())
+        .trim()
+        != "0"
+}
+
+/// Check that a file was read before writing/editing. Returns Some(error) if blocked.
+pub fn check_read_before_write(session_id: &str, file_path: &str) -> Option<ToolResult> {
+    if !read_before_edit_enabled() {
+        return None;
+    }
+    if !is_file_read(session_id, file_path) {
+        Some(ToolResult::error(format!(
+            "File '{}' has not been read yet in this session. \
+             Read the file first with file_read before editing or writing to it. \
+             (Set PRIORITY_AGENT_READ_BEFORE_EDIT=0 to disable this check.)",
+            file_path
+        )))
+    } else {
+        None
+    }
+}
+
 fn read_before_edit_status(
     session_id: &str,
     file_path: &str,
@@ -1295,7 +1320,16 @@ impl Tool for FileWriteTool {
             return ToolResult::error("Cannot write files in read-only mode");
         }
 
+        // Read-before-edit enforcement: file must be read before writing.
         let path_str = params["path"].as_str().unwrap_or("");
+        if let Ok(path) = resolve_read_path(path_str, &context.working_dir) {
+            if let Some(error) =
+                check_read_before_write(&context.session_id, &path.to_string_lossy())
+            {
+                return error;
+            }
+        }
+
         let content = params["content"].as_str().unwrap_or("");
 
         if path_str.is_empty() {
@@ -2216,7 +2250,16 @@ impl Tool for FileEditTool {
             return ToolResult::error("Cannot edit files in read-only mode");
         }
 
+        // Read-before-edit enforcement: file must be read before editing.
         let path_str = params["path"].as_str().unwrap_or("");
+        if let Ok(path) = resolve_read_path(path_str, &context.working_dir) {
+            if let Some(error) =
+                check_read_before_write(&context.session_id, &path.to_string_lossy())
+            {
+                return error;
+            }
+        }
+
         let old_string = params["old_string"].as_str().unwrap_or("");
         let new_string = params["new_string"].as_str().unwrap_or("");
         let insert_after = params["insert_after"].as_str();

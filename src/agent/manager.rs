@@ -3,11 +3,12 @@
 //! 管理所有 Agent 的生命周期
 
 use crate::agent::agent::{Agent, AgentConfig, AgentHandle};
+use crate::agent::progress::AgentProgressEvent;
 use crate::agent::types::{AgentId, AgentMessage, AgentStatus};
 use crate::engine::QueryEngine;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
-use tokio::sync::{mpsc, RwLock};
+use tokio::sync::{broadcast, mpsc, RwLock};
 use tracing::{debug, info};
 
 /// Agent 结果
@@ -363,6 +364,8 @@ pub struct AgentManager {
     /// 完成通知接收器（用于 wait_for_result 的事件驱动等待）
     completion_receivers:
         Arc<RwLock<HashMap<AgentId, tokio::sync::oneshot::Receiver<AgentResult>>>>,
+    /// Progress broadcast channels for sub-agents (one sender per agent).
+    progress_senders: Arc<RwLock<HashMap<AgentId, broadcast::Sender<AgentProgressEvent>>>>,
 }
 
 impl AgentManager {
@@ -377,6 +380,8 @@ impl AgentManager {
         let completion_receivers: Arc<
             RwLock<HashMap<AgentId, tokio::sync::oneshot::Receiver<AgentResult>>>,
         > = Arc::new(RwLock::new(HashMap::new()));
+        let progress_senders: Arc<RwLock<HashMap<AgentId, broadcast::Sender<AgentProgressEvent>>>> =
+            Arc::new(RwLock::new(HashMap::new()));
 
         // 启动周期性清理任务（每 30 秒回收已终止的 Agent 句柄和通道）。
         // Agent results remain available for resume/read until the capped result
@@ -429,6 +434,7 @@ impl AgentManager {
             query_engine: None,
             results,
             completion_receivers,
+            progress_senders,
         }
     }
 
@@ -568,6 +574,33 @@ impl AgentManager {
                     Err(anyhow::anyhow!("Agent {} not found", agent_id))
                 }
             }
+        }
+    }
+
+    /// Subscribe to progress events for a sub-agent.
+    ///
+    /// Returns a broadcast receiver that yields `AgentProgressEvent`s as the
+    /// sub-agent executes. The channel is created on first subscription.
+    /// Capacity: 64 events; lagging receivers will miss older events.
+    pub async fn subscribe_progress(
+        &self,
+        agent_id: &AgentId,
+    ) -> broadcast::Receiver<AgentProgressEvent> {
+        let mut senders = self.progress_senders.write().await;
+        if let Some(sender) = senders.get(agent_id) {
+            sender.subscribe()
+        } else {
+            let (tx, rx) = broadcast::channel(64);
+            senders.insert(agent_id.clone(), tx);
+            rx
+        }
+    }
+
+    /// Emit a progress event for a sub-agent (no-op if no subscribers).
+    pub async fn emit_progress(&self, agent_id: &AgentId, event: AgentProgressEvent) {
+        let senders = self.progress_senders.read().await;
+        if let Some(tx) = senders.get(agent_id) {
+            let _ = tx.send(event);
         }
     }
 

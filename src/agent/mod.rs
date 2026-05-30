@@ -12,6 +12,7 @@ pub mod forked_context;
 pub mod manager;
 pub mod memory;
 pub mod profiles;
+pub mod progress;
 pub mod roles;
 pub mod types;
 pub mod verification_agent;

@@ -1,10 +1,16 @@
 pub mod active;
 pub mod calibration;
 pub mod eval;
+pub mod extraction;
 pub mod manager;
+pub mod persistence;
 pub mod provider;
+pub mod provider_ops;
 pub mod quality;
+pub mod ranking;
 pub mod recall;
+pub mod reports;
+pub mod retrieval;
 pub mod safety;
 pub mod scoring;
 pub mod search_index;

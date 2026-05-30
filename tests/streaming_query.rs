@@ -1,6 +1,4 @@
 //! Integration test: streaming query pipeline.
-//!
-//! Verifies user message -> LLM response -> tool execution -> final response.
 
 use futures::StreamExt;
 use priority_agent::engine::streaming::StreamEvent;
@@ -10,7 +8,9 @@ mod common;
 
 #[tokio::test]
 async fn streaming_query_with_text_response() {
-    let provider = Arc::new(common::MockProvider::from_text("Hello from mock!"));
+    let provider = Arc::new(common::MockProvider::with_streams(vec![
+        common::stream_text_response("Hello from mock!"),
+    ]));
     let tool_registry = common::tool_registry();
 
     let engine = priority_agent::engine::streaming::StreamingQueryEngine::new(
@@ -40,42 +40,32 @@ async fn streaming_query_with_text_response() {
         events.iter().any(|e| matches!(e, StreamEvent::Complete)),
         "expected Complete event"
     );
+    assert!(
+        !events.iter().any(|e| matches!(e, StreamEvent::Error(_))),
+        "unexpected error event: {:?}",
+        events
+    );
 
-    // Assert: the provider was called exactly once.
+    let text = events
+        .iter()
+        .filter_map(|event| match event {
+            StreamEvent::TextChunk(text) => Some(text.as_str()),
+            _ => None,
+        })
+        .collect::<String>();
+    assert_eq!(text, "Hello from mock!");
+
     assert_eq!(provider.call_count(), 1);
 }
 
 #[tokio::test]
 async fn streaming_query_with_tool_call_roundtrip() {
-    // Provide enough mock responses for the engine's internal probes + main turn.
-    let provider = Arc::new(common::MockProvider::new(vec![
-        // Initial response: model requests a tool call.
-        priority_agent::services::api::ChatResponse {
-            content: "".to_string(),
-            tool_calls: Some(vec![priority_agent::services::api::ToolCall {
-                id: "call_1".to_string(),
-                name: "echo".to_string(),
-                arguments: serde_json::json!({"message": "hello"}),
-            }]),
-            usage: None,
-        },
-        // Final response after tool execution.
-        priority_agent::services::api::ChatResponse {
-            content: "Tool said: hello".to_string(),
-            tool_calls: None,
-            usage: None,
-        },
-        // Buffer responses for any internal probes.
-        priority_agent::services::api::ChatResponse {
-            content: "ok".to_string(),
-            tool_calls: None,
-            usage: None,
-        },
-        priority_agent::services::api::ChatResponse {
-            content: "ok".to_string(),
-            tool_calls: None,
-            usage: None,
-        },
+    let mut env = common::EnvGuard::acquire().await;
+    env.set("PRIORITY_AGENT_ROUTE_SCOPED_TOOLS", "0");
+
+    let provider = Arc::new(common::MockProvider::with_streams(vec![
+        common::calculate_tool_call_stream(),
+        common::stream_text_response("Tool said: 5"),
     ]));
 
     let tool_registry = common::tool_registry();
@@ -86,28 +76,51 @@ async fn streaming_query_with_tool_call_roundtrip() {
         "mock-model",
     );
 
-    let mut stream = engine.query_stream("use echo tool").await;
+    let mut stream = engine.query_stream("calculate 2 + 3").await;
     let mut events = Vec::new();
     while let Some(event) = stream.next().await {
         events.push(event);
     }
 
-    // The engine may make multiple calls internally; just assert it didn't error out.
     assert!(
-        provider.call_count() >= 1,
-        "expected at least one provider call, got {}",
-        provider.call_count()
+        !events.iter().any(|e| matches!(e, StreamEvent::Error(_))),
+        "unexpected error event: {:?}",
+        events
+    );
+    assert!(
+        events.iter().any(|e| matches!(e, StreamEvent::Complete)),
+        "expected Complete event, got: {:?}",
+        events
+    );
+    assert!(
+        events.iter().any(|event| matches!(
+            event,
+            StreamEvent::ToolExecutionStart { id, name, .. }
+                if id == "call_1" && name == "calculate"
+        )),
+        "expected calculate tool execution start, got: {:?}",
+        events
     );
 
-    // Assert: stream completed (either Complete or Error with known retry path).
-    let has_complete = events.iter().any(|e| matches!(e, StreamEvent::Complete));
-    let has_error = events.iter().any(|e| matches!(e, StreamEvent::Error(_)));
+    let tool_result = events.iter().find_map(|event| match event {
+        StreamEvent::ToolExecutionComplete { id, result, .. } if id == "call_1" => {
+            Some(result.as_str())
+        }
+        _ => None,
+    });
     assert!(
-        has_complete || has_error,
-        "expected Complete or Error event, got: {:?}",
-        events
-            .iter()
-            .map(|e| format!("{:?}", e))
-            .collect::<Vec<_>>()
+        tool_result.is_some_and(|result| result.contains("2 + 3 = 5")),
+        "expected successful calculate result, got: {:?}",
+        tool_result
     );
+
+    let text = events
+        .iter()
+        .filter_map(|event| match event {
+            StreamEvent::TextChunk(text) => Some(text.as_str()),
+            _ => None,
+        })
+        .collect::<String>();
+    assert!(text.contains("Tool said: 5"), "final text was: {text}");
+    assert_eq!(provider.call_count(), 2);
 }

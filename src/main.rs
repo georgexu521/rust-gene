@@ -376,6 +376,25 @@ async fn init_app_or_exit(working_dir: &std::path::Path) -> bootstrap::AppCompon
     }
 }
 
+#[cfg(feature = "experimental-api-server")]
+async fn init_api_or_exit(working_dir: &std::path::Path) -> bootstrap::ApiComponents {
+    match bootstrap::init_api_components(working_dir).await {
+        Ok(components) => components,
+        Err(e) => {
+            let msg = e.to_string();
+            if msg.contains("No LLM provider configured") {
+                error!("Provider init failed: {}", e);
+                eprintln!("Failed to initialize LLM provider: {}", e);
+                eprintln!("Hint: set MOONSHOT_API_KEY or OPENAI_API_KEY environment variable.");
+            } else {
+                error!("API bootstrap failed: {}", e);
+                eprintln!("Failed to initialize API components: {}", e);
+            }
+            std::process::exit(1);
+        }
+    }
+}
+
 #[tokio::main]
 async fn main() {
     // 解析命令行参数
@@ -422,7 +441,7 @@ async fn main() {
                     .and_then(|p| p.parse::<u16>().ok())
                     .unwrap_or(8787);
                 info!("Starting API server on port {}...", port);
-                let components = init_app_or_exit(&working_dir).await;
+                let components = init_api_or_exit(&working_dir).await;
                 if let Err(e) = api::start_server(
                     components.provider,
                     components.model,
