@@ -24,13 +24,17 @@ impl Tool for EnterPlanModeTool {
     }
 
     fn description(&self) -> &str {
-        concat!(
-            "Enter plan mode to design an implementation approach before coding. In plan mode, focus on exploration and planning.\n\n",
-            "While in plan mode, if you encounter ambiguous requirements or need to make a design decision ",
-            "where multiple valid options exist, use the `ask_user` tool to ask a clarifying question ",
-            "BEFORE submitting the final plan. Examples of when to ask: uncertain auth method (OAuth vs JWT), ",
-            "UI framework choice, API design approach, naming conventions, or scope boundaries."
-        )
+        "Enter plan mode — a read-only exploration phase before coding. \
+         In plan mode, file_write and file_edit are blocked; you can only read, \
+         search, and analyze. This prevents premature edits before understanding \
+         the full picture. \
+         \
+         Use plan mode when: the task spans multiple files, involves unfamiliar \
+         code, or requires architectural decisions. Skip it for trivial fixes. \
+         \
+         While in plan mode, if you hit an ambiguous design choice (auth method, \
+         framework selection, naming convention, scope boundary), use ask_user \
+         BEFORE submitting the plan. Exit plan mode with exit_plan_mode when ready."
     }
 
     fn parameters(&self) -> serde_json::Value {

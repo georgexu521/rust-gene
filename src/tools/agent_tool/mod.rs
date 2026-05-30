@@ -1617,14 +1617,19 @@ impl Tool for AgentTool {
     }
 
     fn description(&self) -> &str {
-        "Delegate a task to a sub-agent with memory and fork support. \
-         Use this for independent, parallel, non-blocking tasks, \
-         or when a bounded task requires specialized context. \
-         Do not delegate work that blocks the current next step or needs tight coordination. \
-         The sub-agent will work independently and report back when done. \
-         Built-in profiles: default, explorer, verifier, planner, implementer. \
-         Built-in templates: explore, verify, plan, review, debug, general. \
-         file context injection, agent memory (save/load/snapshot), and fork branches."
+        "Spawn an isolated sub-agent to handle a self-contained task independently. \
+         The sub-agent runs in its own loop with a forked tool set (write tools \
+         excluded by default for safety). It reports results back when done. \
+         \
+         Use this for: background research, codebase exploration, verification \
+         checks, or any task that can run without blocking the main conversation. \
+         Do NOT use for: tasks requiring tight coordination with the current step, \
+         tasks that need immediate results before the next action, or trivial \
+         one-liner questions. \
+         \
+         Built-in profiles: explorer (read-only survey), verifier (yes/no check), \
+         planner (design approach), implementer (code changes), debugger (fix bugs). \
+         Set a timeout — sub-agents that exceed it return partial results."
     }
 
     fn parameters(&self) -> serde_json::Value {

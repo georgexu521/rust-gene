@@ -1611,7 +1611,16 @@ impl Tool for MemoryLoadTool {
     }
 
     fn description(&self) -> &str {
-        "Load, search, or diagnose persistent memory from MEMORY.md, USER.md, memory/*.md, and agent memory namespaces."
+        "Load or search the agent's persistent memory across tiers: \
+         MEMORY.md (project facts/decisions), USER.md (user preferences), \
+         memory/*.md (topic files), and typed memory records. \
+         \
+         Actions: load (full content), search (filter by query), doctor (health \
+         summary), conflicts (find contradictory entries across tiers), \
+         review (recent decisions, flushes, conflicts). \
+         \
+         Memory is frozen at session start for cache consistency — recent writes \
+         may not appear until next session. Use memory_save to persist new facts."
     }
 
     fn parameters(&self) -> serde_json::Value {

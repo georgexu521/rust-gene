@@ -23,9 +23,18 @@ impl crate::tools::Tool for SkillManageTool {
     }
 
     fn description(&self) -> &str {
-        "Manage skills: list, view, create, patch, or delete SKILL.md files. \
-         Skills are declarative procedural knowledge that the agent can load on demand; \
-         created or patched skills are scanned before they become active."
+        "Manage agent skills — reusable playbooks that future turns can invoke. \
+         Skills are markdown files with frontmatter (description, allowed_tools, \
+         run_as mode). Use this to create, update, or remove skill definitions. \
+         \
+         Actions: list (show all installed skills), view (read a skill's full \
+         content), create (write a new SKILL.md), patch (update existing), \
+         delete (remove), reload (rescan after external changes). \
+         \
+         Created skills are scanned and become active immediately. Use skills \
+         for repeatable workflows (deployment, testing patterns, code review \
+         checklists). Do NOT use skills to save one-off task context — use \
+         memory_save for that."
     }
 
     fn parameters(&self) -> serde_json::Value {

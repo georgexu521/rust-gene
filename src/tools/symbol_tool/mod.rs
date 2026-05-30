@@ -16,10 +16,15 @@ impl Tool for SymbolQueryTool {
     }
 
     fn description(&self) -> &str {
-        "Query the codebase symbol index to find function/struct/enum/trait definitions. \
-         Useful for understanding project structure before making changes. \
-         Actions: 'search' (fuzzy name search), 'list_file' (all symbols in a file), \
-         'list_kind' (all symbols of a type, e.g. 'function', 'struct')."
+        "Query the codebase symbol index using tree-sitter — find where functions, \
+         structs, enums, traits, and modules are defined. Returns 1-based line/column \
+         positions with parent nesting. \
+         \
+         Actions: 'search' (fuzzy name lookup — 'where is X defined'), \
+         'list_file' (all symbols in a single file), 'list_kind' (all symbols \
+         of a given type across the project, e.g. 'all traits'). \
+         Grammar-aware — ignores names inside comments and strings. \
+         For cross-file reference tracing use grep; for file name search use glob."
     }
 
     fn parameters(&self) -> serde_json::Value {
