@@ -117,9 +117,9 @@ impl Tool for AskUserQuestionTool {
         // without waiting for user input. Controlled by PRIORITY_AGENT_AUTO_APPROVE
         // (default "1" in eval-run mode, set to "0" to require user interaction).
         if std::env::var("PRIORITY_AGENT_AUTO_APPROVE")
-            .unwrap_or_else(|_| "1".to_string())
+            .unwrap_or_else(|_| "0".to_string())
             .trim()
-            != "0"
+            == "1"
         {
             let answer = if options.is_empty() {
                 "auto-approved (non-interactive mode)".to_string()

@@ -19,15 +19,13 @@ impl Tool for GlobTool {
     }
 
     fn description(&self) -> &str {
-        "List files matching a glob pattern, sorted by modification time \
-         (most-recently-changed first). Use for 'what changed lately', \
-         'find all *.test.rs', 'all configs under src/'. \
+        "List files matching a glob pattern. Use for 'find all *.test.rs', \
+         'all configs under src/', 'what files are in this directory'. \
          Glob syntax: `*` (any chars in one segment), `**` (any segments), \
          `?` (one char), `{a,b}` (alternation). Pattern matches against \
          the path RELATIVE to the search root (e.g. 'src/**/*.rs'). \
-         Skips node_modules/.git/target/dist/build by default. \
          Different from grep (searches file CONTENTS) and search_files \
-         (substring on basename)."
+         (substring on file NAMES)."
     }
 
     fn parameters(&self) -> serde_json::Value {

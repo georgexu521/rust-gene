@@ -1234,7 +1234,7 @@ impl ContextCompressor {
             consecutive_no_gain_compactions: 0,
             max_consecutive_compaction_failures: 2,
             max_consecutive_no_gain_compactions: 2,
-            has_active_skills: false,
+            has_active_skills: true, // skills are loaded at session start
         }
     }
 
