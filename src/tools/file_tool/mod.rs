@@ -1067,8 +1067,16 @@ impl Tool for FileReadTool {
 
         // 文件缓存优化：如果文件在本会话中已读过且未变更，返回短信提示。
         // 但 offset/limit 读取是新的局部证据，不能被上一次全文读取短路掉。
+        // Skip cache short-circuit in eval/non-interactive mode so the model
+        // always sees full file content when reading the same file multiple times.
+        let eval_no_cache = std::env::var("PRIORITY_AGENT_EVAL_NO_FILE_CACHE")
+            .unwrap_or_default()
+            .trim()
+            == "1";
+
         if let Some(ref cache) = context.file_cache {
-            if !targeted_read
+            if !eval_no_cache
+                && !targeted_read
                 && cache.is_unchanged_since_last_read_for_session(&context.session_id, &path)
             {
                 let lines_count = content.lines().count();

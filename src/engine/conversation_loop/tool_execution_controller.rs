@@ -1,7 +1,9 @@
 use super::permission_controller::{PermissionController, PermissionRequestRuntime};
 use super::tool_call_lifecycle::{ToolCallLifecycle, ToolCallLifecycleRecord, ToolCallStatus};
 use super::tool_context_helpers::{tool_allowed_by_context, tool_not_allowed_result};
-use super::tool_execution::{read_only_tool_concurrency, tool_call_is_concurrency_safe};
+use super::tool_execution::{
+    read_only_tool_concurrency, tool_call_is_concurrency_safe, tool_call_is_read_only,
+};
 use super::tool_metadata::{
     attach_tool_contract_metadata, attach_tool_execution_metadata, merge_tool_result_metadata,
     persist_tool_outcome_learning_event, tool_execution_start_progress,
@@ -1745,14 +1747,23 @@ impl ToolExecutionController {
             }
 
             // Storm breaker: check for repeated calls before dispatching.
-            match storm_state.check(&tc.name, &tc.arguments) {
-                StormDecision::Suppress(reason) => {
-                    let storm_result = crate::tools::ToolResult::error(reason);
-                    results.push((tc.clone(), storm_result));
-                    scheduled_count += 1;
-                    continue;
+            // Skip for read-only tools — retrying file_read/glob/grep is legitimate
+            // when content was truncated or the agent needs different ranges.
+            let is_read_only = tool_call_is_read_only(
+                execution.tool_registry.as_ref(),
+                &tc.name,
+                &tc.arguments,
+            );
+            if !is_read_only {
+                match storm_state.check(&tc.name, &tc.arguments) {
+                    StormDecision::Suppress(reason) => {
+                        let storm_result = crate::tools::ToolResult::error(reason);
+                        results.push((tc.clone(), storm_result));
+                        scheduled_count += 1;
+                        continue;
+                    }
+                    StormDecision::Allow => {}
                 }
-                StormDecision::Allow => {}
             }
 
             let action_review = match gate.evaluate(tc, scheduled_count) {

@@ -133,6 +133,16 @@ async fn run_eval_task(
     let prompt = std::fs::read_to_string(&prompt_file)
         .map_err(|e| anyhow::anyhow!("failed to read prompt file '{}': {}", prompt_file, e))?;
 
+    // Eval-run optimizations: auto-approve ask_user, disable file cache
+    // short-circuit so the model always sees full file content, and skip
+    // storm breaker for read-only tools by default.
+    if std::env::var("PRIORITY_AGENT_AUTO_APPROVE").is_err() {
+        std::env::set_var("PRIORITY_AGENT_AUTO_APPROVE", "1");
+    }
+    if std::env::var("PRIORITY_AGENT_EVAL_NO_FILE_CACHE").is_err() {
+        std::env::set_var("PRIORITY_AGENT_EVAL_NO_FILE_CACHE", "1");
+    }
+
     let working_dir = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
 
     let mut event_writer = if let Some(path) = events_file.as_ref() {
