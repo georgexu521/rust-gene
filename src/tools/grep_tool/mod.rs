@@ -55,9 +55,11 @@ impl Tool for GrepTool {
     }
 
     fn description(&self) -> &str {
-        "Search for text patterns in files. \
-         Returns matching lines with file names and line numbers. \
-         Supports regular expressions."
+        "Recursively grep file CONTENTS for a substring or regex — \
+         'where is X called', 'what files contain Y'. Returns one match \
+         per line as path:line: text. Skips dependency/VCS/build dirs \
+         and binary files. For file NAMES use glob; for structured code \
+         queries use symbol_query or find_in_code."
     }
 
     fn parameters(&self) -> serde_json::Value {

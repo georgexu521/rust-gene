@@ -21,7 +21,11 @@ impl Tool for TodoWriteTool {
     }
 
     fn description(&self) -> &str {
-        "Create or update a structured todo list for the current task. Use this to break down complex tasks into steps and track progress. The todo list is displayed to the user."
+        "In-session task tracker for 3+ step work. NOT a plan — no approval \
+         gate, no checkpoint, no files touched. Each call REPLACES the entire \
+         list (set semantics). Exactly one item may be in_progress at a time; \
+         flip to completed the moment that step's done. Pass `[]` to clear. \
+         For approval gates use submit_plan; for branching choices use ask_user."
     }
 
     fn parameters(&self) -> serde_json::Value {

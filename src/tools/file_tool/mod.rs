@@ -934,10 +934,12 @@ impl Tool for FileReadTool {
     }
 
     fn description(&self) -> &str {
-        "Read the contents of a file or list a directory. \
-         Use this to view file contents, source code, configuration files, and directory entries. \
-         For directories, returns entry names only, with trailing '/' for subdirectories. \
-         Returns an error if the file doesn't exist or cannot be read."
+        "Read a file under the workspace root. Default returns FULL CONTENT. \
+         Optional scoping: limit (N lines), offset (1-indexed start line). \
+         For directories, returns entry names with trailing '/' for subdirectories. \
+         Files that are unchanged since last read return a short notice — \
+         this is NOT an error; use the content from the previous response. \
+         For finding files by name use glob; for searching file contents use grep."
     }
 
     fn parameters(&self) -> serde_json::Value {
@@ -1254,10 +1256,10 @@ impl Tool for FileWriteTool {
     }
 
     fn description(&self) -> &str {
-        "Write content to a file. \
-         Best for new files or intentional full-file replacement. \
-         Use file_edit for targeted changes to existing files. \
-         Creates parent directories as needed and replaces the entire file when it already exists."
+        "Create or overwrite a file with the given content. Parent directories \
+         are created as needed. For targeted changes to existing files, use \
+         file_edit instead — this tool replaces the entire file. You MUST \
+         read the file first with file_read (read-before-edit rule)."
     }
 
     fn parameters(&self) -> serde_json::Value {
@@ -2128,17 +2130,17 @@ impl Tool for FileEditTool {
     }
 
     fn description(&self) -> &str {
-        "Edit a file by replacing specific text. \
-         Use after reading the target file. \
-         Finds the old_string and replaces it with new_string. \
-         Fails if old_string is not found exactly once (unless expected_replacements is set). \
-         Supports insert_after and insert_before for adding new lines. \
+        "Apply a SEARCH/REPLACE edit to an existing file. \
+         You MUST call file_read on this path first — the tool refuses otherwise, \
+         since SEARCH must match on-disk bytes exactly. \
          \
-         CRITICAL: old_string must match EXACTLY, including all whitespace and indentation. \
-         Do not include file_read display prefixes such as `12 |`; those are not file content. \
-         If you are unsure about exact whitespace, use line_start + line_end instead: \
-         set line_start and line_end (1-indexed, inclusive) and provide new_string. \
-         This replaces the entire line range and is more reliable for multi-line edits."
+         `old_string` is whitespace-sensitive plain text (no regex) and must be \
+         UNIQUE in the file; otherwise the edit is refused to avoid surprise rewrites. \
+         Do NOT include file_read display prefixes like `12 |`; those are not file content. \
+         \
+         If you're unsure about exact whitespace, use line_start + line_end instead: \
+         set both (1-indexed, inclusive) and provide new_string for a reliable range replace. \
+         For coordinated changes across multiple files, use file_patch instead."
     }
 
     fn parameters(&self) -> serde_json::Value {

@@ -54,9 +54,14 @@ impl Tool for FilePatchTool {
     }
 
     fn description(&self) -> &str {
-        "Apply a multi-file patch atomically. Use this for coordinated changes across files. \
-         Each operation must be a targeted replace, line_range replace, insertion, or new-file/full-file write. \
-         Existing-file operations require prior file_read evidence and stale-read validation; use file_edit for a single-file edit."
+        "Apply N SEARCH/REPLACE edits across ONE OR MORE files in one call. \
+         Every target file must have been file_read'd first — the tool refuses \
+         the whole batch otherwise. Edits validate across the full batch before \
+         writing; validation failures leave all files untouched. \
+         Same per-edit rules as file_edit: search is exact text (whitespace \
+         sensitive, no regex) and must be unique in its target file. \
+         Use this for renames spanning multiple files, cross-file refactors, \
+         or any batch where you'd otherwise loop file_edit."
     }
 
     fn parameters(&self) -> Value {

@@ -1041,11 +1041,19 @@ impl Tool for BashTool {
     }
 
     fn description(&self) -> &str {
-        "Run shell commands for validation, git, package managers, and shell-only work. \
+        "Run a shell command in the project root; returns combined stdout+stderr. \
+         Allowlisted read-only/test/lint/typecheck commands run immediately; \
+         mutating/network/install commands gate on user confirmation. \
+         \
+         DO NOT use run_command for file operations — use file_read, file_write, \
+         file_edit instead. Shell utilities (echo, cp, sed, cat, tee) bypass \
+         validation, lack rollback, and will trigger confirmation gates. \
+         \
+         Supported: chains `|`/`||`/`&&`/`;` and file redirects `>`/`>>`/`<`. \
+         Rejected: background `&`, heredoc `<<`, `$(…)`, subshells. \
+         Filter at source — `grep -c` / `wc -l` / narrower paths over unbounded dumps. \
          Prefer glob, grep, and file_read for file search, listing, and reading. \
-         Do not infer size, item count, or creation time from ls -la. \
-         Do not use bash output as user-facing communication; summarize results. \
-         Be careful with destructive commands."
+         Do NOT use bash output as user-facing communication; summarize results."
     }
 
     fn parameters(&self) -> serde_json::Value {
