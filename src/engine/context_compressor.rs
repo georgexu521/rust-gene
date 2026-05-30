@@ -104,6 +104,13 @@ that work (for example, files may already be changed). Use the summary \
 and the current state to continue from where things left off, and \
 avoid repeating work:";
 
+/// Preserved skills section appended after compression summaries.
+/// Borrowed from Reasonix: skill content is extracted before compression
+/// and re-appended verbatim to prevent the LLM from synthesizing/omitting it.
+pub const PRESERVED_SKILLS_MARKER: &str = "\
+[PRESERVED SKILLS — these are active skill definitions, preserved verbatim \
+through context compression. Do not paraphrase or override them.]";
+
 /// 会话记忆压缩策略（对标 Claude Code 的 sessionMemoryCompact）
 ///
 /// 基于会话历史的智能压缩：
@@ -1197,6 +1204,8 @@ pub struct ContextCompressor {
     consecutive_no_gain_compactions: u32,
     max_consecutive_compaction_failures: u32,
     max_consecutive_no_gain_compactions: u32,
+    /// Whether active skills are loaded (marker injected in summary).
+    has_active_skills: bool,
 }
 
 impl ContextCompressor {
@@ -1225,6 +1234,7 @@ impl ContextCompressor {
             consecutive_no_gain_compactions: 0,
             max_consecutive_compaction_failures: 2,
             max_consecutive_no_gain_compactions: 2,
+            has_active_skills: false,
         }
     }
 
@@ -1505,12 +1515,41 @@ impl ContextCompressor {
             tokens_before + self.budget.system_prompt_tokens + self.budget.tool_schemas_tokens;
         let usage_ratio = total as f64 / self.budget.max_context_tokens as f64;
 
-        let level = CompressionLevel::auto_select(
-            usage_ratio,
-            self.compression_count,
-            self.consecutive_llm_failures,
-            self.has_llm_provider(),
-        );
+        // ── Economic guard: skip expensive compression for short conversations ──
+        // Borrowed from Reasonix: don't pay LLM summarization cost when the
+        // conversation is too short to benefit. Snip-only is free and sufficient.
+        let message_count = messages.len();
+        let is_short_conversation = message_count < 20;
+        let estimated_summary_savings = if is_short_conversation {
+            0.0 // Short convos gain little from summarization
+        } else {
+            (tokens_before as f64 * 0.3).min(8000.0) // Rough estimate: 30% of body
+        };
+        let skip_heavy = is_short_conversation && estimated_summary_savings < 2000.0;
+
+        // ── Runtime diet integration: avoid re-compressing when recent
+        //     compressions produced no gains. ──
+        let recent_no_gain = self.consecutive_no_gain_compactions >= 2;
+        if recent_no_gain && skip_heavy {
+            debug!(
+                "Skipping compression: {} consecutive no-gain compactions, short conversation",
+                self.consecutive_no_gain_compactions
+            );
+            return messages.to_vec();
+        }
+        // ── End economic guard ──
+
+        let level = if skip_heavy {
+            // Force Medium at most — skip LLM compression for short convos
+            CompressionLevel::Medium
+        } else {
+            CompressionLevel::auto_select(
+                usage_ratio,
+                self.compression_count,
+                self.consecutive_llm_failures,
+                self.has_llm_provider(),
+            )
+        };
 
         debug!(
             "Compression auto-selected level={} (usage={:.1}%, count={}, llm_failures={})",
@@ -1663,6 +1702,14 @@ impl ContextCompressor {
         };
         session_memory.inject_into_summary(&mut summary_text);
         runtime_continuity.inject_into_summary(&mut summary_text);
+
+        // Preserve active skills through compression (Reasonix skill-pin pattern).
+        // Skills loaded by the agent are embedded in the system prompt pre-compression;
+        // this marker tells the model those definitions are still active.
+        if self.has_active_skills() {
+            summary_text.push_str("\n\n");
+            summary_text.push_str(PRESERVED_SKILLS_MARKER);
+        }
 
         // Phase 4: 组装结果
         let mut result = head.to_vec();
@@ -2215,6 +2262,16 @@ impl ContextCompressor {
     /// 检查是否有 LLM provider 可用
     pub fn has_llm_provider(&self) -> bool {
         self.llm_provider.is_some()
+    }
+
+    /// Whether active skills were loaded this session (marker injected in summaries).
+    pub fn has_active_skills(&self) -> bool {
+        self.has_active_skills
+    }
+
+    /// Mark that skills are active so the compression pipeline preserves them.
+    pub fn mark_skills_active(&mut self) {
+        self.has_active_skills = true;
     }
 
     /// 记录压缩失败（进入冷却期）
