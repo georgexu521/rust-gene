@@ -392,8 +392,33 @@ impl PermissionContext {
 
         match self.mode {
             PermissionMode::ReadOnly => {
-                // 只读模式下，任何写入操作都需要确认
-                matches!(tool_name, "file_write" | "file_edit" | "bash" | "mcp_tool")
+                // 只读模式下，任何写入/修改/执行操作都需要确认
+                matches!(
+                    tool_name,
+                    "file_write"
+                        | "file_edit"
+                        | "file_patch"
+                        | "bash"
+                        | "powershell"
+                        | "mcp_tool"
+                        | "format"
+                        | "notebook"
+                        | "skill_manage"
+                        | "install_dependencies"
+                        | "remote_dev"
+                        | "worktree"
+                        | "plugin_manage"
+                        | "plugin_tool"
+                        | "memory_save"
+                        | "memory_clear"
+                        | "memory_tool"
+                        | "rewind"
+                        | "rewind_tool"
+                        | "start_dev_server"
+                        | "send_message"
+                        | "agent"
+                        | "agent_tool"
+                )
             }
             PermissionMode::AutoAll => {
                 // 开发者默认模式：减少常规编程中的打断，但保留显式规则和高风险兜底。
@@ -487,16 +512,23 @@ impl PermissionContext {
                     | "project_list"
                     | "memory_load"
                     | "skills_list"
+                    | "skill_list"
                     | "skill_view"
                     | "web_search"
+                    | "web_fetch"
                     | "list_mcp_resources"
                     | "read_mcp_resource"
                     | "cost"
                     | "context"
-                    | "context_vis"
+                    | "context_visualization"
                     | "diff"
-                    | "lsp"
                     | "symbol_query"
+                    | "git_status"
+                    | "git_diff"
+                    | "datetime"
+                    | "json_query"
+                    | "calculate"
+                    | "tool_search"
             );
         }
 

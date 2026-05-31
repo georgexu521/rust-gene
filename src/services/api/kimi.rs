@@ -35,7 +35,7 @@ const THINKING_BETA_HEADER: &str = "anthropic-beta";
 const THINKING_BETA_VALUE: &str = "interleaved-thinking=2025-05-14";
 
 /// Kimi API 配置
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct KimiConfig {
     pub api_key: String,
     pub base_url: String,
@@ -44,6 +44,18 @@ pub struct KimiConfig {
     pub thinking_enabled: bool,
     /// thinking budget（token 数），如果为 None 则使用 adaptive thinking
     pub thinking_budget: Option<u32>,
+}
+
+impl std::fmt::Debug for KimiConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("KimiConfig")
+            .field("api_key", &"[REDACTED]")
+            .field("base_url", &self.base_url)
+            .field("default_model", &self.default_model)
+            .field("thinking_enabled", &self.thinking_enabled)
+            .field("thinking_budget", &self.thinking_budget)
+            .finish()
+    }
 }
 
 impl KimiConfig {

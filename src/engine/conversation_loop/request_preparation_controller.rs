@@ -97,14 +97,17 @@ impl RequestPreparationController {
         Self::inject_memory_prefetch(&mut request_messages, &mut memory_context).await;
         let zone_envelope_stats = Self::normalize_context_zone_envelope(&mut request_messages);
         Self::record_context_zones(&request_messages, trace, &zone_envelope_stats);
+        let canonical_tools = crate::engine::cache_stability::canonicalize_provider_tools(tools);
+        Self::record_cache_stability_snapshot(&request_messages, &canonical_tools, trace);
 
-        let request_budget = ContextBudgetController::observe_request(&request_messages, tools);
+        let request_budget =
+            ContextBudgetController::observe_request(&request_messages, &canonical_tools);
         ContextBudgetController::record_runtime_diet(memory_context.runtime_diet, &request_budget);
 
         PreparedRequest {
             request: ChatRequest::new(model)
                 .with_messages(request_messages)
-                .with_tools(tools.to_vec())
+                .with_tools(canonical_tools)
                 .with_temperature(temperature),
         }
     }
@@ -128,10 +131,7 @@ impl RequestPreparationController {
             return;
         }
         let block = format!("<task-state>\n{}\n</task-state>", state.trim());
-        let insert_pos = match request_messages.first() {
-            Some(Message::System { .. }) => 1,
-            _ => 0,
-        };
+        let insert_pos = dynamic_tail_insert_pos(request_messages);
         request_messages.insert(insert_pos, Message::system(block));
     }
 
@@ -163,14 +163,7 @@ impl RequestPreparationController {
             ));
         }
         let block = sections.join("\n");
-        let insert_pos = request_messages
-            .iter()
-            .rposition(|message| matches!(message, Message::System { content } if content.contains("<task-state>")))
-            .map(|index| index + 1)
-            .unwrap_or_else(|| match request_messages.first() {
-                Some(Message::System { .. }) => 1,
-                _ => 0,
-            });
+        let insert_pos = dynamic_tail_insert_pos(request_messages);
         request_messages.insert(insert_pos, Message::system(block));
     }
 
@@ -644,6 +637,51 @@ impl RequestPreparationController {
             zone_provenance_markers: envelope_stats.provenance_markers,
         });
     }
+
+    fn record_cache_stability_snapshot(
+        request_messages: &[Message],
+        tools: &[Tool],
+        trace: &TraceCollector,
+    ) {
+        let stable_prefix = request_messages
+            .iter()
+            .find_map(|message| match message {
+                Message::System { content } if !is_dynamic_context_system_message(content) => {
+                    Some(content.as_str())
+                }
+                _ => None,
+            })
+            .unwrap_or("");
+        let manifest = crate::engine::cache_stability::provider_tool_schema_manifest(tools);
+        let dynamic_zone_messages = request_messages
+            .iter()
+            .filter(|message| {
+                matches!(message, Message::System { content } if is_dynamic_context_system_message(content))
+            })
+            .count();
+        let last_user_index = request_messages
+            .iter()
+            .rposition(|message| matches!(message, Message::User { .. }));
+        let dynamic_zones_before_last_user = request_messages
+            .iter()
+            .enumerate()
+            .filter(|(index, message)| {
+                matches!(message, Message::System { content } if is_dynamic_context_system_message(content))
+                    && last_user_index.map(|last_user| *index < last_user).unwrap_or(false)
+            })
+            .count();
+        trace.record(TraceEvent::CacheStabilitySnapshot {
+            stable_prefix_fingerprint: crate::engine::prompt_context::stable_fingerprint(
+                stable_prefix,
+            ),
+            tool_schema_fingerprint: manifest.fingerprint,
+            tool_schema_tokens: manifest.estimated_tokens,
+            tool_count: manifest.tool_count,
+            dynamic_zone_messages,
+            dynamic_zones_before_last_user,
+            message_count: request_messages.len(),
+        });
+    }
 }
 
 fn overflow_label(zone: &ContextZone) -> String {
@@ -651,6 +689,13 @@ fn overflow_label(zone: &ContextZone) -> String {
         .as_deref()
         .unwrap_or("within_budget")
         .to_string()
+}
+
+fn dynamic_tail_insert_pos(request_messages: &[Message]) -> usize {
+    request_messages
+        .iter()
+        .rposition(|message| matches!(message, Message::User { .. }))
+        .unwrap_or(request_messages.len())
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -1628,6 +1673,135 @@ mod tests {
             &prepared.request.messages[2],
             Message::User { content } if content == "change"
         ));
+    }
+
+    #[tokio::test]
+    async fn prepare_places_dynamic_task_zones_at_tail_after_history() {
+        let trace =
+            TraceCollector::new(TurnTrace::new("session-test".to_string(), 1, "next change"));
+        let mut runtime_diet = RuntimeDietSnapshot::new(true);
+        let route = crate::engine::intent_router::IntentRouter::new().route("修改 src/lib.rs");
+        let mut task_bundle = crate::engine::task_context::TaskContextBundle::new(
+            "修改 src/lib.rs",
+            ".",
+            route,
+            None,
+        );
+        task_bundle.add_file("src/lib.rs");
+        let required = vec!["cargo test -q".to_string()];
+        let contract = task_bundle.task_contract(&required);
+        let context_pack = task_bundle.context_pack(&contract);
+
+        let prepared = RequestPreparationController::prepare(RequestPreparationContext {
+            messages: &[
+                Message::system("base system prompt"),
+                Message::user("previous request"),
+                Message::assistant("previous answer"),
+                Message::user("next change"),
+            ],
+            working_dir: std::path::Path::new("."),
+            focused_repair_prompt: None,
+            agent_task_state: Some(&task_bundle.agent_state),
+            task_contract: Some(&contract),
+            context_pack: Some(&context_pack),
+            turn_retrieval_context: None,
+            retrieval_policy: RetrievalPolicy::None,
+            memory_manager: None,
+            provider: None,
+            session_store: None,
+            session_id: "session-test",
+            model: "test-model",
+            temperature: 0.2,
+            tools: &[],
+            trace: &trace,
+            runtime_diet: &mut runtime_diet,
+        })
+        .await;
+
+        assert!(matches!(
+            &prepared.request.messages[0],
+            Message::System { content } if content == "base system prompt"
+        ));
+        assert!(matches!(
+            &prepared.request.messages[1],
+            Message::User { content } if content == "previous request"
+        ));
+        assert!(matches!(
+            &prepared.request.messages[2],
+            Message::Assistant { content, .. } if content == "previous answer"
+        ));
+        assert!(matches!(
+            &prepared.request.messages[3],
+            Message::System { content }
+                if content.starts_with("<context_zones")
+                    && content.contains("<task-state>")
+                    && content.contains("<task-contract>")
+                    && content.contains("<context-pack>")
+        ));
+        assert!(matches!(
+            &prepared.request.messages[4],
+            Message::User { content } if content == "next change"
+        ));
+
+        let trace = trace.finish(crate::engine::trace::TurnStatus::Completed);
+        assert!(trace.events.iter().any(|event| matches!(
+            event,
+            TraceEvent::CacheStabilitySnapshot {
+                dynamic_zone_messages: 1,
+                dynamic_zones_before_last_user: 1,
+                ..
+            }
+        )));
+    }
+
+    #[tokio::test]
+    async fn prepare_sorts_provider_tools_for_schema_cache_stability() {
+        let trace =
+            TraceCollector::new(TurnTrace::new("session-tools".to_string(), 1, "use tools"));
+        let mut runtime_diet = RuntimeDietSnapshot::new(true);
+        let tools = vec![tool("zeta"), tool("alpha"), tool("middle")];
+
+        let prepared = RequestPreparationController::prepare(RequestPreparationContext {
+            messages: &[Message::user("use tools")],
+            working_dir: std::path::Path::new("."),
+            focused_repair_prompt: None,
+            agent_task_state: None,
+            task_contract: None,
+            context_pack: None,
+            turn_retrieval_context: None,
+            retrieval_policy: RetrievalPolicy::None,
+            memory_manager: None,
+            provider: None,
+            session_store: None,
+            session_id: "session-tools",
+            model: "test-model",
+            temperature: 0.2,
+            tools: &tools,
+            trace: &trace,
+            runtime_diet: &mut runtime_diet,
+        })
+        .await;
+
+        let tool_names = prepared
+            .request
+            .tools
+            .as_ref()
+            .unwrap()
+            .iter()
+            .map(|tool| tool.name.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(tool_names, vec!["alpha", "middle", "zeta"]);
+
+        let trace = trace.finish(crate::engine::trace::TurnStatus::Completed);
+        assert!(trace.events.iter().any(|event| matches!(
+            event,
+            TraceEvent::CacheStabilitySnapshot {
+                tool_count: 3,
+                tool_schema_tokens,
+                tool_schema_fingerprint,
+                ..
+            } if *tool_schema_tokens > 0 && !tool_schema_fingerprint.is_empty()
+        )));
     }
 
     #[tokio::test]

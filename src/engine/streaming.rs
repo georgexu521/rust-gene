@@ -8,9 +8,10 @@ use crate::services::api::{LlmProvider, Message};
 use crate::tools::ToolRegistry;
 use anyhow::Result;
 use futures::Stream;
+use parking_lot::RwLock;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 use tokio::sync::mpsc;
 use tracing::{debug, warn};
 
@@ -130,6 +131,7 @@ pub struct ContextUsageReport {
     pub history_tokens: u64,
     pub tool_count: usize,
     pub tool_schema_tokens: u64,
+    pub tool_schema_fingerprint: String,
     pub memory_snapshot_tokens: u64,
     pub relevant_memories: Vec<crate::memory::manager::MemoryMatch>,
     pub max_context_tokens: u64,
@@ -178,9 +180,9 @@ pub struct StreamingQueryEngine {
     /// 成本追踪器
     cost_tracker: Arc<tokio::sync::Mutex<crate::cost_tracker::CostTracker>>,
     /// 当前权限模式（可在运行时通过 TUI 命令切换）
-    permission_mode: Arc<std::sync::RwLock<crate::permissions::PermissionMode>>,
+    permission_mode: Arc<RwLock<crate::permissions::PermissionMode>>,
     /// 当前 CLI 会话内临时权限规则
-    session_permission_rules: Arc<std::sync::RwLock<crate::permissions::PermissionRules>>,
+    session_permission_rules: Arc<RwLock<crate::permissions::PermissionRules>>,
     /// 是否启用 LLM 驱动的记忆提取
     llm_memory_extraction: bool,
     /// 工具授权通道（用于交互式 MCP 授权）
@@ -227,10 +229,8 @@ impl StreamingQueryEngine {
             cost_tracker: Arc::new(tokio::sync::Mutex::new(
                 crate::cost_tracker::CostTracker::new(),
             )),
-            permission_mode: Arc::new(std::sync::RwLock::new(
-                crate::permissions::PermissionMode::AutoAll,
-            )),
-            session_permission_rules: Arc::new(std::sync::RwLock::new(
+            permission_mode: Arc::new(RwLock::new(crate::permissions::PermissionMode::AutoAll)),
+            session_permission_rules: Arc::new(RwLock::new(
                 crate::permissions::PermissionRules::new(),
             )),
             llm_memory_extraction: false,
@@ -282,17 +282,12 @@ impl StreamingQueryEngine {
 
     /// 当前持久化会话 ID。
     pub fn current_session_id(&self) -> Option<String> {
-        self.session_id
-            .read()
-            .map(|session_id| session_id.clone())
-            .unwrap_or_else(|poisoned| poisoned.into_inner().clone())
+        self.session_id.read().clone()
     }
 
     /// 切换当前持久化会话 ID。
     pub fn set_session_id(&self, session_id: impl Into<String>) {
-        if let Ok(mut current) = self.session_id.write() {
-            *current = Some(session_id.into());
-        }
+        *self.session_id.write() = Some(session_id.into());
     }
 
     /// 设置记忆快照（在 system prompt 中注入冻结的记忆）
@@ -348,6 +343,7 @@ impl StreamingQueryEngine {
         let before_messages = history_before.len();
         let compressed = {
             let mut compressor = self.compressor.lock().await;
+            compressor.set_llm_summary_stable_prefix(self.system_prompt.clone());
             if compressor.compaction_circuit_open() {
                 return Some(
                     compressor.record_compaction_decision(CompactionAttemptInput::new(
@@ -455,16 +451,11 @@ impl StreamingQueryEngine {
     }
 
     pub fn provider(&self) -> Arc<dyn LlmProvider> {
-        self.provider
-            .read()
-            .map(|provider| provider.clone())
-            .unwrap_or_else(|poisoned| poisoned.into_inner().clone())
+        self.provider.read().clone()
     }
 
     pub fn set_provider(&self, provider: Arc<dyn LlmProvider>, model: impl Into<String>) {
-        if let Ok(mut current) = self.provider.write() {
-            *current = provider.clone();
-        }
+        *self.provider.write() = provider.clone();
         self.set_model(model);
         let model = self.model_name();
         let profile =
@@ -480,9 +471,7 @@ impl StreamingQueryEngine {
 
     /// 运行时切换模型；下一次请求立即生效。
     pub fn set_model(&self, model: impl Into<String>) {
-        if let Ok(mut current) = self.model.write() {
-            *current = model.into();
-        }
+        *self.model.write() = model.into();
     }
 
     /// 设置系统提示词
@@ -545,7 +534,7 @@ impl StreamingQueryEngine {
 
     /// 设置权限模式
     pub fn with_permission_mode(mut self, mode: crate::permissions::PermissionMode) -> Self {
-        self.permission_mode = Arc::new(std::sync::RwLock::new(mode));
+        self.permission_mode = Arc::new(RwLock::new(mode));
         self
     }
 
@@ -577,31 +566,15 @@ impl StreamingQueryEngine {
 
     /// 运行时更新权限模式（供 TUI 命令调用）
     pub fn set_permission_mode(&self, mode: crate::permissions::PermissionMode) {
-        match self.permission_mode.write() {
-            Ok(mut guard) => *guard = mode,
-            Err(poisoned) => {
-                warn!("permission_mode RwLock poisoned during write, recovering");
-                *poisoned.into_inner() = mode;
-            }
-        }
+        *self.permission_mode.write() = mode;
     }
 
-    /// 获取当前权限模式
     pub fn permission_mode(&self) -> crate::permissions::PermissionMode {
-        match self.permission_mode.read() {
-            Ok(guard) => *guard,
-            Err(poisoned) => {
-                warn!("permission_mode RwLock poisoned during read, recovering");
-                *poisoned.into_inner()
-            }
-        }
+        *self.permission_mode.read()
     }
 
     pub fn add_session_permission_rule(&self, decision: &str, pattern: &str) {
-        let Ok(mut rules) = self.session_permission_rules.write() else {
-            warn!("session_permission_rules RwLock poisoned during write");
-            return;
-        };
+        let mut rules = self.session_permission_rules.write();
         let rule =
             crate::permissions::SourcedRule::new(pattern, crate::permissions::RuleSource::User);
         let target = match decision {
@@ -615,12 +588,8 @@ impl StreamingQueryEngine {
         }
     }
 
-    /// Remove a user-scoped session permission rule.
     pub fn remove_session_permission_rule(&self, decision: &str, pattern: &str) {
-        let Ok(mut rules) = self.session_permission_rules.write() else {
-            warn!("session_permission_rules RwLock poisoned during write");
-            return;
-        };
+        let mut rules = self.session_permission_rules.write();
         let target = match decision {
             "allow" => &mut rules.always_allow,
             "deny" => &mut rules.always_deny,
@@ -634,10 +603,7 @@ impl StreamingQueryEngine {
     }
 
     pub fn session_permission_rules(&self) -> crate::permissions::PermissionRules {
-        self.session_permission_rules
-            .read()
-            .map(|rules| rules.clone())
-            .unwrap_or_default()
+        self.session_permission_rules.read().clone()
     }
 
     /// 获取记忆管理器
@@ -725,6 +691,7 @@ impl StreamingQueryEngine {
             history_tokens,
             tool_count,
             tool_schema_tokens,
+            tool_schema_fingerprint,
             memory_snapshot_tokens,
             relevant_memories,
             max_context_tokens,
@@ -734,10 +701,7 @@ impl StreamingQueryEngine {
 
     /// 获取当前模型名
     pub fn model_name(&self) -> String {
-        self.model
-            .read()
-            .map(|model| model.clone())
-            .unwrap_or_default()
+        self.model.read().clone()
     }
 
     /// 获取当前 Provider 的 base URL（用于状态展示）
@@ -862,6 +826,7 @@ impl StreamingQueryEngine {
                             .await;
                         }
                         let mut comp = compressor.lock().await;
+                        comp.set_llm_summary_stable_prefix(engine.system_prompt.clone());
                         let compressed = comp.compress_async(&hist).await;
                         let compaction_record = comp.latest_compaction_record().cloned();
                         let after_tokens =
@@ -1224,6 +1189,7 @@ async fn reactive_context_retry_messages(
             return None;
         }
         let mut comp = compressor.lock().await;
+        comp.set_llm_summary_stable_prefix(system_prompt.to_string());
         comp.compress_async_with_strategy(
             &hist,
             crate::engine::context_collapse::ContextCompactionStrategy::ReactiveCompact,
@@ -1251,26 +1217,11 @@ async fn reactive_context_retry_messages(
 }
 
 fn estimate_registry_tool_schema_tokens(registry: &ToolRegistry) -> (usize, u64, String) {
-    let mut count = 0usize;
-    let mut tokens = 0u64;
-    let mut schema_text = String::new();
-    for tool in registry.iter_tools() {
-        count += 1;
-        let params = serde_json::to_string(&tool.parameters()).unwrap_or_default();
-        tokens += crate::engine::context_compressor::estimate_tokens(tool.name());
-        tokens += crate::engine::context_compressor::estimate_tokens(tool.description());
-        tokens += crate::engine::context_compressor::estimate_tokens(&params);
-        schema_text.push_str(tool.name());
-        schema_text.push('\n');
-        schema_text.push_str(tool.description());
-        schema_text.push('\n');
-        schema_text.push_str(&params);
-        schema_text.push('\n');
-    }
+    let manifest = crate::engine::cache_stability::registry_tool_schema_manifest(registry);
     (
-        count,
-        tokens,
-        crate::engine::prompt_context::stable_fingerprint(&schema_text),
+        manifest.tool_count,
+        manifest.estimated_tokens,
+        manifest.fingerprint,
     )
 }
 
@@ -1295,7 +1246,7 @@ struct StreamingEngineInner {
     goal_manager: Arc<crate::engine::session_goal::SessionGoalManager>,
     cost_tracker: Arc<tokio::sync::Mutex<crate::cost_tracker::CostTracker>>,
     permission_mode: crate::permissions::PermissionMode,
-    session_permission_rules: Arc<std::sync::RwLock<crate::permissions::PermissionRules>>,
+    session_permission_rules: Arc<RwLock<crate::permissions::PermissionRules>>,
     llm_memory_extraction: bool,
     approval_channel: Option<Arc<crate::engine::conversation_loop::ToolApprovalChannel>>,
     fallback_model: Option<String>,
@@ -1414,12 +1365,7 @@ impl StreamingEngineInner {
         )
         .with_max_iterations(self.max_iterations)
         .with_permission_mode(self.permission_mode)
-        .with_session_permission_rules(
-            self.session_permission_rules
-                .read()
-                .map(|rules| rules.clone())
-                .unwrap_or_default(),
-        )
+        .with_session_permission_rules(self.session_permission_rules.read().clone())
         .with_llm_memory_extraction(self.llm_memory_extraction)
         .with_compressor(self.compressor.clone())
         .with_trace_store(self.trace_store.clone())

@@ -138,8 +138,20 @@ impl Tool for GrepTool {
 
         info!("Grep search: '{}' in {:?}", pattern, search_path);
 
-        // 编译正则表达式
-        let regex = match regex::Regex::new(pattern) {
+        // 编译正则表达式（带 ReDoS 防护）
+        const MAX_PATTERN_LEN: usize = 1000;
+        if pattern.len() > MAX_PATTERN_LEN {
+            return ToolResult::error(format!(
+                "Regex pattern too long ({} chars, max {})",
+                pattern.len(),
+                MAX_PATTERN_LEN
+            ));
+        }
+        let regex = match regex::RegexBuilder::new(pattern)
+            .size_limit(1 << 20)
+            .dfa_size_limit(1 << 20)
+            .build()
+        {
             Ok(r) => r,
             Err(e) => {
                 return ToolResult::error(format!("Invalid regex pattern: {}", e));

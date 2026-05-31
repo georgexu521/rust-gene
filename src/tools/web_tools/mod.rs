@@ -163,7 +163,16 @@ impl Tool for WebSearchTool {
         let search_url = format!("https://html.duckduckgo.com/html/?q={}", encoded);
 
         let output = match tokio::process::Command::new("curl")
-            .args(["-sL", "--max-time", "15", "-A", "Mozilla/5.0", &search_url])
+            .args([
+                "-sL",
+                "--max-redirs",
+                "3",
+                "--max-time",
+                "15",
+                "-A",
+                "Mozilla/5.0",
+                &search_url,
+            ])
             .output()
             .await
         {

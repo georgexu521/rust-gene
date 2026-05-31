@@ -160,7 +160,14 @@ pub struct AgentTool;
 async fn load_file_context(files: &[String], working_dir: &Path) -> String {
     let mut context = String::new();
     for file in files {
-        let path = working_dir.join(file);
+        let path = match crate::tools::file_tool::resolve_path(file, working_dir) {
+            Ok(p) => p,
+            Err(e) => {
+                warn!("Access denied for context file '{}': {}", file, e);
+                context.push_str(&format!("\n## File: {}\n(access denied: {})\n", file, e));
+                continue;
+            }
+        };
         match tokio::fs::read_to_string(&path).await {
             Ok(content) => {
                 context.push_str(&format!("\n## File: {}\n```\n{}\n```\n", file, content));
@@ -1617,19 +1624,11 @@ impl Tool for AgentTool {
     }
 
     fn description(&self) -> &str {
-        "Spawn an isolated sub-agent to handle a self-contained task independently. \
-         The sub-agent runs in its own loop with a forked tool set (write tools \
-         excluded by default for safety). It reports results back when done. \
-         \
-         Use this for: background research, codebase exploration, verification \
-         checks, or any task that can run without blocking the main conversation. \
-         Do NOT use for: tasks requiring tight coordination with the current step, \
-         tasks that need immediate results before the next action, or trivial \
-         one-liner questions. \
-         \
-         Built-in profiles: explorer (read-only survey), verifier (yes/no check), \
-         planner (design approach), implementer (code changes), debugger (fix bugs). \
-         Set a timeout — sub-agents that exceed it return partial results."
+        "Spawn an isolated sub-agent for a self-contained task. \
+         It is an independent, parallel worker with a forked tool set; write tools are excluded by default. \
+         Use for background research, code exploration, verification, or work that can run in parallel. \
+         Do not use when delegation blocks the current next step, needs tight coordination, or is a trivial answer. \
+         Profiles: explorer, verifier, planner, implementer, debugger. Set timeout_secs; overdue agents return partial results."
     }
 
     fn parameters(&self) -> serde_json::Value {

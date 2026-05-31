@@ -156,7 +156,7 @@ use super::streaming::StreamEvent;
 /// with a corrected version, so the model sees a clean context.
 ///
 /// Controlled by `PRIORITY_AGENT_SELF_CORRECTION` (default on, set to "0" to disable).
-pub fn replace_last_assistant_message(messages: &mut Vec<Message>, correction: &str) {
+pub fn replace_last_assistant_message(messages: &mut [Message], correction: &str) {
     if std::env::var("PRIORITY_AGENT_SELF_CORRECTION")
         .unwrap_or_else(|_| "1".to_string())
         .trim()

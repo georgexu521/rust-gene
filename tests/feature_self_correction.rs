@@ -4,9 +4,15 @@
 
 use priority_agent::engine::conversation_loop::replace_last_assistant_message;
 use priority_agent::services::api::Message;
+use std::sync::Mutex;
+
+static ENV_LOCK: Mutex<()> = Mutex::new(());
 
 #[test]
 fn drift_signal_replaces_last_assistant() {
+    let _env_guard = ENV_LOCK.lock().unwrap();
+    std::env::remove_var("PRIORITY_AGENT_SELF_CORRECTION");
+
     let mut messages = vec![
         Message::user("Write a function in PascalCase"),
         Message::assistant("Here is the function in PascalCase:\n```rust\nfn MyFunc() {}\n```"),
@@ -22,7 +28,11 @@ fn drift_signal_replaces_last_assistant() {
         .iter()
         .filter(|m| matches!(m, Message::Assistant { .. }))
         .collect();
-    assert_eq!(assistant_msgs.len(), 1, "should still have one assistant message");
+    assert_eq!(
+        assistant_msgs.len(),
+        1,
+        "should still have one assistant message"
+    );
 
     // The assistant content should now contain the correction context.
     match &assistant_msgs[0] {
@@ -43,6 +53,9 @@ fn drift_signal_replaces_last_assistant() {
 
 #[test]
 fn no_drift_signal_leaves_messages_unchanged() {
+    let _env_guard = ENV_LOCK.lock().unwrap();
+    std::env::remove_var("PRIORITY_AGENT_SELF_CORRECTION");
+
     let mut messages = vec![
         Message::user("What is Rust?"),
         Message::assistant("Rust is a systems programming language."),
@@ -62,6 +75,7 @@ fn no_drift_signal_leaves_messages_unchanged() {
 
 #[test]
 fn self_correction_disabled_by_env() {
+    let _env_guard = ENV_LOCK.lock().unwrap();
     std::env::set_var("PRIORITY_AGENT_SELF_CORRECTION", "0");
 
     let original = "Here is the function in PascalCase";
@@ -75,7 +89,10 @@ fn self_correction_disabled_by_env() {
     // With env off, the original message should be preserved.
     match &messages[1] {
         Message::Assistant { content, .. } => {
-            assert_eq!(content, original, "original should be preserved when disabled");
+            assert_eq!(
+                content, original,
+                "original should be preserved when disabled"
+            );
         }
         _ => unreachable!(),
     }

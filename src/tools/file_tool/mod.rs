@@ -481,7 +481,12 @@ pub fn check_read_before_write(session_id: &str, file_path: &str) -> Option<Tool
     if !read_before_edit_enabled() {
         return None;
     }
-    if !is_file_read(session_id, file_path) {
+    // Use canonical path as the lookup key to match what FileReadTool records
+    // (canonicalize resolves symlinks like /var → /private/var on macOS).
+    let canonical_key = canonicalize_or_normalize(std::path::Path::new(file_path))
+        .to_string_lossy()
+        .to_string();
+    if !is_file_read(session_id, &canonical_key) && !is_file_read(session_id, file_path) {
         Some(ToolResult::error(format!(
             "File '{}' has not been read yet in this session. \
              Read the file first with file_read before editing or writing to it. \
@@ -934,12 +939,10 @@ impl Tool for FileReadTool {
     }
 
     fn description(&self) -> &str {
-        "Read a file under the workspace root. Default returns FULL CONTENT. \
-         Optional scoping: limit (N lines), offset (1-indexed start line). \
-         For directories, returns entry names with trailing '/' for subdirectories. \
-         Files that are unchanged since last read return a short notice — \
-         this is NOT an error; use the content from the previous response. \
-         For finding files by name use glob; for searching file contents use grep."
+        "Read a workspace file or directory. Files return full content by default; \
+         use limit and offset for line ranges. Directories list entries with '/' on \
+         subdirs. If unchanged since last read, reuse the previous content. Use glob \
+         for filenames and grep for content search."
     }
 
     fn parameters(&self) -> serde_json::Value {
@@ -1330,16 +1333,7 @@ impl Tool for FileWriteTool {
             return ToolResult::error("Cannot write files in read-only mode");
         }
 
-        // Read-before-edit enforcement: file must be read before writing.
         let path_str = params["path"].as_str().unwrap_or("");
-        if let Ok(path) = resolve_read_path(path_str, &context.working_dir) {
-            if let Some(error) =
-                check_read_before_write(&context.session_id, &path.to_string_lossy())
-            {
-                return error;
-            }
-        }
-
         let content = params["content"].as_str().unwrap_or("");
 
         if path_str.is_empty() {
@@ -1383,6 +1377,11 @@ impl Tool for FileWriteTool {
         } else {
             None
         };
+        if existed_before && !allow_edit_without_read() {
+            if let Some(error) = check_read_before_write(&context.session_id, &identity.state_key) {
+                return error;
+            }
+        }
         let (content_has_bom, content_body) = split_leading_text_bom(content);
         let encoding = existing_snapshot
             .as_ref()
@@ -2260,16 +2259,7 @@ impl Tool for FileEditTool {
             return ToolResult::error("Cannot edit files in read-only mode");
         }
 
-        // Read-before-edit enforcement: file must be read before editing.
         let path_str = params["path"].as_str().unwrap_or("");
-        if let Ok(path) = resolve_read_path(path_str, &context.working_dir) {
-            if let Some(error) =
-                check_read_before_write(&context.session_id, &path.to_string_lossy())
-            {
-                return error;
-            }
-        }
-
         let old_string = params["old_string"].as_str().unwrap_or("");
         let new_string = params["new_string"].as_str().unwrap_or("");
         let insert_after = params["insert_after"].as_str();
@@ -3055,6 +3045,7 @@ mod tests {
     async fn test_file_write_and_read() {
         let write_tool = FileWriteTool;
         let read_tool = FileReadTool;
+        let _ = tokio::fs::remove_file("/tmp/test_priority_agent_file.txt").await;
 
         let test_content = "Hello, World!";
         let params = json!({
@@ -3088,6 +3079,11 @@ mod tests {
             crate::engine::checkpoint::get_checkpoint_manager(session_id).await;
         checkpoint_manager.lock().await.clear_all().await.unwrap();
         tokio::fs::write(path, "old\n").await.unwrap();
+        mark_file_read(session_id, path);
+        mark_file_read(
+            session_id,
+            &canonicalize_or_normalize(Path::new(path)).to_string_lossy(),
+        );
 
         let result = write_tool
             .execute(
@@ -4872,7 +4868,13 @@ mod tests {
         let mut env = crate::test_utils::env_guard::EnvVarGuard::acquire().await;
         let tool = FileWriteTool;
         let path = "/tmp/test_priority_agent_write_checkpoint_failure.txt";
+        let session_id = "test-session-write-checkpoint-failure";
         tokio::fs::write(path, "before\n").await.unwrap();
+        mark_file_read(session_id, path);
+        mark_file_read(
+            session_id,
+            &canonicalize_or_normalize(Path::new(path)).to_string_lossy(),
+        );
 
         env.set("PRIORITY_AGENT_TEST_FAIL_CHECKPOINT", "1");
         let result = tool
@@ -4881,7 +4883,7 @@ mod tests {
                     "path": path,
                     "content": "after\n"
                 }),
-                ToolContext::new(".", "test-session-write-checkpoint-failure"),
+                ToolContext::new(".", session_id),
             )
             .await;
 

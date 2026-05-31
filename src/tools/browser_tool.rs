@@ -228,8 +228,8 @@ impl BrowserSession {
     async fn navigate(&mut self, url: &str) -> Result<()> {
         let params = serde_json::json!({ "url": url });
         let res = self.client.send("Page.navigate", params).await?;
-        if res["errorText"].as_str().is_some() {
-            anyhow::bail!("Navigation error: {}", res["errorText"].as_str().unwrap());
+        if let Some(err) = res["errorText"].as_str() {
+            anyhow::bail!("Navigation error: {}", err);
         }
         // 等待页面加载
         sleep(Duration::from_millis(500)).await;

@@ -15,6 +15,7 @@ pub struct ContextUsageSnapshot {
     pub provider_completion_tokens: Option<u64>,
     pub provider_reasoning_tokens: Option<u64>,
     pub provider_cached_tokens: Option<u64>,
+    pub provider_cache_miss_tokens: Option<u64>,
     pub reserved_output_tokens: u64,
     pub max_context_tokens: u64,
     pub total_request_tokens: u64,
@@ -41,6 +42,13 @@ impl ContextUsageSnapshot {
             latest_usage.and_then(|usage| usage.reasoning_tokens.map(u64::from));
         let provider_cached_tokens =
             latest_usage.and_then(|usage| usage.cached_tokens.map(u64::from));
+        let provider_cache_miss_tokens = latest_usage.map(|usage| {
+            crate::engine::cache_stability::prompt_cache_usage(
+                u64::from(usage.prompt_tokens),
+                usage.cached_tokens.map(u64::from),
+            )
+            .cache_miss_tokens
+        });
 
         let estimated_history_tokens = message_tokens;
         let total_request_tokens = message_tokens
@@ -69,6 +77,7 @@ impl ContextUsageSnapshot {
             provider_completion_tokens,
             provider_reasoning_tokens,
             provider_cached_tokens,
+            provider_cache_miss_tokens,
             reserved_output_tokens: profile.reserved_output_tokens,
             max_context_tokens: profile.context_window_tokens,
             total_request_tokens,
@@ -140,6 +149,7 @@ mod tests {
 
         assert_eq!(snapshot.provider_prompt_tokens, Some(10_000));
         assert_eq!(snapshot.provider_cached_tokens, Some(8_000));
+        assert_eq!(snapshot.provider_cache_miss_tokens, Some(2_000));
         assert_eq!(snapshot.provider_reasoning_tokens, Some(100));
         assert!(snapshot.pressure_tokens >= 18_500);
     }

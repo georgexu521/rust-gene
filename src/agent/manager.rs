@@ -9,7 +9,7 @@ use crate::engine::QueryEngine;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use tokio::sync::{broadcast, mpsc, RwLock};
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 /// Agent 结果
 #[derive(Debug, Clone)]
@@ -366,6 +366,8 @@ pub struct AgentManager {
         Arc<RwLock<HashMap<AgentId, tokio::sync::oneshot::Receiver<AgentResult>>>>,
     /// Progress broadcast channels for sub-agents (one sender per agent).
     progress_senders: Arc<RwLock<HashMap<AgentId, broadcast::Sender<AgentProgressEvent>>>>,
+    /// Running task JoinHandles for graceful shutdown.
+    task_handles: Arc<RwLock<HashMap<AgentId, tokio::task::JoinHandle<()>>>>,
 }
 
 impl AgentManager {
@@ -382,6 +384,8 @@ impl AgentManager {
         > = Arc::new(RwLock::new(HashMap::new()));
         let progress_senders: Arc<RwLock<HashMap<AgentId, broadcast::Sender<AgentProgressEvent>>>> =
             Arc::new(RwLock::new(HashMap::new()));
+        let task_handles: Arc<RwLock<HashMap<AgentId, tokio::task::JoinHandle<()>>>> =
+            Arc::new(RwLock::new(HashMap::new()));
 
         // 启动周期性清理任务（每 30 秒回收已终止的 Agent 句柄和通道）。
         // Agent results remain available for resume/read until the capped result
@@ -390,6 +394,7 @@ impl AgentManager {
         let channels_for_reaper = message_channels.clone();
         let receivers_for_reaper = completion_receivers.clone();
         let results_for_reaper = results.clone();
+        let handles_for_reaper = task_handles.clone();
         tokio::spawn(async move {
             let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(30));
             loop {
@@ -398,6 +403,7 @@ impl AgentManager {
                 let mut channels = channels_for_reaper.write().await;
                 let mut receivers = receivers_for_reaper.write().await;
                 let mut results_map = results_for_reaper.write().await;
+                let mut handles = handles_for_reaper.write().await;
 
                 let completed: Vec<_> = agents
                     .iter()
@@ -414,6 +420,7 @@ impl AgentManager {
                     agents.remove(&id);
                     channels.remove(&id);
                     receivers.remove(&id);
+                    handles.remove(&id);
                     debug!("Reaper cleaned up agent: {}", id);
                 }
 
@@ -435,6 +442,7 @@ impl AgentManager {
             results,
             completion_receivers,
             progress_senders,
+            task_handles,
         }
     }
 
@@ -503,9 +511,13 @@ impl AgentManager {
         let agent_id_for_task = agent_id.clone();
 
         // 启动 Agent
-        tokio::spawn(async move {
+        let agent_handle = tokio::spawn(async move {
             agent.run().await;
         });
+        {
+            let mut handles = self.task_handles.write().await;
+            handles.insert(agent_id.clone(), agent_handle);
+        }
 
         // 启动结果收集任务
         tokio::spawn(async move {
@@ -662,10 +674,50 @@ impl AgentManager {
 
         self.send_message(agent_id, stop_msg).await?;
 
+        // 等待 Agent 任务实际终止；等不到就强制 abort，避免后台继续执行工具。
+        let handle = { self.task_handles.write().await.remove(agent_id) };
+        if let Some(mut handle) = handle {
+            let timeout = tokio::time::Duration::from_secs(5);
+            match tokio::time::timeout(timeout, &mut handle).await {
+                Ok(Ok(())) => {}
+                Ok(Err(e)) if e.is_cancelled() => {}
+                Ok(Err(e)) => {
+                    warn!("Agent {} task panicked during shutdown: {:?}", agent_id, e);
+                }
+                Err(_) => {
+                    warn!("Agent {} did not terminate within 5s, aborting", agent_id);
+                    handle.abort();
+                    let _ = handle.await;
+                }
+            }
+        }
+
         // 移除通道
         {
             let mut channels = self.message_channels.write().await;
             channels.remove(agent_id);
+        }
+        {
+            let mut agents = self.agents.write().await;
+            agents.remove(agent_id);
+        }
+        {
+            let mut receivers = self.completion_receivers.write().await;
+            receivers.remove(agent_id);
+        }
+        {
+            let mut results = self.results.write().await;
+            results
+                .entry(agent_id.clone())
+                .or_insert_with(|| AgentResult {
+                    agent_id: agent_id.clone(),
+                    status: AgentStatus::Cancelled,
+                    content: "Agent cancelled".to_string(),
+                    completed_at: std::time::Instant::now(),
+                    tools_used: Vec::new(),
+                    confidence: 0.0,
+                    has_conflict: false,
+                });
         }
 
         info!("Killed agent: {}", agent_id);

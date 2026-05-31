@@ -831,15 +831,7 @@ pub fn estimate_messages_tokens(messages: &[Message]) -> u64 {
 
 /// 估算工具 schema 的 token 数
 pub fn estimate_tool_schemas_tokens(tools: &[crate::services::api::Tool]) -> u64 {
-    tools
-        .iter()
-        .map(|t| {
-            estimate_tokens(&t.name)
-                + estimate_tokens(&t.description)
-                + estimate_tokens(&serde_json::to_string(&t.parameters).unwrap_or_default())
-                + 10
-        })
-        .sum()
+    crate::engine::cache_stability::provider_tool_schema_manifest(tools).estimated_tokens
 }
 
 impl Message {
@@ -1180,6 +1172,8 @@ pub struct ContextCompressor {
     llm_provider: Option<std::sync::Arc<dyn crate::services::api::LlmProvider>>,
     /// LLM 摘要用的模型名
     llm_model: String,
+    /// Stable prefix reused when the main agent asks the summary model to compact context.
+    llm_summary_stable_prefix: Option<String>,
     /// 压缩前总 token 数（累积）
     total_tokens_before: u64,
     /// 压缩后总 token 数（累积）
@@ -1220,6 +1214,7 @@ impl ContextCompressor {
             cooldown_secs: 600, // 10 分钟冷却
             llm_provider: None,
             llm_model: String::new(),
+            llm_summary_stable_prefix: None,
             total_tokens_before: 0,
             total_tokens_after: 0,
             llm_compression_attempts: 0,
@@ -1388,6 +1383,24 @@ impl ContextCompressor {
         self.llm_provider = Some(provider);
         self.llm_model = model.into();
         self
+    }
+
+    pub fn set_llm_summary_stable_prefix(&mut self, prefix: impl Into<String>) {
+        let prefix = prefix.into();
+        if prefix.trim().is_empty() {
+            self.llm_summary_stable_prefix = None;
+        } else {
+            self.llm_summary_stable_prefix = Some(prefix);
+        }
+    }
+
+    pub fn set_llm_summary_stable_prefix_from_messages(&mut self, messages: &[Message]) {
+        if let Some(prefix) = messages.iter().find_map(|message| match message {
+            Message::System { content } if !content.trim().is_empty() => Some(content.clone()),
+            _ => None,
+        }) {
+            self.llm_summary_stable_prefix = Some(prefix);
+        }
     }
 
     /// 检查是否在冷却期（压缩失败后）
@@ -2243,9 +2256,14 @@ impl ContextCompressor {
             "Summarize this conversation into 8 sections: Goal, Constraints & Preferences, Progress (Done/InProgress/Blocked), Key Decisions, Relevant Files, Next Steps, Critical Context, Tools & Patterns.\n\n{}",
             &conversation.chars().take(8000).collect::<String>()
         );
+        let mut summary_messages = Vec::new();
+        if let Some(prefix) = self.llm_summary_stable_prefix.as_deref() {
+            summary_messages.push(crate::services::api::Message::system(prefix));
+        }
+        summary_messages.push(crate::services::api::Message::user(&prompt));
 
-        let request = crate::services::api::ChatRequest::new(&self.llm_model)
-            .with_messages(vec![crate::services::api::Message::user(&prompt)]);
+        let request =
+            crate::services::api::ChatRequest::new(&self.llm_model).with_messages(summary_messages);
 
         match provider.chat(request).await {
             Ok(response) => {
@@ -3063,6 +3081,44 @@ mod tests {
         }
     }
 
+    struct CapturingLlmProvider {
+        requests: std::sync::Mutex<Vec<ChatRequest>>,
+        response: String,
+    }
+
+    #[async_trait]
+    impl LlmProvider for CapturingLlmProvider {
+        async fn chat(&self, request: ChatRequest) -> anyhow::Result<ChatResponse> {
+            self.requests.lock().unwrap().push(request);
+            Ok(ChatResponse {
+                content: self.response.clone(),
+                tool_calls: None,
+                usage: Some(Usage {
+                    prompt_tokens: 100,
+                    completion_tokens: 50,
+                    total_tokens: 150,
+                    reasoning_tokens: None,
+                    cached_tokens: Some(80),
+                }),
+            })
+        }
+
+        async fn chat_stream(
+            &self,
+            _request: ChatRequest,
+        ) -> anyhow::Result<ChatCompletionResponseStream> {
+            unimplemented!()
+        }
+
+        fn base_url(&self) -> &str {
+            "http://localhost"
+        }
+
+        fn default_model(&self) -> &str {
+            "mock-model"
+        }
+    }
+
     #[tokio::test]
     async fn test_compress_async_with_llm_success() {
         let summary_text = "## Goal\nTest goal\n\n## Constraints\n\n## Progress\n\n## Key Decisions\n\n## Relevant Files\n\n## Next Steps\n\n## Critical Context\n\n## Tools & Patterns\n";
@@ -3072,7 +3128,7 @@ mod tests {
 
         let mut compressor = ContextCompressor::new(1000).with_llm_provider(provider, "mock-model");
 
-        let messages = vec![
+        let mut messages = vec![
             Message::system("You are a helpful assistant."),
             Message::user("Hello"),
             Message::assistant("Hi!"),
@@ -3081,6 +3137,12 @@ mod tests {
             Message::user("What's 2+2?"),
             Message::assistant("4"),
         ];
+        for i in 0..24 {
+            messages.push(Message::user(format!(
+                "Long context item {i}: {}",
+                "project detail ".repeat(80)
+            )));
+        }
 
         let compressed = compressor.compress_async(&messages).await;
 
@@ -3103,12 +3165,43 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn llm_summary_request_reuses_main_agent_stable_prefix() {
+        let summary_text = "## Goal\nTest goal\n\n## Constraints\n\n## Progress\n\n## Key Decisions\n\n## Relevant Files\n\n## Next Steps\n\n## Critical Context\n\n## Tools & Patterns\n";
+        let provider = std::sync::Arc::new(CapturingLlmProvider {
+            requests: std::sync::Mutex::new(Vec::new()),
+            response: summary_text.to_string(),
+        });
+        let mut compressor =
+            ContextCompressor::new(1000).with_llm_provider(provider.clone(), "mock-model");
+        compressor.set_llm_summary_stable_prefix("MAIN AGENT STABLE PREFIX");
+
+        let messages = vec![
+            Message::user("First task"),
+            Message::assistant("First answer"),
+            Message::user("Second task"),
+        ];
+        let summary = compressor.llm_summarize_middle(&messages).await;
+
+        assert!(summary.is_some());
+        let requests = provider.requests.lock().unwrap();
+        assert_eq!(requests.len(), 1);
+        assert!(matches!(
+            &requests[0].messages[0],
+            Message::System { content } if content == "MAIN AGENT STABLE PREFIX"
+        ));
+        assert!(matches!(
+            &requests[0].messages[1],
+            Message::User { content } if content.contains("Summarize this conversation")
+        ));
+    }
+
+    #[tokio::test]
     async fn test_compress_async_falls_back_when_llm_fails() {
         let provider = std::sync::Arc::new(MockLlmProvider { response: None });
 
         let mut compressor = ContextCompressor::new(1000).with_llm_provider(provider, "mock-model");
 
-        let messages = vec![
+        let mut messages = vec![
             Message::system("You are a helpful assistant."),
             Message::user("Hello"),
             Message::assistant("Hi!"),
@@ -3117,6 +3210,12 @@ mod tests {
             Message::user("What's 2+2?"),
             Message::assistant("4"),
         ];
+        for i in 0..24 {
+            messages.push(Message::user(format!(
+                "Long context item {i}: {}",
+                "project detail ".repeat(80)
+            )));
+        }
 
         let compressed = compressor.compress_async(&messages).await;
 

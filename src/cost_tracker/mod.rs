@@ -37,7 +37,11 @@ pub struct TokenCount {
     pub completion: u64,
     pub total: u64,
     /// Cached prompt tokens (prefix cache hits from provider)
+    #[serde(default)]
     pub cached: u64,
+    /// Prompt tokens charged as cache misses by the provider.
+    #[serde(default)]
+    pub cache_miss: u64,
 }
 
 /// 模型统计
@@ -185,13 +189,20 @@ impl CostTracker {
         cached_tokens: Option<u64>,
     ) {
         self.total_requests += 1;
-        let cached = cached_tokens.unwrap_or(0);
+        let cache_usage =
+            crate::engine::cache_stability::prompt_cache_usage(prompt_tokens, cached_tokens);
         self.total_tokens.prompt += prompt_tokens;
         self.total_tokens.completion += completion_tokens;
         self.total_tokens.total += prompt_tokens + completion_tokens;
-        self.total_tokens.cached += cached;
+        self.total_tokens.cached += cache_usage.cached_tokens;
+        self.total_tokens.cache_miss += cache_usage.cache_miss_tokens;
 
-        let cost = calculate_cost(model, prompt_tokens, completion_tokens, cached);
+        let cost = calculate_cost(
+            model,
+            prompt_tokens,
+            completion_tokens,
+            cache_usage.cached_tokens,
+        );
         self.estimated_cost_usd += cost;
 
         // 更新模型统计
@@ -200,7 +211,8 @@ impl CostTracker {
         stats.tokens.prompt += prompt_tokens;
         stats.tokens.completion += completion_tokens;
         stats.tokens.total += prompt_tokens + completion_tokens;
-        stats.tokens.cached += cached;
+        stats.tokens.cached += cache_usage.cached_tokens;
+        stats.tokens.cache_miss += cache_usage.cache_miss_tokens;
         stats.estimated_cost += cost;
     }
 
@@ -430,12 +442,14 @@ impl CostTracker {
         let completion = self.total_tokens.completion;
         let total = self.total_tokens.total;
         let cached = self.total_tokens.cached;
+        let cache_miss = self.total_tokens.cache_miss;
         let prompt_pct = (prompt as f64 / total as f64) * 100.0;
         let cached_info = if cached > 0 {
             format!(
-                " cached={} ({:.1}% saved)",
+                " cached={} miss={} hit_rate={:.1}%",
                 cached,
-                (cached as f64 / prompt as f64) * 100.0
+                cache_miss,
+                prompt_cache_hit_rate_percent(prompt, cached)
             )
         } else {
             String::new()
@@ -509,6 +523,12 @@ impl CostTracker {
             "session_duration_secs": self.session_duration().as_secs(),
             "total_requests": self.total_requests,
             "tokens": self.total_tokens,
+            "prompt_cache": {
+                "prompt_tokens": self.total_tokens.prompt,
+                "cached_tokens": self.total_tokens.cached,
+                "cache_miss_tokens": self.total_tokens.cache_miss,
+                "hit_rate": prompt_cache_hit_rate(self.total_tokens.prompt, self.total_tokens.cached),
+            },
             "estimated_cost_usd": self.estimated_cost_usd,
             "model_usage": self.model_usage,
             "tool_metrics_summary": {
@@ -567,6 +587,12 @@ impl CostTracker {
             "summary": {
                 "total_requests": self.total_requests,
                 "total_tokens": self.total_tokens,
+                "prompt_cache": {
+                    "prompt_tokens": self.total_tokens.prompt,
+                    "cached_tokens": self.total_tokens.cached,
+                    "cache_miss_tokens": self.total_tokens.cache_miss,
+                    "hit_rate": prompt_cache_hit_rate(self.total_tokens.prompt, self.total_tokens.cached),
+                },
                 "estimated_cost_usd": self.estimated_cost_usd,
                 "tool_usage": self.tool_usage,
                 "tool_metrics": self.tool_metrics,
@@ -595,6 +621,7 @@ impl CostTracker {
 Session Duration: {}m {}s
 Total Requests: {}
 Total Tokens: {} (prompt: {}, completion: {})
+Prompt Cache: cached {} / miss {} / hit_rate {:.1}%
 Estimated Cost: ${:.4}
 
 Model Usage:
@@ -608,10 +635,51 @@ Tool Usage:
             self.total_tokens.total,
             self.total_tokens.prompt,
             self.total_tokens.completion,
+            self.total_tokens.cached,
+            self.total_tokens.cache_miss,
+            prompt_cache_hit_rate_percent(self.total_tokens.prompt, self.total_tokens.cached),
             self.estimated_cost_usd,
             self.format_model_usage(),
             self.format_tool_usage()
         )
+    }
+
+    pub fn prompt_cache_report(&self) -> String {
+        let mut lines = vec![
+            "Prompt Cache Report".to_string(),
+            "===================".to_string(),
+            format!("Requests: {}", self.total_requests),
+            format!("Prompt Tokens: {}", self.total_tokens.prompt),
+            format!("Cached Tokens: {}", self.total_tokens.cached),
+            format!("Cache Miss Tokens: {}", self.total_tokens.cache_miss),
+            format!(
+                "Hit Rate: {:.1}%",
+                prompt_cache_hit_rate_percent(self.total_tokens.prompt, self.total_tokens.cached)
+            ),
+        ];
+
+        if self.model_usage.is_empty() {
+            lines.push("Model Usage: (no data)".to_string());
+            return lines.join("\n");
+        }
+
+        lines.push("".to_string());
+        lines.push("By Model:".to_string());
+        let mut rows = self.model_usage.iter().collect::<Vec<_>>();
+        rows.sort_by(|left, right| left.0.cmp(right.0));
+        for (model, stats) in rows {
+            lines.push(format!(
+                "  {}: {} requests, prompt={}, cached={}, miss={}, hit_rate={:.1}%",
+                model,
+                stats.requests,
+                stats.tokens.prompt,
+                stats.tokens.cached,
+                stats.tokens.cache_miss,
+                prompt_cache_hit_rate_percent(stats.tokens.prompt, stats.tokens.cached)
+            ));
+        }
+
+        lines.join("\n")
     }
 
     fn format_model_usage(&self) -> String {
@@ -622,8 +690,13 @@ Tool Usage:
         self.model_usage
             .iter()
             .map(|(model, stats)| {
-                let cached_info = if stats.tokens.cached > 0 {
-                    format!(" (cached: {})", stats.tokens.cached)
+                let cached_info = if stats.tokens.cached > 0 || stats.tokens.cache_miss > 0 {
+                    format!(
+                        " (cached: {}, miss: {}, hit_rate: {:.1}%)",
+                        stats.tokens.cached,
+                        stats.tokens.cache_miss,
+                        prompt_cache_hit_rate_percent(stats.tokens.prompt, stats.tokens.cached)
+                    )
                 } else {
                     String::new()
                 };
@@ -666,6 +739,18 @@ fn classify_tool_failure_reason(error: Option<&str>) -> String {
     } else {
         "other".to_string()
     }
+}
+
+fn prompt_cache_hit_rate(prompt_tokens: u64, cached_tokens: u64) -> f64 {
+    if prompt_tokens == 0 {
+        0.0
+    } else {
+        cached_tokens.min(prompt_tokens) as f64 / prompt_tokens as f64
+    }
+}
+
+fn prompt_cache_hit_rate_percent(prompt_tokens: u64, cached_tokens: u64) -> f64 {
+    prompt_cache_hit_rate(prompt_tokens, cached_tokens) * 100.0
 }
 
 fn percentile_sorted(sorted: &[u64], p: f64) -> f64 {
@@ -824,6 +909,24 @@ mod tests {
         assert!(summary.contains("total=1500"));
         assert!(summary.contains("prompt=1000"));
         assert!(summary.contains("completion=500"));
+    }
+
+    #[test]
+    fn test_prompt_cache_miss_tracking_and_report() {
+        let mut tracker = CostTracker::new();
+        tracker.record_api_call("kimi-k2.5", 1000, 500, Some(800));
+
+        assert_eq!(tracker.total_tokens.cached, 800);
+        assert_eq!(tracker.total_tokens.cache_miss, 200);
+        let summary = tracker.token_summary();
+        assert!(summary.contains("cached=800"));
+        assert!(summary.contains("miss=200"));
+        assert!(summary.contains("hit_rate=80.0%"));
+
+        let report = tracker.prompt_cache_report();
+        assert!(report.contains("Cache Miss Tokens: 200"));
+        assert!(report.contains("Hit Rate: 80.0%"));
+        assert!(report.contains("kimi-k2.5"));
     }
 
     #[test]

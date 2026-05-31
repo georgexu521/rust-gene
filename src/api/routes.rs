@@ -305,9 +305,7 @@ async fn call_tool_handler(
     State(state): State<Arc<ApiState>>,
     Json(req): Json<ToolCallRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
-    // 危险工具禁止通过 API 远程调用
-    const DANGEROUS_TOOLS: &[&str] = &["bash", "file_write", "file_edit"];
-    if DANGEROUS_TOOLS.contains(&req.tool.as_str()) {
+    if !api_tool_call_allowed(&req.tool, &req.params) {
         return Err(ApiError::Forbidden(format!(
             "tool '{}' is not allowed via API for security reasons",
             req.tool
@@ -321,6 +319,37 @@ async fn call_tool_handler(
     let result = state.call_tool(&req.tool, req.params, &session_id).await?;
 
     Ok((StatusCode::OK, Json(result)))
+}
+
+pub(crate) fn api_tool_call_allowed(tool: &str, params: &serde_json::Value) -> bool {
+    match tool {
+        // Local read/search helpers.
+        "file_read"
+        | "grep"
+        | "glob"
+        | "project_list"
+        | "git_status"
+        | "git_diff"
+        | "diff"
+        | "calculate"
+        | "datetime"
+        | "json_query"
+        | "context"
+        | "context_visualization"
+        | "tool_search"
+        | "symbol_query" => true,
+        // Public-network read tools are explicitly allowed; browser automation is not.
+        "web_search" | "web_fetch" => true,
+        // Task output can append, so only the default/get action is allowed remotely.
+        "task_get" | "task_list" => true,
+        "task_output" => params["action"]
+            .as_str()
+            .map(|action| action == "get")
+            .unwrap_or(true),
+        // Cost reads API-local accounting; ApiState injects the tracker for this call.
+        "cost" => true,
+        _ => false,
+    }
 }
 
 // ── Config Handlers ────────────────────────────────────
@@ -515,6 +544,14 @@ async fn export_audit_handler(
             return Err(ApiError::BadRequest(
                 "absolute paths are not allowed".into(),
             ));
+        }
+        // 限制路径长度（防止路径截断或缓冲区问题）
+        const MAX_PATH_LEN: usize = 4096;
+        if path_str.len() > MAX_PATH_LEN {
+            return Err(ApiError::BadRequest(format!(
+                "path too long (max {} chars)",
+                MAX_PATH_LEN
+            )));
         }
         Some(path)
     } else {
@@ -824,34 +861,42 @@ async fn v1_run_trigger_handler(
 
 async fn bridge_auth_middleware(req: Request<Body>, next: Next) -> Response {
     let configured = configured_bridge_tokens();
-    if !configured.is_empty() {
-        let bearer = req
-            .headers()
-            .get(axum::http::header::AUTHORIZATION)
-            .and_then(|v| v.to_str().ok())
-            .and_then(|v| v.strip_prefix("Bearer "))
-            .map(str::trim);
-        let header_token = req
-            .headers()
-            .get("x-bridge-token")
-            .and_then(|v| v.to_str().ok())
-            .map(str::trim);
-        let authed = bearer
+    if configured.is_empty() {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(json!({
+                "error": "bridge authentication not configured",
+                "status": 403
+            })),
+        )
+            .into_response();
+    }
+    let bearer = req
+        .headers()
+        .get(axum::http::header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "))
+        .map(str::trim);
+    let header_token = req
+        .headers()
+        .get("x-bridge-token")
+        .and_then(|v| v.to_str().ok())
+        .map(str::trim);
+    let authed = bearer
+        .map(|t| configured.iter().any(|x| x == t))
+        .unwrap_or(false)
+        || header_token
             .map(|t| configured.iter().any(|x| x == t))
-            .unwrap_or(false)
-            || header_token
-                .map(|t| configured.iter().any(|x| x == t))
-                .unwrap_or(false);
-        if !authed {
-            return (
-                StatusCode::UNAUTHORIZED,
-                Json(json!({
-                    "error": "unauthorized",
-                    "status": 401
-                })),
-            )
-                .into_response();
-        }
+            .unwrap_or(false);
+    if !authed {
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(json!({
+                "error": "unauthorized",
+                "status": 401
+            })),
+        )
+            .into_response();
     }
     next.run(req).await
 }
@@ -864,8 +909,12 @@ mod tests {
     };
     use async_openai::types::ChatCompletionResponseStream;
     use axum::body::to_bytes;
+    use once_cell::sync::Lazy;
     use std::time::Instant;
     use tower::util::ServiceExt;
+
+    static ENV_LOCK: Lazy<tokio::sync::Mutex<()>> = Lazy::new(|| tokio::sync::Mutex::new(()));
+    const TEST_BRIDGE_TOKEN: &str = "test-bridge-token";
 
     struct MockProvider;
 
@@ -920,8 +969,44 @@ mod tests {
         assert_eq!(tokens, vec!["a", "b", "c", "d"]);
     }
 
+    #[test]
+    fn test_api_tool_allowlist_uses_registered_read_only_names() {
+        assert!(api_tool_call_allowed(
+            "file_read",
+            &json!({"path": "src/main.rs"})
+        ));
+        assert!(api_tool_call_allowed("git_status", &json!({})));
+        assert!(api_tool_call_allowed("git_diff", &json!({})));
+        assert!(api_tool_call_allowed(
+            "json_query",
+            &json!({"input": "{}", "query": "."})
+        ));
+        assert!(api_tool_call_allowed(
+            "task_output",
+            &json!({"task_id": "task_1"})
+        ));
+        assert!(api_tool_call_allowed(
+            "task_output",
+            &json!({"task_id": "task_1", "action": "get"})
+        ));
+
+        assert!(!api_tool_call_allowed("git_read", &json!({})));
+        assert!(!api_tool_call_allowed("json_tool", &json!({})));
+        assert!(!api_tool_call_allowed(
+            "browser",
+            &json!({"action": "evaluate_js"})
+        ));
+        assert!(!api_tool_call_allowed("bash", &json!({"command": "pwd"})));
+        assert!(!api_tool_call_allowed(
+            "task_output",
+            &json!({"task_id": "task_1", "action": "append", "line": "x"})
+        ));
+    }
+
     #[tokio::test]
     async fn test_audit_summary_contains_structured_coding_quality() {
+        let _env_guard = ENV_LOCK.lock().await;
+        unsafe { std::env::set_var("PRIORITY_AGENT_BRIDGE_TOKEN", TEST_BRIDGE_TOKEN) };
         let provider = Arc::new(MockProvider);
         let state = Arc::new(crate::api::state::ApiState {
             provider,
@@ -954,6 +1039,10 @@ mod tests {
                 Request::builder()
                     .uri("/api/audit/summary")
                     .method("GET")
+                    .header(
+                        axum::http::header::AUTHORIZATION,
+                        format!("Bearer {TEST_BRIDGE_TOKEN}"),
+                    )
                     .body(Body::empty())
                     .expect("build request"),
             )
@@ -978,6 +1067,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_workflow_weekly_metrics_endpoint() {
+        let _env_guard = ENV_LOCK.lock().await;
+        unsafe { std::env::set_var("PRIORITY_AGENT_BRIDGE_TOKEN", TEST_BRIDGE_TOKEN) };
         let provider = Arc::new(MockProvider);
         let state = Arc::new(crate::api::state::ApiState {
             provider,
@@ -1004,6 +1095,10 @@ mod tests {
                 Request::builder()
                     .uri("/api/workflow/metrics/weekly?limit=4")
                     .method("GET")
+                    .header(
+                        axum::http::header::AUTHORIZATION,
+                        format!("Bearer {TEST_BRIDGE_TOKEN}"),
+                    )
                     .body(Body::empty())
                     .expect("build request"),
             )
@@ -1024,6 +1119,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_workflow_weekly_calibration_endpoint() {
+        let _env_guard = ENV_LOCK.lock().await;
+        unsafe { std::env::set_var("PRIORITY_AGENT_BRIDGE_TOKEN", TEST_BRIDGE_TOKEN) };
         let provider = Arc::new(MockProvider);
         let state = Arc::new(crate::api::state::ApiState {
             provider,
@@ -1050,6 +1147,10 @@ mod tests {
                 Request::builder()
                     .uri("/api/workflow/metrics/calibration/weekly?limit=4")
                     .method("GET")
+                    .header(
+                        axum::http::header::AUTHORIZATION,
+                        format!("Bearer {TEST_BRIDGE_TOKEN}"),
+                    )
                     .body(Body::empty())
                     .expect("build request"),
             )

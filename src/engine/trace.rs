@@ -346,6 +346,29 @@ pub enum TraceEvent {
         #[serde(default)]
         zone_provenance_markers: usize,
     },
+    CacheStabilitySnapshot {
+        #[serde(default)]
+        stable_prefix_fingerprint: String,
+        #[serde(default)]
+        tool_schema_fingerprint: String,
+        #[serde(default)]
+        tool_schema_tokens: u64,
+        #[serde(default)]
+        tool_count: usize,
+        #[serde(default)]
+        dynamic_zone_messages: usize,
+        #[serde(default)]
+        dynamic_zones_before_last_user: usize,
+        #[serde(default)]
+        message_count: usize,
+    },
+    PromptCacheUsageRecorded {
+        model: String,
+        prompt_tokens: u64,
+        cached_tokens: u64,
+        cache_miss_tokens: u64,
+        hit_rate: f64,
+    },
     MemoryBoundaryEvaluated {
         read_status: String,
         stale_conflict_demotion_status: String,
@@ -793,6 +816,8 @@ impl TraceEvent {
             TraceEvent::SelfEvolutionGuidanceInjected { .. } => "self_evolution.guidance",
             TraceEvent::RetrievalContextBuilt { .. } => "retrieval.context",
             TraceEvent::ContextZonesMaterialized { .. } => "context.zones",
+            TraceEvent::CacheStabilitySnapshot { .. } => "cache.stability",
+            TraceEvent::PromptCacheUsageRecorded { .. } => "cache.usage",
             TraceEvent::MemoryBoundaryEvaluated { .. } => "memory.boundary",
             TraceEvent::MemoryProposalPrepared { .. } => "memory.proposal",
             TraceEvent::MemorySynced { .. } => "memory.sync",
@@ -1330,6 +1355,38 @@ impl TraceEvent {
                 relevant_material_overflow,
                 recent_observation_overflow,
                 current_decision_request_overflow
+            ),
+            TraceEvent::CacheStabilitySnapshot {
+                stable_prefix_fingerprint,
+                tool_schema_fingerprint,
+                tool_schema_tokens,
+                tool_count,
+                dynamic_zone_messages,
+                dynamic_zones_before_last_user,
+                message_count,
+            } => format!(
+                "cache stability: stable_fp={} tool_fp={} tools={} tool_tokens={} dynamic_zones={} before_last_user={} messages={}",
+                preview(stable_prefix_fingerprint),
+                preview(tool_schema_fingerprint),
+                tool_count,
+                tool_schema_tokens,
+                dynamic_zone_messages,
+                dynamic_zones_before_last_user,
+                message_count
+            ),
+            TraceEvent::PromptCacheUsageRecorded {
+                model,
+                prompt_tokens,
+                cached_tokens,
+                cache_miss_tokens,
+                hit_rate,
+            } => format!(
+                "prompt cache usage: model={} prompt={} cached={} miss={} hit_rate={:.1}%",
+                model,
+                prompt_tokens,
+                cached_tokens,
+                cache_miss_tokens,
+                hit_rate * 100.0
             ),
             TraceEvent::MemoryBoundaryEvaluated {
                 read_status,
@@ -2372,6 +2429,8 @@ fn control_loop_phase_for_event(event: &TraceEvent) -> Option<&'static str> {
         | TraceEvent::SelfEvolutionGuidanceInjected { .. }
         | TraceEvent::RetrievalContextBuilt { .. }
         | TraceEvent::ContextZonesMaterialized { .. }
+        | TraceEvent::CacheStabilitySnapshot { .. }
+        | TraceEvent::PromptCacheUsageRecorded { .. }
         | TraceEvent::MemoryBoundaryEvaluated { .. }
         | TraceEvent::MemorySynced { .. }
         | TraceEvent::ContextCompacted { .. }

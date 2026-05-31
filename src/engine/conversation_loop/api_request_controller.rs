@@ -179,6 +179,8 @@ impl ApiRequestController {
                                 compressor.micro_compress(context.messages)
                             };
                             let mut compressor = compressor_mutex.lock().await;
+                            compressor
+                                .set_llm_summary_stable_prefix_from_messages(&request.messages);
                             let compaction_record_len = compressor.compaction_records().len();
                             let compressed = compressor
                                 .compress_async_with_strategy(

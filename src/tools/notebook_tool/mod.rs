@@ -187,6 +187,18 @@ fn notebook_action_mutates(action: &str) -> bool {
 impl NotebookTool {
     /// 读取整个 Notebook
     async fn read_notebook(&self, path: &Path) -> ToolResult {
+        const MAX_NOTEBOOK_SIZE: u64 = 10 * 1024 * 1024; // 10 MB
+        match tokio::fs::metadata(path).await {
+            Ok(meta) if meta.len() > MAX_NOTEBOOK_SIZE => {
+                return ToolResult::error(format!(
+                    "Notebook file too large ({} bytes, max {} MB).",
+                    meta.len(),
+                    MAX_NOTEBOOK_SIZE / (1024 * 1024)
+                ));
+            }
+            Err(e) => return ToolResult::error(format!("Failed to read notebook metadata: {}", e)),
+            Ok(_) => {}
+        }
         match tokio::fs::read_to_string(path).await {
             Ok(content) => match serde_json::from_str::<Notebook>(&content) {
                 Ok(notebook) => {
@@ -337,6 +349,23 @@ impl NotebookTool {
 
     /// 加载 Notebook
     async fn load_notebook(&self, path: &Path) -> Result<Notebook, ToolResult> {
+        const MAX_NOTEBOOK_SIZE: u64 = 10 * 1024 * 1024; // 10 MB
+        match tokio::fs::metadata(path).await {
+            Ok(meta) if meta.len() > MAX_NOTEBOOK_SIZE => {
+                return Err(ToolResult::error(format!(
+                    "Notebook file too large ({} bytes, max {} MB).",
+                    meta.len(),
+                    MAX_NOTEBOOK_SIZE / (1024 * 1024)
+                )));
+            }
+            Err(e) => {
+                return Err(ToolResult::error(format!(
+                    "Failed to read notebook metadata: {}",
+                    e
+                )))
+            }
+            Ok(_) => {}
+        }
         match tokio::fs::read_to_string(path).await {
             Ok(content) => match serde_json::from_str::<Notebook>(&content) {
                 Ok(notebook) => Ok(notebook),

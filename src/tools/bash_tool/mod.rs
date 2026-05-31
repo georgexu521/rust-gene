@@ -504,6 +504,11 @@ fn shell_output_artifact_path(
         }
     }
     std::fs::write(&path, output).ok()?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).ok();
+    }
     Some(relative.to_string_lossy().to_string())
 }
 
@@ -1041,19 +1046,12 @@ impl Tool for BashTool {
     }
 
     fn description(&self) -> &str {
-        "Run a shell command in the project root; returns combined stdout+stderr. \
-         Allowlisted read-only/test/lint/typecheck commands run immediately; \
-         mutating/network/install commands gate on user confirmation. \
-         \
-         DO NOT use run_command for file operations — use file_read, file_write, \
-         file_edit instead. Shell utilities (echo, cp, sed, cat, tee) bypass \
-         validation, lack rollback, and will trigger confirmation gates. \
-         \
-         Supported: chains `|`/`||`/`&&`/`;` and file redirects `>`/`>>`/`<`. \
-         Rejected: background `&`, heredoc `<<`, `$(…)`, subshells. \
-         Filter at source — `grep -c` / `wc -l` / narrower paths over unbounded dumps. \
-         Prefer glob, grep, and file_read for file search, listing, and reading. \
-         Do NOT use bash output as user-facing communication; summarize results."
+        "Run a shell-only command; returns stdout+stderr. \
+         Read-only/test/lint/typecheck commands run immediately; mutating/network/install \
+         commands require confirmation. For file ops use file_read, file_write, \
+         or file_edit for validation and rollback. Supports pipes/chains/redirects; \
+         rejects background, heredoc, command substitution, and subshells. \
+         Do not use bash output as user-facing communication; summarize results."
     }
 
     fn parameters(&self) -> serde_json::Value {

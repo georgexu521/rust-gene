@@ -10,6 +10,7 @@ pub mod active_task_plan;
 pub mod agent_mode;
 pub mod auto_verify;
 pub mod batch_refactor;
+pub mod cache_stability;
 pub mod candidate_action;
 pub mod checkpoint;
 pub mod code_change_workflow;

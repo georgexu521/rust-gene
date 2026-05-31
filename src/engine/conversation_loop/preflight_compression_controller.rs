@@ -78,6 +78,7 @@ impl PreflightCompressionController {
             drop(compressor);
             let before_tokens = preflight.observation.message_tokens;
             let mut compressor = compressor_mutex.lock().await;
+            compressor.set_llm_summary_stable_prefix_from_messages(context.messages);
             let compaction_record_len = compressor.compaction_records().len();
             *context.messages = compressor
                 .compress_async_with_strategy(

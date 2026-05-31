@@ -290,6 +290,9 @@ impl ApiState {
 
         let mut context = ToolContext::new(".", session_id)
             .with_task_manager(crate::task_manager::GLOBAL_TASK_MANAGER.clone())
+            .with_cost_tracker(Arc::new(tokio::sync::Mutex::new(
+                self.audit_tracker.read().await.clone(),
+            )))
             .with_file_cache(crate::tools::file_cache::GLOBAL_FILE_CACHE.clone());
         if let Some(ref lsp) = self.lsp_manager {
             context = context.with_lsp_manager(lsp.clone());
@@ -355,7 +358,10 @@ impl ApiState {
 
         if let Some(api) = req.api {
             config.api.model = api.model;
-            config.api.base_url = api.base_url;
+            // Security: disallow changing base_url via API to prevent redirect attacks
+            if !api.base_url.is_empty() && api.base_url != config.api.base_url {
+                anyhow::bail!("Changing base_url via API is not allowed for security reasons");
+            }
             config.api.temperature = api.temperature;
             config.api.max_tokens = api.max_tokens;
         }

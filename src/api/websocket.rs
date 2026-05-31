@@ -217,6 +217,15 @@ async fn handle_message(msg: WsMessage, state: &Arc<ApiState>, session_id: &str)
             session_id: msg_session_id,
         } => {
             let target_session = msg_session_id.unwrap_or_else(|| session_id.to_string());
+            if !crate::api::routes::api_tool_call_allowed(&tool, &params) {
+                return WsResponse::Error {
+                    code: "tool_forbidden".to_string(),
+                    message: format!(
+                        "tool '{}' is not allowed via API for security reasons",
+                        tool
+                    ),
+                };
+            }
 
             match state.call_tool(&tool, params, &target_session).await {
                 Ok(result) => WsResponse::ToolResult {

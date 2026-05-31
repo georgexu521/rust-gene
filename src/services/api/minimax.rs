@@ -23,6 +23,16 @@ pub struct MiniMaxClient {
     api_key: String,
 }
 
+impl std::fmt::Debug for MiniMaxClient {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("MiniMaxClient")
+            .field("api_key", &"[REDACTED]")
+            .field("model", &self.model)
+            .field("base_url", &self.base_url)
+            .finish_non_exhaustive()
+    }
+}
+
 impl MiniMaxClient {
     /// 使用 MiniMax Token Plan 的 API Key 初始化
     pub fn new(api_key: &str, base_url: Option<&str>, model: Option<&str>) -> Self {

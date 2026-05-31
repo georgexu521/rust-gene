@@ -1275,8 +1275,8 @@ pub const CMD_CACHE: CommandDef = CommandDef::new(
     "/cache",
     &[],
     "Config",
-    "/cache [clear|stats]",
-    "Cache management",
+    "/cache [clear|stats|prompt|miss-report]",
+    "Cache and prompt-cache diagnostics",
 );
 
 pub const CMD_BENCHMARK: CommandDef = CommandDef::new(

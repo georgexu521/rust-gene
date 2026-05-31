@@ -2,8 +2,9 @@
 //!
 //! 模仿 React 的重新渲染机制
 
+use parking_lot::Mutex;
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use uuid::Uuid;
 
 /// 状态事件
@@ -34,7 +35,7 @@ pub enum StateEvent {
 }
 
 /// 事件处理器类型
-type EventHandler = Box<dyn Fn(StateEvent) + Send + Sync>;
+type EventHandler = Arc<dyn Fn(StateEvent) + Send + Sync>;
 /// 事件订阅者映射（共享引用）
 type SubscriberMap = Arc<Mutex<HashMap<String, EventHandler>>>;
 
@@ -58,8 +59,7 @@ impl EventBus {
         let id = Uuid::new_v4().to_string();
         self.subscribers
             .lock()
-            .unwrap()
-            .insert(id.clone(), Box::new(callback));
+            .insert(id.clone(), Arc::new(callback));
 
         Subscription {
             id,
@@ -69,8 +69,11 @@ impl EventBus {
 
     /// 发布事件
     pub fn emit(&self, event: StateEvent) {
-        let subscribers = self.subscribers.lock().expect("subscribers mutex poisoned");
-        for callback in subscribers.values() {
+        let callbacks: Vec<_> = {
+            let subscribers = self.subscribers.lock();
+            subscribers.values().cloned().collect()
+        };
+        for callback in callbacks {
             callback(event.clone());
         }
     }
@@ -90,10 +93,7 @@ pub struct Subscription {
 
 impl Drop for Subscription {
     fn drop(&mut self) {
-        self.bus
-            .lock()
-            .expect("bus mutex poisoned")
-            .remove(&self.id);
+        self.bus.lock().remove(&self.id);
     }
 }
 
@@ -109,12 +109,12 @@ mod tests {
         let r = received.clone();
         let _sub = bus.subscribe(move |event| {
             if matches!(event, StateEvent::StateUpdated) {
-                *r.lock().unwrap() = true;
+                *r.lock() = true;
             }
         });
 
         bus.emit(StateEvent::StateUpdated);
 
-        assert!(*received.lock().unwrap());
+        assert!(*received.lock());
     }
 }

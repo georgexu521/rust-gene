@@ -124,7 +124,10 @@ impl Tool for AskUserQuestionTool {
             let answer = if options.is_empty() {
                 "auto-approved (non-interactive mode)".to_string()
             } else {
-                options.first().cloned().unwrap_or_else(|| "auto-approved".to_string())
+                options
+                    .first()
+                    .cloned()
+                    .unwrap_or_else(|| "auto-approved".to_string())
             };
             return ToolResult::success(format!(
                 "Question: {}\nAnswer (auto): {}",

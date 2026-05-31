@@ -756,9 +756,9 @@ pub fn handle_env(_app: &mut TuiApp, args: &str) -> String {
 }
 
 /// /cache - Cache management
-pub fn handle_cache(_app: &mut TuiApp, args: &str) -> String {
+pub async fn handle_cache(app: &mut TuiApp, args: &str) -> String {
     if args.is_empty() {
-        return "Usage: /cache [clear|stats]".to_string();
+        return "Usage: /cache [clear|stats|prompt|miss-report]".to_string();
     }
 
     let parts: Vec<&str> = args.split_whitespace().collect();
@@ -780,7 +780,14 @@ pub fn handle_cache(_app: &mut TuiApp, args: &str) -> String {
                 tool_cache.display()
             )
         }
-        _ => "Usage: /cache [clear|stats]".to_string(),
+        "prompt" | "miss-report" | "report" => {
+            let Some(engine) = app.streaming_engine.as_ref() else {
+                return "Prompt cache report unavailable: no active streaming engine.".to_string();
+            };
+            let tracker = engine.cost_tracker().lock().await;
+            tracker.prompt_cache_report()
+        }
+        _ => "Usage: /cache [clear|stats|prompt|miss-report]".to_string(),
     }
 }
 

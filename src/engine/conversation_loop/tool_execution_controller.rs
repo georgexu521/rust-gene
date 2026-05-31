@@ -1704,9 +1704,9 @@ impl ToolExecutionController {
         } = request;
         let execution = &self.context;
         let mut parallel_jobs: Vec<(usize, _)> = Vec::new();
-        let mut serial_items: Vec<(usize, ToolCall, ActionReview)> = Vec::new();
         let mut results: Vec<(ToolCall, ToolResult)> = Vec::new();
         let mut scheduled_count = 0usize;
+        let mut serial_boundary_seen = false;
         lifecycle.pending_batch(tool_calls);
         let runtime_context = ToolRuntimeContext::new(ToolRuntimeContextInput {
             route,
@@ -1749,14 +1749,18 @@ impl ToolExecutionController {
             // Storm breaker: check for repeated calls before dispatching.
             // Skip for read-only tools — retrying file_read/glob/grep is legitimate
             // when content was truncated or the agent needs different ranges.
-            let is_read_only = tool_call_is_read_only(
-                execution.tool_registry.as_ref(),
-                &tc.name,
-                &tc.arguments,
-            );
+            let is_read_only =
+                tool_call_is_read_only(execution.tool_registry.as_ref(), &tc.name, &tc.arguments);
             if !is_read_only {
                 match storm_state.check(&tc.name, &tc.arguments) {
                     StormDecision::Suppress(reason) => {
+                        if !parallel_jobs.is_empty() {
+                            let pending = std::mem::take(&mut parallel_jobs);
+                            let parallel_results = self
+                                .collect_read_only_results(pending, concurrency, tx, lifecycle)
+                                .await;
+                            results.extend(parallel_results);
+                        }
                         let storm_result = crate::tools::ToolResult::error(reason);
                         results.push((tc.clone(), storm_result));
                         scheduled_count += 1;
@@ -1769,6 +1773,13 @@ impl ToolExecutionController {
             let action_review = match gate.evaluate(tc, scheduled_count) {
                 ToolExecutionGateOutcome::Allow(review) => *review,
                 ToolExecutionGateOutcome::Deny(result) => {
+                    if !parallel_jobs.is_empty() {
+                        let pending = std::mem::take(&mut parallel_jobs);
+                        let parallel_results = self
+                            .collect_read_only_results(pending, concurrency, tx, lifecycle)
+                            .await;
+                        results.extend(parallel_results);
+                    }
                     persist_tool_outcome_learning_event(
                         execution.session_store.as_ref(),
                         &execution.session_id,
@@ -1783,61 +1794,70 @@ impl ToolExecutionController {
             };
 
             // Pre-executed results from streaming phase: use directly.
-            if let Some(pre_result) = pre_executed.get(&i) {
-                let mut pre_result = pre_result.clone();
-                attach_tool_execution_metadata(tc, &mut pre_result);
-                if let Some(tool) = execution.tool_registry.get(&tc.name) {
-                    attach_tool_contract_metadata(tool, tc, &mut pre_result);
+            if !serial_boundary_seen {
+                if let Some(pre_result) = pre_executed.get(&i) {
+                    if !parallel_jobs.is_empty() {
+                        let pending = std::mem::take(&mut parallel_jobs);
+                        let parallel_results = self
+                            .collect_read_only_results(pending, concurrency, tx, lifecycle)
+                            .await;
+                        results.extend(parallel_results);
+                    }
+                    let mut pre_result = pre_result.clone();
+                    attach_tool_execution_metadata(tc, &mut pre_result);
+                    if let Some(tool) = execution.tool_registry.get(&tc.name) {
+                        attach_tool_contract_metadata(tool, tc, &mut pre_result);
+                    }
+                    attach_action_review_metadata(&mut pre_result, &action_review);
+                    runtime_context.attach(&mut pre_result, true, true, None);
+                    runtime_context.attach_action_decision(tc, &mut pre_result);
+                    record_tool_observation(&trace, tc, &pre_result);
+                    persist_tool_outcome_learning_event(
+                        execution.session_store.as_ref(),
+                        &execution.session_id,
+                        tc,
+                        &pre_result,
+                    );
+                    if let Some(ref trace) = trace {
+                        trace.record(TraceEvent::ToolStarted {
+                            tool: tc.name.clone(),
+                            call_id: tc.id.clone(),
+                            parallel: true,
+                            pre_executed: true,
+                        });
+                        trace.record(TraceEvent::ToolCompleted {
+                            tool: tc.name.clone(),
+                            call_id: tc.id.clone(),
+                            success: pre_result.success,
+                            duration_ms: pre_result.duration_ms,
+                            output_chars: pre_result.content.chars().count(),
+                        });
+                        let trace_ref = Some(trace.clone());
+                        record_mcp_resource_trace(&trace_ref, tc, &pre_result);
+                        record_remote_bridge_trace(&trace_ref, tc, &pre_result);
+                        record_permission_denial_recovery_trace(&trace_ref, tc, &pre_result);
+                        record_web_retrieval_trace(&trace_ref, tc, &pre_result);
+                    }
+                    lifecycle.provider_executed(tc, &pre_result);
+                    debug!(
+                        "Skipping pre-executed read-only tool at index {}: {}",
+                        i, tc.name
+                    );
+                    results.push((tc.clone(), pre_result.clone()));
+                    if let Some(tx) = tx {
+                        let result_content =
+                            ToolResultNormalizer::normalize(tc, &pre_result).ui_content;
+                        let _ = tx
+                            .send(StreamEvent::ToolExecutionComplete {
+                                id: tc.id.clone(),
+                                result: result_content,
+                                metadata: tool_completion_metadata(&pre_result),
+                            })
+                            .await;
+                    }
+                    scheduled_count += 1;
+                    continue;
                 }
-                attach_action_review_metadata(&mut pre_result, &action_review);
-                runtime_context.attach(&mut pre_result, true, true, None);
-                runtime_context.attach_action_decision(tc, &mut pre_result);
-                record_tool_observation(&trace, tc, &pre_result);
-                persist_tool_outcome_learning_event(
-                    execution.session_store.as_ref(),
-                    &execution.session_id,
-                    tc,
-                    &pre_result,
-                );
-                if let Some(ref trace) = trace {
-                    trace.record(TraceEvent::ToolStarted {
-                        tool: tc.name.clone(),
-                        call_id: tc.id.clone(),
-                        parallel: true,
-                        pre_executed: true,
-                    });
-                    trace.record(TraceEvent::ToolCompleted {
-                        tool: tc.name.clone(),
-                        call_id: tc.id.clone(),
-                        success: pre_result.success,
-                        duration_ms: pre_result.duration_ms,
-                        output_chars: pre_result.content.chars().count(),
-                    });
-                    let trace_ref = Some(trace.clone());
-                    record_mcp_resource_trace(&trace_ref, tc, &pre_result);
-                    record_remote_bridge_trace(&trace_ref, tc, &pre_result);
-                    record_permission_denial_recovery_trace(&trace_ref, tc, &pre_result);
-                    record_web_retrieval_trace(&trace_ref, tc, &pre_result);
-                }
-                lifecycle.provider_executed(tc, &pre_result);
-                debug!(
-                    "Skipping pre-executed read-only tool at index {}: {}",
-                    i, tc.name
-                );
-                results.push((tc.clone(), pre_result.clone()));
-                if let Some(tx) = tx {
-                    let result_content =
-                        ToolResultNormalizer::normalize(tc, &pre_result).ui_content;
-                    let _ = tx
-                        .send(StreamEvent::ToolExecutionComplete {
-                            id: tc.id.clone(),
-                            result: result_content,
-                            metadata: tool_completion_metadata(&pre_result),
-                        })
-                        .await;
-                }
-                scheduled_count += 1;
-                continue;
             }
 
             let concurrency_safe = tool_call_is_concurrency_safe(
@@ -1871,37 +1891,40 @@ impl ToolExecutionController {
                 ));
                 scheduled_count += 1;
             } else {
-                serial_items.push((i, tc.clone(), action_review));
+                if !parallel_jobs.is_empty() {
+                    let pending = std::mem::take(&mut parallel_jobs);
+                    let parallel_results = self
+                        .collect_read_only_results(pending, concurrency, tx, lifecycle)
+                        .await;
+                    results.extend(parallel_results);
+                }
+                let read_write_results = self
+                    .execute_read_write_calls(
+                        vec![(tc.clone(), action_review)],
+                        ReadWriteExecutionContext {
+                            tx,
+                            trace: &trace,
+                            runtime_context: &runtime_context,
+                            retained_context,
+                            task_state,
+                            parent_tool_calls: tool_calls,
+                            parent_assistant_content,
+                        },
+                        lifecycle,
+                    )
+                    .await;
+                results.extend(read_write_results);
+                serial_boundary_seen = true;
                 scheduled_count += 1;
             }
         }
 
-        // ── Phase 2: execute all parallel jobs concurrently ──
+        // ── Phase 2: execute trailing read-only jobs concurrently ──
         if !parallel_jobs.is_empty() {
             let parallel_results = self
                 .collect_read_only_results(parallel_jobs, concurrency, tx, lifecycle)
                 .await;
             results.extend(parallel_results);
-        }
-
-        // ── Phase 3: execute serial (write) tools sequentially ──
-        for (_i, tc, action_review) in serial_items {
-            let read_write_results = self
-                .execute_read_write_calls(
-                    vec![(tc, action_review)],
-                    ReadWriteExecutionContext {
-                        tx,
-                        trace: &trace,
-                        runtime_context: &runtime_context,
-                        retained_context,
-                        task_state,
-                        parent_tool_calls: tool_calls,
-                        parent_assistant_content,
-                    },
-                    lifecycle,
-                )
-                .await;
-            results.extend(read_write_results);
         }
 
         let lifecycle_snapshot = lifecycle.snapshot();

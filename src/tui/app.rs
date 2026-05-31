@@ -62,6 +62,23 @@ impl StreamUsageSnapshot {
     pub fn total_tokens(self) -> u32 {
         self.prompt_tokens + self.completion_tokens
     }
+
+    pub fn cache_miss_tokens(self) -> Option<u32> {
+        self.cached_tokens.map(|cached| {
+            self.prompt_tokens
+                .saturating_sub(cached.min(self.prompt_tokens))
+        })
+    }
+
+    pub fn cache_hit_rate_percent(self) -> Option<f64> {
+        self.cached_tokens.map(|cached| {
+            if self.prompt_tokens == 0 {
+                0.0
+            } else {
+                cached.min(self.prompt_tokens) as f64 / self.prompt_tokens as f64 * 100.0
+            }
+        })
+    }
 }
 
 fn skill_outcome_attribution(
@@ -3229,7 +3246,7 @@ impl TuiApp {
             "/backend" => slash::handle_backend(self, args),
             "/sandbox" => slash::handle_sandbox(self, args),
             "/env" => slash::handle_env(self, args),
-            "/cache" => slash::handle_cache(self, args),
+            "/cache" => slash::handle_cache(self, args).await,
             "/benchmark" => slash::handle_benchmark(self, args).await,
             "/test" => slash::handle_test(self, args).await,
             "/trace" => slash::handle_trace(self, args),
@@ -3898,6 +3915,12 @@ impl TuiApp {
         }
         if let Some(cached) = usage.cached_tokens {
             label.push_str(&format!(" / {} cached", cached));
+            if let Some(miss) = usage.cache_miss_tokens() {
+                label.push_str(&format!(" / {} miss", miss));
+            }
+            if let Some(hit_rate) = usage.cache_hit_rate_percent() {
+                label.push_str(&format!(" / {:.1}% hit", hit_rate));
+            }
         }
         Some(label)
     }
@@ -4300,7 +4323,7 @@ mod tests {
 
         assert_eq!(
             app.stream_usage_label().as_deref(),
-            Some("125 tokens / 12 reasoning / 80 cached")
+            Some("125 tokens / 12 reasoning / 80 cached / 20 miss / 80.0% hit")
         );
     }
 

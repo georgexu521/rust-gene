@@ -4,7 +4,6 @@
 //! file has not been read in the current session.
 
 use priority_agent::tools::file_tool::{check_read_before_write, mark_file_read};
-use priority_agent::tools::ToolResult;
 
 #[test]
 fn write_without_read_is_blocked() {
@@ -35,7 +34,11 @@ fn write_after_read_is_allowed() {
 
     // Now write should be allowed.
     let result = check_read_before_write(session, path);
-    assert!(result.is_none(), "should allow write after read, got: {:?}", result);
+    assert!(
+        result.is_none(),
+        "should allow write after read, got: {:?}",
+        result
+    );
 }
 
 #[test]

@@ -213,7 +213,23 @@ fn has_evasion_pattern(command: &str, cmd_lower: &str) -> bool {
 }
 
 fn is_dangerous_rm(cmd_lower: &str) -> bool {
-    let rm_patterns = ["rm -rf", "rm -fr", "rm -r -f", "rm -f -r"];
+    // Detect both bare "rm" and full-path variants like "/bin/rm", "/usr/bin/rm"
+    let rm_patterns = [
+        "rm -rf",
+        "rm -fr",
+        "rm -r -f",
+        "rm -f -r",
+        "/bin/rm -rf",
+        "/bin/rm -fr",
+        "/bin/rm -r -f",
+        "/bin/rm -f -r",
+        "/usr/bin/rm -rf",
+        "/usr/bin/rm -fr",
+        "/usr/bin/rm -r -f",
+        "/usr/bin/rm -f -r",
+        "/usr/local/bin/rm -rf",
+        "/usr/local/bin/rm -fr",
+    ];
 
     for pattern in &rm_patterns {
         if let Some(pos) = cmd_lower.find(pattern) {

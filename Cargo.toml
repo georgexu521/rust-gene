@@ -154,6 +154,7 @@ regex = { workspace = true }
 ignore = { workspace = true }
 rusqlite = { workspace = true }
 futures = { workspace = true }
+parking_lot = "0.12"
 chrono = { workspace = true }
 uuid = { workspace = true }
 once_cell = { workspace = true }
