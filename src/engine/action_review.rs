@@ -3,6 +3,8 @@
 //! This module does not replace the specialized permission, resource, and tool
 //! checks. It records their read-only verdicts in one object so traces, tool
 //! results, desktop UI, and evals can reason about the same action boundary.
+//! Score-derived concerns are advisory unless they map to an explicit safety or
+//! evidence gate; the model still owns the semantic choice of the next action.
 
 use crate::engine::action_decision::ActionDecision;
 use crate::engine::action_policy::{ActionSideEffectProfile, ExternalSideEffect};
@@ -160,13 +162,30 @@ impl ActionReview {
             reasons.insert(0, primary_reason);
         }
 
-        let user_reason = user_reason(decision, primary_reason, &tool_contract, &permission);
-        let model_recovery = model_recovery(decision, primary_reason, &tool_contract);
+        let advisory_reasons = reasons
+            .iter()
+            .copied()
+            .filter(|reason| is_score_review_reason(*reason))
+            .map(ActionReviewReason::as_str)
+            .collect::<Vec<_>>();
+        let hard_gate = decision.blocks_execution() || decision == ActionReviewDecision::AskUser;
+        let user_reason = user_reason(
+            decision,
+            primary_reason,
+            &reasons,
+            &tool_contract,
+            &permission,
+        );
+        let model_recovery = model_recovery(decision, primary_reason, &reasons, &tool_contract);
         let debug = serde_json::json!({
             "schema": "action_review_debug.v1",
+            "semantic_authority": "runtime_advisory_scoring_with_hard_safety_gates",
+            "hard_gate": hard_gate,
+            "hard_gate_reason": hard_gate.then(|| primary_reason.as_str()),
+            "advisory_reasons": advisory_reasons,
             "action_checkpoint_rejection": input.action_checkpoint_rejection,
             "exposed_tool_alternatives": tool_contract.available_alternatives,
-            "candidate_action_request": candidate_action_request(decision, primary_reason, &worth),
+            "candidate_action_request": candidate_action_request(decision, primary_reason, &reasons, &worth),
         });
 
         Self {
@@ -794,57 +813,13 @@ fn final_decision(
         let reason = permission_confirmation_reason(permission, contract);
         return (ActionReviewDecision::AskUser, reason, vec![reason]);
     }
-    if worth.repeated_low_score {
-        return (
-            ActionReviewDecision::Revise,
-            ActionReviewReason::RepeatedLowScoreAction,
-            vec![ActionReviewReason::RepeatedLowScoreAction],
-        );
-    }
-    if worth.low_scope_fit
-        && (worth.mutates_workspace || worth.broad_shell || worth.risk >= HIGH_RISK_THRESHOLD)
-    {
-        return (
-            ActionReviewDecision::Revise,
-            ActionReviewReason::LowScopeFit,
-            vec![ActionReviewReason::LowScopeFit],
-        );
-    }
-    if worth.high_cost_low_value {
-        return (
-            ActionReviewDecision::Revise,
-            ActionReviewReason::HighCostLowValue,
-            vec![ActionReviewReason::HighCostLowValue],
-        );
-    }
-    if worth.high_risk_low_value {
-        if permission.requires_confirmation || worth.requires_confirmation {
-            return (
-                ActionReviewDecision::AskUser,
-                ActionReviewReason::HighRiskLowValue,
-                vec![ActionReviewReason::HighRiskLowValue],
-            );
-        }
-        return (
-            ActionReviewDecision::Revise,
-            ActionReviewReason::HighRiskLowValue,
-            vec![ActionReviewReason::HighRiskLowValue],
-        );
-    }
-    if (worth.low_value || worth.action_score <= LOW_ACTION_SCORE_THRESHOLD)
-        && (worth.mutates_workspace || worth.broad_shell || worth.risk >= HIGH_RISK_THRESHOLD)
-    {
-        return (
-            ActionReviewDecision::Revise,
-            ActionReviewReason::LowActionValue,
-            vec![ActionReviewReason::LowActionValue],
-        );
-    }
+    let mut reasons = vec![ActionReviewReason::SafeToExecute];
+    reasons.extend(advisory_score_reasons(worth));
 
     (
         ActionReviewDecision::Allow,
         ActionReviewReason::SafeToExecute,
-        vec![ActionReviewReason::SafeToExecute],
+        reasons,
     )
 }
 
@@ -880,10 +855,15 @@ fn permission_confirmation_reason(
 fn user_reason(
     decision: ActionReviewDecision,
     reason: ActionReviewReason,
+    reasons: &[ActionReviewReason],
     contract: &ToolContractReview,
     permission: &PermissionReviewVerdict,
 ) -> String {
     match decision {
+        ActionReviewDecision::Allow if has_score_review_reason(reasons) => {
+            "Action passed runtime review; score-based concerns were recorded as advisory evidence."
+                .to_string()
+        }
         ActionReviewDecision::Allow => "Action passed runtime review.".to_string(),
         ActionReviewDecision::AskUser => format!(
             "Action requires user confirmation before execution: {}.",
@@ -928,9 +908,13 @@ fn user_reason(
 fn model_recovery(
     decision: ActionReviewDecision,
     reason: ActionReviewReason,
+    reasons: &[ActionReviewReason],
     contract: &ToolContractReview,
 ) -> String {
     match decision {
+        ActionReviewDecision::Allow if has_score_review_reason(reasons) => {
+            "Action passed runtime review; runtime score concerns are advisory only, so use the tool observation and keep the next-step judgment model-led.".to_string()
+        }
         ActionReviewDecision::Allow => {
             "Action passed runtime review; use the observation after execution.".to_string()
         }
@@ -984,25 +968,63 @@ fn is_score_review_reason(reason: ActionReviewReason) -> bool {
     )
 }
 
+fn has_score_review_reason(reasons: &[ActionReviewReason]) -> bool {
+    reasons.iter().copied().any(is_score_review_reason)
+}
+
+fn advisory_score_reasons(worth: &ActionWorthVerdict) -> Vec<ActionReviewReason> {
+    let mut reasons = Vec::new();
+    if worth.repeated_low_score {
+        reasons.push(ActionReviewReason::RepeatedLowScoreAction);
+    }
+    if worth.low_scope_fit
+        && (worth.mutates_workspace || worth.broad_shell || worth.risk >= HIGH_RISK_THRESHOLD)
+    {
+        reasons.push(ActionReviewReason::LowScopeFit);
+    }
+    if worth.high_cost_low_value {
+        reasons.push(ActionReviewReason::HighCostLowValue);
+    }
+    if worth.high_risk_low_value {
+        reasons.push(ActionReviewReason::HighRiskLowValue);
+    }
+    if (worth.low_value || worth.action_score <= LOW_ACTION_SCORE_THRESHOLD)
+        && (worth.mutates_workspace || worth.broad_shell || worth.risk >= HIGH_RISK_THRESHOLD)
+    {
+        reasons.push(ActionReviewReason::LowActionValue);
+    }
+    reasons
+}
+
 fn candidate_action_request(
     decision: ActionReviewDecision,
     reason: ActionReviewReason,
+    reasons: &[ActionReviewReason],
     worth: &ActionWorthVerdict,
 ) -> Value {
     let mode = crate::engine::candidate_action::CandidateActionMode::from_env();
-    let triggered = decision != ActionReviewDecision::Allow
+    let advisory_reasons = reasons
+        .iter()
+        .copied()
+        .filter(|reason| is_score_review_reason(*reason))
+        .map(ActionReviewReason::as_str)
+        .collect::<Vec<_>>();
+    let hard_score_repair = decision != ActionReviewDecision::Allow
         && (is_score_review_reason(reason) || reason == ActionReviewReason::LowValueAction);
+    let triggered = hard_score_repair || !advisory_reasons.is_empty();
     serde_json::json!({
         "schema": "candidate_action_request.v1",
         "mode": mode.as_str(),
         "triggered": triggered,
+        "authority": if hard_score_repair { "hard_gate_repair" } else if !advisory_reasons.is_empty() { "advisory_trace" } else { "none" },
         "reason": reason.as_str(),
+        "advisory_reasons": advisory_reasons,
         "selected_action_score": worth.action_score,
         "selected_scope_fit": worth.scope_fit,
         "min_scope_fit": LOW_SCOPE_FIT_THRESHOLD + 1,
         "min_value": LOW_VALUE_THRESHOLD + 1,
         "instructions": if triggered {
-            "Return a narrower next action that uses an exposed tool, reduces uncertainty or verifies progress, and will still pass normal ActionReview."
+            "Score-based runtime concerns are advisory unless a hard gate blocked execution. Keep the next-step choice model-led, using exposed tools and current evidence."
         } else {
             "none"
         },
@@ -1461,7 +1483,7 @@ mod tests {
     }
 
     #[test]
-    fn phase_misaligned_action_revises_for_low_scope_fit() {
+    fn phase_misaligned_action_records_low_scope_fit_as_advisory() {
         let tool = FileEditLikeTool;
         let tool_call = call(
             "file_edit",
@@ -1484,13 +1506,22 @@ mod tests {
             action_checkpoint_rejection: None,
         });
 
-        assert_eq!(review.decision, ActionReviewDecision::Revise);
-        assert_eq!(review.primary_reason, ActionReviewReason::LowScopeFit);
+        assert_eq!(review.decision, ActionReviewDecision::Allow);
+        assert_eq!(review.primary_reason, ActionReviewReason::SafeToExecute);
+        assert!(review.reasons.contains(&ActionReviewReason::LowScopeFit));
         assert!(review.worth.scope_fit <= LOW_SCOPE_FIT_THRESHOLD);
+        assert_eq!(
+            review.debug["semantic_authority"],
+            "runtime_advisory_scoring_with_hard_safety_gates"
+        );
+        assert_eq!(
+            review.debug["candidate_action_request"]["authority"],
+            "advisory_trace"
+        );
     }
 
     #[test]
-    fn high_cost_low_value_action_revises_before_execution() {
+    fn high_cost_low_value_action_records_advisory_without_blocking() {
         let tool = FileEditLikeTool;
         let tool_call = call(
             "file_edit",
@@ -1523,9 +1554,12 @@ mod tests {
             action_checkpoint_rejection: None,
         });
 
-        assert_eq!(review.decision, ActionReviewDecision::Revise);
-        assert_eq!(review.primary_reason, ActionReviewReason::HighCostLowValue);
-        assert!(review.model_recovery.contains("high_cost_low_value"));
+        assert_eq!(review.decision, ActionReviewDecision::Allow);
+        assert_eq!(review.primary_reason, ActionReviewReason::SafeToExecute);
+        assert!(review
+            .reasons
+            .contains(&ActionReviewReason::HighCostLowValue));
+        assert!(review.model_recovery.contains("advisory only"));
     }
 
     #[test]

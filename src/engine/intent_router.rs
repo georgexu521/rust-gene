@@ -3,6 +3,8 @@
 //! V1 is deliberately rule-based and advisory. It records the expected workflow,
 //! retrieval depth, reasoning depth, and risk so the runtime can be inspected in
 //! `/trace` without changing existing behavior prematurely.
+//! A route must not answer locally, grant mutation authority, or override the
+//! model's semantic plan; it only shapes optional context, tools, and tracing.
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;

@@ -3,11 +3,14 @@
 //! This module intentionally does not force every turn through candidate JSON.
 //! It provides the small runtime contract used when the agent is stuck,
 //! repeatedly revised, or about to take a risky low-value action.
+//! Candidate order and model-provided scores remain authoritative for semantic
+//! selection; runtime scores are advisory calibration evidence.
 
 use crate::engine::action_decision::{ActionDecision, ActionDecisionInput, ActionScores};
 use crate::services::api::ToolCall;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::cmp::Ordering;
 use std::collections::HashSet;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -163,6 +166,14 @@ pub struct CandidateActionRejection {
     pub reason: String,
 }
 
+type AcceptedCandidate<'a> = (
+    usize,
+    &'a CandidateAction,
+    ActionDecision,
+    Option<i16>,
+    Option<i16>,
+);
+
 pub fn parse_candidate_actions(content: &str) -> Result<CandidateActionSet, String> {
     let raw = extract_json_object(content).ok_or_else(|| "candidate JSON not found".to_string())?;
     serde_json::from_str::<CandidateActionSet>(raw)
@@ -178,7 +189,7 @@ pub fn rank_candidate_actions(
     let mut accepted = Vec::new();
     let mut rejected = Vec::new();
 
-    for candidate in &candidates.candidate_actions {
+    for (index, candidate) in candidates.candidate_actions.iter().enumerate() {
         if candidate.id.trim().is_empty() {
             rejected.push(rejection(candidate, "candidate id is empty"));
             continue;
@@ -211,41 +222,28 @@ pub fn rank_candidate_actions(
             .as_ref()
             .map(model_action_score)
             .or(factor_score);
-        accepted.push((candidate, decision, model_score, factor_score));
+        accepted.push((index, candidate, decision, model_score, factor_score));
     }
 
-    let model_selected_id = accepted
+    let runtime_selected_id = accepted
         .iter()
-        .filter_map(|(candidate, _, model_score, _)| model_score.map(|score| (*candidate, score)))
-        .max_by(
-            |(left_candidate, left_score), (right_candidate, right_score)| {
-                left_score
-                    .cmp(right_score)
-                    .then_with(|| right_candidate.id.cmp(&left_candidate.id))
-            },
-        )
-        .map(|(candidate, _)| candidate.id.clone());
+        .max_by(|left, right| runtime_score_order(left, right))
+        .map(|(_, candidate, _, _, _)| candidate.id.clone());
 
-    accepted.sort_by(|(_, left, _, _), (_, right, _, _)| {
-        right
-            .scores
-            .action_score
-            .cmp(&left.scores.action_score)
-            .then_with(|| right.scores.scope_fit.cmp(&left.scores.scope_fit))
-            .then_with(|| left.scores.risk.cmp(&right.scores.risk))
-    });
+    accepted.sort_by(model_authority_order);
 
     let selected = accepted.first();
-    let selected_id = selected.map(|(candidate, _, _, _)| candidate.id.clone());
-    let selected_runtime_score = selected.map(|(_, decision, _, _)| decision.scores.action_score);
-    let selected_model_score = selected.and_then(|(_, _, model_score, _)| *model_score);
-    let selected_factor_score = selected.and_then(|(_, _, _, factor_score)| *factor_score);
+    let selected_id = selected.map(|(_, candidate, _, _, _)| candidate.id.clone());
+    let selected_runtime_score =
+        selected.map(|(_, _, decision, _, _)| decision.scores.action_score);
+    let selected_model_score = selected.and_then(|(_, _, _, model_score, _)| *model_score);
+    let selected_factor_score = selected.and_then(|(_, _, _, _, factor_score)| *factor_score);
     let selected_factor_rationale = selected
-        .and_then(|(candidate, _, _, _)| candidate.model_factors.as_ref())
+        .and_then(|(_, candidate, _, _, _)| candidate.model_factors.as_ref())
         .map(|factors| factors.rationale.clone());
     let model_factor_coverage = accepted
         .iter()
-        .filter(|(candidate, _, _, _)| candidate.model_factors.is_some())
+        .filter(|(_, candidate, _, _, _)| candidate.model_factors.is_some())
         .count();
     let memory_evidence_items = candidates
         .candidate_actions
@@ -256,21 +254,30 @@ pub fn rank_candidate_actions(
     let runtime_model_score_delta = selected_runtime_score
         .zip(selected_model_score)
         .map(|(runtime, model)| runtime - model);
-    let runtime_selected_differs_from_model_order =
-        selected_id.is_some() && model_selected_id.is_some() && selected_id != model_selected_id;
-    let calibration_reason = if selected_model_score.is_none() {
-        "model candidate scores unavailable; runtime score only".to_string()
+    let runtime_selected_differs_from_model_order = selected_id.is_some()
+        && runtime_selected_id.is_some()
+        && selected_id != runtime_selected_id;
+    let calibration_reason = if selected_model_score.is_some() {
+        if runtime_selected_differs_from_model_order {
+            "model score selected the candidate; runtime score recorded a different advisory preference"
+                .to_string()
+        } else {
+            "model score selected the candidate; runtime score agreed as advisory calibration"
+                .to_string()
+        }
     } else if runtime_selected_differs_from_model_order {
-        "runtime ranking selected a different candidate than model score order".to_string()
+        "model scores unavailable; preserved model candidate order while runtime score stayed advisory"
+            .to_string()
     } else {
-        "runtime ranking agreed with model score order for the selected candidate".to_string()
+        "model scores unavailable; model candidate order and runtime advisory score agreed"
+            .to_string()
     };
 
     CandidateActionRanking {
         mode,
         candidate_count: candidates.candidate_actions.len(),
         selected_id,
-        selected_tool: selected.map(|(candidate, _, _, _)| candidate.tool.clone()),
+        selected_tool: selected.map(|(_, candidate, _, _, _)| candidate.tool.clone()),
         selected_score: selected_runtime_score,
         selected_runtime_score,
         selected_model_score,
@@ -283,6 +290,27 @@ pub fn rank_candidate_actions(
         selected_factor_rationale,
         rejected,
     }
+}
+
+fn model_authority_order(left: &AcceptedCandidate<'_>, right: &AcceptedCandidate<'_>) -> Ordering {
+    match (left.3, right.3) {
+        (Some(left_score), Some(right_score)) => right_score
+            .cmp(&left_score)
+            .then_with(|| left.0.cmp(&right.0)),
+        (Some(_), None) => Ordering::Less,
+        (None, Some(_)) => Ordering::Greater,
+        (None, None) => left.0.cmp(&right.0),
+    }
+}
+
+fn runtime_score_order(left: &AcceptedCandidate<'_>, right: &AcceptedCandidate<'_>) -> Ordering {
+    left.2
+        .scores
+        .action_score
+        .cmp(&right.2.scores.action_score)
+        .then_with(|| left.2.scores.scope_fit.cmp(&right.2.scores.scope_fit))
+        .then_with(|| right.2.scores.risk.cmp(&left.2.scores.risk))
+        .then_with(|| right.0.cmp(&left.0))
 }
 
 impl From<CandidateModelScores> for ActionScores {
@@ -383,7 +411,7 @@ mod tests {
     }
 
     #[test]
-    fn ranks_exposed_candidates_by_runtime_score() {
+    fn preserves_model_tool_order_when_scores_are_absent() {
         let candidates = CandidateActionSet {
             candidate_actions: vec![
                 CandidateAction {
@@ -420,7 +448,68 @@ mod tests {
         );
 
         assert_eq!(ranking.candidate_count, 2);
+        assert_eq!(ranking.selected_id.as_deref(), Some("edit"));
+        assert!(ranking.runtime_selected_differs_from_model_order);
+        assert!(ranking
+            .calibration_reason
+            .contains("preserved model candidate order"));
+        assert!(ranking.rejected.is_empty());
+    }
+
+    #[test]
+    fn model_scores_drive_selection_before_runtime_scores() {
+        let candidates = CandidateActionSet {
+            candidate_actions: vec![
+                CandidateAction {
+                    id: "edit".to_string(),
+                    action_type: "tool_call".to_string(),
+                    tool: "file_edit".to_string(),
+                    arguments: serde_json::json!({"path":"src/lib.rs"}),
+                    reason: "edit now".to_string(),
+                    expected_observation: None,
+                    model_scores: Some(CandidateModelScores {
+                        value: 3,
+                        risk: 7,
+                        uncertainty_reduction: 2,
+                        cost: 5,
+                        reversibility: 5,
+                        scope_fit: 3,
+                    }),
+                    model_factors: None,
+                    evidence: Vec::new(),
+                },
+                CandidateAction {
+                    id: "read".to_string(),
+                    action_type: "tool_call".to_string(),
+                    tool: "file_read".to_string(),
+                    arguments: serde_json::json!({"path":"src/lib.rs"}),
+                    reason: "inspect first".to_string(),
+                    expected_observation: None,
+                    model_scores: Some(CandidateModelScores {
+                        value: 8,
+                        risk: 1,
+                        uncertainty_reduction: 8,
+                        cost: 2,
+                        reversibility: 10,
+                        scope_fit: 9,
+                    }),
+                    model_factors: None,
+                    evidence: Vec::new(),
+                },
+            ],
+        };
+        let exposed = HashSet::from(["file_edit".to_string(), "file_read".to_string()]);
+
+        let ranking = rank_candidate_actions(
+            &candidates,
+            input(AgentTaskStage::Understand),
+            &exposed,
+            CandidateActionMode::Shadow,
+        );
+
         assert_eq!(ranking.selected_id.as_deref(), Some("read"));
+        assert!(ranking.selected_model_score.is_some());
+        assert!(ranking.calibration_reason.contains("model score selected"));
         assert!(ranking.rejected.is_empty());
     }
 

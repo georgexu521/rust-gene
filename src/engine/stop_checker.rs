@@ -3,6 +3,8 @@
 //! This is intentionally small: it does not replace focused repair or failure
 //! recovery. It records the runtime's answer to "should this loop continue,
 //! checkpoint, or stop?" in a form task state and traces can consume.
+//! Score-only concerns are advisory; hard stop/checkpoint decisions stay tied
+//! to explicit failures, permissions, budgets, rollback, or verification state.
 
 use crate::engine::task_context::{
     AgentTaskStage, AgentTaskState, RollbackCandidate, StopAction, StopCheckReason,
@@ -324,54 +326,59 @@ impl StopChecker {
         if input.consecutive_high_risk_low_value_actions >= 2 {
             return decision(
                 &input,
-                StopCheckStatus::Stop,
+                StopCheckStatus::Continue,
                 StopCheckReason::LowActionValueLoop,
-                Some(TaskTerminalStatus::NeedsUser),
-                StopAction::AskUser,
+                None,
+                StopAction::Continue,
                 format!(
-                    "{} consecutive high-risk low-value action(s) need user direction",
+                    "{} consecutive high-risk low-value action(s) recorded as advisory evidence",
                     input.consecutive_high_risk_low_value_actions
                 ),
                 vec!["action score history shows high risk without enough value".to_string()],
-                Some("low_action_value".to_string()),
-                Some("ask the user or choose a safer scoped alternative".to_string()),
+                Some("low_action_value_advisory".to_string()),
+                Some(
+                    "let the model decide whether to replan, ask the user, or continue".to_string(),
+                ),
             );
         }
 
         if input.score_without_uncertainty_reduction_rounds >= 3 {
             return decision(
                 &input,
-                StopCheckStatus::Stop,
+                StopCheckStatus::Continue,
                 StopCheckReason::ScoreNotReducingUncertainty,
-                Some(TaskTerminalStatus::Blocked),
-                StopAction::Replan,
+                None,
+                StopAction::Continue,
                 format!(
-                    "{} low-score action(s) did not reduce uncertainty",
+                    "{} low-score action(s) did not reduce uncertainty; recording advisory evidence",
                     input.score_without_uncertainty_reduction_rounds
                 ),
                 vec![
                     "action score history shows continued work is not paying down uncertainty"
                         .to_string(),
                 ],
-                Some("score_not_reducing_uncertainty".to_string()),
-                Some("replan around a sharper hypothesis before continuing".to_string()),
+                Some("score_not_reducing_uncertainty_advisory".to_string()),
+                Some("let the model decide whether a sharper hypothesis is needed".to_string()),
             );
         }
 
         if input.consecutive_low_action_scores >= 3 {
             return decision(
                 &input,
-                StopCheckStatus::Checkpoint,
+                StopCheckStatus::Continue,
                 StopCheckReason::LowActionValueLoop,
                 None,
-                StopAction::Replan,
+                StopAction::Continue,
                 format!(
-                    "{} consecutive low action score(s) require replanning",
+                    "{} consecutive low action score(s) recorded as advisory evidence",
                     input.consecutive_low_action_scores
                 ),
                 vec!["action score history stayed below the useful-action threshold".to_string()],
-                Some("low_action_value".to_string()),
-                Some("choose a higher-scope, lower-cost action".to_string()),
+                Some("low_action_value_advisory".to_string()),
+                Some(
+                    "let the model decide whether to choose a higher-scope, lower-cost action"
+                        .to_string(),
+                ),
             );
         }
 
@@ -501,8 +508,6 @@ impl StopChecker {
             StopCheckReason::UncertaintyNotReduced
             | StopCheckReason::ActionNeedsRevision
             | StopCheckReason::RollbackRecommended
-            | StopCheckReason::LowActionValueLoop
-            | StopCheckReason::ScoreNotReducingUncertainty
             | StopCheckReason::RepeatedActionRevision => {
                 task_state.transition_to_stage(
                     AgentTaskStage::Repair,
@@ -511,6 +516,19 @@ impl StopChecker {
                     decision.evidence.len(),
                 );
                 task_state.record_observation("stop_checker", decision.summary.clone());
+            }
+            StopCheckReason::LowActionValueLoop | StopCheckReason::ScoreNotReducingUncertainty => {
+                if decision.status == StopCheckStatus::Continue {
+                    task_state.record_observation("stop_checker", decision.summary.clone());
+                } else {
+                    task_state.transition_to_stage(
+                        AgentTaskStage::Repair,
+                        "stop_checker",
+                        decision.reason.label(),
+                        decision.evidence.len(),
+                    );
+                    task_state.record_observation("stop_checker", decision.summary.clone());
+                }
             }
             StopCheckReason::DuplicateReadOnly | StopCheckReason::NoIssue => {}
         }
@@ -714,30 +732,30 @@ mod tests {
     }
 
     #[test]
-    fn repeated_low_action_scores_replan_before_more_tools() {
+    fn repeated_low_action_scores_are_advisory_not_replan() {
         let decision = StopChecker::evaluate(StopCheckInput {
             consecutive_low_action_scores: 3,
             ..input()
         });
 
-        assert_eq!(decision.status, StopCheckStatus::Checkpoint);
+        assert_eq!(decision.status, StopCheckStatus::Continue);
         assert_eq!(decision.reason, StopCheckReason::LowActionValueLoop);
-        assert_eq!(decision.action, StopAction::Replan);
+        assert_eq!(decision.action, StopAction::Continue);
     }
 
     #[test]
-    fn low_scores_without_uncertainty_stop_as_blocked_replan() {
+    fn low_scores_without_uncertainty_are_advisory_not_blocking() {
         let decision = StopChecker::evaluate(StopCheckInput {
             score_without_uncertainty_reduction_rounds: 3,
             ..input()
         });
 
-        assert_eq!(decision.status, StopCheckStatus::Stop);
+        assert_eq!(decision.status, StopCheckStatus::Continue);
         assert_eq!(
             decision.reason,
             StopCheckReason::ScoreNotReducingUncertainty
         );
-        assert_eq!(decision.terminal_status, Some(TaskTerminalStatus::Blocked));
-        assert_eq!(decision.action, StopAction::Replan);
+        assert_eq!(decision.terminal_status, None);
+        assert_eq!(decision.action, StopAction::Continue);
     }
 }

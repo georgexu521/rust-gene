@@ -1749,10 +1749,9 @@ fn derive_model_profile(bundle: &TaskContextBundle) -> ModelProfileMode {
         + bundle.agent_state.consecutive_edit_failures
         + bundle.agent_state.consecutive_command_failures
         + bundle.agent_state.consecutive_permission_blocks;
-    if failure_count > 0
-        || bundle.agent_state.consecutive_low_action_scores() >= 2
-        || bundle.agent_state.mode_score.uncertainty >= 7
-    {
+    // Low action-score history is advisory trace. Do not constrain the model's
+    // tool surface solely because runtime scoring disliked prior actions.
+    if failure_count > 0 || bundle.agent_state.mode_score.uncertainty >= 7 {
         return ModelProfileMode::Constrained;
     }
     ModelProfileMode::Standard
@@ -2939,7 +2938,7 @@ mod tests {
     }
 
     #[test]
-    fn task_contract_uses_constrained_profile_for_low_action_score_loop() {
+    fn task_contract_keeps_standard_profile_for_low_action_score_history() {
         let route = IntentRouter::new().route("修改 src/lib.rs");
         let mut bundle = TaskContextBundle::new("修改 src/lib.rs", ".", route, None);
         for idx in 0..2 {
@@ -2962,7 +2961,7 @@ mod tests {
 
         let contract = bundle.task_contract(&[]);
 
-        assert_eq!(contract.model_profile, ModelProfileMode::Constrained);
+        assert_eq!(contract.model_profile, ModelProfileMode::Standard);
     }
 
     #[test]

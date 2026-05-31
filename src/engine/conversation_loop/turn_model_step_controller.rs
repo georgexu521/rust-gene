@@ -278,11 +278,9 @@ fn candidate_set_from_tool_calls(tool_calls: &[ToolCall]) -> CandidateActionSet 
 
 fn candidate_gate_triggered(task_bundle: &TaskContextBundle) -> bool {
     let state = &task_bundle.agent_state;
-    state.repeated_revised_action_count() >= 1
-        || state.consecutive_low_action_scores() >= 2
-        || state.consecutive_high_risk_low_value_actions() >= 1
-        || state.score_without_uncertainty_reduction_rounds() >= 2
-        || state.uncertainty_not_reduced_steps >= 2
+    // Score-only signals stay advisory. Gated candidate reduction is reserved
+    // for explicit revision/uncertainty loops and still preserves model order.
+    state.repeated_revised_action_count() >= 1 || state.uncertainty_not_reduced_steps >= 2
 }
 
 #[cfg(test)]
@@ -461,7 +459,7 @@ mod tests {
     }
 
     #[test]
-    fn gated_candidate_ranking_filters_to_runtime_selected_action_only_after_trigger() {
+    fn gated_candidate_ranking_preserves_model_order_after_trigger() {
         let mut guard = crate::test_utils::env_guard::EnvVarGuard::acquire_blocking();
         guard.set("PRIORITY_AGENT_CANDIDATE_ACTIONS", "gated");
 
@@ -502,7 +500,7 @@ mod tests {
             });
 
         assert_eq!(ranked.len(), 1);
-        assert_eq!(ranked[0].name, "file_read");
+        assert_eq!(ranked[0].name, "file_edit");
         assert!(pre_executed.is_empty());
         let finished = trace.finish(TurnStatus::Completed);
         assert!(finished.events.iter().any(|event| matches!(
@@ -511,7 +509,7 @@ mod tests {
                 mode,
                 selected_tool: Some(tool),
                 ..
-            } if mode == "gated" && tool == "file_read"
+            } if mode == "gated" && tool == "file_edit"
         )));
     }
 

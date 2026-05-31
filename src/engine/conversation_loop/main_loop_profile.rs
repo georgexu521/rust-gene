@@ -7,6 +7,8 @@ pub(super) enum MainLoopProfile {
 }
 
 impl MainLoopProfile {
+    /// Request-shaping only. QuietDirect still enters the model loop; it just
+    /// suppresses optional tools/dynamic context for low-risk direct turns.
     pub(super) fn from_turn(route: &IntentRoute, required_validation_commands: &[String]) -> Self {
         let simple_direct = route.workflow == WorkflowKind::Direct
             && matches!(

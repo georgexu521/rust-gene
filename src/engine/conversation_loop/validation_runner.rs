@@ -610,6 +610,8 @@ fn required_validation_preflight_repairs(
     working_dir: &Path,
     command: &str,
 ) -> Vec<RequiredValidationPreflightRepair> {
+    // Fixture-scoped environment prep only. This must not become semantic
+    // repair or a local substitute for the model's validation judgment.
     let normalized =
         crate::tools::bash_tool::command_classifier::normalize_command_for_match(command);
     if normalized.is_empty() {
