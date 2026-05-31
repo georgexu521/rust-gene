@@ -4,7 +4,7 @@ import {
   DesktopRunContext,
   DesktopRuntimeDiagnostic,
 } from "../../runtime/desktopApi";
-import { TraceItem } from "../types";
+import { TimelineSummary, TraceItem } from "../types";
 
 type TraceDrawerProps = {
   activeItemId: string | null;
@@ -77,13 +77,21 @@ export function TraceDrawer({
         <div className="trace-list">
           {items.map((item) => (
             <article
-              className={`trace-item ${item.kind} ${item.id === activeItemId ? "active" : ""}`}
+              className={`trace-item ${item.kind} ${item.status || ""} ${item.id === activeItemId ? "active" : ""}`}
               data-trace-id={item.id}
               key={item.id}
             >
               <div className="trace-kind">{item.kind}</div>
               <div className="trace-title">{item.title}</div>
               {item.detail ? <div className="trace-detail">{item.detail}</div> : null}
+              {item.summary ? <TraceSummary summary={item.summary} /> : null}
+              {item.facts && item.facts.length > 0 ? (
+                <div className="trace-facts">
+                  {item.facts.map((fact) => (
+                    <span key={fact}>{fact}</span>
+                  ))}
+                </div>
+              ) : null}
               {item.runtime ? <RuntimeDiagnosticView diagnostic={item.runtime} /> : null}
               {item.contexts && item.contexts.length > 0 ? (
                 <div className="trace-contexts" aria-label="Trace attached context">
@@ -107,6 +115,76 @@ export function TraceDrawer({
       )}
     </aside>
   );
+}
+
+function TraceSummary({ summary }: { summary: TimelineSummary }) {
+  if (summary.kind === "shell") {
+    return (
+      <div className="trace-summary">
+        <span>Command</span>
+        <code>{summary.command}</code>
+        <small>
+          {[summary.validation, summary.exitCode !== undefined ? `exit ${summary.exitCode}` : null, summary.duration]
+            .filter(Boolean)
+            .join(" · ")}
+        </small>
+      </div>
+    );
+  }
+
+  if (summary.kind === "file") {
+    return (
+      <div className="trace-summary">
+        <span>File change</span>
+        {summary.path ? <code>{summary.path}</code> : null}
+        <small>
+          {[
+            summary.replacements !== undefined ? `${summary.replacements} replacements` : null,
+            summary.operations !== undefined ? `${summary.operations} operations` : null,
+            summary.additions !== undefined ? `+${summary.additions}` : null,
+            summary.deletions !== undefined ? `-${summary.deletions}` : null,
+          ]
+            .filter(Boolean)
+            .join(" · ")}
+        </small>
+        {summary.diffPreview ? <pre>{summary.diffPreview}</pre> : null}
+      </div>
+    );
+  }
+
+  if (summary.kind === "failure") {
+    return (
+      <div className="trace-summary failure">
+        <span>Failure</span>
+        <strong>{summary.reason}</strong>
+        {summary.recovery ? <small>{summary.recovery}</small> : null}
+        {summary.outputPreview ? <pre>{summary.outputPreview}</pre> : null}
+      </div>
+    );
+  }
+
+  if (summary.kind === "permission") {
+    return (
+      <div className="trace-summary permission">
+        <span>Permission review</span>
+        <small>
+          {[
+            summary.actionDecision ? `review ${summary.actionDecision}` : null,
+            summary.risk ? `risk ${summary.risk}` : null,
+            summary.requestKind ? summary.requestKind.replaceAll("_", " ") : null,
+            summary.checkpoint ? `checkpoint ${summary.checkpoint.replaceAll("_", " ")}` : null,
+            summary.parserStatus ? `parser ${summary.parserStatus}` : null,
+          ]
+            .filter(Boolean)
+            .join(" · ")}
+        </small>
+        {summary.reason ? <strong>{summary.reason}</strong> : null}
+        {summary.recovery ? <small>{summary.recovery}</small> : null}
+      </div>
+    );
+  }
+
+  return null;
 }
 
 function RuntimeDiagnosticView({ diagnostic }: { diagnostic: DesktopRuntimeDiagnostic }) {

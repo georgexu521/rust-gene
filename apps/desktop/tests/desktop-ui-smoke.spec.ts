@@ -4,8 +4,7 @@ test.describe("desktop UI smoke", () => {
   test("desktop layout renders core controls and settings drawer", async ({ page }, testInfo) => {
     await page.goto("/");
 
-    await expect(page.getByRole("heading", { name: "What should we build in rust-agent?" }))
-      .toBeVisible();
+    await expect(page.getByRole("heading", { name: "Desktop app Phase 1" })).toBeVisible();
     await expect(page.locator(".startup-state-card")).toContainText("Restored session");
     await expect(page.getByRole("complementary", { name: "Workbench" })).not.toBeVisible();
     await page.getByRole("button", { name: /Workbench/ }).click();
@@ -59,8 +58,8 @@ test.describe("desktop UI smoke", () => {
     await page.keyboard.press("Escape");
     await expect(page.getByRole("dialog", { name: "Mode details" })).not.toBeVisible();
     await composer.getByRole("button", { exact: true, name: "Provider" }).click();
-    await expect(page.getByRole("dialog", { name: "Provider controls" })).toContainText("kimi-k2.5");
-    await page.getByRole("button", { exact: true, name: "Use model kimi-k2.5" }).click();
+    await expect(page.getByRole("dialog", { name: "Provider controls" })).toContainText("MiniMax-M2.7");
+    await page.getByRole("button", { exact: true, name: "Use model MiniMax-M2.7" }).click();
     await expect(page.getByRole("dialog", { name: "Provider controls" })).not.toBeVisible();
     await expect(page.getByRole("button", { name: "New Chat" })).toBeVisible();
     await expect(page.getByRole("button", { name: "rust-agent" })).toBeVisible();
@@ -155,63 +154,38 @@ test.describe("desktop UI smoke", () => {
     await expect(page.locator(".timeline-run-stats span", { hasText: "1 failed" })).toBeVisible();
     await expect(page.locator(".timeline-run-stats span", { hasText: "1 file changed" })).toBeVisible();
     await expect(page.locator(".timeline-run-stats span", { hasText: "spine 7/7" })).toBeVisible();
-    await expect(page.locator(".message.assistant.final", { hasText: "Final answer" })).toBeVisible();
-    await expect(page.locator(".message.assistant.final .message-section-label", { hasText: "Conclusion" })).toBeVisible();
+    await expect(page.locator(".message.assistant.final", { hasText: "Web preview received" })).toBeVisible();
     await expect(page.locator(".message.assistant.final")).toHaveClass(/run-group-final/);
-    const pnpmCard = page.locator(".timeline-event.compact-shell", { hasText: "Pnpm Test" });
-    await expect(pnpmCard).toBeVisible();
-    await expect(pnpmCard).toHaveClass(/run-group-step/);
-    await expect(
-      pnpmCard.locator(".timeline-summary code", {
-        hasText: "corepack pnpm --dir apps/desktop test:ui-smoke",
-      }),
-    ).toBeVisible();
-    await expect(pnpmCard.locator(".timeline-summary-meta", { hasText: "Pnpm Test" })).toBeVisible();
-    await expect(pnpmCard.locator(".timeline-summary-meta", { hasText: "exit 0" })).toBeVisible();
-    await expect(pnpmCard.locator(".timeline-facts span")).toHaveCount(0);
-    await expect(page.locator(".timeline-title", { hasText: "Edited file" })).toBeVisible();
-    await expect(
-      page.locator(".timeline-summary.file .timeline-summary-meta", {
-        hasText: "apps/desktop/src/app/runEventState.ts",
-      }),
-    ).toBeVisible();
-    await expect(page.locator(".timeline-diff-preview", { hasText: "+  diff_preview?: string;" })).toBeVisible();
-    await expect(page.locator(".timeline-facts span", { hasText: "2 replacements" })).toBeVisible();
-    await expect(
-      page.locator(".timeline-summary.failure strong", {
-        hasText: "cargo test failed with exit code 101",
-      }),
-    ).toBeVisible();
-    await expect(
-      page.locator(".timeline-summary.failure .timeline-summary-meta", {
-        hasText: "Inspect the failing test output",
-      }),
-    ).toBeVisible();
-    await expect(page.locator(".timeline-expandable-preview summary", { hasText: "Output preview" })).toBeVisible();
-    await page.locator(".timeline-expandable-preview summary", { hasText: "Output preview" }).click();
-    await expect(page.locator(".timeline-output-preview", { hasText: "timeline_cards_show_diff_preview" })).toBeVisible();
-    await expect(page.locator(".timeline-event.usage", { hasText: "Token usage" })).toBeVisible();
+    await expect(page.locator(".timeline-event", { hasText: "Pnpm Test" })).not.toBeVisible();
+    await expect(page.locator(".timeline-event", { hasText: "Edited file" })).not.toBeVisible();
+    await expect(page.locator(".timeline-event", { hasText: "cargo test failed" })).not.toBeVisible();
+    await expect(page.locator(".timeline-event.usage", { hasText: "Token usage" })).not.toBeVisible();
     await expect(page.locator(".timeline-event.permission", { hasText: "Allow git push" })).toBeVisible();
-    await expect(page.locator(".timeline-event.permission", { hasText: "review ask_user" })).toBeVisible();
-    await expect(
-      page.locator(".timeline-event.permission", { hasText: "checkpoint unavailable" }),
-    ).toBeVisible();
-    await page.locator(".timeline-event.permission .timeline-actions button", { hasText: "Approve" }).click();
-    await expect(page.locator(".timeline-event.permission", { hasText: "Permission approved" })).toBeVisible();
+    await expect(page.locator(".timeline-event.permission", { hasText: "checkpoint unavailable" })).not.toBeVisible();
+    await page.locator(".timeline-event.permission").getByRole("button", { name: "Approve" }).click();
+    await expect(page.locator(".timeline-event.permission", { hasText: "Permission approved" })).not.toBeVisible();
     await page.locator(".timeline-run-row").getByRole("button", { name: "Open trace for current run" }).click();
     await expect(page.getByRole("complementary", { name: "Run trace" })).toBeVisible();
     await expect(page.locator(".trace-item.active", { hasText: "Run started" })).toContainText("Attached context");
     await expect(page.locator(".trace-item.active", { hasText: "Run started" })).toContainText("Current diff");
     await expect(page.locator(".trace-item.active", { hasText: "Run started" })).toContainText("App.tsx");
+    await expect(page.locator(".trace-item.tool", { hasText: "Pnpm Test" })).toContainText(
+      "corepack pnpm --dir apps/desktop test:ui-smoke",
+    );
+    await expect(page.locator(".trace-item.tool", { hasText: "Edited file" })).toContainText(
+      "+  diff_preview?: string;",
+    );
+    await expect(page.locator(".trace-item.tool.failed", { hasText: "Cargo Test" })).toContainText(
+      "timeline_cards_show_diff_preview",
+    );
+    await expect(page.locator(".trace-item.permission", { hasText: "Permission requested" })).toContainText(
+      "checkpoint unavailable",
+    );
     await expect(page.locator(".trace-item.runtime", { hasText: "Runtime diagnostic" })).toContainText("Proof summary");
     await expect(page.locator(".trace-item.runtime", { hasText: "Runtime diagnostic" })).toContainText("validation passed");
     await page.locator(".trace-item.active", { hasText: "Run started" }).getByRole("button", { name: "Open trace context Current diff" }).click();
     await expect(page.getByRole("complementary", { name: "Context details" })).toContainText("Patch preview");
     await page.getByRole("button", { name: "Close context details" }).click();
-    await page.getByRole("complementary", { name: "Run trace" }).getByRole("button", { name: "Close" }).click();
-    await page.locator(".timeline-event", { hasText: "Pnpm Test" }).getByRole("button", { name: "Open trace for Pnpm Test" }).click();
-    await expect(page.getByRole("complementary", { name: "Run trace" })).toBeVisible();
-    await expect(page.locator(".trace-item.active", { hasText: "Tool completed" })).toBeVisible();
     await page.getByRole("complementary", { name: "Run trace" }).getByRole("button", { name: "Close" }).click();
 
     await assertNoHorizontalOverflow(page);
@@ -272,8 +246,7 @@ test.describe("desktop UI smoke", () => {
     await page.setViewportSize({ width: 390, height: 844 });
     await page.goto("/");
 
-    await expect(page.getByRole("heading", { name: "What should we build in rust-agent?" }))
-      .toBeVisible();
+    await expect(page.getByRole("heading", { name: "Desktop app Phase 1" })).toBeVisible();
     await expect(page.getByRole("button", { name: /Workbench/ })).toBeVisible();
     await page.getByRole("button", { name: /Workbench/ }).click();
     await expect(page.getByRole("region", { name: "Frontend workbench" })).toContainText("Project intelligence");

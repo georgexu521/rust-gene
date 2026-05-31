@@ -1906,19 +1906,19 @@ fn desktop_provider_options(
         })
         .collect::<Vec<_>>();
 
-    for (id, label, provider_type, model, env_key) in default_desktop_providers() {
-        if providers.iter().any(|provider| provider.id == id) {
+    for spec in priority_agent::services::api::provider::DEFAULT_PROVIDER_ENV_SPECS {
+        if providers.iter().any(|provider| provider.id == spec.id) {
             continue;
         }
         providers.push(DesktopProviderOption {
-            id: id.to_string(),
-            label: label.to_string(),
-            provider_type: provider_type.to_string(),
-            model: model.to_string(),
+            id: spec.id.to_string(),
+            label: spec.label.to_string(),
+            provider_type: format!("{:?}", spec.provider_type),
+            model: spec.default_model.to_string(),
             base_url: String::new(),
             configured: false,
             active: false,
-            note: format!("missing {env_key}"),
+            note: format!("missing {}", spec.key_env_hint()),
         });
     }
 
@@ -1983,35 +1983,23 @@ fn provider_id_for_base_url(
 fn default_provider_id_from_env(
     registry: &priority_agent::services::api::provider::ProviderRegistry,
 ) -> Option<String> {
-    ["minimax", "openai", "kimi"]
-        .into_iter()
-        .find(|provider| registry.get(provider).is_some())
-        .map(ToString::to_string)
-}
-
-fn default_desktop_providers() -> [(
-    &'static str,
-    &'static str,
-    &'static str,
-    &'static str,
-    &'static str,
-); 3] {
-    [
-        (
-            "minimax",
-            "MiniMax",
-            "Minimax",
-            "MiniMax-M2.7",
-            "MINIMAX_API_KEY",
-        ),
-        ("openai", "OpenAI", "OpenAI", "gpt-4o", "OPENAI_API_KEY"),
-        ("kimi", "Kimi", "Kimi", "kimi-k2.5", "MOONSHOT_API_KEY"),
-    ]
+    priority_agent::services::api::provider::DEFAULT_PROVIDER_ENV_SPECS
+        .iter()
+        .find(|spec| registry.get(spec.id).is_some())
+        .map(|spec| spec.id.to_string())
 }
 
 fn default_models_for_provider(provider_id: &str) -> Vec<&'static str> {
     match provider_id {
-        "minimax" => vec!["MiniMax-M2.7", "MiniMax-M1"],
+        "minimax" => vec![
+            "MiniMax-M2.7",
+            "MiniMax-M2.7-highspeed",
+            "MiniMax-M2.5",
+            "MiniMax-M2",
+        ],
+        "kimi-code" => vec!["kimi-for-coding"],
+        "deepseek" => vec!["deepseek-v4-pro", "deepseek-v4-flash", "deepseek-chat"],
+        "glm" => vec!["glm-5.1", "glm-4.7", "glm-4.6"],
         "openai" => vec!["gpt-4o", "gpt-4o-mini"],
         "kimi" => vec!["kimi-k2.5", "kimi-k2.5-thinking"],
         _ => Vec::new(),
@@ -2019,9 +2007,8 @@ fn default_models_for_provider(provider_id: &str) -> Vec<&'static str> {
 }
 
 fn provider_label(provider_id: &str) -> String {
-    default_desktop_providers()
-        .into_iter()
-        .find_map(|(id, label, _, _, _)| (id == provider_id).then_some(label.to_string()))
+    priority_agent::services::api::provider::default_provider_env_spec(provider_id)
+        .map(|spec| spec.label.to_string())
         .unwrap_or_else(|| provider_id.to_string())
 }
 
@@ -2726,6 +2713,10 @@ mod tests {
             info.shell_profile_path.ends_with(".zshrc")
                 || info.shell_profile_path.ends_with(".bash_profile")
         );
+        assert!(info.provider_env_vars.contains(&"MINIMAX_API_KEY"));
+        assert!(info.provider_env_vars.contains(&"KIMI_CODE_API_KEY"));
+        assert!(info.provider_env_vars.contains(&"DEEPSEEK_API_KEY"));
+        assert!(info.provider_env_vars.contains(&"GLM_API_KEY"));
         assert!(info.provider_env_vars.contains(&"MOONSHOT_API_KEY"));
         assert!(info.example.contains("export "));
     }
@@ -2765,6 +2756,15 @@ mod tests {
         assert!(providers
             .iter()
             .any(|provider| provider.id == "minimax" && !provider.configured));
+        assert!(providers
+            .iter()
+            .any(|provider| provider.id == "deepseek"
+                && provider.note.contains("DEEPSEEK_API_KEY")));
+        assert!(providers
+            .iter()
+            .any(|provider| provider.id == "glm" && provider.note.contains("GLM_API_KEY")));
+        assert!(providers.iter().any(|provider| provider.id == "kimi-code"
+            && provider.model == "kimi-for-coding"));
         assert!(providers
             .iter()
             .any(|provider| provider.id == "openai" && provider.note.contains("OPENAI_API_KEY")));
@@ -2816,27 +2816,35 @@ fn collect_desktop_diagnostics(
 fn provider_setup_info_value() -> ProviderSetupInfo {
     ProviderSetupInfo {
         shell_profile_path: shell_profile_path().display().to_string(),
-        provider_env_vars: vec!["MINIMAX_API_KEY", "OPENAI_API_KEY", "MOONSHOT_API_KEY"],
-        example: "export MOONSHOT_API_KEY=\"your-key-here\"",
+        provider_env_vars: priority_agent::services::api::provider::DEFAULT_PROVIDER_ENV_SPECS
+            .iter()
+            .flat_map(|spec| spec.key_env_vars.iter().copied())
+            .collect(),
+        example: "export MINIMAX_API_KEY=\"your-key-here\"",
     }
 }
 
 fn provider_key_diagnostic() -> DesktopDiagnostic {
-    let configured: Vec<&str> = [
-        ("MINIMAX_API_KEY", "MiniMax"),
-        ("OPENAI_API_KEY", "OpenAI"),
-        ("MOONSHOT_API_KEY", "Moonshot/Kimi"),
-    ]
-    .into_iter()
-    .filter_map(|(env, label)| env_is_set(env).then_some(label))
-    .collect();
+    let configured: Vec<&str> =
+        priority_agent::services::api::provider::DEFAULT_PROVIDER_ENV_SPECS
+            .iter()
+            .filter_map(|spec| {
+                spec.key_env_vars
+                    .iter()
+                    .any(|env| env_is_set(env))
+                    .then_some(spec.label)
+            })
+            .collect();
 
     if configured.is_empty() {
         DesktopDiagnostic {
             id: "provider_keys",
             label: "Provider keys",
             status: DiagnosticStatus::Error,
-            detail: "No provider key found. Set MINIMAX_API_KEY, OPENAI_API_KEY, or MOONSHOT_API_KEY before running real agent sessions.".to_string(),
+            detail: format!(
+                "No provider key found. Set one of {} before running real agent sessions.",
+                priority_agent::services::api::provider::provider_key_env_hint()
+            ),
         }
     } else {
         DesktopDiagnostic {

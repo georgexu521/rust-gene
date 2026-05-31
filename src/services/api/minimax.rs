@@ -44,7 +44,7 @@ impl MiniMaxClient {
         // 官方 quickstart 默认示例模型
         let model = model.unwrap_or("MiniMax-M2.7").to_string();
         let base_url = base_url
-            .unwrap_or("https://api.minimaxi.com/v1")
+            .unwrap_or(crate::services::api::provider::MINIMAX_DEFAULT_BASE_URL)
             .to_string();
         info!(
             "MiniMax client initialized with base URL: {}, model: {}",
@@ -330,7 +330,10 @@ mod tests {
     fn test_minimax_client_defaults() {
         let client = MiniMaxClient::new("test-key", None, None);
         assert_eq!(client.default_model(), "MiniMax-M2.7");
-        assert_eq!(client.base_url(), "https://api.minimaxi.com/v1");
+        assert_eq!(
+            client.base_url(),
+            crate::services::api::provider::MINIMAX_DEFAULT_BASE_URL
+        );
     }
 
     #[test]

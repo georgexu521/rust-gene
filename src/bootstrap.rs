@@ -34,41 +34,31 @@ pub struct ApiComponents {
     pub worktree_manager: Arc<crate::engine::worktree::WorktreeManager>,
 }
 
-/// 初始化 LLM Provider（MiniMax -> OpenAI -> Kimi）
+/// 初始化 LLM Provider（由 ProviderRegistry 的确定性优先级和用户覆盖项选择）
 pub fn init_provider() -> Result<(Arc<dyn crate::services::api::LlmProvider>, String)> {
-    if let Ok(client) = crate::services::api::minimax::MiniMaxClient::from_env() {
-        let model = client.default_model().to_string();
-        info!(
-            "MiniMax client ready: base={}, model={}",
-            client.base_url(),
-            model
-        );
-        let provider: Arc<dyn crate::services::api::LlmProvider> = Arc::new(client);
-        Ok((provider, model))
-    } else if let Ok(client) = crate::services::api::openai::OpenAiClient::from_env() {
-        let model = client.default_model().to_string();
-        info!(
-            "OpenAI client ready: base={}, model={}",
-            client.base_url(),
-            model
-        );
-        let provider: Arc<dyn crate::services::api::LlmProvider> = Arc::new(client);
-        Ok((provider, model))
-    } else if let Ok(client) = crate::services::api::kimi::KimiClient::from_env() {
-        let model = client.default_model().to_string();
-        info!("Kimi client ready: model={}", model);
-        let provider: Arc<dyn crate::services::api::LlmProvider> = Arc::new(client);
-        Ok((provider, model))
-    } else {
-        Err(anyhow::anyhow!(
+    let registry = crate::services::api::provider::ProviderRegistry::from_env();
+    let Some(provider) = registry.get_selected_provider() else {
+        return Err(anyhow::anyhow!(
             "No LLM provider configured.\n\
-             Set one of:\n\
-             1. MINIMAX_API_KEY (MiniMax Token Plan)\n\
-             2. OPENAI_API_KEY (OpenAI, or any OpenAI-compatible API)\n\
-             3. MOONSHOT_API_KEY (Kimi / Moonshot AI)\n\
-             Optional env vars: MINIMAX_BASE_URL, MINIMAX_MODEL, OPENAI_BASE_URL, OPENAI_MODEL, MOONSHOT_BASE_URL, MOONSHOT_MODEL"
-        ))
-    }
+             Set one of: {}\n\
+             Optional provider-specific env vars: *_BASE_URL, *_MODEL.\n\
+             To override selection when multiple keys are present, set PRIORITY_AGENT_DEFAULT_PROVIDER.",
+            crate::services::api::provider::provider_key_env_hint()
+        ));
+    };
+
+    let selected = registry.selected().unwrap_or("unknown");
+    let model = registry
+        .get_config(selected)
+        .map(|config| config.default_model.clone())
+        .unwrap_or_else(|| provider.default_model().to_string());
+    info!(
+        "LLM provider ready: provider={}, base={}, model={}",
+        selected,
+        provider.base_url(),
+        model
+    );
+    Ok((provider, model))
 }
 
 /// 初始化工具注册表（含插件动态注入）
@@ -357,6 +347,17 @@ mod tests {
 
     fn with_env_vars(vars: &[(&str, Option<&str>)], f: impl FnOnce()) {
         let mut env = EnvVarGuard::acquire_blocking();
+        for spec in crate::services::api::provider::DEFAULT_PROVIDER_ENV_SPECS {
+            for key in spec
+                .key_env_vars
+                .iter()
+                .chain(spec.base_url_env_vars.iter())
+                .chain(spec.model_env_vars.iter())
+            {
+                env.remove(key);
+            }
+        }
+        env.remove("PRIORITY_AGENT_DEFAULT_PROVIDER");
         for (k, v) in vars {
             if let Some(val) = v {
                 env.set(k, val);
@@ -392,7 +393,6 @@ mod tests {
             &[
                 ("MINIMAX_API_KEY", None),
                 ("OPENAI_API_KEY", Some("openai-key")),
-                ("MOONSHOT_API_KEY", Some("moonshot-key")),
                 ("OPENAI_MODEL", Some("gpt-4o")),
             ],
             || {

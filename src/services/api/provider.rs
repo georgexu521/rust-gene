@@ -28,10 +28,16 @@ pub struct ProviderConfig {
 }
 
 /// Provider 类型
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProviderType {
     /// Kimi / Moonshot
     Kimi,
+    /// Kimi Code Plan
+    KimiCode,
+    /// DeepSeek
+    DeepSeek,
+    /// GLM / Zhipu / Z.AI
+    Glm,
     /// OpenAI 兼容
     OpenAI,
     /// OpenAI 兼容（通用）
@@ -53,6 +59,11 @@ impl ProviderType {
     pub fn parse_lossy(s: &str) -> Self {
         match s.to_lowercase().as_str() {
             "kimi" | "moonshot" => ProviderType::Kimi,
+            "kimi_code" | "kimi-code" | "kimi_code_plan" | "kimi-code-plan" => {
+                ProviderType::KimiCode
+            }
+            "deepseek" => ProviderType::DeepSeek,
+            "glm" | "zai" | "z.ai" | "zhipu" | "zhipuai" | "bigmodel" => ProviderType::Glm,
             "openai" => ProviderType::OpenAI,
             "openai_compat" | "openai-compatible" => ProviderType::OpenAICompat,
             "minimax" => ProviderType::Minimax,
@@ -65,11 +76,13 @@ impl ProviderType {
 
     pub fn protocol_family(&self) -> ProviderProtocolFamily {
         match self {
-            ProviderType::Kimi => ProviderProtocolFamily::Kimi,
+            ProviderType::Kimi | ProviderType::KimiCode => ProviderProtocolFamily::Kimi,
             ProviderType::Minimax => ProviderProtocolFamily::MiniMax,
             ProviderType::Anthropic => ProviderProtocolFamily::AnthropicLike,
             ProviderType::OpenAI
             | ProviderType::OpenAICompat
+            | ProviderType::DeepSeek
+            | ProviderType::Glm
             | ProviderType::Google
             | ProviderType::Azure
             | ProviderType::Custom => ProviderProtocolFamily::OpenAiCompatible,
@@ -103,6 +116,142 @@ impl std::str::FromStr for ProviderType {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct ProviderEnvSpec {
+    pub id: &'static str,
+    pub label: &'static str,
+    pub provider_type: ProviderType,
+    pub key_env_vars: &'static [&'static str],
+    pub base_url_env_vars: &'static [&'static str],
+    pub model_env_vars: &'static [&'static str],
+    pub default_base_url: &'static str,
+    pub default_model: &'static str,
+}
+
+impl ProviderEnvSpec {
+    pub fn primary_key_env(self) -> &'static str {
+        self.key_env_vars.first().copied().unwrap_or("")
+    }
+
+    pub fn key_env_hint(self) -> String {
+        self.key_env_vars.join(" or ")
+    }
+}
+
+pub const MINIMAX_DEFAULT_BASE_URL: &str = "https://api.minimax.io/v1";
+pub const KIMI_DEFAULT_BASE_URL: &str = "https://api.moonshot.cn/v1";
+pub const KIMI_CODE_DEFAULT_BASE_URL: &str = "https://api.kimi.com/coding/v1";
+pub const DEEPSEEK_DEFAULT_BASE_URL: &str = "https://api.deepseek.com";
+pub const GLM_DEFAULT_BASE_URL: &str = "https://open.bigmodel.cn/api/paas/v4";
+pub const OPENAI_DEFAULT_BASE_URL: &str = "https://api.openai.com/v1";
+
+const MINIMAX_KEY_ENV: &[&str] = &["MINIMAX_API_KEY"];
+const MINIMAX_BASE_URL_ENV: &[&str] = &["MINIMAX_BASE_URL"];
+const MINIMAX_MODEL_ENV: &[&str] = &["MINIMAX_MODEL"];
+const KIMI_CODE_KEY_ENV: &[&str] = &["KIMI_CODE_API_KEY"];
+const KIMI_CODE_BASE_URL_ENV: &[&str] = &["KIMI_CODE_BASE_URL"];
+const KIMI_CODE_MODEL_ENV: &[&str] = &["KIMI_CODE_MODEL"];
+const DEEPSEEK_KEY_ENV: &[&str] = &["DEEPSEEK_API_KEY"];
+const DEEPSEEK_BASE_URL_ENV: &[&str] = &["DEEPSEEK_BASE_URL"];
+const DEEPSEEK_MODEL_ENV: &[&str] = &["DEEPSEEK_MODEL"];
+const GLM_KEY_ENV: &[&str] = &[
+    "GLM_API_KEY",
+    "ZAI_API_KEY",
+    "ZHIPUAI_API_KEY",
+    "BIGMODEL_API_KEY",
+];
+const GLM_BASE_URL_ENV: &[&str] = &[
+    "GLM_BASE_URL",
+    "ZAI_BASE_URL",
+    "ZHIPUAI_BASE_URL",
+    "BIGMODEL_BASE_URL",
+];
+const GLM_MODEL_ENV: &[&str] = &["GLM_MODEL", "ZAI_MODEL", "ZHIPUAI_MODEL", "BIGMODEL_MODEL"];
+const KIMI_KEY_ENV: &[&str] = &["MOONSHOT_API_KEY"];
+const KIMI_BASE_URL_ENV: &[&str] = &["MOONSHOT_BASE_URL"];
+const KIMI_MODEL_ENV: &[&str] = &["MOONSHOT_MODEL"];
+const OPENAI_KEY_ENV: &[&str] = &["OPENAI_API_KEY"];
+const OPENAI_BASE_URL_ENV: &[&str] = &["OPENAI_BASE_URL"];
+const OPENAI_MODEL_ENV: &[&str] = &["OPENAI_MODEL"];
+
+/// Built-in provider order is deterministic, advisory, and user-overridable via
+/// `PRIORITY_AGENT_DEFAULT_PROVIDER`.
+pub const DEFAULT_PROVIDER_ENV_SPECS: &[ProviderEnvSpec] = &[
+    ProviderEnvSpec {
+        id: "minimax",
+        label: "MiniMax",
+        provider_type: ProviderType::Minimax,
+        key_env_vars: MINIMAX_KEY_ENV,
+        base_url_env_vars: MINIMAX_BASE_URL_ENV,
+        model_env_vars: MINIMAX_MODEL_ENV,
+        default_base_url: MINIMAX_DEFAULT_BASE_URL,
+        default_model: "MiniMax-M2.7",
+    },
+    ProviderEnvSpec {
+        id: "kimi-code",
+        label: "Kimi Code",
+        provider_type: ProviderType::KimiCode,
+        key_env_vars: KIMI_CODE_KEY_ENV,
+        base_url_env_vars: KIMI_CODE_BASE_URL_ENV,
+        model_env_vars: KIMI_CODE_MODEL_ENV,
+        default_base_url: KIMI_CODE_DEFAULT_BASE_URL,
+        default_model: "kimi-for-coding",
+    },
+    ProviderEnvSpec {
+        id: "deepseek",
+        label: "DeepSeek",
+        provider_type: ProviderType::DeepSeek,
+        key_env_vars: DEEPSEEK_KEY_ENV,
+        base_url_env_vars: DEEPSEEK_BASE_URL_ENV,
+        model_env_vars: DEEPSEEK_MODEL_ENV,
+        default_base_url: DEEPSEEK_DEFAULT_BASE_URL,
+        default_model: "deepseek-v4-pro",
+    },
+    ProviderEnvSpec {
+        id: "glm",
+        label: "GLM",
+        provider_type: ProviderType::Glm,
+        key_env_vars: GLM_KEY_ENV,
+        base_url_env_vars: GLM_BASE_URL_ENV,
+        model_env_vars: GLM_MODEL_ENV,
+        default_base_url: GLM_DEFAULT_BASE_URL,
+        default_model: "glm-5.1",
+    },
+    ProviderEnvSpec {
+        id: "kimi",
+        label: "Kimi",
+        provider_type: ProviderType::Kimi,
+        key_env_vars: KIMI_KEY_ENV,
+        base_url_env_vars: KIMI_BASE_URL_ENV,
+        model_env_vars: KIMI_MODEL_ENV,
+        default_base_url: KIMI_DEFAULT_BASE_URL,
+        default_model: "kimi-k2.5",
+    },
+    ProviderEnvSpec {
+        id: "openai",
+        label: "OpenAI",
+        provider_type: ProviderType::OpenAI,
+        key_env_vars: OPENAI_KEY_ENV,
+        base_url_env_vars: OPENAI_BASE_URL_ENV,
+        model_env_vars: OPENAI_MODEL_ENV,
+        default_base_url: OPENAI_DEFAULT_BASE_URL,
+        default_model: "gpt-4o",
+    },
+];
+
+pub fn default_provider_env_spec(id: &str) -> Option<&'static ProviderEnvSpec> {
+    DEFAULT_PROVIDER_ENV_SPECS.iter().find(|spec| spec.id == id)
+}
+
+pub fn provider_key_env_hint() -> String {
+    DEFAULT_PROVIDER_ENV_SPECS
+        .iter()
+        .map(|spec| spec.primary_key_env())
+        .filter(|env| !env.is_empty())
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
 /// Provider 注册表
 pub struct ProviderRegistry {
     /// 已注册的 providers（name -> ProviderInstance）
@@ -127,89 +276,14 @@ impl ProviderRegistry {
     pub fn from_env() -> Self {
         let mut registry = Self::new();
 
-        // 加载默认的 MiniMax Provider（如果配置了）
-        if let Some(api_key) = env_non_empty("MINIMAX_API_KEY") {
-            let base_url = env_non_empty("MINIMAX_BASE_URL")
-                .unwrap_or_else(|| "https://api.minimaxi.com/v1".to_string());
-            let model =
-                env_non_empty("MINIMAX_MODEL").unwrap_or_else(|| "MiniMax-M2.7".to_string());
-
-            let config = ProviderConfig {
-                name: "minimax".to_string(),
-                provider_type: ProviderType::Minimax,
-                api_key: api_key.clone(),
-                base_url: Some(base_url.clone()),
-                default_model: model.clone(),
-                enabled: true,
-            };
-
-            let provider = crate::services::api::minimax::MiniMaxClient::new(
-                &api_key,
-                Some(&base_url),
-                Some(&model),
-            );
-            registry.register("minimax".to_string(), Arc::new(provider), config);
-            registry.select("minimax".to_string());
-        }
-
-        // 加载默认的 Kimi Provider（如果配置了）
-        if let Some(api_key) = env_non_empty("MOONSHOT_API_KEY") {
-            let base_url = env_non_empty("MOONSHOT_BASE_URL")
-                .unwrap_or_else(|| "https://api.moonshot.cn/v1".to_string());
-            let model = env_non_empty("MOONSHOT_MODEL").unwrap_or_else(|| "kimi-k2.5".to_string());
-
-            let config = ProviderConfig {
-                name: "kimi".to_string(),
-                provider_type: ProviderType::Kimi,
-                api_key: api_key.clone(),
-                base_url: Some(base_url.clone()),
-                default_model: model.clone(),
-                enabled: true,
-            };
-
-            // 创建 Kimi provider
-            let kimi_config = crate::services::api::kimi::KimiConfig {
-                api_key,
-                base_url,
-                default_model: model,
-                thinking_enabled: std::env::var("PRIORITY_AGENT_THINKING")
-                    .map(|v| v != "0")
-                    .unwrap_or(true),
-                thinking_budget: std::env::var("PRIORITY_AGENT_THINKING_BUDGET")
-                    .ok()
-                    .and_then(|v| v.parse().ok()),
-            };
-            let provider = crate::services::api::kimi::KimiClient::new(kimi_config);
-            registry.register("kimi".to_string(), Arc::new(provider), config);
-            if registry.selected().is_none() {
-                registry.select("kimi".to_string());
-            }
-        }
-
-        // 加载默认的 OpenAI Provider（如果配置了）
-        if let Some(api_key) = env_non_empty("OPENAI_API_KEY") {
-            let base_url = env_non_empty("OPENAI_BASE_URL")
-                .unwrap_or_else(|| "https://api.openai.com/v1".to_string());
-            let model = env_non_empty("OPENAI_MODEL").unwrap_or_else(|| "gpt-4o".to_string());
-
-            let config = ProviderConfig {
-                name: "openai".to_string(),
-                provider_type: ProviderType::OpenAI,
-                api_key: api_key.clone(),
-                base_url: Some(base_url.clone()),
-                default_model: model.clone(),
-                enabled: true,
-            };
-
-            // 创建 OpenAI provider
-            let provider = crate::services::api::openai::OpenAiClient::new(
-                &api_key,
-                Some(&base_url),
-                Some(&model),
-            );
-            registry.register("openai".to_string(), Arc::new(provider), config);
-            if registry.selected().is_none() {
-                registry.select("openai".to_string());
+        for spec in DEFAULT_PROVIDER_ENV_SPECS {
+            if let Some(config) = provider_config_from_env_spec(spec) {
+                if let Some(provider) = Self::create_provider(&config) {
+                    registry.register(spec.id.to_string(), provider, config);
+                    if registry.selected().is_none() {
+                        registry.select(spec.id.to_string());
+                    }
+                }
             }
         }
 
@@ -225,12 +299,28 @@ impl ProviderRegistry {
                     info!("Configuring extra provider: {}", name);
                     if let Some(config) = parse_extra_provider_env(&name, &value) {
                         if let Some(provider) = Self::create_provider(&config) {
+                            let select_name = name.clone();
                             registry.register(name, provider, config);
+                            if registry.selected().is_none() {
+                                registry.select(select_name);
+                            }
                         }
                     } else {
                         warn!("Invalid provider env format for '{}'", name);
                     }
                 }
+            }
+        }
+
+        if let Some(preferred) = env_non_empty("PRIORITY_AGENT_DEFAULT_PROVIDER") {
+            let preferred = preferred.to_ascii_lowercase();
+            if registry.providers.contains_key(&preferred) {
+                registry.select(preferred);
+            } else {
+                warn!(
+                    "PRIORITY_AGENT_DEFAULT_PROVIDER is set to '{}', but that provider is not configured",
+                    preferred
+                );
             }
         }
 
@@ -246,7 +336,7 @@ impl ProviderRegistry {
                     base_url: config
                         .base_url
                         .clone()
-                        .unwrap_or_else(|| "https://api.moonshot.cn/v1".to_string()),
+                        .unwrap_or_else(|| KIMI_DEFAULT_BASE_URL.to_string()),
                     default_model: config.default_model.clone(),
                     thinking_enabled: true,
                     thinking_budget: None,
@@ -256,14 +346,18 @@ impl ProviderRegistry {
                         as Arc<dyn LlmProvider>,
                 )
             }
-            ProviderType::OpenAI | ProviderType::OpenAICompat => {
-                // OpenAICompat 和 OpenAI 使用相同的 Client
-                Some(Arc::new(crate::services::api::openai::OpenAiClient::new(
+            ProviderType::OpenAI
+            | ProviderType::OpenAICompat
+            | ProviderType::KimiCode
+            | ProviderType::DeepSeek
+            | ProviderType::Glm => Some(Arc::new(
+                crate::services::api::openai::OpenAiClient::new_with_label(
+                    &config.name,
                     &config.api_key,
                     config.base_url.as_deref(),
                     Some(&config.default_model),
-                )) as Arc<dyn LlmProvider>)
-            }
+                ),
+            ) as Arc<dyn LlmProvider>),
             ProviderType::Minimax => {
                 // Minimax 也使用 OpenAI 兼容方式
                 Some(Arc::new(crate::services::api::minimax::MiniMaxClient::new(
@@ -272,7 +366,7 @@ impl ProviderRegistry {
                         config
                             .base_url
                             .as_deref()
-                            .unwrap_or("https://api.minimaxi.com/v1"),
+                            .unwrap_or(MINIMAX_DEFAULT_BASE_URL),
                     ),
                     Some(&config.default_model),
                 )) as Arc<dyn LlmProvider>)
@@ -363,6 +457,59 @@ fn env_non_empty(key: &str) -> Option<String> {
         .filter(|value| !value.is_empty())
 }
 
+fn env_first_non_empty(keys: &[&str]) -> Option<String> {
+    keys.iter().find_map(|key| env_non_empty(key))
+}
+
+fn provider_config_from_env_spec(spec: &ProviderEnvSpec) -> Option<ProviderConfig> {
+    let api_key = env_first_non_empty(spec.key_env_vars)?;
+    let base_url =
+        env_first_non_empty(spec.base_url_env_vars).unwrap_or_else(|| spec.default_base_url.into());
+    let model =
+        env_first_non_empty(spec.model_env_vars).unwrap_or_else(|| spec.default_model.into());
+
+    Some(ProviderConfig {
+        name: spec.id.to_string(),
+        provider_type: spec.provider_type,
+        api_key,
+        base_url: Some(base_url),
+        default_model: model,
+        enabled: true,
+    })
+}
+
+fn default_base_url_for_provider_type(provider_type: ProviderType) -> Option<&'static str> {
+    match provider_type {
+        ProviderType::Kimi => Some(KIMI_DEFAULT_BASE_URL),
+        ProviderType::KimiCode => Some(KIMI_CODE_DEFAULT_BASE_URL),
+        ProviderType::DeepSeek => Some(DEEPSEEK_DEFAULT_BASE_URL),
+        ProviderType::Glm => Some(GLM_DEFAULT_BASE_URL),
+        ProviderType::OpenAI => Some(OPENAI_DEFAULT_BASE_URL),
+        ProviderType::Minimax => Some(MINIMAX_DEFAULT_BASE_URL),
+        ProviderType::OpenAICompat
+        | ProviderType::Anthropic
+        | ProviderType::Google
+        | ProviderType::Azure
+        | ProviderType::Custom => None,
+    }
+}
+
+fn default_model_for_provider_type(provider_type: ProviderType) -> &'static str {
+    match provider_type {
+        ProviderType::Kimi => "kimi-k2.5",
+        ProviderType::KimiCode => "kimi-for-coding",
+        ProviderType::DeepSeek => "deepseek-v4-pro",
+        ProviderType::Glm => "glm-5.1",
+        ProviderType::Minimax => "MiniMax-M2.7",
+        ProviderType::OpenAI
+        | ProviderType::OpenAICompat
+        | ProviderType::Anthropic
+        | ProviderType::Google
+        | ProviderType::Azure
+        | ProviderType::Custom => "gpt-4o",
+    }
+}
+
 fn parse_extra_provider_env(name: &str, value: &str) -> Option<ProviderConfig> {
     // 首选 JSON 格式，避免分隔符歧义:
     // {"type":"openai","api_key":"...","base_url":"https://...","model":"gpt-4o"}
@@ -378,13 +525,14 @@ fn parse_extra_provider_env(name: &str, value: &str) -> Option<ProviderConfig> {
             .and_then(|v| v.as_str())
             .map(str::trim)
             .filter(|s| !s.is_empty())
-            .map(ToString::to_string);
+            .map(ToString::to_string)
+            .or_else(|| default_base_url_for_provider_type(provider_type).map(ToString::to_string));
         let default_model = json
             .get("model")
             .and_then(|v| v.as_str())
             .map(str::trim)
             .filter(|s| !s.is_empty())
-            .unwrap_or("gpt-4o")
+            .unwrap_or_else(|| default_model_for_provider_type(provider_type))
             .to_string();
         return Some(ProviderConfig {
             name: name.to_string(),
@@ -411,16 +559,27 @@ fn parse_extra_provider_env(name: &str, value: &str) -> Option<ProviderConfig> {
     let provider_type = ProviderType::parse_lossy(p_type);
     let api_key = p_key.to_string();
     let (base_url, default_model) = match rest {
-        None => (None, "gpt-4o".to_string()),
+        None => (
+            default_base_url_for_provider_type(provider_type).map(ToString::to_string),
+            default_model_for_provider_type(provider_type).to_string(),
+        ),
         Some(rem) if rem.starts_with("http://") || rem.starts_with("https://") => {
             if let Some((url, model)) = rem.rsplit_once('|') {
                 let model = model.trim();
                 (
                     Some(url.trim().to_string()),
-                    if model.is_empty() { "gpt-4o" } else { model }.to_string(),
+                    if model.is_empty() {
+                        default_model_for_provider_type(provider_type)
+                    } else {
+                        model
+                    }
+                    .to_string(),
                 )
             } else {
-                (Some(rem.to_string()), "gpt-4o".to_string())
+                (
+                    Some(rem.to_string()),
+                    default_model_for_provider_type(provider_type).to_string(),
+                )
             }
         }
         Some(rem) => {
@@ -428,10 +587,18 @@ fn parse_extra_provider_env(name: &str, value: &str) -> Option<ProviderConfig> {
                 let model = model.trim();
                 (
                     Some(url.trim().to_string()),
-                    if model.is_empty() { "gpt-4o" } else { model }.to_string(),
+                    if model.is_empty() {
+                        default_model_for_provider_type(provider_type)
+                    } else {
+                        model
+                    }
+                    .to_string(),
                 )
             } else {
-                (Some(rem.to_string()), "gpt-4o".to_string())
+                (
+                    Some(rem.to_string()),
+                    default_model_for_provider_type(provider_type).to_string(),
+                )
             }
         }
     };
@@ -490,6 +657,15 @@ mod tests {
     fn test_provider_type_from_str() {
         assert_eq!(ProviderType::parse_lossy("kimi"), ProviderType::Kimi);
         assert_eq!(ProviderType::parse_lossy("moonshot"), ProviderType::Kimi);
+        assert_eq!(
+            ProviderType::parse_lossy("kimi-code-plan"),
+            ProviderType::KimiCode
+        );
+        assert_eq!(
+            ProviderType::parse_lossy("deepseek"),
+            ProviderType::DeepSeek
+        );
+        assert_eq!(ProviderType::parse_lossy("zhipuai"), ProviderType::Glm);
         assert_eq!(ProviderType::parse_lossy("openai"), ProviderType::OpenAI);
         assert_eq!(
             ProviderType::parse_lossy("anthropic"),
@@ -503,6 +679,15 @@ mod tests {
         let minimax = ProviderType::Minimax.capabilities();
         assert_eq!(minimax.protocol_family, ProviderProtocolFamily::MiniMax);
         assert!(minimax.requires_nonstreaming_tool_calls);
+
+        let kimi_code = ProviderType::KimiCode.capabilities();
+        assert_eq!(kimi_code.protocol_family, ProviderProtocolFamily::Kimi);
+
+        let deepseek = ProviderType::DeepSeek.capabilities();
+        assert_eq!(
+            deepseek.protocol_family,
+            ProviderProtocolFamily::OpenAiCompatible
+        );
 
         let openai = ProviderType::OpenAI.capabilities();
         assert_eq!(
@@ -594,15 +779,29 @@ mod tests {
         );
     }
 
+    fn clear_default_provider_env(env: &mut EnvVarGuard) {
+        for spec in DEFAULT_PROVIDER_ENV_SPECS {
+            for key in spec
+                .key_env_vars
+                .iter()
+                .chain(spec.base_url_env_vars.iter())
+                .chain(spec.model_env_vars.iter())
+            {
+                env.remove(key);
+            }
+        }
+        env.remove("PRIORITY_AGENT_DEFAULT_PROVIDER");
+    }
+
     #[test]
     fn test_from_env_prefers_minimax_when_configured() {
         let mut env = EnvVarGuard::acquire_blocking();
+        clear_default_provider_env(&mut env);
         env.set("MINIMAX_API_KEY", "minimax-key");
         env.set("MINIMAX_BASE_URL", "https://minimax.example/v1");
         env.set("MINIMAX_MODEL", "MiniMax-Test");
         env.set("OPENAI_API_KEY", "openai-key");
         env.set("OPENAI_MODEL", "gpt-test");
-        env.remove("MOONSHOT_API_KEY");
 
         let registry = ProviderRegistry::from_env();
         assert_eq!(registry.selected(), Some("minimax"));
@@ -614,11 +813,62 @@ mod tests {
     }
 
     #[test]
+    fn test_from_env_registers_new_coding_providers() {
+        let mut env = EnvVarGuard::acquire_blocking();
+        clear_default_provider_env(&mut env);
+        env.set("KIMI_CODE_API_KEY", "kimi-code-key");
+        env.set("DEEPSEEK_API_KEY", "deepseek-key");
+        env.set("GLM_API_KEY", "glm-key");
+
+        let registry = ProviderRegistry::from_env();
+
+        assert_eq!(registry.selected(), Some("kimi-code"));
+        assert_eq!(
+            registry
+                .get_config("kimi-code")
+                .expect("kimi-code config")
+                .default_model
+                .as_str(),
+            "kimi-for-coding"
+        );
+        assert_eq!(
+            registry
+                .get_config("deepseek")
+                .expect("deepseek config")
+                .base_url
+                .as_deref(),
+            Some(DEEPSEEK_DEFAULT_BASE_URL)
+        );
+        assert_eq!(
+            registry
+                .get_config("glm")
+                .expect("glm config")
+                .provider_type,
+            ProviderType::Glm
+        );
+    }
+
+    #[test]
+    fn test_from_env_allows_default_provider_override() {
+        let mut env = EnvVarGuard::acquire_blocking();
+        clear_default_provider_env(&mut env);
+        env.set("MINIMAX_API_KEY", "minimax-key");
+        env.set("DEEPSEEK_API_KEY", "deepseek-key");
+        env.set("PRIORITY_AGENT_DEFAULT_PROVIDER", "deepseek");
+
+        let registry = ProviderRegistry::from_env();
+
+        assert_eq!(registry.selected(), Some("deepseek"));
+    }
+
+    #[test]
     fn test_from_env_ignores_empty_provider_keys() {
         let mut env = EnvVarGuard::acquire_blocking();
+        clear_default_provider_env(&mut env);
         env.set("MINIMAX_API_KEY", "");
         env.set("OPENAI_API_KEY", "   ");
         env.set("MOONSHOT_API_KEY", "");
+        env.set("DEEPSEEK_API_KEY", "");
 
         let registry = ProviderRegistry::from_env();
 

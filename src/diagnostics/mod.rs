@@ -249,59 +249,101 @@ pub fn check_toolchain() -> CheckResult {
 
 /// 检测配置（API keys 等）
 pub fn check_config() -> CheckResult {
-    let openai = std::env::var("OPENAI_API_KEY").is_ok();
-    let moonshot = std::env::var("MOONSHOT_API_KEY").is_ok();
+    let configured = crate::services::api::provider::DEFAULT_PROVIDER_ENV_SPECS
+        .iter()
+        .filter_map(|spec| {
+            spec.key_env_vars
+                .iter()
+                .any(|env| std::env::var(env).is_ok_and(|value| !value.trim().is_empty()))
+                .then_some(format!("{} configured", spec.label))
+        })
+        .collect::<Vec<_>>();
 
-    if openai || moonshot {
-        let mut parts = Vec::new();
-        if openai {
-            parts.push("OPENAI_API_KEY set");
-        }
-        if moonshot {
-            parts.push("MOONSHOT_API_KEY set");
-        }
-        CheckResult::ok("config", parts.join("; "))
-    } else {
+    if configured.is_empty() {
         CheckResult::error(
             "config",
             "No LLM API key configured",
-            "Set OPENAI_API_KEY or MOONSHOT_API_KEY in your environment",
+            format!(
+                "Set one provider key in your environment: {}",
+                crate::services::api::provider::provider_key_env_hint()
+            ),
         )
+    } else {
+        CheckResult::ok("config", configured.join("; "))
     }
 }
 
 /// Detect active provider protocol behavior from config/env.
 pub fn check_provider_runtime_config() -> CheckResult {
-    let (base_url, model, config_note) = match AppConfig::load() {
+    let (mut base_url, mut model, config_note) = match AppConfig::load() {
         Ok(config) => (
             first_non_empty(vec![
                 config.api.base_url,
-                std::env::var("OPENAI_BASE_URL").unwrap_or_default(),
-                std::env::var("MOONSHOT_BASE_URL").unwrap_or_default(),
                 std::env::var("MINIMAX_BASE_URL").unwrap_or_default(),
+                std::env::var("KIMI_CODE_BASE_URL").unwrap_or_default(),
+                std::env::var("DEEPSEEK_BASE_URL").unwrap_or_default(),
+                std::env::var("GLM_BASE_URL").unwrap_or_default(),
+                std::env::var("ZAI_BASE_URL").unwrap_or_default(),
+                std::env::var("ZHIPUAI_BASE_URL").unwrap_or_default(),
+                std::env::var("BIGMODEL_BASE_URL").unwrap_or_default(),
+                std::env::var("MOONSHOT_BASE_URL").unwrap_or_default(),
+                std::env::var("OPENAI_BASE_URL").unwrap_or_default(),
             ]),
             first_non_empty(vec![
                 config.api.model,
-                std::env::var("OPENAI_MODEL").unwrap_or_default(),
-                std::env::var("MOONSHOT_MODEL").unwrap_or_default(),
                 std::env::var("MINIMAX_MODEL").unwrap_or_default(),
+                std::env::var("KIMI_CODE_MODEL").unwrap_or_default(),
+                std::env::var("DEEPSEEK_MODEL").unwrap_or_default(),
+                std::env::var("GLM_MODEL").unwrap_or_default(),
+                std::env::var("ZAI_MODEL").unwrap_or_default(),
+                std::env::var("ZHIPUAI_MODEL").unwrap_or_default(),
+                std::env::var("BIGMODEL_MODEL").unwrap_or_default(),
+                std::env::var("MOONSHOT_MODEL").unwrap_or_default(),
+                std::env::var("OPENAI_MODEL").unwrap_or_default(),
             ]),
             None,
         ),
         Err(e) => (
             first_non_empty(vec![
-                std::env::var("OPENAI_BASE_URL").unwrap_or_default(),
-                std::env::var("MOONSHOT_BASE_URL").unwrap_or_default(),
                 std::env::var("MINIMAX_BASE_URL").unwrap_or_default(),
+                std::env::var("KIMI_CODE_BASE_URL").unwrap_or_default(),
+                std::env::var("DEEPSEEK_BASE_URL").unwrap_or_default(),
+                std::env::var("GLM_BASE_URL").unwrap_or_default(),
+                std::env::var("ZAI_BASE_URL").unwrap_or_default(),
+                std::env::var("ZHIPUAI_BASE_URL").unwrap_or_default(),
+                std::env::var("BIGMODEL_BASE_URL").unwrap_or_default(),
+                std::env::var("MOONSHOT_BASE_URL").unwrap_or_default(),
+                std::env::var("OPENAI_BASE_URL").unwrap_or_default(),
             ]),
             first_non_empty(vec![
-                std::env::var("OPENAI_MODEL").unwrap_or_default(),
-                std::env::var("MOONSHOT_MODEL").unwrap_or_default(),
                 std::env::var("MINIMAX_MODEL").unwrap_or_default(),
+                std::env::var("KIMI_CODE_MODEL").unwrap_or_default(),
+                std::env::var("DEEPSEEK_MODEL").unwrap_or_default(),
+                std::env::var("GLM_MODEL").unwrap_or_default(),
+                std::env::var("ZAI_MODEL").unwrap_or_default(),
+                std::env::var("ZHIPUAI_MODEL").unwrap_or_default(),
+                std::env::var("BIGMODEL_MODEL").unwrap_or_default(),
+                std::env::var("MOONSHOT_MODEL").unwrap_or_default(),
+                std::env::var("OPENAI_MODEL").unwrap_or_default(),
             ]),
             Some(e.to_string()),
         ),
     };
+
+    if base_url.is_empty() || model.is_empty() {
+        let registry = crate::services::api::provider::ProviderRegistry::from_env();
+        if let Some(config) = registry
+            .selected()
+            .and_then(|selected| registry.get_config(selected))
+        {
+            if base_url.is_empty() {
+                base_url = config.base_url.clone().unwrap_or_default();
+            }
+            if model.is_empty() {
+                model = config.default_model.clone();
+            }
+        }
+    }
 
     if model.is_empty() && base_url.is_empty() {
         return CheckResult::warn(

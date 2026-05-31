@@ -71,7 +71,7 @@ impl KimiConfig {
             .ok()
             .map(|value| value.trim().to_string())
             .filter(|value| !value.is_empty())
-            .unwrap_or_else(|| "https://api.moonshot.ai/v1".to_string());
+            .unwrap_or_else(|| crate::services::api::provider::KIMI_DEFAULT_BASE_URL.to_string());
 
         let default_model = std::env::var("MOONSHOT_MODEL")
             .ok()

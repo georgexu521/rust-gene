@@ -76,15 +76,19 @@ impl OnboardingStep {
             Self::ApiKey => {
                 "To use the AI features, you need an API key.\n\n\
                  Supported providers:\n\
+                 - MiniMax: Set MINIMAX_API_KEY\n\
+                 - Kimi Code Plan: Set KIMI_CODE_API_KEY\n\
+                 - DeepSeek: Set DEEPSEEK_API_KEY\n\
+                 - GLM/Z.AI/BigModel: Set GLM_API_KEY or ZAI_API_KEY\n\
                  - Kimi/Moonshot: Set MOONSHOT_API_KEY\n\
-                 - OpenAI: Set OPENAI_API_KEY\n\n\
+                 - OpenAI-compatible fallback: Set OPENAI_API_KEY\n\n\
                  You can set it in your shell profile:\n\
-                 export MOONSHOT_API_KEY=\"your-key-here\"\n\n\
+                 export MINIMAX_API_KEY=\"your-key-here\"\n\n\
                  Or create ~/.config/priority-agent/config.toml:\n\
                  [api]\n\
                  api_key = \"your-key\"\n\
-                 base_url = \"https://api.moonshot.cn/v1\"\n\
-                 model = \"kimi-k2.5\"\n\n\
+                 base_url = \"https://api.minimax.io/v1\"\n\
+                 model = \"MiniMax-M2.7\"\n\n\
                  The app will still work without a key in legacy mode (--legacy)."
             }
             Self::Commands => {

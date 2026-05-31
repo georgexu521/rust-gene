@@ -894,10 +894,16 @@ fn read_git_branch_fast(cwd: &std::path::Path) -> Option<String> {
 
 fn provider_name_from_base_url(base_url: &str) -> &'static str {
     let u = base_url.to_ascii_lowercase();
-    if u.contains("minimaxi.com") {
+    if u.contains("minimax") {
         "MiniMax"
+    } else if u.contains("api.kimi.com") {
+        "Kimi Code"
     } else if u.contains("moonshot") {
         "Kimi"
+    } else if u.contains("deepseek") {
+        "DeepSeek"
+    } else if u.contains("bigmodel") || u.contains("z.ai") {
+        "GLM"
     } else if u.contains("openai.com") {
         "OpenAI"
     } else {
@@ -1619,7 +1625,15 @@ impl TuiApp {
         let provider = self.current_provider_label();
         let current = self.current_model_label();
         let mut models = match provider.as_str() {
-            "MiniMax" => vec!["MiniMax-M2.7", "MiniMax-M1"],
+            "MiniMax" => vec![
+                "MiniMax-M2.7",
+                "MiniMax-M2.7-highspeed",
+                "MiniMax-M2.5",
+                "MiniMax-M2",
+            ],
+            "Kimi Code" => vec!["kimi-for-coding"],
+            "DeepSeek" => vec!["deepseek-v4-pro", "deepseek-v4-flash", "deepseek-chat"],
+            "GLM" => vec!["glm-5.1", "glm-4.7", "glm-4.6"],
             "OpenAI" => vec!["gpt-4o", "gpt-4o-mini"],
             "Kimi" => vec!["kimi-k2.5", "kimi-k2.5-thinking"],
             _ => vec![current.as_str()],
@@ -1737,22 +1751,18 @@ impl TuiApp {
             })
             .collect::<Vec<_>>();
 
-        for (name, env_key, default_model, provider_type) in [
-            ("minimax", "MINIMAX_API_KEY", "MiniMax-M2.7", "Minimax"),
-            ("openai", "OPENAI_API_KEY", "gpt-4o", "OpenAI"),
-            ("kimi", "MOONSHOT_API_KEY", "kimi-k2.5", "Kimi"),
-        ] {
-            if choices.iter().any(|choice| choice.name == name) {
+        for spec in crate::services::api::provider::DEFAULT_PROVIDER_ENV_SPECS {
+            if choices.iter().any(|choice| choice.name == spec.id) {
                 continue;
             }
             choices.push(ProviderChoice {
-                name: name.to_string(),
-                provider_type: provider_type.to_string(),
-                model: default_model.to_string(),
+                name: spec.id.to_string(),
+                provider_type: format!("{:?}", spec.provider_type),
+                model: spec.default_model.to_string(),
                 base_url: String::new(),
                 configured: false,
                 active: false,
-                note: format!("missing {}", env_key),
+                note: format!("missing {}", spec.key_env_hint()),
             });
         }
 
@@ -2045,9 +2055,10 @@ impl TuiApp {
             self.stream_handle = Some(handle);
         } else {
             // 没有引擎，使用占位响应
-            self.add_assistant_response(
-                "AI engine not available. Set OPENAI_API_KEY or MOONSHOT_API_KEY.".to_string(),
-            )
+            self.add_assistant_response(format!(
+                "AI engine not available. Set one provider key: {}.",
+                crate::services::api::provider::provider_key_env_hint()
+            ))
             .await;
         }
     }

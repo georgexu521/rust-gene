@@ -97,7 +97,10 @@ export type TraceItem = {
   title: string;
   detail?: string;
   contexts?: DesktopRunContext[];
+  facts?: string[];
   runtime?: DesktopRuntimeDiagnostic;
+  status?: TimelineStatus;
+  summary?: TimelineSummary;
 };
 
 export type PermissionRequest = Extract<DesktopRunEvent, { type: "permission_request" }>;

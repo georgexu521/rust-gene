@@ -376,7 +376,10 @@ async fn init_app_or_exit(working_dir: &std::path::Path) -> bootstrap::AppCompon
             if msg.contains("No LLM provider configured") {
                 error!("Provider init failed: {}", e);
                 eprintln!("Failed to initialize LLM provider: {}", e);
-                eprintln!("Hint: set MOONSHOT_API_KEY or OPENAI_API_KEY environment variable.");
+                eprintln!(
+                    "Hint: set one provider key: {}.",
+                    priority_agent::services::api::provider::provider_key_env_hint()
+                );
             } else {
                 error!("Bootstrap failed: {}", e);
                 eprintln!("Failed to initialize components: {}", e);
@@ -395,7 +398,10 @@ async fn init_api_or_exit(working_dir: &std::path::Path) -> bootstrap::ApiCompon
             if msg.contains("No LLM provider configured") {
                 error!("Provider init failed: {}", e);
                 eprintln!("Failed to initialize LLM provider: {}", e);
-                eprintln!("Hint: set MOONSHOT_API_KEY or OPENAI_API_KEY environment variable.");
+                eprintln!(
+                    "Hint: set one provider key: {}.",
+                    priority_agent::services::api::provider::provider_key_env_hint()
+                );
             } else {
                 error!("API bootstrap failed: {}", e);
                 eprintln!("Failed to initialize API components: {}", e);

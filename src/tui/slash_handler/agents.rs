@@ -2354,24 +2354,34 @@ pub fn handle_logout(_app: &mut TuiApp, _args: &str) -> String {
 /// /key - API key management
 pub fn handle_key(_app: &mut TuiApp, args: &str) -> String {
     if args.is_empty() {
-        let has_key =
-            std::env::var("MOONSHOT_API_KEY").is_ok() || std::env::var("OPENAI_API_KEY").is_ok();
+        let has_key = crate::services::api::provider::DEFAULT_PROVIDER_ENV_SPECS
+            .iter()
+            .any(|spec| {
+                spec.key_env_vars
+                    .iter()
+                    .any(|key| std::env::var(key).is_ok_and(|value| !value.trim().is_empty()))
+            });
         return if has_key {
             "API key is set. Use /model to see which model is active.".to_string()
         } else {
-            "No API key set. Set MOONSHOT_API_KEY or OPENAI_API_KEY environment variable."
-                .to_string()
+            format!(
+                "No API key set. Set one provider key: {}.",
+                crate::services::api::provider::provider_key_env_hint()
+            )
         };
     }
 
     match args.trim() {
-        "show" => {
-            "API key not shown for security. Set MOONSHOT_API_KEY or OPENAI_API_KEY.".to_string()
-        }
+        "show" => format!(
+            "API key not shown for security. Supported key env vars: {}.",
+            crate::services::api::provider::provider_key_env_hint()
+        ),
         "clear" => {
-            std::env::remove_var("OPENAI_API_KEY");
-            std::env::remove_var("MOONSHOT_API_KEY");
-            std::env::remove_var("MINIMAX_API_KEY");
+            for spec in crate::services::api::provider::DEFAULT_PROVIDER_ENV_SPECS {
+                for key in spec.key_env_vars {
+                    std::env::remove_var(key);
+                }
+            }
             "Cleared API keys from current process environment.".to_string()
         }
         _ => "Usage: /key [show|clear]".to_string(),

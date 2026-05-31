@@ -52,11 +52,22 @@ Priority Agent chooses providers in this order when configured:
 export MINIMAX_API_KEY="..."
 export MINIMAX_MODEL="MiniMax-M2.7"   # optional
 
-export OPENAI_API_KEY="..."
-export OPENAI_MODEL="gpt-4o"          # optional
+export KIMI_CODE_API_KEY="..."
+export KIMI_CODE_MODEL="kimi-for-coding" # optional
+
+export DEEPSEEK_API_KEY="..."
+export DEEPSEEK_MODEL="deepseek-v4-pro"  # optional
+
+export GLM_API_KEY="..."              # or ZAI_API_KEY / ZHIPUAI_API_KEY / BIGMODEL_API_KEY
+export GLM_MODEL="glm-5.1"            # optional
 
 export MOONSHOT_API_KEY="..."
 export MOONSHOT_MODEL="kimi-k2.5"     # optional
+
+export OPENAI_API_KEY="..."
+export OPENAI_MODEL="gpt-4o"          # optional fallback
+
+export PRIORITY_AGENT_DEFAULT_PROVIDER="minimax" # optional override when multiple keys are set
 ```
 
 ## Usage

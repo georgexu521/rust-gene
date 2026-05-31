@@ -414,9 +414,10 @@ impl crate::tools::Tool for SwarmTool {
         let provider = match &context.llm_provider {
             Some(p) => p.clone(),
             None => {
-                return crate::tools::ToolResult::error(
-                    "SwarmTool requires LLM provider. Set OPENAI_API_KEY or MOONSHOT_API_KEY.",
-                );
+                return crate::tools::ToolResult::error(format!(
+                    "SwarmTool requires LLM provider. Set one provider key: {}.",
+                    crate::services::api::provider::provider_key_env_hint()
+                ));
             }
         };
         let model = if context.model.is_empty() {

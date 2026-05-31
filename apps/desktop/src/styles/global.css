@@ -1286,14 +1286,14 @@ h1 {
 }
 
 .message.assistant.final {
-  margin-top: 8px;
-  padding: 12px 0 4px;
-  border-top: 1px solid #dfe5ec;
+  margin-top: 2px;
+  padding: 8px 0 4px;
+  border-top: 0;
 }
 
 .message.assistant.final.run-group-final {
-  margin-top: 4px;
-  padding-top: 10px;
+  margin-top: 2px;
+  padding-top: 8px;
 }
 
 .message-section-label,
@@ -1424,8 +1424,8 @@ h1 {
   align-items: center;
   gap: 8px;
   width: min(790px, 100%);
-  min-height: 24px;
-  margin: 2px 0 -2px;
+  min-height: 22px;
+  margin: 0;
   color: #8a939e;
   font-size: 12px;
   font-weight: 700;
@@ -1557,6 +1557,33 @@ h1 {
   padding: 5px 8px;
   color: #3f4650;
   background: #fcfdfc;
+}
+
+.timeline-event.compact-permission {
+  grid-template-columns: 22px minmax(0, 1fr);
+  gap: 8px;
+  padding: 7px 9px;
+}
+
+.timeline-event.compact-permission .timeline-icon {
+  width: 21px;
+  height: 21px;
+}
+
+.timeline-event.compact-permission .timeline-detail {
+  margin-top: 2px;
+  color: #6b5b2b;
+  font-size: 12px;
+}
+
+.timeline-event.compact-permission .timeline-actions {
+  margin-top: 6px;
+}
+
+.timeline-event.compact-permission .timeline-actions button {
+  min-height: 26px;
+  padding: 4px 9px;
+  font-size: 12px;
 }
 
 .timeline-event.compact-shell .timeline-icon {
@@ -2651,6 +2678,11 @@ h1 {
   background: #fff4f4;
 }
 
+.trace-item.failed {
+  border-color: #f0b8b8;
+  background: #fff7f7;
+}
+
 .trace-item.permission {
   border-color: #f2c15b;
   background: #fff9ea;
@@ -2674,6 +2706,92 @@ h1 {
   line-height: 1.45;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+}
+
+.trace-summary {
+  display: grid;
+  gap: 5px;
+  margin-top: 9px;
+  padding: 9px;
+  border: 1px solid #dde5ee;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.trace-summary.failure {
+  border-color: #efc1c1;
+  background: #fffafa;
+}
+
+.trace-summary.permission {
+  border-color: #ead79b;
+  background: #fffdf6;
+}
+
+.trace-summary span {
+  color: #7a8490;
+  font-size: 10px;
+  font-weight: 760;
+  text-transform: uppercase;
+}
+
+.trace-summary strong {
+  color: #303740;
+  font-size: 12px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.trace-summary small {
+  color: #626c78;
+  font-size: 11px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.trace-summary code,
+.trace-summary pre {
+  margin: 0;
+  color: #303842;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11px;
+}
+
+.trace-summary code {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.trace-summary pre {
+  max-height: 220px;
+  padding: 8px;
+  border: 1px solid #e2e6eb;
+  border-radius: 7px;
+  background: #f8fafc;
+  overflow: auto;
+  white-space: pre-wrap;
+}
+
+.trace-facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-top: 8px;
+}
+
+.trace-facts span {
+  max-width: 100%;
+  padding: 2px 7px;
+  border: 1px solid #d8e1ec;
+  border-radius: 999px;
+  color: #596574;
+  background: #ffffff;
+  font-size: 11px;
+  font-weight: 700;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .trace-runtime {

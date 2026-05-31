@@ -518,6 +518,8 @@ export function App() {
 
   const isEmptyConversation = runState.items.length === 0;
   const workbenchBadge = workbenchStatusBadge(diagnostics, workbenchSnapshot);
+  const conversationTitle =
+    selectedSessionSummary?.title || (isEmptyConversation ? "New Chat" : "Priority Agent");
 
   return (
     <main className="app-shell">
@@ -543,7 +545,7 @@ export function App() {
         <header className="topbar">
           <div className="title-cluster">
             <div className="topbar-title-row">
-              <h1>What should we build in rust-agent?</h1>
+              <h1>{conversationTitle}</h1>
               <button
                 aria-label="More conversation actions"
                 className="title-icon-button"

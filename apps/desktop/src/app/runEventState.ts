@@ -174,7 +174,11 @@ export function applyRunEvent(
           status: toolPresentation.status,
           traceId: `${event.id}-done`,
         },
-        traceTool(`${event.id}-done`, "Tool completed", event.result_preview),
+        traceTool(`${event.id}-done`, toolPresentation.title, event.result_preview, {
+          facts: toolPresentation.facts,
+          status: toolPresentation.status,
+          summary: toolPresentation.summary,
+        }),
       );
       return {
         ...result,
@@ -207,6 +211,9 @@ export function applyRunEvent(
               kind: "permission",
               title: `Permission requested: ${event.tool_name}`,
               detail: permissionTraceDetail(event, permissionSummary),
+              facts: [event.prompt],
+              status: "waiting",
+              summary: permissionSummary,
             },
           ],
           items: [
@@ -476,6 +483,7 @@ export function appendPermissionAnswer(
         kind: "permission",
         title: approved ? "Permission approved" : "Permission rejected",
         detail: answered ? undefined : "No pending permission request was available",
+        status: answerStatus,
       },
     ],
   };
@@ -952,12 +960,18 @@ function updateLatestWaitingPermission(
   return nextItems;
 }
 
-function traceTool(id: string, title: string, detail?: string): TraceItem {
+function traceTool(
+  id: string,
+  title: string,
+  detail?: string,
+  extras: Partial<Pick<TraceItem, "facts" | "status" | "summary">> = {},
+): TraceItem {
   return {
     id,
     kind: "tool",
     title,
     detail,
+    ...extras,
   };
 }
 

@@ -9,7 +9,7 @@ import {
   KeyRound,
   TerminalSquare,
 } from "lucide-react";
-import { Fragment, useEffect, useRef } from "react";
+import { useEffect, useRef } from "react";
 import { DesktopDiagnostic, DesktopRunContext, ProviderModelStatus } from "../../runtime/desktopApi";
 import { TimelineKind, TimelineStatus, TimelineSummary, TranscriptItem } from "../types";
 
@@ -73,33 +73,20 @@ export function Transcript({
         />
       ) : (
         renderedItems.map(({ className, item }) =>
-          item.role === "timeline" ? (
-            <Fragment key={item.id}>
-              {className?.includes("run-group-start") && item.kind !== "run" ? (
-                <div className="timeline-section-label">Process</div>
-              ) : null}
-              <TimelineEvent
-                className={className}
-                item={item}
-                onOpenContext={onOpenContext}
-                onPermissionAnswer={onPermissionAnswer}
-                onOpenTrace={onOpenTrace}
-              />
-            </Fragment>
+          className?.includes("transcript-hidden") ? null : item.role === "timeline" ? (
+            <TimelineEvent
+              className={className}
+              item={item}
+              onOpenContext={onOpenContext}
+              onPermissionAnswer={onPermissionAnswer}
+              onOpenTrace={onOpenTrace}
+            />
           ) : (
             <article
               className={`message ${item.role}${item.role === "assistant" && item.variant === "final" ? " final" : ""}${className ? ` ${className}` : ""}`}
               key={item.id}
             >
-              {className?.includes("run-group-final") ? (
-                <div className="message-section-label">Conclusion</div>
-              ) : null}
-              <div className="message-label">
-                <span>{formatRole(item.role)}</span>
-                {item.role === "assistant" && item.variant === "final" ? (
-                  <span className="message-badge">Final answer</span>
-                ) : null}
-              </div>
+              {item.role === "tool" ? <div className="message-label">{formatRole(item.role)}</div> : null}
               <div className="message-body">
                 {item.text}
                 {isStreamingAssistant(item, isRunning, renderedItems) ? (
@@ -131,7 +118,10 @@ function annotateTranscriptItems(items: TranscriptItem[]): AnnotatedTranscriptIt
   return items.map((item) => {
     if (item.role === "timeline" && item.kind === "run") {
       inRunGroup = true;
-      return { className: "run-boundary run-group-start", item };
+      return {
+        className: timelineItemClass(item, "run-boundary run-group-start"),
+        item,
+      };
     }
     if (item.role === "assistant" && item.variant === "final") {
       const className = inRunGroup ? "run-group-final" : undefined;
@@ -143,10 +133,40 @@ function annotateTranscriptItems(items: TranscriptItem[]): AnnotatedTranscriptIt
       return { item };
     }
     if (item.role === "timeline" && inRunGroup) {
-      return { className: "run-group-step", item };
+      return { className: timelineItemClass(item, "run-group-step"), item };
+    }
+    if (item.role === "timeline") {
+      return { className: timelineItemClass(item), item };
     }
     return { item };
   });
+}
+
+function timelineItemClass(
+  item: Extract<TranscriptItem, { role: "timeline" }>,
+  baseClass = "",
+) {
+  const classes = [baseClass];
+  if (shouldHideTimelineItem(item)) {
+    classes.push("transcript-hidden");
+  }
+  return classes.filter(Boolean).join(" ") || undefined;
+}
+
+function shouldHideTimelineItem(item: Extract<TranscriptItem, { role: "timeline" }>) {
+  if (item.kind === "compact") {
+    return false;
+  }
+  if (item.kind === "run") {
+    const hasStats = item.summary?.kind === "run" && Boolean(item.summary.stats?.length);
+    const hasContexts = item.summary?.kind === "run" && Boolean(item.summary.contexts?.length);
+    return item.status === "completed" && !hasStats && !hasContexts;
+  }
+  if (item.kind === "permission") {
+    return item.status !== "waiting";
+  }
+
+  return true;
 }
 
 function EmptyState({
@@ -241,6 +261,7 @@ function TimelineEvent({
   onOpenTrace?: (traceId: string) => void;
 }) {
   const isCompact = isCompactToolEvent(item);
+  const isCompactPermission = item.kind === "permission" && item.status === "waiting";
 
   if (item.kind === "run") {
     return (
@@ -308,7 +329,7 @@ function TimelineEvent({
 
   return (
     <article
-      className={`timeline-event ${item.kind} ${item.status || "info"}${isCompact ? " compact-shell" : ""}${className ? ` ${className}` : ""}`}
+      className={`timeline-event ${item.kind} ${item.status || "info"}${isCompact ? " compact-shell" : ""}${isCompactPermission ? " compact-permission" : ""}${className ? ` ${className}` : ""}`}
     >
       <div className="timeline-icon" aria-hidden="true">
         {iconForTimeline(item.kind, item.status)}
@@ -318,17 +339,17 @@ function TimelineEvent({
           <div className="timeline-title">{item.title}</div>
           <div className="timeline-status">{labelForStatus(item.status)}</div>
         </div>
-        {item.summary ? (
+        {item.summary && !isCompactPermission ? (
           <TimelineSummaryView
             compact={isCompact}
             summary={item.summary}
             onOpenContext={onOpenContext}
           />
         ) : null}
-        {(!item.summary || item.summary.kind === "permission") && item.detail ? (
+        {(!item.summary || item.summary.kind === "permission" || isCompactPermission) && item.detail ? (
           <div className="timeline-detail">{item.detail}</div>
         ) : null}
-        {!isCompact && item.facts && item.facts.length > 0 ? (
+        {!isCompact && !isCompactPermission && item.facts && item.facts.length > 0 ? (
           <div className="timeline-facts">
             {item.facts.map((fact) => (
               <span key={fact}>{fact}</span>

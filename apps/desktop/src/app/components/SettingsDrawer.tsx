@@ -365,7 +365,7 @@ function ProviderSetupGuide({
         <li>Open the shell profile file.</li>
         <li>
           Add an export line such as{" "}
-          <code>{providerSetup?.example || 'export MOONSHOT_API_KEY="your-key-here"'}</code>.
+          <code>{providerSetup?.example || 'export MINIMAX_API_KEY="your-key-here"'}</code>.
         </li>
         <li>Save the file, restart the app, then refresh diagnostics.</li>
       </ol>

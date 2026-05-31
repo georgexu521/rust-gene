@@ -12,10 +12,20 @@ pub struct OpenAiClient {
     client: Client<OpenAIConfig>,
     model: String,
     base_url: String,
+    provider_label: String,
 }
 
 impl OpenAiClient {
     pub fn new(api_key: &str, base_url: Option<&str>, model: Option<&str>) -> Self {
+        Self::new_with_label("OpenAI", api_key, base_url, model)
+    }
+
+    pub fn new_with_label(
+        provider_label: &str,
+        api_key: &str,
+        base_url: Option<&str>,
+        model: Option<&str>,
+    ) -> Self {
         let mut config = OpenAIConfig::new().with_api_key(api_key);
         if let Some(url) = base_url {
             config = config.with_api_base(url);
@@ -24,13 +34,14 @@ impl OpenAiClient {
         let model = model.unwrap_or("gpt-4o").to_string();
         let base_url = base_url.unwrap_or("https://api.openai.com/v1").to_string();
         info!(
-            "OpenAI client initialized with base URL: {}, model: {}",
-            base_url, model
+            "{} client initialized with base URL: {}, model: {}",
+            provider_label, base_url, model
         );
         Self {
             client,
             model,
             base_url,
+            provider_label: provider_label.to_string(),
         }
     }
 
@@ -71,12 +82,12 @@ impl LlmProvider for OpenAiClient {
         let capabilities = ProviderCapabilities::detect(&self.base_url, &self.model);
         let req = convert_request_for_capabilities(request, &self.model, capabilities);
         let response = ProviderRetryPolicy::from_env()
-            .retry("OpenAI", "chat.completions", || {
+            .retry(self.provider_label.as_str(), "chat.completions", || {
                 let req = req.clone();
                 async move { self.client.chat().create(req).await }
             })
             .await
-            .context("Failed to get response from OpenAI API")?;
+            .with_context(|| format!("Failed to get response from {} API", self.provider_label))?;
         convert_response_for_capabilities(response, capabilities)
     }
 
@@ -91,12 +102,21 @@ impl LlmProvider for OpenAiClient {
             include_usage: true,
         });
         ProviderRetryPolicy::from_env()
-            .retry("OpenAI", "chat.completions.stream", || {
-                let req = req.clone();
-                async move { self.client.chat().create_stream(req).await }
-            })
+            .retry(
+                self.provider_label.as_str(),
+                "chat.completions.stream",
+                || {
+                    let req = req.clone();
+                    async move { self.client.chat().create_stream(req).await }
+                },
+            )
             .await
-            .context("Failed to create streaming response from OpenAI API")
+            .with_context(|| {
+                format!(
+                    "Failed to create streaming response from {} API",
+                    self.provider_label
+                )
+            })
     }
 
     fn base_url(&self) -> &str {
