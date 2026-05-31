@@ -1259,10 +1259,11 @@ impl Tool for FileWriteTool {
     }
 
     fn description(&self) -> &str {
-        "Create or overwrite a file with the given content. Parent directories \
-         are created as needed. For targeted changes to existing files, use \
-         file_edit instead — this tool replaces the entire file. You MUST \
-         read the file first with file_read (read-before-edit rule)."
+        "Create a new file, or overwrite an existing file only after reading it \
+         in this session. Parent directories are created as needed. For targeted \
+         changes to existing files, use file_edit instead — this tool replaces \
+         the entire file. Existing-file writes are rejected until file_read has \
+         provided current file content."
     }
 
     fn parameters(&self) -> serde_json::Value {

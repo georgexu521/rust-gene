@@ -113,6 +113,7 @@ fn model_profile_allows_tool(profile: ModelProfileMode, name: &str) -> bool {
                 | "glob"
                 | "grep"
                 | "file_read"
+                | "file_write"
                 | "file_edit"
                 | "file_patch"
                 | "bash"
@@ -171,6 +172,7 @@ fn phase_allows_tool(
                     | "glob"
                     | "grep"
                     | "file_read"
+                    | "file_write"
                     | "lsp"
                     | "symbol_query"
                     | "ask_user"
@@ -281,6 +283,7 @@ fn mva_audit_allows_tool(name: &str) -> bool {
             | "glob"
             | "grep"
             | "file_read"
+            | "file_write"
             | "file_edit"
             | "file_patch"
             | "run_tests"
@@ -307,6 +310,7 @@ mod tests {
 
     fn base_tools() -> Vec<Tool> {
         vec![
+            tool("file_write"),
             tool("file_edit"),
             tool("file_patch"),
             tool("file_read"),
@@ -368,7 +372,7 @@ mod tests {
         let Some(Message::System { content }) = plan.focused_repair_prompt else {
             panic!("focused repair prompt should be injected");
         };
-        assert!(content.contains("file_edit, file_patch, file_read, grep"));
+        assert!(content.contains("file_edit, file_patch, file_read, file_write, grep"));
         assert!(content.contains("Up to 2 targeted file_read/grep lookups remain"));
     }
 
@@ -438,7 +442,7 @@ mod tests {
     }
 
     #[test]
-    fn programming_understand_stage_exposes_only_inspection_tools() {
+    fn programming_understand_stage_allows_new_file_creation_without_edit_tools() {
         let mut base_tools = base_tools();
         base_tools.push(tool("ask_user"));
         let plan = ToolExposurePlan::build(ToolExposureRequest {
@@ -454,6 +458,7 @@ mod tests {
         });
 
         assert!(plan.exposed_tool_names.contains("file_read"));
+        assert!(plan.exposed_tool_names.contains("file_write"));
         assert!(plan.exposed_tool_names.contains("grep"));
         assert!(plan.exposed_tool_names.contains("ask_user"));
         assert!(!plan.exposed_tool_names.contains("file_edit"));
@@ -483,6 +488,7 @@ mod tests {
         });
 
         assert!(plan.exposed_tool_names.contains("file_read"));
+        assert!(plan.exposed_tool_names.contains("file_write"));
         assert!(plan.exposed_tool_names.contains("bash"));
         assert!(plan.exposed_tool_names.contains("run_tests"));
         assert!(!plan.exposed_tool_names.contains("file_edit"));

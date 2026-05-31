@@ -62,7 +62,7 @@ not proof of current code. Read exact files before editing.
 - `src/engine/task_context.rs`: task state and task context bundle.
 - `src/engine/task_contract.rs`: executor contract, context pack, validation requirements.
 - `src/engine/tool_orchestration.rs`: route/tool planning and tool exposure intent.
-- `src/engine/conversation_loop/tool_exposure_plan.rs`: route-scoped tool exposure plan.
+- `src/engine/conversation_loop/tool_exposure_plan.rs`: route-scoped and stage-scoped tool exposure; programming `Understand` can expose `file_write` for new files while `file_edit`/`file_patch` stay edit-stage tools.
 - `src/engine/action_decision.rs`: deterministic tool action scoring.
 - `src/engine/candidate_action.rs`: model-proposed candidate action parsing, shadow/gated ranking, and model factor calibration.
 - `src/engine/action_review.rs`: action review before execution.

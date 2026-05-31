@@ -144,6 +144,7 @@ impl ActionDecision {
         ) && matches!(
             profile.kind,
             ToolActionKind::Inspect
+                | ToolActionKind::CreateFile
                 | ToolActionKind::Edit
                 | ToolActionKind::Validate
                 | ToolActionKind::Format
@@ -350,6 +351,7 @@ struct ToolActionProfile {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ToolActionKind {
     Inspect,
+    CreateFile,
     Edit,
     Validate,
     Format,
@@ -371,7 +373,15 @@ impl ToolActionProfile {
                 kind: ToolActionKind::Inspect,
                 expected_observation: "targeted project context or source evidence",
             },
-            "file_write" | "file_edit" | "file_patch" => Self {
+            "file_write" => Self {
+                mutates_workspace: true,
+                broad_shell: false,
+                requires_confirmation: false,
+                kind: ToolActionKind::CreateFile,
+                expected_observation:
+                    "new workspace file creation, or read-gated whole-file replacement",
+            },
+            "file_edit" | "file_patch" => Self {
                 mutates_workspace: true,
                 broad_shell: false,
                 requires_confirmation: false,
@@ -511,6 +521,15 @@ fn scores_for_profile(profile: &ToolActionProfile, stage: AgentTaskStage) -> Act
             scope_fit: scope_fit_for_profile(profile, stage),
             action_score: 0,
         },
+        ToolActionKind::CreateFile => ActionScores {
+            value: 8,
+            risk: 4,
+            uncertainty_reduction: 3,
+            cost: 3,
+            reversibility: 6,
+            scope_fit: scope_fit_for_profile(profile, stage),
+            action_score: 0,
+        },
         ToolActionKind::Edit => ActionScores {
             value: 8,
             risk: 5,
@@ -612,8 +631,9 @@ fn scores_for_profile(profile: &ToolActionProfile, stage: AgentTaskStage) -> Act
 fn scope_fit_for_profile(profile: &ToolActionProfile, stage: AgentTaskStage) -> u8 {
     let base: u8 = match (stage, profile.kind) {
         (AgentTaskStage::Understand, ToolActionKind::Inspect) => 9,
+        (AgentTaskStage::Understand, ToolActionKind::CreateFile) => 8,
         (AgentTaskStage::Plan, ToolActionKind::Inspect | ToolActionKind::Delegate) => 8,
-        (AgentTaskStage::Edit, ToolActionKind::Edit) => 9,
+        (AgentTaskStage::Edit, ToolActionKind::CreateFile | ToolActionKind::Edit) => 9,
         (AgentTaskStage::Edit, ToolActionKind::Inspect | ToolActionKind::Format) => 7,
         (AgentTaskStage::Validate, ToolActionKind::Validate) => 9,
         (AgentTaskStage::Validate, ToolActionKind::Inspect | ToolActionKind::StartServer) => 7,
@@ -736,6 +756,7 @@ fn phase_allows_action(stage: AgentTaskStage, profile: &ToolActionProfile) -> bo
     match stage {
         AgentTaskStage::Understand => {
             profile.kind == ToolActionKind::Inspect
+                || profile.kind == ToolActionKind::CreateFile
                 || (profile.kind == ToolActionKind::Validate
                     && !profile.mutates_workspace
                     && !profile.broad_shell)
@@ -746,7 +767,10 @@ fn phase_allows_action(stage: AgentTaskStage, profile: &ToolActionProfile) -> bo
         ),
         AgentTaskStage::Edit => matches!(
             profile.kind,
-            ToolActionKind::Inspect | ToolActionKind::Edit | ToolActionKind::Format
+            ToolActionKind::Inspect
+                | ToolActionKind::CreateFile
+                | ToolActionKind::Edit
+                | ToolActionKind::Format
         ),
         AgentTaskStage::Validate => matches!(
             profile.kind,
@@ -777,6 +801,7 @@ fn reason_summary(
     };
     let kind = match profile.kind {
         ToolActionKind::Inspect => "inspection",
+        ToolActionKind::CreateFile => "file-creation",
         ToolActionKind::Edit => "mutation",
         ToolActionKind::Validate => "validation",
         ToolActionKind::Format => "formatting",
@@ -847,6 +872,24 @@ mod tests {
         assert!(decision.scores.scope_fit >= 8);
         assert!(decision.scores.action_score > 0);
         assert!(decision.trace_recommended);
+    }
+
+    #[test]
+    fn new_file_write_is_phase_aligned_during_understand() {
+        let decision = ActionDecision::for_tool_call(
+            &call("file_write", serde_json::json!({ "path": "demo.html" })),
+            input(AgentTaskStage::Understand),
+        );
+
+        assert!(decision.action.phase_aligned);
+        assert!(decision.action.mutates_workspace);
+        assert!(decision.scores.scope_fit >= 8);
+        assert!(!decision.requires_confirmation);
+        assert!(!decision
+            .score_computation
+            .modifiers
+            .iter()
+            .any(|modifier| modifier.kind == "phase_mismatch"));
     }
 
     #[test]
