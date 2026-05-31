@@ -2049,6 +2049,7 @@ mod tests {
                 content: String::new(),
                 tool_calls: None,
                 usage: None,
+                tool_call_repair: None,
             })
         }
 

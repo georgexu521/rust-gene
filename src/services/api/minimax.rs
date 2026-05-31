@@ -7,7 +7,7 @@ use crate::services::api::{
     provider_protocol::{
         normalize_messages_for_capabilities, ProviderCapabilities, ProviderProtocolFamily,
     },
-    sanitize_assistant_content, ChatRequest, ChatResponse, LlmProvider, Message, ToolCall, Usage,
+    tool_call_repair, ChatRequest, ChatResponse, LlmProvider, Message, ToolCall, Usage,
 };
 use anyhow::{bail, Context, Result};
 use async_openai::{config::OpenAIConfig, types::ChatCompletionResponseStream, Client};
@@ -170,16 +170,18 @@ fn parse_minimax_chat_response_body(body: &str) -> Result<ChatResponse> {
         .next()
         .context("No choices in response")?;
     let message = choice.message;
+    let mut repair_report =
+        tool_call_repair::ToolCallRepairReport::new(ProviderProtocolFamily::MiniMax);
     let tool_calls = message.tool_calls.map(|calls| {
         calls
             .into_iter()
             .map(|call| ToolCall {
                 id: call.id,
                 name: call.function.name,
-                arguments: serde_json::from_str(&call.function.arguments).unwrap_or_else(|e| {
-                    tracing::warn!("Failed to parse MiniMax tool arguments: {}", e);
-                    serde_json::Value::Null
-                }),
+                arguments: tool_call_repair::parse_tool_arguments(
+                    &call.function.arguments,
+                    &mut repair_report,
+                ),
             })
             .collect()
     });
@@ -195,20 +197,31 @@ fn parse_minimax_chat_response_body(body: &str) -> Result<ChatResponse> {
             .and_then(|details| details.cached_tokens),
     });
 
-    Ok(ChatResponse {
-        content: sanitize_assistant_content(message.content.unwrap_or_default()),
+    let repaired = tool_call_repair::repair_response(
+        &message.content.unwrap_or_default(),
         tool_calls,
+        ProviderProtocolFamily::MiniMax,
+        repair_report,
+    );
+
+    Ok(ChatResponse {
+        content: repaired.content,
+        tool_calls: repaired.tool_calls,
         usage,
+        tool_call_repair: repaired.report,
     })
 }
 
 #[async_trait]
 impl LlmProvider for MiniMaxClient {
     async fn chat(&self, request: ChatRequest) -> Result<ChatResponse> {
-        use super::openai_compat::{convert_request, convert_response};
+        use super::openai_compat::{
+            convert_request_for_capabilities, convert_response_for_capabilities,
+        };
         let mut request = request;
         request.messages = Self::normalize_messages_for_minimax(request.messages);
-        let req = convert_request(request, &self.model);
+        let capabilities = ProviderCapabilities::for_family(ProviderProtocolFamily::MiniMax);
+        let req = convert_request_for_capabilities(request, &self.model, capabilities);
         let response = match ProviderRetryPolicy::from_env()
             .retry("MiniMax", "chat.completions", || {
                 let req = req.clone();
@@ -241,14 +254,15 @@ impl LlmProvider for MiniMaxClient {
                 );
             }
         };
-        convert_response(response)
+        convert_response_for_capabilities(response, capabilities)
     }
 
     async fn chat_stream(&self, request: ChatRequest) -> Result<ChatCompletionResponseStream> {
-        use super::openai_compat::convert_request;
+        use super::openai_compat::convert_request_for_capabilities;
         let mut request = request;
         request.messages = Self::normalize_messages_for_minimax(request.messages);
-        let mut req = convert_request(request, &self.model);
+        let capabilities = ProviderCapabilities::for_family(ProviderProtocolFamily::MiniMax);
+        let mut req = convert_request_for_capabilities(request, &self.model, capabilities);
         req.stream = Some(true);
         // MiniMax's OpenAI-compatible streaming usage chunks can omit
         // prompt_tokens/completion_tokens and include MiniMax-specific fields

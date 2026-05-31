@@ -1524,12 +1524,14 @@ mod tests {
                         arguments: serde_json::json!({ "path": "marker.txt" }),
                     }]),
                     usage: None,
+                    tool_call_repair: None,
                 })
             } else {
                 Ok(crate::services::api::ChatResponse {
                     content: "Done.".to_string(),
                     tool_calls: None,
                     usage: None,
+                    tool_call_repair: None,
                 })
             }
         }
@@ -1612,21 +1614,25 @@ mod tests {
                         }),
                     }]),
                     usage: None,
+                    tool_call_repair: None,
                 },
                 crate::services::api::ChatResponse {
                     content: "Done.".to_string(),
                     tool_calls: None,
                     usage: None,
+                    tool_call_repair: None,
                 },
                 crate::services::api::ChatResponse {
                     content: "Done.".to_string(),
                     tool_calls: None,
                     usage: None,
+                    tool_call_repair: None,
                 },
                 crate::services::api::ChatResponse {
                     content: "Done.".to_string(),
                     tool_calls: None,
                     usage: None,
+                    tool_call_repair: None,
                 },
             ])),
         });
@@ -1769,6 +1775,7 @@ mod tests {
                 content: "Large tool output was inspected.".to_string(),
                 tool_calls: None,
                 usage: None,
+                tool_call_repair: None,
             }])),
         });
         let registry = Arc::new(ToolRegistry::new());
@@ -1827,6 +1834,7 @@ mod tests {
                 content: "README and validation facts were summarized.".to_string(),
                 tool_calls: None,
                 usage: None,
+                tool_call_repair: None,
             }])),
         });
         let registry = Arc::new(ToolRegistry::new());

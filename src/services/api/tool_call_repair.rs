@@ -1,0 +1,582 @@
+//! Weak-model tool-call repair.
+//!
+//! Some OpenAI-compatible weak reasoning models leak tool calls as text,
+//! truncate JSON arguments, or drop nested arguments when the schema is too
+//! complex. This module keeps those repairs at the provider boundary so the
+//! rest of the runtime still sees normal `ToolCall` values and can apply the
+//! existing permission, stale-read, validation, and closeout gates.
+
+use super::{sanitize_assistant_content, Tool, ToolCall};
+use crate::services::api::provider_protocol::ProviderProtocolFamily;
+use regex::Regex;
+use serde::{Deserialize, Serialize};
+use serde_json::{Map, Value};
+use std::collections::HashSet;
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ToolCallRepairReport {
+    pub provider_family: String,
+    pub schema_flattened_tools: usize,
+    pub schema_flattened_fields: usize,
+    pub scavenged_tool_calls: usize,
+    pub argument_repairs: usize,
+    pub unflattened_arguments: usize,
+    pub dropped_duplicate_calls: usize,
+    pub malformed_tool_calls: usize,
+    pub warnings: Vec<String>,
+}
+
+impl ToolCallRepairReport {
+    pub fn new(provider_family: ProviderProtocolFamily) -> Self {
+        Self {
+            provider_family: provider_family.label().to_string(),
+            ..Self::default()
+        }
+    }
+
+    pub fn has_repairs(&self) -> bool {
+        self.schema_flattened_tools > 0
+            || self.scavenged_tool_calls > 0
+            || self.argument_repairs > 0
+            || self.unflattened_arguments > 0
+            || self.dropped_duplicate_calls > 0
+            || self.malformed_tool_calls > 0
+    }
+
+    fn warn(&mut self, warning: impl Into<String>) {
+        self.warnings.push(warning.into());
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct RepairedToolCallResponse {
+    pub content: String,
+    pub tool_calls: Option<Vec<ToolCall>>,
+    pub report: Option<ToolCallRepairReport>,
+}
+
+pub fn prepare_tools_for_provider(
+    tools: Vec<Tool>,
+    provider_family: ProviderProtocolFamily,
+    model: &str,
+) -> Vec<Tool> {
+    if !weak_tool_call_repair_enabled(provider_family, model) {
+        return tools;
+    }
+
+    tools
+        .into_iter()
+        .map(|mut tool| {
+            let shape = schema_shape(&tool.parameters);
+            if shape.leaf_count <= 10 && shape.max_depth <= 2 {
+                return tool;
+            }
+            let flattened = flatten_tool_schema(&tool.parameters);
+            if flattened.flattened_fields == 0 {
+                return tool;
+            }
+            tool.parameters = flattened.schema;
+            tool.strict_schema = false;
+            if !tool
+                .description
+                .contains("Nested parameters may be supplied with dot notation")
+            {
+                tool.description.push_str(
+                    "\nNested parameters may be supplied with dot notation; the runtime will re-nest them before execution.",
+                );
+            }
+            tool
+        })
+        .collect()
+}
+
+pub fn repair_response(
+    raw_content: &str,
+    tool_calls: Option<Vec<ToolCall>>,
+    provider_family: ProviderProtocolFamily,
+    mut report: ToolCallRepairReport,
+) -> RepairedToolCallResponse {
+    let mut calls = tool_calls.unwrap_or_default();
+    let scavenged = scavenge_tool_calls(raw_content, &mut report);
+    report.scavenged_tool_calls += scavenged.len();
+    calls.extend(scavenged);
+
+    for call in &mut calls {
+        let unflattened = unflatten_dot_arguments(std::mem::take(&mut call.arguments));
+        if unflattened.changed {
+            report.unflattened_arguments += 1;
+        }
+        call.arguments = unflattened.value;
+    }
+
+    let calls = suppress_duplicate_calls(calls, &mut report);
+    report.provider_family = provider_family.label().to_string();
+    let report = report.has_repairs().then_some(report);
+
+    RepairedToolCallResponse {
+        content: sanitize_assistant_content(raw_content),
+        tool_calls: (!calls.is_empty()).then_some(calls),
+        report,
+    }
+}
+
+pub fn parse_tool_arguments(raw: &str, report: &mut ToolCallRepairReport) -> Value {
+    match serde_json::from_str::<Value>(raw.trim()) {
+        Ok(value) => unflatten_dot_arguments(value).value,
+        Err(first_error) => {
+            if let Some(value) = repair_truncated_json(raw) {
+                report.argument_repairs += 1;
+                return unflatten_dot_arguments(value).value;
+            }
+            report.malformed_tool_calls += 1;
+            report.warn(format!("tool argument JSON parse failed: {}", first_error));
+            Value::Null
+        }
+    }
+}
+
+pub fn schema_flattening_report(
+    tools: &[Tool],
+    provider_family: ProviderProtocolFamily,
+    model: &str,
+) -> Option<ToolCallRepairReport> {
+    if !weak_tool_call_repair_enabled(provider_family, model) {
+        return None;
+    }
+    let mut report = ToolCallRepairReport::new(provider_family);
+    for tool in tools {
+        let shape = schema_shape(&tool.parameters);
+        if shape.leaf_count <= 10 && shape.max_depth <= 2 {
+            continue;
+        }
+        let flattened = flatten_tool_schema(&tool.parameters);
+        if flattened.flattened_fields > 0 {
+            report.schema_flattened_tools += 1;
+            report.schema_flattened_fields += flattened.flattened_fields;
+        }
+    }
+    report.has_repairs().then_some(report)
+}
+
+fn weak_tool_call_repair_enabled(provider_family: ProviderProtocolFamily, model: &str) -> bool {
+    match std::env::var("PRIORITY_AGENT_WEAK_MODEL_TOOL_REPAIR") {
+        Ok(value) => matches!(
+            value.trim().to_ascii_lowercase().as_str(),
+            "1" | "true" | "yes" | "on"
+        ),
+        Err(_) => {
+            matches!(
+                provider_family,
+                ProviderProtocolFamily::MiniMax | ProviderProtocolFamily::Kimi
+            ) || weak_model_name(model)
+        }
+    }
+}
+
+fn weak_model_name(model: &str) -> bool {
+    let model = model.to_ascii_lowercase();
+    ["deepseek", "glm", "kimi", "moonshot", "minimax"]
+        .iter()
+        .any(|needle| model.contains(needle))
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+struct SchemaShape {
+    leaf_count: usize,
+    max_depth: usize,
+}
+
+fn schema_shape(schema: &Value) -> SchemaShape {
+    fn walk(schema: &Value, depth: usize, shape: &mut SchemaShape) {
+        let Some(properties) = schema.get("properties").and_then(Value::as_object) else {
+            shape.leaf_count += 1;
+            shape.max_depth = shape.max_depth.max(depth);
+            return;
+        };
+        if properties.is_empty() {
+            shape.leaf_count += 1;
+            shape.max_depth = shape.max_depth.max(depth);
+            return;
+        }
+        for property in properties.values() {
+            walk(property, depth + 1, shape);
+        }
+    }
+
+    let mut shape = SchemaShape::default();
+    walk(schema, 0, &mut shape);
+    shape
+}
+
+#[derive(Debug, Clone)]
+struct FlattenedSchema {
+    schema: Value,
+    flattened_fields: usize,
+}
+
+fn flatten_tool_schema(schema: &Value) -> FlattenedSchema {
+    let Some(properties) = schema.get("properties").and_then(Value::as_object) else {
+        return FlattenedSchema {
+            schema: schema.clone(),
+            flattened_fields: 0,
+        };
+    };
+
+    let mut flat_properties = Map::new();
+    flatten_properties("", properties, &mut flat_properties);
+    if flat_properties.is_empty() {
+        return FlattenedSchema {
+            schema: schema.clone(),
+            flattened_fields: 0,
+        };
+    }
+
+    let mut flattened = schema.clone();
+    if let Some(object) = flattened.as_object_mut() {
+        object.insert(
+            "properties".to_string(),
+            Value::Object(flat_properties.clone()),
+        );
+        object.remove("required");
+    }
+
+    FlattenedSchema {
+        schema: flattened,
+        flattened_fields: flat_properties.len(),
+    }
+}
+
+fn flatten_properties(prefix: &str, properties: &Map<String, Value>, out: &mut Map<String, Value>) {
+    for (name, schema) in properties {
+        let key = if prefix.is_empty() {
+            name.clone()
+        } else {
+            format!("{prefix}.{name}")
+        };
+        if schema
+            .get("properties")
+            .and_then(Value::as_object)
+            .is_some()
+        {
+            let nested = schema
+                .get("properties")
+                .and_then(Value::as_object)
+                .expect("checked above");
+            flatten_properties(&key, nested, out);
+        } else {
+            out.insert(key, schema.clone());
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct UnflattenedArguments {
+    value: Value,
+    changed: bool,
+}
+
+fn unflatten_dot_arguments(value: Value) -> UnflattenedArguments {
+    let Value::Object(object) = value else {
+        return UnflattenedArguments {
+            value,
+            changed: false,
+        };
+    };
+    if !object.keys().any(|key| key.contains('.')) {
+        return UnflattenedArguments {
+            value: Value::Object(object),
+            changed: false,
+        };
+    }
+
+    let mut root = Map::new();
+    let mut changed = false;
+    for (key, value) in object {
+        if key.contains('.') {
+            insert_dotted(&mut root, &key, value);
+            changed = true;
+        } else {
+            root.insert(key, value);
+        }
+    }
+
+    UnflattenedArguments {
+        value: Value::Object(root),
+        changed,
+    }
+}
+
+fn insert_dotted(root: &mut Map<String, Value>, key: &str, value: Value) {
+    let mut parts = key.split('.').filter(|part| !part.is_empty()).peekable();
+    let Some(first) = parts.next() else {
+        return;
+    };
+    insert_dotted_parts(root, first, parts.collect::<Vec<_>>().as_slice(), value);
+}
+
+fn insert_dotted_parts(root: &mut Map<String, Value>, current: &str, rest: &[&str], value: Value) {
+    if rest.is_empty() {
+        root.insert(current.to_string(), value);
+        return;
+    }
+    let entry = root
+        .entry(current.to_string())
+        .or_insert_with(|| Value::Object(Map::new()));
+    if !entry.is_object() {
+        *entry = Value::Object(Map::new());
+    }
+    let Some(object) = entry.as_object_mut() else {
+        return;
+    };
+    insert_dotted_parts(object, rest[0], &rest[1..], value);
+}
+
+fn scavenge_tool_calls(raw_content: &str, report: &mut ToolCallRepairReport) -> Vec<ToolCall> {
+    let mut calls = Vec::new();
+    calls.extend(scavenge_invoke_tags(raw_content, report));
+    calls.extend(scavenge_json_tool_call_tags(raw_content, report));
+    calls
+}
+
+fn scavenge_invoke_tags(raw_content: &str, report: &mut ToolCallRepairReport) -> Vec<ToolCall> {
+    let re = Regex::new(r#"(?is)<invoke\b[^>]*\bname\s*=\s*["']([^"']+)["'][^>]*>(.*?)</invoke>"#)
+        .expect("valid invoke regex");
+    re.captures_iter(raw_content)
+        .enumerate()
+        .filter_map(|(idx, captures)| {
+            let name = captures.get(1)?.as_str().trim().to_string();
+            if name.is_empty() {
+                report.malformed_tool_calls += 1;
+                return None;
+            }
+            let body = captures.get(2).map(|m| m.as_str()).unwrap_or("").trim();
+            let arguments = if body.is_empty() {
+                Value::Object(Map::new())
+            } else {
+                parse_tool_arguments(body, report)
+            };
+            Some(ToolCall {
+                id: format!("repair_call_{}", idx + 1),
+                name,
+                arguments,
+            })
+        })
+        .collect()
+}
+
+fn scavenge_json_tool_call_tags(
+    raw_content: &str,
+    report: &mut ToolCallRepairReport,
+) -> Vec<ToolCall> {
+    let re = Regex::new(r#"(?is)<(?:minimax:)?tool_call\b[^>]*>(.*?)</(?:minimax:)?tool_call>"#)
+        .expect("valid tool_call regex");
+    re.captures_iter(raw_content)
+        .enumerate()
+        .filter_map(|(idx, captures)| {
+            let body = captures.get(1)?.as_str();
+            if body.to_ascii_lowercase().contains("<invoke") {
+                return None;
+            }
+            parse_json_tool_call(body, idx, report)
+        })
+        .collect()
+}
+
+fn parse_json_tool_call(
+    raw: &str,
+    idx: usize,
+    report: &mut ToolCallRepairReport,
+) -> Option<ToolCall> {
+    let value = parse_tool_arguments(raw, report);
+    let object = value.as_object()?;
+    let name = object
+        .get("name")
+        .or_else(|| object.get("tool"))
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .trim()
+        .to_string();
+    if name.is_empty() {
+        report.malformed_tool_calls += 1;
+        return None;
+    }
+    let arguments = object
+        .get("arguments")
+        .or_else(|| object.get("args"))
+        .cloned()
+        .unwrap_or_else(|| Value::Object(Map::new()));
+    Some(ToolCall {
+        id: object
+            .get("id")
+            .and_then(Value::as_str)
+            .map(str::to_string)
+            .unwrap_or_else(|| format!("repair_json_call_{}", idx + 1)),
+        name,
+        arguments,
+    })
+}
+
+fn suppress_duplicate_calls(
+    calls: Vec<ToolCall>,
+    report: &mut ToolCallRepairReport,
+) -> Vec<ToolCall> {
+    let mut seen = HashSet::new();
+    let mut kept = Vec::with_capacity(calls.len());
+    for call in calls {
+        let key = format!(
+            "{}\n{}",
+            call.name,
+            serde_json::to_string(&call.arguments).unwrap_or_default()
+        );
+        if seen.insert(key) {
+            kept.push(call);
+        } else {
+            report.dropped_duplicate_calls += 1;
+        }
+    }
+    kept
+}
+
+fn repair_truncated_json(raw: &str) -> Option<Value> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Some(Value::Object(Map::new()));
+    }
+    if let Ok(value) = serde_json::from_str(trimmed) {
+        return Some(value);
+    }
+    let repaired = close_brackets_and_strings(trimmed);
+    serde_json::from_str(&repaired).ok()
+}
+
+fn close_brackets_and_strings(raw: &str) -> String {
+    let mut result = String::with_capacity(raw.len() + 16);
+    let mut stack = Vec::new();
+    let mut in_string = false;
+    let mut escape_next = false;
+
+    for ch in raw.chars() {
+        result.push(ch);
+        if escape_next {
+            escape_next = false;
+            continue;
+        }
+        match ch {
+            '\\' if in_string => escape_next = true,
+            '"' => in_string = !in_string,
+            '{' if !in_string => stack.push('}'),
+            '[' if !in_string => stack.push(']'),
+            '}' | ']' if !in_string => {
+                if stack.last() == Some(&ch) {
+                    stack.pop();
+                }
+            }
+            _ => {}
+        }
+    }
+    if in_string {
+        result.push('"');
+    }
+    while let Some(closer) = stack.pop() {
+        result.push(closer);
+    }
+    result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn report() -> ToolCallRepairReport {
+        ToolCallRepairReport::new(ProviderProtocolFamily::MiniMax)
+    }
+
+    #[test]
+    fn scavenges_invoke_tool_call_from_hidden_block() {
+        let repaired = repair_response(
+            r#"before <think><invoke name="file_read">{"path":"Cargo.toml"}</invoke></think> after"#,
+            None,
+            ProviderProtocolFamily::MiniMax,
+            report(),
+        );
+
+        let calls = repaired.tool_calls.unwrap();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].name, "file_read");
+        assert_eq!(calls[0].arguments, json!({"path": "Cargo.toml"}));
+        assert_eq!(repaired.content.trim(), "before  after");
+        assert_eq!(repaired.report.unwrap().scavenged_tool_calls, 1);
+    }
+
+    #[test]
+    fn repairs_truncated_arguments() {
+        let mut report = report();
+        let value = parse_tool_arguments(r#"{"path":"Cargo.toml""#, &mut report);
+
+        assert_eq!(value, json!({"path": "Cargo.toml"}));
+        assert_eq!(report.argument_repairs, 1);
+    }
+
+    #[test]
+    fn unflattens_dotted_arguments() {
+        let mut report = report();
+        let value = parse_tool_arguments(
+            r#"{"patch.old_string":"old","patch.new_string":"new","path":"src/lib.rs"}"#,
+            &mut report,
+        );
+
+        assert_eq!(
+            value,
+            json!({"patch": {"old_string": "old", "new_string": "new"}, "path": "src/lib.rs"})
+        );
+    }
+
+    #[test]
+    fn suppresses_duplicate_calls_in_same_response() {
+        let call = ToolCall {
+            id: "a".to_string(),
+            name: "grep".to_string(),
+            arguments: json!({"pattern": "foo"}),
+        };
+        let repaired = repair_response(
+            "",
+            Some(vec![call.clone(), call]),
+            ProviderProtocolFamily::Kimi,
+            report(),
+        );
+
+        assert_eq!(repaired.tool_calls.unwrap().len(), 1);
+        assert_eq!(repaired.report.unwrap().dropped_duplicate_calls, 1);
+    }
+
+    #[test]
+    fn flattens_complex_schema_for_weak_models() {
+        let tool = Tool::new("complex", "complex").with_parameters(json!({
+            "type": "object",
+            "properties": {
+                "path": {"type": "string"},
+                "patch": {
+                    "type": "object",
+                    "properties": {
+                        "body": {
+                            "type": "object",
+                            "properties": {
+                                "old_string": {"type": "string"},
+                                "new_string": {"type": "string"}
+                            }
+                        }
+                    }
+                }
+            }
+        }));
+
+        let tools =
+            prepare_tools_for_provider(vec![tool], ProviderProtocolFamily::MiniMax, "MiniMax-M2.7");
+        let properties = tools[0].parameters["properties"].as_object().unwrap();
+
+        assert!(properties.contains_key("path"));
+        assert!(properties.contains_key("patch.body.old_string"));
+        assert!(properties.contains_key("patch.body.new_string"));
+    }
+}

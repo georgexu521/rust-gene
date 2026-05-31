@@ -2737,6 +2737,7 @@ mod tests {
                 content: self.response.lock().unwrap().clone(),
                 tool_calls: None,
                 usage: None,
+                tool_call_repair: None,
             })
         }
 

@@ -7,7 +7,7 @@ use crate::services::api::{
     provider_protocol::{
         normalize_messages_for_capabilities, ProviderCapabilities, ProviderProtocolFamily,
     },
-    sanitize_assistant_content, ChatRequest, ChatResponse, LlmProvider, Message, ToolCall, Usage,
+    tool_call_repair, ChatRequest, ChatResponse, LlmProvider, Message, ToolCall, Usage,
 };
 use anyhow::{bail, Context, Result};
 use async_openai::{
@@ -239,20 +239,18 @@ impl LlmProvider for KimiClient {
         let message = choice.message;
 
         // 提取工具调用
+        let mut repair_report =
+            tool_call_repair::ToolCallRepairReport::new(ProviderProtocolFamily::Kimi);
         let tool_calls: Option<Vec<ToolCall>> = message.tool_calls.map(|calls| {
             calls
                 .into_iter()
                 .map(|call| ToolCall {
                     id: call.id,
                     name: call.function.name,
-                    arguments: serde_json::from_str(&call.function.arguments).unwrap_or_else(|e| {
-                        tracing::warn!(
-                            "Failed to parse tool arguments '{}': {}",
-                            &call.function.arguments,
-                            e
-                        );
-                        serde_json::Value::Null
-                    }),
+                    arguments: tool_call_repair::parse_tool_arguments(
+                        &call.function.arguments,
+                        &mut repair_report,
+                    ),
                 })
                 .collect()
         });
@@ -272,10 +270,18 @@ impl LlmProvider for KimiClient {
                 .and_then(|d| d.cached_tokens),
         });
 
-        Ok(ChatResponse {
-            content: sanitize_assistant_content(message.content.unwrap_or_default()),
+        let repaired = tool_call_repair::repair_response(
+            &message.content.unwrap_or_default(),
             tool_calls,
+            ProviderProtocolFamily::Kimi,
+            repair_report,
+        );
+
+        Ok(ChatResponse {
+            content: repaired.content,
+            tool_calls: repaired.tool_calls,
             usage,
+            tool_call_repair: repaired.report,
         })
     }
 
@@ -346,6 +352,11 @@ fn convert_request_for_kimi(
 
     let strict_tool_schema = super::openai_compat::strict_tool_schema_enabled();
     if let Some(tools) = request.tools {
+        let tools = tool_call_repair::prepare_tools_for_provider(
+            tools,
+            ProviderProtocolFamily::Kimi,
+            &request.model,
+        );
         req.tools = Some(
             tools
                 .into_iter()

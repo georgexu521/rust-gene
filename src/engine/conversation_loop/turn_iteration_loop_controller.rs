@@ -154,6 +154,7 @@ mod tests {
             content: "done".to_string(),
             tool_calls: None,
             usage: None,
+            tool_call_repair: None,
         });
         let route = IntentRouter::new().route("hello");
         let resource_policy = ResourcePolicy::from_route(&route);

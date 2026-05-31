@@ -95,6 +95,25 @@ impl ApiRequestController {
                         .dropped_assistant_tool_call_ids,
                     dropped_tool_result_ids: normalization_report.dropped_tool_result_ids,
                 });
+            if let Some(report) = crate::services::api::tool_call_repair::schema_flattening_report(
+                context.tools,
+                provider_capabilities.protocol_family,
+                &request.model,
+            ) {
+                context
+                    .trace
+                    .record(TraceEvent::ProviderToolCallRepairApplied {
+                        provider_family: report.provider_family,
+                        schema_flattened_tools: report.schema_flattened_tools,
+                        schema_flattened_fields: report.schema_flattened_fields,
+                        scavenged_tool_calls: report.scavenged_tool_calls,
+                        argument_repairs: report.argument_repairs,
+                        unflattened_arguments: report.unflattened_arguments,
+                        dropped_duplicate_calls: report.dropped_duplicate_calls,
+                        malformed_tool_calls: report.malformed_tool_calls,
+                        warnings: report.warnings,
+                    });
+            }
             let nonstreaming_tool_request = context.tx.is_some()
                 && !context.tools.is_empty()
                 && provider_capabilities.requires_nonstreaming_tool_calls;
@@ -341,6 +360,21 @@ impl ApiRequestController {
         context: ApiRequestApplicationContext<'_>,
     ) -> ApiRequestApplication {
         let session_step = context.outcome.session_step;
+        if let Some(report) = &session_step.tool_call_repair {
+            context
+                .trace
+                .record(TraceEvent::ProviderToolCallRepairApplied {
+                    provider_family: report.provider_family.clone(),
+                    schema_flattened_tools: report.schema_flattened_tools,
+                    schema_flattened_fields: report.schema_flattened_fields,
+                    scavenged_tool_calls: report.scavenged_tool_calls,
+                    argument_repairs: report.argument_repairs,
+                    unflattened_arguments: report.unflattened_arguments,
+                    dropped_duplicate_calls: report.dropped_duplicate_calls,
+                    malformed_tool_calls: report.malformed_tool_calls,
+                    warnings: report.warnings.clone(),
+                });
+        }
         let content = session_step.assistant_text;
         let tool_calls = session_step.tool_calls;
         let pre_executed = session_step.pre_executed_results;
@@ -607,6 +641,7 @@ mod tests {
                 tool_calls: vec![tool_call.clone()],
                 pre_executed_results: HashMap::new(),
                 usage: None,
+                tool_call_repair: None,
                 finish_reason: None,
                 source: super::super::session_processor::SessionStepSource::NonStreaming,
             },

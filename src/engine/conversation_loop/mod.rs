@@ -3284,6 +3284,7 @@ mod tests {
                     reasoning_tokens: None,
                     cached_tokens: None,
                 }),
+                tool_call_repair: None,
             }])),
         });
         let tool_registry = Arc::new(ToolRegistry::new());
@@ -3356,6 +3357,7 @@ mod tests {
                 content: "hello".to_string(),
                 tool_calls: None,
                 usage: None,
+                tool_call_repair: None,
             }])),
         });
         let trace_store = Arc::new(TraceStore::default());
@@ -3423,11 +3425,13 @@ mod tests {
                         }),
                     }]),
                     usage: None,
+                    tool_call_repair: None,
                 },
                 ChatResponse {
                     content: "done".to_string(),
                     tool_calls: None,
                     usage: None,
+                    tool_call_repair: None,
                 },
             ])),
         });
@@ -3508,6 +3512,7 @@ mod tests {
                     reasoning_tokens: None,
                     cached_tokens: None,
                 }),
+                tool_call_repair: None,
             },
             ChatResponse {
                 content: "done".to_string(),
@@ -3519,6 +3524,7 @@ mod tests {
                     reasoning_tokens: None,
                     cached_tokens: None,
                 }),
+                tool_call_repair: None,
             },
             ChatResponse {
                 content: String::new(),
@@ -3537,6 +3543,7 @@ mod tests {
                     reasoning_tokens: None,
                     cached_tokens: None,
                 }),
+                tool_call_repair: None,
             },
             ChatResponse {
                 content: "repaired".to_string(),
@@ -3548,6 +3555,7 @@ mod tests {
                     reasoning_tokens: None,
                     cached_tokens: None,
                 }),
+                tool_call_repair: None,
             },
         ]);
 

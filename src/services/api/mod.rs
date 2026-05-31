@@ -9,6 +9,7 @@ pub mod openai_compat;
 pub mod provider;
 pub mod provider_protocol;
 pub mod retry;
+pub mod tool_call_repair;
 
 use async_openai::types::ChatCompletionResponseStream;
 use async_trait::async_trait;
@@ -266,6 +267,7 @@ pub struct ChatResponse {
     pub content: String,
     pub tool_calls: Option<Vec<ToolCall>>,
     pub usage: Option<Usage>,
+    pub tool_call_repair: Option<tool_call_repair::ToolCallRepairReport>,
 }
 
 /// Remove provider-leaked hidden reasoning blocks from assistant-visible output.

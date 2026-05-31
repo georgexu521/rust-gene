@@ -9,6 +9,7 @@ use super::ConversationLoop;
 use crate::engine::hooks::HookDecision;
 use crate::engine::streaming::{emit_text_progressively, StreamEvent};
 use crate::engine::trace::{TraceCollector, TurnStatus};
+use crate::services::api::tool_call_repair::ToolCallRepairReport;
 use crate::services::api::{ChatRequest, ChatResponse, ToolCall, Usage};
 use crate::tools::ToolResult;
 use anyhow::Result;
@@ -22,6 +23,7 @@ pub(super) struct SessionStepResult {
     pub(super) tool_calls: Vec<ToolCall>,
     pub(super) pre_executed_results: std::collections::HashMap<usize, ToolResult>,
     pub(super) usage: Option<Usage>,
+    pub(super) tool_call_repair: Option<ToolCallRepairReport>,
     pub(super) finish_reason: Option<String>,
     pub(super) source: SessionStepSource,
 }
@@ -39,6 +41,7 @@ impl SessionStepResult {
         tool_calls: Vec<ToolCall>,
         pre_executed_results: std::collections::HashMap<usize, ToolResult>,
         usage: Option<Usage>,
+        tool_call_repair: Option<ToolCallRepairReport>,
         finish_reason: Option<String>,
         source: SessionStepSource,
     ) -> Self {
@@ -47,6 +50,7 @@ impl SessionStepResult {
             tool_calls,
             pre_executed_results,
             usage,
+            tool_call_repair,
             finish_reason,
             source,
         }
@@ -76,12 +80,14 @@ impl ConversationLoop {
         let content = strip_think_blocks(&response.content);
         let tool_calls = response.tool_calls.unwrap_or_default();
         let usage = response.usage.clone();
+        let tool_call_repair = response.tool_call_repair.clone();
 
         Ok(SessionStepResult::new(
             content,
             tool_calls,
             std::collections::HashMap::new(),
             usage,
+            tool_call_repair,
             None,
             SessionStepSource::NonStreaming,
         ))
@@ -425,18 +431,18 @@ impl ConversationLoop {
 
                 for (i, tc) in collected_tool_calls.iter_mut().enumerate() {
                     if i < raw_args_accum.len() && !raw_args_accum[i].is_empty() {
-                        tc.arguments = serde_json::from_str(&raw_args_accum[i])
-                            .or_else(|e| {
-                                warn!(
-                                    "Failed to parse tool args, attempting truncation repair: {}",
-                                    e
-                                );
-                                crate::engine::repair::truncation::repair_truncated_json(
-                                    &raw_args_accum[i],
-                                )
-                                .ok_or(e)
-                            })
-                            .unwrap_or(serde_json::Value::Null);
+                        let mut repair_report =
+                            crate::services::api::tool_call_repair::ToolCallRepairReport::default();
+                        tc.arguments = crate::services::api::tool_call_repair::parse_tool_arguments(
+                            &raw_args_accum[i],
+                            &mut repair_report,
+                        );
+                        if repair_report.has_repairs() {
+                            warn!(
+                                "Streaming tool argument repair applied: {:?}",
+                                repair_report
+                            );
+                        }
                         let _ = tx
                             .send(StreamEvent::ToolCallComplete { id: tc.id.clone() })
                             .await;
@@ -514,6 +520,7 @@ impl ConversationLoop {
                         tool_calls,
                         std::collections::HashMap::new(),
                         response.usage.clone(),
+                        response.tool_call_repair.clone(),
                         None,
                         SessionStepSource::StreamingFallback {
                             reason: "stream_interrupted".to_string(),
@@ -526,6 +533,7 @@ impl ConversationLoop {
                     collected_tool_calls,
                     pre_executed,
                     stream_usage,
+                    None,
                     finish_reason,
                     SessionStepSource::Streaming,
                 ))
@@ -579,6 +587,7 @@ impl ConversationLoop {
                     tool_calls,
                     std::collections::HashMap::new(),
                     response.usage.clone(),
+                    response.tool_call_repair.clone(),
                     None,
                     SessionStepSource::StreamingFallback {
                         reason: "stream_open".to_string(),
@@ -638,6 +647,7 @@ impl ConversationLoop {
                     tool_calls,
                     std::collections::HashMap::new(),
                     response.usage.clone(),
+                    response.tool_call_repair.clone(),
                     None,
                     SessionStepSource::StreamingFallback {
                         reason: "stream_open_timeout".to_string(),

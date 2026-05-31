@@ -6,7 +6,7 @@ use crate::services::api::{
     provider_protocol::{
         normalize_messages_for_capabilities, ProviderCapabilities, ProviderProtocolFamily,
     },
-    sanitize_assistant_content, ChatRequest, ChatResponse, Message, ToolCall, ToolChoice, Usage,
+    tool_call_repair, ChatRequest, ChatResponse, Message, ToolCall, ToolChoice, Usage,
 };
 use anyhow::{Context, Result};
 use async_openai::types::{
@@ -19,21 +19,32 @@ use async_openai::types::{
 };
 
 pub fn convert_request(request: ChatRequest, model: &str) -> CreateChatCompletionRequest {
-    let strict_tool_schema = strict_tool_schema_enabled();
-    let messages: Vec<ChatCompletionRequestMessage> = normalize_messages_for_capabilities(
+    convert_request_for_capabilities(
+        request,
+        model,
         ProviderCapabilities::for_family(ProviderProtocolFamily::OpenAiCompatible),
-        request.messages,
     )
-    .into_iter()
-    .map(convert_message)
-    .collect();
+}
+
+pub fn convert_request_for_capabilities(
+    request: ChatRequest,
+    model: &str,
+    capabilities: ProviderCapabilities,
+) -> CreateChatCompletionRequest {
+    let strict_tool_schema = strict_tool_schema_enabled();
+    let effective_model = if request.model.is_empty() {
+        model.to_string()
+    } else {
+        request.model
+    };
+    let messages: Vec<ChatCompletionRequestMessage> =
+        normalize_messages_for_capabilities(capabilities, request.messages)
+            .into_iter()
+            .map(convert_message)
+            .collect();
 
     let mut req = CreateChatCompletionRequest {
-        model: if request.model.is_empty() {
-            model.to_string()
-        } else {
-            request.model
-        },
+        model: effective_model.clone(),
         messages,
         temperature: request.temperature,
         max_completion_tokens: request.max_tokens,
@@ -43,6 +54,11 @@ pub fn convert_request(request: ChatRequest, model: &str) -> CreateChatCompletio
     };
 
     if let Some(tools) = request.tools {
+        let tools = tool_call_repair::prepare_tools_for_provider(
+            tools,
+            capabilities.protocol_family,
+            &effective_model,
+        );
         req.tools = Some(
             tools
                 .into_iter()
@@ -88,6 +104,16 @@ pub(crate) fn convert_tool_choice(choice: ToolChoice) -> ChatCompletionToolChoic
 }
 
 pub fn convert_response(response: CreateChatCompletionResponse) -> Result<ChatResponse> {
+    convert_response_for_capabilities(
+        response,
+        ProviderCapabilities::for_family(ProviderProtocolFamily::OpenAiCompatible),
+    )
+}
+
+pub fn convert_response_for_capabilities(
+    response: CreateChatCompletionResponse,
+    capabilities: ProviderCapabilities,
+) -> Result<ChatResponse> {
     let choice = response
         .choices
         .into_iter()
@@ -95,16 +121,18 @@ pub fn convert_response(response: CreateChatCompletionResponse) -> Result<ChatRe
         .context("No choices in response")?;
     let message = choice.message;
 
+    let mut repair_report =
+        tool_call_repair::ToolCallRepairReport::new(capabilities.protocol_family);
     let tool_calls: Option<Vec<ToolCall>> = message.tool_calls.map(|calls| {
         calls
             .into_iter()
             .map(|call| ToolCall {
                 id: call.id,
                 name: call.function.name,
-                arguments: serde_json::from_str(&call.function.arguments).unwrap_or_else(|e| {
-                    tracing::warn!("Failed to parse tool arguments: {}", e);
-                    serde_json::Value::Null
-                }),
+                arguments: tool_call_repair::parse_tool_arguments(
+                    &call.function.arguments,
+                    &mut repair_report,
+                ),
             })
             .collect()
     });
@@ -123,10 +151,18 @@ pub fn convert_response(response: CreateChatCompletionResponse) -> Result<ChatRe
             .and_then(|d| d.cached_tokens),
     });
 
-    Ok(ChatResponse {
-        content: sanitize_assistant_content(message.content.unwrap_or_default()),
+    let repaired = tool_call_repair::repair_response(
+        &message.content.unwrap_or_default(),
         tool_calls,
+        capabilities.protocol_family,
+        repair_report,
+    );
+
+    Ok(ChatResponse {
+        content: repaired.content,
+        tool_calls: repaired.tool_calls,
         usage,
+        tool_call_repair: repaired.report,
     })
 }
 

@@ -470,6 +470,17 @@ pub enum TraceEvent {
         #[serde(default)]
         dropped_tool_result_ids: Vec<String>,
     },
+    ProviderToolCallRepairApplied {
+        provider_family: String,
+        schema_flattened_tools: usize,
+        schema_flattened_fields: usize,
+        scavenged_tool_calls: usize,
+        argument_repairs: usize,
+        unflattened_arguments: usize,
+        dropped_duplicate_calls: usize,
+        malformed_tool_calls: usize,
+        warnings: Vec<String>,
+    },
     StreamingToolExecutionShadow {
         mode: String,
         provider_family: String,
@@ -825,6 +836,7 @@ impl TraceEvent {
             TraceEvent::RuntimeDietReport { .. } => "runtime.diet",
             TraceEvent::ApiRequestStarted { .. } => "api.start",
             TraceEvent::ProviderMessageSequenceNormalized { .. } => "provider.protocol",
+            TraceEvent::ProviderToolCallRepairApplied { .. } => "provider.tool_repair",
             TraceEvent::StreamingToolExecutionShadow { .. } => "streaming.tool.shadow",
             TraceEvent::ApiRequestCompleted { .. } => "api.done",
             TraceEvent::ToolStarted { .. } => "tool.start",
@@ -1572,6 +1584,28 @@ impl TraceEvent {
                 compact_id_list(valid_tool_call_ids),
                 compact_id_list(dropped_assistant_tool_call_ids),
                 compact_id_list(dropped_tool_result_ids)
+            ),
+            TraceEvent::ProviderToolCallRepairApplied {
+                provider_family,
+                schema_flattened_tools,
+                schema_flattened_fields,
+                scavenged_tool_calls,
+                argument_repairs,
+                unflattened_arguments,
+                dropped_duplicate_calls,
+                malformed_tool_calls,
+                warnings,
+            } => format!(
+                "provider tool repair: provider={} flattened_tools={} flattened_fields={} scavenged={} argument_repairs={} unflattened={} dropped_duplicates={} malformed={} warnings={}",
+                provider_family,
+                schema_flattened_tools,
+                schema_flattened_fields,
+                scavenged_tool_calls,
+                argument_repairs,
+                unflattened_arguments,
+                dropped_duplicate_calls,
+                malformed_tool_calls,
+                compact_label_list(warnings)
             ),
             TraceEvent::StreamingToolExecutionShadow {
                 mode,
@@ -2437,6 +2471,7 @@ fn control_loop_phase_for_event(event: &TraceEvent) -> Option<&'static str> {
         | TraceEvent::RuntimeDietReport { .. }
         | TraceEvent::ApiRequestStarted { .. }
         | TraceEvent::ProviderMessageSequenceNormalized { .. }
+        | TraceEvent::ProviderToolCallRepairApplied { .. }
         | TraceEvent::StreamingToolExecutionShadow { .. } => Some("context"),
         TraceEvent::ImplementationIntentRecorded { .. }
         | TraceEvent::WorkflowJudgmentCompleted { .. }

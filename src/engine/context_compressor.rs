@@ -3060,6 +3060,7 @@ mod tests {
                         reasoning_tokens: None,
                         cached_tokens: None,
                     }),
+                    tool_call_repair: None,
                 }),
                 None => Err(anyhow::anyhow!("Mock LLM error")),
             }
@@ -3100,6 +3101,7 @@ mod tests {
                     reasoning_tokens: None,
                     cached_tokens: Some(80),
                 }),
+                tool_call_repair: None,
             })
         }
 

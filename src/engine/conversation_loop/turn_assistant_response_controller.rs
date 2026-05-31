@@ -135,6 +135,7 @@ mod tests {
                 tool_calls,
                 pre_executed_results: HashMap::new(),
                 usage: None,
+                tool_call_repair: None,
                 finish_reason: None,
                 source: SessionStepSource::NonStreaming,
             },

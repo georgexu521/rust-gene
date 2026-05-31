@@ -64,8 +64,12 @@ impl OpenAiClient {
 #[async_trait]
 impl LlmProvider for OpenAiClient {
     async fn chat(&self, request: ChatRequest) -> Result<ChatResponse> {
-        use super::openai_compat::{convert_request, convert_response};
-        let req = convert_request(request, &self.model);
+        use super::openai_compat::{
+            convert_request_for_capabilities, convert_response_for_capabilities,
+        };
+        use super::provider_protocol::ProviderCapabilities;
+        let capabilities = ProviderCapabilities::detect(&self.base_url, &self.model);
+        let req = convert_request_for_capabilities(request, &self.model, capabilities);
         let response = ProviderRetryPolicy::from_env()
             .retry("OpenAI", "chat.completions", || {
                 let req = req.clone();
@@ -73,13 +77,15 @@ impl LlmProvider for OpenAiClient {
             })
             .await
             .context("Failed to get response from OpenAI API")?;
-        convert_response(response)
+        convert_response_for_capabilities(response, capabilities)
     }
 
     async fn chat_stream(&self, request: ChatRequest) -> Result<ChatCompletionResponseStream> {
-        use super::openai_compat::convert_request;
+        use super::openai_compat::convert_request_for_capabilities;
+        use super::provider_protocol::ProviderCapabilities;
         use async_openai::types::ChatCompletionStreamOptions;
-        let mut req = convert_request(request, &self.model);
+        let capabilities = ProviderCapabilities::detect(&self.base_url, &self.model);
+        let mut req = convert_request_for_capabilities(request, &self.model, capabilities);
         req.stream = Some(true);
         req.stream_options = Some(ChatCompletionStreamOptions {
             include_usage: true,
