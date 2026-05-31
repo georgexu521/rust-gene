@@ -549,6 +549,14 @@ pub enum TraceEvent {
         runtime_selected_differs_from_model_order: bool,
         #[serde(default)]
         calibration_reason: String,
+        #[serde(default)]
+        selected_factor_score: Option<i16>,
+        #[serde(default)]
+        model_factor_coverage: usize,
+        #[serde(default)]
+        memory_evidence_items: usize,
+        #[serde(default)]
+        selected_factor_rationale: Option<String>,
         rejected: usize,
         reason: String,
     },
@@ -1704,10 +1712,14 @@ impl TraceEvent {
                 runtime_model_score_delta,
                 runtime_selected_differs_from_model_order,
                 calibration_reason,
+                selected_factor_score,
+                model_factor_coverage,
+                memory_evidence_items,
+                selected_factor_rationale,
                 rejected,
                 reason,
             } => format!(
-                "candidate actions: mode={} count={} selected={} tool={} score={} runtime_score={} model_score={} delta={} differs={} rejected={} calibration={} ({})",
+                "candidate actions: mode={} count={} selected={} tool={} score={} runtime_score={} model_score={} factor_score={} factor_coverage={} memory_evidence={} delta={} differs={} rejected={} rationale={} calibration={} ({})",
                 mode,
                 candidate_count,
                 selected_id.as_deref().unwrap_or("none"),
@@ -1721,11 +1733,17 @@ impl TraceEvent {
                 selected_model_score
                     .map(|score| score.to_string())
                     .unwrap_or_else(|| "none".to_string()),
+                selected_factor_score
+                    .map(|score| score.to_string())
+                    .unwrap_or_else(|| "none".to_string()),
+                model_factor_coverage,
+                memory_evidence_items,
                 runtime_model_score_delta
                     .map(|score| score.to_string())
                     .unwrap_or_else(|| "none".to_string()),
                 runtime_selected_differs_from_model_order,
                 rejected,
+                preview(selected_factor_rationale.as_deref().unwrap_or("none")),
                 preview(calibration_reason),
                 preview(reason)
             ),

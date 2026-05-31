@@ -20,8 +20,16 @@ pub enum CandidateActionMode {
 
 impl CandidateActionMode {
     pub fn from_env() -> Self {
-        match std::env::var("PRIORITY_AGENT_CANDIDATE_ACTIONS")
-            .unwrap_or_else(|_| "off".to_string())
+        let explicit = std::env::var("PRIORITY_AGENT_CANDIDATE_ACTIONS").ok();
+        match explicit
+            .as_deref()
+            .unwrap_or_else(|| {
+                if model_led_weighting_enabled() {
+                    "shadow"
+                } else {
+                    "off"
+                }
+            })
             .trim()
             .to_ascii_lowercase()
             .as_str()
@@ -39,6 +47,17 @@ impl CandidateActionMode {
             Self::Gated => "gated",
         }
     }
+}
+
+pub fn model_led_weighting_enabled() -> bool {
+    !matches!(
+        std::env::var("PRIORITY_AGENT_MODEL_LED_WEIGHTING")
+            .unwrap_or_else(|_| "1".to_string())
+            .trim()
+            .to_ascii_lowercase()
+            .as_str(),
+        "0" | "false" | "no" | "off"
+    )
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -59,6 +78,10 @@ pub struct CandidateAction {
     pub expected_observation: Option<String>,
     #[serde(default)]
     pub model_scores: Option<CandidateModelScores>,
+    #[serde(default)]
+    pub model_factors: Option<CandidateModelFactors>,
+    #[serde(default)]
+    pub evidence: Vec<CandidateActionEvidence>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -69,6 +92,40 @@ pub struct CandidateModelScores {
     pub cost: u8,
     pub reversibility: u8,
     pub scope_fit: u8,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CandidateModelFactors {
+    #[serde(default)]
+    pub goal_importance: u8,
+    #[serde(default)]
+    pub evidence_strength: u8,
+    #[serde(default)]
+    pub uncertainty_reduction: u8,
+    #[serde(default)]
+    pub risk: u8,
+    #[serde(default)]
+    pub cost: u8,
+    #[serde(default)]
+    pub reversibility: u8,
+    #[serde(default)]
+    pub scope_fit: u8,
+    #[serde(default)]
+    pub validation_need: u8,
+    #[serde(default)]
+    pub memory_relevance: u8,
+    #[serde(default)]
+    pub rationale: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CandidateActionEvidence {
+    #[serde(default)]
+    pub source: String,
+    #[serde(default)]
+    pub relevance: String,
+    #[serde(default)]
+    pub quote: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -88,6 +145,14 @@ pub struct CandidateActionRanking {
     pub runtime_selected_differs_from_model_order: bool,
     #[serde(default)]
     pub calibration_reason: String,
+    #[serde(default)]
+    pub selected_factor_score: Option<i16>,
+    #[serde(default)]
+    pub model_factor_coverage: usize,
+    #[serde(default)]
+    pub memory_evidence_items: usize,
+    #[serde(default)]
+    pub selected_factor_rationale: Option<String>,
     pub rejected: Vec<CandidateActionRejection>,
 }
 
@@ -140,13 +205,18 @@ pub fn rank_candidate_actions(
             arguments: candidate.arguments.clone(),
         };
         let decision = ActionDecision::for_tool_call(&tool_call, input);
-        let model_score = candidate.model_scores.as_ref().map(model_action_score);
-        accepted.push((candidate, decision, model_score));
+        let factor_score = candidate.model_factors.as_ref().map(model_factor_score);
+        let model_score = candidate
+            .model_scores
+            .as_ref()
+            .map(model_action_score)
+            .or(factor_score);
+        accepted.push((candidate, decision, model_score, factor_score));
     }
 
     let model_selected_id = accepted
         .iter()
-        .filter_map(|(candidate, _, model_score)| model_score.map(|score| (*candidate, score)))
+        .filter_map(|(candidate, _, model_score, _)| model_score.map(|score| (*candidate, score)))
         .max_by(
             |(left_candidate, left_score), (right_candidate, right_score)| {
                 left_score
@@ -156,7 +226,7 @@ pub fn rank_candidate_actions(
         )
         .map(|(candidate, _)| candidate.id.clone());
 
-    accepted.sort_by(|(_, left, _), (_, right, _)| {
+    accepted.sort_by(|(_, left, _, _), (_, right, _, _)| {
         right
             .scores
             .action_score
@@ -166,9 +236,23 @@ pub fn rank_candidate_actions(
     });
 
     let selected = accepted.first();
-    let selected_id = selected.map(|(candidate, _, _)| candidate.id.clone());
-    let selected_runtime_score = selected.map(|(_, decision, _)| decision.scores.action_score);
-    let selected_model_score = selected.and_then(|(_, _, model_score)| *model_score);
+    let selected_id = selected.map(|(candidate, _, _, _)| candidate.id.clone());
+    let selected_runtime_score = selected.map(|(_, decision, _, _)| decision.scores.action_score);
+    let selected_model_score = selected.and_then(|(_, _, model_score, _)| *model_score);
+    let selected_factor_score = selected.and_then(|(_, _, _, factor_score)| *factor_score);
+    let selected_factor_rationale = selected
+        .and_then(|(candidate, _, _, _)| candidate.model_factors.as_ref())
+        .map(|factors| factors.rationale.clone());
+    let model_factor_coverage = accepted
+        .iter()
+        .filter(|(candidate, _, _, _)| candidate.model_factors.is_some())
+        .count();
+    let memory_evidence_items = candidates
+        .candidate_actions
+        .iter()
+        .flat_map(|candidate| candidate.evidence.iter())
+        .filter(|evidence| evidence.source.to_ascii_lowercase().contains("memory"))
+        .count();
     let runtime_model_score_delta = selected_runtime_score
         .zip(selected_model_score)
         .map(|(runtime, model)| runtime - model);
@@ -186,13 +270,17 @@ pub fn rank_candidate_actions(
         mode,
         candidate_count: candidates.candidate_actions.len(),
         selected_id,
-        selected_tool: selected.map(|(candidate, _, _)| candidate.tool.clone()),
+        selected_tool: selected.map(|(candidate, _, _, _)| candidate.tool.clone()),
         selected_score: selected_runtime_score,
         selected_runtime_score,
         selected_model_score,
         runtime_model_score_delta,
         runtime_selected_differs_from_model_order,
         calibration_reason,
+        selected_factor_score,
+        model_factor_coverage,
+        memory_evidence_items,
+        selected_factor_rationale,
         rejected,
     }
 }
@@ -226,6 +314,18 @@ fn model_action_score(scores: &CandidateModelScores) -> i16 {
         + i16::from(scores.reversibility)
         - i16::from(scores.risk)
         - i16::from(scores.cost)
+}
+
+fn model_factor_score(factors: &CandidateModelFactors) -> i16 {
+    i16::from(factors.goal_importance.min(10)) * 2
+        + i16::from(factors.evidence_strength.min(10))
+        + i16::from(factors.uncertainty_reduction.min(10)) * 2
+        + i16::from(factors.scope_fit.min(10)) * 2
+        + i16::from(factors.validation_need.min(10))
+        + i16::from(factors.memory_relevance.min(10))
+        + i16::from(factors.reversibility.min(10))
+        - i16::from(factors.risk.min(10)) * 2
+        - i16::from(factors.cost.min(10))
 }
 
 fn extract_json_object(content: &str) -> Option<&str> {
@@ -268,6 +368,21 @@ mod tests {
     }
 
     #[test]
+    fn parses_partial_model_factors_without_rejecting_candidate_set() {
+        let parsed = parse_candidate_actions(
+            r#"{"candidate_actions":[{"id":"validate","action_type":"tool_call","tool":"bash","arguments":{"command":"cargo test -q"},"reason":"check change","model_factors":{"goal_importance":8,"rationale":"validation matters"},"evidence":[{"source":"memory"}]}]}"#,
+        )
+        .unwrap();
+
+        let factors = parsed.candidate_actions[0].model_factors.as_ref().unwrap();
+        assert_eq!(factors.goal_importance, 8);
+        assert_eq!(factors.scope_fit, 0);
+        assert_eq!(factors.rationale, "validation matters");
+        assert_eq!(parsed.candidate_actions[0].evidence[0].source, "memory");
+        assert_eq!(parsed.candidate_actions[0].evidence[0].relevance, "");
+    }
+
+    #[test]
     fn ranks_exposed_candidates_by_runtime_score() {
         let candidates = CandidateActionSet {
             candidate_actions: vec![
@@ -279,6 +394,8 @@ mod tests {
                     reason: "edit now".to_string(),
                     expected_observation: None,
                     model_scores: None,
+                    model_factors: None,
+                    evidence: Vec::new(),
                 },
                 CandidateAction {
                     id: "read".to_string(),
@@ -288,6 +405,8 @@ mod tests {
                     reason: "inspect first".to_string(),
                     expected_observation: None,
                     model_scores: None,
+                    model_factors: None,
+                    evidence: Vec::new(),
                 },
             ],
         };
@@ -316,6 +435,8 @@ mod tests {
                 reason: "bad idea".to_string(),
                 expected_observation: None,
                 model_scores: None,
+                model_factors: None,
+                evidence: Vec::new(),
             }],
         };
         let exposed = HashSet::from(["file_read".to_string()]);
@@ -329,5 +450,56 @@ mod tests {
 
         assert_eq!(ranking.selected_id, None);
         assert_eq!(ranking.rejected[0].reason, "candidate tool is not exposed");
+    }
+
+    #[test]
+    fn model_factors_produce_shadow_scores_and_memory_evidence_counts() {
+        let candidates = CandidateActionSet {
+            candidate_actions: vec![CandidateAction {
+                id: "validate".to_string(),
+                action_type: "tool_call".to_string(),
+                tool: "bash".to_string(),
+                arguments: serde_json::json!({"command":"corepack pnpm --dir apps/desktop test:ui-smoke"}),
+                reason: "validate UI change with remembered smoke test".to_string(),
+                expected_observation: Some("smoke test result".to_string()),
+                model_scores: None,
+                model_factors: Some(CandidateModelFactors {
+                    goal_importance: 8,
+                    evidence_strength: 8,
+                    uncertainty_reduction: 7,
+                    risk: 2,
+                    cost: 4,
+                    reversibility: 9,
+                    scope_fit: 9,
+                    validation_need: 10,
+                    memory_relevance: 8,
+                    rationale: "memory says UI changes need the desktop smoke test".to_string(),
+                }),
+                evidence: vec![CandidateActionEvidence {
+                    source: "memory".to_string(),
+                    relevance: "prior UI validation convention".to_string(),
+                    quote: Some("run desktop smoke after UI changes".to_string()),
+                }],
+            }],
+        };
+        let exposed = HashSet::from(["bash".to_string()]);
+
+        let ranking = rank_candidate_actions(
+            &candidates,
+            input(AgentTaskStage::Validate),
+            &exposed,
+            CandidateActionMode::Shadow,
+        );
+
+        assert_eq!(ranking.selected_id.as_deref(), Some("validate"));
+        assert!(ranking.selected_model_score.is_some());
+        assert_eq!(ranking.selected_factor_score, ranking.selected_model_score);
+        assert_eq!(ranking.model_factor_coverage, 1);
+        assert_eq!(ranking.memory_evidence_items, 1);
+        assert!(ranking
+            .selected_factor_rationale
+            .as_deref()
+            .unwrap_or_default()
+            .contains("desktop smoke"));
     }
 }

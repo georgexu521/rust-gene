@@ -42,7 +42,7 @@ not proof of current code. Read exact files before editing.
 - `src/engine/streaming.rs`: streaming request/response path.
 - `src/engine/conversation_loop/mod.rs`: main agent loop coordinator.
 - `src/engine/conversation_loop/main_loop_profile.rs`: quiet-direct vs standard main-loop profile selection.
-- `src/engine/conversation_loop/request_preparation_controller.rs`: request message preparation, dynamic context zones, memory prefetch, cache-stability snapshot.
+- `src/engine/conversation_loop/request_preparation_controller.rs`: request message preparation, dynamic context zones, model-led weighting hints, memory prefetch, cache-stability snapshot.
 - `src/engine/conversation_loop/tool_execution_controller.rs`: tool execution, observations, checkpoints, action review, permission integration.
 - `src/engine/conversation_loop/closeout_controller.rs`: final closeout, execution reports, memory proposal preparation.
 
@@ -64,6 +64,7 @@ not proof of current code. Read exact files before editing.
 - `src/engine/tool_orchestration.rs`: route/tool planning and tool exposure intent.
 - `src/engine/conversation_loop/tool_exposure_plan.rs`: route-scoped tool exposure plan.
 - `src/engine/action_decision.rs`: deterministic tool action scoring.
+- `src/engine/candidate_action.rs`: model-proposed candidate action parsing, shadow/gated ranking, and model factor calibration.
 - `src/engine/action_review.rs`: action review before execution.
 - `src/engine/destructive_scope.rs`: destructive scope checks.
 - `src/engine/verification_proof.rs`: verification proof model.

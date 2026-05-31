@@ -225,6 +225,10 @@ fn evaluate_candidate_actions_for_tool_round(
         runtime_selected_differs_from_model_order: ranking
             .runtime_selected_differs_from_model_order,
         calibration_reason: ranking.calibration_reason,
+        selected_factor_score: ranking.selected_factor_score,
+        model_factor_coverage: ranking.model_factor_coverage,
+        memory_evidence_items: ranking.memory_evidence_items,
+        selected_factor_rationale: ranking.selected_factor_rationale,
         rejected: ranking.rejected.len(),
         reason: "candidate-action ranking evaluated for tool round".to_string(),
     });
@@ -265,6 +269,8 @@ fn candidate_set_from_tool_calls(tool_calls: &[ToolCall]) -> CandidateActionSet 
                 reason: "model-proposed tool call".to_string(),
                 expected_observation: None,
                 model_scores: None,
+                model_factors: None,
+                evidence: Vec::new(),
             })
             .collect(),
     }
