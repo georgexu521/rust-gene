@@ -1,4 +1,4 @@
-use super::{is_drift_interruption_signal, text_sanitizer::strip_think_blocks};
+use super::{is_drift_interruption_signal, text_sanitizer::strip_hidden_blocks};
 use crate::engine::intent_router::IntentRoute;
 use crate::engine::streaming::StreamEvent;
 use crate::engine::trace::{TraceCollector, TraceEvent};
@@ -105,7 +105,7 @@ impl LegacyWorkflowGateController {
                 context.trace.record(TraceEvent::WorkflowCompleted {
                     steps: result.plan.steps.len(),
                 });
-                let workflow_report = strip_think_blocks(&result.final_report);
+                let workflow_report = strip_hidden_blocks(&result.final_report);
                 Self::save_workflow_decision(
                     context.memory_manager,
                     "execution",

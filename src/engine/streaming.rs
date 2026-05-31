@@ -424,6 +424,9 @@ impl StreamingQueryEngine {
 
     fn clear_post_compact_transient_state(&self) {
         crate::tools::file_cache::GLOBAL_FILE_CACHE.clear();
+        if let Some(session_id) = self.current_session_id() {
+            crate::tools::file_tool::clear_read_files(&session_id);
+        }
     }
 
     /// Flush memory extraction for the current conversation history with an explicit lifecycle reason.
@@ -859,6 +862,9 @@ impl StreamingQueryEngine {
                             ),
                         );
                         *hist = compressed;
+                        if let Some(sid) = &engine.session_id {
+                            crate::tools::file_tool::clear_read_files(sid);
+                        }
                         if let (Some(store), Some(sid), Some(record)) = (
                             &engine.session_store,
                             &engine.session_id,
@@ -933,6 +939,7 @@ impl StreamingQueryEngine {
                             &user_msg,
                             agent_mode,
                             engine.working_dir_override.as_deref(),
+                            engine.session_id.as_deref(),
                         )
                         .await
                         {
@@ -1182,6 +1189,7 @@ async fn reactive_context_retry_messages(
     user_msg: &str,
     agent_mode: crate::engine::agent_mode::AgentMode,
     working_dir: Option<&Path>,
+    session_id: Option<&str>,
 ) -> Option<Vec<Message>> {
     let compressed = {
         let hist = history.lock().await;
@@ -1206,6 +1214,9 @@ async fn reactive_context_retry_messages(
             return None;
         }
         *hist = compressed;
+        if let Some(session_id) = session_id {
+            crate::tools::file_tool::clear_read_files(session_id);
+        }
         Some(build_messages_for_turn(
             system_prompt,
             user_msg,
@@ -1748,6 +1759,7 @@ mod tests {
             "System prompt.",
             "continue",
             crate::engine::agent_mode::AgentMode::Build,
+            None,
             None,
         )
         .await

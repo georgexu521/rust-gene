@@ -158,6 +158,8 @@ impl QueryEngine {
         let user_message = user_message.into();
         let system_prompt = self.composed_system_prompt_for_user(None, &user_message, None);
         let messages = vec![Message::system(system_prompt), Message::user(user_message)];
+        let cache_shape =
+            crate::engine::cache_stability::request_cache_diagnostic_shape(&messages, &[]);
 
         let request = ChatRequest::new(&self.model).with_messages(messages);
 
@@ -170,11 +172,12 @@ impl QueryEngine {
         // 记录成本
         if let Some(ref usage) = response.usage {
             let mut tracker = self.cost_tracker.lock().await;
-            tracker.record_api_call(
+            tracker.record_api_call_with_cache_shape(
                 &self.model,
                 usage.prompt_tokens as u64,
                 usage.completion_tokens as u64,
                 usage.cached_tokens.map(|t| t as u64),
+                Some(cache_shape),
             );
         }
 

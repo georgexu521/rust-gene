@@ -75,7 +75,6 @@ pub mod task_context;
 pub mod task_contract;
 pub mod task_mode_score;
 pub mod tool_exposure;
-pub mod tool_orchestration;
 pub mod trace;
 pub mod trace_replay;
 pub mod turn_ingress;

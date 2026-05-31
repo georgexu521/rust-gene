@@ -121,6 +121,8 @@ impl IntentRouter {
         let has_debug_signal = is_debug_request(&lower, zh);
         let has_file_mutation_signal = is_file_mutation_request(&lower, zh);
         let has_local_inspection_signal = is_local_inspection_request(&lower, zh);
+        let has_file_read_signal = is_file_read_request(&lower, zh);
+        let has_calculation_signal = is_calculation_request(&lower, zh);
         let has_terminal_operation_signal = is_terminal_operation_request(&lower, zh);
         let has_error_explanation_signal = is_error_explanation_request(&lower, zh);
         let has_dependency_install_intent = is_dependency_install_request(&lower, zh);
@@ -277,6 +279,21 @@ impl IntentRouter {
             };
         }
 
+        if has_calculation_signal {
+            return IntentRoute {
+                intent: IntentKind::DirectAnswer,
+                confidence: 0.74,
+                workflow: WorkflowKind::Direct,
+                retrieval: RetrievalPolicy::Light,
+                reasoning: ReasoningPolicy::Medium,
+                risk: RiskLevel::Low,
+                recommended_tools: vec!["calculate".into()],
+                dependency_install_intent: false,
+                mcp_auth_intent: false,
+                reason: "prompt asks for deterministic calculation".into(),
+            };
+        }
+
         if has_code_creation_signal {
             return IntentRoute {
                 intent: IntentKind::CodeChange,
@@ -324,7 +341,7 @@ impl IntentRouter {
             };
         }
 
-        if has_local_inspection_signal {
+        if has_local_inspection_signal || has_file_read_signal {
             return IntentRoute {
                 intent: IntentKind::DirectAnswer,
                 confidence: 0.72,
@@ -335,7 +352,11 @@ impl IntentRouter {
                 recommended_tools: vec!["glob".into(), "file_read".into()],
                 dependency_install_intent: false,
                 mcp_auth_intent: false,
-                reason: "prompt asks to inspect local filesystem or workspace state".into(),
+                reason: if has_file_read_signal {
+                    "prompt asks to read a likely local file or workspace item".into()
+                } else {
+                    "prompt asks to inspect local filesystem or workspace state".into()
+                },
             };
         }
 
@@ -1009,8 +1030,8 @@ fn is_local_inspection_request(lower: &str, zh: &str) -> bool {
     let asks_to_inspect = contains_any(
         lower,
         &[
-            "check", "look", "list", "show", "find", "exists", "exist", "is there", "whether",
-            "inside", "contents",
+            "check", "look", "list", "show", "find", "read", "cat ", "open", "exists", "exist",
+            "is there", "whether", "inside", "contents",
         ],
     ) || contains_any(
         zh,
@@ -1021,6 +1042,9 @@ fn is_local_inspection_request(lower: &str, zh: &str) -> bool {
             "列出",
             "找找",
             "找一下",
+            "读取",
+            "读一下",
+            "打开",
             "有没有",
             "是否存在",
             "在不在",
@@ -1055,6 +1079,58 @@ fn is_local_inspection_request(lower: &str, zh: &str) -> bool {
         &["inside", "there", "that folder", "this folder", "it"],
     ) || contains_any(zh, &["里面", "其中", "这个", "那里", "刚才"]);
     asks_to_inspect && (local_scope || anaphora_scope)
+}
+
+fn is_file_read_request(lower: &str, zh: &str) -> bool {
+    if contains_any(lower, &["http://", "https://"]) {
+        return false;
+    }
+
+    let english_read = lower.starts_with("read ")
+        || lower.starts_with("cat ")
+        || lower.starts_with("open ")
+        || lower.contains(" read ")
+        || lower.contains(" cat ");
+    let chinese_read = contains_any(zh, &["读取", "读一下", "打开"]);
+    if !english_read && !chinese_read {
+        return false;
+    }
+
+    let likely_path_or_file = contains_any(
+        lower,
+        &[
+            "./", "../", "~/", "/", ".txt", ".md", ".json", ".yaml", ".yml", ".toml", ".rs", ".py",
+            ".ts", ".tsx", ".js", ".jsx", ".html", ".css", "readme", "marker",
+        ],
+    ) || contains_any(zh, &["文件", "这个", "那个", "里面"]);
+    if likely_path_or_file {
+        return true;
+    }
+
+    let words = lower.split_whitespace().collect::<Vec<_>>();
+    words.len() <= 4
+        && words.iter().any(|word| {
+            word.chars().any(|ch| ch == '_' || ch == '-' || ch == '.')
+                || matches!(*word, "marker" | "readme" | "todo" | "notes" | "config")
+        })
+}
+
+fn is_calculation_request(lower: &str, zh: &str) -> bool {
+    let has_calc_word = contains_any(
+        lower,
+        &["calculate", "compute", "evaluate", "what is", "what's"],
+    );
+    let has_math_operator = lower
+        .chars()
+        .any(|ch| matches!(ch, '+' | '-' | '*' | '/' | '^' | '(' | ')'));
+    let digit_count = lower.chars().filter(|ch| ch.is_ascii_digit()).count();
+    let chinese_calc_word = contains_any(zh, &["计算", "算一下", "算出"]);
+    let chinese_operator_word = contains_any(zh, &["加", "减", "乘", "除", "平方", "开方"]);
+    if chinese_calc_word {
+        return digit_count >= 1 && (has_math_operator || chinese_operator_word);
+    }
+
+    has_calc_word && has_math_operator && digit_count >= 2
 }
 
 #[cfg(test)]
@@ -1304,6 +1380,39 @@ mod tests {
         assert_eq!(route.retrieval, RetrievalPolicy::Light);
         assert!(route.recommended_tools.contains(&"file_read".to_string()));
         assert!(!route.recommended_tools.contains(&"bash".to_string()));
+    }
+
+    #[test]
+    fn routes_direct_file_read_as_local_inspection() {
+        let route = IntentRouter::new().route("读取 note.txt");
+        assert_eq!(route.intent, IntentKind::DirectAnswer);
+        assert_eq!(route.workflow, WorkflowKind::Direct);
+        assert!(route.recommended_tools.contains(&"file_read".to_string()));
+        assert!(!route.recommended_tools.contains(&"bash".to_string()));
+    }
+
+    #[test]
+    fn routes_short_marker_read_as_local_inspection() {
+        let route = IntentRouter::new().route("read marker");
+        assert_eq!(route.intent, IntentKind::DirectAnswer);
+        assert_eq!(route.workflow, WorkflowKind::Direct);
+        assert!(route.recommended_tools.contains(&"file_read".to_string()));
+        assert!(!route.recommended_tools.contains(&"bash".to_string()));
+    }
+
+    #[test]
+    fn routes_deterministic_calculation_with_calculate_tool() {
+        let route = IntentRouter::new().route("calculate 2 + 3");
+        assert_eq!(route.intent, IntentKind::DirectAnswer);
+        assert_eq!(route.workflow, WorkflowKind::Direct);
+        assert!(route.recommended_tools.contains(&"calculate".to_string()));
+        assert!(!route.recommended_tools.contains(&"bash".to_string()));
+    }
+
+    #[test]
+    fn calculation_word_without_numbers_does_not_route_to_calculate_tool() {
+        let route = IntentRouter::new().route("讨论一下缓存命中率怎么计算");
+        assert!(!route.recommended_tools.contains(&"calculate".to_string()));
     }
 
     #[test]

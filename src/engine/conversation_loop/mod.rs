@@ -100,7 +100,7 @@ pub use approval::{ToolApprovalChannel, ToolApprovalRequest, ToolApprovalRespons
 use patch_recovery::PatchSynthesisAction;
 pub(crate) use step_executor::{is_drift_interruption_signal, WorkflowRealStepExecutor};
 #[cfg(test)]
-use text_sanitizer::strip_think_blocks;
+use text_sanitizer::strip_hidden_blocks;
 #[cfg(test)]
 use text_sanitizer::VisibleTextSanitizer;
 #[cfg(test)]
@@ -896,9 +896,9 @@ mod tests {
     }
 
     #[test]
-    fn test_strip_think_blocks_removes_internal_reasoning() {
+    fn test_strip_hidden_blocks_removes_internal_reasoning() {
         let input = "你好<think>内部推理</think>世界";
-        assert_eq!(strip_think_blocks(input), "你好世界");
+        assert_eq!(strip_hidden_blocks(input), "你好世界");
     }
 
     #[test]
@@ -2960,6 +2960,7 @@ mod tests {
         }];
         let exposed_tool_names = HashSet::from(["git".to_string()]);
         let mut lifecycle = tool_call_lifecycle::ToolCallLifecycle::default();
+        let mut storm_state = crate::engine::repair::storm::StormState::default();
 
         let batch =
             ToolExecutionController::new(ToolExecutionContext::from_conversation(&loop_instance))
@@ -2980,6 +2981,7 @@ mod tests {
                     no_progress_rounds: 0,
                     has_changes_before_tools: false,
                     destructive_scope: &destructive_scope,
+                    storm_state: &mut storm_state,
                     lifecycle: &mut lifecycle,
                 })
                 .await;
@@ -3043,6 +3045,7 @@ mod tests {
                 provenance: "test.skill".to_string(),
             }]);
 
+        let mut storm_state = crate::engine::repair::storm::StormState::default();
         let batch =
             ToolExecutionController::new(ToolExecutionContext::from_conversation(&loop_instance))
                 .execute_tools_parallel(ToolExecutionRequest {
@@ -3062,6 +3065,7 @@ mod tests {
                     no_progress_rounds: 0,
                     has_changes_before_tools: false,
                     destructive_scope: &destructive_scope,
+                    storm_state: &mut storm_state,
                     lifecycle: &mut lifecycle,
                 })
                 .await;
@@ -3143,6 +3147,7 @@ mod tests {
         }];
         let exposed_tool_names = HashSet::from(["bash".to_string()]);
         let mut lifecycle = tool_call_lifecycle::ToolCallLifecycle::default();
+        let mut storm_state = crate::engine::repair::storm::StormState::default();
 
         let batch =
             ToolExecutionController::new(ToolExecutionContext::from_conversation(&loop_instance))
@@ -3163,6 +3168,7 @@ mod tests {
                     no_progress_rounds: 0,
                     has_changes_before_tools: false,
                     destructive_scope: &destructive_scope,
+                    storm_state: &mut storm_state,
                     lifecycle: &mut lifecycle,
                 })
                 .await;
@@ -3213,6 +3219,7 @@ mod tests {
         }];
         let exposed_tool_names = HashSet::from(["bash".to_string()]);
         let mut lifecycle = tool_call_lifecycle::ToolCallLifecycle::default();
+        let mut storm_state = crate::engine::repair::storm::StormState::default();
 
         let batch =
             ToolExecutionController::new(ToolExecutionContext::from_conversation(&loop_instance))
@@ -3233,6 +3240,7 @@ mod tests {
                     no_progress_rounds: 0,
                     has_changes_before_tools: false,
                     destructive_scope: &destructive_scope,
+                    storm_state: &mut storm_state,
                     lifecycle: &mut lifecycle,
                 })
                 .await;

@@ -668,33 +668,29 @@ fn apply_existing_file_operation(
             let anchor = params["insert_after"]
                 .as_str()
                 .ok_or_else(|| "insert_after operation requires insert_after".to_string())?;
-            let (updated, count) =
-                FileEditTool::do_insert(content, anchor, new_string, super::InsertMode::After)?;
-            ensure_expected_insert_count(count, expected)?;
+            let (updated, count) = FileEditTool::do_insert(
+                content,
+                anchor,
+                new_string,
+                super::InsertMode::After,
+                expected,
+            )?;
             Ok((updated, count))
         }
         PatchMode::InsertBefore => {
             let anchor = params["insert_before"]
                 .as_str()
                 .ok_or_else(|| "insert_before operation requires insert_before".to_string())?;
-            let (updated, count) =
-                FileEditTool::do_insert(content, anchor, new_string, super::InsertMode::Before)?;
-            ensure_expected_insert_count(count, expected)?;
+            let (updated, count) = FileEditTool::do_insert(
+                content,
+                anchor,
+                new_string,
+                super::InsertMode::Before,
+                expected,
+            )?;
             Ok((updated, count))
         }
         PatchMode::Write => unreachable!("write mode is handled before existing-file operations"),
-    }
-}
-
-fn ensure_expected_insert_count(count: usize, expected: Option<usize>) -> Result<(), String> {
-    let expected = expected.unwrap_or(1);
-    if count == expected {
-        Ok(())
-    } else {
-        Err(format!(
-            "Expected {} insertion anchor occurrence(s), but found {}.",
-            expected, count
-        ))
     }
 }
 

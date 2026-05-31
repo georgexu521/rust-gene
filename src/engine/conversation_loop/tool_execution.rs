@@ -255,6 +255,13 @@ pub(crate) fn tool_call_is_concurrency_safe(
         .unwrap_or_else(|| is_read_only(tool_name))
 }
 
+pub(crate) fn tool_call_is_storm_exempt(registry: &ToolRegistry, tool_name: &str) -> bool {
+    registry
+        .get(tool_name)
+        .map(|tool| tool.requires_user_interaction())
+        .unwrap_or(false)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

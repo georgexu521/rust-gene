@@ -3,6 +3,7 @@ use super::tool_call_lifecycle::{ToolCallLifecycle, ToolCallLifecycleRecord, Too
 use super::tool_context_helpers::{tool_allowed_by_context, tool_not_allowed_result};
 use super::tool_execution::{
     read_only_tool_concurrency, tool_call_is_concurrency_safe, tool_call_is_read_only,
+    tool_call_is_storm_exempt,
 };
 use super::tool_metadata::{
     attach_tool_contract_metadata, attach_tool_execution_metadata, merge_tool_result_metadata,
@@ -166,6 +167,7 @@ pub(super) struct ToolExecutionRequest<'a> {
     pub(super) no_progress_rounds: usize,
     pub(super) has_changes_before_tools: bool,
     pub(super) destructive_scope: &'a DestructiveScopeContract,
+    pub(super) storm_state: &'a mut StormState,
     pub(super) lifecycle: &'a mut ToolCallLifecycle,
 }
 
@@ -1703,6 +1705,7 @@ impl ToolExecutionController {
             no_progress_rounds,
             has_changes_before_tools,
             destructive_scope,
+            storm_state,
             lifecycle,
         } = request;
         let execution = &self.context;
@@ -1741,8 +1744,6 @@ impl ToolExecutionController {
         let concurrency =
             read_only_tool_concurrency().min(resource_policy.parallelism_limit.max(1));
 
-        let mut storm_state = StormState::default();
-
         // ── Phase 1: scan and categorize ──
         for (i, tc) in tool_calls.iter().enumerate() {
             if tc.name.is_empty() {
@@ -1750,27 +1751,25 @@ impl ToolExecutionController {
             }
 
             // Storm breaker: check for repeated calls before dispatching.
-            // Skip for read-only tools — retrying file_read/glob/grep is legitimate
-            // when content was truncated or the agent needs different ranges.
             let is_read_only =
                 tool_call_is_read_only(execution.tool_registry.as_ref(), &tc.name, &tc.arguments);
-            if !is_read_only {
-                match storm_state.check(&tc.name, &tc.arguments) {
-                    StormDecision::Suppress(reason) => {
-                        if !parallel_jobs.is_empty() {
-                            let pending = std::mem::take(&mut parallel_jobs);
-                            let parallel_results = self
-                                .collect_read_only_results(pending, concurrency, tx, lifecycle)
-                                .await;
-                            results.extend(parallel_results);
-                        }
-                        let storm_result = crate::tools::ToolResult::error(reason);
-                        results.push((tc.clone(), storm_result));
-                        scheduled_count += 1;
-                        continue;
+            let storm_exempt =
+                tool_call_is_storm_exempt(execution.tool_registry.as_ref(), &tc.name);
+            match storm_state.check(&tc.name, &tc.arguments, is_read_only, storm_exempt) {
+                StormDecision::Suppress(reason) => {
+                    if !parallel_jobs.is_empty() {
+                        let pending = std::mem::take(&mut parallel_jobs);
+                        let parallel_results = self
+                            .collect_read_only_results(pending, concurrency, tx, lifecycle)
+                            .await;
+                        results.extend(parallel_results);
                     }
-                    StormDecision::Allow => {}
+                    let storm_result = crate::tools::ToolResult::error(reason);
+                    results.push((tc.clone(), storm_result));
+                    scheduled_count += 1;
+                    continue;
                 }
+                StormDecision::Allow => {}
             }
 
             let action_review = match gate.evaluate(tc, scheduled_count) {
@@ -2214,6 +2213,7 @@ mod tests {
         let exposed_tool_names =
             HashSet::from(["probe_read".to_string(), "probe_write".to_string()]);
         let mut lifecycle = ToolCallLifecycle::default();
+        let mut storm_state = StormState::default();
 
         ToolExecutionController::new(ToolExecutionContext::from_conversation(loop_instance))
             .execute_tools_parallel(ToolExecutionRequest {
@@ -2233,6 +2233,7 @@ mod tests {
                 no_progress_rounds: 0,
                 has_changes_before_tools: false,
                 destructive_scope: &destructive_scope,
+                storm_state: &mut storm_state,
                 lifecycle: &mut lifecycle,
             })
             .await
@@ -2447,6 +2448,7 @@ mod tests {
         );
         let exposed_tool_names = HashSet::from(["file_edit".to_string(), "file_read".to_string()]);
         let mut lifecycle = ToolCallLifecycle::default();
+        let mut storm_state = StormState::default();
         let task_state = AgentTaskState::from_initial_context(
             "edit src/lib.rs",
             std::path::Path::new("."),
@@ -2478,6 +2480,7 @@ mod tests {
                     no_progress_rounds: 0,
                     has_changes_before_tools: false,
                     destructive_scope: &destructive_scope,
+                    storm_state: &mut storm_state,
                     lifecycle: &mut lifecycle,
                 })
                 .await;

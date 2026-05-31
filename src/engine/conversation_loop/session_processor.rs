@@ -1,5 +1,5 @@
 use super::runtime_timeouts::{llm_request_timeout, stream_chunk_idle_timeout};
-use super::text_sanitizer::{strip_think_blocks, VisibleTextSanitizer};
+use super::text_sanitizer::{strip_hidden_blocks, VisibleTextSanitizer};
 use super::tool_execution::read_only_tool_concurrency;
 use super::turn_recording::{
     persist_turn_learning_event, promote_trace_candidate_memories, record_hook_traces,
@@ -9,6 +9,7 @@ use super::ConversationLoop;
 use crate::engine::hooks::HookDecision;
 use crate::engine::streaming::{emit_text_progressively, StreamEvent};
 use crate::engine::trace::{TraceCollector, TurnStatus};
+use crate::services::api::provider_protocol::ProviderCapabilities;
 use crate::services::api::tool_call_repair::ToolCallRepairReport;
 use crate::services::api::{ChatRequest, ChatResponse, ToolCall, Usage};
 use crate::tools::ToolResult;
@@ -70,14 +71,26 @@ async fn emit_usage_event(response: &ChatResponse, tx: &mpsc::Sender<StreamEvent
     }
 }
 
+fn cache_shape_for_request(
+    request: &ChatRequest,
+) -> crate::engine::cache_stability::CacheDiagnosticShape {
+    cache_shape_for_messages_and_tools(&request.messages, request.tools.as_deref().unwrap_or(&[]))
+}
+
+fn cache_shape_for_messages_and_tools(
+    messages: &[crate::services::api::Message],
+    tools: &[crate::services::api::Tool],
+) -> crate::engine::cache_stability::CacheDiagnosticShape {
+    crate::engine::cache_stability::request_cache_diagnostic_shape(messages, tools)
+}
+
 impl ConversationLoop {
     pub(super) async fn call_api(&self, request: ChatRequest) -> Result<SessionStepResult> {
         let response = self
-            .provider_chat_with_timeout(request, "non-streaming chat")
+            .provider_chat_with_tracking(request, "non-streaming chat")
             .await?;
-        self.record_cost(&response).await;
 
-        let content = strip_think_blocks(&response.content);
+        let content = strip_hidden_blocks(&response.content);
         let tool_calls = response.tool_calls.unwrap_or_default();
         let usage = response.usage.clone();
         let tool_call_repair = response.tool_call_repair.clone();
@@ -91,6 +104,17 @@ impl ConversationLoop {
             None,
             SessionStepSource::NonStreaming,
         ))
+    }
+
+    async fn provider_chat_with_tracking(
+        &self,
+        request: ChatRequest,
+        purpose: &str,
+    ) -> Result<ChatResponse> {
+        let cache_shape = cache_shape_for_request(&request);
+        let response = self.provider_chat_with_timeout(request, purpose).await?;
+        self.record_cost(&response, Some(cache_shape)).await;
+        Ok(response)
     }
 
     async fn provider_chat_with_timeout(
@@ -119,13 +143,18 @@ impl ConversationLoop {
     ) -> Result<SessionStepResult> {
         let fallback_messages = request.messages.clone();
         let fallback_tools = request.tools.clone();
+        let provider_family =
+            ProviderCapabilities::detect(self.provider.base_url(), &request.model).protocol_family;
+        let streaming_cache_shape = cache_shape_for_messages_and_tools(
+            &fallback_messages,
+            fallback_tools.as_deref().unwrap_or(&[]),
+        );
 
         let stream_open =
             tokio::time::timeout(llm_request_timeout(), self.provider.chat_stream(request)).await;
         match stream_open {
             Ok(Ok(mut stream)) => {
                 let mut raw_content = String::new();
-                let mut full_content = String::new();
                 let mut collected_tool_calls: Vec<ToolCall> = Vec::new();
                 let mut raw_args_accum: Vec<String> = Vec::new();
                 let mut stream_failed: Option<String> = None;
@@ -198,7 +227,6 @@ impl ConversationLoop {
                                         raw_content.push_str(content);
                                         let visible_chunk = visible_sanitizer.push_chunk(content);
                                         if !visible_chunk.is_empty() {
-                                            full_content.push_str(&visible_chunk);
                                             let _ = tx
                                                 .send(StreamEvent::TextChunk(visible_chunk))
                                                 .await;
@@ -425,29 +453,34 @@ impl ConversationLoop {
                 let _ = tx.send(StreamEvent::ThinkingComplete).await;
                 let visible_tail = visible_sanitizer.finish();
                 if !visible_tail.is_empty() {
-                    full_content.push_str(&visible_tail);
                     let _ = tx.send(StreamEvent::TextChunk(visible_tail)).await;
                 }
 
+                let mut repair_report = ToolCallRepairReport::new(provider_family);
                 for (i, tc) in collected_tool_calls.iter_mut().enumerate() {
                     if i < raw_args_accum.len() && !raw_args_accum[i].is_empty() {
-                        let mut repair_report =
-                            crate::services::api::tool_call_repair::ToolCallRepairReport::default();
                         tc.arguments = crate::services::api::tool_call_repair::parse_tool_arguments(
                             &raw_args_accum[i],
                             &mut repair_report,
                         );
-                        if repair_report.has_repairs() {
-                            warn!(
-                                "Streaming tool argument repair applied: {:?}",
-                                repair_report
-                            );
-                        }
                         let _ = tx
                             .send(StreamEvent::ToolCallComplete { id: tc.id.clone() })
                             .await;
                     }
                 }
+                let collected_tool_call_count = collected_tool_calls.len();
+                let repaired = crate::services::api::tool_call_repair::repair_response(
+                    &raw_content,
+                    Some(collected_tool_calls),
+                    provider_family,
+                    repair_report,
+                );
+                if let Some(report) = &repaired.report {
+                    warn!("Streaming tool-call repair applied: {:?}", report);
+                }
+                let repaired_tool_calls = repaired.tool_calls.unwrap_or_default();
+                let repaired_content = repaired.content;
+                let repaired_report = repaired.report;
 
                 let mut pre_executed: std::collections::HashMap<usize, ToolResult> =
                     std::collections::HashMap::new();
@@ -476,7 +509,7 @@ impl ConversationLoop {
                     warn!(
                         "Streaming interrupted after {} visible chars and {} partial tool call(s) (error: {}). Falling back to non-streaming",
                         raw_content.chars().count(),
-                        collected_tool_calls.len(),
+                        collected_tool_call_count,
                         stream_err
                     );
                     let base_request = ChatRequest::new(&self.model)
@@ -484,7 +517,7 @@ impl ConversationLoop {
                         .with_temperature(0.2);
                     let response = if let Some(tools) = fallback_tools.clone() {
                         match self
-                            .provider_chat_with_timeout(
+                            .provider_chat_with_tracking(
                                 base_request.clone().with_tools(tools),
                                 "non-streaming fallback with tools",
                             )
@@ -496,7 +529,7 @@ impl ConversationLoop {
                                     "Non-streaming fallback with tools failed: {}. Retrying without tools.",
                                     with_tools_err
                                 );
-                                self.provider_chat_with_timeout(
+                                self.provider_chat_with_tracking(
                                     base_request,
                                     "non-streaming fallback without tools",
                                 )
@@ -504,13 +537,12 @@ impl ConversationLoop {
                             }
                         }
                     } else {
-                        self.provider_chat_with_timeout(base_request, "non-streaming fallback")
+                        self.provider_chat_with_tracking(base_request, "non-streaming fallback")
                             .await?
                     };
-                    self.record_cost(&response).await;
                     emit_usage_event(&response, tx).await;
 
-                    let content = strip_think_blocks(&response.content);
+                    let content = strip_hidden_blocks(&response.content);
                     if !content.is_empty() {
                         emit_text_progressively(tx, content.clone()).await;
                     }
@@ -528,12 +560,16 @@ impl ConversationLoop {
                     ));
                 }
 
+                if let Some(usage) = &stream_usage {
+                    self.record_usage(usage, Some(streaming_cache_shape)).await;
+                }
+
                 Ok(SessionStepResult::new(
-                    full_content,
-                    collected_tool_calls,
+                    repaired_content,
+                    repaired_tool_calls,
                     pre_executed,
                     stream_usage,
-                    None,
+                    repaired_report,
                     finish_reason,
                     SessionStepSource::Streaming,
                 ))
@@ -551,7 +587,7 @@ impl ConversationLoop {
                     .with_temperature(0.2);
                 let response = if let Some(tools) = fallback_tools.clone() {
                     match self
-                        .provider_chat_with_timeout(
+                        .provider_chat_with_tracking(
                             base_request.clone().with_tools(tools),
                             "non-streaming fallback with tools",
                         )
@@ -563,7 +599,7 @@ impl ConversationLoop {
                                 "Non-streaming fallback with tools failed: {}. Retrying without tools.",
                                 with_tools_err
                             );
-                            self.provider_chat_with_timeout(
+                            self.provider_chat_with_tracking(
                                 base_request,
                                 "non-streaming fallback without tools",
                             )
@@ -571,13 +607,12 @@ impl ConversationLoop {
                         }
                     }
                 } else {
-                    self.provider_chat_with_timeout(base_request, "non-streaming fallback")
+                    self.provider_chat_with_tracking(base_request, "non-streaming fallback")
                         .await?
                 };
-                self.record_cost(&response).await;
                 emit_usage_event(&response, tx).await;
 
-                let content = strip_think_blocks(&response.content);
+                let content = strip_hidden_blocks(&response.content);
                 if !content.is_empty() {
                     emit_text_progressively(tx, content.clone()).await;
                 }
@@ -611,7 +646,7 @@ impl ConversationLoop {
                     .with_temperature(0.2);
                 let response = if let Some(tools) = fallback_tools.clone() {
                     match self
-                        .provider_chat_with_timeout(
+                        .provider_chat_with_tracking(
                             base_request.clone().with_tools(tools),
                             "non-streaming fallback with tools",
                         )
@@ -623,7 +658,7 @@ impl ConversationLoop {
                                 "Non-streaming fallback with tools failed: {}. Retrying without tools.",
                                 with_tools_err
                             );
-                            self.provider_chat_with_timeout(
+                            self.provider_chat_with_tracking(
                                 base_request,
                                 "non-streaming fallback without tools",
                             )
@@ -631,13 +666,12 @@ impl ConversationLoop {
                         }
                     }
                 } else {
-                    self.provider_chat_with_timeout(base_request, "non-streaming fallback")
+                    self.provider_chat_with_tracking(base_request, "non-streaming fallback")
                         .await?
                 };
-                self.record_cost(&response).await;
                 emit_usage_event(&response, tx).await;
 
-                let content = strip_think_blocks(&response.content);
+                let content = strip_hidden_blocks(&response.content);
                 if !content.is_empty() {
                     emit_text_progressively(tx, content.clone()).await;
                 }
@@ -658,16 +692,29 @@ impl ConversationLoop {
     }
 
     /// 记录 API 调用成本
-    async fn record_cost(&self, response: &ChatResponse) {
+    async fn record_cost(
+        &self,
+        response: &ChatResponse,
+        cache_shape: Option<crate::engine::cache_stability::CacheDiagnosticShape>,
+    ) {
         if let Some(ref usage) = response.usage {
-            let mut tracker = self.cost_tracker.lock().await;
-            tracker.record_api_call(
-                &self.model,
-                usage.prompt_tokens as u64,
-                usage.completion_tokens as u64,
-                usage.cached_tokens.map(|t| t as u64),
-            );
+            self.record_usage(usage, cache_shape).await;
         }
+    }
+
+    async fn record_usage(
+        &self,
+        usage: &Usage,
+        cache_shape: Option<crate::engine::cache_stability::CacheDiagnosticShape>,
+    ) {
+        let mut tracker = self.cost_tracker.lock().await;
+        tracker.record_api_call_with_cache_shape(
+            &self.model,
+            usage.prompt_tokens as u64,
+            usage.completion_tokens as u64,
+            usage.cached_tokens.map(|t| t as u64),
+            cache_shape,
+        );
     }
 
     pub(super) async fn finish_trace(&self, trace: TraceCollector, status: TurnStatus) {

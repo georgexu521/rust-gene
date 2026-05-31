@@ -23,6 +23,11 @@ export type DesktopContextSnapshot = {
   max_context_tokens: number;
   usage_percent: number;
   stable_prefix_fingerprint: string;
+  prompt_cache_cached_tokens: number;
+  prompt_cache_miss_tokens: number;
+  prompt_cache_hit_rate_percent: number;
+  prompt_cache_diagnostic_count: number;
+  prompt_cache_last_reason?: string | null;
   compact: DesktopCompactState;
 };
 
@@ -340,6 +345,11 @@ export function desktopContextSnapshot(): Promise<DesktopContextSnapshot> {
       max_context_tokens: 128000,
       usage_percent: 3,
       stable_prefix_fingerprint: "web-preview",
+      prompt_cache_cached_tokens: 16,
+      prompt_cache_miss_tokens: 112,
+      prompt_cache_hit_rate_percent: 12.5,
+      prompt_cache_diagnostic_count: 1,
+      prompt_cache_last_reason: "cold-start",
       compact: {
         compression_count: 0,
         circuit_open: false,
@@ -419,6 +429,11 @@ export function desktopWorkbenchSnapshot(): Promise<DesktopWorkbenchSnapshot> {
         max_context_tokens: 128000,
         usage_percent: 3,
         stable_prefix_fingerprint: "web-preview",
+        prompt_cache_cached_tokens: 16,
+        prompt_cache_miss_tokens: 112,
+        prompt_cache_hit_rate_percent: 12.5,
+        prompt_cache_diagnostic_count: 1,
+        prompt_cache_last_reason: "cold-start",
         compact: {
           compression_count: 0,
           circuit_open: false,

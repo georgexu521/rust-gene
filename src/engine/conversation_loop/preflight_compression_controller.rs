@@ -92,6 +92,7 @@ impl PreflightCompressionController {
                 .get(compaction_record_len)
                 .cloned();
             drop(compressor);
+            crate::tools::file_tool::clear_read_files(context.session_id);
             if let (Some(store), Some(record)) = (context.session_store, compaction_record.as_ref())
             {
                 let _ = store.add_compact_boundary_from_runtime_record(

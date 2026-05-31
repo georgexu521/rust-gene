@@ -78,6 +78,7 @@ impl ToolRoundController {
                     no_progress_rounds: turn_state.focused_repair.no_code_progress_rounds,
                     has_changes_before_tools,
                     destructive_scope: runtime.destructive_scope,
+                    storm_state: &mut turn_state.storm_state,
                     lifecycle: &mut turn_state.tool_lifecycle,
                 })
                 .await;

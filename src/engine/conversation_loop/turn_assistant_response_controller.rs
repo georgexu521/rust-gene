@@ -140,6 +140,7 @@ mod tests {
                 source: SessionStepSource::NonStreaming,
             },
             compressed_this_turn: false,
+            model: "mock-model".to_string(),
         }
     }
 

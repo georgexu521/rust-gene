@@ -519,6 +519,19 @@ mod tests {
     }
 
     #[test]
+    fn unrecoverable_arguments_remain_invalid() {
+        let mut report = report();
+        let value = parse_tool_arguments(r#"{"path": [1,}"#, &mut report);
+
+        assert_eq!(value, Value::Null);
+        assert_eq!(report.malformed_tool_calls, 1);
+        assert!(report
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("tool argument JSON parse failed")));
+    }
+
+    #[test]
     fn unflattens_dotted_arguments() {
         let mut report = report();
         let value = parse_tool_arguments(

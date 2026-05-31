@@ -2,6 +2,7 @@
 //!
 //! 支持多个 LLM 提供商：Kimi、OpenAI
 
+pub(crate) mod content_sanitizer;
 pub mod kimi;
 pub mod minimax;
 pub mod openai;
@@ -276,11 +277,7 @@ pub struct ChatResponse {
 /// them not to expose hidden reasoning. The product surface should show the
 /// deliberate result, not chain-of-thought-like scratch text.
 pub fn sanitize_assistant_content(content: impl AsRef<str>) -> String {
-    let without_tool_call = strip_tag_block(content.as_ref(), "minimax:tool_call");
-    let without_tool_call = strip_tag_block(&without_tool_call, "tool_call");
-    let without_tool_call = strip_tag_block(&without_tool_call, "invoke");
-    let without_thinking = strip_tag_block(&without_tool_call, "thinking");
-    strip_tag_block(&without_thinking, "think")
+    content_sanitizer::strip_hidden_blocks(content)
         .trim_start_matches('\n')
         .to_string()
 }
@@ -396,35 +393,6 @@ pub fn normalize_tool_message_sequence_with_report(
         messages: normalized,
         report,
     }
-}
-
-fn strip_tag_block(input: &str, tag: &str) -> String {
-    let mut output = String::with_capacity(input.len());
-    let mut rest = input;
-    let open_prefix = format!("<{}", tag);
-    let close_tag = format!("</{}>", tag);
-
-    loop {
-        let lower = rest.to_ascii_lowercase();
-        let Some(open_start) = lower.find(&open_prefix) else {
-            output.push_str(rest);
-            break;
-        };
-        output.push_str(&rest[..open_start]);
-
-        let Some(open_end_rel) = lower[open_start..].find('>') else {
-            break;
-        };
-        let content_start = open_start + open_end_rel + 1;
-        let lower_after_open = &lower[content_start..];
-        let Some(close_start_rel) = lower_after_open.find(&close_tag) else {
-            break;
-        };
-        let close_end = content_start + close_start_rel + close_tag.len();
-        rest = &rest[close_end..];
-    }
-
-    output
 }
 
 /// Token 使用量

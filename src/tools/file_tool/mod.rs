@@ -2161,16 +2161,16 @@ impl Tool for FileEditTool {
                 },
                 "expected_replacements": {
                     "type": "integer",
-                    "description": "How many times old_string should appear. Defaults to 1. Use values greater than 1 only for deliberate mass replacements.",
+                    "description": "How many times old_string or an insert anchor should appear. Defaults to 1. Use values greater than 1 only for deliberate mass edits.",
                     "minimum": 1
                 },
                 "insert_after": {
                     "type": "string",
-                    "description": "If provided, new_string will be inserted after each occurrence of this string (old_string is ignored when this is set)"
+                    "description": "If provided, new_string will be inserted after this anchor (old_string is ignored when this is set). The anchor must appear expected_replacements times, default 1."
                 },
                 "insert_before": {
                     "type": "string",
-                    "description": "If provided, new_string will be inserted before each occurrence of this string (old_string is ignored when this is set)"
+                    "description": "If provided, new_string will be inserted before this anchor (old_string is ignored when this is set). The anchor must appear expected_replacements times, default 1."
                 },
                 "line_start": {
                     "type": "integer",
@@ -2383,9 +2383,21 @@ impl Tool for FileEditTool {
         let result = if let (Some(start), Some(end)) = (line_start, line_end) {
             Self::do_replace_lines(content, start, end, &new_string)
         } else if let Some(after) = insert_after {
-            Self::do_insert(content, after, &new_string, InsertMode::After)
+            Self::do_insert(
+                content,
+                after,
+                &new_string,
+                InsertMode::After,
+                expected_replacements,
+            )
         } else if let Some(before) = insert_before {
-            Self::do_insert(content, before, &new_string, InsertMode::Before)
+            Self::do_insert(
+                content,
+                before,
+                &new_string,
+                InsertMode::Before,
+                expected_replacements,
+            )
         } else {
             if old_string.trim().is_empty() {
                 return ToolResult::error(
@@ -2586,11 +2598,23 @@ impl FileEditTool {
         if let (Some(start), Some(end)) = (line_start, line_end) {
             Self::do_replace_lines(original.to_string(), start, end, new_string).map(|(s, _)| s)
         } else if let Some(after) = insert_after {
-            Self::do_insert(original.to_string(), after, new_string, InsertMode::After)
-                .map(|(s, _)| s)
+            Self::do_insert(
+                original.to_string(),
+                after,
+                new_string,
+                InsertMode::After,
+                expected_replacements,
+            )
+            .map(|(s, _)| s)
         } else if let Some(before) = insert_before {
-            Self::do_insert(original.to_string(), before, new_string, InsertMode::Before)
-                .map(|(s, _)| s)
+            Self::do_insert(
+                original.to_string(),
+                before,
+                new_string,
+                InsertMode::Before,
+                expected_replacements,
+            )
+            .map(|(s, _)| s)
         } else {
             if old_string.trim().is_empty() {
                 return Err(
@@ -2686,6 +2710,7 @@ impl FileEditTool {
         anchor: &str,
         new_string: &str,
         mode: InsertMode,
+        expected: Option<usize>,
     ) -> Result<(String, usize), String> {
         if contains_file_read_line_prefix(anchor) {
             let field = match mode {
@@ -2702,6 +2727,18 @@ impl FileEditTool {
             ));
         }
         let count = occurrences.len();
+        let expected_count = expected.unwrap_or(1);
+        if count != expected_count {
+            let field = match mode {
+                InsertMode::After => "insert_after",
+                InsertMode::Before => "insert_before",
+            };
+            let ctx = build_match_context(&content, &occurrences, 2);
+            return Err(format!(
+                "Expected {} occurrence(s) of {} anchor, but found {}.\n{}\n\nPlease provide a more specific anchor or set expected_replacements to {} if this bulk insert is intentional.",
+                expected_count, field, count, ctx, count
+            ));
+        }
         let mut new_content = content;
         for (start, end) in occurrences.into_iter().rev() {
             match mode {
@@ -4769,6 +4806,60 @@ mod tests {
         assert!(result.success, "insert failed: {:?}", result.error);
         let content = tokio::fs::read_to_string(path).await.unwrap();
         assert!(content.contains("line1\nline1.5\nline2"));
+
+        let _ = tokio::fs::remove_file(path).await;
+    }
+
+    #[tokio::test]
+    async fn test_file_edit_insert_rejects_ambiguous_anchor_by_default() {
+        let tool = FileEditTool;
+        let path = "/tmp/test_priority_agent_edit_insert_ambiguous.txt";
+        tokio::fs::write(path, "line\nline\n").await.unwrap();
+        read_test_file_for_edit(path, "test-session-edit-insert-ambiguous").await;
+
+        let result = tool
+            .execute(
+                json!({
+                    "path": path,
+                    "insert_after": "line",
+                    "new_string": "\ninserted"
+                }),
+                ToolContext::new(".", "test-session-edit-insert-ambiguous"),
+            )
+            .await;
+
+        assert!(!result.success);
+        let err = result.error.unwrap_or_default();
+        assert!(err.contains("Expected 1 occurrence(s) of insert_after anchor"));
+        assert!(err.contains("expected_replacements to 2"));
+        let content = tokio::fs::read_to_string(path).await.unwrap();
+        assert_eq!(content, "line\nline\n");
+
+        let _ = tokio::fs::remove_file(path).await;
+    }
+
+    #[tokio::test]
+    async fn test_file_edit_insert_allows_intentional_bulk_anchor() {
+        let tool = FileEditTool;
+        let path = "/tmp/test_priority_agent_edit_insert_bulk.txt";
+        tokio::fs::write(path, "line\nline\n").await.unwrap();
+        read_test_file_for_edit(path, "test-session-edit-insert-bulk").await;
+
+        let result = tool
+            .execute(
+                json!({
+                    "path": path,
+                    "insert_after": "line",
+                    "new_string": "!",
+                    "expected_replacements": 2
+                }),
+                ToolContext::new(".", "test-session-edit-insert-bulk"),
+            )
+            .await;
+
+        assert!(result.success, "insert failed: {:?}", result.error);
+        let content = tokio::fs::read_to_string(path).await.unwrap();
+        assert_eq!(content, "line!\nline!\n");
 
         let _ = tokio::fs::remove_file(path).await;
     }

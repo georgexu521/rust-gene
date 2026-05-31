@@ -27,6 +27,11 @@ pub struct DesktopContextSnapshot {
     pub max_context_tokens: u64,
     pub usage_percent: u64,
     pub stable_prefix_fingerprint: String,
+    pub prompt_cache_cached_tokens: u64,
+    pub prompt_cache_miss_tokens: u64,
+    pub prompt_cache_hit_rate_percent: f64,
+    pub prompt_cache_diagnostic_count: usize,
+    pub prompt_cache_last_reason: Option<String>,
     pub compact: DesktopCompactState,
 }
 
@@ -161,6 +166,32 @@ impl DesktopRuntime {
         } else {
             0
         };
+        let (
+            prompt_cache_cached_tokens,
+            prompt_cache_miss_tokens,
+            prompt_cache_hit_rate_percent,
+            prompt_cache_diagnostic_count,
+            prompt_cache_last_reason,
+        ) = {
+            let tracker = self.streaming_engine.cost_tracker().lock().await;
+            let prompt_tokens = tracker.total_tokens.prompt;
+            let cached_tokens = tracker.total_tokens.cached;
+            let hit_rate = if prompt_tokens == 0 {
+                0.0
+            } else {
+                cached_tokens.min(prompt_tokens) as f64 / prompt_tokens as f64 * 100.0
+            };
+            (
+                cached_tokens,
+                tracker.total_tokens.cache_miss,
+                hit_rate,
+                tracker.prompt_cache_diagnostics.len(),
+                tracker
+                    .prompt_cache_diagnostics
+                    .last()
+                    .map(|entry| entry.miss_reason.clone()),
+            )
+        };
 
         DesktopContextSnapshot {
             history_messages: usage.history_messages,
@@ -171,6 +202,11 @@ impl DesktopRuntime {
             max_context_tokens: usage.max_context_tokens,
             usage_percent,
             stable_prefix_fingerprint: usage.stable_prefix_fingerprint,
+            prompt_cache_cached_tokens,
+            prompt_cache_miss_tokens,
+            prompt_cache_hit_rate_percent,
+            prompt_cache_diagnostic_count,
+            prompt_cache_last_reason,
             compact: DesktopCompactState {
                 compression_count: stats.compression_count,
                 circuit_open,

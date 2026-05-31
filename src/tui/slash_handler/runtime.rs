@@ -780,12 +780,20 @@ pub async fn handle_cache(app: &mut TuiApp, args: &str) -> String {
                 tool_cache.display()
             )
         }
-        "prompt" | "miss-report" | "report" => {
+        "prompt" | "report" => {
             let Some(engine) = app.streaming_engine.as_ref() else {
                 return "Prompt cache report unavailable: no active streaming engine.".to_string();
             };
             let tracker = engine.cost_tracker().lock().await;
             tracker.prompt_cache_report()
+        }
+        "miss-report" => {
+            let Some(engine) = app.streaming_engine.as_ref() else {
+                return "Prompt cache miss report unavailable: no active streaming engine."
+                    .to_string();
+            };
+            let tracker = engine.cost_tracker().lock().await;
+            tracker.prompt_cache_miss_report()
         }
         _ => "Usage: /cache [clear|stats|prompt|miss-report]".to_string(),
     }

@@ -10,12 +10,19 @@ use std::collections::VecDeque;
 /// Storm breaker state for a single conversation turn.
 #[derive(Debug, Clone)]
 pub struct StormState {
-    /// Sliding window of recent (tool_name, normalized_args_hash).
-    window: VecDeque<(String, u64)>,
+    /// Sliding window of recent calls.
+    window: VecDeque<RecentCall>,
     /// Maximum window size.
     capacity: usize,
     /// Suppress after this many repeats in the window.
     threshold: usize,
+}
+
+#[derive(Debug, Clone)]
+struct RecentCall {
+    tool_name: String,
+    args_hash: u64,
+    read_only: bool,
 }
 
 impl Default for StormState {
@@ -41,31 +48,50 @@ impl StormState {
     ///
     /// Returns `StormDecision::Allow` if the call should proceed,
     /// or `StormDecision::Suppress` with a reason if it should be skipped.
-    pub fn check(&mut self, tool_name: &str, args: &Value) -> StormDecision {
+    pub fn check(
+        &mut self,
+        tool_name: &str,
+        args: &Value,
+        read_only: bool,
+        storm_exempt: bool,
+    ) -> StormDecision {
+        if storm_exempt {
+            return StormDecision::Allow;
+        }
+
         let hash = normalize_and_hash_args(args);
-        let key = (tool_name.to_string(), hash);
+
+        if !read_only {
+            self.window.retain(|entry| !entry.read_only);
+        }
 
         // Count occurrences of this exact (name, args_hash) in the window.
         let count = self
             .window
             .iter()
-            .filter(|(n, h)| n == tool_name && *h == hash)
+            .filter(|entry| entry.tool_name == tool_name && entry.args_hash == hash)
             .count();
 
+        if count >= self.threshold.saturating_sub(1) {
+            return StormDecision::Suppress(format!(
+                "detected repeated call to `{}` with same arguments ({} times in window of {}); stopping to avoid storm",
+                tool_name,
+                count + 1,
+                self.capacity
+            ));
+        }
+
         // Push the new call into the window.
-        self.window.push_back(key);
+        self.window.push_back(RecentCall {
+            tool_name: tool_name.to_string(),
+            args_hash: hash,
+            read_only,
+        });
         if self.window.len() > self.capacity {
             self.window.pop_front();
         }
 
-        if count >= self.threshold {
-            StormDecision::Suppress(format!(
-                "detected repeated call to `{}` with same arguments ({} times in window of {}); stopping to avoid storm",
-                tool_name, count, self.capacity
-            ))
-        } else {
-            StormDecision::Allow
-        }
+        StormDecision::Allow
     }
 
     /// Reset the window (e.g., at the start of a new turn).
@@ -123,11 +149,7 @@ fn normalize_value(value: &Value) -> Value {
             }
             Value::Object(normalized)
         }
-        Value::String(s) => {
-            // Normalize whitespace in strings for comparison purposes.
-            let trimmed = s.trim();
-            Value::String(trimmed.to_string())
-        }
+        Value::String(s) => Value::String(s.clone()),
         Value::Array(arr) => Value::Array(arr.iter().map(normalize_value).collect()),
         other => other.clone(),
     }
@@ -138,15 +160,23 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+    fn read(state: &mut StormState, name: &str, args: &Value) -> StormDecision {
+        state.check(name, args, true, false)
+    }
+
+    fn write(state: &mut StormState, name: &str, args: &Value) -> StormDecision {
+        state.check(name, args, false, false)
+    }
+
     #[test]
     fn storm_allows_first_occurrences() {
         let mut state = StormState::default();
         assert_eq!(
-            state.check("file_read", &json!({"path": "/tmp/a.txt"})),
+            read(&mut state, "file_read", &json!({"path": "/tmp/a.txt"})),
             StormDecision::Allow
         );
         assert_eq!(
-            state.check("file_read", &json!({"path": "/tmp/a.txt"})),
+            read(&mut state, "file_read", &json!({"path": "/tmp/a.txt"})),
             StormDecision::Allow
         );
     }
@@ -156,13 +186,12 @@ mod tests {
         let mut state = StormState::default();
         let args = json!({"path": "/tmp/a.txt"});
 
-        // First 3 calls allowed.
-        assert_eq!(state.check("file_read", &args), StormDecision::Allow);
-        assert_eq!(state.check("file_read", &args), StormDecision::Allow);
-        assert_eq!(state.check("file_read", &args), StormDecision::Allow);
-        // 4th identical call suppressed (3 already in window).
+        // First 2 calls allowed.
+        assert_eq!(read(&mut state, "file_read", &args), StormDecision::Allow);
+        assert_eq!(read(&mut state, "file_read", &args), StormDecision::Allow);
+        // 3rd identical call suppressed.
         assert!(matches!(
-            state.check("file_read", &args),
+            read(&mut state, "file_read", &args),
             StormDecision::Suppress(_)
         ));
     }
@@ -171,36 +200,39 @@ mod tests {
     fn storm_different_args_not_suppressed() {
         let mut state = StormState::default();
         assert_eq!(
-            state.check("file_read", &json!({"path": "/tmp/a.txt"})),
+            read(&mut state, "file_read", &json!({"path": "/tmp/a.txt"})),
             StormDecision::Allow
         );
         assert_eq!(
-            state.check("file_read", &json!({"path": "/tmp/b.txt"})),
+            read(&mut state, "file_read", &json!({"path": "/tmp/b.txt"})),
             StormDecision::Allow
         );
         assert_eq!(
-            state.check("file_read", &json!({"path": "/tmp/c.txt"})),
+            read(&mut state, "file_read", &json!({"path": "/tmp/c.txt"})),
             StormDecision::Allow
         );
         // Different args don't suppress.
         assert_eq!(
-            state.check("file_read", &json!({"path": "/tmp/d.txt"})),
+            read(&mut state, "file_read", &json!({"path": "/tmp/d.txt"})),
             StormDecision::Allow
         );
     }
 
     #[test]
-    fn storm_different_tools_not_suppressed() {
+    fn storm_counts_repeats_per_tool() {
         let mut state = StormState::default();
         let args = json!({"path": "/tmp/a.txt"});
-        assert_eq!(state.check("file_read", &args), StormDecision::Allow);
-        assert_eq!(state.check("glob", &args), StormDecision::Allow);
-        assert_eq!(state.check("grep", &args), StormDecision::Allow);
-        assert_eq!(state.check("file_read", &args), StormDecision::Allow);
-        assert_eq!(state.check("glob", &args), StormDecision::Allow);
-        assert_eq!(state.check("grep", &args), StormDecision::Allow);
+        assert_eq!(read(&mut state, "file_read", &args), StormDecision::Allow);
+        assert_eq!(read(&mut state, "glob", &args), StormDecision::Allow);
+        assert_eq!(read(&mut state, "grep", &args), StormDecision::Allow);
+        assert_eq!(read(&mut state, "file_read", &args), StormDecision::Allow);
+        assert_eq!(read(&mut state, "glob", &args), StormDecision::Allow);
+        assert_eq!(read(&mut state, "grep", &args), StormDecision::Allow);
         // Different tools, same args — not suppressed.
-        assert_eq!(state.check("file_read", &args), StormDecision::Allow);
+        assert!(matches!(
+            read(&mut state, "file_read", &args),
+            StormDecision::Suppress(_)
+        ));
     }
 
     #[test]
@@ -208,24 +240,51 @@ mod tests {
         let mut state = StormState::new(4, 3);
 
         // Fill with different calls.
-        state.check("a", &json!({}));
-        state.check("b", &json!({}));
-        state.check("c", &json!({}));
-        state.check("d", &json!({}));
+        read(&mut state, "a", &json!({}));
+        read(&mut state, "b", &json!({}));
+        read(&mut state, "c", &json!({}));
+        read(&mut state, "d", &json!({}));
         // Call a-gain after eviction — should not be suppressed.
-        assert_eq!(state.check("a", &json!({})), StormDecision::Allow);
+        assert_eq!(read(&mut state, "a", &json!({})), StormDecision::Allow);
     }
 
     #[test]
     fn storm_reset_clears_window() {
         let mut state = StormState::default();
         let args = json!({"path": "/tmp/a.txt"});
-        state.check("file_read", &args);
-        state.check("file_read", &args);
-        state.check("file_read", &args);
+        read(&mut state, "file_read", &args);
+        read(&mut state, "file_read", &args);
 
         state.reset();
         // After reset, same call should be allowed.
-        assert_eq!(state.check("file_read", &args), StormDecision::Allow);
+        assert_eq!(read(&mut state, "file_read", &args), StormDecision::Allow);
+    }
+
+    #[test]
+    fn mutating_call_clears_prior_read_only_entries() {
+        let mut state = StormState::default();
+        let args = json!({"path": "/tmp/a.txt"});
+        assert_eq!(read(&mut state, "file_read", &args), StormDecision::Allow);
+        assert_eq!(read(&mut state, "file_read", &args), StormDecision::Allow);
+        assert_eq!(write(&mut state, "file_edit", &args), StormDecision::Allow);
+        assert_eq!(read(&mut state, "file_read", &args), StormDecision::Allow);
+    }
+
+    #[test]
+    fn storm_exempt_call_does_not_count() {
+        let mut state = StormState::default();
+        let args = json!({"question": "continue?"});
+        assert_eq!(
+            state.check("ask_user", &args, false, true),
+            StormDecision::Allow
+        );
+        assert_eq!(
+            state.check("ask_user", &args, false, true),
+            StormDecision::Allow
+        );
+        assert_eq!(
+            state.check("ask_user", &args, false, true),
+            StormDecision::Allow
+        );
     }
 }

@@ -819,14 +819,22 @@ pub fn estimate_tokens(text: &str) -> u64 {
 
 /// 估算消息列表的总 token 数
 pub fn estimate_messages_tokens(messages: &[Message]) -> u64 {
-    messages
-        .iter()
-        .map(|m| {
-            let content_tokens = estimate_tokens(&m.content());
-            let overhead = 4; // role, formatting 等开销
-            content_tokens + overhead
-        })
-        .sum()
+    messages.iter().map(estimate_message_tokens).sum()
+}
+
+fn estimate_message_tokens(message: &Message) -> u64 {
+    let content_tokens = estimate_tokens(&message.content());
+    let tool_call_tokens = match message {
+        Message::Assistant {
+            tool_calls: Some(tool_calls),
+            ..
+        } if !tool_calls.is_empty() => serde_json::to_string(tool_calls)
+            .map(|json| estimate_tokens(&json))
+            .unwrap_or_default(),
+        _ => 0,
+    };
+    let overhead = 4; // role, formatting 等开销
+    content_tokens + tool_call_tokens + overhead
 }
 
 /// 估算工具 schema 的 token 数
@@ -1396,7 +1404,14 @@ impl ContextCompressor {
 
     pub fn set_llm_summary_stable_prefix_from_messages(&mut self, messages: &[Message]) {
         if let Some(prefix) = messages.iter().find_map(|message| match message {
-            Message::System { content } if !content.trim().is_empty() => Some(content.clone()),
+            Message::System { content }
+                if !content.trim().is_empty()
+                    && !crate::engine::cache_stability::is_dynamic_context_system_message(
+                        content,
+                    ) =>
+            {
+                Some(content.clone())
+            }
             _ => None,
         }) {
             self.llm_summary_stable_prefix = Some(prefix);
@@ -2008,7 +2023,7 @@ impl ContextCompressor {
 
         // 从后往前计算，使用 soft_ceiling 防止超大消息中间切割
         for (i, msg) in messages.iter().enumerate().rev() {
-            let tokens = estimate_tokens(&msg.content()) + 4;
+            let tokens = estimate_message_tokens(msg);
             if used_tokens + tokens > soft_ceiling {
                 tail_start = i + 1;
                 break;
@@ -2533,6 +2548,27 @@ mod tests {
         assert_eq!(estimate_tokens("hello"), 2); // 5 chars / 4 = 1.25 → 2
         assert_eq!(estimate_tokens("1234"), 1); // 4 chars / 4 = 1
         assert_eq!(estimate_tokens(""), 0);
+    }
+
+    #[test]
+    fn estimate_messages_tokens_counts_assistant_tool_calls() {
+        let content_only = vec![Message::assistant("")];
+        let with_tool_call = vec![Message::assistant_with_tools(
+            "",
+            vec![ToolCall {
+                id: "call-1".to_string(),
+                name: "file_edit".to_string(),
+                arguments: serde_json::json!({
+                    "path": "src/lib.rs",
+                    "old_string": "a".repeat(80),
+                    "new_string": "b".repeat(80)
+                }),
+            }],
+        )];
+
+        assert!(
+            estimate_messages_tokens(&with_tool_call) > estimate_messages_tokens(&content_only)
+        );
     }
 
     #[test]
@@ -3194,6 +3230,33 @@ mod tests {
         assert!(matches!(
             &requests[0].messages[1],
             Message::User { content } if content.contains("Summarize this conversation")
+        ));
+    }
+
+    #[tokio::test]
+    async fn llm_summary_prefix_from_messages_skips_dynamic_context_zones() {
+        let summary_text = "## Goal\nTest goal\n\n## Constraints\n\n## Progress\n\n## Key Decisions\n\n## Relevant Files\n\n## Next Steps\n\n## Critical Context\n\n## Tools & Patterns\n";
+        let provider = std::sync::Arc::new(CapturingLlmProvider {
+            requests: std::sync::Mutex::new(Vec::new()),
+            response: summary_text.to_string(),
+        });
+        let mut compressor =
+            ContextCompressor::new(1000).with_llm_provider(provider.clone(), "mock-model");
+        compressor.set_llm_summary_stable_prefix_from_messages(&[
+            Message::system("<context_zones>\n<task-state>volatile</task-state>\n</context_zones>"),
+            Message::system("MAIN AGENT STABLE PREFIX"),
+            Message::user("Compress this"),
+        ]);
+
+        let summary = compressor
+            .llm_summarize_middle(&[Message::user("large tail")])
+            .await;
+
+        assert!(summary.is_some());
+        let requests = provider.requests.lock().unwrap();
+        assert!(matches!(
+            &requests[0].messages[0],
+            Message::System { content } if content == "MAIN AGENT STABLE PREFIX"
         ));
     }
 

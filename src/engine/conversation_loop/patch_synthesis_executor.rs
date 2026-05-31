@@ -99,6 +99,7 @@ impl PatchSynthesisExecutor {
             no_progress_rounds: context.turn_state.focused_repair.no_code_progress_rounds,
             has_changes_before_tools: false,
             destructive_scope: context.destructive_scope,
+            storm_state: &mut context.turn_state.storm_state,
             lifecycle: &mut context.turn_state.tool_lifecycle,
         })
         .await

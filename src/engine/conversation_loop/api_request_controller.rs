@@ -34,6 +34,7 @@ pub(super) struct ApiRequestContext<'a> {
 pub(super) struct ApiRequestOutcome {
     pub(super) session_step: SessionStepResult,
     pub(super) compressed_this_turn: bool,
+    pub(super) model: String,
 }
 
 pub(super) struct ApiRequestApplicationContext<'a> {
@@ -61,6 +62,8 @@ impl ApiRequestController {
         let mut api_result = Err(anyhow::anyhow!("initial"));
 
         for compress_retry in 0..3 {
+            let request_tools = request.tools.as_deref().unwrap_or(context.tools);
+            let request_has_tools = !request_tools.is_empty();
             let provider_capabilities = ProviderCapabilities::detect(
                 context.conversation.provider.base_url(),
                 &request.model,
@@ -68,7 +71,7 @@ impl ApiRequestController {
             context.trace.record(TraceEvent::ApiRequestStarted {
                 iteration: context.iteration,
                 model: request.model.clone(),
-                tools: context.tools.len(),
+                tools: request_tools.len(),
                 provider_family: Some(provider_capabilities.protocol_family.label().to_string()),
                 nonstreaming_tools_required: provider_capabilities.requires_nonstreaming_tool_calls,
                 tool_result_adjacency_required: provider_capabilities
@@ -96,7 +99,7 @@ impl ApiRequestController {
                     dropped_tool_result_ids: normalization_report.dropped_tool_result_ids,
                 });
             if let Some(report) = crate::services::api::tool_call_repair::schema_flattening_report(
-                context.tools,
+                request_tools,
                 provider_capabilities.protocol_family,
                 &request.model,
             ) {
@@ -115,7 +118,7 @@ impl ApiRequestController {
                     });
             }
             let nonstreaming_tool_request = context.tx.is_some()
-                && !context.tools.is_empty()
+                && request_has_tools
                 && provider_capabilities.requires_nonstreaming_tool_calls;
             let request_started_at = Instant::now();
             api_result = if let Some(tx) = context.tx {
@@ -299,6 +302,9 @@ impl ApiRequestController {
                                 .with_messages(compressed)
                                 .with_tools(context.tools.to_vec())
                                 .with_temperature(0.2);
+                            crate::tools::file_tool::clear_read_files(
+                                &context.conversation.session_id,
+                            );
                             compressed_this_turn = true;
                             recovered = true;
                         }
@@ -353,6 +359,7 @@ impl ApiRequestController {
         Ok(ApiRequestOutcome {
             session_step,
             compressed_this_turn,
+            model: request.model,
         })
     }
 
@@ -374,6 +381,19 @@ impl ApiRequestController {
                     malformed_tool_calls: report.malformed_tool_calls,
                     warnings: report.warnings.clone(),
                 });
+        }
+        if let Some(usage) = &session_step.usage {
+            let cache_usage = crate::engine::cache_stability::prompt_cache_usage(
+                usage.prompt_tokens as u64,
+                usage.cached_tokens.map(u64::from),
+            );
+            context.trace.record(TraceEvent::PromptCacheUsageRecorded {
+                model: context.outcome.model.clone(),
+                prompt_tokens: cache_usage.prompt_tokens,
+                cached_tokens: cache_usage.cached_tokens,
+                cache_miss_tokens: cache_usage.cache_miss_tokens,
+                hit_rate: cache_usage.hit_ratio,
+            });
         }
         let content = session_step.assistant_text;
         let tool_calls = session_step.tool_calls;
@@ -646,6 +666,7 @@ mod tests {
                 source: super::super::session_processor::SessionStepSource::NonStreaming,
             },
             compressed_this_turn: true,
+            model: "mock-model".to_string(),
         };
         let mut final_content = String::new();
         let mut final_tool_calls = Vec::new();

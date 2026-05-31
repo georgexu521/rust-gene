@@ -51,10 +51,18 @@ export function WorkbenchPanel({ snapshot, onRefresh }: WorkbenchPanelProps) {
           value={runtime ? `${runtime.usage_percent}%` : "Idle"}
         />
         <WorkbenchMetric
-          detail={runtime ? `${runtime.tool_schema_tokens} tool tokens` : "starts after run"}
+          detail={
+            runtime
+              ? `${runtime.prompt_cache_cached_tokens} cached · ${runtime.prompt_cache_miss_tokens} miss · ${runtime.prompt_cache_last_reason || "no reason"}`
+              : "starts after run"
+          }
           icon={<Database aria-hidden="true" size={16} />}
           label="Cache surface"
-          value={runtime?.stable_prefix_fingerprint || "not ready"}
+          value={
+            runtime
+              ? `${runtime.prompt_cache_hit_rate_percent.toFixed(1)}% hit`
+              : "not ready"
+          }
         />
       </div>
 

@@ -1044,21 +1044,7 @@ fn tagged_content(messages: &[Message], tag: &str) -> Option<String> {
 }
 
 fn is_dynamic_context_system_message(content: &str) -> bool {
-    let trimmed = content.trim_start();
-    [
-        "<task-state>",
-        "<task_state>",
-        "<task-contract>",
-        "<context-pack>",
-        "<relevant_material>",
-        "<recent_observation>",
-        "<self-evolution-guidance>",
-        "<context_zones",
-        "<retrieval-context",
-        "MVA profile:",
-    ]
-    .iter()
-    .any(|prefix| trimmed.starts_with(prefix))
+    crate::engine::cache_stability::is_dynamic_context_system_message(content)
 }
 
 fn zone_item_count(content: &str) -> usize {

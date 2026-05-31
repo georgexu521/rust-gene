@@ -1,6 +1,7 @@
 use super::runtime_diet::RuntimeDietSnapshot;
 use super::tool_call_lifecycle::ToolCallLifecycle;
 use crate::engine::evidence_ledger::EvidenceLedger;
+use crate::engine::repair::storm::StormState;
 use crate::engine::route_recovery::RouteRecoveryRuntimeState;
 use std::collections::HashMap;
 
@@ -16,6 +17,7 @@ pub(super) struct TurnRuntimeState {
     pub(super) reserved_repair_rounds: usize,
     pub(super) successful_read_only_tool_fingerprints: HashMap<String, usize>,
     pub(super) successful_read_only_tool_results: HashMap<String, String>,
+    pub(super) storm_state: StormState,
 }
 
 #[derive(Default)]
@@ -47,6 +49,7 @@ impl TurnRuntimeState {
             reserved_repair_rounds: 0,
             successful_read_only_tool_fingerprints: HashMap::new(),
             successful_read_only_tool_results: HashMap::new(),
+            storm_state: StormState::default(),
         }
     }
 }

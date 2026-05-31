@@ -25,11 +25,8 @@ async fn streaming_query_with_text_response() {
         events.push(event);
     }
 
-    // Assert: we received at least Start, TextChunk, and Complete events.
-    assert!(
-        events.iter().any(|e| matches!(e, StreamEvent::Start)),
-        "expected Start event"
-    );
+    // Quiet direct turns intentionally skip the run-card Start event; the
+    // streaming contract still emits text and completion.
     assert!(
         events
             .iter()

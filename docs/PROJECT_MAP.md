@@ -26,7 +26,7 @@ not proof of current code. Read exact files before editing.
 - `src/bootstrap.rs`: shared startup wiring for registry, providers, memory, hooks, and runtime managers.
 - `src/engine/`: conversation loop, prompt/context assembly, routing, workflow, tracing, verification, retrieval, and runtime policy.
 - `src/tools/`: tool contracts and implementations exposed to the model.
-- `src/services/api/`: provider adapters, request/response normalization, prompt cache accounting, weak-model tool-call repair.
+- `src/services/api/`: provider adapters, request/response normalization, response content sanitizing, weak-model tool-call repair.
 - `src/memory/`: memory providers, manager, persistence, retrieval, extraction, ranking, reports.
 - `src/tui/`: terminal UI screens, commands, slash handlers, event wiring.
 - `src/api/`: optional API server routes and tool allowlist behavior.
@@ -50,10 +50,11 @@ not proof of current code. Read exact files before editing.
 
 - `src/engine/context_assembly.rs`: typed context zones, token reports, stable-prefix/dynamic-tail accounting.
 - `src/engine/prompt_context.rs`: prompt assembly reports and stable fingerprints.
-- `src/engine/cache_stability.rs`: provider tool schema canonicalization and prompt-cache accounting helpers.
+- `src/engine/cache_stability.rs`: provider tool schema canonicalization, stable-prefix request-shape fingerprints, and prompt-cache miss-reason inference.
 - `src/engine/context_ledger.rs`: recent file/tool/validation evidence converted back into compact turn context.
 - `src/engine/retrieval_context.rs`: retrieval items and prompt formatting.
 - `src/engine/project_map.rs`: bounded `docs/PROJECT_MAP.md` runtime snippet, env budget controls, watched-path freshness detection, and machine-readable symbol/file index building.
+- `src/cost_tracker/prompt_cache.rs`: Reasonix-style per-turn prompt-cache diagnostics, inferred miss reasons, and `/cache miss-report` rendering.
 
 ## Routing, Workflow, And Safety
 
@@ -61,7 +62,6 @@ not proof of current code. Read exact files before editing.
 - `src/engine/turn_ingress.rs`: desktop ingress classifier for explicit side questions and normal main-loop tasks.
 - `src/engine/task_context.rs`: task state and task context bundle.
 - `src/engine/task_contract.rs`: executor contract, context pack, validation requirements.
-- `src/engine/tool_orchestration.rs`: route/tool planning and tool exposure intent.
 - `src/engine/conversation_loop/tool_exposure_plan.rs`: route-scoped and stage-scoped tool exposure; programming `Understand` can expose `file_write` for new files while `file_edit`/`file_patch` stay edit-stage tools.
 - `src/engine/action_decision.rs`: deterministic tool action scoring.
 - `src/engine/candidate_action.rs`: model-proposed candidate action parsing, shadow/gated ranking, and model factor calibration.
@@ -98,8 +98,8 @@ not proof of current code. Read exact files before editing.
 - `src/services/api/openai_compat.rs`: OpenAI-compatible conversion path.
 - `src/services/api/minimax.rs`: MiniMax provider conversion path.
 - `src/services/api/kimi.rs`: Kimi provider conversion path.
+- `src/services/api/content_sanitizer.rs`: shared hidden-block cleanup for streamed and non-streamed provider content.
 - `src/services/api/tool_call_repair.rs`: weak-model tool-call repair and schema flatten/unflatten support.
-- `src/services/api/prompt_cache.rs`: prompt-cache usage extraction.
 
 ## Memory And Learning
 

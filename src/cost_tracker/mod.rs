@@ -2,6 +2,12 @@
 //!
 //! 追踪 API 调用成本和 token 使用情况
 
+mod prompt_cache;
+
+pub use prompt_cache::PromptCacheDiagnosticEntry;
+use prompt_cache::{
+    build_prompt_cache_diagnostic, render_prompt_cache_miss_report, trim_prompt_cache_diagnostics,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::HashMap;
@@ -28,6 +34,9 @@ pub struct CostTracker {
     pub recent_tool_events: Vec<ToolExecEvent>,
     /// 编程质量指标（一次通过率/修复轮次）
     pub coding_quality: CodingQualityStats,
+    /// Recent prompt-cache diagnostic entries inferred from stable request shape.
+    #[serde(default)]
+    pub prompt_cache_diagnostics: Vec<PromptCacheDiagnosticEntry>,
 }
 
 /// Token 计数
@@ -171,6 +180,7 @@ impl Default for CostTracker {
             tool_metrics: HashMap::new(),
             recent_tool_events: Vec::new(),
             coding_quality: CodingQualityStats::default(),
+            prompt_cache_diagnostics: Vec::new(),
         }
     }
 }
@@ -187,6 +197,23 @@ impl CostTracker {
         prompt_tokens: u64,
         completion_tokens: u64,
         cached_tokens: Option<u64>,
+    ) {
+        self.record_api_call_with_cache_shape(
+            model,
+            prompt_tokens,
+            completion_tokens,
+            cached_tokens,
+            None,
+        );
+    }
+
+    pub fn record_api_call_with_cache_shape(
+        &mut self,
+        model: &str,
+        prompt_tokens: u64,
+        completion_tokens: u64,
+        cached_tokens: Option<u64>,
+        cache_shape: Option<crate::engine::cache_stability::CacheDiagnosticShape>,
     ) {
         self.total_requests += 1;
         let cache_usage =
@@ -214,6 +241,10 @@ impl CostTracker {
         stats.tokens.cached += cache_usage.cached_tokens;
         stats.tokens.cache_miss += cache_usage.cache_miss_tokens;
         stats.estimated_cost += cost;
+
+        if let Some(cache_shape) = cache_shape {
+            self.record_prompt_cache_diagnostic(model, cache_usage, cost, cache_shape);
+        }
     }
 
     /// 记录工具调用
@@ -682,6 +713,29 @@ Tool Usage:
         lines.join("\n")
     }
 
+    pub fn prompt_cache_miss_report(&self) -> String {
+        render_prompt_cache_miss_report(&self.prompt_cache_diagnostics)
+    }
+
+    fn record_prompt_cache_diagnostic(
+        &mut self,
+        model: &str,
+        cache_usage: crate::engine::cache_stability::PromptCacheUsage,
+        estimated_cost_usd: f64,
+        cache_shape: crate::engine::cache_stability::CacheDiagnosticShape,
+    ) {
+        let entry = build_prompt_cache_diagnostic(
+            model,
+            self.total_requests,
+            cache_usage,
+            estimated_cost_usd,
+            cache_shape,
+            self.prompt_cache_diagnostics.last(),
+        );
+        self.prompt_cache_diagnostics.push(entry);
+        trim_prompt_cache_diagnostics(&mut self.prompt_cache_diagnostics);
+    }
+
     fn format_model_usage(&self) -> String {
         if self.model_usage.is_empty() {
             return "  (no usage)".to_string();
@@ -802,6 +856,26 @@ fn calculate_cost(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::services::api::{Message, Tool};
+
+    fn cache_shape(
+        user_text: &str,
+        tools: &[Tool],
+    ) -> crate::engine::cache_stability::CacheDiagnosticShape {
+        crate::engine::cache_stability::request_cache_diagnostic_shape(
+            &[Message::system("stable system"), Message::user(user_text)],
+            tools,
+        )
+    }
+
+    fn tool(name: &str) -> Tool {
+        Tool {
+            name: name.to_string(),
+            description: format!("{name} description"),
+            parameters: serde_json::json!({"type": "object"}),
+            strict_schema: false,
+        }
+    }
 
     #[test]
     fn test_cost_tracker() {
@@ -927,6 +1001,33 @@ mod tests {
         assert!(report.contains("Cache Miss Tokens: 200"));
         assert!(report.contains("Hit Rate: 80.0%"));
         assert!(report.contains("kimi-k2.5"));
+    }
+
+    #[test]
+    fn prompt_cache_miss_report_infers_reason_from_request_shape() {
+        let mut tracker = CostTracker::new();
+        let alpha = tool("alpha");
+        tracker.record_api_call_with_cache_shape(
+            "kimi-k2.5",
+            1000,
+            100,
+            Some(0),
+            Some(cache_shape("one", std::slice::from_ref(&alpha))),
+        );
+        tracker.record_api_call_with_cache_shape(
+            "kimi-k2.5",
+            1200,
+            100,
+            Some(900),
+            Some(cache_shape("one", &[alpha, tool("beta")])),
+        );
+
+        assert_eq!(tracker.prompt_cache_diagnostics.len(), 2);
+        let report = tracker.prompt_cache_miss_report();
+        assert!(report.contains("Prompt Cache Miss Report"));
+        assert!(report.contains("reason=cold-start"));
+        assert!(report.contains("reason=tool-list-changed"));
+        assert!(report.contains("Estimated Saved Cost"));
     }
 
     #[test]

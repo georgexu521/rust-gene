@@ -1,10 +1,9 @@
-const THINK_OPEN_TAG: &str = "<think>";
-const THINK_CLOSE_TAG: &str = "</think>";
+use crate::services::api::content_sanitizer::{find_hidden_block_open, max_hidden_open_prefix_len};
 
 #[derive(Default)]
 pub(super) struct VisibleTextSanitizer {
     buffer: String,
-    in_think_block: bool,
+    hidden_close_tag: Option<&'static str>,
 }
 
 impl VisibleTextSanitizer {
@@ -20,18 +19,19 @@ impl VisibleTextSanitizer {
     fn drain_visible(&mut self, flush_all: bool) -> String {
         let mut out = String::new();
         loop {
-            if self.in_think_block {
-                if let Some(end_idx) = self.buffer.find(THINK_CLOSE_TAG) {
-                    let drain_len = end_idx + THINK_CLOSE_TAG.len();
+            if let Some(close_tag) = self.hidden_close_tag {
+                let lower = self.buffer.to_ascii_lowercase();
+                if let Some(end_idx) = lower.find(close_tag) {
+                    let drain_len = end_idx + close_tag.len();
                     self.buffer.drain(..drain_len);
-                    self.in_think_block = false;
+                    self.hidden_close_tag = None;
                     continue;
                 }
 
                 if flush_all {
                     self.buffer.clear();
                 } else {
-                    let keep = THINK_CLOSE_TAG.len().saturating_sub(1);
+                    let keep = close_tag.len().saturating_sub(1);
                     if self.buffer.len() > keep {
                         let drain_len = floor_char_boundary(&self.buffer, self.buffer.len() - keep);
                         self.buffer.drain(..drain_len);
@@ -40,11 +40,10 @@ impl VisibleTextSanitizer {
                 break;
             }
 
-            if let Some(start_idx) = self.buffer.find(THINK_OPEN_TAG) {
+            if let Some((start_idx, open_end, block)) = find_hidden_block_open(&self.buffer) {
                 out.push_str(&self.buffer[..start_idx]);
-                let drain_len = start_idx + THINK_OPEN_TAG.len();
-                self.buffer.drain(..drain_len);
-                self.in_think_block = true;
+                self.buffer.drain(..open_end);
+                self.hidden_close_tag = Some(block.close_tag);
                 continue;
             }
 
@@ -52,7 +51,7 @@ impl VisibleTextSanitizer {
                 out.push_str(&self.buffer);
                 self.buffer.clear();
             } else {
-                let keep = THINK_OPEN_TAG.len().saturating_sub(1);
+                let keep = max_hidden_open_prefix_len().saturating_sub(1);
                 if self.buffer.len() > keep {
                     let emit_len = floor_char_boundary(&self.buffer, self.buffer.len() - keep);
                     out.push_str(&self.buffer[..emit_len]);
@@ -66,7 +65,7 @@ impl VisibleTextSanitizer {
     }
 }
 
-pub(super) fn strip_think_blocks(text: &str) -> String {
+pub(super) fn strip_hidden_blocks(text: &str) -> String {
     let mut sanitizer = VisibleTextSanitizer::default();
     let mut visible = sanitizer.push_chunk(text);
     visible.push_str(&sanitizer.finish());
@@ -78,4 +77,30 @@ fn floor_char_boundary(s: &str, mut idx: usize) -> usize {
         idx -= 1;
     }
     idx
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn strips_streamed_hidden_and_tool_blocks() {
+        let mut sanitizer = VisibleTextSanitizer::default();
+        let mut visible = sanitizer.push_chunk("Before <tool_");
+        visible.push_str(&sanitizer.push_chunk("call>{}</tool_call> After"));
+        visible.push_str(&sanitizer.push_chunk(" <invoke name=\"x\">{}</invoke> Done"));
+        visible.push_str(&sanitizer.finish());
+
+        assert_eq!(visible, "Before  After  Done");
+    }
+
+    #[test]
+    fn strips_thinking_without_losing_following_text() {
+        let mut sanitizer = VisibleTextSanitizer::default();
+        let mut visible = sanitizer.push_chunk("A <thinking>hidden");
+        visible.push_str(&sanitizer.push_chunk("</thinking> B"));
+        visible.push_str(&sanitizer.finish());
+
+        assert_eq!(visible, "A  B");
+    }
 }
