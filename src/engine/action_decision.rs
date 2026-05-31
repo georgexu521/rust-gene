@@ -258,6 +258,10 @@ impl ActionDecision {
             compute_action_score(self.scores, self.score_computation.formula_stage);
         self.score_computation.modifiers.push(modifier);
     }
+
+    pub fn record_score_modifier_evidence(&mut self, modifier: ActionScoreModifier) {
+        self.score_computation.modifiers.push(modifier);
+    }
 }
 
 impl ActionScoreStage {

@@ -629,20 +629,23 @@ fn apply_memory_action_signal(
     if signal.is_empty() {
         return;
     }
-    decision.apply_score_modifier(
+    decision.record_score_modifier_evidence(
         ActionScoreModifier::new(
             ActionScoreModifierSource::Memory,
             signal.kind,
-            signal.reasons.join("; "),
-        )
-        .value(signal.value_delta)
-        .risk(signal.risk_delta)
-        .uncertainty_reduction(signal.uncertainty_reduction_delta)
-        .scope_fit(signal.scope_fit_delta),
+            format!(
+                "memory evidence only; suggested value_delta={} risk_delta={} uncertainty_delta={} scope_delta={}; {}",
+                signal.value_delta,
+                signal.risk_delta,
+                signal.uncertainty_reduction_delta,
+                signal.scope_fit_delta,
+                signal.reasons.join("; ")
+            ),
+        ),
     );
     decision.trace_recommended = true;
     decision.reason_summary = format!(
-        "{}; memory modifier value_delta={} risk_delta={} uncertainty_delta={} scope_delta={} ({})",
+        "{}; memory evidence value_delta={} risk_delta={} uncertainty_delta={} scope_delta={} not_applied_to_score ({})",
         decision.reason_summary,
         signal.value_delta,
         signal.risk_delta,
@@ -2010,7 +2013,7 @@ mod tests {
     }
 
     #[test]
-    fn memory_action_signal_raises_risk_for_prior_failure_memory() {
+    fn memory_action_signal_records_evidence_without_changing_scores() {
         let call = tool_call("call_1", "file_edit");
         let mut decision = ActionDecision::for_tool_call(
             &call,
@@ -2036,8 +2039,22 @@ mod tests {
 
         apply_memory_action_signal(&mut decision, &call, &items);
 
-        assert!(decision.scores.risk > before);
-        assert!(decision.reason_summary.contains("memory modifier"));
+        assert_eq!(decision.scores.risk, before);
+        assert!(decision
+            .reason_summary
+            .contains("memory evidence value_delta=0 risk_delta=2"));
+        assert!(decision.reason_summary.contains("not_applied_to_score"));
+        let modifier = decision
+            .score_computation
+            .modifiers
+            .iter()
+            .find(|modifier| modifier.source == ActionScoreModifierSource::Memory)
+            .expect("memory evidence modifier");
+        assert_eq!(modifier.kind, "memory_failure_risk");
+        assert_eq!(modifier.risk_delta, 0);
+        assert!(modifier
+            .reason
+            .contains("suggested value_delta=0 risk_delta=2"));
     }
 
     struct NoopProvider;
