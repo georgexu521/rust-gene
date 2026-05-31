@@ -84,6 +84,7 @@ impl RequestPreparationController {
         Self::inject_self_evolution_guidance_zone(&mut request_messages, trace, working_dir);
         Self::inject_focused_repair_zone(&mut request_messages, focused_repair_prompt);
         Self::inject_context_ledger_hint(&mut request_messages, session_store, session_id);
+        Self::inject_project_map_zone(&mut request_messages, trace, working_dir);
 
         let mut memory_context = MemoryPrefetchContext {
             turn_retrieval_context,
@@ -460,6 +461,49 @@ impl RequestPreparationController {
             .rposition(|message| matches!(message, Message::User { .. }))
             .unwrap_or(request_messages.len());
         request_messages.insert(insert_pos, Message::system(hint));
+    }
+
+    fn inject_project_map_zone(
+        request_messages: &mut Vec<Message>,
+        trace: &TraceCollector,
+        working_dir: &std::path::Path,
+    ) {
+        if !crate::engine::project_map::project_map_runtime_enabled() {
+            return;
+        }
+        if !request_messages.iter().any(|message| {
+            matches!(message, Message::System { content } if !is_dynamic_context_system_message(content))
+        }) {
+            return;
+        }
+        if request_messages.iter().any(
+            |message| matches!(message, Message::System { content } if content.contains("Project map source: docs/PROJECT_MAP.md")),
+        ) {
+            return;
+        }
+        let Some(zone) = crate::engine::project_map::load_project_map_zone(working_dir) else {
+            return;
+        };
+        let block = format!(
+            "<relevant_material>\n{}\n</relevant_material>",
+            zone.content.trim()
+        );
+        trace.record(TraceEvent::RetrievalContextBuilt {
+            policy: "project_map".to_string(),
+            sources: vec!["ProjectMap".to_string()],
+            items: 1,
+            estimated_tokens: crate::engine::context_compressor::estimate_tokens(&block) as usize,
+            provenance: vec![format!(
+                "{} freshness={} chars={} truncated={}",
+                crate::engine::project_map::PROJECT_MAP_PATH,
+                zone.freshness.label(),
+                zone.chars,
+                zone.truncated
+            )],
+            conflicts: 0,
+        });
+        let insert_pos = dynamic_tail_insert_pos(request_messages);
+        request_messages.insert(insert_pos, Message::system(block));
     }
 
     async fn inject_memory_prefetch(

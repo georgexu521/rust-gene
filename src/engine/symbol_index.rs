@@ -188,7 +188,7 @@ impl SymbolIndex {
         // 提取名称：通常第一个 identifier 子节点就是名称
         let name_node = (0..node.child_count())
             .filter_map(|i| node.child(i))
-            .find(|child| child.kind() == "identifier")?;
+            .find(|child| child.kind() == "identifier" || child.kind() == "type_identifier")?;
 
         let name = content[name_node.start_byte()..name_node.end_byte()].to_string();
         if name.is_empty() {
@@ -470,6 +470,10 @@ impl SymbolIndex {
 
     pub fn is_empty(&self) -> bool {
         self.symbols.is_empty()
+    }
+
+    pub fn all_symbols(&self) -> &[Symbol] {
+        &self.symbols
     }
 }
 

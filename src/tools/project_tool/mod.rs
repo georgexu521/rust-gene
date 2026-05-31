@@ -336,7 +336,8 @@ impl Tool for ProjectListTool {
 
     fn description(&self) -> &str {
         "List all files in the project or search for files with fuzzy matching. \
-         Use this to understand the project structure and find relevant files. \
+         Use this to understand the project structure, read the compact project map, \
+         and find relevant files. \
          Cached for 30s to avoid repeated scans."
     }
 
@@ -346,8 +347,10 @@ impl Tool for ProjectListTool {
             "properties": {
                 "action": {
                     "type": "string",
-                    "enum": ["summary", "list", "search", "dir", "refresh"],
+                    "enum": ["summary", "map", "index", "list", "search", "dir", "refresh"],
                     "description": "summary: show project overview. list: all files. \
+                                   map: read docs/PROJECT_MAP.md runtime navigation snippet. \
+                                   index: return a machine-readable file/symbol index with hashes. \
                                    search: fuzzy find files matching query. \
                                    dir: list files in directory. \
                                    refresh: force rebuild index cache."
@@ -359,6 +362,10 @@ impl Tool for ProjectListTool {
                 "limit": {
                     "type": "integer",
                     "description": "Max results to return (default 30, max 100)"
+                },
+                "symbols_per_file": {
+                    "type": "integer",
+                    "description": "For action=index, max symbols per file (default 40, max 120)"
                 }
             },
             "required": ["action"]
@@ -369,6 +376,68 @@ impl Tool for ProjectListTool {
         let action = params["action"].as_str().unwrap_or("summary");
         let query = params["query"].as_str().unwrap_or("");
         let limit = params["limit"].as_u64().unwrap_or(30).clamp(1, 100) as usize;
+        let symbols_per_file = params["symbols_per_file"]
+            .as_u64()
+            .unwrap_or(40)
+            .clamp(1, 120) as usize;
+
+        if action == "map" {
+            return match crate::engine::project_map::load_project_map_zone_with_limit(
+                &context.working_dir,
+                12_000,
+            ) {
+                Some(zone) => ToolResult::success_with_data(
+                    zone.content,
+                    json!({
+                        "action": "map",
+                        "source": zone.source.to_string_lossy().to_string(),
+                        "freshness": zone.freshness.label(),
+                        "chars": zone.chars,
+                        "truncated": zone.truncated,
+                    }),
+                ),
+                None => ToolResult::success_with_data(
+                    "No docs/PROJECT_MAP.md found for this workspace.".to_string(),
+                    json!({
+                        "action": "map",
+                        "source": crate::engine::project_map::PROJECT_MAP_PATH,
+                        "found": false,
+                    }),
+                ),
+            };
+        }
+
+        if action == "index" {
+            let index = crate::engine::project_map::build_project_symbol_index(
+                &context.working_dir,
+                limit,
+                symbols_per_file,
+            );
+            let file_preview = index
+                .files
+                .iter()
+                .take(12)
+                .map(|file| {
+                    format!(
+                        "- {} [{} lines, hash {}]: {}",
+                        file.path,
+                        file.lines,
+                        &file.hash[..8],
+                        file.summary
+                    )
+                })
+                .collect::<Vec<_>>();
+            return ToolResult::success_with_data(
+                format!(
+                    "Project symbol index: {} file(s), {} symbol(s), truncated={}\n{}",
+                    index.files.len(),
+                    index.total_symbols,
+                    index.truncated,
+                    file_preview.join("\n")
+                ),
+                serde_json::to_value(index).unwrap_or_else(|_| json!({ "error": "serialize" })),
+            );
+        }
 
         // refresh: 强制刷新缓存
         if action == "refresh" {
@@ -476,7 +545,7 @@ impl Tool for ProjectListTool {
             )),
 
             _ => ToolResult::error(format!(
-                "Unknown action: {}. Use summary, list, search, dir, or refresh",
+                "Unknown action: {}. Use summary, map, index, list, search, dir, or refresh",
                 action
             )),
         }
@@ -586,6 +655,70 @@ mod tests {
         assert_eq!(recovery["reason"], "no_results");
         assert_eq!(recovery["action"], "search");
         assert!(recovery["files_indexed"].as_u64().unwrap_or(0) > 0);
+    }
+
+    #[tokio::test]
+    async fn test_project_list_map_reads_project_map() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("docs")).unwrap();
+        std::fs::write(
+            dir.path()
+                .join(crate::engine::project_map::PROJECT_MAP_PATH),
+            "<!-- agent-context:start -->\nmodule navigation\n<!-- agent-context:end -->",
+        )
+        .unwrap();
+
+        let result = ProjectListTool
+            .execute(
+                json!({"action": "map"}),
+                ToolContext::new(dir.path(), "project-map-test"),
+            )
+            .await;
+
+        assert!(result.success);
+        assert!(result.content.contains("module navigation"));
+        assert!(matches!(
+            result
+                .data
+                .as_ref()
+                .and_then(|data| data.get("freshness"))
+                .and_then(serde_json::Value::as_str),
+            Some("current")
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_project_list_index_returns_symbol_hash_data() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("src")).unwrap();
+        std::fs::write(
+            dir.path().join("src/lib.rs"),
+            "pub trait Runner {\n    fn run(&self);\n}\npub fn run() {}\n",
+        )
+        .unwrap();
+
+        let result = ProjectListTool
+            .execute(
+                json!({"action": "index", "limit": 10, "symbols_per_file": 10}),
+                ToolContext::new(dir.path(), "project-index-test"),
+            )
+            .await;
+
+        assert!(result.success);
+        assert!(result.content.contains("Project symbol index"));
+        let files = result
+            .data
+            .as_ref()
+            .and_then(|data| data.get("files"))
+            .and_then(serde_json::Value::as_array)
+            .expect("index files");
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0]["path"], "src/lib.rs");
+        assert_eq!(files[0]["hash"].as_str().unwrap_or("").len(), 32);
+        let symbols = files[0]["symbols"].as_array().expect("symbols");
+        assert!(symbols
+            .iter()
+            .any(|symbol| symbol["name"] == "Runner" && symbol["kind"] == "trait"));
     }
 
     #[test]

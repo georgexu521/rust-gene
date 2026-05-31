@@ -47,6 +47,7 @@ pub mod mcp;
 pub mod mcp_server;
 pub mod model_context;
 pub mod plan_mode;
+pub mod project_map;
 pub mod project_progress;
 pub mod prompt_builder;
 pub mod prompt_context;
