@@ -15,6 +15,7 @@ use crate::engine::candidate_action::{
     CandidateActionSet,
 };
 use crate::engine::code_change_workflow::CodeChangeWorkflowRunner;
+use crate::engine::conversation_loop::main_loop_profile::MainLoopProfile;
 use crate::engine::intent_router::IntentRoute;
 use crate::engine::resource_policy::ResourcePolicy;
 use crate::engine::retrieval_context::RetrievalContext;
@@ -32,6 +33,7 @@ pub(super) struct TurnModelStepContext<'a> {
     pub(super) conversation: &'a ConversationLoop,
     pub(super) iteration: usize,
     pub(super) route: &'a IntentRoute,
+    pub(super) profile: MainLoopProfile,
     pub(super) code_workflow: &'a CodeChangeWorkflowRunner,
     pub(super) task_bundle: &'a TaskContextBundle,
     pub(super) required_validation_commands: &'a [String],
@@ -74,9 +76,18 @@ impl TurnModelStepController {
                 .as_deref()
                 .unwrap_or_else(|| std::path::Path::new(".")),
             focused_repair_prompt: context.focused_repair_prompt,
-            agent_task_state: Some(&context.task_bundle.agent_state),
-            task_contract: Some(&task_contract),
-            context_pack: Some(&context_pack),
+            agent_task_state: context
+                .profile
+                .inject_dynamic_context()
+                .then_some(&context.task_bundle.agent_state),
+            task_contract: context
+                .profile
+                .inject_dynamic_context()
+                .then_some(&task_contract),
+            context_pack: context
+                .profile
+                .inject_dynamic_context()
+                .then_some(&context_pack),
             turn_retrieval_context: context.turn_retrieval_context,
             retrieval_policy: context.route.retrieval,
             memory_manager: context.conversation.memory_manager.as_ref(),
@@ -88,6 +99,7 @@ impl TurnModelStepController {
             tools: context.tools,
             trace: context.trace,
             runtime_diet: &mut context.turn_state.runtime_diet,
+            inject_dynamic_context: context.profile.inject_dynamic_context(),
         })
         .await;
 
@@ -344,6 +356,7 @@ mod tests {
             conversation,
             iteration: 1,
             route,
+            profile: MainLoopProfile::from_turn(route, &[]),
             code_workflow: &code_workflow,
             task_bundle: &task_bundle,
             required_validation_commands: &[],

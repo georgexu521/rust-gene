@@ -26,6 +26,7 @@ pub(super) struct TurnRequestBootstrapContext<'a> {
     pub(super) runtime_diet: &'a mut RuntimeDietSnapshot,
     pub(super) trace: &'a TraceCollector,
     pub(super) tx: Option<&'a mpsc::Sender<StreamEvent>>,
+    pub(super) inject_dynamic_context: bool,
 }
 
 pub(super) struct TurnRequestBootstrapController;
@@ -44,16 +45,19 @@ impl TurnRequestBootstrapController {
             runtime_diet,
             trace,
             tx,
+            inject_dynamic_context,
         } = context;
 
-        MemorySnapshotController::inject(MemorySnapshotInjectionContext {
-            retrieval_policy,
-            memory_manager,
-            messages,
-            runtime_diet,
-            trace,
-        })
-        .await;
+        if inject_dynamic_context {
+            MemorySnapshotController::inject(MemorySnapshotInjectionContext {
+                retrieval_policy,
+                memory_manager,
+                messages,
+                runtime_diet,
+                trace,
+            })
+            .await;
+        }
 
         PreflightCompressionController::run(PreflightCompressionContext {
             compressor,
@@ -70,10 +74,12 @@ impl TurnRequestBootstrapController {
             let _ = tx.send(StreamEvent::Start).await;
         }
 
-        RetrievalPromptController::inject(RetrievalPromptContext {
-            retrieval_context,
-            messages,
-        });
+        if inject_dynamic_context {
+            RetrievalPromptController::inject(RetrievalPromptContext {
+                retrieval_context,
+                messages,
+            });
+        }
     }
 }
 
@@ -110,6 +116,7 @@ mod tests {
             runtime_diet: &mut runtime_diet,
             trace: &trace,
             tx: Some(&tx),
+            inject_dynamic_context: true,
         })
         .await;
 

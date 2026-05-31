@@ -7,6 +7,7 @@ use super::turn_task_context_controller::{
 };
 use super::ConversationLoop;
 use crate::engine::code_change_workflow::CodeChangeWorkflowRunner;
+use crate::engine::conversation_loop::main_loop_profile::MainLoopProfile;
 use crate::engine::intent_router::IntentRoute;
 use crate::engine::resource_policy::ResourcePolicy;
 use crate::engine::retrieval_context::RetrievalContext;
@@ -21,6 +22,7 @@ pub(super) struct TurnContextBootstrapContext<'a> {
     pub(super) conversation: &'a ConversationLoop,
     pub(super) last_user_preview: &'a str,
     pub(super) route: &'a IntentRoute,
+    pub(super) profile: MainLoopProfile,
     pub(super) resource_policy: &'a ResourcePolicy,
     pub(super) working_dir: &'a Path,
     pub(super) required_validation_commands: &'a [String],
@@ -40,7 +42,7 @@ pub(super) struct TurnContextBootstrapController;
 impl TurnContextBootstrapController {
     pub(super) async fn run(context: TurnContextBootstrapContext<'_>) -> TurnContextBootstrap {
         Self::set_active_memory_scope(&context).await;
-        let retrieval_context =
+        let retrieval_context = if context.profile.inject_dynamic_context() {
             TurnRetrievalContextController::build(TurnRetrievalContextRequest {
                 last_user_preview: context.last_user_preview,
                 working_dir: context.working_dir,
@@ -52,11 +54,15 @@ impl TurnContextBootstrapController {
                 model: &context.conversation.model,
                 trace: context.trace,
             })
-            .await;
+            .await
+        } else {
+            None
+        };
         let retained_context = Self::build_retained_context(
             context.last_user_preview,
             context.working_dir,
             retrieval_context.as_ref(),
+            context.profile,
         );
 
         let task_context_setup =
@@ -99,23 +105,28 @@ impl TurnContextBootstrapController {
         query: &str,
         working_dir: &Path,
         retrieval_context: Option<&RetrievalContext>,
+        profile: MainLoopProfile,
     ) -> ToolContextRetainedContext {
-        let skill_triggers = SkillRuntime::load(working_dir)
-            .search(query)
-            .into_iter()
-            .take(5)
-            .map(|skill| ToolContextSkillTrigger {
-                name: skill.meta.name.clone(),
-                description: skill.meta.description.clone(),
-                triggers: skill.meta.triggers.clone(),
-                allowed_tools: skill.meta.allowed_tools.clone(),
-                disallowed_tools: skill.meta.disallowed_tools.clone(),
-                model: skill.meta.model.clone(),
-                effort: skill.meta.effort.clone(),
-                context: skill.meta.context.clone(),
-                provenance: format!("skills.search:{}", skill.skill_dir.display()),
-            })
-            .collect();
+        let skill_triggers = if profile.inject_dynamic_context() {
+            SkillRuntime::load(working_dir)
+                .search(query)
+                .into_iter()
+                .take(5)
+                .map(|skill| ToolContextSkillTrigger {
+                    name: skill.meta.name.clone(),
+                    description: skill.meta.description.clone(),
+                    triggers: skill.meta.triggers.clone(),
+                    allowed_tools: skill.meta.allowed_tools.clone(),
+                    disallowed_tools: skill.meta.disallowed_tools.clone(),
+                    model: skill.meta.model.clone(),
+                    effort: skill.meta.effort.clone(),
+                    context: skill.meta.context.clone(),
+                    provenance: format!("skills.search:{}", skill.skill_dir.display()),
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
 
         ToolContextRetainedContext::from_retrieval_context(query, retrieval_context)
             .with_skill_triggers(skill_triggers)
@@ -178,6 +189,7 @@ mod tests {
             conversation: &conversation,
             last_user_preview: "你好",
             route: &route,
+            profile: MainLoopProfile::from_turn(&route, &[]),
             resource_policy: &resource_policy,
             working_dir: &working_dir,
             required_validation_commands: &[],
@@ -216,6 +228,7 @@ mod tests {
             conversation: &conversation,
             last_user_preview: "你好",
             route: &route,
+            profile: MainLoopProfile::from_turn(&route, &[]),
             resource_policy: &resource_policy,
             working_dir: &base,
             required_validation_commands: &[],
@@ -248,6 +261,7 @@ mod tests {
             conversation: &conversation,
             last_user_preview: "修改 src/main.rs 并运行 cargo test -q",
             route: &route,
+            profile: MainLoopProfile::from_turn(&route, &required),
             resource_policy: &resource_policy,
             working_dir: &working_dir,
             required_validation_commands: &required,

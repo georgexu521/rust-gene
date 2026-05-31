@@ -7,6 +7,7 @@ use super::turn_runtime_diet_bootstrap_controller::{
 };
 use super::turn_runtime_state::TurnRuntimeState;
 use super::ConversationLoop;
+use crate::engine::conversation_loop::main_loop_profile::MainLoopProfile;
 use crate::engine::intent_router::IntentRoute;
 use crate::engine::retrieval_context::RetrievalContext;
 use crate::engine::streaming::StreamEvent;
@@ -18,6 +19,7 @@ use tokio::sync::mpsc;
 pub(super) struct TurnLoopBootstrapContext<'a> {
     pub(super) conversation: &'a ConversationLoop,
     pub(super) route: &'a IntentRoute,
+    pub(super) profile: MainLoopProfile,
     pub(super) retrieval_context: Option<&'a RetrievalContext>,
     pub(super) working_dir: &'a Path,
     pub(super) turn_state: &'a mut TurnRuntimeState,
@@ -36,8 +38,16 @@ pub(super) struct TurnLoopBootstrapController;
 
 impl TurnLoopBootstrapController {
     pub(super) async fn run(context: TurnLoopBootstrapContext<'_>) -> TurnLoopBootstrap {
-        let available_tools = context.conversation.get_tools();
-        let base_tools = context.conversation.get_tools_for_route(context.route);
+        let available_tools = if context.profile.expose_tools() {
+            context.conversation.get_tools()
+        } else {
+            Vec::new()
+        };
+        let base_tools = if context.profile.expose_tools() {
+            context.conversation.get_tools_for_route(context.route)
+        } else {
+            Vec::new()
+        };
         let loop_state = TurnLoopStateController::initial_state();
 
         TurnRuntimeDietBootstrapController::observe(TurnRuntimeDietBootstrapContext {
@@ -57,7 +67,8 @@ impl TurnLoopBootstrapController {
             retrieval_context: context.retrieval_context,
             runtime_diet: &mut context.turn_state.runtime_diet,
             trace: context.trace,
-            tx: context.tx,
+            tx: context.tx.filter(|_| context.profile.emit_start_event()),
+            inject_dynamic_context: context.profile.inject_dynamic_context(),
         })
         .await;
 
@@ -125,6 +136,7 @@ mod tests {
         let bootstrap = TurnLoopBootstrapController::run(TurnLoopBootstrapContext {
             conversation: &conversation,
             route: &route,
+            profile: MainLoopProfile::from_turn(&route, &[]),
             retrieval_context: None,
             working_dir: &working_dir,
             turn_state: &mut turn_state,

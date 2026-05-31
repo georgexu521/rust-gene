@@ -1,8 +1,20 @@
 import { FormEvent, useEffect, useRef, useState, type ReactNode } from "react";
-import { Activity, Folder, Gauge, GitBranch, Globe, Info, MoreHorizontal, PanelRight, Settings } from "lucide-react";
+import {
+  Activity,
+  Folder,
+  Gauge,
+  GitBranch,
+  Globe,
+  Info,
+  LayoutDashboard,
+  MoreHorizontal,
+  PanelRight,
+  Settings,
+} from "lucide-react";
 import {
   DesktopDiagnostic,
   DesktopContextSnapshot,
+  DesktopWorkbenchSnapshot,
   DiagnosticStatus,
   DetailLevelId,
   DesktopHealth,
@@ -23,6 +35,7 @@ import {
   desktopHealth,
   desktopRunContextDetail,
   desktopSettings,
+  desktopWorkbenchSnapshot,
   listRecentSessions,
   newConversation,
   onDesktopRunEvent,
@@ -46,12 +59,12 @@ import {
 } from "../runtime/desktopApi";
 import { Composer } from "./components/Composer";
 import { ContextDetailDrawer } from "./components/ContextDetailDrawer";
-import { DiagnosticsPanel } from "./components/DiagnosticsPanel";
 import { PermissionCard } from "./components/PermissionCard";
 import { SettingsDrawer } from "./components/SettingsDrawer";
 import { Sidebar } from "./components/Sidebar";
 import { Transcript } from "./components/Transcript";
 import { TraceDrawer } from "./components/TraceDrawer";
+import { WorkbenchDrawer } from "./components/WorkbenchDrawer";
 import {
   applyRunEvent,
   appendPermissionAnswer,
@@ -73,10 +86,12 @@ export function App() {
   const [sessionSearch, setSessionSearch] = useState("");
   const [diagnostics, setDiagnostics] = useState<DesktopDiagnostic[]>([]);
   const [contextSnapshot, setContextSnapshot] = useState<DesktopContextSnapshot | null>(null);
+  const [workbenchSnapshot, setWorkbenchSnapshot] = useState<DesktopWorkbenchSnapshot | null>(null);
   const [composer, setComposer] = useState("");
   const [runContexts, setRunContexts] = useState<DesktopRunContext[]>([]);
   const [activeContextDetail, setActiveContextDetail] = useState<DesktopRunContext | null>(null);
   const [isTraceOpen, setIsTraceOpen] = useState(false);
+  const [isWorkbenchOpen, setIsWorkbenchOpen] = useState(false);
   const [activeTraceId, setActiveTraceId] = useState<string | null>(null);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isEnvironmentOpen, setIsEnvironmentOpen] = useState(false);
@@ -117,6 +132,7 @@ export function App() {
         nextPermissionOptions,
         nextProviderStatus,
         nextContextSnapshot,
+        nextWorkbenchSnapshot,
       ] =
         await Promise.all([
           desktopHealth(),
@@ -127,6 +143,7 @@ export function App() {
           permissionModeOptions(),
           providerModelStatus(),
           desktopContextSnapshot(),
+          desktopWorkbenchSnapshot(),
         ]);
       setHealth(nextHealth);
       setSettings(nextSettings);
@@ -134,6 +151,7 @@ export function App() {
       setProviderSetup(nextProviderSetup);
       setProviderStatus(nextProviderStatus);
       setContextSnapshot(nextContextSnapshot);
+      setWorkbenchSnapshot(nextWorkbenchSnapshot);
       setProjectPath(nextSettings.selected_project || nextHealth.cwd);
       setSessions(nextSessions);
       setSelectedSessionSummary(
@@ -200,6 +218,18 @@ export function App() {
     }
   }
 
+  async function refreshWorkbenchSnapshot() {
+    try {
+      const snapshot = await desktopWorkbenchSnapshot();
+      setWorkbenchSnapshot(snapshot);
+      if (snapshot.runtime_context) {
+        setContextSnapshot(snapshot.runtime_context);
+      }
+    } catch (err) {
+      setRunState((current) => withError(current, err));
+    }
+  }
+
   async function handleCompactContext() {
     try {
       await compactContext();
@@ -245,6 +275,7 @@ export function App() {
       );
       resetConversationView();
       void refreshDiagnostics();
+      void refreshWorkbenchSnapshot();
     } catch (err) {
       setRunState((current) => withError(current, err));
     }
@@ -264,6 +295,7 @@ export function App() {
       );
       resetConversationView();
       void refreshDiagnostics();
+      void refreshWorkbenchSnapshot();
     } catch (err) {
       setRunState((current) => withError(current, err));
     }
@@ -280,6 +312,7 @@ export function App() {
       resetConversationView();
       await refreshDiagnostics();
       await refreshSessions();
+      await refreshWorkbenchSnapshot();
     } catch (err) {
       setRunState((current) => withError(current, err));
     }
@@ -301,6 +334,7 @@ export function App() {
         ),
       );
       await refreshContextSnapshot();
+      await refreshWorkbenchSnapshot();
     } catch (err) {
       setRunState((current) => withError(current, err));
     }
@@ -313,6 +347,7 @@ export function App() {
       resetConversationView();
       void refreshSessions();
       void refreshDiagnostics();
+      void refreshWorkbenchSnapshot();
     } catch (err) {
       setRunState((current) => withError(current, err));
     }
@@ -453,6 +488,7 @@ export function App() {
     if (event.type === "run_completed" || event.type === "run_error") {
       void refreshSessions();
       void refreshContextSnapshot();
+      void refreshWorkbenchSnapshot();
     }
     if (event.type === "run_started" && event.session_id) {
       setSelectedSessionSummary((current) =>
@@ -475,11 +511,13 @@ export function App() {
   function resetConversationView() {
     setRunState({ ...initialRunViewState, items: [], traceItems: [] });
     setComposer("");
+    setRunContexts([]);
     setActiveTraceId(null);
     setIsTraceOpen(false);
   }
 
   const isEmptyConversation = runState.items.length === 0;
+  const workbenchBadge = workbenchStatusBadge(diagnostics, workbenchSnapshot);
 
   return (
     <main className="app-shell">
@@ -542,6 +580,19 @@ export function App() {
               />
             ) : null}
             <button
+              aria-expanded={isWorkbenchOpen}
+              className={`trace-toggle workbench-toggle${workbenchBadge.tone ? ` ${workbenchBadge.tone}` : ""}`}
+              type="button"
+              onClick={() => {
+                setIsEnvironmentOpen(false);
+                setIsWorkbenchOpen((open) => !open);
+              }}
+            >
+              <LayoutDashboard aria-hidden="true" size={15} />
+              <span>Workbench</span>
+              <small>{workbenchBadge.label}</small>
+            </button>
+            <button
               className="trace-toggle"
               type="button"
               onClick={() => setIsTraceOpen((open) => !open)}
@@ -551,11 +602,6 @@ export function App() {
             </button>
           </div>
         </header>
-
-        <DiagnosticsPanel
-          diagnostics={diagnostics}
-          onRefresh={() => void refreshDiagnostics()}
-        />
 
         {settings && settings.startup_state.status !== "new_conversation" ? (
           <div className={`startup-state-card ${settings.startup_state.status}`} role="status">
@@ -594,6 +640,15 @@ export function App() {
           items={runState.traceItems}
           onOpenContext={setActiveContextDetail}
           onClose={() => setIsTraceOpen(false)}
+        />
+
+        <WorkbenchDrawer
+          diagnostics={diagnostics}
+          isOpen={isWorkbenchOpen}
+          snapshot={workbenchSnapshot}
+          onClose={() => setIsWorkbenchOpen(false)}
+          onRefreshDiagnostics={() => void refreshDiagnostics()}
+          onRefreshWorkbench={() => void refreshWorkbenchSnapshot()}
         />
 
         <ContextDetailDrawer
@@ -716,6 +771,32 @@ function startupStateDetail(
     return `Continuing ${selectedSession.title} in ${basename(projectPath)}`;
   }
   return settings.startup_state.detail;
+}
+
+function workbenchStatusBadge(
+  diagnostics: DesktopDiagnostic[],
+  snapshot: DesktopWorkbenchSnapshot | null,
+) {
+  const blocking = diagnostics.filter((item) => item.status === "error").length;
+  if (blocking > 0) {
+    return {
+      label: `${blocking} issue${blocking === 1 ? "" : "s"}`,
+      tone: "error",
+    };
+  }
+
+  const symbols = snapshot?.symbol_index?.total_symbols;
+  if (symbols && symbols > 0) {
+    return {
+      label: `${symbols} symbols`,
+      tone: "",
+    };
+  }
+
+  return {
+    label: "Ready",
+    tone: "",
+  };
 }
 
 function basename(path: string) {

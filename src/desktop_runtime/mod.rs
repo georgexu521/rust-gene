@@ -4,7 +4,8 @@
 //! conversation-loop internals directly.
 
 use crate::engine::streaming::{StreamEvent, StreamingQueryEngine};
-use crate::services::api::Message;
+use crate::engine::turn_ingress::{lightweight_user_text, TurnIngressLane};
+use crate::services::api::{sanitize_assistant_content, ChatRequest, Message, Usage};
 use crate::session_store::{MessageRecord, SessionStore};
 use serde::Serialize;
 use std::path::{Path, PathBuf};
@@ -101,6 +102,28 @@ impl DesktopRuntime {
 
     pub fn streaming_engine(&self) -> Arc<StreamingQueryEngine> {
         self.streaming_engine.clone()
+    }
+
+    pub async fn run_lightweight_turn(
+        &self,
+        user_message: &str,
+        lane: TurnIngressLane,
+    ) -> anyhow::Result<DesktopLightweightTurnOutcome> {
+        let prompt = lightweight_user_text(user_message, lane);
+        let request = ChatRequest {
+            max_tokens: Some(512),
+            ..ChatRequest::new(self.streaming_engine.model_name()).with_messages(vec![
+                Message::system(LIGHTWEIGHT_CHAT_SYSTEM_PROMPT),
+                Message::user(prompt.clone()),
+            ])
+        };
+        let response = self.streaming_engine.provider().chat(request).await?;
+        let answer = sanitize_lightweight_answer(&response.content);
+        Ok(DesktopLightweightTurnOutcome {
+            lane,
+            answer,
+            usage: response.usage,
+        })
     }
 
     pub async fn compact_context(
@@ -208,6 +231,57 @@ impl DesktopRuntime {
             let _ = store.delete_session(current_session_id);
         }
     }
+}
+
+const LIGHTWEIGHT_CHAT_SYSTEM_PROMPT: &str = "You are Liz, gex's concise AI coding partner. Answer this one user message directly in plain prose. Reply in the user's language. You have no tools in this lightweight lane: do not claim to inspect files, run commands, edit files, or verify anything. If the request requires project inspection or code changes, say it needs the full agent lane.";
+
+#[derive(Debug, Clone)]
+pub struct DesktopLightweightTurnOutcome {
+    pub lane: TurnIngressLane,
+    pub answer: String,
+    pub usage: Option<Usage>,
+}
+
+fn sanitize_lightweight_answer(content: &str) -> String {
+    let sanitized = sanitize_assistant_content(content);
+    let sanitized = strip_hallucinated_tool_envelopes(&sanitized);
+    if sanitized.trim().is_empty() {
+        "I could not produce a plain-text answer from the lightweight lane.".to_string()
+    } else {
+        sanitized.trim().to_string()
+    }
+}
+
+fn strip_hallucinated_tool_envelopes(content: &str) -> String {
+    let mut out = content.to_string();
+    for (open, close) in [
+        ("<function_calls>", "</function_calls>"),
+        ("<|DSML|function_calls>", "</|DSML|function_calls>"),
+        ("<｜DSML｜function_calls>", "</｜DSML｜function_calls>"),
+    ] {
+        out = strip_literal_block(&out, open, close);
+    }
+    for open in ["<｜DSML｜", "<|DSML|"] {
+        if let Some(index) = out.find(open) {
+            out.truncate(index);
+        }
+    }
+    out
+}
+
+fn strip_literal_block(input: &str, open: &str, close: &str) -> String {
+    let mut output = String::with_capacity(input.len());
+    let mut rest = input;
+    while let Some(start) = rest.find(open) {
+        output.push_str(&rest[..start]);
+        let after_open = &rest[start + open.len()..];
+        let Some(end) = after_open.find(close) else {
+            return output;
+        };
+        rest = &after_open[end + close.len()..];
+    }
+    output.push_str(rest);
+    output
 }
 
 fn message_record_to_history_message(record: MessageRecord) -> Option<Message> {
@@ -361,6 +435,7 @@ mod tests {
     use crate::tools::ToolRegistry;
     use async_openai::types::ChatCompletionResponseStream;
     use async_trait::async_trait;
+    use std::sync::Mutex as StdMutex;
 
     struct MockProvider;
 
@@ -388,6 +463,44 @@ mod tests {
 
         fn default_model(&self) -> &str {
             "mock-desktop"
+        }
+    }
+
+    struct RecordingProvider {
+        request: StdMutex<Option<ChatRequest>>,
+    }
+
+    #[async_trait]
+    impl LlmProvider for RecordingProvider {
+        async fn chat(&self, request: ChatRequest) -> anyhow::Result<ChatResponse> {
+            *self.request.lock().unwrap() = Some(request);
+            Ok(ChatResponse {
+                content: "你好，我在。".to_string(),
+                tool_calls: None,
+                usage: Some(crate::services::api::Usage {
+                    prompt_tokens: 12,
+                    completion_tokens: 4,
+                    total_tokens: 16,
+                    reasoning_tokens: None,
+                    cached_tokens: Some(8),
+                }),
+                tool_call_repair: None,
+            })
+        }
+
+        async fn chat_stream(
+            &self,
+            _request: ChatRequest,
+        ) -> anyhow::Result<ChatCompletionResponseStream> {
+            anyhow::bail!("streaming is not used by this test")
+        }
+
+        fn base_url(&self) -> &str {
+            "mock://recording"
+        }
+
+        fn default_model(&self) -> &str {
+            "recording-model"
         }
     }
 
@@ -532,6 +645,62 @@ mod tests {
         assert_eq!(
             snapshot.compact.latest_strategy.as_deref(),
             Some("session_memory_compact")
+        );
+    }
+
+    #[tokio::test]
+    async fn side_question_turn_uses_no_tools_and_does_not_touch_agent_history() {
+        let provider = Arc::new(RecordingProvider {
+            request: StdMutex::new(None),
+        });
+        let store = Arc::new(SessionStore::in_memory().unwrap());
+        store
+            .create_session("session-light", "CLI Session", "recording-model")
+            .unwrap();
+        let engine = Arc::new(
+            StreamingQueryEngine::new(
+                provider.clone(),
+                Arc::new(ToolRegistry::default_registry()),
+                "recording-model",
+            )
+            .with_session_store(store.clone(), "session-light".to_string()),
+        );
+        let runtime = DesktopRuntime::from_streaming_engine(engine, "/tmp/project");
+
+        let outcome = runtime
+            .run_lightweight_turn("/btw Rust 的 trait 是什么？", TurnIngressLane::SideQuestion)
+            .await
+            .unwrap();
+
+        assert_eq!(outcome.lane, TurnIngressLane::SideQuestion);
+        assert_eq!(outcome.answer, "你好，我在。");
+        assert_eq!(
+            outcome.usage.as_ref().and_then(|u| u.cached_tokens),
+            Some(8)
+        );
+        assert!(runtime.streaming_engine().get_history().await.is_empty());
+        assert!(store.get_messages("session-light").unwrap().is_empty());
+
+        let request = provider.request.lock().unwrap().clone().unwrap();
+        assert!(request.tools.is_none());
+        assert!(request.tool_choice.is_none());
+        assert_eq!(request.max_tokens, Some(512));
+        assert_eq!(request.messages.len(), 2);
+        assert!(matches!(
+            &request.messages[1],
+            Message::User { content } if content == "Rust 的 trait 是什么？"
+        ));
+    }
+
+    #[test]
+    fn lightweight_sanitizer_strips_hallucinated_tool_markup() {
+        assert_eq!(
+            sanitize_lightweight_answer("Answer\n<function_calls>{}</function_calls>"),
+            "Answer"
+        );
+        assert_eq!(
+            sanitize_lightweight_answer("Visible\n<｜DSML｜function_calls>{}"),
+            "Visible"
         );
     }
 }

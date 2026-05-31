@@ -47,6 +47,22 @@ test.describe("run event state", () => {
     );
   });
 
+  test("keeps simple replies out of the tool timeline", () => {
+    const submitted = submitUserMessage(initialRunViewState, "你好", [], ids("user-1"));
+    const answered = applyRunEvent(
+      submitted,
+      { type: "assistant_delta", text: "你好，我在。" },
+      ids("assistant-1"),
+    ).state;
+    const completed = applyRunEvent(answered, { type: "run_completed" }, ids("done-1")).state;
+
+    expect(completed.isRunning).toBe(false);
+    expect(completed.items).toEqual([
+      { id: "user-1", role: "user", text: "你好" },
+      { id: "assistant-1", role: "assistant", text: "你好，我在。", variant: undefined },
+    ]);
+  });
+
   test("carries attached contexts into the run summary", () => {
     const submitted = submitUserMessage(
       initialRunViewState,

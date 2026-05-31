@@ -22,6 +22,7 @@ mod focused_repair_state_controller;
 mod force_summary;
 mod iteration_budget_controller;
 mod legacy_workflow_gate_controller;
+mod main_loop_profile;
 mod memory_snapshot_controller;
 mod memory_sync_controller;
 mod patch_recovery;
@@ -540,11 +541,14 @@ impl ConversationLoop {
         let resource_policy = setup.resource_policy;
         let working_dir = setup.working_dir;
         let destructive_scope = setup.destructive_scope;
+        let main_loop_profile =
+            main_loop_profile::MainLoopProfile::from_turn(&route, &required_validation_commands);
         let turn_context_bootstrap =
             TurnContextBootstrapController::run(TurnContextBootstrapContext {
                 conversation: self,
                 last_user_preview: &last_user_preview,
                 route: &route,
+                profile: main_loop_profile,
                 resource_policy: &resource_policy,
                 working_dir: &working_dir,
                 required_validation_commands: &required_validation_commands,
@@ -588,6 +592,7 @@ impl ConversationLoop {
         let turn_loop_bootstrap = TurnLoopBootstrapController::run(TurnLoopBootstrapContext {
             conversation: self,
             route: &route,
+            profile: main_loop_profile,
             retrieval_context: turn_retrieval_context.as_ref(),
             working_dir: &working_dir,
             turn_state: &mut turn_state,
@@ -603,6 +608,7 @@ impl ConversationLoop {
         TurnIterationLoopController::run(TurnIterationLoopContext {
             conversation: self,
             route: &route,
+            profile: main_loop_profile,
             code_workflow: &mut code_workflow,
             task_bundle: &mut task_bundle,
             turn_retrieval_context: turn_retrieval_context.as_ref(),
@@ -3348,6 +3354,90 @@ mod tests {
         assert_eq!(workflow_context, "none");
         assert_eq!(validation, "none");
         assert!(crate::engine::trace::format_trace_summary(&trace, 80).contains("Runtime Diet:"));
+    }
+
+    struct CapturingLlmProvider {
+        requests: StdMutex<Vec<ChatRequest>>,
+        response: StdMutex<Option<ChatResponse>>,
+    }
+
+    #[async_trait::async_trait]
+    impl LlmProvider for CapturingLlmProvider {
+        async fn chat(&self, request: ChatRequest) -> anyhow::Result<ChatResponse> {
+            self.requests.lock().unwrap().push(request);
+            self.response
+                .lock()
+                .unwrap()
+                .take()
+                .ok_or_else(|| anyhow::anyhow!("no mock response left"))
+        }
+
+        async fn chat_stream(
+            &self,
+            _request: ChatRequest,
+        ) -> anyhow::Result<ChatCompletionResponseStream> {
+            Err(anyhow::anyhow!("stream not used in this test"))
+        }
+
+        fn base_url(&self) -> &str {
+            "mock://local"
+        }
+
+        fn default_model(&self) -> &str {
+            "mock-model"
+        }
+    }
+
+    #[tokio::test]
+    async fn quiet_direct_turn_stays_in_main_loop_without_tools_or_dynamic_context() {
+        let provider = Arc::new(CapturingLlmProvider {
+            requests: StdMutex::new(Vec::new()),
+            response: StdMutex::new(Some(ChatResponse {
+                content: "你好，我在。".to_string(),
+                tool_calls: None,
+                usage: None,
+                tool_call_repair: None,
+            })),
+        });
+        let (tx, mut rx) = mpsc::channel(8);
+        let loop_instance = ConversationLoop::new(
+            provider.clone(),
+            Arc::new(ToolRegistry::new()),
+            Arc::new(Mutex::new(crate::cost_tracker::CostTracker::new())),
+            "test".into(),
+        )
+        .with_max_iterations(5);
+
+        let result = loop_instance
+            .run_streaming(vec![Message::user("你好")], &tx)
+            .await
+            .expect("loop should complete");
+
+        assert_eq!(result.content, "你好，我在。");
+        assert_eq!(result.iterations, 1);
+        assert!(!result.tool_calls_made);
+
+        let requests = provider.requests.lock().unwrap();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].tools.as_ref().map(Vec::len), Some(0));
+        assert!(requests[0].tool_choice.is_none());
+        assert!(requests[0].messages.iter().all(|message| {
+            !matches!(
+                message,
+                Message::System { content }
+                    if content.contains("<task-state>")
+                        || content.contains("<task-contract>")
+                        || content.contains("Project map source: docs/PROJECT_MAP.md")
+                        || content.contains("<memory-context>")
+            )
+        }));
+
+        drop(tx);
+        let mut saw_start = false;
+        while let Some(event) = rx.recv().await {
+            saw_start |= matches!(event, StreamEvent::Start);
+        }
+        assert!(!saw_start, "quiet direct turns should not emit a run card");
     }
 
     #[tokio::test]

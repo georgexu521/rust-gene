@@ -6,6 +6,7 @@ use super::turn_runtime_state::TurnRuntimeState;
 use super::workflow_change_tracker::WorkflowChangeTracker;
 use super::ConversationLoop;
 use crate::engine::code_change_workflow::CodeChangeWorkflowRunner;
+use crate::engine::conversation_loop::main_loop_profile::MainLoopProfile;
 use crate::engine::destructive_scope::DestructiveScopeContract;
 use crate::engine::intent_router::IntentRoute;
 use crate::engine::resource_policy::ResourcePolicy;
@@ -21,6 +22,7 @@ use tokio::sync::mpsc;
 pub(super) struct TurnIterationLoopContext<'a> {
     pub(super) conversation: &'a ConversationLoop,
     pub(super) route: &'a IntentRoute,
+    pub(super) profile: MainLoopProfile,
     pub(super) code_workflow: &'a mut CodeChangeWorkflowRunner,
     pub(super) task_bundle: &'a mut TaskContextBundle,
     pub(super) turn_retrieval_context: Option<&'a RetrievalContext>,
@@ -45,8 +47,10 @@ pub(super) struct TurnIterationLoopController;
 
 impl TurnIterationLoopController {
     pub(super) async fn run(context: TurnIterationLoopContext<'_>) -> anyhow::Result<()> {
-        let max_loop_iterations = context.conversation.max_iterations
-            + context.code_workflow.max_repair_attempts().max(3);
+        let max_loop_iterations = context.profile.max_loop_iterations(
+            context.conversation.max_iterations,
+            context.code_workflow.max_repair_attempts(),
+        );
         let baseline_git_status_files = WorkflowChangeTracker::git_status_files();
 
         for iteration in 0..max_loop_iterations {
@@ -61,6 +65,7 @@ impl TurnIterationLoopController {
                 conversation: context.conversation,
                 iteration,
                 route: context.route,
+                profile: context.profile,
                 code_workflow: &mut *context.code_workflow,
                 task_bundle: &mut *context.task_bundle,
                 turn_retrieval_context: context.turn_retrieval_context,
@@ -173,6 +178,7 @@ mod tests {
         TurnIterationLoopController::run(TurnIterationLoopContext {
             conversation: &conversation,
             route: &route,
+            profile: MainLoopProfile::from_turn(&route, &[]),
             code_workflow: &mut code_workflow,
             task_bundle: &mut task_bundle,
             turn_retrieval_context: None,

@@ -6,7 +6,19 @@ test.describe("desktop UI smoke", () => {
 
     await expect(page.getByRole("heading", { name: "What should we build in rust-agent?" }))
       .toBeVisible();
+    await expect(page.locator(".startup-state-card")).toContainText("Restored session");
+    await expect(page.getByRole("complementary", { name: "Workbench" })).not.toBeVisible();
+    await page.getByRole("button", { name: /Workbench/ }).click();
+    await expect(page.getByRole("complementary", { name: "Workbench" })).toBeVisible();
     await expect(page.getByText("Environment diagnostics")).toBeVisible();
+    await expect(page.getByRole("region", { name: "Frontend workbench" })).toContainText("Project intelligence");
+    await expect(page.getByRole("region", { name: "Frontend workbench" })).toContainText("Project map");
+    await expect(page.getByRole("region", { name: "Frontend workbench" })).toContainText("Symbol index");
+    await expect(page.getByRole("region", { name: "Symbol index preview" })).toContainText(
+      "src/engine/conversation_loop/request_preparation_controller.rs",
+    );
+    await page.getByRole("button", { name: "Close workbench" }).click();
+    await expect(page.getByRole("complementary", { name: "Workbench" })).not.toBeVisible();
     await expect(page.getByLabel("Provider")).toBeVisible();
     await expect(page.getByLabel("Model")).toBeVisible();
     const composer = page.locator(".composer");
@@ -104,6 +116,11 @@ test.describe("desktop UI smoke", () => {
     ).toBeVisible();
     await expect(page.locator(".composer")).toHaveClass(/empty-composer/);
     await expect(page.getByPlaceholder("Ask anything")).toBeVisible();
+    await page.getByRole("textbox", { name: "Message" }).fill("你好");
+    await page.getByRole("button", { name: "Send message" }).click();
+    await expect(page.getByText("你好，我在。")).toBeVisible();
+    await expect(page.locator(".timeline-run-row")).not.toBeVisible();
+    await expect(page.locator(".timeline-event", { hasText: "Pnpm Test" })).not.toBeVisible();
     await page.locator(".recent-item", { hasText: "Daily desktop flow" }).hover();
     await page.getByRole("button", { name: /Delete Daily desktop flow/ }).click();
     await expect(page.getByRole("dialog", { name: "Delete session?" })).toBeVisible();
@@ -119,6 +136,10 @@ test.describe("desktop UI smoke", () => {
       page.locator(".recent-list .recent-item", { hasText: "Daily desktop flow" }),
     ).not.toBeVisible();
 
+    await composer.getByRole("button", { name: "Add context" }).click();
+    await page.getByRole("button", { name: "Reference current diff" }).click();
+    await composer.getByRole("button", { name: "Add context" }).click();
+    await page.getByRole("button", { name: "Attach file" }).click();
     await page.getByRole("textbox", { name: "Message" }).fill("Inspect the desktop timeline UI");
     await page.getByRole("button", { name: "Send message" }).click();
     await expect(page.locator(".composer-context-chips")).not.toBeVisible();
@@ -253,6 +274,10 @@ test.describe("desktop UI smoke", () => {
 
     await expect(page.getByRole("heading", { name: "What should we build in rust-agent?" }))
       .toBeVisible();
+    await expect(page.getByRole("button", { name: /Workbench/ })).toBeVisible();
+    await page.getByRole("button", { name: /Workbench/ }).click();
+    await expect(page.getByRole("region", { name: "Frontend workbench" })).toContainText("Project intelligence");
+    await page.getByRole("button", { name: "Close workbench" }).click();
     await expect(page.getByLabel("Provider")).toBeVisible();
     await expect(page.getByLabel("Model")).toBeVisible();
 

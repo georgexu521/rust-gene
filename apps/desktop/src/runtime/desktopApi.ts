@@ -26,6 +26,44 @@ export type DesktopContextSnapshot = {
   compact: DesktopCompactState;
 };
 
+export type DesktopWorkbenchSnapshot = {
+  selected_project: string;
+  project_map: DesktopProjectMapSnapshot;
+  symbol_index: DesktopSymbolIndexSnapshot;
+  runtime_context?: DesktopContextSnapshot | null;
+};
+
+export type DesktopProjectMapSnapshot = {
+  available: boolean;
+  source?: string | null;
+  freshness: string;
+  chars: number;
+  truncated: boolean;
+  content_preview: string;
+};
+
+export type DesktopSymbolIndexSnapshot = {
+  schema_version: number;
+  total_symbols: number;
+  files: DesktopIndexedFile[];
+  truncated: boolean;
+};
+
+export type DesktopIndexedFile = {
+  path: string;
+  hash: string;
+  lines: number;
+  summary: string;
+  symbols: DesktopIndexedSymbol[];
+};
+
+export type DesktopIndexedSymbol = {
+  name: string;
+  kind: string;
+  line: number;
+  signature: string;
+};
+
 export type DesktopCompactState = {
   compression_count: number;
   circuit_open: boolean;
@@ -310,6 +348,86 @@ export function desktopContextSnapshot(): Promise<DesktopContextSnapshot> {
   }
 
   return invoke("desktop_context_snapshot");
+}
+
+export function desktopWorkbenchSnapshot(): Promise<DesktopWorkbenchSnapshot> {
+  if (!isTauriRuntime()) {
+    return Promise.resolve({
+      selected_project: webPreviewSettings.selected_project,
+      project_map: {
+        available: true,
+        source: `${webPreviewSettings.selected_project}/docs/PROJECT_MAP.md`,
+        freshness: "current",
+        chars: 2974,
+        truncated: false,
+        content_preview:
+          "Project map source: docs/PROJECT_MAP.md\nFreshness: current\nPolicy: use this as navigation before broad repo scans; verify exact code with file_read/symbol_query before editing.\n\n## Runtime Navigation Contract\n\n- Start here for orientation before broad repository scans.\n- Use `project_list` action `map` or the injected project-map zone to pick likely files.\n- Use `symbol_query` for functions, structs, traits, enums, and impls before broad `grep`.",
+      },
+      symbol_index: {
+        schema_version: 1,
+        total_symbols: 2148,
+        truncated: true,
+        files: [
+          {
+            path: "src/engine/conversation_loop/request_preparation_controller.rs",
+            hash: "cfbbe16c9a1f4024669ab6d3d9210c2f",
+            lines: 1908,
+            summary: "42 symbols: struct RequestPreparationController, function prepare, function inject_project_map_zone",
+            symbols: [
+              {
+                name: "RequestPreparationController",
+                kind: "struct",
+                line: 47,
+                signature: "pub(super) struct RequestPreparationController;",
+              },
+              {
+                name: "inject_project_map_zone",
+                kind: "function",
+                line: 466,
+                signature: "fn inject_project_map_zone(",
+              },
+            ],
+          },
+          {
+            path: "src/tools/project_tool/mod.rs",
+            hash: "930b1d540c135a768a0f8d3d716acccb",
+            lines: 736,
+            summary: "31 symbols: struct ProjectScanner, struct ProjectListTool, function execute",
+            symbols: [
+              {
+                name: "ProjectScanner",
+                kind: "struct",
+                line: 95,
+                signature: "pub struct ProjectScanner {",
+              },
+              {
+                name: "ProjectListTool",
+                kind: "struct",
+                line: 327,
+                signature: "pub struct ProjectListTool;",
+              },
+            ],
+          },
+        ],
+      },
+      runtime_context: {
+        history_messages: webPreviewSessions.find((session) => session.id === webPreviewSettings.active_session_id)?.message_count || 0,
+        history_tokens: 1200,
+        tool_schema_tokens: 2200,
+        memory_snapshot_tokens: 0,
+        total_estimated_tokens: 3400,
+        max_context_tokens: 128000,
+        usage_percent: 3,
+        stable_prefix_fingerprint: "web-preview",
+        compact: {
+          compression_count: 0,
+          circuit_open: false,
+        },
+      },
+    });
+  }
+
+  return invoke("desktop_workbench_snapshot");
 }
 
 export function selectProject(path: string): Promise<SelectedProject> {
@@ -732,6 +850,11 @@ export async function pickProjectFile(): Promise<string | null> {
 
 export function sendMessage(message: string, contexts: DesktopRunContext[] = []): Promise<void> {
   if (!isTauriRuntime()) {
+    if (shouldUseQuietMainLoopPreview(message, contexts)) {
+      emitQuietMainLoopPreviewResponse(message);
+      return Promise.resolve();
+    }
+
     const runId = crypto.randomUUID();
     const toolId = crypto.randomUUID();
     const fileToolId = crypto.randomUUID();
@@ -975,6 +1098,43 @@ export function sendMessage(message: string, contexts: DesktopRunContext[] = [])
   }
 
   return invoke("send_message", { contexts, message });
+}
+
+function shouldUseQuietMainLoopPreview(message: string, contexts: DesktopRunContext[]) {
+  if (contexts.length > 0) {
+    return false;
+  }
+
+  const normalized = message.trim().toLowerCase();
+  if (!normalized) {
+    return true;
+  }
+
+  const heavyIntent = /\b(inspect|review|edit|fix|build|test|verify|run|diff|trace|debug|implement|refactor|check)\b/.test(
+    normalized,
+  );
+  const chineseHeavyIntent =
+    /检查|审查|修改|修复|构建|测试|验证|运行|差异|调试|实现|重构|查看|看看|做|创建|生成|写|开发|网页|页面|网站|应用|组件|前端|后端|接口|代码|报错|错误|失败/.test(
+      normalized,
+    );
+  return !heavyIntent && !chineseHeavyIntent && normalized.length <= 80;
+}
+
+function emitQuietMainLoopPreviewResponse(message: string) {
+  const trimmed = message.trim();
+  emitWebPreview({
+    type: "assistant_delta",
+    text: quietMainLoopPreviewReply(trimmed),
+  });
+  emitWebPreview({ type: "run_completed" });
+}
+
+function quietMainLoopPreviewReply(message: string) {
+  if (/^(你好|您好|嗨|哈喽|hello|hi|hey)[!.。！\s]*$/i.test(message)) {
+    return "你好，我在。";
+  }
+
+  return `收到：${message || "空消息"}`;
 }
 
 export function compactContext(): Promise<DesktopCompactionAttempt | null> {

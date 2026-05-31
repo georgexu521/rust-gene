@@ -1,5 +1,6 @@
 use futures::StreamExt;
 use priority_agent::desktop_runtime::{DesktopContextSnapshot, DesktopRunEvent, DesktopRuntime};
+use priority_agent::engine::turn_ingress::classify_turn_ingress;
 use priority_agent::permissions::PermissionMode;
 use priority_agent::session_store::SessionStore;
 use serde::{Deserialize, Serialize};
@@ -179,6 +180,32 @@ struct ProviderModelStatus {
     configured_count: usize,
     providers: Vec<DesktopProviderOption>,
     models: Vec<DesktopModelOption>,
+}
+
+#[derive(Debug, Serialize)]
+struct DesktopWorkbenchSnapshot {
+    selected_project: String,
+    project_map: DesktopProjectMapSnapshot,
+    symbol_index: DesktopSymbolIndexSnapshot,
+    runtime_context: Option<DesktopContextSnapshot>,
+}
+
+#[derive(Debug, Serialize)]
+struct DesktopProjectMapSnapshot {
+    available: bool,
+    source: Option<String>,
+    freshness: String,
+    chars: usize,
+    truncated: bool,
+    content_preview: String,
+}
+
+#[derive(Debug, Serialize)]
+struct DesktopSymbolIndexSnapshot {
+    schema_version: u8,
+    total_symbols: usize,
+    files: Vec<priority_agent::engine::project_map::ProjectIndexedFile>,
+    truncated: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -719,6 +746,53 @@ async fn send_message(
     }
 
     let runtime = runtime_for_state(&state).await?;
+    let ingress_lane = classify_turn_ingress(&message, !contexts.is_empty());
+    if ingress_lane.is_lightweight() {
+        let outcome = runtime
+            .run_lightweight_turn(&message, ingress_lane)
+            .await
+            .map_err(|err| err.to_string())?;
+        let active_session_id = runtime.streaming_engine().current_session_id();
+        if active_session_id.is_some() {
+            {
+                let mut stored_session_id = state.active_session_id.lock().await;
+                *stored_session_id = active_session_id;
+            }
+            persist_current_settings(&state).await?;
+        }
+        let usage_log = outcome
+            .usage
+            .as_ref()
+            .map(|usage| {
+                format!(
+                    " prompt={} completion={} cached={}",
+                    usage.prompt_tokens,
+                    usage.completion_tokens,
+                    usage.cached_tokens.unwrap_or(0)
+                )
+            })
+            .unwrap_or_default();
+        let _ = append_desktop_log(
+            &diagnostic_logs_path,
+            &format!(
+                "run_lightweight lane={}{}",
+                outcome.lane.label(),
+                usage_log
+            ),
+        );
+        app.emit(
+            "desktop-run-event",
+            DesktopRunEvent::AssistantDelta {
+                text: outcome.answer,
+            },
+        )
+        .map_err(|err| err.to_string())?;
+        app.emit("desktop-run-event", DesktopRunEvent::RunCompleted)
+            .map_err(|err| err.to_string())?;
+        let _ = append_desktop_log(&diagnostic_logs_path, "run_completed");
+        return Ok(());
+    }
+
     let selected_project = state.selected_project.lock().await.clone();
     let message = match enrich_message_with_desktop_contexts(message, &contexts, &selected_project)
     {
@@ -798,6 +872,60 @@ async fn desktop_context_snapshot(
 ) -> Result<DesktopContextSnapshot, String> {
     let runtime = runtime_for_state(&state).await?;
     Ok(runtime.context_snapshot().await)
+}
+
+#[tauri::command]
+async fn desktop_workbench_snapshot(
+    state: State<'_, DesktopAppState>,
+) -> Result<DesktopWorkbenchSnapshot, String> {
+    let selected_project = state.selected_project.lock().await.clone();
+    let project_map = match priority_agent::engine::project_map::load_project_map_zone_with_limit(
+        &selected_project,
+        8_000,
+    ) {
+        Some(zone) => DesktopProjectMapSnapshot {
+            available: true,
+            source: Some(zone.source.display().to_string()),
+            freshness: zone.freshness.label(),
+            chars: zone.chars,
+            truncated: zone.truncated,
+            content_preview: zone.content,
+        },
+        None => DesktopProjectMapSnapshot {
+            available: false,
+            source: Some(
+                selected_project
+                    .join(priority_agent::engine::project_map::PROJECT_MAP_PATH)
+                    .display()
+                    .to_string(),
+            ),
+            freshness: "missing".to_string(),
+            chars: 0,
+            truncated: false,
+            content_preview: "No docs/PROJECT_MAP.md found for this project.".to_string(),
+        },
+    };
+    let index =
+        priority_agent::engine::project_map::build_project_symbol_index(&selected_project, 24, 12);
+    let runtime_context = {
+        let runtime = state.runtime.lock().await.clone();
+        match runtime {
+            Some(runtime) => Some(runtime.context_snapshot().await),
+            None => None,
+        }
+    };
+
+    Ok(DesktopWorkbenchSnapshot {
+        selected_project: selected_project.display().to_string(),
+        project_map,
+        symbol_index: DesktopSymbolIndexSnapshot {
+            schema_version: index.schema_version,
+            total_symbols: index.total_symbols,
+            files: index.files,
+            truncated: index.truncated,
+        },
+        runtime_context,
+    })
 }
 
 fn enrich_message_with_desktop_contexts(
@@ -2175,6 +2303,7 @@ pub fn run() {
             send_message,
             compact_context,
             desktop_context_snapshot,
+            desktop_workbench_snapshot,
             desktop_run_context_detail,
             answer_permission,
         ])

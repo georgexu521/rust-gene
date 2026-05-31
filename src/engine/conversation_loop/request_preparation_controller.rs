@@ -37,6 +37,7 @@ pub(super) struct RequestPreparationContext<'a> {
     pub(super) tools: &'a [Tool],
     pub(super) trace: &'a TraceCollector,
     pub(super) runtime_diet: &'a mut RuntimeDietSnapshot,
+    pub(super) inject_dynamic_context: bool,
 }
 
 pub(super) struct PreparedRequest {
@@ -75,16 +76,19 @@ impl RequestPreparationController {
             tools,
             trace,
             runtime_diet,
+            inject_dynamic_context,
         } = context;
 
         let mut request_messages = messages.to_vec();
-        Self::inject_task_state_zone(&mut request_messages, agent_task_state);
-        Self::inject_task_contract_zone(&mut request_messages, task_contract, context_pack);
-        Self::inject_mva_candidate_action_hint(&mut request_messages);
-        Self::inject_self_evolution_guidance_zone(&mut request_messages, trace, working_dir);
-        Self::inject_focused_repair_zone(&mut request_messages, focused_repair_prompt);
-        Self::inject_context_ledger_hint(&mut request_messages, session_store, session_id);
-        Self::inject_project_map_zone(&mut request_messages, trace, working_dir);
+        if inject_dynamic_context {
+            Self::inject_task_state_zone(&mut request_messages, agent_task_state);
+            Self::inject_task_contract_zone(&mut request_messages, task_contract, context_pack);
+            Self::inject_mva_candidate_action_hint(&mut request_messages);
+            Self::inject_self_evolution_guidance_zone(&mut request_messages, trace, working_dir);
+            Self::inject_focused_repair_zone(&mut request_messages, focused_repair_prompt);
+            Self::inject_context_ledger_hint(&mut request_messages, session_store, session_id);
+            Self::inject_project_map_zone(&mut request_messages, trace, working_dir);
+        }
 
         let mut memory_context = MemoryPrefetchContext {
             turn_retrieval_context,
@@ -95,7 +99,9 @@ impl RequestPreparationController {
             trace,
             runtime_diet,
         };
-        Self::inject_memory_prefetch(&mut request_messages, &mut memory_context).await;
+        if inject_dynamic_context {
+            Self::inject_memory_prefetch(&mut request_messages, &mut memory_context).await;
+        }
         let zone_envelope_stats = Self::normalize_context_zone_envelope(&mut request_messages);
         Self::record_context_zones(&request_messages, trace, &zone_envelope_stats);
         let canonical_tools = crate::engine::cache_stability::canonicalize_provider_tools(tools);
@@ -1125,6 +1131,7 @@ mod tests {
             tools: &tools,
             trace: &trace,
             runtime_diet: &mut runtime_diet,
+            inject_dynamic_context: true,
         })
         .await;
 
@@ -1189,11 +1196,56 @@ mod tests {
             tools: &tools,
             trace: &trace,
             runtime_diet: &mut runtime_diet,
+            inject_dynamic_context: true,
         })
         .await;
 
         assert_eq!(prepared.request.messages.len(), 1);
         assert_eq!(runtime_diet.retrieval_items, 0);
+    }
+
+    #[tokio::test]
+    async fn prepare_quiet_direct_skips_dynamic_context_injections() {
+        let trace = TraceCollector::new(TurnTrace::new("session-quiet".to_string(), 1, "你好"));
+        let mut runtime_diet = RuntimeDietSnapshot::new(true);
+
+        let prepared = RequestPreparationController::prepare(RequestPreparationContext {
+            messages: &[Message::user("你好")],
+            working_dir: std::path::Path::new("."),
+            focused_repair_prompt: Some(Message::system("repair prompt should be skipped")),
+            agent_task_state: None,
+            task_contract: None,
+            context_pack: None,
+            turn_retrieval_context: None,
+            retrieval_policy: RetrievalPolicy::Light,
+            memory_manager: None,
+            provider: None,
+            session_store: None,
+            session_id: "session-quiet",
+            model: "test-model",
+            temperature: 0.2,
+            tools: &[],
+            trace: &trace,
+            runtime_diet: &mut runtime_diet,
+            inject_dynamic_context: false,
+        })
+        .await;
+
+        assert_eq!(prepared.request.messages.len(), 1);
+        assert!(matches!(
+            &prepared.request.messages[0],
+            Message::User { content } if content == "你好"
+        ));
+        assert_eq!(prepared.request.tools.as_ref().map(Vec::len), Some(0));
+        let finished = trace.finish(crate::engine::trace::TurnStatus::Completed);
+        assert!(!finished.events.iter().any(|event| matches!(
+            event,
+            TraceEvent::RetrievalContextBuilt { policy, .. } if policy == "project_map"
+        )));
+        assert!(!finished.events.iter().any(|event| matches!(
+            event,
+            TraceEvent::MemoryPrefetch { .. } | TraceEvent::SelfEvolutionGuidanceInjected { .. }
+        )));
     }
 
     #[tokio::test]
@@ -1249,6 +1301,7 @@ mod tests {
             tools: &[],
             trace: &trace,
             runtime_diet: &mut runtime_diet,
+            inject_dynamic_context: true,
         })
         .await;
 
@@ -1297,6 +1350,7 @@ mod tests {
             tools: &[],
             trace: &trace,
             runtime_diet: &mut runtime_diet,
+            inject_dynamic_context: true,
         })
         .await;
 
@@ -1354,6 +1408,7 @@ mod tests {
             tools: &[],
             trace: &trace,
             runtime_diet: &mut runtime_diet,
+            inject_dynamic_context: true,
         })
         .await;
 
@@ -1426,6 +1481,7 @@ mod tests {
             tools: &[],
             trace: &trace,
             runtime_diet: &mut runtime_diet,
+            inject_dynamic_context: true,
         })
         .await;
 
@@ -1490,6 +1546,7 @@ mod tests {
             tools: &[],
             trace: &trace,
             runtime_diet: &mut runtime_diet,
+            inject_dynamic_context: true,
         })
         .await;
 
@@ -1627,6 +1684,7 @@ mod tests {
             tools: &[],
             trace: &trace,
             runtime_diet: &mut runtime_diet,
+            inject_dynamic_context: true,
         })
         .await;
 
@@ -1689,6 +1747,7 @@ mod tests {
             tools: &[],
             trace: &trace,
             runtime_diet: &mut runtime_diet,
+            inject_dynamic_context: true,
         })
         .await;
 
@@ -1759,6 +1818,7 @@ mod tests {
             tools: &[],
             trace: &trace,
             runtime_diet: &mut runtime_diet,
+            inject_dynamic_context: true,
         })
         .await;
 
@@ -1823,6 +1883,7 @@ mod tests {
             tools: &tools,
             trace: &trace,
             runtime_diet: &mut runtime_diet,
+            inject_dynamic_context: true,
         })
         .await;
 
@@ -1880,6 +1941,7 @@ mod tests {
             tools: &[],
             trace: &trace,
             runtime_diet: &mut runtime_diet,
+            inject_dynamic_context: true,
         })
         .await;
 
@@ -1941,6 +2003,7 @@ mod tests {
             tools: &[],
             trace: &trace,
             runtime_diet: &mut runtime_diet,
+            inject_dynamic_context: true,
         })
         .await;
 

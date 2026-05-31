@@ -23,6 +23,7 @@ use super::turn_tool_round_step_controller::{
 };
 use super::ConversationLoop;
 use crate::engine::code_change_workflow::CodeChangeWorkflowRunner;
+use crate::engine::conversation_loop::main_loop_profile::MainLoopProfile;
 use crate::engine::destructive_scope::DestructiveScopeContract;
 use crate::engine::intent_router::IntentRoute;
 use crate::engine::resource_policy::ResourcePolicy;
@@ -44,6 +45,7 @@ pub(super) struct TurnIterationContext<'a> {
     pub(super) conversation: &'a ConversationLoop,
     pub(super) iteration: usize,
     pub(super) route: &'a IntentRoute,
+    pub(super) profile: MainLoopProfile,
     pub(super) code_workflow: &'a mut CodeChangeWorkflowRunner,
     pub(super) task_bundle: &'a mut TaskContextBundle,
     pub(super) turn_retrieval_context: Option<&'a RetrievalContext>,
@@ -107,6 +109,7 @@ impl TurnIterationController {
                 conversation: context.conversation,
                 iteration: context.iteration + 1,
                 route: context.route,
+                profile: context.profile,
                 code_workflow: &*context.code_workflow,
                 task_bundle: &*context.task_bundle,
                 required_validation_commands: context.required_validation_commands,
@@ -1098,6 +1101,7 @@ mod tests {
             conversation: &conversation,
             iteration: 0,
             route: &route,
+            profile: MainLoopProfile::from_turn(&route, &[]),
             code_workflow: &mut code_workflow,
             task_bundle: &mut task_bundle,
             turn_retrieval_context: None,

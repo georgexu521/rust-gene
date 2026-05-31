@@ -684,6 +684,9 @@ function completeLatestRun(items: TranscriptItem[]): TranscriptItem[] {
   }
   if (index < 0) {
     const completedItems = appendLedgerReuseCard(markLatestAssistantAsFinal(items));
+    if (runStats(items).length === 0) {
+      return completedItems;
+    }
     return [
       ...completedItems,
       timelineEvent({

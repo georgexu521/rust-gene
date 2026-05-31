@@ -30,6 +30,7 @@ not proof of current code. Read exact files before editing.
 - `src/memory/`: memory providers, manager, persistence, retrieval, extraction, ranking, reports.
 - `src/tui/`: terminal UI screens, commands, slash handlers, event wiring.
 - `src/api/`: optional API server routes and tool allowlist behavior.
+- `apps/desktop/`: React/Tauri frontend app for the local workbench experience.
 - `scripts/`: local validation, live-eval, benchmark, and maintenance scripts.
 - `docs/`: current status, design notes, archived plans, eval reports, and project map.
 - `tests/`: integration and behavior tests outside module-local unit tests.
@@ -40,6 +41,7 @@ not proof of current code. Read exact files before editing.
 - `src/engine/query_engine.rs`: high-level query engine orchestration.
 - `src/engine/streaming.rs`: streaming request/response path.
 - `src/engine/conversation_loop/mod.rs`: main agent loop coordinator.
+- `src/engine/conversation_loop/main_loop_profile.rs`: quiet-direct vs standard main-loop profile selection.
 - `src/engine/conversation_loop/request_preparation_controller.rs`: request message preparation, dynamic context zones, memory prefetch, cache-stability snapshot.
 - `src/engine/conversation_loop/tool_execution_controller.rs`: tool execution, observations, checkpoints, action review, permission integration.
 - `src/engine/conversation_loop/closeout_controller.rs`: final closeout, execution reports, memory proposal preparation.
@@ -56,6 +58,7 @@ not proof of current code. Read exact files before editing.
 ## Routing, Workflow, And Safety
 
 - `src/engine/intent_router.rs`: intent, retrieval policy, workflow, confidence, and risk routing.
+- `src/engine/turn_ingress.rs`: desktop ingress classifier for explicit side questions and normal main-loop tasks.
 - `src/engine/task_context.rs`: task state and task context bundle.
 - `src/engine/task_contract.rs`: executor contract, context pack, validation requirements.
 - `src/engine/tool_orchestration.rs`: route/tool planning and tool exposure intent.
@@ -77,6 +80,15 @@ not proof of current code. Read exact files before editing.
 - `src/engine/symbol_index.rs`: project-level AST symbol index for Rust/TS/JS/Python, including Rust type identifiers.
 - `src/tools/bash_tool/`: shell execution and background task handling.
 - `src/tools/git_read_tool.rs` and `src/tools/diff_tool/`: git status/diff/read-only inspection.
+
+## Frontend Workbench
+
+- `apps/desktop/src/app/App.tsx`: main React shell, session/workspace state, run submission, drawers, workbench snapshot refresh.
+- `apps/desktop/src/app/components/WorkbenchPanel.tsx`: local web workbench surface for project map, symbol index, runtime context, and cache surface.
+- `apps/desktop/src/app/components/WorkbenchDrawer.tsx`: right-side workbench drawer that keeps diagnostics and project intelligence out of the main chat flow.
+- `apps/desktop/src/runtime/desktopApi.ts`: Tauri invoke wrappers plus web-preview fixtures.
+- `apps/desktop/src-tauri/src/lib.rs`: desktop commands, selected project/session state, runtime bridge, workbench snapshot command.
+- `apps/desktop/tests/desktop-ui-smoke.spec.ts`: Playwright layout and workflow smoke coverage.
 
 ## Provider And Weak-Model Boundaries
 
@@ -107,6 +119,9 @@ not proof of current code. Read exact files before editing.
 - `cargo test -q project_tool`: project-list/map/index tool tests.
 - `cargo test -q request_preparation_controller`: request context-zone behavior.
 - `cargo test -q prompt_context`: prompt/context reporting.
+- `corepack pnpm --dir apps/desktop build`: desktop frontend typecheck and production build.
+- `corepack pnpm --dir apps/desktop test:ui-smoke`: desktop web-preview Playwright smoke tests.
+- `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml -q`: Tauri shell compile gate.
 - `cargo test -q`: broad Rust tests when shared runtime contracts moved.
 - `cargo clippy --all-features -- -D warnings`: broad lint gate.
 

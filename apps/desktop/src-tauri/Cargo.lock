@@ -3882,6 +3882,7 @@ dependencies = [
  "libc",
  "md5",
  "once_cell",
+ "parking_lot",
  "portable-pty",
  "priority-core",
  "pulldown-cmark",
