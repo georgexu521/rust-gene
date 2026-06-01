@@ -78,6 +78,25 @@ impl TurnIterationController {
     pub(super) async fn run(
         context: TurnIterationContext<'_>,
     ) -> anyhow::Result<TurnIterationFlow> {
+        // Force-summary: inject wrap-up prompt before the last 2 iterations
+        // so the model has time to stop calling tools and produce a final answer.
+        // Mirrors Reasonix's forceSummaryAfterIterLimit pattern.
+        if crate::engine::conversation_loop::force_summary::should_force_summary(
+            context.iteration,
+            context.conversation.max_iterations,
+        ) && context.loop_state.final_content.is_empty()
+        {
+            let summary_msg = crate::engine::conversation_loop::force_summary::force_summary_message();
+            context.messages.push(summary_msg);
+            context.trace.record(TraceEvent::WorkflowFallback {
+                error: format!(
+                    "iteration {} of {} — injecting force-summary prompt",
+                    context.iteration + 1,
+                    context.conversation.max_iterations
+                ),
+            });
+        }
+
         let model_profile = context
             .task_bundle
             .task_contract(context.required_validation_commands)
