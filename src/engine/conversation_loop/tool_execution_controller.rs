@@ -2,8 +2,8 @@ use super::permission_controller::{PermissionController, PermissionRequestRuntim
 use super::tool_call_lifecycle::{ToolCallLifecycle, ToolCallLifecycleRecord, ToolCallStatus};
 use super::tool_context_helpers::{tool_allowed_by_context, tool_not_allowed_result};
 use super::tool_execution::{
-    read_only_tool_concurrency, tool_call_is_concurrency_safe, tool_call_is_read_only,
-    tool_call_is_storm_exempt,
+    force_serial_tool_dispatch, read_only_tool_concurrency, tool_call_is_concurrency_safe,
+    tool_call_is_read_only, tool_call_is_storm_exempt,
 };
 use super::tool_metadata::{
     attach_tool_contract_metadata, attach_tool_execution_metadata, merge_tool_result_metadata,
@@ -1741,8 +1741,11 @@ impl ToolExecutionController {
             runtime_context: &runtime_context,
             permission_context: &execution.base_tool_context.permission_context,
         };
-        let concurrency =
-            read_only_tool_concurrency().min(resource_policy.parallelism_limit.max(1));
+        let concurrency = if force_serial_tool_dispatch() {
+            1
+        } else {
+            read_only_tool_concurrency().min(resource_policy.parallelism_limit.max(1))
+        };
 
         // ── Phase 1: scan and categorize ──
         for (i, tc) in tool_calls.iter().enumerate() {

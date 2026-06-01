@@ -19,6 +19,14 @@ pub(crate) const READ_ONLY_TOOLS: &[&str] = &[
 
 pub(crate) const DEFAULT_READ_ONLY_TOOL_CONCURRENCY: usize = 8;
 
+/// Whether tool dispatch should be forced serial (mirrors Reasonix's
+/// REASONIX_TOOL_DISPATCH=serial). Default is parallel for read-only tools.
+pub(crate) fn force_serial_tool_dispatch() -> bool {
+    std::env::var("PRIORITY_AGENT_TOOL_DISPATCH")
+        .map(|v| v.trim().to_ascii_lowercase() == "serial")
+        .unwrap_or(false)
+}
+
 /// 工具结果截断阈值（字节），超过此值会截断并写入磁盘
 pub(crate) const TOOL_RESULT_TRUNCATE_THRESHOLD: usize = 32 * 1024; // 32 KiB
 
@@ -58,6 +66,34 @@ pub(crate) fn safe_suffix_by_bytes(s: &str, max_bytes: usize) -> &str {
         start += 1;
     }
     &s[start..]
+}
+
+/// Default max result tokens before shrinking (mirrors Reasonix's
+/// DEFAULT_MAX_RESULT_TOKENS = 4096). CJK text costs ~2× tokens vs ASCII.
+pub(crate) const DEFAULT_MAX_RESULT_TOKENS: usize = 4096;
+
+/// Truncate a tool result string to fit within `max_tokens` tokens.
+/// Uses a conservative estimate: 1 token ≈ 3 chars for CJK safety.
+/// Preserves head + tail with a truncation marker.
+pub(crate) fn shrink_tool_result_by_tokens(content: &str, max_tokens: usize) -> String {
+    if max_tokens == 0 {
+        return content.to_string();
+    }
+    // Conservative: 1 token ≈ 3 chars (covers CJK which is ~2 chars/token).
+    let max_chars = max_tokens.saturating_mul(3);
+    if content.len() <= max_chars {
+        return content.to_string();
+    }
+    let head_chars = max_chars * 3 / 4;
+    let tail_chars = max_chars.saturating_sub(head_chars).saturating_sub(100);
+    if tail_chars < 200 {
+        let head = safe_prefix_by_bytes(content, max_chars);
+        return format!("{head}\n\n... [truncated] ...");
+    }
+    let head = safe_prefix_by_bytes(content, head_chars);
+    let tail = safe_suffix_by_bytes(content, tail_chars);
+    let skipped = content.len().saturating_sub(head.len() + tail.len());
+    format!("{head}\n\n... [truncated ~{skipped} chars, ~{max_tokens} token budget] ...\n\n{tail}")
 }
 
 const HIGH_SIGNAL_TOOL_RESULT_TERMS: &[&str] = &[

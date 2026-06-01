@@ -1176,6 +1176,9 @@ pub struct ToolContext {
         Option<std::sync::Arc<tokio::sync::Mutex<crate::engine::checkpoint::CheckpointManager>>>,
     /// Persistent memory manager shared with the active conversation.
     pub memory_manager: Option<std::sync::Arc<tokio::sync::Mutex<crate::memory::MemoryManager>>>,
+    /// Read-before-edit guard — tracks which files the model has read
+    /// so edit_file / multi_edit can validate SEARCH text grounding.
+    pub read_tracker: Option<std::sync::Arc<crate::engine::read_tracker::ReadTracker>>,
 }
 
 impl std::fmt::Debug for ToolContext {
@@ -1231,6 +1234,10 @@ impl std::fmt::Debug for ToolContext {
                 "memory_manager",
                 &self.memory_manager.as_ref().map(|_| "<MemoryManager>"),
             )
+            .field(
+                "read_tracker",
+                &self.read_tracker.as_ref().map(|_| "<ReadTracker>"),
+            )
             .finish()
     }
 }
@@ -1261,6 +1268,7 @@ impl ToolContext {
             diagnostic_tracker: None,
             checkpoint_manager: None,
             memory_manager: None,
+            read_tracker: None,
         }
     }
 
@@ -1387,6 +1395,16 @@ impl ToolContext {
         manager: std::sync::Arc<tokio::sync::Mutex<crate::memory::MemoryManager>>,
     ) -> Self {
         self.memory_manager = Some(manager);
+        self
+    }
+
+    /// Attach the read-before-edit guard so file_read / file_edit / file_write
+    /// can participate in the ReadTracker lifecycle.
+    pub fn with_read_tracker(
+        mut self,
+        tracker: std::sync::Arc<crate::engine::read_tracker::ReadTracker>,
+    ) -> Self {
+        self.read_tracker = Some(tracker);
         self
     }
 

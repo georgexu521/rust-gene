@@ -213,6 +213,36 @@ pub fn request_cache_diagnostic_shape(
     }
 }
 
+/// Returns a list of prefix-change reasons, mirroring Reasonix's
+/// `prefixChangeReasons`. Empty list means the prefix shape is stable
+/// (likely cache hit). Each string is one of: "system", "tools",
+/// "few_shots", "dynamic_tail", "log_rewrite".
+pub fn prefix_change_reasons(
+    previous: Option<&CacheDiagnosticShape>,
+    current: &CacheDiagnosticShape,
+) -> Vec<String> {
+    let Some(previous) = previous else {
+        return vec!["cold_start".to_string()];
+    };
+    let mut reasons = Vec::new();
+    if previous.system_fingerprint != current.system_fingerprint {
+        reasons.push("system".to_string());
+    }
+    if previous.tool_schema_fingerprint != current.tool_schema_fingerprint {
+        reasons.push("tools".to_string());
+    }
+    if previous.few_shots_fingerprint != current.few_shots_fingerprint {
+        reasons.push("few_shots".to_string());
+    }
+    if previous.dynamic_tail_fingerprint != current.dynamic_tail_fingerprint {
+        reasons.push("dynamic_tail".to_string());
+    }
+    if previous.message_count != current.message_count {
+        reasons.push("message_count".to_string());
+    }
+    reasons
+}
+
 pub fn infer_cache_miss_reason(
     previous: Option<&CacheDiagnosticShape>,
     current: &CacheDiagnosticShape,

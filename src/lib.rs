@@ -27,6 +27,7 @@ pub mod permissions;
 #[cfg(feature = "experimental-platform")]
 pub mod platform;
 pub mod plugins;
+pub mod ports;
 #[cfg(feature = "experimental-priority")]
 pub mod priority;
 #[cfg(feature = "experimental-priority")]

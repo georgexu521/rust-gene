@@ -335,6 +335,7 @@ fn scavenge_tool_calls(raw_content: &str, report: &mut ToolCallRepairReport) -> 
     let mut calls = Vec::new();
     calls.extend(scavenge_invoke_tags(raw_content, report));
     calls.extend(scavenge_json_tool_call_tags(raw_content, report));
+    calls.extend(scavenge_dsml_function_calls(raw_content, report));
     calls
 }
 
@@ -414,6 +415,83 @@ fn parse_json_tool_call(
         name,
         arguments,
     })
+}
+
+/// Scavenge DSML-format tool calls leaked in non-thinking model responses.
+/// DeepSeek models can emit DSML markup in regular turns:
+///
+/// ```text
+/// 〈DSML｜function_calls〉
+/// 〈DSML｜invoke name="file_read"〉
+/// 〈DSML｜parameter name="path" string="true"〉file.md〈/DSML｜parameter〉
+/// 〈/DSML｜invoke〉
+/// 〈/DSML｜function_calls〉
+/// ```
+fn scavenge_dsml_function_calls(
+    raw_content: &str,
+    report: &mut ToolCallRepairReport,
+) -> Vec<ToolCall> {
+    if !raw_content.contains("〈DSML｜function_calls〉") {
+        return Vec::new();
+    }
+
+    let re = Regex::new(r"(?s)〈DSML｜function_calls〉(.*?)〈/DSML｜function_calls〉")
+        .expect("valid DSML regex");
+    let mut calls = Vec::new();
+
+    for captures in re.captures_iter(raw_content) {
+        let body = captures.get(1).map(|m| m.as_str()).unwrap_or("");
+        calls.extend(parse_dsml_invoke_block(body, calls.len(), report));
+    }
+
+    calls
+}
+
+fn parse_dsml_invoke_block(
+    body: &str,
+    base_idx: usize,
+    report: &mut ToolCallRepairReport,
+) -> Vec<ToolCall> {
+    let invoke_re =
+        Regex::new(r#"(?s)〈DSML｜invoke\s+name\s*=\s*"([^"]+)"〉(.*?)〈/DSML｜invoke〉"#)
+            .expect("valid DSML invoke regex");
+    let param_re =
+        Regex::new(r#"〈DSML｜parameter\s+name\s*=\s*"([^"]+)"[^〉]*〉(.*?)〈/DSML｜parameter〉"#)
+            .expect("valid DSML param regex");
+
+    let mut calls = Vec::new();
+
+    for (idx, captures) in invoke_re.captures_iter(body).enumerate() {
+        let name = captures.get(1).map(|m| m.as_str().trim().to_string());
+        let Some(name) = name else { continue };
+        if name.is_empty() {
+            continue;
+        }
+
+        let params_body = captures.get(2).map(|m| m.as_str()).unwrap_or("");
+        let mut args = Map::new();
+        for param in param_re.captures_iter(params_body) {
+            let param_name = param.get(1).map(|m| m.as_str().trim().to_string());
+            let param_value = param
+                .get(2)
+                .map(|m| m.as_str().trim().to_string())
+                .unwrap_or_default();
+            if let Some(param_name) = param_name {
+                if !param_name.is_empty() {
+                    args.insert(param_name, Value::String(param_value));
+                }
+            }
+        }
+
+        calls.push(ToolCall {
+            id: format!("dsml_repair_call_{}", base_idx + idx + 1),
+            name,
+            arguments: Value::Object(args),
+        });
+        report.scavenged_tool_calls += 1;
+    }
+
+    calls
 }
 
 fn suppress_duplicate_calls(

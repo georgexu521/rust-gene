@@ -296,6 +296,7 @@ mod tests {
             diagnostic_tracker: None,
             checkpoint_manager: None,
             memory_manager: None,
+            read_tracker: None,
         }
     }
 

@@ -1047,6 +1047,9 @@ impl Tool for FileReadTool {
         }
 
         if path.is_dir() {
+            if let Some(ref tracker) = context.read_tracker {
+                tracker.mark_read(&path);
+            }
             return read_directory_result(&path, path_str, &identity, limit, offset).await;
         }
 
@@ -1066,6 +1069,10 @@ impl Tool for FileReadTool {
                 return ToolResult::error(e);
             }
         };
+        // Read-before-edit guard: record this successful read.
+        if let Some(ref tracker) = context.read_tracker {
+            tracker.mark_read(&path);
+        }
         let content = snapshot.content.as_str();
 
         let targeted_read = limit.is_some() || offset.is_some();
@@ -1365,6 +1372,15 @@ impl Tool for FileWriteTool {
             return result;
         }
         let file_guard = acquire_file_mutation_lock(&identity.state_key).await;
+
+        // ReadTracker: block overwriting unreferenced files.
+        if let Some(ref tracker) = context.read_tracker {
+            if !allow_edit_without_read() {
+                if let Err(msg) = tracker.check_edit(&path, content) {
+                    return ToolResult::error(msg);
+                }
+            }
+        }
 
         let existed_before = path.exists();
         let existing_snapshot = if existed_before {
@@ -2315,6 +2331,12 @@ impl Tool for FileEditTool {
                 read_before_edit_status(&context.session_id, &state_key, line_start, line_end);
             if status != ReadBeforeEditStatus::Allowed {
                 return ToolResult::error(file_read_state_guidance(path_str, status));
+            }
+            // ReadTracker — simpler path-level guard, cleared on context fold.
+            if let Some(ref tracker) = context.read_tracker {
+                if let Err(msg) = tracker.check_edit(&path, old_string) {
+                    return ToolResult::error(msg);
+                }
             }
         }
 
