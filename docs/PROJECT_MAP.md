@@ -42,9 +42,19 @@ not proof of current code. Read exact files before editing.
 - `src/engine/streaming.rs`: streaming request/response path.
 - `src/engine/conversation_loop/mod.rs`: main agent loop coordinator.
 - `src/engine/conversation_loop/main_loop_profile.rs`: quiet-direct vs standard main-loop profile selection.
+- `src/engine/conversation_loop/turn_iteration_controller.rs`: per-iteration
+  loop contract; no valid tool calls finish the turn, while empty responses get
+  bounded retry and tool loops are left to the iteration budget/storm guard.
 - `src/engine/conversation_loop/request_preparation_controller.rs`: request message preparation, dynamic context zones, model-led weighting hints, memory prefetch, cache-stability snapshot.
 - `src/engine/conversation_loop/tool_execution_controller.rs`: tool execution, observations, checkpoints, action review, permission integration.
+- `src/engine/conversation_loop/tool_batch_result_processor.rs`: tool result
+  aggregation and success/failure accounting; duplicate read-only calls are
+  counted for evidence, not converted into runtime-generated answers.
 - `src/engine/conversation_loop/closeout_controller.rs`: final closeout, execution reports, memory proposal preparation.
+- `src/engine/stop_checker.rs`: hard stop/checkpoint decisions only; advisory
+  score/no-progress/duplicate-read signals should not become a shadow planner.
+- `src/engine/repair/storm.rs`: simple exact repeated-call storm guard for
+  loop containment.
 
 ## Context And Cache
 

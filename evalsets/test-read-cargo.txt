@@ -1,0 +1,1 @@
+请读取 Cargo.toml 文件，告诉我 package.version 和 package.edition 的值。只读，不修改。

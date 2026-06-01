@@ -15,8 +15,10 @@ Progress through 2026-05-24:
 - Track C is implemented with durable compact boundary persistence and desktop
   restored-session binding through compacted session restore.
 - Track D is implemented with a session context ledger for file reads and
-  read-only bash facts, plus repeated-read recovery that answers from ledger
-  facts when the exact output is already known.
+  read-only bash facts. The earlier repeated-read runtime closeout that
+  answered from ledger/cache facts was removed on 2026-06-02 as part of runtime
+  diet; ledger facts should inform prompt context and trace, not generate final
+  answers outside the LLM.
 - Track E has its first product layer: tool-result normalization now applies
   context policy, keeps model-facing summaries factual, and marks ledger-fact
   eligible results.
@@ -291,9 +293,10 @@ Implemented in this pass:
   plus read/list/search bash facts as structured session events and injects
   recent ledger facts into request prompts so the model can reuse prior reads
   instead of rereading whole files.
-- Track D follow-up: repeated read-only closeout is now ledger-aware. Cache
-  notices can recover through session ledger facts instead of becoming another
-  blind retry.
+- Superseded Track D follow-up: repeated read-only closeout was briefly
+  ledger-aware, but that path is now removed. Exact duplicate read loops should
+  be bounded by the shared storm guard and iteration budget; useful prior-read
+  facts should enter as context ledger evidence.
 - Track E first layer: `ToolResultContextPolicy` is now attached during tool
   result normalization and marks provider-visible size, desktop-visible size,
   trace payload availability, durable artifacts, ledger eligibility,
@@ -383,8 +386,8 @@ Tasks:
 2. Record file-read facts from `file_read` and read-like bash/search commands.
 3. Store ledger facts in session store as structured learning/context events.
 4. Inject recent relevant ledger facts into `PromptContextAssembler`.
-5. Replace the current per-turn duplicate read closeout with ledger-aware
-   reuse that can answer from prior reads when the file is unchanged.
+5. Keep prior read facts model-facing through context ledger evidence. Do not
+   reintroduce a runtime-generated final answer path for repeated reads.
 
 Acceptance:
 
@@ -490,15 +493,17 @@ scripts/release-dogfood-gate.sh quick
 1. Track A: model context profiles.
 2. Track B: canonical usage snapshot.
 3. Track C: durable compact boundaries and restored-session binding.
-4. Track D: context ledger and repeated-read prevention.
+4. Track D: context ledger evidence. Repeated exact reads are bounded by the
+   shared storm guard; the context ledger should not synthesize final answers.
 5. Track F: unified compaction state machine.
 6. Track E: tool-result context policy.
 7. Track G: desktop context UX.
 8. Track H: long-session release gate.
 
-The first four tracks should land before judging the repeated `file_read`
-problem solved. A local guard that refuses repeated reads is only a stopgap; the
-real fix is making prior read facts durable, visible, and model-facing.
+The first four tracks should land before judging long-session read reuse solved.
+The current policy is deliberately narrow: prior read facts should be durable,
+visible, and model-facing, while exact duplicate read loops are bounded by the
+shared storm guard and the iteration cap.
 
 ## Non-Goals
 

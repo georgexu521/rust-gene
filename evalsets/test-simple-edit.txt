@@ -1,0 +1,1 @@
+请在 src/engine/conversation_loop/force_summary.rs 文件的 ForceSummaryReason 枚举的 Stuck 变体的文档注释中，把 "Iteration limit hit" 改成 "Iteration limit reached"。只改这一处英文，改完请用 cargo check 验证。

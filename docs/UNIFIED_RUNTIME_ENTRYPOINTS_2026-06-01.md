@@ -1,6 +1,6 @@
 # Unified Runtime Entrypoints
 
-Status: active guidance as of 2026-06-01.
+Status: active guidance as of 2026-06-02.
 
 ## Decision
 
@@ -21,11 +21,15 @@ The desktop app is a thin entrypoint:
 Use this order when debugging complex agent behavior:
 
 1. Deterministic Rust tests for the touched runtime modules.
-2. `scripts/agent-runtime-dogfood.sh` for one real full-runtime turn without
+2. Headless or TUI full-runtime dogfood for one real full-runtime turn without
    building or launching the desktop app.
 3. TUI/CLI interactive testing only when human interaction matters.
 4. Desktop smoke for bridge/UI behavior.
 5. Full Tauri packaging only for release or package-specific failures.
+
+For runtime-loop changes, do not start by rebuilding the desktop app. Desktop
+should prove bridge and rendering behavior after the shared runtime is already
+stable.
 
 ## Commands
 
@@ -59,3 +63,12 @@ Headless/TUI runtime dogfood can prove tool-loop, retry, validation, closeout,
 and model-flow behavior. It cannot prove desktop-specific behavior such as
 Tauri command wiring, event delivery to React, packaged-app environment,
 window state, or visual rendering. Those stay as small desktop smoke tests.
+
+## Runtime Diet Boundary
+
+The shared runtime should not infer semantic intent from natural-language model
+text such as "I will read X next". If the provider returns no valid tool calls,
+the turn is complete unless the response is empty. Loop safety belongs to the
+iteration budget, force-summary, and exact duplicate storm guard; tool safety
+belongs to tool contracts, permissions, destructive scope, and validation
+proof.

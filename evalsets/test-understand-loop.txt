@@ -1,0 +1,1 @@
+请阅读 src/engine/conversation_loop/turn_iteration_controller.rs 和 src/engine/stop_checker.rs，概括它们的关系，以及 stop_checker 当前的停止条件有哪些。

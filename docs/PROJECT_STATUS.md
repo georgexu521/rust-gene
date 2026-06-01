@@ -1,15 +1,16 @@
 # Project Status
 
-Last updated: 2026-05-26
+Last updated: 2026-06-02
 
 ## Summary
 
 Priority Agent is now an interactive coding CLI with a stateful runtime spine:
 intent routing, turn traces, session goals, memory, permissions, recovery plans,
 MCP health, CLI observability panels, and required validation closeout.
-The active runtime work is reducing prompt-driven over-control by moving agent
-design rules into typed context zones, task state, tool/permission gates,
-evidence-backed verification, and trace diagnostics.
+The active runtime work is keeping the shared CLI/TUI/desktop runtime simple:
+hard limits, permissions, tool contracts, evidence, validation proof, and
+closeout gates stay deterministic, while the LLM owns semantic and engineering
+judgment.
 
 Product direction: Priority Agent should stay narrow, deep, personal, and
 verifiable rather than chasing broad generic-agent parity. The durable goal is
@@ -19,6 +20,16 @@ habits, validation loops, and local workflow. See
 
 Current stage:
 
+- The latest runtime-diet pass is implemented in commit `4430647b` and recorded
+  in `docs/RUNTIME_DIET_UPDATE_2026-06-02.md`. It removed duplicate read-only
+  runtime closeout, cached read-result substitution, directory-read
+  redirection, workflow-specific non-tool double-tap finishing, and
+  score/advisory-driven `StopChecker` branches. The remaining loop contract is
+  simpler: a valid no-tool assistant response ends the turn; empty responses get
+  a bounded retry; exact repeated tool storms are handled by the shared storm
+  guard; the iteration budget and force-summary remain the runaway-loop safety
+  net; verification, permissions, rollback, model-output protocol repair, and
+  destructive-scope checks remain hard constraints.
 - OpenClaw/Hermes reference implementation has started from
   `docs/OPENCLAW_HERMES_REFERENCE_AUDIT_2026-05-26.md`. Phase 1 is implemented:
   the instruction loader now supports optional project-root `SOUL.md`,
@@ -84,8 +95,10 @@ Current stage:
   skill evolution state; improvement proposals can also be bound to named
   evalsets before apply.
 - `docs/LLM_RUNTIME_SIMPLIFICATION_PLAN_2026-05-08.md` is complete through its
-  follow-up implementation phases. Future runtime-diet work should come from
-  live-use gaps, release-hardening gates, or a newly reviewed plan.
+  original follow-up implementation phases and now has a 2026-06-02 addendum
+  for the Reasonix-style simplification pass. Future runtime-diet work should
+  remove or downgrade pseudo-intelligent runtime branches before adding new
+  ones.
 - `docs/AGENT_LEARNING_NOTES_PROJECT_ALIGNMENT_2026-05-24.md` is the current
   implementation record for the agent-design notes review. The active slice has
   landed five-zone context assembly, `AgentTaskState`, phase-aware tool
@@ -136,9 +149,11 @@ Current stage:
   real A/B run (`ab-20260525-155452-baseline` vs
   `ab-20260525-155452-weighted`) showed weighted process-score improvement
   without outcome improvement. Follow-up hardening fixed the assertion/reporting
-  false negatives for high-risk block and loop, added bounded duplicate
-  read-only filtering plus target-preserving closeout for low-value replan, and
-  improved stale/missing `old_string` edit-repair guidance. Latest full
+  false negatives for high-risk block and loop, and improved stale/missing
+  `old_string` edit-repair guidance. An earlier bounded duplicate read-only
+  closeout path was removed by the 2026-06-02 runtime diet; exact duplicate
+  tool loops now belong to the shared storm guard and iteration budget. Latest
+  full
   weighted suite: `mva-followup-full-20260525-165257`, `6/7` passed with
   average `agent_score=87.1`; the remaining `minimum-agent-verification-repair`
   failure is a model/task-completion failure with honest `not_verified`
@@ -818,6 +833,8 @@ Canonical current docs:
 - `docs/CLAUDE_CODE_ALIGNMENT_PLAN.md`
 - `docs/REMAINING_CLOSURE_PLAN.md`
 - `docs/LLM_RUNTIME_SIMPLIFICATION_PLAN_2026-05-08.md`
+- `docs/RUNTIME_DIET_UPDATE_2026-06-02.md`
+- `docs/UNIFIED_RUNTIME_ENTRYPOINTS_2026-06-01.md`
 - `docs/AGENT_LEARNING_NOTES_PROJECT_ALIGNMENT_2026-05-24.md`
 - `docs/NEXT_DEVELOPMENT_PLAN_2026-05-09.md`
 - `docs/AGENT_TESTING_MATRIX_2026-05-08.md`

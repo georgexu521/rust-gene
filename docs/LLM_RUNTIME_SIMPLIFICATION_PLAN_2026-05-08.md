@@ -1300,15 +1300,69 @@ Validated on 2026-05-08:
 
 ## Next Execution Order After Phase 14
 
-Follow-up implementation phases in this plan are complete. Next work should be
-chosen from validation gaps found during live use, release-hardening gates, or a
-new reviewed plan.
+Follow-up implementation phases in this plan are complete. The 2026-06-02
+runtime-diet addendum below records the next live-use simplification pass.
+Future work should be chosen from validation gaps found during live use,
+release-hardening gates, or a newly reviewed plan.
 
 The completed plan now has project-instruction diet, explicit loading
 semantics, route/sample measurement gates, core tool contracts, role-scoped
 subagent surfaces, gated auxiliary context, and concise default closeout.
 Future work should use these gates to catch prompt or tool-surface bloat while
 changing more surfaces.
+
+## Addendum - 2026-06-02 Runtime Diet
+
+Status: completed in commit `4430647b`.
+
+Reason: live desktop/TUI testing exposed a failure mode where complex tasks
+could keep cycling through tool calls and runtime follow-up branches instead of
+letting the LLM conclude or hit the bounded iteration safety net. Comparing the
+loop with Reasonix favored a simpler contract: process valid tool calls, stop
+on no valid tool calls, bound repeated calls with a simple storm guard and the
+iteration cap, and avoid runtime-generated semantic answers.
+
+Implemented:
+
+1. Simplified finish semantics in
+   `src/engine/conversation_loop/turn_iteration_controller.rs`.
+   A valid assistant response with no valid tool calls now ends the turn for
+   all workflows. Empty responses still get a bounded retry when budget
+   remains.
+2. Removed duplicate read-only runtime synthesis:
+   - no pre-execution closeout from cached read results;
+   - no cached read-result substitution in mixed batches;
+   - no duplicate directory-read redirection;
+   - no ledger-based runtime-generated final answer;
+   - no model-visible "stop reading and answer from prior output" prompt.
+3. Reduced `StopChecker` back to hard constraints:
+   user interruption, action review ask/deny/revise, rollback candidates,
+   budget exhaustion, repeated permission blocks, invalid model-output repair
+   exhaustion, and verification-ready closeout. Score-only and advisory-only
+   signals no longer drive loop control.
+4. Kept exact duplicate loop protection in the shared storm guard. `file_read`
+   is no longer storm-exempt, so identical repeated reads are bounded there;
+   changed path/range reads remain distinct calls.
+5. Kept provider-visible tool results from exposing local artifact paths while
+   retaining artifact metadata for trace/runtime use.
+
+Validation:
+
+```bash
+cargo fmt --check
+cargo check -q
+cargo test -q --lib stop_checker
+cargo test -q --lib turn_iteration_controller
+cargo test -q --lib tool_batch_result_processor
+cargo test -q --lib tool_execution_controller
+cargo test -q --lib resolve_read_path_rejects_runtime_tool_result_artifacts_by_default
+bash -n scripts/tui-dogfood-test.sh
+git diff --check
+```
+
+No desktop, TUI, or live dogfood run was performed for this addendum. The next
+behavior check should use the shared runtime dogfood/TUI path first, then
+desktop smoke only for bridge or UI-specific evidence.
 
 ## Original Execution Order (Completed Through Phase 8)
 
