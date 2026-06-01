@@ -303,6 +303,16 @@ pub(crate) fn tool_call_is_storm_exempt(registry: &ToolRegistry, tool_name: &str
         .get(tool_name)
         .map(|tool| tool.requires_user_interaction())
         .unwrap_or(false)
+        || matches!(
+            tool_name,
+            "file_read"
+                | "project_list"
+                | "memory_load"
+                | "skills_list"
+                | "skill_view"
+                | "list_mcp_resources"
+                | "read_mcp_resource"
+        )
 }
 
 #[cfg(test)]

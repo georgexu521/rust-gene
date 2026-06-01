@@ -81,7 +81,10 @@ import {
   loadSessionTranscript,
   submitUserMessage,
   withError,
+  withRunIdleWarning,
 } from "./runEventState";
+
+const RUN_EVENT_IDLE_TIMEOUT_MS = 660_000;
 
 export function App() {
   const { theme, toggle: toggleTheme } = useTheme();
@@ -111,6 +114,8 @@ export function App() {
   const [pendingDeleteSession, setPendingDeleteSession] = useState<RecentSession | null>(null);
   const [runState, setRunState] = useState(initialRunViewState);
   const permissionRecoveryRef = useRef<HTMLDivElement | null>(null);
+  const activeRunSessionIdRef = useRef<string | null>(null);
+  const runWatchdogRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     void initialize();
@@ -127,6 +132,7 @@ export function App() {
 
     return () => {
       disposed = true;
+      clearRunWatchdog();
       cleanup?.();
     };
   }, []);
@@ -254,10 +260,17 @@ export function App() {
     }
   }
 
-  async function refreshSessions() {
+  async function refreshSessions(options: { syncSelectedSessionId?: string | null } = {}) {
     try {
       const query = sessionSearch.trim();
-      setSessions(query ? await searchSessions(query) : await listRecentSessions());
+      const nextSessions = query ? await searchSessions(query) : await listRecentSessions();
+      setSessions(nextSessions);
+      if (options.syncSelectedSessionId) {
+        const selected = nextSessions.find((session) => session.id === options.syncSelectedSessionId);
+        if (selected) {
+          setSelectedSessionSummary(selected);
+        }
+      }
     } catch (err) {
       setRunState((current) => withError(current, err));
     }
@@ -344,9 +357,9 @@ export function App() {
     }
   }
 
-  async function handleSelectProject() {
+  async function handleSelectProject(path = projectPath) {
     try {
-      const selected = await selectProject(projectPath);
+      const selected = await selectProject(path);
       setProjectPath(selected.path);
       setSelectedSessionSummary(null);
       setSettings((current) =>
@@ -507,10 +520,12 @@ export function App() {
     setComposer("");
     setRunContexts([]);
     setRunState((current) => submitUserMessage(current, message, runContexts));
+    armRunWatchdog("after submit");
 
     try {
       await sendMessage(message, runContexts);
     } catch (err) {
+      clearRunWatchdog();
       setRunState((current) => withError(current, err));
       void refreshSessions();
     }
@@ -559,17 +574,26 @@ export function App() {
   }
 
   function handleRunEvent(event: DesktopRunEvent) {
+    if (event.type === "run_completed" || event.type === "run_error") {
+      clearRunWatchdog();
+    } else {
+      armRunWatchdog(`after ${event.type}`);
+    }
+
     setRunState((current) => {
       const result = applyRunEvent(current, event);
       return result.state;
     });
 
     if (event.type === "run_completed" || event.type === "run_error") {
-      void refreshSessions();
+      const completedSessionId = activeRunSessionIdRef.current;
+      activeRunSessionIdRef.current = null;
+      void refreshSessions({ syncSelectedSessionId: completedSessionId });
       void refreshContextSnapshot();
       void refreshWorkbenchSnapshot();
     }
     if (event.type === "run_started" && event.session_id) {
+      activeRunSessionIdRef.current = event.session_id;
       setSelectedSessionSummary((current) =>
         current?.id === event.session_id
           ? current
@@ -588,11 +612,40 @@ export function App() {
   }
 
   function resetConversationView() {
+    clearRunWatchdog();
     setRunState({ ...initialRunViewState, items: [], traceItems: [] });
     setComposer("");
     setRunContexts([]);
     setActiveTraceId(null);
     setIsTraceOpen(false);
+  }
+
+  function armRunWatchdog(reason: string) {
+    clearRunWatchdog();
+    runWatchdogRef.current = setTimeout(() => {
+      runWatchdogRef.current = null;
+      setRunState((current) =>
+        current.isRunning
+          ? withRunIdleWarning(
+              current,
+              `Desktop runtime stopped sending events for ${Math.round(
+                RUN_EVENT_IDLE_TIMEOUT_MS / 1000,
+              )} seconds (${reason}). The provider request may still be active; check diagnostics or retry.`,
+            )
+          : current,
+      );
+      void refreshSessions();
+      void refreshContextSnapshot();
+      void refreshWorkbenchSnapshot();
+    }, RUN_EVENT_IDLE_TIMEOUT_MS);
+  }
+
+  function clearRunWatchdog() {
+    if (!runWatchdogRef.current) {
+      return;
+    }
+    clearTimeout(runWatchdogRef.current);
+    runWatchdogRef.current = null;
   }
 
   const isEmptyConversation = runState.items.length === 0;
@@ -792,9 +845,8 @@ export function App() {
           onAddFileContext={() => void handleAddFileContext()}
           onOpenContext={setActiveContextDetail}
           onRemoveContext={(type) => handleRemoveContext(type)}
-          onProjectPathChange={setProjectPath}
           onBrowseProject={() => void handleBrowseProject()}
-          onSelectProject={() => void handleSelectProject()}
+          onSelectProject={(path) => void handleSelectProject(path)}
           onSelectRecentProject={(path) => void handleSelectRecentProject(path)}
           onDetailLevelChange={(level) => void handleDetailLevelChange(level)}
           onPermissionModeChange={(mode) => void handlePermissionModeChange(mode)}

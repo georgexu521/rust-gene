@@ -9,7 +9,7 @@ type TooltipProps = {
 export function Tooltip({ text, children, delayMs = 400 }: TooltipProps) {
   const [show, setShow] = useState(false);
   const [pos, setPos] = useState({ x: 0, y: 0 });
-  const timeoutRef = useRef<ReturnType<typeof setTimeout>>();
+  const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const ref = useRef<HTMLSpanElement>(null);
 
   function handleEnter(e: React.MouseEvent) {
@@ -22,12 +22,19 @@ export function Tooltip({ text, children, delayMs = 400 }: TooltipProps) {
   }
 
   function handleLeave() {
-    clearTimeout(timeoutRef.current);
+    if (timeoutRef.current) {
+      clearTimeout(timeoutRef.current);
+      timeoutRef.current = null;
+    }
     setShow(false);
   }
 
   useEffect(() => {
-    return () => clearTimeout(timeoutRef.current);
+    return () => {
+      if (timeoutRef.current) {
+        clearTimeout(timeoutRef.current);
+      }
+    };
   }, []);
 
   return (

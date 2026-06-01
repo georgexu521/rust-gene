@@ -120,6 +120,22 @@ impl ApiRequestController {
             let nonstreaming_tool_request = context.tx.is_some()
                 && request_has_tools
                 && provider_capabilities.requires_nonstreaming_tool_calls;
+            if let Some(tx) = context.tx {
+                let _ = tx
+                    .send(StreamEvent::RuntimeDiagnostic {
+                        diagnostic: serde_json::json!({
+                            "schema": "api_request_stage.v1",
+                            "stage": "api_request_started",
+                            "iteration": context.iteration,
+                            "model": request.model.clone(),
+                            "tools": request_tools.len(),
+                            "streaming": !nonstreaming_tool_request,
+                            "provider_family": provider_capabilities.protocol_family.label(),
+                            "nonstreaming_tool_request": nonstreaming_tool_request,
+                        }),
+                    })
+                    .await;
+            }
             let request_started_at = Instant::now();
             api_result = if let Some(tx) = context.tx {
                 if nonstreaming_tool_request {

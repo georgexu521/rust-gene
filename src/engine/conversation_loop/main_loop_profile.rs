@@ -45,12 +45,12 @@ impl MainLoopProfile {
     pub(super) fn max_loop_iterations(
         self,
         configured_max: usize,
-        repair_attempts: usize,
+        _repair_attempts: usize,
     ) -> usize {
         if self.is_quiet_direct() {
             1
         } else {
-            configured_max + repair_attempts.max(3)
+            configured_max
         }
     }
 }
@@ -89,5 +89,10 @@ mod tests {
             MainLoopProfile::from_turn(&route, &required),
             MainLoopProfile::Standard
         );
+    }
+
+    #[test]
+    fn standard_profile_respects_configured_reasonix_cap_without_extra_repair_rounds() {
+        assert_eq!(MainLoopProfile::Standard.max_loop_iterations(50, 9), 50);
     }
 }

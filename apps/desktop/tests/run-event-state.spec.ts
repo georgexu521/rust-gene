@@ -5,6 +5,7 @@ import {
   initialRunViewState,
   loadSessionTranscript,
   submitUserMessage,
+  withRunIdleWarning,
 } from "../src/app/runEventState";
 
 function ids(...values: string[]) {
@@ -45,6 +46,25 @@ test.describe("run event state", () => {
         }),
       }),
     );
+  });
+
+  test("treats idle watchdog messages as recoverable run warnings", () => {
+    const submitted = submitUserMessage(initialRunViewState, "Inspect UI", [], ids("user-1"));
+    const warned = withRunIdleWarning(submitted, "runtime idle");
+
+    expect(warned.isRunning).toBe(true);
+    expect(warned.error).toBe("runtime idle");
+
+    const started = applyRunEvent(warned, {
+      type: "run_started",
+      run_id: "run-1",
+      session_id: "session-1",
+    }).state;
+    const completed = applyRunEvent(started, { type: "run_completed" }, ids("done-1")).state;
+
+    expect(started.error).toBeNull();
+    expect(completed.error).toBeNull();
+    expect(completed.isRunning).toBe(false);
   });
 
   test("keeps simple replies out of the tool timeline", () => {
@@ -889,13 +909,15 @@ test.describe("run event state", () => {
   });
 
   test("loads stored session messages and normalizes unknown roles as tool rows", () => {
-    const loaded = loadSessionTranscript(initialRunViewState, "session-1", [
+    const runningState = submitUserMessage(initialRunViewState, "stuck run", [], ids("user-1"));
+    const loaded = loadSessionTranscript(runningState, "session-1", [
       { id: 1, role: "user", content: "hi", created_at: "preview" },
       { id: 2, role: "assistant", content: "hello", created_at: "preview" },
       { id: 3, role: "tool", content: "ran command", created_at: "preview" },
     ]);
 
     expect(loaded.selectedSessionId).toBe("session-1");
+    expect(loaded.isRunning).toBe(false);
     expect(loaded.pendingPermission).toBeNull();
     expect(loaded.error).toBeNull();
     expect(loaded.items).toEqual([

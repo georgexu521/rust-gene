@@ -1,5 +1,6 @@
 use futures::StreamExt;
 use priority_agent::desktop_runtime::{DesktopContextSnapshot, DesktopRunEvent, DesktopRuntime};
+use priority_agent::engine::streaming::StreamEvent;
 use priority_agent::engine::turn_ingress::classify_turn_ingress;
 use priority_agent::permissions::PermissionMode;
 use priority_agent::session_store::SessionStore;
@@ -7,6 +8,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter, Manager, State, WebviewWindow};
 use tokio::sync::Mutex;
 
@@ -812,9 +814,45 @@ async fn send_message(
     };
     let engine = runtime.streaming_engine();
     let active_session_id = engine.current_session_id();
-    let mut stream = engine.query_stream(message).await;
+    if active_session_id.is_some() {
+        {
+            let mut stored_session_id = state.active_session_id.lock().await;
+            *stored_session_id = active_session_id.clone();
+        }
+        persist_current_settings(&state).await?;
+    }
+    let desktop_run_id = format!(
+        "desktop-run-{}",
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or_default()
+    );
+    app.emit(
+        "desktop-run-event",
+        DesktopRunEvent::RunStarted {
+            run_id: desktop_run_id,
+            session_id: active_session_id.clone(),
+        },
+    )
+    .map_err(|err| err.to_string())?;
+    let _ = append_desktop_log(&diagnostic_logs_path, "run_started");
 
-    while let Some(event) = stream.next().await {
+    let mut stream = engine.query_stream(message).await;
+    let _ = append_desktop_log(&diagnostic_logs_path, "run_stream_opened");
+
+    loop {
+        let event = stream.next().await;
+        let Some(event) = event else {
+            let _ = append_desktop_log(&diagnostic_logs_path, "run_stream_ended");
+            break;
+        };
+        if let Some(entry) = desktop_stream_event_log(&event) {
+            let _ = append_desktop_log(&diagnostic_logs_path, &entry);
+        }
+        if matches!(event, StreamEvent::Start) {
+            continue;
+        }
         let mut desktop_event = DesktopRunEvent::from_stream_event(event);
         if let DesktopRunEvent::RunStarted { session_id, .. } = &mut desktop_event {
             *session_id = active_session_id.clone();
@@ -848,6 +886,94 @@ async fn send_message(
     }
 
     Ok(())
+}
+
+fn desktop_stream_event_log(event: &StreamEvent) -> Option<String> {
+    match event {
+        StreamEvent::Start => Some("stream_event start".to_string()),
+        StreamEvent::TextChunk(text) => Some(format!(
+            "stream_event text_chunk chars={}",
+            text.chars().count()
+        )),
+        StreamEvent::ThinkingStart => Some("stream_event thinking_start".to_string()),
+        StreamEvent::ThinkingChunk(text) => Some(format!(
+            "stream_event thinking_chunk chars={}",
+            text.chars().count()
+        )),
+        StreamEvent::ThinkingComplete => Some("stream_event thinking_complete".to_string()),
+        StreamEvent::ToolCallStart { id, name } => Some(format!(
+            "stream_event tool_call_start id={} name={}",
+            sanitize_log_value(id),
+            sanitize_log_value(name)
+        )),
+        StreamEvent::ToolCallArgs { id, args_delta } => Some(format!(
+            "stream_event tool_call_args id={} chars={}",
+            sanitize_log_value(id),
+            args_delta.chars().count()
+        )),
+        StreamEvent::ToolCallComplete { id } => Some(format!(
+            "stream_event tool_call_complete id={}",
+            sanitize_log_value(id)
+        )),
+        StreamEvent::ToolExecutionStart { id, name, .. } => Some(format!(
+            "stream_event tool_execution_start id={} name={}",
+            sanitize_log_value(id),
+            sanitize_log_value(name)
+        )),
+        StreamEvent::ToolExecutionProgress { id, progress } => Some(format!(
+            "stream_event tool_execution_progress id={} chars={}",
+            sanitize_log_value(id),
+            progress.chars().count()
+        )),
+        StreamEvent::ToolExecutionComplete { id, result, .. } => Some(format!(
+            "stream_event tool_execution_complete id={} chars={}",
+            sanitize_log_value(id),
+            result.chars().count()
+        )),
+        StreamEvent::PermissionRequest { id, tool_name, .. } => Some(format!(
+            "stream_event permission_request id={} tool={}",
+            sanitize_log_value(id),
+            sanitize_log_value(tool_name)
+        )),
+        StreamEvent::Usage {
+            prompt_tokens,
+            completion_tokens,
+            reasoning_tokens,
+            cached_tokens,
+        } => Some(format!(
+            "stream_event usage prompt_tokens={} completion_tokens={} reasoning_tokens={} cached_tokens={}",
+            prompt_tokens,
+            completion_tokens,
+            reasoning_tokens
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "none".to_string()),
+            cached_tokens
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "none".to_string())
+        )),
+        StreamEvent::RuntimeDiagnostic { diagnostic } => {
+            let schema = diagnostic
+                .get("schema")
+                .and_then(|value| value.as_str())
+                .unwrap_or("unknown");
+            let stage = diagnostic
+                .get("stage")
+                .or_else(|| diagnostic.pointer("/task_state/stage"))
+                .and_then(|value| value.as_str())
+                .unwrap_or("unknown");
+            Some(format!(
+                "stream_event runtime_diagnostic schema={} stage={}",
+                sanitize_log_value(schema),
+                sanitize_log_value(stage)
+            ))
+        }
+        StreamEvent::Complete => Some("stream_event complete".to_string()),
+        StreamEvent::OutputTruncated => Some("stream_event output_truncated".to_string()),
+        StreamEvent::Error(message) => Some(format!(
+            "stream_event error message={}",
+            sanitize_log_value(message)
+        )),
+    }
 }
 
 #[tauri::command]

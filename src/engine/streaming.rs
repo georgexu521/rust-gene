@@ -812,6 +812,14 @@ impl StreamingQueryEngine {
                     }
                 }
             }
+            let _ = tx
+                .send(StreamEvent::RuntimeDiagnostic {
+                    diagnostic: serde_json::json!({
+                        "schema": "streaming_stage.v1",
+                        "stage": "user_message_recorded",
+                    }),
+                })
+                .await;
 
             // 2. 检查是否需要压缩
             {
@@ -912,6 +920,14 @@ impl StreamingQueryEngine {
                     ));
                 }
             }
+            let _ = tx
+                .send(StreamEvent::RuntimeDiagnostic {
+                    diagnostic: serde_json::json!({
+                        "schema": "streaming_stage.v1",
+                        "stage": "preflight_compression_checked",
+                    }),
+                })
+                .await;
 
             // 3. 获取当前历史用于查询
             let messages_for_query = {
@@ -924,12 +940,30 @@ impl StreamingQueryEngine {
                     engine.working_dir_override.as_deref(),
                 )
             };
+            let _ = tx
+                .send(StreamEvent::RuntimeDiagnostic {
+                    diagnostic: serde_json::json!({
+                        "schema": "streaming_stage.v1",
+                        "stage": "messages_built",
+                        "messages": messages_for_query.len(),
+                    }),
+                })
+                .await;
 
             // 4. 执行查询（带 fallback 支持）
             let mut assistant_content = String::new();
             let mut assistant_tool_calls_made = false;
 
             let turn_timeout = turn_execution_timeout();
+            let _ = tx
+                .send(StreamEvent::RuntimeDiagnostic {
+                    diagnostic: serde_json::json!({
+                        "schema": "streaming_stage.v1",
+                        "stage": "conversation_loop_starting",
+                        "timeout_secs": turn_timeout.as_secs(),
+                    }),
+                })
+                .await;
             let run_result = match tokio::time::timeout(
                 turn_timeout,
                 engine.run_query_with_messages(messages_for_query.clone(), &tx, agent_mode),

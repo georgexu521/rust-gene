@@ -1,6 +1,22 @@
 import { expect, test, type Page } from "@playwright/test";
 
 test.describe("desktop UI smoke", () => {
+  test("project path edits stay draft-only until applied", async ({ page }) => {
+    await page.goto("/?previewFixture=1");
+
+    const composer = page.locator(".composer");
+    await expect(page.getByRole("button", { exact: true, name: "rust-agent" })).toBeVisible();
+    await expect(
+      page.locator(".empty-state").getByRole("heading", { name: "What should we build in rust-agent?" }),
+    ).not.toBeVisible();
+
+    await composer.getByRole("button", { name: "Project" }).click();
+    await page.getByRole("textbox", { name: "Project path" }).fill("/Users/georgexu/Desktop/bioclaw");
+
+    await expect(page.getByRole("button", { exact: true, name: "rust-agent" })).toBeVisible();
+    await expect(composer.getByRole("button", { exact: true, name: "Project" })).toContainText("rust-agent");
+  });
+
   test("desktop layout renders core controls and settings drawer", async ({ page }, testInfo) => {
     await page.goto("/?previewFixture=1");
 

@@ -48,6 +48,7 @@ export function applyRunEvent(
       return {
         state: {
           ...state,
+          error: null,
           selectedSessionId: event.session_id || state.selectedSessionId,
           items: [
             ...state.items,
@@ -85,6 +86,7 @@ export function applyRunEvent(
       return {
         state: {
           ...state,
+          error: null,
           items: appendAssistantDelta(state.items, event.text, createId),
         },
         shouldRefreshSessions: false,
@@ -93,6 +95,7 @@ export function applyRunEvent(
       return {
         state: {
           ...state,
+          error: null,
           items: appendReasoning(state.items, "", true, createId),
           traceItems: appendTrace(state.traceItems, {
             id: createId(),
@@ -106,6 +109,7 @@ export function applyRunEvent(
       return {
         state: {
           ...state,
+          error: null,
           items: appendReasoning(state.items, event.text, true, createId),
         },
         shouldRefreshSessions: false,
@@ -369,6 +373,7 @@ export function applyRunEvent(
       return {
         state: {
           ...state,
+          error: null,
           isRunning: false,
           pendingPermission: null,
           pendingRunContexts: [],
@@ -411,6 +416,7 @@ export function loadSessionTranscript(
 ): RunViewState {
   return {
     ...state,
+    isRunning: false,
     selectedSessionId: sessionId,
     pendingRunContexts: [],
     items: [...compactBoundaries.map(compactBoundaryToTranscriptItem), ...messages.map(messageToTranscriptItem)],
@@ -514,6 +520,16 @@ export function withError(state: RunViewState, error: unknown): RunViewState {
     error: String(error),
     isRunning: false,
     pendingRunContexts: [],
+  };
+}
+
+export function withRunIdleWarning(state: RunViewState, warning: unknown): RunViewState {
+  if (!state.isRunning) {
+    return state;
+  }
+  return {
+    ...state,
+    error: String(warning),
   };
 }
 

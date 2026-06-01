@@ -36,9 +36,8 @@ type ComposerProps = {
   onAddFileContext: () => void;
   onOpenContext: (context: DesktopRunContext) => void;
   onRemoveContext: (type: DesktopRunContext["type"]) => void;
-  onProjectPathChange: (value: string) => void;
   onBrowseProject: () => void;
-  onSelectProject: () => void;
+  onSelectProject: (path: string) => void;
   onSelectRecentProject: (path: string) => void;
   onDetailLevelChange: (level: DetailLevelId) => void;
   onPermissionModeChange: (mode: PermissionModeId) => void;
@@ -58,7 +57,6 @@ export function Composer({
   isEmptyState = false,
   isRunning,
   onComposerChange,
-  onProjectPathChange,
   onOpenContext,
   onBrowseProject,
   onSelectProject,
@@ -75,6 +73,7 @@ export function Composer({
   const [openMenu, setOpenMenu] = useState<"context" | "project" | "mode" | "provider" | null>(
     null,
   );
+  const [draftProjectPath, setDraftProjectPath] = useState(projectPath);
   const activeProvider = providerStatus?.active_provider || "";
   const activeModel = providerStatus?.active_model || "";
   const projectSegments = projectPath.split("/").filter(Boolean);
@@ -91,7 +90,13 @@ export function Composer({
   const permissionLabel = formatPermissionMode(permissionMode);
 
   function toggleMenu(menu: "context" | "project" | "mode" | "provider") {
-    setOpenMenu((current) => (current === menu ? null : menu));
+    setOpenMenu((current) => {
+      const next = current === menu ? null : menu;
+      if (next === "project") {
+        setDraftProjectPath(projectPath);
+      }
+      return next;
+    });
   }
 
   function addCurrentDiffContext() {
@@ -117,6 +122,7 @@ export function Composer({
 
   useEffect(() => {
     if (!openMenu) {
+      setDraftProjectPath(projectPath);
       return;
     }
 
@@ -138,7 +144,7 @@ export function Composer({
       document.removeEventListener("mousedown", closeOnOutsideClick);
       document.removeEventListener("keydown", closeOnEscape);
     };
-  }, [openMenu]);
+  }, [openMenu, projectPath]);
 
   return (
     <form
@@ -251,8 +257,19 @@ export function Composer({
                 <div className="composer-popover-title">Project</div>
                 <input
                   aria-label="Project path"
-                  value={projectPath}
-                  onChange={(event) => onProjectPathChange(event.target.value)}
+                  value={draftProjectPath}
+                  onChange={(event) => setDraftProjectPath(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key !== "Enter") {
+                      return;
+                    }
+                    event.preventDefault();
+                    const nextPath = draftProjectPath.trim();
+                    if (nextPath) {
+                      setOpenMenu(null);
+                      onSelectProject(nextPath);
+                    }
+                  }}
                 />
                 {recentProjects.length ? (
                   <>
@@ -282,11 +299,12 @@ export function Composer({
                 <div className="composer-popover-actions">
                   <button
                     aria-label="Apply project path"
+                    disabled={!draftProjectPath.trim() || isRunning}
                     title="Apply project path"
                     type="button"
                     onClick={() => {
                       setOpenMenu(null);
-                      onSelectProject();
+                      onSelectProject(draftProjectPath.trim());
                     }}
                   >
                     <RotateCcw aria-hidden="true" size={16} />

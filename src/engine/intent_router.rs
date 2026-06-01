@@ -115,9 +115,12 @@ impl IntentRouter {
         let has_memory_signal = contains_any(&lower, &["/memory", "remember", "memory", "recall"])
             || contains_any(zh, &["记忆", "记住", "回忆"]);
         let has_code_creation_signal = is_natural_code_creation_request(&lower, zh);
+        let has_read_only_signal = is_read_only_request(&lower, zh);
+        let has_generic_code_change_signal =
+            !has_read_only_signal && is_code_change_request(&lower, zh);
         let has_code_change_signal = has_live_coding_code_change_signal
             || has_live_coding_audit_signal
-            || is_code_change_request(&lower, zh);
+            || has_generic_code_change_signal;
         let has_debug_signal = is_debug_request(&lower, zh);
         let has_file_mutation_signal = is_file_mutation_request(&lower, zh);
         let has_local_inspection_signal = is_local_inspection_request(&lower, zh);
@@ -216,6 +219,32 @@ impl IntentRouter {
                 mcp_auth_intent: false,
                 reason: "prompt asks to explain an error without a code or environment action"
                     .into(),
+            };
+        }
+
+        if has_read_only_signal
+            && (has_local_inspection_signal
+                || has_file_read_signal
+                || has_code_creation_signal
+                || has_code_change_signal
+                || has_code_artifact_signal(&lower, zh))
+        {
+            return IntentRoute {
+                intent: IntentKind::DirectAnswer,
+                confidence: 0.78,
+                workflow: WorkflowKind::Direct,
+                retrieval: RetrievalPolicy::Project,
+                reasoning: ReasoningPolicy::Medium,
+                risk: RiskLevel::Low,
+                recommended_tools: vec![
+                    "glob".into(),
+                    "grep".into(),
+                    "file_read".into(),
+                    "bash".into(),
+                ],
+                dependency_install_intent: false,
+                mcp_auth_intent: false,
+                reason: "prompt asks for read-only project inspection without code changes".into(),
             };
         }
 
@@ -851,6 +880,40 @@ fn is_code_change_request(lower: &str, zh: &str) -> bool {
         )
 }
 
+fn is_read_only_request(lower: &str, zh: &str) -> bool {
+    contains_any(
+        lower,
+        &[
+            "read-only",
+            "readonly",
+            "do not modify",
+            "don't modify",
+            "do not edit",
+            "don't edit",
+            "no edits",
+            "without editing",
+            "without modifying",
+            "do not write",
+            "don't write",
+        ],
+    ) || contains_any(
+        zh,
+        &[
+            "只读",
+            "不要修改",
+            "不要改",
+            "不要编辑",
+            "不要写",
+            "不要写入",
+            "不修改",
+            "不改文件",
+            "不写文件",
+            "不能修改",
+            "无需修改",
+        ],
+    )
+}
+
 fn is_natural_code_creation_request(lower: &str, zh: &str) -> bool {
     let has_creation_verb = contains_any(
         lower,
@@ -1389,6 +1452,21 @@ mod tests {
         assert_eq!(route.workflow, WorkflowKind::Direct);
         assert!(route.recommended_tools.contains(&"file_read".to_string()));
         assert!(!route.recommended_tools.contains(&"bash".to_string()));
+    }
+
+    #[test]
+    fn routes_read_only_runtime_diagnostic_as_project_inspection() {
+        let route = IntentRouter::new().route(
+            "复杂桌面端根因复测（只读）：请在当前 rust-agent 项目里完成一次运行时工具循环检查，不要修改任何文件，不要运行会写入文件的命令。请读取 src/engine/conversation_loop/force_summary.rs 并分析。",
+        );
+
+        assert_eq!(route.intent, IntentKind::DirectAnswer);
+        assert_eq!(route.workflow, WorkflowKind::Direct);
+        assert_eq!(route.retrieval, RetrievalPolicy::Project);
+        assert_eq!(route.risk, RiskLevel::Low);
+        assert!(route.recommended_tools.contains(&"grep".to_string()));
+        assert!(route.recommended_tools.contains(&"file_read".to_string()));
+        assert!(route.recommended_tools.contains(&"bash".to_string()));
     }
 
     #[test]

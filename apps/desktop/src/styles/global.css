@@ -3547,6 +3547,7 @@ h1 {
 @media (max-width: 760px) {
   .app-shell {
     grid-template-columns: 1fr;
+    max-width: 100vw;
   }
 
   .sidebar {
@@ -3559,10 +3560,23 @@ h1 {
     padding-right: 20px;
   }
 
+  .workspace,
+  .topbar {
+    width: 100%;
+    max-width: 100vw;
+    min-width: 0;
+  }
+
   .topbar {
     flex-wrap: wrap;
     align-items: flex-start;
     gap: 10px;
+    overflow: hidden;
+  }
+
+  .title-cluster {
+    flex: 1 1 160px;
+    min-width: 0;
   }
 
   h1 {
@@ -3572,9 +3586,22 @@ h1 {
 
   .health {
     width: 100%;
+    min-width: 0;
     margin-left: 0;
     flex-wrap: wrap;
     justify-content: flex-start;
+    overflow: hidden;
+  }
+
+  .health-status,
+  .trace-toggle {
+    min-width: 0;
+  }
+
+  .trace-toggle span {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 
   .context-meter small {
@@ -3722,6 +3749,27 @@ h1 {
 
   .settings-kv div:last-child {
     border-bottom: 0;
+  }
+
+  .statusbar {
+    max-width: 100vw;
+    overflow: hidden;
+  }
+
+  .statusbar-seg {
+    flex: 0 1 auto;
+    max-width: 30vw;
+    min-width: 0;
+  }
+
+  .statusbar-val {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .statusbar-grow {
+    display: none;
   }
 }
 

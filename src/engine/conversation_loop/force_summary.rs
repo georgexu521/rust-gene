@@ -1,12 +1,20 @@
 //! Force summary / wrap-up controller.
 //!
 //! When the conversation is approaching the iteration or token budget limit,
-//! inject a wrap-up instruction that tells the model to summarize its work
-//! and avoid calling new tools unless strictly necessary for the summary.
+//! inject a wrap-up instruction. If the model still does not stop, make one
+//! final Reasonix-style summarization call with no tools attached.
 //!
 //! Mirrors Reasonix's `ForceSummaryReason` enum in `loop/force-summary.ts`.
 
-use crate::services::api::Message;
+use crate::engine::streaming::StreamEvent;
+use crate::engine::trace::{TraceCollector, TraceEvent};
+use crate::services::api::{ChatRequest, LlmProvider, Message};
+use regex::Regex;
+use std::sync::Arc;
+use tokio::sync::{mpsc, Mutex};
+
+const FORCE_SUMMARY_MAX_TOKENS: u32 = 2048;
+const FORCE_SUMMARY_INSTRUCTION: &str = "The turn is being force-summarized because the runtime reached a stuck-state or context guard. Summarize in plain prose what you learned from the tool results above. Do NOT emit any tool calls, function-call markup, DSML invocations, or SEARCH/REPLACE edit blocks; they will be discarded. Just plain text.";
 
 /// Why the turn was forcefully terminated.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -70,6 +78,100 @@ Do NOT start any new multi-step task or call tools that would require follow-up 
     }
 }
 
+pub(super) struct ForceSummaryAfterLimitContext<'a> {
+    pub(super) provider: Arc<dyn LlmProvider>,
+    pub(super) model: &'a str,
+    pub(super) messages: &'a mut Vec<Message>,
+    pub(super) trace: &'a TraceCollector,
+    pub(super) tx: Option<&'a mpsc::Sender<StreamEvent>>,
+    pub(super) cost_tracker: &'a Arc<Mutex<crate::cost_tracker::CostTracker>>,
+    pub(super) reason: ForceSummaryReason,
+}
+
+/// Make one final no-tools summarization call and append the result to the
+/// turn content. This is the hard runtime stop after the normal loop budget is
+/// exhausted; callers should still let the standard completion controller emit
+/// diagnostics and `Complete`.
+pub(super) async fn force_summary_after_iter_limit(
+    context: ForceSummaryAfterLimitContext<'_>,
+) -> String {
+    context.trace.record(TraceEvent::WorkflowFallback {
+        error: "iteration cap reached; forcing no-tools summary".to_string(),
+    });
+
+    let mut messages = context.messages.clone();
+    messages.push(Message::user(FORCE_SUMMARY_INSTRUCTION));
+
+    let mut request = ChatRequest::new(context.model).with_messages(messages);
+    request.max_tokens = Some(FORCE_SUMMARY_MAX_TOKENS);
+    request.tools = None;
+    request.tool_choice = None;
+
+    match context.provider.chat(request).await {
+        Ok(response) => {
+            if let Some(usage) = &response.usage {
+                {
+                    let mut tracker = context.cost_tracker.lock().await;
+                    tracker.record_api_call(
+                        context.model,
+                        usage.prompt_tokens as u64,
+                        usage.completion_tokens as u64,
+                        usage.cached_tokens.map(|tokens| tokens as u64),
+                    );
+                }
+                if let Some(tx) = context.tx {
+                    let _ = tx
+                        .send(StreamEvent::Usage {
+                            prompt_tokens: usage.prompt_tokens,
+                            completion_tokens: usage.completion_tokens,
+                            reasoning_tokens: usage.reasoning_tokens,
+                            cached_tokens: usage.cached_tokens,
+                        })
+                        .await;
+                }
+            }
+
+            let cleaned = strip_hallucinated_tool_markup(&response.content);
+            let summary = if cleaned.trim().is_empty() {
+                "The model did not produce a usable summary after the runtime stopped the repeated tool loop.".to_string()
+            } else {
+                cleaned
+            };
+            let annotated = format!("{}\n\n{}", context.reason.prefix(), summary.trim());
+            context.messages.push(Message::assistant(summary.clone()));
+            context.trace.record(TraceEvent::WorkflowFallback {
+                error: "forced no-tools summary completed".to_string(),
+            });
+            annotated
+        }
+        Err(err) => {
+            let fallback = format!(
+                "{}\n\n[Forced summary failed: {}. Review the last tool results and continue if the task is not complete.]",
+                context.reason.prefix(),
+                err
+            );
+            context.trace.record(TraceEvent::Error {
+                message: format!("forced no-tools summary failed: {err}"),
+            });
+            fallback
+        }
+    }
+}
+
+fn strip_hallucinated_tool_markup(content: &str) -> String {
+    let mut output = crate::services::api::sanitize_assistant_content(content);
+    let patterns = [
+        r"(?s)〈DSML｜function_calls〉.*?〈/DSML｜function_calls〉",
+        r"(?s)<\|DSML\|function_calls>.*?</\|DSML\|function_calls>",
+        r"(?is)<(?:minimax:)?tool_call\b[^>]*>.*?</(?:minimax:)?tool_call>",
+    ];
+    for pattern in patterns {
+        let re = Regex::new(pattern).expect("valid force-summary cleanup regex");
+        output = re.replace_all(&output, "").to_string();
+    }
+    output.trim().to_string()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -102,5 +204,13 @@ mod tests {
             _ => "",
         };
         assert!(content.contains("wrap-up"));
+    }
+
+    #[test]
+    fn force_summary_strips_hallucinated_tool_markup() {
+        let cleaned = strip_hallucinated_tool_markup(
+            "Done\n〈DSML｜function_calls〉call〈/DSML｜function_calls〉\n<tool_call>{}</tool_call>",
+        );
+        assert_eq!(cleaned, "Done");
     }
 }
