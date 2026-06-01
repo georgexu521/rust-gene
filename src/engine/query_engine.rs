@@ -82,7 +82,7 @@ impl QueryEngine {
             cost_tracker: Arc::new(tokio::sync::Mutex::new(
                 crate::cost_tracker::CostTracker::new(),
             )),
-            max_iterations: 10,
+            max_iterations: 50, // Match Reasonix DEFAULT_MAX_ITER_PER_TURN
         }
     }
 

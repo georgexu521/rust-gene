@@ -181,7 +181,7 @@ impl ConversationLoopBuilder {
             cost_tracker,
             model: model.into(),
             temperature: 0.2,
-            max_iterations: 10,
+            max_iterations: 50, // Match Reasonix DEFAULT_MAX_ITER_PER_TURN
             agent_manager: None,
             mcp_manager: None,
             lsp_manager: None,

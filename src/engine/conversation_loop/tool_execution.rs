@@ -19,6 +19,11 @@ pub(crate) const READ_ONLY_TOOLS: &[&str] = &[
 
 pub(crate) const DEFAULT_READ_ONLY_TOOL_CONCURRENCY: usize = 8;
 
+/// Maximum tool-call iterations per turn. Mirrors Reasonix's
+/// DEFAULT_MAX_ITER_PER_TURN = 50. Env override: PRIORITY_AGENT_MAX_ITER.
+#[allow(dead_code)]
+pub(crate) const DEFAULT_MAX_ITERATIONS: usize = 50;
+
 /// Whether tool dispatch should be forced serial (mirrors Reasonix's
 /// REASONIX_TOOL_DISPATCH=serial). Default is parallel for read-only tools.
 pub(crate) fn force_serial_tool_dispatch() -> bool {
