@@ -37,7 +37,16 @@ impl ModelContextProfile {
         let normalized = model.to_ascii_lowercase();
         let mut profile = match family {
             ProviderProtocolFamily::MiniMax => {
-                if normalized.contains("m2.7") || normalized.contains("m1") {
+                if normalized.contains("m3") {
+                    Self::new(
+                        family,
+                        "minimax-m3",
+                        1_000_000,
+                        24_000,
+                        CacheAccounting::PromptCachedTokens,
+                        ProfileSource::Exact,
+                    )
+                } else if normalized.contains("m2.7") || normalized.contains("m1") {
                     Self::new(
                         family,
                         "minimax-m",

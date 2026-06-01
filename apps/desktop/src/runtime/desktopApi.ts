@@ -689,6 +689,13 @@ export function providerModelStatus(): Promise<ProviderModelStatus> {
       ],
       models: [
         {
+          id: "MiniMax-M3",
+          label: "MiniMax-M3",
+          provider_id: "minimax",
+          active: false,
+          note: "latest generation",
+        },
+        {
           id: "MiniMax-M2.7",
           label: "MiniMax-M2.7",
           provider_id: "minimax",

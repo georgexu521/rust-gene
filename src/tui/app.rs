@@ -1626,6 +1626,7 @@ impl TuiApp {
         let current = self.current_model_label();
         let mut models = match provider.as_str() {
             "MiniMax" => vec![
+                "MiniMax-M3",
                 "MiniMax-M2.7",
                 "MiniMax-M2.7-highspeed",
                 "MiniMax-M2.5",
