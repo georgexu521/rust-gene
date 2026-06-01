@@ -1,3 +1,14 @@
+import {
+  Activity,
+  CheckCircle2,
+  CircleAlert,
+  CircleDotDashed,
+  Clock3,
+  Bug,
+  FilePenLine,
+  KeyRound,
+  TerminalSquare,
+} from "lucide-react";
 import { useEffect, useRef } from "react";
 import { DesktopDiagnostic, DesktopRunContext, ProviderModelStatus } from "../../runtime/desktopApi";
 import { TimelineKind, TimelineStatus, TimelineSummary, TranscriptItem } from "../types";
