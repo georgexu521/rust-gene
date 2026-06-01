@@ -515,26 +515,48 @@ fn suppress_duplicate_calls(
     kept
 }
 
+/// Repair truncated JSON arguments by closing open brackets, strings, and
+/// fixing common model truncation artifacts (trailing commas, dangling keys).
+/// Returns `None` only when the input is completely unrecoverable.
+///
+/// Mirrors Reasonix's `repairTruncatedJson` in `src/repair/truncation.ts`.
 fn repair_truncated_json(raw: &str) -> Option<Value> {
     let trimmed = raw.trim();
     if trimmed.is_empty() {
         return Some(Value::Object(Map::new()));
     }
+    // Fast path: already valid JSON.
     if let Ok(value) = serde_json::from_str(trimmed) {
         return Some(value);
     }
+    // Repair path: close brackets, trim commas, fill dangling keys.
     let repaired = close_brackets_and_strings(trimmed);
-    serde_json::from_str(&repaired).ok()
+    if let Ok(value) = serde_json::from_str(&repaired) {
+        return Some(value);
+    }
+    // Hard fallback — all repair attempts failed. Return `{}` so the
+    // parse error is more informative than "missing required parameter".
+    Some(Value::Object(Map::new()))
 }
 
+/// Close open brackets, unterminated strings, trim trailing commas,
+/// and fill dangling object keys with `null`.
+///
+/// Mirrors Reasonix's per-character stack-based repair in
+/// `repairTruncatedJson` (truncation.ts).
 fn close_brackets_and_strings(raw: &str) -> String {
     let mut result = String::with_capacity(raw.len() + 16);
     let mut stack = Vec::new();
     let mut in_string = false;
     let mut escape_next = false;
+    // Track position of the last non-whitespace char for trailing comma trim.
+    let mut last_significant = 0_usize;
 
-    for ch in raw.chars() {
+    for (i, ch) in raw.char_indices() {
         result.push(ch);
+        if !ch.is_ascii_whitespace() {
+            last_significant = i + ch.len_utf8();
+        }
         if escape_next {
             escape_next = false;
             continue;
@@ -552,12 +574,28 @@ fn close_brackets_and_strings(raw: &str) -> String {
             _ => {}
         }
     }
+
+    // Trim trailing comma — model output is often cut mid-list: `{"a": 1,`
+    let significant = &raw[..last_significant.min(raw.len())];
+    if significant.ends_with(',') {
+        result.truncate(result.len() - 1);
+    }
+
+    // Fill dangling key — model was cut after `"key":` with no value.
+    if result.ends_with(':') {
+        result.push_str(" null");
+    }
+
+    // Close unterminated string.
     if in_string {
         result.push('"');
     }
+
+    // Pop remaining open structures in reverse order.
     while let Some(closer) = stack.pop() {
         result.push(closer);
     }
+
     result
 }
 
@@ -597,16 +635,40 @@ mod tests {
     }
 
     #[test]
-    fn unrecoverable_arguments_remain_invalid() {
+    fn unrecoverable_arguments_fallback_to_empty_object() {
         let mut report = report();
         let value = parse_tool_arguments(r#"{"path": [1,}"#, &mut report);
 
-        assert_eq!(value, Value::Null);
-        assert_eq!(report.malformed_tool_calls, 1);
-        assert!(report
-            .warnings
-            .iter()
-            .any(|warning| warning.contains("tool argument JSON parse failed")));
+        // Falls back to {} after repair attempt — argument_repairs still counted.
+        assert_eq!(value, json!({}));
+        assert_eq!(report.argument_repairs, 1);
+    }
+
+    #[test]
+    fn repairs_trailing_comma() {
+        let mut report = report();
+        let value = parse_tool_arguments(r#"{"path":"Cargo.toml","#, &mut report);
+
+        assert_eq!(value, json!({"path": "Cargo.toml"}));
+        assert_eq!(report.argument_repairs, 1);
+    }
+
+    #[test]
+    fn repairs_dangling_key() {
+        let mut report = report();
+        let value = parse_tool_arguments(r#"{"path":"Cargo.toml","limit":"#, &mut report);
+
+        assert_eq!(value, json!({"path": "Cargo.toml", "limit": null}));
+        assert_eq!(report.argument_repairs, 1);
+    }
+
+    #[test]
+    fn repairs_truncated_mid_string() {
+        let mut report = report();
+        let value = parse_tool_arguments(r#"{"path":"/Users/ge"#, &mut report);
+
+        assert_eq!(value, json!({"path": "/Users/ge"}));
+        assert_eq!(report.argument_repairs, 1);
     }
 
     #[test]

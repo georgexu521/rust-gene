@@ -189,6 +189,9 @@ pub struct StreamingQueryEngine {
     approval_channel: Option<Arc<crate::engine::conversation_loop::ToolApprovalChannel>>,
     /// Fallback 模型名称（当主模型失败时使用）
     fallback_model: Option<String>,
+    /// Read-before-edit guard — cleared on context fold so stale
+    /// read-tracking doesn't survive across compacted history.
+    read_tracker: Option<Arc<crate::engine::read_tracker::ReadTracker>>,
 }
 
 impl StreamingQueryEngine {
@@ -236,6 +239,7 @@ impl StreamingQueryEngine {
             llm_memory_extraction: false,
             approval_channel: None,
             fallback_model: std::env::var("PRIORITY_AGENT_FALLBACK_MODEL").ok(),
+            read_tracker: None,
         }
     }
 
@@ -427,6 +431,11 @@ impl StreamingQueryEngine {
         if let Some(session_id) = self.current_session_id() {
             crate::tools::file_tool::clear_read_files(&session_id);
         }
+        // ReadTracker must be cleared on fold — the model's byte-level
+        // view of the elided history is gone, so prior reads are stale.
+        if let Some(ref tracker) = self.read_tracker {
+            tracker.reset();
+        }
     }
 
     /// Flush memory extraction for the current conversation history with an explicit lifecycle reason.
@@ -557,6 +566,20 @@ impl StreamingQueryEngine {
     }
 
     /// 设置 fallback 模型
+    /// Attach the ReadTracker so it can be cleared on context fold.
+    pub fn with_read_tracker(
+        mut self,
+        tracker: Arc<crate::engine::read_tracker::ReadTracker>,
+    ) -> Self {
+        self.read_tracker = Some(tracker);
+        self
+    }
+
+    /// Get a reference to the ReadTracker, if attached.
+    pub fn read_tracker(&self) -> Option<&Arc<crate::engine::read_tracker::ReadTracker>> {
+        self.read_tracker.as_ref()
+    }
+
     pub fn with_fallback_model(mut self, model: impl Into<String>) -> Self {
         self.fallback_model = Some(model.into());
         self

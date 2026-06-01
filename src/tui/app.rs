@@ -2545,6 +2545,9 @@ impl TuiApp {
             if let Some(memory_manager) = engine.memory_manager() {
                 context = context.with_memory_manager(memory_manager);
             }
+            if let Some(tracker) = engine.read_tracker() {
+                context = context.with_read_tracker(tracker.clone());
+            }
         }
         context
     }

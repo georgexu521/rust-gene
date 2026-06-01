@@ -247,6 +247,9 @@ pub struct ConversationLoop {
     session_store: Option<Arc<crate::session_store::SessionStore>>,
     /// Monotonic turn counter used for trace display.
     turn_counter: std::sync::atomic::AtomicU64,
+    /// Read-before-edit guard — shared with tool contexts so file_read
+    /// results are visible to file_edit/file_write guards.
+    read_tracker: Option<Arc<crate::engine::read_tracker::ReadTracker>>,
 }
 
 /// 对话循环结果
@@ -298,6 +301,7 @@ impl ConversationLoop {
             goal_manager: None,
             session_store: None,
             turn_counter: std::sync::atomic::AtomicU64::new(0),
+            read_tracker: None,
         }
     }
 
@@ -395,6 +399,15 @@ impl ConversationLoop {
         self
     }
 
+    /// Attach the ReadTracker so file_read results gate file_edit/file_write.
+    pub fn with_read_tracker(
+        mut self,
+        tracker: Arc<crate::engine::read_tracker::ReadTracker>,
+    ) -> Self {
+        self.read_tracker = Some(tracker);
+        self
+    }
+
     pub fn with_allowed_mcp_servers(mut self, servers: Vec<String>) -> Self {
         let servers = servers
             .into_iter()
@@ -464,6 +477,9 @@ impl ConversationLoop {
         }
         if let Some(ref memory) = self.memory_manager {
             ctx = ctx.with_memory_manager(memory.clone());
+        }
+        if let Some(ref tracker) = self.read_tracker {
+            ctx = ctx.with_read_tracker(tracker.clone());
         }
         if let Some(servers) = self.allowed_mcp_servers.as_ref() {
             ctx.metadata
