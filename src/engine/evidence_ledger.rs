@@ -549,6 +549,13 @@ impl EvidenceLedger {
         let validation_rollup = self.current_validation_rollup();
         let proof_kinds =
             self.proof_kinds_for_rollups(required_rollup.as_ref(), validation_rollup.as_ref());
+        let direct_read_only_without_required_validation = !request.requires_validation
+            && request.required_commands.is_empty()
+            && matches!(
+                request.support_context.task_type,
+                VerificationProofTaskType::DirectAnswer | VerificationProofTaskType::ReadOnlyAudit
+            );
+
         let mut proof = if let Some(rollup) = required_rollup.as_ref() {
             if rollup.missing > 0 {
                 VerificationProof::new(
@@ -622,6 +629,11 @@ impl EvidenceLedger {
                     "validation not applicable to this task",
                 )
             }
+        } else if direct_read_only_without_required_validation {
+            VerificationProof::new(
+                VerificationProofStatus::NotApplicable,
+                "validation not required for read-only direct answer",
+            )
         } else {
             match request.task_verification_status {
                 VerificationStatus::Verified => VerificationProof::new(

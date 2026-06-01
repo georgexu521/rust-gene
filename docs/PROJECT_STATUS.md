@@ -101,11 +101,14 @@ Current stage:
   The desktop app now receives the same runtime spine through a stable
   `runtime_diagnostic` run event and renders task state, verification proof,
   and control-loop coverage in the run summary and trace drawer without making
-  the UI part of the core algorithm. The light/full routing gap now has a
-  runtime-owned scoring surface as well: `TaskModeScore` records complexity,
-  risk, uncertainty, tool need, and user impact, and `LightweightPlan` gives
-  tool-assisted light turns bounded scope/observe/respond steps without
-  invoking the heavy workflow contract.
+  the UI part of the core algorithm. `DesktopRuntime` is the desktop-facing
+  facade over the same `StreamingQueryEngine` used by CLI/TUI/headless
+  eval-run, and `scripts/agent-runtime-dogfood.sh` is now the fast first check
+  for complex full-runtime behavior before desktop packaging. The light/full
+  routing gap now has a runtime-owned scoring surface as well: `TaskModeScore`
+  records complexity, risk, uncertainty, tool need, and user impact, and
+  `LightweightPlan` gives tool-assisted light turns bounded
+  scope/observe/respond steps without invoking the heavy workflow contract.
 - `docs/AGENT_MINIMUM_VIABLE_ARCHITECTURE_ALIGNMENT_PLAN_2026-05-25.md` is
   implemented as a thin contract layer over the existing runtime spine rather
   than as a second agent loop. The runtime now emits `AgentLoopStepEvaluated`,

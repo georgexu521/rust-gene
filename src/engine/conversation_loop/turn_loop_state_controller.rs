@@ -8,6 +8,7 @@ pub(super) struct TurnLoopState {
     pub(super) tool_calls_made: bool,
     pub(super) pseudo_tool_retry_used: bool,
     pub(super) filesystem_grounding_retry_used: bool,
+    pub(super) continuation_retry_used: bool,
     pub(super) companion_context_keys: HashSet<String>,
     pub(super) failed_tool_fingerprints: HashMap<String, usize>,
     pub(super) failed_tool_names: HashMap<String, usize>,
@@ -39,6 +40,7 @@ mod tests {
         assert!(!state.tool_calls_made);
         assert!(!state.pseudo_tool_retry_used);
         assert!(!state.filesystem_grounding_retry_used);
+        assert!(!state.continuation_retry_used);
         assert!(state.companion_context_keys.is_empty());
         assert!(state.failed_tool_fingerprints.is_empty());
         assert!(state.failed_tool_names.is_empty());

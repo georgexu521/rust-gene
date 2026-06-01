@@ -1638,7 +1638,13 @@ impl TaskContextBundle {
 
     pub fn add_acceptance_check(&mut self, check: impl Into<String>) {
         let check = check.into();
-        self.agent_state.add_required_check(check.clone());
+        if matches!(
+            self.route.workflow,
+            crate::engine::intent_router::WorkflowKind::CodeChange
+                | crate::engine::intent_router::WorkflowKind::BugFix
+        ) {
+            self.agent_state.add_required_check(check.clone());
+        }
         push_unique(&mut self.acceptance_checks, check);
     }
 
@@ -1851,6 +1857,33 @@ mod tests {
             .iter()
             .any(|item| item.contains("model-judged risk")));
         assert!(!bundle.needs_stronger_acceptance());
+    }
+
+    #[test]
+    fn direct_acceptance_checks_do_not_create_validation_requirements() {
+        let route = IntentRouter::new().route("只读检查 src/engine/intent_router.rs，不要修改文件");
+        let mut bundle = TaskContextBundle::new(
+            "只读检查 src/engine/intent_router.rs，不要修改文件",
+            ".",
+            route,
+            None,
+        );
+
+        bundle.add_acceptance_check("最终答案包含路由结论");
+
+        assert!(bundle
+            .acceptance_checks
+            .iter()
+            .any(|item| item == "最终答案包含路由结论"));
+        assert!(bundle
+            .agent_state
+            .verification_plan
+            .required_checks
+            .is_empty());
+        assert_eq!(
+            bundle.agent_state.verification_plan.status,
+            VerificationStatus::NotRequired
+        );
     }
 
     #[test]

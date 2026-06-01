@@ -86,7 +86,8 @@ impl TurnIterationController {
             context.conversation.max_iterations,
         ) && context.loop_state.final_content.is_empty()
         {
-            let summary_msg = crate::engine::conversation_loop::force_summary::force_summary_message();
+            let summary_msg =
+                crate::engine::conversation_loop::force_summary::force_summary_message();
             context.messages.push(summary_msg);
             context.trace.record(TraceEvent::WorkflowFallback {
                 error: format!(
@@ -358,8 +359,8 @@ impl TurnIterationController {
             return Ok(TurnIterationFlow::Continue);
         }
 
-        let _followup_flow = TurnToolFailureFollowupController::run(
-            TurnToolFailureFollowupContext {
+        let _followup_flow =
+            TurnToolFailureFollowupController::run(TurnToolFailureFollowupContext {
                 provider: context.conversation.provider.as_ref(),
                 model: context.conversation.model.clone(),
                 session_store: context.conversation.session_store.as_ref(),
@@ -374,28 +375,25 @@ impl TurnIterationController {
                 tx: context.tx,
                 final_content: &mut context.loop_state.final_content,
                 messages: &mut *context.messages,
-            },
-        )
-        .await;
+            })
+            .await;
 
-        let _closeout_flow = TurnPostChangeCloseoutController::run(
-            TurnPostChangeCloseoutContext {
-                conversation: context.conversation,
-                trace: context.trace,
-                route: context.route,
-                code_workflow: &mut *context.code_workflow,
-                task_bundle: &mut *context.task_bundle,
-                round_state: &mut tool_round_state,
-                required_validation_commands: context.required_validation_commands,
-                successful_required_validation_commands: &mut context
-                    .loop_state
-                    .successful_required_validation_commands,
-                turn_state: &mut *context.turn_state,
-                final_content: &mut context.loop_state.final_content,
-                messages: &mut *context.messages,
-                last_user_preview: context.last_user_preview,
-            },
-        )
+        let _closeout_flow = TurnPostChangeCloseoutController::run(TurnPostChangeCloseoutContext {
+            conversation: context.conversation,
+            trace: context.trace,
+            route: context.route,
+            code_workflow: &mut *context.code_workflow,
+            task_bundle: &mut *context.task_bundle,
+            round_state: &mut tool_round_state,
+            required_validation_commands: context.required_validation_commands,
+            successful_required_validation_commands: &mut context
+                .loop_state
+                .successful_required_validation_commands,
+            turn_state: &mut *context.turn_state,
+            final_content: &mut context.loop_state.final_content,
+            messages: &mut *context.messages,
+            last_user_preview: context.last_user_preview,
+        })
         .await;
 
         Ok(TurnIterationFlow::Continue)

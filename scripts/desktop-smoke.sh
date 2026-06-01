@@ -27,6 +27,9 @@ Runs the macOS desktop app smoke checks.
   --quick   Build frontend and run Rust command/runtime smoke tests.
   --bundle  Also build the local macOS .app bundle.
   --native  Launch the native .app and capture a screenshot artifact.
+
+For complex agent-flow dogfood, run scripts/agent-runtime-dogfood.sh first.
+Desktop smoke is intentionally limited to frontend, bridge, and package checks.
 USAGE
       exit 0
       ;;

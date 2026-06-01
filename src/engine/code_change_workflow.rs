@@ -380,6 +380,7 @@ impl WorkflowCloseout {
 pub struct CodeChangeWorkflowRunner {
     pub task_id: String,
     pub policy: RiskSensitiveWorkflowPolicy,
+    programming_workflow: bool,
     changed_files: Vec<String>,
     step_states: Vec<PlanStepRuntimeState>,
     validations: Vec<StageValidationRecord>,
@@ -397,6 +398,7 @@ impl CodeChangeWorkflowRunner {
         Self {
             task_id: bundle.task_id.clone(),
             policy,
+            programming_workflow: is_programming_workflow(bundle.route.workflow),
             changed_files: Vec::new(),
             step_states: step_states_from_bundle(bundle),
             validations: Vec::new(),
@@ -411,6 +413,7 @@ impl CodeChangeWorkflowRunner {
             &bundle.route,
             bundle.workflow_judgment.as_ref(),
         );
+        self.programming_workflow = is_programming_workflow(bundle.route.workflow);
         self.step_states = step_states_from_bundle(bundle);
         let triggers = self.adaptive_triggers.clone();
         for trigger in triggers {
@@ -470,14 +473,18 @@ impl CodeChangeWorkflowRunner {
         match trigger {
             AdaptiveWorkflowTrigger::RiskSignalHigh => {
                 self.policy.require_workflow_judgment = true;
-                self.policy.require_stage_validation = true;
-                self.policy.require_final_closeout = true;
-                self.policy.max_repair_attempts = self.policy.max_repair_attempts.max(2);
+                if self.programming_workflow {
+                    self.policy.require_stage_validation = true;
+                    self.policy.require_final_closeout = true;
+                    self.policy.max_repair_attempts = self.policy.max_repair_attempts.max(2);
+                }
                 self.policy.visibility = WorkflowVisibility::Normal;
-                self.policy.reason = append_reason(
-                    &self.policy.reason,
-                    "high runtime risk signal activated workflow judgment and validation",
-                );
+                let reason = if self.programming_workflow {
+                    "high runtime risk signal activated workflow judgment and validation"
+                } else {
+                    "high runtime risk signal activated workflow judgment without code-change validation"
+                };
+                self.policy.reason = append_reason(&self.policy.reason, reason);
             }
             AdaptiveWorkflowTrigger::RequiredValidation => {
                 self.policy.require_workflow_judgment = true;
@@ -1311,6 +1318,33 @@ mod tests {
         assert!(runner.policy.require_stage_validation);
         assert!(runner.policy.require_final_closeout);
         assert_eq!(runner.policy.max_repair_attempts, 2);
+        assert_eq!(runner.adaptive_trigger_labels(), vec!["risk_signal_high"]);
+    }
+
+    #[test]
+    fn high_risk_signal_on_direct_task_does_not_require_code_validation() {
+        let route = IntentRoute {
+            intent: IntentKind::DirectAnswer,
+            confidence: 0.90,
+            workflow: WorkflowKind::Direct,
+            retrieval: RetrievalPolicy::Project,
+            reasoning: ReasoningPolicy::Medium,
+            risk: RiskLevel::Low,
+            recommended_tools: vec!["file_read".to_string(), "grep".to_string()],
+            dependency_install_intent: false,
+            mcp_auth_intent: false,
+            reason: "read-only runtime inspection".into(),
+        };
+        let bundle = TaskContextBundle::new("检查工具循环实现，不修改文件", ".", route, None);
+        let mut runner = CodeChangeWorkflowRunner::new(&bundle);
+
+        assert!(runner.activate_trigger(AdaptiveWorkflowTrigger::RiskSignalHigh));
+
+        assert!(runner.should_request_workflow_judgment());
+        assert!(!runner.policy.require_stage_validation);
+        assert!(!runner.policy.require_final_closeout);
+        assert_eq!(runner.policy.max_repair_attempts, 0);
+        assert!(runner.build_closeout(&bundle).is_none());
         assert_eq!(runner.adaptive_trigger_labels(), vec!["risk_signal_high"]);
     }
 

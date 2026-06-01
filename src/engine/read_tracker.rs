@@ -99,10 +99,7 @@ impl ReadTracker {
 
     /// Clear all tracked reads. Called on fold / mechanical truncation.
     pub fn reset(&self) {
-        self.files
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .clear();
+        self.files.lock().unwrap_or_else(|p| p.into_inner()).clear();
     }
 }
 
@@ -134,9 +131,7 @@ mod tests {
         let file = dir.join("unread.md");
         fs::write(&file, "# Never seen").unwrap();
 
-        let err = tracker
-            .check_edit(&file, "# Never seen")
-            .unwrap_err();
+        let err = tracker.check_edit(&file, "# Never seen").unwrap_err();
         assert!(err.contains("was not read"));
         assert!(err.contains("file_read"));
 
@@ -165,9 +160,7 @@ mod tests {
         fs::write(&file, "# Read first").unwrap();
 
         tracker.mark_read(&file);
-        assert!(tracker
-            .check_edit(&file, "# Read first")
-            .is_ok());
+        assert!(tracker.check_edit(&file, "# Read first").is_ok());
 
         fs::remove_dir_all(&dir).unwrap();
     }
@@ -195,8 +188,6 @@ mod tests {
         let file = dir.join("ghost.md");
 
         // File doesn't exist — let the edit gate handle it.
-        assert!(tracker
-            .check_edit(&file, "some search text")
-            .is_ok());
+        assert!(tracker.check_edit(&file, "some search text").is_ok());
     }
 }

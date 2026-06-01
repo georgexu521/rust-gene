@@ -68,6 +68,7 @@ impl TurnAssistantResponseController {
                     filesystem_grounding_retry_used: &mut context
                         .loop_state
                         .filesystem_grounding_retry_used,
+                    continuation_retry_used: &mut context.loop_state.continuation_retry_used,
                     provider: context.provider,
                     tools: context.tools,
                     tx: context.tx,

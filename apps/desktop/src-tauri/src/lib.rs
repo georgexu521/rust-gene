@@ -781,11 +781,7 @@ async fn send_message(
             .unwrap_or_default();
         let _ = append_desktop_log(
             &diagnostic_logs_path,
-            &format!(
-                "run_lightweight lane={}{}",
-                outcome.lane.label(),
-                usage_log
-            ),
+            &format!("run_lightweight lane={}{}", outcome.lane.label(), usage_log),
         );
         app.emit(
             "desktop-run-event",
@@ -812,8 +808,7 @@ async fn send_message(
             return Err(err);
         }
     };
-    let engine = runtime.streaming_engine();
-    let active_session_id = engine.current_session_id();
+    let active_session_id = runtime.current_session_id();
     if active_session_id.is_some() {
         {
             let mut stored_session_id = state.active_session_id.lock().await;
@@ -838,7 +833,7 @@ async fn send_message(
     .map_err(|err| err.to_string())?;
     let _ = append_desktop_log(&diagnostic_logs_path, "run_started");
 
-    let mut stream = engine.query_stream(message).await;
+    let mut stream = runtime.run_full_turn(message).await;
     let _ = append_desktop_log(&diagnostic_logs_path, "run_stream_opened");
 
     loop {
@@ -2933,15 +2928,15 @@ mod tests {
         assert!(providers
             .iter()
             .any(|provider| provider.id == "minimax" && !provider.configured));
-        assert!(providers
-            .iter()
-            .any(|provider| provider.id == "deepseek"
-                && provider.note.contains("DEEPSEEK_API_KEY")));
+        assert!(providers.iter().any(
+            |provider| provider.id == "deepseek" && provider.note.contains("DEEPSEEK_API_KEY")
+        ));
         assert!(providers
             .iter()
             .any(|provider| provider.id == "glm" && provider.note.contains("GLM_API_KEY")));
-        assert!(providers.iter().any(|provider| provider.id == "kimi-code"
-            && provider.model == "kimi-for-coding"));
+        assert!(providers
+            .iter()
+            .any(|provider| provider.id == "kimi-code" && provider.model == "kimi-for-coding"));
         assert!(providers
             .iter()
             .any(|provider| provider.id == "openai" && provider.note.contains("OPENAI_API_KEY")));
@@ -3002,16 +2997,15 @@ fn provider_setup_info_value() -> ProviderSetupInfo {
 }
 
 fn provider_key_diagnostic() -> DesktopDiagnostic {
-    let configured: Vec<&str> =
-        priority_agent::services::api::provider::DEFAULT_PROVIDER_ENV_SPECS
-            .iter()
-            .filter_map(|spec| {
-                spec.key_env_vars
-                    .iter()
-                    .any(|env| env_is_set(env))
-                    .then_some(spec.label)
-            })
-            .collect();
+    let configured: Vec<&str> = priority_agent::services::api::provider::DEFAULT_PROVIDER_ENV_SPECS
+        .iter()
+        .filter_map(|spec| {
+            spec.key_env_vars
+                .iter()
+                .any(|env| env_is_set(env))
+                .then_some(spec.label)
+        })
+        .collect();
 
     if configured.is_empty() {
         DesktopDiagnostic {

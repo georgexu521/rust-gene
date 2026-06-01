@@ -7,8 +7,10 @@ use crate::engine::streaming::{StreamEvent, StreamingQueryEngine};
 use crate::engine::turn_ingress::{lightweight_user_text, TurnIngressLane};
 use crate::services::api::{sanitize_assistant_content, ChatRequest, Message, Usage};
 use crate::session_store::{MessageRecord, SessionStore};
+use futures::Stream;
 use serde::Serialize;
 use std::path::{Path, PathBuf};
+use std::pin::Pin;
 use std::sync::Arc;
 
 #[derive(Clone)]
@@ -107,6 +109,17 @@ impl DesktopRuntime {
 
     pub fn streaming_engine(&self) -> Arc<StreamingQueryEngine> {
         self.streaming_engine.clone()
+    }
+
+    pub fn current_session_id(&self) -> Option<String> {
+        self.streaming_engine.current_session_id()
+    }
+
+    pub async fn run_full_turn(
+        &self,
+        user_message: impl Into<String>,
+    ) -> Pin<Box<dyn Stream<Item = StreamEvent> + Send>> {
+        self.streaming_engine.query_stream(user_message).await
     }
 
     pub async fn run_lightweight_turn(
@@ -551,6 +564,7 @@ mod tests {
 
         assert_eq!(runtime.working_dir(), Path::new("/tmp/project"));
         assert_eq!(runtime.streaming_engine().model_name(), "mock-desktop");
+        assert!(runtime.current_session_id().is_none());
     }
 
     #[test]

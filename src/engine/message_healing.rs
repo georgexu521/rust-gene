@@ -48,7 +48,10 @@ fn drop_dangling_tool_calls(messages: &[Message], report: &mut HealReport) -> Ve
     messages
         .iter()
         .filter_map(|msg| match msg {
-            Message::Assistant { content, tool_calls } => {
+            Message::Assistant {
+                content,
+                tool_calls,
+            } => {
                 let Some(calls) = tool_calls else {
                     return Some(msg.clone());
                 };

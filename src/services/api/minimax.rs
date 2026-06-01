@@ -463,18 +463,17 @@ mod tests {
     #[tokio::test]
     #[ignore = "requires MINIMAX_API_KEY env var; run with --ignored"]
     async fn smoke_minimax_m3_connectivity() {
-        let api_key = std::env::var("MINIMAX_API_KEY")
-            .expect("MINIMAX_API_KEY must be set for smoke test");
+        let api_key =
+            std::env::var("MINIMAX_API_KEY").expect("MINIMAX_API_KEY must be set for smoke test");
         let client = MiniMaxClient::new(
             &api_key,
-            None,                    // default base URL (api.minimaxi.com/v1)
-            Some("MiniMax-M3"),       // test the new M3 model
+            None,               // default base URL (api.minimaxi.com/v1)
+            Some("MiniMax-M3"), // test the new M3 model
         );
 
-        let request = ChatRequest::new("MiniMax-M3")
-            .with_messages(vec![crate::services::api::Message::user(
-                "Reply with exactly this text: M3_OK",
-            )]);
+        let request = ChatRequest::new("MiniMax-M3").with_messages(vec![
+            crate::services::api::Message::user("Reply with exactly this text: M3_OK"),
+        ]);
 
         let response = client.chat(request).await;
         match response {
@@ -497,15 +496,10 @@ mod tests {
                 // Try alternative model name "minimax-m3"
                 println!("MiniMax-M3 failed: {err}");
                 println!("Trying minimax-m3...");
-                let client2 = MiniMaxClient::new(
-                    &api_key,
-                    None,
-                    Some("minimax-m3"),
-                );
-                let request2 = ChatRequest::new("minimax-m3")
-                    .with_messages(vec![crate::services::api::Message::user(
-                        "Reply with exactly this text: M3_OK",
-                    )]);
+                let client2 = MiniMaxClient::new(&api_key, None, Some("minimax-m3"));
+                let request2 = ChatRequest::new("minimax-m3").with_messages(vec![
+                    crate::services::api::Message::user("Reply with exactly this text: M3_OK"),
+                ]);
                 match client2.chat(request2).await {
                     Ok(resp2) => {
                         println!("\nminimax-m3 connected successfully!");

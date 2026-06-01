@@ -115,10 +115,7 @@ impl RequestPreparationController {
         // Heal messages before sending: shrink oversized tool results and
         // drop dangling tool_calls to prevent provider 400 errors.
         let (request_messages, heal_report) =
-            crate::engine::message_healing::heal_active_log_before_send(
-                &request_messages,
-                None,
-            );
+            crate::engine::message_healing::heal_active_log_before_send(&request_messages, None);
         if heal_report.oversized_shrunk > 0 || heal_report.dangling_dropped > 0 {
             trace.record(TraceEvent::WorkflowFallback {
                 error: format!(

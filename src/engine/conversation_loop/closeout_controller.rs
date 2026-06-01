@@ -105,22 +105,29 @@ fn closeout_validation_required(
 ) -> bool {
     use crate::engine::task_context::VerificationStatus;
 
-    code_workflow.policy.require_stage_validation
-        || !required_validation_commands.is_empty()
+    let programming_workflow = matches!(
+        task_bundle.route.workflow,
+        WorkflowKind::CodeChange | WorkflowKind::BugFix
+    );
+    let explicit_validation_required = !required_validation_commands.is_empty()
         || !task_bundle
             .agent_state
             .verification_plan
             .required_checks
-            .is_empty()
-        || matches!(
-            task_bundle.agent_state.verification_plan.status,
-            VerificationStatus::Pending
-                | VerificationStatus::Verified
-                | VerificationStatus::Failed
-                | VerificationStatus::Blocked
-                | VerificationStatus::UserDeferred
-                | VerificationStatus::Unavailable
-        )
+            .is_empty();
+
+    code_workflow.policy.require_stage_validation
+        || explicit_validation_required
+        || (programming_workflow
+            && matches!(
+                task_bundle.agent_state.verification_plan.status,
+                VerificationStatus::Pending
+                    | VerificationStatus::Verified
+                    | VerificationStatus::Failed
+                    | VerificationStatus::Blocked
+                    | VerificationStatus::UserDeferred
+                    | VerificationStatus::Unavailable
+            ))
 }
 
 fn apply_verification_proof_to_closeout(
@@ -1069,8 +1076,9 @@ mod tests {
             evaluation.verification_proof.status,
             VerificationProofStatus::Verified
         );
-        assert!(closeout.validation.iter().any(|item| item
-            .contains("verification proof: verified (required validation passed 2/2 commands)")));
+        assert!(closeout.validation.iter().any(|item| {
+            item.contains("verification proof: verified (required validation passed 2/2 commands)")
+        }));
     }
 
     #[test]

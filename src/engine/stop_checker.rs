@@ -185,8 +185,10 @@ impl StopChecker {
                     "{} duplicate successful read-only tool result(s) — continuing",
                     input.duplicate_read_only_tools
                 ),
-                vec!["duplicate read-only calls are advisory only; iteration budget handles loops"
-                    .to_string()],
+                vec![
+                    "duplicate read-only calls are advisory only; iteration budget handles loops"
+                        .to_string(),
+                ],
                 Some("duplicate_read_only".to_string()),
                 Some("continue with existing tool results; model decides when to stop".to_string()),
             );

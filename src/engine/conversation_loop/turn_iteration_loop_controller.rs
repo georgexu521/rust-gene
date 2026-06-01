@@ -93,8 +93,13 @@ impl TurnIterationLoopController {
             }
         }
 
-        if context.loop_state.final_content.trim().is_empty() && context.loop_state.tool_calls_made
-        {
+        let needs_forced_closeout_summary = context.loop_state.tool_calls_made
+            && (context.loop_state.final_content.trim().is_empty()
+                || super::assistant_response_retry_controller::is_continuation_only_response(
+                    &context.loop_state.final_content,
+                ));
+
+        if needs_forced_closeout_summary {
             let summary = super::force_summary::force_summary_after_iter_limit(
                 super::force_summary::ForceSummaryAfterLimitContext {
                     provider: context.conversation.provider.clone(),
@@ -108,6 +113,7 @@ impl TurnIterationLoopController {
             )
             .await;
             if !summary.trim().is_empty() {
+                context.loop_state.final_content.clear();
                 context.loop_state.final_content.push_str(&summary);
                 if let Some(tx) = context.tx {
                     let _ = tx.send(StreamEvent::TextChunk(summary)).await;

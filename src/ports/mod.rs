@@ -108,11 +108,7 @@ pub enum HookDecision {
 #[async_trait]
 pub trait HookRunner: Send + Sync {
     /// Run pre-tool hooks. Returns `Block` if any hook rejects.
-    async fn run_pre_tool(
-        &self,
-        tool_name: &str,
-        tool_args: &Value,
-    ) -> Result<HookDecision>;
+    async fn run_pre_tool(&self, tool_name: &str, tool_args: &Value) -> Result<HookDecision>;
 
     /// Run post-tool hooks (observational only — cannot block).
     async fn run_post_tool(

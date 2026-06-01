@@ -16,6 +16,7 @@ pub(super) struct AssistantResponseRetryRequest<'a> {
     pub(super) unsupported_filesystem_claims: Vec<String>,
     pub(super) pseudo_tool_retry_used: bool,
     pub(super) filesystem_grounding_retry_used: bool,
+    pub(super) continuation_retry_used: bool,
 }
 
 pub(super) struct AssistantResponseRetryDecision {
@@ -24,12 +25,14 @@ pub(super) struct AssistantResponseRetryDecision {
     pub(super) correction_message: Message,
     pub(super) mark_pseudo_tool_retry_used: bool,
     pub(super) mark_filesystem_grounding_retry_used: bool,
+    pub(super) mark_continuation_retry_used: bool,
 }
 
 pub(super) struct AssistantResponseRetryApplicationContext<'a> {
     pub(super) decision: AssistantResponseRetryDecision,
     pub(super) pseudo_tool_retry_used: &'a mut bool,
     pub(super) filesystem_grounding_retry_used: &'a mut bool,
+    pub(super) continuation_retry_used: &'a mut bool,
     pub(super) trace: &'a TraceCollector,
     pub(super) messages: &'a mut Vec<Message>,
 }
@@ -42,6 +45,7 @@ pub(super) struct NoToolAssistantResponseContext<'a> {
     pub(super) tool_calls_made: bool,
     pub(super) pseudo_tool_retry_used: &'a mut bool,
     pub(super) filesystem_grounding_retry_used: &'a mut bool,
+    pub(super) continuation_retry_used: &'a mut bool,
     pub(super) provider: &'a dyn LlmProvider,
     pub(super) tools: &'a [Tool],
     pub(super) tx: Option<&'a mpsc::Sender<StreamEvent>>,
@@ -74,52 +78,73 @@ impl AssistantResponseRetryController {
                 request.exposed_tool_names,
             );
         let needs_filesystem_grounding_retry = !request.unsupported_filesystem_claims.is_empty();
+        let needs_continuation_retry =
+            request.tool_calls_made && is_continuation_only_response(request.content);
 
         let should_retry = (!request.pseudo_tool_retry_used
             && (needs_bash_tool_retry || needs_filesystem_tool_retry))
-            || (!request.filesystem_grounding_retry_used && needs_filesystem_grounding_retry);
+            || (!request.filesystem_grounding_retry_used && needs_filesystem_grounding_retry)
+            || (!request.continuation_retry_used && needs_continuation_retry);
         if !should_retry {
             return None;
         }
 
-        let (fallback_error, correction, mark_filesystem_grounding_retry_used) =
-            if needs_filesystem_grounding_retry {
-                (
-                    format!(
-                        "assistant included unsupported filesystem claim(s): {}; retrying with evidence-grounded correction",
-                        request.unsupported_filesystem_claims.join(", ")
-                    ),
-                    "Your previous answer added filesystem metadata that was not explicitly supported by tool output. \
+        let (
+            fallback_error,
+            correction,
+            mark_filesystem_grounding_retry_used,
+            mark_continuation_retry_used,
+        ) = if needs_filesystem_grounding_retry {
+            (
+                format!(
+                    "assistant included unsupported filesystem claim(s): {}; retrying with evidence-grounded correction",
+                    request.unsupported_filesystem_claims.join(", ")
+                ),
+                "Your previous answer added filesystem metadata that was not explicitly supported by tool output. \
 Re-answer from the evidence already gathered. Do not state size, item count, creation time, or exact contents unless the tool output directly contains that fact. \
 If the user did not ask for those metadata fields, omit them.",
-                    true,
-                )
-            } else if needs_filesystem_tool_retry {
-                (
+                true,
+                false,
+            )
+        } else if needs_filesystem_tool_retry {
+            (
                     "assistant answered local filesystem state without a tool; retrying with explicit filesystem tool-use correction".to_string(),
                     "file_read and glob are currently exposed to you as callable tools. \
 The user asked for current local filesystem state, so do not answer from memory or inference. \
 Inspect the requested path with file_read or glob now, then answer only from that tool output. \
 Do not invent size, item count, creation time, or contents that are not present in tool output.",
                     false,
+                    false,
                 )
-            } else {
-                (
+        } else if needs_continuation_retry {
+            (
+                    "assistant returned a continuation placeholder without tools; retrying with explicit closeout correction".to_string(),
+                    "Your previous response said you would continue investigating, but it did not call a tool and it did not answer the user. \
+Use the tool results already gathered. If the answer is knowable, provide the final answer now in the user's requested format. \
+Only call a tool if one specific missing fact is required. Do not reply with planning prose such as \"I'll check\" or \"continuing\" without a tool call.",
+                    false,
+                    true,
+                )
+        } else {
+            (
                     "assistant emitted an unexecuted or false-unavailable shell response; retrying with explicit bash tool-use correction".to_string(),
                     "Bash is currently exposed to you as a callable tool. \
 The user asked for current local/runtime state, so do not answer from an unexecuted command and do not claim bash is unavailable. \
 If a command appears in a code block or your answer asks the user to run a shell command manually, execute it with the bash tool now. \
 Only report a tool as unavailable when it is not exposed in the current tool list.",
                     false,
+                    false,
                 )
-            };
+        };
 
         Some(AssistantResponseRetryDecision {
             fallback_error,
             assistant_message: Message::assistant(safe_prefix_by_bytes(request.content, 1200)),
             correction_message: Message::system(correction),
-            mark_pseudo_tool_retry_used: !mark_filesystem_grounding_retry_used,
+            mark_pseudo_tool_retry_used: !mark_filesystem_grounding_retry_used
+                && !mark_continuation_retry_used,
             mark_filesystem_grounding_retry_used,
+            mark_continuation_retry_used,
         })
     }
 
@@ -127,6 +152,9 @@ Only report a tool as unavailable when it is not exposed in the current tool lis
         let decision = context.decision;
         if decision.mark_filesystem_grounding_retry_used {
             *context.filesystem_grounding_retry_used = true;
+        }
+        if decision.mark_continuation_retry_used {
+            *context.continuation_retry_used = true;
         }
         if decision.mark_pseudo_tool_retry_used {
             *context.pseudo_tool_retry_used = true;
@@ -158,11 +186,13 @@ Only report a tool as unavailable when it is not exposed in the current tool lis
             unsupported_filesystem_claims: filesystem_grounding_gaps,
             pseudo_tool_retry_used: *context.pseudo_tool_retry_used,
             filesystem_grounding_retry_used: *context.filesystem_grounding_retry_used,
+            continuation_retry_used: *context.continuation_retry_used,
         }) {
             Self::apply_decision(AssistantResponseRetryApplicationContext {
                 decision: retry_decision,
                 pseudo_tool_retry_used: context.pseudo_tool_retry_used,
                 filesystem_grounding_retry_used: context.filesystem_grounding_retry_used,
+                continuation_retry_used: context.continuation_retry_used,
                 trace: context.trace,
                 messages: context.messages,
             });
@@ -179,6 +209,35 @@ Only report a tool as unavailable when it is not exposed in the current tool lis
 
         NoToolAssistantResponseFlow::Finish
     }
+}
+
+pub(super) fn is_continuation_only_response(content: &str) -> bool {
+    let trimmed = content.trim();
+    if trimmed.is_empty() || trimmed.chars().count() > 160 {
+        return false;
+    }
+    let lower = trimmed.to_ascii_lowercase();
+    contains_any(
+        trimmed,
+        &[
+            "继续查找",
+            "继续检查",
+            "继续读取",
+            "继续分析",
+            "补齐",
+            "补充",
+            "还需要",
+            "需要补",
+        ],
+    ) || lower.starts_with("i'll ")
+        || lower.starts_with("i will ")
+        || lower.starts_with("let me ")
+        || lower.starts_with("continuing ")
+        || lower.starts_with("continue ")
+}
+
+fn contains_any(text: &str, needles: &[&str]) -> bool {
+    needles.iter().any(|needle| text.contains(needle))
 }
 
 pub(super) fn is_local_filesystem_inspection_route(route: &IntentRoute) -> bool {
@@ -220,6 +279,7 @@ mod tests {
             unsupported_filesystem_claims: Vec::new(),
             pseudo_tool_retry_used: false,
             filesystem_grounding_retry_used: false,
+            continuation_retry_used: false,
         })
         .expect("bash command should trigger retry");
 
@@ -244,6 +304,7 @@ mod tests {
             unsupported_filesystem_claims: Vec::new(),
             pseudo_tool_retry_used: false,
             filesystem_grounding_retry_used: false,
+            continuation_retry_used: false,
         })
         .expect("local filesystem answer without tool should trigger retry");
 
@@ -264,6 +325,7 @@ mod tests {
             unsupported_filesystem_claims: vec!["creation_time".to_string()],
             pseudo_tool_retry_used: false,
             filesystem_grounding_retry_used: false,
+            continuation_retry_used: false,
         })
         .expect("unsupported metadata should trigger grounding retry");
 
@@ -277,6 +339,45 @@ mod tests {
     }
 
     #[test]
+    fn retries_continuation_placeholder_after_tools() {
+        let decision = AssistantResponseRetryController::evaluate(AssistantResponseRetryRequest {
+            content: "继续查找路由枚举和工具定义。",
+            exposed_tool_names: &exposed(&["file_read", "grep", "bash"]),
+            tool_calls_made: true,
+            is_local_filesystem_inspection_route: false,
+            unsupported_filesystem_claims: Vec::new(),
+            pseudo_tool_retry_used: false,
+            filesystem_grounding_retry_used: false,
+            continuation_retry_used: false,
+        })
+        .expect("continuation placeholder should trigger a closeout retry");
+
+        assert!(!decision.mark_pseudo_tool_retry_used);
+        assert!(!decision.mark_filesystem_grounding_retry_used);
+        assert!(decision.mark_continuation_retry_used);
+        assert!(decision.fallback_error.contains("continuation placeholder"));
+    }
+
+    #[test]
+    fn retries_chinese_fill_in_placeholder_after_tools() {
+        let decision = AssistantResponseRetryController::evaluate(AssistantResponseRetryRequest {
+            content: "补齐关键未读区段：route_message 路由表。",
+            exposed_tool_names: &exposed(&["file_read", "grep", "bash"]),
+            tool_calls_made: true,
+            is_local_filesystem_inspection_route: false,
+            unsupported_filesystem_claims: Vec::new(),
+            pseudo_tool_retry_used: false,
+            filesystem_grounding_retry_used: false,
+            continuation_retry_used: false,
+        })
+        .expect("Chinese fill-in placeholder should trigger a closeout retry");
+
+        assert!(!decision.mark_pseudo_tool_retry_used);
+        assert!(!decision.mark_filesystem_grounding_retry_used);
+        assert!(decision.mark_continuation_retry_used);
+    }
+
+    #[test]
     fn does_not_retry_after_relevant_retry_was_used() {
         let decision = AssistantResponseRetryController::evaluate(AssistantResponseRetryRequest {
             content: "```bash\npython3 app.py\n```",
@@ -286,6 +387,7 @@ mod tests {
             unsupported_filesystem_claims: Vec::new(),
             pseudo_tool_retry_used: true,
             filesystem_grounding_retry_used: false,
+            continuation_retry_used: false,
         });
 
         assert!(decision.is_none());
@@ -296,6 +398,7 @@ mod tests {
         let trace = trace();
         let mut pseudo_tool_retry_used = false;
         let mut filesystem_grounding_retry_used = false;
+        let mut continuation_retry_used = false;
         let mut messages = Vec::new();
         let decision = AssistantResponseRetryController::evaluate(AssistantResponseRetryRequest {
             content: "```bash\npython3 app.py\n```",
@@ -305,6 +408,7 @@ mod tests {
             unsupported_filesystem_claims: Vec::new(),
             pseudo_tool_retry_used,
             filesystem_grounding_retry_used,
+            continuation_retry_used,
         })
         .expect("bash command should trigger retry");
 
@@ -313,6 +417,7 @@ mod tests {
                 decision,
                 pseudo_tool_retry_used: &mut pseudo_tool_retry_used,
                 filesystem_grounding_retry_used: &mut filesystem_grounding_retry_used,
+                continuation_retry_used: &mut continuation_retry_used,
                 trace: &trace,
                 messages: &mut messages,
             },
@@ -320,6 +425,7 @@ mod tests {
 
         assert!(pseudo_tool_retry_used);
         assert!(!filesystem_grounding_retry_used);
+        assert!(!continuation_retry_used);
         assert_eq!(messages.len(), 2);
         assert!(matches!(messages[0], Message::Assistant { .. }));
         assert!(matches!(messages[1], Message::System { .. }));
@@ -381,6 +487,7 @@ mod tests {
         let exposed_tools = exposed(&["bash"]);
         let mut pseudo_tool_retry_used = false;
         let mut filesystem_grounding_retry_used = false;
+        let mut continuation_retry_used = false;
         let mut messages = Vec::new();
 
         let flow = AssistantResponseRetryController::handle_no_tool_response(
@@ -392,6 +499,7 @@ mod tests {
                 tool_calls_made: false,
                 pseudo_tool_retry_used: &mut pseudo_tool_retry_used,
                 filesystem_grounding_retry_used: &mut filesystem_grounding_retry_used,
+                continuation_retry_used: &mut continuation_retry_used,
                 provider: &provider,
                 tools: &tools,
                 tx: None,
@@ -404,6 +512,7 @@ mod tests {
         assert!(matches!(flow, NoToolAssistantResponseFlow::Retry));
         assert!(pseudo_tool_retry_used);
         assert!(!filesystem_grounding_retry_used);
+        assert!(!continuation_retry_used);
         assert_eq!(messages.len(), 2);
         let finished = trace.finish(TurnStatus::Completed);
         assert!(finished.events.iter().any(|event| matches!(
@@ -427,6 +536,7 @@ mod tests {
         let (tx, mut rx) = mpsc::channel(1);
         let mut pseudo_tool_retry_used = false;
         let mut filesystem_grounding_retry_used = false;
+        let mut continuation_retry_used = false;
         let mut messages = Vec::new();
 
         let flow = AssistantResponseRetryController::handle_no_tool_response(
@@ -438,6 +548,7 @@ mod tests {
                 tool_calls_made: false,
                 pseudo_tool_retry_used: &mut pseudo_tool_retry_used,
                 filesystem_grounding_retry_used: &mut filesystem_grounding_retry_used,
+                continuation_retry_used: &mut continuation_retry_used,
                 provider: &provider,
                 tools: &tools,
                 tx: Some(&tx),
@@ -450,6 +561,7 @@ mod tests {
         assert!(matches!(flow, NoToolAssistantResponseFlow::Finish));
         assert!(!pseudo_tool_retry_used);
         assert!(!filesystem_grounding_retry_used);
+        assert!(!continuation_retry_used);
         assert!(messages.is_empty());
         assert!(matches!(
             rx.recv().await,
