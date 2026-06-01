@@ -70,11 +70,13 @@ pub(crate) fn safe_suffix_by_bytes(s: &str, max_bytes: usize) -> &str {
 
 /// Default max result tokens before shrinking (mirrors Reasonix's
 /// DEFAULT_MAX_RESULT_TOKENS = 4096). CJK text costs ~2× tokens vs ASCII.
+#[allow(dead_code)] // API-ready: callers will integrate in follow-up
 pub(crate) const DEFAULT_MAX_RESULT_TOKENS: usize = 4096;
 
 /// Truncate a tool result string to fit within `max_tokens` tokens.
 /// Uses a conservative estimate: 1 token ≈ 3 chars for CJK safety.
 /// Preserves head + tail with a truncation marker.
+#[allow(dead_code)] // API-ready: callers will integrate in follow-up
 pub(crate) fn shrink_tool_result_by_tokens(content: &str, max_tokens: usize) -> String {
     if max_tokens == 0 {
         return content.to_string();

@@ -10,6 +10,7 @@ use crate::services::api::Message;
 
 /// Why the turn was forcefully terminated.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code)] // Aborted + ContextGuard are API-ready for future callers
 pub enum ForceSummaryReason {
     /// User explicitly aborted (Esc / /abort).
     Aborted,
