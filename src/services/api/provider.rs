@@ -185,7 +185,7 @@ pub const DEFAULT_PROVIDER_ENV_SPECS: &[ProviderEnvSpec] = &[
         base_url_env_vars: MINIMAX_BASE_URL_ENV,
         model_env_vars: MINIMAX_MODEL_ENV,
         default_base_url: MINIMAX_DEFAULT_BASE_URL,
-        default_model: "MiniMax-M2.7",
+        default_model: "MiniMax-M3",
     },
     ProviderEnvSpec {
         id: "kimi-code",
@@ -500,7 +500,7 @@ fn default_model_for_provider_type(provider_type: ProviderType) -> &'static str 
         ProviderType::KimiCode => "kimi-for-coding",
         ProviderType::DeepSeek => "deepseek-v4-pro",
         ProviderType::Glm => "glm-5.1",
-        ProviderType::Minimax => "MiniMax-M2.7",
+        ProviderType::Minimax => "MiniMax-M3",
         ProviderType::OpenAI
         | ProviderType::OpenAICompat
         | ProviderType::Anthropic
@@ -704,7 +704,7 @@ mod tests {
             provider_type: ProviderType::OpenAICompat,
             api_key: "k".to_string(),
             base_url: Some("https://api.minimaxi.com/v1".to_string()),
-            default_model: "MiniMax-M2.7".to_string(),
+            default_model: "MiniMax-M3".to_string(),
             enabled: true,
         };
 

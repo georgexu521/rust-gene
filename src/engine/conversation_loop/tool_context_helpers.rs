@@ -12,8 +12,29 @@ pub(super) fn tool_result_dialog_content(result: &ToolResult) -> String {
 }
 
 pub(super) fn tool_call_fingerprint(tc: &ToolCall) -> String {
-    let args = serde_json::to_string(&tc.arguments).unwrap_or_else(|_| "null".to_string());
+    let normalized = normalize_path_args(&tc.arguments);
+    let args = serde_json::to_string(&normalized).unwrap_or_else(|_| "null".to_string());
     format!("{}|{}", tc.name, args)
+}
+
+/// Normalize path arguments so that `src/a/` and `src/a` produce the same
+/// fingerprint, preventing duplicate-read-only leaks caused by trailing-slash
+/// churn in weak providers.
+fn normalize_path_args(args: &serde_json::Value) -> serde_json::Value {
+    let mut value = args.clone();
+    if let Some(obj) = value.as_object_mut() {
+        for (key, val) in obj.iter_mut() {
+            if key == "path" || key == "pattern" || key.ends_with("_path") || key.ends_with("_pattern") {
+                if let Some(s) = val.as_str() {
+                    let trimmed = s.trim_end_matches('/');
+                    if !trimmed.is_empty() {
+                        *val = serde_json::Value::String(trimmed.to_string());
+                    }
+                }
+            }
+        }
+    }
+    value
 }
 
 pub(super) fn tool_allowed_by_context(
@@ -69,6 +90,25 @@ mod tests {
         let fingerprint = tool_call_fingerprint(&tool_call("file_read"));
         assert!(fingerprint.starts_with("file_read|"));
         assert!(fingerprint.contains("src/main.rs"));
+    }
+
+    #[test]
+    fn tool_call_fingerprint_normalizes_trailing_slash() {
+        let with_slash = ToolCall {
+            id: "call_1".to_string(),
+            name: "file_read".to_string(),
+            arguments: serde_json::json!({"path": "src/engine/conversation_loop/"}),
+        };
+        let without_slash = ToolCall {
+            id: "call_2".to_string(),
+            name: "file_read".to_string(),
+            arguments: serde_json::json!({"path": "src/engine/conversation_loop"}),
+        };
+        assert_eq!(
+            tool_call_fingerprint(&with_slash),
+            tool_call_fingerprint(&without_slash),
+            "trailing slash should be normalized in fingerprint"
+        );
     }
 
     #[test]

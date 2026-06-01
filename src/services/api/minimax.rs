@@ -42,7 +42,7 @@ impl MiniMaxClient {
         }
         let client = Client::with_config(config);
         // 官方 quickstart 默认示例模型
-        let model = model.unwrap_or("MiniMax-M2.7").to_string();
+        let model = model.unwrap_or("MiniMax-M3").to_string();
         let base_url = base_url
             .unwrap_or(crate::services::api::provider::MINIMAX_DEFAULT_BASE_URL)
             .to_string();
@@ -72,7 +72,7 @@ impl MiniMaxClient {
             .ok()
             .map(|value| value.trim().to_string())
             .filter(|value| !value.is_empty())
-            .unwrap_or_else(|| "MiniMax-M2.7".to_string());
+            .unwrap_or_else(|| "MiniMax-M3".to_string());
         Ok(Self::new(&api_key, base_url.as_deref(), Some(&model)))
     }
 

@@ -35,8 +35,8 @@ use crate::engine::task_context::{
 };
 use crate::engine::trace::{TraceCollector, TraceEvent};
 use crate::services::api::{Message, Tool, ToolCall};
-use crate::tools::ToolContextRetainedContext;
-use std::collections::HashSet;
+use crate::tools::{ToolContextRetainedContext, ToolResult};
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use tokio::sync::mpsc;
 
@@ -110,7 +110,7 @@ impl TurnIterationController {
         let tools = exposure_plan.tools;
         let exposed_tool_names = exposure_plan.exposed_tool_names;
 
-        let (content, mut tool_calls, pre_executed) =
+        let (content, mut tool_calls, mut pre_executed) =
             match TurnModelStepController::run(TurnModelStepContext {
                 conversation: context.conversation,
                 iteration: context.iteration + 1,
@@ -213,7 +213,7 @@ impl TurnIterationController {
             }
         }
         if pre_executed.is_empty() {
-            if let Some(filtered) =
+            if let Some((filtered, dup_pre_executed)) =
                 drop_duplicate_successful_read_only_tool_calls(&tool_calls, context.turn_state)
             {
                 let dropped = tool_calls.len().saturating_sub(filtered.len());
@@ -223,6 +223,7 @@ impl TurnIterationController {
                     ),
                 });
                 tool_calls = filtered;
+                pre_executed = dup_pre_executed;
             }
         }
 
@@ -573,9 +574,34 @@ fn duplicate_read_only_closeout_allowed(
 fn drop_duplicate_successful_read_only_tool_calls(
     tool_calls: &[ToolCall],
     turn_state: &TurnRuntimeState,
-) -> Option<Vec<ToolCall>> {
-    let _ = (tool_calls, turn_state);
-    None
+) -> Option<(Vec<ToolCall>, HashMap<usize, ToolResult>)> {
+    let mut filtered = Vec::with_capacity(tool_calls.len());
+    let mut pre_executed = HashMap::new();
+    let mut dropped = 0usize;
+
+    for (idx, tool_call) in tool_calls.iter().enumerate() {
+        let fingerprint = super::tool_context_helpers::tool_call_fingerprint(tool_call);
+        let duplicate_successful_read = super::tool_execution::is_read_only(&tool_call.name)
+            && turn_state
+                .successful_read_only_tool_fingerprints
+                .contains_key(&fingerprint);
+        if duplicate_successful_read {
+            if let Some(cached) = turn_state.successful_read_only_tool_results.get(&fingerprint) {
+                let mut result = ToolResult::success(cached.clone());
+                result.tool_name = Some(tool_call.name.clone());
+                pre_executed.insert(idx, result);
+                dropped += 1;
+                continue;
+            }
+        }
+        filtered.push(tool_call.clone());
+    }
+
+    if dropped > 0 {
+        Some((filtered, pre_executed))
+    } else {
+        None
+    }
 }
 
 #[cfg(test)]
