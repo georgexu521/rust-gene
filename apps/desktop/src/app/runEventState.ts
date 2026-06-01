@@ -90,24 +90,39 @@ export function applyRunEvent(
         shouldRefreshSessions: false,
       };
     case "thinking_started":
-      return appendTraceOnly(state, {
-        id: createId(),
-        kind: "run",
-        title: "Thinking started",
-      });
+      return {
+        state: {
+          ...state,
+          items: appendReasoning(state.items, "", true, createId),
+          traceItems: appendTrace(state.traceItems, {
+            id: createId(),
+            kind: "run",
+            title: "Thinking started",
+          }),
+        },
+        shouldRefreshSessions: false,
+      };
     case "thinking_delta":
-      return appendTraceOnly(state, {
-        id: createId(),
-        kind: "run",
-        title: "Thinking",
-        detail: event.text,
-      });
+      return {
+        state: {
+          ...state,
+          items: appendReasoning(state.items, event.text, true, createId),
+        },
+        shouldRefreshSessions: false,
+      };
     case "thinking_completed":
-      return appendTraceOnly(state, {
-        id: createId(),
-        kind: "run",
-        title: "Thinking completed",
-      });
+      return {
+        state: {
+          ...state,
+          items: finalizeReasoning(state.items),
+          traceItems: appendTrace(state.traceItems, {
+            id: createId(),
+            kind: "run",
+            title: "Thinking completed",
+          }),
+        },
+        shouldRefreshSessions: false,
+      };
     case "tool_started": {
       const result = appendToolNote(
         state,
@@ -519,6 +534,34 @@ function normalizeRole(role: string): MessageTranscriptRole {
   }
 
   return "tool";
+}
+
+function appendReasoning(
+  items: TranscriptItem[],
+  text: string,
+  streaming: boolean,
+  createId: () => string,
+): TranscriptItem[] {
+  const last = items[items.length - 1];
+  if (last?.role === "reasoning") {
+    return [
+      ...items.slice(0, -1),
+      { ...last, text: last.text + text, streaming },
+    ];
+  }
+  return [...items, { id: createId(), role: "reasoning", text, streaming }];
+}
+
+function finalizeReasoning(items: TranscriptItem[]): TranscriptItem[] {
+  const last = items[items.length - 1];
+  if (last?.role === "reasoning") {
+    return [...items.slice(0, -1), { ...last, streaming: false }];
+  }
+  return items;
+}
+
+function appendTrace(traceItems: TraceItem[], item: TraceItem): TraceItem[] {
+  return [...traceItems, item];
 }
 
 function appendAssistantDelta(

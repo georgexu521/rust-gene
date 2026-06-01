@@ -1,17 +1,13 @@
-import {
-  Activity,
-  CheckCircle2,
-  CircleAlert,
-  CircleDotDashed,
-  Clock3,
-  Bug,
-  FilePenLine,
-  KeyRound,
-  TerminalSquare,
-} from "lucide-react";
 import { useEffect, useRef } from "react";
 import { DesktopDiagnostic, DesktopRunContext, ProviderModelStatus } from "../../runtime/desktopApi";
 import { TimelineKind, TimelineStatus, TimelineSummary, TranscriptItem } from "../types";
+import {
+  ReasoningCard,
+  ShellCard,
+  DiffCard,
+  ToolCard,
+  ToolGroupShell,
+} from "./Cards";
 
 type TranscriptProps = {
   items: TranscriptItem[];
@@ -73,7 +69,11 @@ export function Transcript({
         />
       ) : (
         renderedItems.map(({ className, item }) =>
-          className?.includes("transcript-hidden") ? null : item.role === "timeline" ? (
+          className?.includes("transcript-hidden") ? null : item.role === "reasoning" ? (
+            <article className="message reasoning" key={item.id}>
+              <ReasoningCard text={item.text} streaming={item.streaming ?? false} />
+            </article>
+          ) : item.role === "timeline" ? (
             <TimelineEvent
               className={className}
               item={item}

@@ -4206,3 +4206,77 @@ h1 {
   pointer-events: none;
   white-space: nowrap;
 }
+
+/* ═══════════════════════════════════════════════════════════
+   Reasonix-style Cards
+   ═══════════════════════════════════════════════════════════ */
+
+:root {
+  --rx-success: #22c55e;
+  --rx-warning: #f59e0b;
+  --rx-danger: #ef4444;
+  --rx-accent: #7c3aed;
+  --rx-violet: #8b5cf6;
+}
+
+.rx-card {
+  margin: 2px 0;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: var(--bg-surface);
+  overflow: hidden;
+  font-size: 12px;
+}
+.rx-card[data-tone="success"] { border-left: 3px solid var(--rx-success); }
+.rx-card[data-tone="warning"] { border-left: 3px solid var(--rx-warning); }
+.rx-card[data-tone="danger"]  { border-left: 3px solid var(--rx-danger); }
+.rx-card[data-tone="accent"]  { border-left: 3px solid var(--rx-accent); }
+.rx-card[data-tone="violet"]  { border-left: 3px solid var(--rx-violet); }
+.rx-card-compact .rx-card-head { padding: 3px 8px; font-size: 11px; }
+
+.rx-card-head {
+  display: flex; align-items: center; gap: 5px;
+  width: 100%; padding: 5px 8px;
+  background: none; border: none; cursor: pointer;
+  color: var(--text-secondary); text-align: left; font: inherit;
+}
+.rx-card-head:hover { background: var(--bg-hover); }
+.rx-card-icon { flex-shrink: 0; width: 14px; text-align: center; }
+.rx-card-kind { font-weight: 600; color: var(--text-primary); }
+.rx-card-name { color: var(--text-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rx-card-grow { flex: 1; }
+.rx-card-meta { display: flex; align-items: center; gap: 5px; color: var(--text-muted); font-size: 10px; white-space: nowrap; }
+.rx-card-chevron { flex-shrink: 0; color: var(--text-muted); }
+.rx-card-body { padding: 6px 8px; border-top: 1px solid var(--border-subtle); }
+
+.rx-status-dot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--text-muted); }
+.rx-status-dot.running { background: var(--rx-accent); animation: rx-pulse 1.5s ease-in-out infinite; }
+.rx-status-dot.warn { background: var(--rx-warning); }
+@keyframes rx-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
+
+.rx-reasoning-text { font-size: 12px; line-height: 1.5; color: var(--text-secondary); }
+.rx-reasoning-text p { margin: 0 0 6px; }
+.rx-reasoning-text p:last-child { margin: 0; }
+
+.rx-shell-cmd-text { font-size: 11px; font-family: var(--font-mono, monospace); color: var(--text-primary); }
+.rx-shell-output { margin: 0; padding: 6px 8px; background: var(--bg-code); border-radius: 4px; font-size: 11px; font-family: var(--font-mono, monospace); white-space: pre-wrap; word-break: break-word; max-height: 240px; overflow-y: auto; line-height: 1.4; }
+.rx-shell-ok { color: var(--rx-success); }
+.rx-shell-err { color: var(--rx-danger); }
+
+.rx-diff-add { color: var(--rx-success); font-weight: 600; }
+.rx-diff-del { color: var(--rx-danger); font-weight: 600; }
+.rx-diff-preview { margin: 0; padding: 6px 8px; background: var(--bg-code); border-radius: 4px; font-size: 11px; font-family: var(--font-mono, monospace); white-space: pre-wrap; word-break: break-word; max-height: 200px; overflow-y: auto; }
+
+.rx-tool-output { margin: 0; padding: 6px 8px; background: var(--bg-code); border-radius: 4px; font-size: 11px; font-family: var(--font-mono, monospace); white-space: pre-wrap; word-break: break-word; max-height: 200px; overflow-y: auto; }
+
+.rx-tool-group { margin: 2px 0; }
+.rx-tool-group-header { display: flex; align-items: center; gap: 6px; width: 100%; padding: 4px 8px; background: var(--bg-surface); border: 1px solid var(--border-subtle); border-radius: 5px; cursor: pointer; font-size: 11px; color: var(--text-muted); }
+.rx-tool-group-header:hover { background: var(--bg-hover); }
+.rx-tool-group-chevron { transition: transform 0.15s; }
+.rx-tool-group-chevron.open { transform: rotate(90deg); }
+.rx-tool-group-body { padding: 2px 0 2px 8px; border-left: 2px solid var(--border-subtle); margin-left: 4px; }
+
+.streaming-caret { display: inline-block; width: 1px; height: 14px; background: var(--rx-accent); margin-left: 2px; vertical-align: text-bottom; animation: rx-blink 1s step-end infinite; }
+@keyframes rx-blink { 0%, 100% { opacity: 1; } 50% { opacity: 0; } }
+
+.message.reasoning { margin: 0; }
