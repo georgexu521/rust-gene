@@ -11,12 +11,12 @@ use super::turn_model_step_controller::{
     TurnModelStepContext, TurnModelStepController, TurnModelStepFlow,
 };
 use super::turn_post_change_closeout_controller::{
-    TurnPostChangeCloseoutContext, TurnPostChangeCloseoutController, TurnPostChangeCloseoutFlow,
+    TurnPostChangeCloseoutContext, TurnPostChangeCloseoutController,
 };
 use super::turn_runtime_context::TurnRuntimeContext;
 use super::turn_runtime_state::TurnRuntimeState;
 use super::turn_tool_failure_followup_controller::{
-    TurnToolFailureFollowupContext, TurnToolFailureFollowupController, TurnToolFailureFollowupFlow,
+    TurnToolFailureFollowupContext, TurnToolFailureFollowupController,
 };
 use super::turn_tool_round_step_controller::{
     TurnToolRoundStepContext, TurnToolRoundStepController,
@@ -344,55 +344,61 @@ impl TurnIterationController {
                 TurnFocusedRepairFlow::Continue | TurnFocusedRepairFlow::Stop
             ),
         );
-        match focused_repair_flow {
-            TurnFocusedRepairFlow::Continue => return Ok(TurnIterationFlow::Continue),
-            TurnFocusedRepairFlow::Stop => return Ok(TurnIterationFlow::Break),
-            TurnFocusedRepairFlow::Proceed => {}
+        // ── Advisory-only post-tool checks ──
+        // Reasonix alignment: only 4 hard-stop conditions exist:
+        // 1. Budget exhausted → force summary
+        // 2. User abort (handled upstream)
+        // 3. No tool calls after 2 consecutive Finishes (double-tap)
+        // 4. API error
+        //
+        // All other checks below are advisory — they record traces and
+        // update task state but NEVER break the loop. The iteration budget
+        // + force summary are the ultimate safety net.
+        if matches!(focused_repair_flow, TurnFocusedRepairFlow::Continue) {
+            return Ok(TurnIterationFlow::Continue);
         }
 
-        match TurnToolFailureFollowupController::run(TurnToolFailureFollowupContext {
-            provider: context.conversation.provider.as_ref(),
-            model: context.conversation.model.clone(),
-            session_store: context.conversation.session_store.as_ref(),
-            session_id: &context.conversation.session_id,
-            trace: context.trace,
-            any_tool_success: tool_round_state.any_tool_success,
-            last_user_preview: context.last_user_preview,
-            task_bundle: &mut *context.task_bundle,
-            round_state: &mut tool_round_state,
-            turn_state: context.turn_state,
-            failed_tool_names: &context.loop_state.failed_tool_names,
-            tx: context.tx,
-            final_content: &mut context.loop_state.final_content,
-            messages: &mut *context.messages,
-        })
-        .await
-        {
-            TurnToolFailureFollowupFlow::Continue => {}
-            TurnToolFailureFollowupFlow::Stop => return Ok(TurnIterationFlow::Break),
-        }
+        let _followup_flow = TurnToolFailureFollowupController::run(
+            TurnToolFailureFollowupContext {
+                provider: context.conversation.provider.as_ref(),
+                model: context.conversation.model.clone(),
+                session_store: context.conversation.session_store.as_ref(),
+                session_id: &context.conversation.session_id,
+                trace: context.trace,
+                any_tool_success: tool_round_state.any_tool_success,
+                last_user_preview: context.last_user_preview,
+                task_bundle: &mut *context.task_bundle,
+                round_state: &mut tool_round_state,
+                turn_state: context.turn_state,
+                failed_tool_names: &context.loop_state.failed_tool_names,
+                tx: context.tx,
+                final_content: &mut context.loop_state.final_content,
+                messages: &mut *context.messages,
+            },
+        )
+        .await;
 
-        match TurnPostChangeCloseoutController::run(TurnPostChangeCloseoutContext {
-            conversation: context.conversation,
-            trace: context.trace,
-            route: context.route,
-            code_workflow: &mut *context.code_workflow,
-            task_bundle: &mut *context.task_bundle,
-            round_state: &mut tool_round_state,
-            required_validation_commands: context.required_validation_commands,
-            successful_required_validation_commands: &mut context
-                .loop_state
-                .successful_required_validation_commands,
-            turn_state: &mut *context.turn_state,
-            final_content: &mut context.loop_state.final_content,
-            messages: &mut *context.messages,
-            last_user_preview: context.last_user_preview,
-        })
-        .await
-        {
-            TurnPostChangeCloseoutFlow::Continue => Ok(TurnIterationFlow::Continue),
-            TurnPostChangeCloseoutFlow::Break => Ok(TurnIterationFlow::Break),
-        }
+        let _closeout_flow = TurnPostChangeCloseoutController::run(
+            TurnPostChangeCloseoutContext {
+                conversation: context.conversation,
+                trace: context.trace,
+                route: context.route,
+                code_workflow: &mut *context.code_workflow,
+                task_bundle: &mut *context.task_bundle,
+                round_state: &mut tool_round_state,
+                required_validation_commands: context.required_validation_commands,
+                successful_required_validation_commands: &mut context
+                    .loop_state
+                    .successful_required_validation_commands,
+                turn_state: &mut *context.turn_state,
+                final_content: &mut context.loop_state.final_content,
+                messages: &mut *context.messages,
+                last_user_preview: context.last_user_preview,
+            },
+        )
+        .await;
+
+        Ok(TurnIterationFlow::Continue)
     }
 }
 
