@@ -2007,6 +2007,7 @@ fn default_provider_id_from_env(
 fn default_models_for_provider(provider_id: &str) -> Vec<&'static str> {
     match provider_id {
         "minimax" => vec![
+            "MiniMax-M3",
             "MiniMax-M2.7",
             "MiniMax-M2.7-highspeed",
             "MiniMax-M2.5",
