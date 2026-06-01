@@ -145,26 +145,46 @@ impl TurnIterationController {
             })
             .await?
             {
-                TurnModelStepFlow::Retry => return Ok(TurnIterationFlow::Continue),
+                TurnModelStepFlow::Retry => {
+                    context.loop_state.consecutive_empty_rounds = 0;
+                    return Ok(TurnIterationFlow::Continue);
+                }
                 TurnModelStepFlow::Finish => {
-                    // Guard: if the model produces empty content, inject a
-                    // prompt asking it to summarize and give it one more try.
-                    // Mirrors Reasonix: empty finish is treated as a retry
-                    // with an explicit prompt rather than silently ending.
-                    if context.loop_state.final_content.trim().is_empty()
-                        && context.iteration < context.conversation.max_iterations
-                    {
-                        context.messages.push(Message::system(
-                            "Your last response was empty. Please summarize what you have \
-                             learned from the tool results above in a few sentences. \
-                             If you need more information, call the appropriate tool. \
-                             Otherwise, provide a direct answer to the user's question."
-                                .to_string(),
-                        ));
+                    // Double-tap finish: only break after TWO consecutive
+                    // responses without tool calls. The first one may be the
+                    // model "thinking out loud" before acting (e.g. "next
+                    // I'll read X, then Y"). This matches Claude Code
+                    // behavior and prevents premature stopping.
+                    if context.loop_state.final_content.trim().is_empty() {
+                        // Empty content is always bad — prompt the model.
+                        if context.iteration < context.conversation.max_iterations {
+                            context.messages.push(Message::system(
+                                "Your last response was empty. Please summarize what you \
+                                 have learned from the tool results above in a few \
+                                 sentences, or call tools if you need more information."
+                                    .to_string(),
+                            ));
+                            context.trace.record(TraceEvent::WorkflowFallback {
+                                error: "empty assistant response — injecting retry prompt"
+                                    .to_string(),
+                            });
+                            return Ok(TurnIterationFlow::Continue);
+                        }
+                        return Ok(TurnIterationFlow::Break);
+                    }
+                    context.loop_state.consecutive_empty_rounds += 1;
+                    if context.loop_state.consecutive_empty_rounds < 2 {
+                        // First non-tool response: let the model continue.
                         context.trace.record(TraceEvent::WorkflowFallback {
-                            error: "empty assistant response — injecting retry prompt"
-                                .to_string(),
+                            error: format!(
+                                "non-tool response (round {}/{}) — letting model continue",
+                                context.loop_state.consecutive_empty_rounds, 2
+                            ),
                         });
+                        // But if budget is nearly exhausted, break anyway.
+                        if context.iteration + 2 >= context.conversation.max_iterations {
+                            return Ok(TurnIterationFlow::Break);
+                        }
                         return Ok(TurnIterationFlow::Continue);
                     }
                     return Ok(TurnIterationFlow::Break);
@@ -173,7 +193,10 @@ impl TurnIterationController {
                     content,
                     tool_calls,
                     pre_executed,
-                } => (content, tool_calls, pre_executed),
+                } => {
+                    context.loop_state.consecutive_empty_rounds = 0;
+                    (content, tool_calls, pre_executed)
+                }
             };
 
         let redirected_directory_reads =
@@ -1198,8 +1221,12 @@ mod tests {
         .await
         .expect("iteration");
 
-        assert!(matches!(flow, TurnIterationFlow::Break));
+        // Double-tap finish: first non-tool response returns Continue,
+        // letting the model "think out loud" before acting. The second
+        // consecutive Finish will break.
+        assert!(matches!(flow, TurnIterationFlow::Continue));
         assert_eq!(loop_state.final_content, "done");
+        assert_eq!(loop_state.consecutive_empty_rounds, 1);
         assert_eq!(turn_state.iterations_used, 1);
         assert!(!loop_state.tool_calls_made);
     }
