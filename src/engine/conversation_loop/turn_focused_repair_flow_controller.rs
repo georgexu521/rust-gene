@@ -1,28 +1,14 @@
 use super::focused_repair_state_controller::{
     FocusedRepairRoundApplicationContext, FocusedRepairStateContext, FocusedRepairStateController,
 };
-use super::patch_synthesis_flow_controller::{
-    EnterPatchSynthesisContext, EnterPatchSynthesisFlow, PatchSynthesisFlowController,
-};
-use super::turn_focused_repair_action_controller::{
-    TurnFocusedRepairActionContext, TurnFocusedRepairActionController, TurnFocusedRepairActionFlow,
-};
 use super::turn_runtime_state::TurnRuntimeState;
 use super::turn_tool_round_outcome_controller::TurnToolRoundState;
-use super::ConversationLoop;
 use crate::engine::code_change_workflow::CodeChangeWorkflowRunner;
-use crate::engine::destructive_scope::DestructiveScopeContract;
 use crate::engine::intent_router::WorkflowKind;
-use crate::engine::resource_policy::ResourcePolicy;
-use crate::engine::streaming::StreamEvent;
 use crate::engine::trace::TraceCollector;
-use crate::services::api::{Message, ToolCall};
-use std::collections::HashSet;
-use std::path::{Path, PathBuf};
-use tokio::sync::mpsc;
+use crate::services::api::Message;
 
 pub(super) struct TurnFocusedRepairFlowContext<'a> {
-    pub(super) conversation: &'a ConversationLoop,
     pub(super) workflow: WorkflowKind,
     pub(super) no_diff_audit_closeout_allowed: bool,
     pub(super) code_write_tools_forbidden: bool,
@@ -30,21 +16,11 @@ pub(super) struct TurnFocusedRepairFlowContext<'a> {
     pub(super) code_workflow: &'a mut CodeChangeWorkflowRunner,
     pub(super) turn_state: &'a mut TurnRuntimeState,
     pub(super) round_state: &'a mut TurnToolRoundState,
-    pub(super) exposed_tool_names: &'a HashSet<String>,
-    pub(super) tx: Option<&'a mpsc::Sender<StreamEvent>>,
-    pub(super) resource_policy: &'a ResourcePolicy,
-    pub(super) destructive_scope: &'a DestructiveScopeContract,
-    pub(super) baseline_git_status_files: &'a HashSet<PathBuf>,
-    pub(super) working_dir: &'a Path,
-    pub(super) last_user_preview: &'a str,
     pub(super) messages: &'a mut Vec<Message>,
-    pub(super) final_content: &'a mut String,
-    pub(super) final_tool_calls: &'a mut Vec<ToolCall>,
 }
 
 pub(super) enum TurnFocusedRepairFlow {
     Continue,
-    Stop,
     Proceed,
 }
 
@@ -54,7 +30,7 @@ impl TurnFocusedRepairFlowController {
     pub(super) async fn run(context: TurnFocusedRepairFlowContext<'_>) -> TurnFocusedRepairFlow {
         let is_programming_workflow =
             crate::engine::code_change_workflow::is_programming_workflow(context.workflow);
-        let mut focused_repair_state =
+        let focused_repair_state =
             FocusedRepairStateController::apply_tool_round(FocusedRepairRoundApplicationContext {
                 state_context: FocusedRepairStateContext {
                     state: &mut context.turn_state.focused_repair,
@@ -86,151 +62,16 @@ impl TurnFocusedRepairFlowController {
             return TurnFocusedRepairFlow::Continue;
         }
 
-        if Self::should_force_deterministic_patch_synthesis_after_failed_tool(
-            context.conversation,
-            context.round_state,
-            context.working_dir,
-            context.last_user_preview,
-        ) {
-            context.turn_state.focused_repair.action_checkpoint_active = true;
-            context
-                .turn_state
-                .focused_repair
-                .action_checkpoint_no_change_rounds = 1;
-            focused_repair_state.force_patch_synthesis_after_no_change = true;
-            focused_repair_state.force_patch_synthesis_reason =
-                Some("deterministic patch available after failed tool");
-            context
-                .trace
-                .record(crate::engine::trace::TraceEvent::WorkflowFallback {
-                    error:
-                        "deterministic patch synthesis forced after failed tool with no code change"
-                            .to_string(),
-                });
-        }
-
-        match TurnFocusedRepairActionController::run(TurnFocusedRepairActionContext {
-            focused_repair_state: &focused_repair_state,
-            runtime_state: &mut context.turn_state.focused_repair,
-            round_state: context.round_state,
-            exposed_tool_names: context.exposed_tool_names,
-            trace: context.trace,
-            messages: context.messages,
-        }) {
-            TurnFocusedRepairActionFlow::NoAction => TurnFocusedRepairFlow::Proceed,
-            TurnFocusedRepairActionFlow::Continue => TurnFocusedRepairFlow::Continue,
-            TurnFocusedRepairActionFlow::EnterPatchSynthesis { proposal } => {
-                match PatchSynthesisFlowController::handle_enter_patch_synthesis(
-                    EnterPatchSynthesisContext {
-                        proposal: &proposal,
-                        conversation: context.conversation,
-                        code_write_tools_forbidden: context.code_write_tools_forbidden,
-                        last_user_preview: context.last_user_preview,
-                        exposed_tool_names: context.exposed_tool_names,
-                        any_tool_success: &mut context.round_state.any_tool_success,
-                        tx: context.tx,
-                        trace: context.trace,
-                        resource_policy: context.resource_policy,
-                        destructive_scope: context.destructive_scope,
-                        turn_state: context.turn_state,
-                        tool_results_text: &mut context.round_state.tool_results_text,
-                        messages: context.messages,
-                        changed_files: &mut context.round_state.changed_files,
-                        baseline_git_status_files: context.baseline_git_status_files,
-                        is_programming_workflow,
-                        final_content: context.final_content,
-                        final_tool_calls: context.final_tool_calls,
-                    },
-                )
-                .await
-                {
-                    EnterPatchSynthesisFlow::Continue => TurnFocusedRepairFlow::Continue,
-                    EnterPatchSynthesisFlow::Stop => TurnFocusedRepairFlow::Stop,
-                    EnterPatchSynthesisFlow::Proceed => TurnFocusedRepairFlow::Proceed,
-                }
-            }
-        }
-    }
-
-    fn should_force_deterministic_patch_synthesis_after_failed_tool(
-        conversation: &ConversationLoop,
-        round_state: &TurnToolRoundState,
-        working_dir: &Path,
-        last_user_preview: &str,
-    ) -> bool {
-        if !ConversationLoop::deterministic_patch_synthesis_enabled() {
-            return false;
-        }
-        if !round_state.batch_has_unsuccessful_tools
-            || !round_state.failed_tool_evidence_present()
-            || round_state.has_worktree_changes()
-            || round_state.used_write_tool
-            || round_state.successful_write_tool
-        {
-            return false;
-        }
-
-        let deterministic_seed = PatchSynthesisFlowController::deterministic_seed(
-            last_user_preview,
-            &round_state.tool_results_text,
-        );
-        if deterministic_seed.trim().is_empty() {
-            return false;
-        }
-
-        !conversation
-            .deterministic_patch_tool_calls(&deterministic_seed, working_dir)
-            .is_empty()
+        TurnFocusedRepairFlow::Proceed
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::engine::destructive_scope::DestructiveScopeContract;
-    use crate::engine::intent_router::{IntentRouter, WorkflowKind};
+    use crate::engine::intent_router::WorkflowKind;
     use crate::engine::task_context::TaskContextBundle;
     use crate::engine::trace::{TraceEvent, TurnStatus, TurnTrace};
-    use crate::services::api::{ChatRequest, ChatResponse, LlmProvider};
-    use crate::tools::{FileWriteTool, ToolRegistry};
-    use async_openai::types::ChatCompletionResponseStream;
-    use std::path::Path;
-    use std::sync::Arc;
-    use tempfile::tempdir;
-    use tokio::sync::Mutex;
-
-    struct MockProvider;
-
-    #[async_trait::async_trait]
-    impl LlmProvider for MockProvider {
-        async fn chat(&self, _request: ChatRequest) -> anyhow::Result<ChatResponse> {
-            Err(anyhow::anyhow!("chat not used in this test"))
-        }
-
-        async fn chat_stream(
-            &self,
-            _request: ChatRequest,
-        ) -> anyhow::Result<ChatCompletionResponseStream> {
-            Err(anyhow::anyhow!("stream not used in this test"))
-        }
-
-        fn base_url(&self) -> &str {
-            "mock://local"
-        }
-
-        fn default_model(&self) -> &str {
-            "mock-model"
-        }
-    }
-
-    fn conversation() -> ConversationLoop {
-        ConversationLoop::new(
-            Arc::new(MockProvider),
-            Arc::new(ToolRegistry::new()),
-            Arc::new(Mutex::new(crate::cost_tracker::CostTracker::new())),
-            "mock-model".to_string(),
-        )
-    }
 
     fn round_state() -> TurnToolRoundState {
         TurnToolRoundState {
@@ -259,20 +100,11 @@ mod tests {
         trace: &TraceCollector,
         messages: &mut Vec<Message>,
     ) -> TurnFocusedRepairFlow {
-        let conversation = conversation();
-        let route = IntentRouter::new().route("fix it");
-        let resource_policy = ResourcePolicy::from_route(&route);
-        let destructive_scope =
-            DestructiveScopeContract::from_user_request("fix it", Path::new("."));
+        let route = crate::engine::intent_router::IntentRouter::new().route("fix it");
         let task_bundle = TaskContextBundle::new("fix it", ".", route, None);
         let mut code_workflow = CodeChangeWorkflowRunner::new(&task_bundle);
-        let exposed_tool_names = HashSet::from(["file_edit".to_string()]);
-        let baseline_git_status_files = HashSet::new();
-        let mut final_content = String::new();
-        let mut final_tool_calls = Vec::new();
 
         TurnFocusedRepairFlowController::run(TurnFocusedRepairFlowContext {
-            conversation: &conversation,
             workflow,
             no_diff_audit_closeout_allowed: false,
             code_write_tools_forbidden: false,
@@ -280,29 +112,9 @@ mod tests {
             code_workflow: &mut code_workflow,
             turn_state,
             round_state,
-            exposed_tool_names: &exposed_tool_names,
-            tx: None,
-            resource_policy: &resource_policy,
-            destructive_scope: &destructive_scope,
-            baseline_git_status_files: &baseline_git_status_files,
-            working_dir: Path::new("."),
-            last_user_preview: "fix it",
             messages,
-            final_content: &mut final_content,
-            final_tool_calls: &mut final_tool_calls,
         })
         .await
-    }
-
-    fn conversation_with_file_write() -> ConversationLoop {
-        let mut registry = ToolRegistry::new();
-        registry.register(FileWriteTool);
-        ConversationLoop::new(
-            Arc::new(MockProvider),
-            Arc::new(registry),
-            Arc::new(Mutex::new(crate::cost_tracker::CostTracker::new())),
-            "mock-model".to_string(),
-        )
     }
 
     #[tokio::test]
@@ -356,7 +168,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn continues_after_focused_repair_prompt() {
+    async fn proceeds_without_runtime_focused_repair_prompt() {
         let trace = TraceCollector::new(TurnTrace::new("session", 1, "fix it"));
         let mut turn_state = TurnRuntimeState::new(true);
         turn_state.focused_repair.action_checkpoint_active = true;
@@ -374,40 +186,13 @@ mod tests {
         )
         .await;
 
-        assert!(matches!(flow, TurnFocusedRepairFlow::Continue));
-        assert!(round_state
+        assert!(matches!(flow, TurnFocusedRepairFlow::Proceed));
+        assert!(!round_state
             .tool_results_text
             .contains("Focused repair correction"));
-        assert!(messages.iter().any(|message| matches!(
+        assert!(!messages.iter().any(|message| matches!(
             message,
             Message::System { content } if content.contains("Focused repair correction")
         )));
-    }
-
-    #[test]
-    fn detects_deterministic_patch_after_failed_tool_with_no_diff() {
-        let conversation = conversation_with_file_write();
-        let tmp = tempdir().expect("create temp dir");
-        std::fs::create_dir_all(tmp.path().join("fixtures/project_partner_vague_tool"))
-            .expect("create fixture dir");
-        std::fs::write(
-            tmp.path()
-                .join("fixtures/project_partner_vague_tool/README.md"),
-            "tiny local tool for lab strains and phage notes; local-only",
-        )
-        .expect("write readme");
-        let mut round_state = round_state();
-        round_state.any_tool_success = true;
-        round_state.batch_has_unsuccessful_tools = true;
-        round_state.failed_tool_evidence = vec!["bash was not exposed".to_string()];
-
-        assert!(
-            TurnFocusedRepairFlowController::should_force_deterministic_patch_synthesis_after_failed_tool(
-                &conversation,
-                &round_state,
-                tmp.path(),
-                "Build the smallest useful local web MVP under fixtures/project_partner_vague_tool. Keep it local-only for strain and phage notes.",
-            )
-        );
     }
 }

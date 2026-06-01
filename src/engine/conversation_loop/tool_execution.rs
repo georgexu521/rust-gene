@@ -28,7 +28,7 @@ pub(crate) const DEFAULT_MAX_ITERATIONS: usize = 50;
 /// REASONIX_TOOL_DISPATCH=serial). Default is parallel for read-only tools.
 pub(crate) fn force_serial_tool_dispatch() -> bool {
     std::env::var("PRIORITY_AGENT_TOOL_DISPATCH")
-        .map(|v| v.trim().to_ascii_lowercase() == "serial")
+        .map(|v| v.trim().eq_ignore_ascii_case("serial"))
         .unwrap_or(false)
 }
 

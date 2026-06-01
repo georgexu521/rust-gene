@@ -802,13 +802,6 @@ fn final_decision(
             vec![ActionReviewReason::CheckpointRequired],
         );
     }
-    if worth.premature_mutation {
-        return (
-            ActionReviewDecision::Revise,
-            ActionReviewReason::LowValueAction,
-            vec![ActionReviewReason::LowValueAction],
-        );
-    }
     if permission.requires_confirmation {
         let reason = permission_confirmation_reason(permission, contract);
         return (ActionReviewDecision::AskUser, reason, vec![reason]);
@@ -1451,7 +1444,7 @@ mod tests {
     }
 
     #[test]
-    fn premature_code_edit_without_read_evidence_is_typed_revise() {
+    fn premature_code_edit_without_read_evidence_is_advisory() {
         let tool = FileEditLikeTool;
         let tool_call = call(
             "file_edit",
@@ -1475,11 +1468,11 @@ mod tests {
             action_checkpoint_rejection: None,
         });
 
-        assert_eq!(review.decision, ActionReviewDecision::Revise);
-        assert_eq!(review.primary_reason, ActionReviewReason::LowValueAction);
+        assert_eq!(review.decision, ActionReviewDecision::Allow);
+        assert_eq!(review.primary_reason, ActionReviewReason::SafeToExecute);
         assert_eq!(review.worth.has_relevant_observation, Some(false));
         assert!(review.worth.premature_mutation);
-        assert!(review.model_recovery.contains("file_read or grep"));
+        assert!(review.reasons.contains(&ActionReviewReason::LowScopeFit));
     }
 
     #[test]

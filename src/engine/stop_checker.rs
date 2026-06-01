@@ -197,20 +197,17 @@ impl StopChecker {
         if !input.any_tool_success && input.repeated_failed_tools > 0 {
             return decision(
                 &input,
-                StopCheckStatus::Stop,
+                StopCheckStatus::Continue,
                 StopCheckReason::RepeatedToolFailure,
-                Some(TaskTerminalStatus::Failed),
-                StopAction::Recover,
-                format!(
-                    "stopping after {} repeated failed tool attempt(s)",
-                    input.repeated_failed_tools
-                ),
+                None,
+                StopAction::Continue,
+                format!("{} repeated failed tool attempt(s) recorded as advisory evidence", input.repeated_failed_tools),
                 vec!["same tool failure repeated with no successful tool in the round".to_string()],
                 input
                     .failure_type
                     .clone()
                     .or_else(|| Some("tool_failure".to_string())),
-                Some("switch strategy instead of repeating the failed tool".to_string()),
+                Some("let the model decide whether to retry, switch strategy, or summarize the blocker".to_string()),
             );
         }
 
@@ -234,51 +231,60 @@ impl StopChecker {
         if input.consecutive_validation_failures >= 3 {
             return decision(
                 &input,
-                StopCheckStatus::Stop,
+                StopCheckStatus::Continue,
                 StopCheckReason::ConsecutiveValidationFailures,
-                Some(TaskTerminalStatus::Failed),
-                StopAction::Recover,
+                None,
+                StopAction::Continue,
                 format!(
-                    "{} consecutive validation failure(s) without recovery",
+                    "{} consecutive validation failure(s) recorded as advisory evidence",
                     input.consecutive_validation_failures
                 ),
                 vec!["validation failures persisted across repair attempts".to_string()],
                 Some("validation_failure".to_string()),
-                Some("change debugging strategy and report failing checks".to_string()),
+                Some(
+                    "feed validation evidence back to the model without forcing a runtime stop"
+                        .to_string(),
+                ),
             );
         }
 
         if input.consecutive_edit_failures >= 3 {
             return decision(
                 &input,
-                StopCheckStatus::Stop,
+                StopCheckStatus::Continue,
                 StopCheckReason::ConsecutiveEditFailures,
-                Some(TaskTerminalStatus::Blocked),
-                StopAction::Recover,
+                None,
+                StopAction::Continue,
                 format!(
-                    "{} consecutive edit failure(s) without a successful change",
+                    "{} consecutive edit failure(s) recorded as advisory evidence",
                     input.consecutive_edit_failures
                 ),
                 vec!["edit attempts failed repeatedly".to_string()],
                 Some("edit_failure".to_string()),
-                Some("use a different edit method or ask for help if blocked".to_string()),
+                Some(
+                    "let the model choose a different edit method or report the blocker"
+                        .to_string(),
+                ),
             );
         }
 
         if input.consecutive_command_failures >= 3 {
             return decision(
                 &input,
-                StopCheckStatus::Stop,
+                StopCheckStatus::Continue,
                 StopCheckReason::ConsecutiveCommandFailures,
-                Some(TaskTerminalStatus::Blocked),
-                StopAction::Recover,
+                None,
+                StopAction::Continue,
                 format!(
-                    "{} consecutive command failure(s) without progress",
+                    "{} consecutive command failure(s) recorded as advisory evidence",
                     input.consecutive_command_failures
                 ),
                 vec!["shell or validation commands failed repeatedly".to_string()],
                 Some("command_failure".to_string()),
-                Some("change command strategy before retrying".to_string()),
+                Some(
+                    "let the model choose a different command strategy or report the blocker"
+                        .to_string(),
+                ),
             );
         }
 
@@ -392,19 +398,19 @@ impl StopChecker {
         if input.uncertainty_not_reduced_steps >= 3 {
             return decision(
                 &input,
-                StopCheckStatus::Stop,
+                StopCheckStatus::Continue,
                 StopCheckReason::UncertaintyNotReduced,
-                Some(TaskTerminalStatus::Blocked),
-                StopAction::Replan,
+                None,
+                StopAction::Continue,
                 format!(
-                    "{} observation step(s) did not reduce uncertainty",
+                    "{} observation step(s) did not reduce uncertainty; recording advisory evidence",
                     input.uncertainty_not_reduced_steps
                 ),
                 vec![
                     "observer state did not gain a finding, focus, or progress signal".to_string(),
                 ],
                 Some("uncertainty_not_reduced".to_string()),
-                Some("replan around a sharper hypothesis before more tools".to_string()),
+                Some("let the model decide whether to replan around a sharper hypothesis".to_string()),
             );
         }
 
@@ -413,34 +419,34 @@ impl StopChecker {
         {
             return decision(
                 &input,
-                StopCheckStatus::Checkpoint,
+                StopCheckStatus::Continue,
                 StopCheckReason::FocusedRepairStalled,
                 None,
-                StopAction::Recover,
+                StopAction::Continue,
                 format!(
-                    "focused repair stalled after {} checkpoint no-change round(s)",
+                    "focused repair stalled after {} checkpoint no-change round(s); recording advisory evidence",
                     input.action_checkpoint_no_change_rounds
                 ),
                 vec!["focused repair checkpoint did not produce changes".to_string()],
                 Some("focused_repair_stalled".to_string()),
-                Some("synthesize a patch from accumulated evidence".to_string()),
+                Some("let the model decide whether to synthesize a patch from accumulated evidence".to_string()),
             );
         }
 
         if input.no_code_progress_rounds >= 2 && !input.successful_write_tool {
             return decision(
                 &input,
-                StopCheckStatus::Checkpoint,
+                StopCheckStatus::Continue,
                 StopCheckReason::NoProgress,
                 None,
-                StopAction::Replan,
+                StopAction::Continue,
                 format!(
-                    "{} successful tool round(s) produced no code progress",
+                    "{} successful tool round(s) produced no code progress; recording advisory evidence",
                     input.no_code_progress_rounds
                 ),
                 vec!["successful tools did not result in code progress".to_string()],
                 Some("no_code_progress".to_string()),
-                Some("change strategy before more read-only inspection".to_string()),
+                Some("let the model decide whether to change strategy or continue inspection".to_string()),
             );
         }
 
@@ -482,27 +488,25 @@ impl StopChecker {
                     decision.evidence.len(),
                 );
             }
-            StopCheckReason::NoProgress | StopCheckReason::FocusedRepairStalled => {
-                task_state.transition_to_stage(
-                    AgentTaskStage::Repair,
-                    "stop_checker",
-                    decision.reason.label(),
-                    decision.evidence.len(),
-                );
-                task_state.record_observation("stop_checker", decision.summary.clone());
-            }
             StopCheckReason::RepeatedToolFailure
             | StopCheckReason::ConsecutiveValidationFailures
             | StopCheckReason::ConsecutiveEditFailures
             | StopCheckReason::ConsecutiveCommandFailures
-            | StopCheckReason::ModelOutputInvalid => {
-                task_state.transition_to_stage(
-                    AgentTaskStage::Repair,
-                    "stop_checker",
-                    decision.reason.label(),
-                    decision.evidence.len(),
-                );
-                task_state.verification_plan.status = VerificationStatus::Blocked;
+            | StopCheckReason::NoProgress
+            | StopCheckReason::FocusedRepairStalled
+            | StopCheckReason::UncertaintyNotReduced => {
+                task_state.record_observation("stop_checker", decision.summary.clone());
+            }
+            StopCheckReason::ModelOutputInvalid => {
+                if decision.status == StopCheckStatus::Stop {
+                    task_state.transition_to_stage(
+                        AgentTaskStage::Repair,
+                        "stop_checker",
+                        decision.reason.label(),
+                        decision.evidence.len(),
+                    );
+                    task_state.verification_plan.status = VerificationStatus::Blocked;
+                }
                 task_state.record_observation("stop_checker", decision.summary.clone());
             }
             StopCheckReason::ConsecutivePermissionBlocks
@@ -512,8 +516,7 @@ impl StopChecker {
             | StopCheckReason::UserInterrupted => {
                 task_state.record_observation("stop_checker", decision.summary.clone());
             }
-            StopCheckReason::UncertaintyNotReduced
-            | StopCheckReason::ActionNeedsRevision
+            StopCheckReason::ActionNeedsRevision
             | StopCheckReason::RollbackRecommended
             | StopCheckReason::RepeatedActionRevision => {
                 task_state.transition_to_stage(
@@ -625,7 +628,7 @@ mod tests {
     }
 
     #[test]
-    fn repeated_failed_tools_block_pending_verification_in_task_state() {
+    fn repeated_failed_tools_are_advisory_in_task_state() {
         let route = IntentRouter::new().route("fix src/main.rs");
         let mut bundle = TaskContextBundle::new("fix src/main.rs", ".", route, None);
         let decision = StopChecker::evaluate(StopCheckInput {
@@ -636,21 +639,20 @@ mod tests {
 
         StopChecker::apply_to_task_state(&mut bundle.agent_state, &decision);
 
-        assert_eq!(decision.status, StopCheckStatus::Stop);
-        assert_eq!(bundle.agent_state.stage, AgentTaskStage::Repair);
+        assert_eq!(decision.status, StopCheckStatus::Continue);
+        assert_eq!(decision.reason, StopCheckReason::RepeatedToolFailure);
+        assert_eq!(decision.action, StopAction::Continue);
+        assert_eq!(bundle.agent_state.stage, AgentTaskStage::Understand);
         assert_eq!(
             bundle.agent_state.verification_plan.status,
-            VerificationStatus::Blocked
+            VerificationStatus::Pending
         );
         assert_eq!(bundle.agent_state.stop_checks.len(), 1);
-        assert_eq!(
-            bundle.agent_state.terminal_status,
-            Some(TaskTerminalStatus::Failed)
-        );
+        assert_eq!(bundle.agent_state.terminal_status, None);
     }
 
     #[test]
-    fn no_progress_checkpoint_moves_task_state_to_repair() {
+    fn no_progress_records_advisory_without_forcing_repair() {
         let route = IntentRouter::new().route("fix src/main.rs");
         let mut bundle = TaskContextBundle::new("fix src/main.rs", ".", route, None);
         let decision = StopChecker::evaluate(StopCheckInput {
@@ -660,13 +662,14 @@ mod tests {
 
         StopChecker::apply_to_task_state(&mut bundle.agent_state, &decision);
 
-        assert_eq!(decision.status, StopCheckStatus::Checkpoint);
+        assert_eq!(decision.status, StopCheckStatus::Continue);
         assert_eq!(decision.reason, StopCheckReason::NoProgress);
-        assert_eq!(bundle.agent_state.stage, AgentTaskStage::Repair);
+        assert_eq!(decision.action, StopAction::Continue);
+        assert_eq!(bundle.agent_state.stage, AgentTaskStage::Understand);
         assert!(bundle
             .agent_state
             .format_for_context_zone()
-            .contains("Stop check: checkpoint"));
+            .contains("Stop check: continue"));
     }
 
     #[test]
@@ -699,20 +702,20 @@ mod tests {
     }
 
     #[test]
-    fn consecutive_validation_failures_stop_as_failed_recovery() {
+    fn consecutive_validation_failures_are_advisory() {
         let decision = StopChecker::evaluate(StopCheckInput {
             consecutive_validation_failures: 3,
             ..input()
         });
 
-        assert_eq!(decision.status, StopCheckStatus::Stop);
+        assert_eq!(decision.status, StopCheckStatus::Continue);
         assert_eq!(
             decision.reason,
             StopCheckReason::ConsecutiveValidationFailures
         );
-        assert_eq!(decision.terminal_status, Some(TaskTerminalStatus::Failed));
+        assert_eq!(decision.terminal_status, None);
         assert_eq!(decision.failure_type.as_deref(), Some("validation_failure"));
-        assert_eq!(decision.action, StopAction::Recover);
+        assert_eq!(decision.action, StopAction::Continue);
     }
 
     #[test]

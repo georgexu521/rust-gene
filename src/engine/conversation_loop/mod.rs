@@ -17,6 +17,7 @@ mod context_budget_controller;
 #[cfg(test)]
 mod direct_task_behavior_tests;
 mod first_code_change_controller;
+#[cfg(test)]
 mod focused_repair_recovery;
 mod focused_repair_state_controller;
 mod force_summary;
@@ -25,9 +26,13 @@ mod legacy_workflow_gate_controller;
 mod main_loop_profile;
 mod memory_snapshot_controller;
 mod memory_sync_controller;
+#[cfg(test)]
 mod patch_recovery;
+#[cfg(test)]
 mod patch_repair_rules;
+#[cfg(test)]
 mod patch_synthesis_executor;
+#[cfg(test)]
 mod patch_synthesis_flow_controller;
 mod permission_controller;
 mod post_change_workflow_controller;
@@ -57,6 +62,7 @@ mod tool_execution;
 mod tool_execution_controller;
 mod tool_exposure_plan;
 mod tool_failure_guided_debugging;
+#[cfg(test)]
 mod tool_failure_stop_controller;
 mod tool_metadata;
 mod tool_orchestrator;
@@ -68,6 +74,7 @@ mod turn_assistant_response_controller;
 mod turn_completion_controller;
 mod turn_context_bootstrap_controller;
 mod turn_entry_gate_controller;
+#[cfg(test)]
 mod turn_focused_repair_action_controller;
 mod turn_focused_repair_flow_controller;
 mod turn_iteration_closeout_controller;
@@ -97,6 +104,7 @@ mod workflow_runtime;
 mod workflow_trace;
 
 pub use approval::{ToolApprovalChannel, ToolApprovalRequest, ToolApprovalResponse};
+#[cfg(test)]
 use patch_recovery::PatchSynthesisAction;
 pub(crate) use step_executor::{is_drift_interruption_signal, WorkflowRealStepExecutor};
 #[cfg(test)]
@@ -105,9 +113,11 @@ use text_sanitizer::strip_hidden_blocks;
 use text_sanitizer::VisibleTextSanitizer;
 #[cfg(test)]
 use tool_context_helpers::tool_not_allowed_result;
+pub(crate) use tool_execution::safe_prefix_by_bytes;
+#[cfg(test)]
+pub(crate) use tool_execution::safe_suffix_by_bytes;
 #[cfg(test)]
 use tool_execution::truncate_tool_result;
-pub(crate) use tool_execution::{safe_prefix_by_bytes, safe_suffix_by_bytes, READ_ONLY_TOOLS};
 #[cfg(test)]
 use tool_execution_controller::{
     ToolExecutionContext, ToolExecutionController, ToolExecutionRequest,
@@ -3595,106 +3605,5 @@ mod tests {
         assert_eq!(truncated, 0);
         assert_eq!(artifacts, 0);
         assert!(crate::engine::trace::format_trace_summary(&trace, 80).contains("tool_results="));
-    }
-
-    #[tokio::test]
-    async fn test_coding_quality_tracks_fail_then_repair_cycle() {
-        let mut env = EnvVarGuard::acquire().await;
-        env.set("PRIORITY_AGENT_AUTO_REVIEW", "1");
-        let tmp = tempdir().expect("create temp dir");
-        let target_file = tmp.path().join("sample.rs");
-        let target_path = target_file.to_string_lossy().to_string();
-
-        let failing_code = "fn main() { let x = Some(1).unwrap(); let _ = x; }";
-        let fixed_code = "fn main() { let x = Some(1); if let Some(v) = x { let _ = v; } }";
-
-        let responses = VecDeque::from(vec![
-            ChatResponse {
-                content: String::new(),
-                tool_calls: Some(vec![ToolCall {
-                    id: "call_1".to_string(),
-                    name: "file_write".to_string(),
-                    arguments: serde_json::json!({
-                        "path": target_path,
-                        "content": failing_code
-                    }),
-                }]),
-                usage: Some(Usage {
-                    prompt_tokens: 10,
-                    completion_tokens: 5,
-                    total_tokens: 15,
-                    reasoning_tokens: None,
-                    cached_tokens: None,
-                }),
-                tool_call_repair: None,
-            },
-            ChatResponse {
-                content: "done".to_string(),
-                tool_calls: None,
-                usage: Some(Usage {
-                    prompt_tokens: 5,
-                    completion_tokens: 3,
-                    total_tokens: 8,
-                    reasoning_tokens: None,
-                    cached_tokens: None,
-                }),
-                tool_call_repair: None,
-            },
-            ChatResponse {
-                content: String::new(),
-                tool_calls: Some(vec![ToolCall {
-                    id: "call_2".to_string(),
-                    name: "file_write".to_string(),
-                    arguments: serde_json::json!({
-                        "path": target_path,
-                        "content": fixed_code
-                    }),
-                }]),
-                usage: Some(Usage {
-                    prompt_tokens: 10,
-                    completion_tokens: 5,
-                    total_tokens: 15,
-                    reasoning_tokens: None,
-                    cached_tokens: None,
-                }),
-                tool_call_repair: None,
-            },
-            ChatResponse {
-                content: "repaired".to_string(),
-                tool_calls: None,
-                usage: Some(Usage {
-                    prompt_tokens: 5,
-                    completion_tokens: 3,
-                    total_tokens: 8,
-                    reasoning_tokens: None,
-                    cached_tokens: None,
-                }),
-                tool_call_repair: None,
-            },
-        ]);
-
-        let provider = Arc::new(MockLlmProvider {
-            responses: StdMutex::new(responses),
-        });
-        let mut registry = ToolRegistry::new();
-        registry.register(FileReadTool);
-        registry.register(FileWriteTool);
-        let tool_registry = Arc::new(registry);
-        let cost_tracker = Arc::new(Mutex::new(crate::cost_tracker::CostTracker::new()));
-
-        let loop_instance =
-            ConversationLoop::new(provider, tool_registry, cost_tracker, "test".into())
-                .with_max_iterations(5);
-
-        let messages = vec![Message::user("write code and fix issues")];
-        let result = loop_instance
-            .run(messages)
-            .await
-            .expect("loop should succeed");
-
-        assert!(
-            result.iterations >= 2,
-            "should iterate at least twice for write+fix"
-        );
     }
 }

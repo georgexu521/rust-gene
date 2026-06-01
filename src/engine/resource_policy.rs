@@ -45,7 +45,7 @@ impl ResourcePolicy {
                 cost_ceiling_usd: 0.02,
                 reasoning: route.reasoning,
                 parallelism_limit: 1,
-                max_tool_calls: 4,
+                max_tool_calls: DEFAULT_MAX_TOOL_CALLS,
                 context_budget_tokens: 8_000,
                 allow_fallback_model: true,
                 reason: "low reasoning route favors fast response".to_string(),
@@ -55,7 +55,7 @@ impl ResourcePolicy {
                 cost_ceiling_usd: 0.08,
                 reasoning: route.reasoning,
                 parallelism_limit: 2,
-                max_tool_calls: 12,
+                max_tool_calls: DEFAULT_MAX_TOOL_CALLS,
                 context_budget_tokens: 24_000,
                 allow_fallback_model: true,
                 reason: "medium reasoning route uses balanced resource budget".to_string(),
@@ -65,7 +65,7 @@ impl ResourcePolicy {
                 cost_ceiling_usd: 0.25,
                 reasoning: route.reasoning,
                 parallelism_limit: 4,
-                max_tool_calls: 30,
+                max_tool_calls: DEFAULT_MAX_TOOL_CALLS,
                 context_budget_tokens: 64_000,
                 allow_fallback_model: true,
                 reason: "high reasoning route allows deeper investigation".to_string(),
@@ -77,7 +77,6 @@ impl ResourcePolicy {
             RetrievalPolicy::Web | RetrievalPolicy::Full
         ) {
             policy.parallelism_limit = policy.parallelism_limit.max(3);
-            policy.max_tool_calls = policy.max_tool_calls.max(16);
             policy
                 .reason
                 .push_str("; retrieval policy needs broader source checks");
@@ -85,25 +84,18 @@ impl ResourcePolicy {
 
         if matches!(route.risk, RiskLevel::High) {
             policy.parallelism_limit = 1;
-            policy.max_tool_calls = policy.max_tool_calls.min(12);
             policy
                 .reason
                 .push_str("; high-risk route limits parallel side effects");
         }
 
         if mva_runtime_profile_enabled() {
-            let max_tool_calls = std::env::var("PRIORITY_AGENT_MVA_MAX_TOOL_CALLS")
-                .ok()
-                .and_then(|value| value.trim().parse::<usize>().ok())
-                .filter(|value| *value > 0)
-                .unwrap_or(10);
             let parallelism_limit = std::env::var("PRIORITY_AGENT_MVA_PARALLELISM_LIMIT")
                 .ok()
                 .and_then(|value| value.trim().parse::<usize>().ok())
                 .filter(|value| *value > 0)
                 .unwrap_or(1);
             policy.parallelism_limit = policy.parallelism_limit.min(parallelism_limit);
-            policy.max_tool_calls = policy.max_tool_calls.min(max_tool_calls);
             policy
                 .reason
                 .push_str("; MVA profile applies first-version resource caps");
@@ -123,6 +115,8 @@ impl ResourcePolicy {
         )
     }
 }
+
+const DEFAULT_MAX_TOOL_CALLS: usize = 50;
 
 fn mva_runtime_profile_enabled() -> bool {
     matches!(
@@ -146,7 +140,7 @@ mod tests {
         let policy = ResourcePolicy::from_route(&route);
         assert_eq!(policy.latency, LatencyTarget::Fast);
         assert_eq!(policy.parallelism_limit, 1);
-        assert!(policy.max_tool_calls <= 4);
+        assert_eq!(policy.max_tool_calls, DEFAULT_MAX_TOOL_CALLS);
     }
 
     #[test]
@@ -164,5 +158,6 @@ mod tests {
         route.risk = RiskLevel::High;
         let policy = ResourcePolicy::from_route(&route);
         assert_eq!(policy.parallelism_limit, 1);
+        assert_eq!(policy.max_tool_calls, DEFAULT_MAX_TOOL_CALLS);
     }
 }

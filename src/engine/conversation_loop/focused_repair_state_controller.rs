@@ -26,7 +26,9 @@ pub(super) struct FocusedRepairStateContext<'a> {
 pub(super) struct FocusedRepairStateOutcome {
     pub(super) retry_after_file_edit_failure_correction: bool,
     pub(super) progress_checkpoint_action: ProgressCheckpointAction,
+    #[cfg(test)]
     pub(super) force_patch_synthesis_after_no_change: bool,
+    #[cfg(test)]
     pub(super) force_patch_synthesis_reason: Option<&'static str>,
 }
 
@@ -80,7 +82,9 @@ impl FocusedRepairStateController {
             return FocusedRepairStateOutcome {
                 retry_after_file_edit_failure_correction: true,
                 progress_checkpoint_action: ProgressCheckpointAction::None,
+                #[cfg(test)]
                 force_patch_synthesis_after_no_change: false,
+                #[cfg(test)]
                 force_patch_synthesis_reason: None,
             };
         }
@@ -137,7 +141,9 @@ impl FocusedRepairStateController {
         FocusedRepairStateOutcome {
             retry_after_file_edit_failure_correction: false,
             progress_checkpoint_action: decision.action,
+            #[cfg(test)]
             force_patch_synthesis_after_no_change: decision.force_patch_synthesis_after_no_change,
+            #[cfg(test)]
             force_patch_synthesis_reason: decision.force_patch_synthesis_reason,
         }
     }
@@ -146,25 +152,31 @@ impl FocusedRepairStateController {
         FocusedRepairStateOutcome {
             retry_after_file_edit_failure_correction: false,
             progress_checkpoint_action: ProgressCheckpointAction::None,
+            #[cfg(test)]
             force_patch_synthesis_after_no_change: false,
+            #[cfg(test)]
             force_patch_synthesis_reason: None,
         }
     }
 
+    #[cfg(test)]
     pub(super) fn record_code_write_forbidden_recovery(state: &mut FocusedRepairRuntimeState) {
         Self::clear_checkpoint_after_patch_path(state);
         state.code_write_forbidden_checkpoint_sent = true;
     }
 
+    #[cfg(test)]
     pub(super) fn record_patch_synthesis_success(state: &mut FocusedRepairRuntimeState) {
         Self::clear_checkpoint_after_patch_path(state);
     }
 
+    #[cfg(test)]
     pub(super) fn record_patch_synthesis_return_to_model(state: &mut FocusedRepairRuntimeState) {
         state.patch_synthesis_recovery_used = true;
         state.action_checkpoint_no_change_rounds = 0;
     }
 
+    #[cfg(test)]
     pub(super) fn record_patch_synthesis_reopen_normal_tools(
         state: &mut FocusedRepairRuntimeState,
     ) {
@@ -175,6 +187,7 @@ impl FocusedRepairStateController {
         state.no_code_progress_rounds = 1;
     }
 
+    #[cfg(test)]
     pub(super) fn record_patch_synthesis_insufficient_evidence(
         state: &mut FocusedRepairRuntimeState,
     ) {
@@ -186,6 +199,7 @@ impl FocusedRepairStateController {
         state.file_edit_failure_retry_used = false;
     }
 
+    #[cfg(test)]
     fn clear_checkpoint_after_patch_path(state: &mut FocusedRepairRuntimeState) {
         state.action_checkpoint_active = false;
         state.action_checkpoint_lookup_count = 0;

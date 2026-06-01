@@ -15,7 +15,7 @@
 use anyhow::Result;
 use async_trait::async_trait;
 use serde_json::Value;
-use std::path::PathBuf;
+use std::path::Path;
 
 // ── ModelClient ──────────────────────────────────────────────
 
@@ -52,7 +52,7 @@ pub trait ToolHost: Send + Sync {
         &self,
         name: &str,
         args: &Value,
-        working_dir: &PathBuf,
+        working_dir: &Path,
     ) -> Result<PortToolResult>;
 
     /// Whether a tool is read-only (safe for concurrent execution).
@@ -126,7 +126,7 @@ pub trait HookRunner: Send + Sync {
 #[async_trait]
 pub trait CheckpointStore: Send + Sync {
     /// Create a checkpoint (snapshot) of a file.
-    async fn create(&self, path: &PathBuf) -> Result<String>;
+    async fn create(&self, path: &Path) -> Result<String>;
 
     /// Restore a file from a checkpoint id.
     async fn restore(&self, checkpoint_id: &str) -> Result<()>;

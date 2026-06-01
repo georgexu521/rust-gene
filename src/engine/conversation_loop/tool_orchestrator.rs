@@ -227,6 +227,7 @@ impl ConversationLoop {
         }
     }
 
+    #[cfg(test)]
     pub(super) fn code_action_tools(
         tools: &[Tool],
         has_changes_before_request: bool,

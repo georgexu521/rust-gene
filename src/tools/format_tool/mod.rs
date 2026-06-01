@@ -483,11 +483,11 @@ mod tests {
         let original = "fn main(){println!(\"hi\");}\n";
         tokio::fs::write(&path, original).await.unwrap();
 
-        let session_id = "test-format-checkpoint";
-        let manager = crate::engine::checkpoint::get_checkpoint_manager(session_id).await;
+        let session_id = format!("test-format-checkpoint-{}", uuid::Uuid::new_v4().simple());
+        let manager = crate::engine::checkpoint::get_checkpoint_manager(&session_id).await;
         manager.lock().await.clear_all().await.unwrap();
         let context =
-            ToolContext::new(temp.path(), session_id).with_checkpoint_manager(manager.clone());
+            ToolContext::new(temp.path(), &session_id).with_checkpoint_manager(manager.clone());
         let result = FormatTool
             .execute(
                 json!({"action": "format", "file_path": "main.rs", "formatter": "rustfmt"}),

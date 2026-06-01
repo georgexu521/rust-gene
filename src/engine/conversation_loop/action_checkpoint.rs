@@ -41,10 +41,13 @@ pub(super) struct ProgressCheckpointDecision {
     pub(super) no_diff_audit_validation_checkpoint_sent: bool,
     pub(super) code_write_forbidden_checkpoint_sent: bool,
     pub(super) reset_file_edit_failure_retry: bool,
+    #[allow(dead_code)]
     pub(super) force_patch_synthesis_after_no_change: bool,
+    #[allow(dead_code)]
     pub(super) force_patch_synthesis_reason: Option<&'static str>,
 }
 
+#[cfg(test)]
 pub(super) struct FocusedRepairActionRequest<'a> {
     pub(super) action_checkpoint_active: bool,
     pub(super) any_tool_success: bool,
@@ -57,6 +60,7 @@ pub(super) struct FocusedRepairActionRequest<'a> {
     pub(super) exposed_tool_names: &'a HashSet<String>,
 }
 
+#[cfg(test)]
 pub(super) struct FocusedRepairActionProposal {
     pub(super) reminder: String,
     pub(super) next_no_change_rounds: usize,
@@ -359,6 +363,7 @@ impl ConversationLoop {
         }
     }
 
+    #[cfg(test)]
     pub(super) fn focused_repair_mode_prompt(
         exposed_names: &[String],
         targeted_lookups_used: usize,
@@ -426,6 +431,7 @@ impl ConversationLoop {
         )
     }
 
+    #[cfg(test)]
     pub(super) fn focused_repair_action_proposal(
         request: FocusedRepairActionRequest<'_>,
     ) -> Option<FocusedRepairActionProposal> {

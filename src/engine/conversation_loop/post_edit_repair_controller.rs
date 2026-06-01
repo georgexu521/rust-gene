@@ -185,14 +185,6 @@ impl PostEditRepairController {
             context.tool_results_text.push('\n');
             context.tool_results_text.push_str(&repair_instruction);
             context.messages.push(Message::system(repair_instruction));
-            if reflection_action.reserve_repair_round {
-                *context.runtime.reserved_repair_rounds =
-                    (*context.runtime.reserved_repair_rounds).max(1);
-                context.trace.record(TraceEvent::WorkflowFallback {
-                    error: "reserved repair round granted after post-edit reflection failure"
-                        .to_string(),
-                });
-            }
         }
 
         PostEditRepairOutcome {
@@ -203,14 +195,12 @@ impl PostEditRepairController {
 
     fn reflection_repair_action(
         status: ReflectionStatus,
-        effective_iterations: usize,
-        max_iterations: usize,
+        _effective_iterations: usize,
+        _max_iterations: usize,
     ) -> PostEditReflectionRepairAction {
         let requires_patch_before_validation = status != ReflectionStatus::Passed;
         PostEditReflectionRepairAction {
             requires_patch_before_validation,
-            reserve_repair_round: requires_patch_before_validation
-                && effective_iterations >= max_iterations,
         }
     }
 }
@@ -218,7 +208,6 @@ impl PostEditRepairController {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct PostEditReflectionRepairAction {
     requires_patch_before_validation: bool,
-    reserve_repair_round: bool,
 }
 
 #[cfg(test)]
@@ -251,21 +240,18 @@ mod tests {
             PostEditRepairController::reflection_repair_action(ReflectionStatus::Passed, 3, 3),
             PostEditReflectionRepairAction {
                 requires_patch_before_validation: false,
-                reserve_repair_round: false,
             }
         );
         assert_eq!(
             PostEditRepairController::reflection_repair_action(ReflectionStatus::NeedsWork, 2, 3),
             PostEditReflectionRepairAction {
                 requires_patch_before_validation: true,
-                reserve_repair_round: false,
             }
         );
         assert_eq!(
             PostEditRepairController::reflection_repair_action(ReflectionStatus::NeedsWork, 3, 3),
             PostEditReflectionRepairAction {
                 requires_patch_before_validation: true,
-                reserve_repair_round: true,
             }
         );
     }

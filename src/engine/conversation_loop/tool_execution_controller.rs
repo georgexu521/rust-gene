@@ -2430,7 +2430,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn premature_edit_in_understand_stage_revises_before_execution() {
+    async fn premature_edit_in_understand_stage_runs_with_advisory_review() {
         let executions = Arc::new(AtomicUsize::new(0));
         let mut registry = ToolRegistry::new();
         registry.register(PrematureEditProbeTool {
@@ -2489,15 +2489,11 @@ mod tests {
                 .await;
         let result = &batch.results()[0].1;
 
-        assert!(!result.success);
-        assert_eq!(executions.load(Ordering::SeqCst), 0);
+        assert!(result.success);
+        assert_eq!(executions.load(Ordering::SeqCst), 1);
         assert_eq!(
             result.data.as_ref().unwrap()["action_review"]["decision"],
-            "revise"
-        );
-        assert_eq!(
-            result.data.as_ref().unwrap()["action_review"]["primary_reason"],
-            "low_value_action"
+            "allow"
         );
         assert!(
             result.data.as_ref().unwrap()["action_review"]["worth"]["premature_mutation"]

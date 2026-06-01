@@ -666,6 +666,25 @@ mod tests {
         }
     }
 
+    fn isolate_project_memory_stores(env: &mut EnvVarGuard, store_dir: &tempfile::TempDir) {
+        env.set(
+            "PRIORITY_AGENT_PROJECT_PROGRESS_PATH",
+            store_dir
+                .path()
+                .join("project_progress.jsonl")
+                .to_str()
+                .unwrap(),
+        );
+        env.set(
+            "PRIORITY_AGENT_MEMORY_PROPOSALS_PATH",
+            store_dir
+                .path()
+                .join("memory_proposals.jsonl")
+                .to_str()
+                .unwrap(),
+        );
+    }
+
     #[test]
     fn evaluator_uses_ledger_runtime_validation_for_no_diff_audit_closeout() {
         let mut bundle = TaskContextBundle::new("审查已有实现", ".", audit_route(), None);
@@ -736,6 +755,8 @@ mod tests {
     #[tokio::test]
     async fn mva_profile_adds_structured_closeout_for_direct_tool_turn() {
         let mut env = EnvVarGuard::acquire().await;
+        let store_dir = tempfile::tempdir().unwrap();
+        isolate_project_memory_stores(&mut env, &store_dir);
         env.set("PRIORITY_AGENT_RUNTIME_PROFILE", "minimum_viable_agent");
         let bundle = TaskContextBundle::new("inspect one known file", ".", direct_route(), None);
         let code_workflow = CodeChangeWorkflowRunner::new(&bundle);
@@ -805,6 +826,8 @@ mod tests {
     #[tokio::test]
     async fn project_partner_profile_adds_direct_execution_report_for_read_only_turn() {
         let mut env = EnvVarGuard::acquire().await;
+        let store_dir = tempfile::tempdir().unwrap();
+        isolate_project_memory_stores(&mut env, &store_dir);
         env.set(
             "PRIORITY_AGENT_RUNTIME_PROFILE",
             "project_partner_alignment",
@@ -863,22 +886,7 @@ mod tests {
     async fn project_partner_profile_surfaces_review_only_memory_proposal() {
         let mut env = EnvVarGuard::acquire().await;
         let store_dir = tempfile::tempdir().unwrap();
-        env.set(
-            "PRIORITY_AGENT_PROJECT_PROGRESS_PATH",
-            store_dir
-                .path()
-                .join("project_progress.jsonl")
-                .to_str()
-                .unwrap(),
-        );
-        env.set(
-            "PRIORITY_AGENT_MEMORY_PROPOSALS_PATH",
-            store_dir
-                .path()
-                .join("memory_proposals.jsonl")
-                .to_str()
-                .unwrap(),
-        );
+        isolate_project_memory_stores(&mut env, &store_dir);
         env.set(
             "PRIORITY_AGENT_RUNTIME_PROFILE",
             "project_partner_alignment",
@@ -953,6 +961,8 @@ mod tests {
     #[tokio::test]
     async fn mva_direct_closeout_preserves_low_value_stop_target() {
         let mut env = EnvVarGuard::acquire().await;
+        let store_dir = tempfile::tempdir().unwrap();
+        isolate_project_memory_stores(&mut env, &store_dir);
         env.set("PRIORITY_AGENT_RUNTIME_PROFILE", "minimum_viable_agent");
         let mut bundle = TaskContextBundle::new(
             "在 fixtures/mva_low_value_replan 里找到 missing-target-token-7391",

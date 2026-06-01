@@ -13,7 +13,6 @@ use crate::engine::task_context::TaskContextBundle;
 use crate::services::api::{Message, ToolCall};
 use crate::tools::ToolResult;
 use std::collections::{HashMap, HashSet};
-use tracing::debug;
 
 pub(super) struct ToolRoundContext<'a> {
     pub(super) conversation: &'a ConversationLoop,
@@ -83,10 +82,7 @@ impl ToolRoundController {
                 })
                 .await;
 
-        let tool_budget = IterationBudgetController::record_tool_round(turn_state, tool_calls);
-        if tool_budget.refunded {
-            debug!("All tools read-only, refunding iteration budget");
-        }
+        let _tool_budget = IterationBudgetController::record_tool_round(turn_state, tool_calls);
 
         ToolBatchResultProcessor::process(ToolBatchProcessingContext {
             tool_calls,

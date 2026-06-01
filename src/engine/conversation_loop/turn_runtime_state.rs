@@ -27,7 +27,9 @@ pub(super) struct FocusedRepairRuntimeState {
     pub(super) action_checkpoint_lookup_count: usize,
     pub(super) action_checkpoint_no_change_rounds: usize,
     pub(super) action_checkpoint_requires_patch_before_validation: bool,
+    #[cfg(test)]
     pub(super) patch_synthesis_recovery_used: bool,
+    #[cfg(test)]
     pub(super) action_checkpoint_reopen_used: bool,
     pub(super) no_diff_audit_validation_checkpoint_sent: bool,
     pub(super) code_write_forbidden_checkpoint_sent: bool,

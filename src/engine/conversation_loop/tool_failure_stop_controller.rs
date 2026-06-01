@@ -1,4 +1,3 @@
-use super::READ_ONLY_TOOLS;
 use std::collections::HashMap;
 
 pub(super) struct ToolFailureStopRequest<'a> {
@@ -7,54 +6,18 @@ pub(super) struct ToolFailureStopRequest<'a> {
     pub(super) failed_tool_names: &'a HashMap<String, usize>,
 }
 
-pub(super) struct ToolFailureStopDecision {
-    pub(super) message: String,
-}
+pub(super) struct ToolFailureStopDecision;
 
 pub(super) struct ToolFailureStopController;
 
 impl ToolFailureStopController {
     pub(super) fn decide(request: ToolFailureStopRequest<'_>) -> Option<ToolFailureStopDecision> {
-        if request.any_tool_success {
-            return None;
-        }
-
-        if let Some(message) = Self::repeated_failed_tools_message(request.repeated_failed_tools) {
-            return Some(ToolFailureStopDecision { message });
-        }
-
-        Self::noisy_retry_message(request.failed_tool_names)
-            .map(|message| ToolFailureStopDecision { message })
-    }
-
-    fn repeated_failed_tools_message(repeated_failed_tools: &[String]) -> Option<String> {
-        let mut repeated = repeated_failed_tools.to_vec();
-        repeated.sort();
-        repeated.dedup();
-        if repeated.is_empty() {
-            return None;
-        }
-        Some(format!(
-            "[Stopped repeated failed tool attempts: {}]",
-            repeated.join(", ")
-        ))
-    }
-
-    fn noisy_retry_message(failed_tool_names: &HashMap<String, usize>) -> Option<String> {
-        let mut noisy_by_name = failed_tool_names
-            .iter()
-            .filter(|(name, count)| **count >= 2 && !READ_ONLY_TOOLS.contains(&name.as_str()))
-            .map(|(name, _)| name.clone())
-            .collect::<Vec<_>>();
-        noisy_by_name.sort();
-        noisy_by_name.dedup();
-        if noisy_by_name.is_empty() {
-            return None;
-        }
-        Some(format!(
-            "[Stopped noisy retries after repeated failures: {}]",
-            noisy_by_name.join(", ")
-        ))
+        let _ = (
+            request.any_tool_success,
+            request.repeated_failed_tools,
+            request.failed_tool_names,
+        );
+        None
     }
 }
 
@@ -63,7 +26,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn repeated_failed_tools_take_precedence_and_are_sorted() {
+    fn repeated_failed_tools_are_advisory_only() {
         let failed_tool_names = HashMap::from([("file_write".to_string(), 3)]);
 
         let decision = ToolFailureStopController::decide(ToolFailureStopRequest {
@@ -74,17 +37,13 @@ mod tests {
                 "file_edit".to_string(),
             ],
             failed_tool_names: &failed_tool_names,
-        })
-        .expect("repeated failures should stop");
+        });
 
-        assert_eq!(
-            decision.message,
-            "[Stopped repeated failed tool attempts: bash, file_edit]"
-        );
+        assert!(decision.is_none());
     }
 
     #[test]
-    fn noisy_non_read_only_retries_stop_when_no_tool_succeeded() {
+    fn noisy_non_read_only_retries_are_advisory_only() {
         let failed_tool_names = HashMap::from([
             ("file_write".to_string(), 2),
             ("file_read".to_string(), 5),
@@ -95,13 +54,9 @@ mod tests {
             any_tool_success: false,
             repeated_failed_tools: &[],
             failed_tool_names: &failed_tool_names,
-        })
-        .expect("noisy write retries should stop");
+        });
 
-        assert_eq!(
-            decision.message,
-            "[Stopped noisy retries after repeated failures: file_write]"
-        );
+        assert!(decision.is_none());
     }
 
     #[test]

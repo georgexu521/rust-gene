@@ -204,9 +204,6 @@ impl NoEffectiveDiffRepairController {
             focused_repair.action_checkpoint_no_change_rounds =
                 focused_repair.action_checkpoint_no_change_rounds.max(1);
         }
-        context.turn_state.reserved_repair_rounds =
-            context.turn_state.reserved_repair_rounds.max(1);
-
         let round = focused_repair.no_effective_diff_repair_rounds;
         context.trace.record(TraceEvent::WorkflowFallback {
             error: format!(
@@ -440,7 +437,7 @@ mod tests {
                 .focused_repair
                 .action_checkpoint_requires_patch_before_validation
         );
-        assert_eq!(turn_state.reserved_repair_rounds, 1);
+        assert_eq!(turn_state.reserved_repair_rounds, 0);
         assert!(tool_results_text.contains("status=no_effective_diff"));
         assert!(tool_results_text.contains("failed_commands:\n- `false`"));
         assert!(messages.iter().any(|message| matches!(

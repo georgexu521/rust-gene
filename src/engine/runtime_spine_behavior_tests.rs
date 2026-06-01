@@ -132,14 +132,14 @@ fn runtime_spine_behavior_contract_covers_context_action_progress_stop_and_proof
         failure_type: None,
         recovery_plan_id: None,
     });
-    assert_eq!(stop.status, StopCheckStatus::Checkpoint);
+    assert_eq!(stop.status, StopCheckStatus::Continue);
     assert_eq!(stop.reason, StopCheckReason::NoProgress);
     StopChecker::apply_to_task_state(&mut task_bundle.agent_state, &stop);
-    assert_eq!(task_bundle.agent_state.stage, AgentTaskStage::Repair);
+    assert_eq!(task_bundle.agent_state.stage, AgentTaskStage::Validate);
     assert!(task_bundle
         .agent_state
         .format_for_context_zone()
-        .contains("Stop check: checkpoint"));
+        .contains("Stop check: continue"));
 
     let required = vec!["cargo test -q".to_string()];
     let mut ledger = EvidenceLedger::new();

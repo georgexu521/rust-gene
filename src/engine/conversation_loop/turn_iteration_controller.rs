@@ -11,12 +11,12 @@ use super::turn_model_step_controller::{
     TurnModelStepContext, TurnModelStepController, TurnModelStepFlow,
 };
 use super::turn_post_change_closeout_controller::{
-    TurnPostChangeCloseoutContext, TurnPostChangeCloseoutController,
+    TurnPostChangeCloseoutContext, TurnPostChangeCloseoutController, TurnPostChangeCloseoutFlow,
 };
 use super::turn_runtime_context::TurnRuntimeContext;
 use super::turn_runtime_state::TurnRuntimeState;
 use super::turn_tool_failure_followup_controller::{
-    TurnToolFailureFollowupContext, TurnToolFailureFollowupController, TurnToolFailureFollowupFlow,
+    TurnToolFailureFollowupContext, TurnToolFailureFollowupController,
 };
 use super::turn_tool_round_step_controller::{
     TurnToolRoundStepContext, TurnToolRoundStepController,
@@ -33,7 +33,6 @@ use crate::engine::streaming::StreamEvent;
 use crate::engine::task_context::{
     mva_stage_transition_policy, AgentToolRoundObservation, TaskContextBundle,
 };
-use crate::engine::task_contract::TaskContractBundleExt;
 use crate::engine::trace::{TraceCollector, TraceEvent};
 use crate::services::api::{Message, Tool, ToolCall};
 use crate::tools::ToolContextRetainedContext;
@@ -98,29 +97,16 @@ impl TurnIterationController {
             });
         }
 
-        let model_profile = context
-            .task_bundle
-            .task_contract(context.required_validation_commands)
-            .model_profile;
-        let exposure_plan = match TurnIterationSetupController::run(TurnIterationSetupContext {
-            iteration: context.iteration,
-            max_iterations: context.conversation.max_iterations,
-            turn_state: &mut *context.turn_state,
-            memory_manager: context.conversation.memory_manager.as_ref(),
-            trace: context.trace,
-            route_workflow: context.route.workflow,
-            task_stage: context.task_bundle.agent_state.stage,
-            baseline_git_status_files: context.baseline_git_status_files,
-            base_tools: context.base_tools,
-            available_tools: context.available_tools,
-            required_validation_commands_present: !context.required_validation_commands.is_empty(),
-            model_profile,
-        })
-        .await
-        {
-            TurnIterationSetupFlow::Continue { exposure_plan } => exposure_plan,
-            TurnIterationSetupFlow::Stop => return Ok(TurnIterationFlow::Break),
-        };
+        let TurnIterationSetupFlow::Continue { exposure_plan } =
+            TurnIterationSetupController::run(TurnIterationSetupContext {
+                iteration: context.iteration,
+                max_iterations: context.conversation.max_iterations,
+                turn_state: &mut *context.turn_state,
+                memory_manager: context.conversation.memory_manager.as_ref(),
+                base_tools: context.base_tools,
+                available_tools: context.available_tools,
+            })
+            .await;
         let tools = exposure_plan.tools;
         let exposed_tool_names = exposure_plan.exposed_tool_names;
 
@@ -313,7 +299,6 @@ impl TurnIterationController {
 
         let focused_repair_flow =
             TurnFocusedRepairFlowController::run(TurnFocusedRepairFlowContext {
-                conversation: context.conversation,
                 workflow: context.route.workflow,
                 no_diff_audit_closeout_allowed: context.no_diff_audit_closeout_allowed,
                 code_write_tools_forbidden: context.code_write_tools_forbidden,
@@ -321,16 +306,7 @@ impl TurnIterationController {
                 code_workflow: &mut *context.code_workflow,
                 turn_state: &mut *context.turn_state,
                 round_state: &mut tool_round_state,
-                exposed_tool_names: &exposed_tool_names,
-                tx: context.tx,
-                resource_policy: context.resource_policy,
-                destructive_scope: context.destructive_scope,
-                baseline_git_status_files: context.baseline_git_status_files,
-                working_dir: context.working_dir,
-                last_user_preview: context.last_user_preview,
                 messages: &mut *context.messages,
-                final_content: &mut context.loop_state.final_content,
-                final_tool_calls: &mut context.loop_state.final_tool_calls,
             })
             .await;
         record_stop_check(
@@ -340,10 +316,7 @@ impl TurnIterationController {
             &tool_round_state,
             exposed_tool_names.len(),
             tool_calls.len(),
-            matches!(
-                focused_repair_flow,
-                TurnFocusedRepairFlow::Continue | TurnFocusedRepairFlow::Stop
-            ),
+            matches!(focused_repair_flow, TurnFocusedRepairFlow::Continue),
         );
         // ── Advisory-only post-tool checks ──
         // Reasonix alignment: only 4 hard-stop conditions exist:
@@ -359,29 +332,21 @@ impl TurnIterationController {
             return Ok(TurnIterationFlow::Continue);
         }
 
-        let followup_flow =
-            TurnToolFailureFollowupController::run(TurnToolFailureFollowupContext {
-                provider: context.conversation.provider.as_ref(),
-                model: context.conversation.model.clone(),
-                session_store: context.conversation.session_store.as_ref(),
-                session_id: &context.conversation.session_id,
-                trace: context.trace,
-                any_tool_success: tool_round_state.any_tool_success,
-                last_user_preview: context.last_user_preview,
-                task_bundle: &mut *context.task_bundle,
-                round_state: &mut tool_round_state,
-                turn_state: context.turn_state,
-                failed_tool_names: &context.loop_state.failed_tool_names,
-                tx: context.tx,
-                final_content: &mut context.loop_state.final_content,
-                messages: &mut *context.messages,
-            })
-            .await;
-        if let Some(flow) = flow_after_tool_failure_followup(followup_flow) {
-            return Ok(flow);
-        }
+        TurnToolFailureFollowupController::run(TurnToolFailureFollowupContext {
+            provider: context.conversation.provider.as_ref(),
+            model: context.conversation.model.clone(),
+            session_store: context.conversation.session_store.as_ref(),
+            session_id: &context.conversation.session_id,
+            trace: context.trace,
+            any_tool_success: tool_round_state.any_tool_success,
+            last_user_preview: context.last_user_preview,
+            task_bundle: &mut *context.task_bundle,
+            round_state: &mut tool_round_state,
+            messages: &mut *context.messages,
+        })
+        .await;
 
-        let _closeout_flow = TurnPostChangeCloseoutController::run(TurnPostChangeCloseoutContext {
+        let closeout_flow = TurnPostChangeCloseoutController::run(TurnPostChangeCloseoutContext {
             conversation: context.conversation,
             trace: context.trace,
             route: context.route,
@@ -398,17 +363,11 @@ impl TurnIterationController {
             last_user_preview: context.last_user_preview,
         })
         .await;
+        if matches!(closeout_flow, TurnPostChangeCloseoutFlow::Break) {
+            return Ok(TurnIterationFlow::Break);
+        }
 
         Ok(TurnIterationFlow::Continue)
-    }
-}
-
-fn flow_after_tool_failure_followup(
-    followup_flow: TurnToolFailureFollowupFlow,
-) -> Option<TurnIterationFlow> {
-    match followup_flow {
-        TurnToolFailureFollowupFlow::Stop => Some(TurnIterationFlow::Break),
-        TurnToolFailureFollowupFlow::Continue => None,
     }
 }
 
@@ -1580,15 +1539,6 @@ mod tests {
     }
 
     #[test]
-    fn tool_failure_followup_stop_breaks_turn_loop() {
-        assert!(matches!(
-            flow_after_tool_failure_followup(TurnToolFailureFollowupFlow::Stop),
-            Some(TurnIterationFlow::Break)
-        ));
-        assert!(flow_after_tool_failure_followup(TurnToolFailureFollowupFlow::Continue).is_none());
-    }
-
-    #[test]
     fn stop_check_ignores_duplicate_read_only_for_code_change() {
         let route = IntentRoute {
             intent: IntentKind::CodeChange,
@@ -1699,7 +1649,7 @@ mod tests {
     }
 
     #[test]
-    fn stop_check_records_no_progress_in_task_state_and_trace() {
+    fn stop_check_records_no_progress_advisory_in_task_state_and_trace() {
         let route = IntentRouter::new().route("fix src/main.rs");
         let mut task_bundle = TaskContextBundle::new("fix src/main.rs", ".", route, None);
         let mut turn_state = TurnRuntimeState::new(true);
@@ -1741,7 +1691,7 @@ mod tests {
             .expect("stop check");
         assert_eq!(
             stop_check.status,
-            crate::engine::task_context::StopCheckStatus::Checkpoint
+            crate::engine::task_context::StopCheckStatus::Continue
         );
         assert_eq!(
             stop_check.reason,
@@ -1749,7 +1699,7 @@ mod tests {
         );
         assert_eq!(
             task_bundle.agent_state.stage,
-            crate::engine::task_context::AgentTaskStage::Repair
+            crate::engine::task_context::AgentTaskStage::Understand
         );
 
         let finished = trace.finish(TurnStatus::Completed);
@@ -1761,7 +1711,7 @@ mod tests {
                 no_code_progress_rounds: 2,
                 action_checkpoint_active: true,
                 ..
-            } if status == "checkpoint" && reason == "no_progress"
+            } if status == "continue" && reason == "no_progress"
         )));
         assert!(finished.events.iter().any(|event| matches!(
             event,
@@ -1770,7 +1720,7 @@ mod tests {
                 stage_after,
                 selected_tool_calls: 1,
                 ..
-            } if stage_before == "Understand" && stage_after == "Repair"
+            } if stage_before == "Understand" && stage_after == "Understand"
         )));
     }
 }
