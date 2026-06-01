@@ -101,18 +101,8 @@ impl TurnIterationController {
             TurnIterationSetupFlow::Continue { exposure_plan } => exposure_plan,
             TurnIterationSetupFlow::Stop => return Ok(TurnIterationFlow::Break),
         };
-        let mut tools = exposure_plan.tools;
-        let mut exposed_tool_names = exposure_plan.exposed_tool_names;
-        if context.turn_state.force_synthesis_without_tools {
-            context.turn_state.force_synthesis_without_tools = false;
-            tools.clear();
-            exposed_tool_names.clear();
-            context.trace.record(TraceEvent::WorkflowFallback {
-                error:
-                    "forcing synthesis-only model step after exact duplicate read-only tool loop"
-                        .to_string(),
-            });
-        }
+        let tools = exposure_plan.tools;
+        let exposed_tool_names = exposure_plan.exposed_tool_names;
 
         let (content, mut tool_calls, pre_executed) =
             match TurnModelStepController::run(TurnModelStepContext {
@@ -236,19 +226,11 @@ impl TurnIterationController {
             false,
         );
 
-        if let Some(prompt) = duplicate_successful_read_only_synthesis_prompt(
-            &tool_calls,
-            context.turn_state,
-            context.last_user_preview,
-        ) {
-            context.trace.record(TraceEvent::WorkflowFallback {
-                error: "exact duplicate read-only tools converted to synthesis-only follow-up"
-                    .to_string(),
-            });
-            context.messages.push(Message::system(prompt));
-            context.turn_state.force_synthesis_without_tools = true;
-            return Ok(TurnIterationFlow::Continue);
-        }
+        // NOTE: Unlike previous behavior, we no longer inject a synthesis-only
+        // prompt when the model re-reads the same file.  Reasonix lets the model
+        // decide when it has enough information; the iteration budget (force
+        // summary after max iterations) is the safety net for read-only loops.
+        // The storm breaker still guards against mutating-call storms.
 
         if duplicate_read_only_closeout_allowed(context.route, context.required_validation_commands)
         {
@@ -545,74 +527,9 @@ fn duplicate_read_only_closeout_allowed(
     false
 }
 
-fn duplicate_successful_read_only_synthesis_prompt(
-    tool_calls: &[ToolCall],
-    turn_state: &TurnRuntimeState,
-    last_user_preview: &str,
-) -> Option<String> {
-    if tool_calls.is_empty() {
-        return None;
-    }
-
-    let mut duplicate_labels = Vec::new();
-    for tool_call in tool_calls {
-        if !is_read_only(&tool_call.name) {
-            return None;
-        }
-        let count = *turn_state
-            .successful_read_only_tool_fingerprints
-            .get(&tool_call_fingerprint(tool_call))
-            .unwrap_or(&0);
-        if count < 2 {
-            return None;
-        }
-        duplicate_labels.push(read_only_tool_label(tool_call));
-    }
-
-    duplicate_labels.sort();
-    duplicate_labels.dedup();
-    let duplicate_labels = duplicate_labels.join(", ");
-    let chinese = contains_cjk(last_user_preview);
-    if chinese {
-        Some(format!(
-            "Exact duplicate read-only loop guard: 刚才的工具回合只是在重复读取已经成功读取过的同一目标（{duplicate_labels}），没有产生新的信息。下一次回复不要调用工具，直接根据已有工具结果回答用户；如果已有内容确实不足，只说明还需要读取哪个不同文件或哪个不同 offset/limit 行范围。允许继续阅读，但必须改变 path、offset 或 limit；不要再次用相同参数读取。"
-        ))
-    } else {
-        Some(format!(
-            "Exact duplicate read-only loop guard: the last tool round only reread targets that were already read successfully ({duplicate_labels}) and produced no new information. In the next response, do not call tools; answer from the existing tool results. If the evidence is insufficient, state the different file or different offset/limit range needed next. Further reading is allowed only with changed path, offset, or limit; do not repeat the same arguments."
-        ))
-    }
-}
-
-fn read_only_tool_label(tool_call: &ToolCall) -> String {
-    let target = tool_call
-        .arguments
-        .get("path")
-        .or_else(|| tool_call.arguments.get("pattern"))
-        .and_then(serde_json::Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .unwrap_or("");
-    let offset = tool_call
-        .arguments
-        .get("offset")
-        .and_then(serde_json::Value::as_u64);
-    let limit = tool_call
-        .arguments
-        .get("limit")
-        .and_then(serde_json::Value::as_u64);
-    let range = match (offset, limit) {
-        (Some(offset), Some(limit)) => format!(" offset={offset} limit={limit}"),
-        (Some(offset), None) => format!(" offset={offset}"),
-        (None, Some(limit)) => format!(" limit={limit}"),
-        (None, None) => String::new(),
-    };
-    if target.is_empty() {
-        format!("{}{}", tool_call.name, range)
-    } else {
-        format!("{} `{}`{}", tool_call.name, target, range)
-    }
-}
+// Removed: duplicate_successful_read_only_synthesis_prompt + read_only_tool_label
+// — Reasonix alignment. Read-only tools always allowed through; iteration
+// budget handles loops naturally.
 
 fn drop_duplicate_successful_read_only_tool_calls(
     tool_calls: &[ToolCall],
@@ -1549,42 +1466,33 @@ mod tests {
     }
 
     #[test]
-    fn exact_duplicate_read_only_requests_synthesis_without_blocking_new_ranges() {
-        let duplicate_read = ToolCall {
-            id: "call_read_again".to_string(),
+    fn duplicate_read_only_is_never_synthesis_blocked() {
+        // After Reasonix alignment: read-only tools are always allowed through.
+        // The iteration budget handles loops naturally. This test verifies that
+        // the fingerprints are still tracked (for closeout/caching) but no
+        // synthesis prompt is injected.
+        let read = ToolCall {
+            id: "call_read".to_string(),
             name: "file_read".to_string(),
             arguments: serde_json::json!({"path": "~/Desktop/phageGPT/README.md"}),
         };
-        let next_range_read = ToolCall {
-            id: "call_read_next_range".to_string(),
-            name: "file_read".to_string(),
-            arguments: serde_json::json!({
-                "path": "~/Desktop/phageGPT/README.md",
-                "offset": 81,
-                "limit": 80
-            }),
-        };
-        let duplicate_fingerprint = tool_call_fingerprint(&duplicate_read);
+        let fingerprint = tool_call_fingerprint(&read);
         let mut turn_state = TurnRuntimeState::new(true);
         turn_state
             .successful_read_only_tool_fingerprints
-            .insert(duplicate_fingerprint, 2);
+            .insert(fingerprint.clone(), 2);
 
-        let prompt = duplicate_successful_read_only_synthesis_prompt(
-            std::slice::from_ref(&duplicate_read),
-            &turn_state,
-            "帮我看看 phageGPT 是什么",
-        )
-        .expect("exact duplicate should request synthesis");
-
-        assert!(prompt.contains("不要调用工具"));
-        assert!(prompt.contains("offset"));
-        assert!(duplicate_successful_read_only_synthesis_prompt(
-            std::slice::from_ref(&next_range_read),
-            &turn_state,
-            "帮我继续看后面的内容",
-        )
-        .is_none());
+        // Fingerprint tracking still works for closeout / caching.
+        assert!(turn_state
+            .successful_read_only_tool_fingerprints
+            .contains_key(&fingerprint));
+        assert_eq!(
+            *turn_state
+                .successful_read_only_tool_fingerprints
+                .get(&fingerprint)
+                .unwrap(),
+            2
+        );
     }
 
     #[test]
