@@ -632,7 +632,12 @@ fn validate_project_path(path: impl Into<PathBuf>) -> Result<PathBuf, String> {
         ));
     }
 
-    project.canonicalize().map_err(|err| err.to_string())
+    let project = project.canonicalize().map_err(|err| err.to_string())?;
+    if project.parent().is_none() {
+        return Err("project path cannot be the filesystem root".to_string());
+    }
+
+    Ok(project)
 }
 
 fn selected_project_response(project: PathBuf) -> SelectedProject {
@@ -1664,7 +1669,14 @@ fn write_desktop_settings(path: &PathBuf, settings: &DesktopSettings) -> Result<
 }
 
 fn initial_desktop_project(cwd: PathBuf, settings: &DesktopSettings) -> PathBuf {
-    let default_project = default_desktop_project(cwd);
+    let configured_project = configured_desktop_project();
+    let default_project = configured_project
+        .clone()
+        .unwrap_or_else(|| discover_project_root(&cwd).unwrap_or(cwd));
+    if configured_project.is_some() {
+        return default_project;
+    }
+
     settings
         .selected_project
         .as_deref()
@@ -1674,14 +1686,17 @@ fn initial_desktop_project(cwd: PathBuf, settings: &DesktopSettings) -> PathBuf 
 }
 
 fn default_desktop_project(cwd: PathBuf) -> PathBuf {
-    if let Some(project) = std::env::var("PRIORITY_AGENT_DESKTOP_PROJECT_DIR")
-        .ok()
-        .and_then(|path| validate_project_path(path).ok())
-    {
+    if let Some(project) = configured_desktop_project() {
         return project;
     }
 
     discover_project_root(&cwd).unwrap_or(cwd)
+}
+
+fn configured_desktop_project() -> Option<PathBuf> {
+    std::env::var("PRIORITY_AGENT_DESKTOP_PROJECT_DIR")
+        .ok()
+        .and_then(|path| validate_project_path(path).ok())
 }
 
 fn discover_project_root(start: &Path) -> Option<PathBuf> {
@@ -2335,6 +2350,13 @@ mod tests {
     }
 
     #[test]
+    fn desktop_smoke_project_path_validation_rejects_filesystem_root() {
+        let err = validate_project_path(Path::new("/")).unwrap_err();
+
+        assert!(err.contains("filesystem root"));
+    }
+
+    #[test]
     fn desktop_smoke_recent_sessions_include_message_counts() {
         let store = SessionStore::in_memory().unwrap();
         store
@@ -2596,6 +2618,34 @@ mod tests {
         };
 
         assert_eq!(initial_desktop_project(cwd, &settings), expected);
+    }
+
+    #[test]
+    fn desktop_smoke_initial_project_falls_back_when_saved_path_is_filesystem_root() {
+        let root = std::env::temp_dir().join(format!(
+            "priority-agent-root-saved-root-{}",
+            std::process::id()
+        ));
+        let tauri_dir = root.join("apps/desktop/src-tauri");
+        std::fs::create_dir_all(root.join(".git")).unwrap();
+        std::fs::create_dir_all(&tauri_dir).unwrap();
+        std::fs::write(root.join("Cargo.toml"), "[workspace]\n").unwrap();
+
+        let settings = DesktopSettings {
+            selected_project: Some("/".to_string()),
+            active_session_id: None,
+            permission_mode: None,
+            detail_level: None,
+            provider_name: None,
+            model: None,
+            recent_projects: None,
+            archived_session_ids: None,
+        };
+        let expected = root.canonicalize().unwrap();
+        let selected = initial_desktop_project(tauri_dir.canonicalize().unwrap(), &settings);
+        let _ = std::fs::remove_dir_all(&root);
+
+        assert_eq!(selected, expected);
     }
 
     #[test]

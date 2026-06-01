@@ -63,6 +63,30 @@ test.describe("run event state", () => {
     ]);
   });
 
+  test("ignores duplicate assistant delta events", () => {
+    const submitted = submitUserMessage(initialRunViewState, "你好", [], ids("user-1"));
+    const answered = applyRunEvent(
+      submitted,
+      { type: "assistant_delta", text: "你好！继续吧，有什么需要帮忙的？" },
+      ids("assistant-1"),
+    ).state;
+    const duplicated = applyRunEvent(
+      answered,
+      { type: "assistant_delta", text: "你好！继续吧，有什么需要帮忙的？" },
+      ids("assistant-2"),
+    ).state;
+
+    expect(duplicated.items).toEqual([
+      { id: "user-1", role: "user", text: "你好" },
+      {
+        id: "assistant-1",
+        role: "assistant",
+        text: "你好！继续吧，有什么需要帮忙的？",
+        variant: undefined,
+      },
+    ]);
+  });
+
   test("carries attached contexts into the run summary", () => {
     const submitted = submitUserMessage(
       initialRunViewState,
@@ -130,7 +154,7 @@ test.describe("run event state", () => {
           stage: "running",
           headline: "Running tool",
           detail: "bash",
-          stats: ["1 tool", "1 running"],
+          stats: ["1 tool", "1 running", "bash"],
         }),
       }),
     );
@@ -142,7 +166,7 @@ test.describe("run event state", () => {
           stage: "waiting",
           headline: "Waiting for permission",
           detail: "Allow git push?",
-          stats: ["1 tool", "1 running"],
+          stats: ["1 tool", "1 running", "bash"],
         }),
       }),
     );
@@ -154,7 +178,7 @@ test.describe("run event state", () => {
           stage: "running",
           headline: "Permission approved",
           sessionId: "session-1",
-          stats: ["1 tool", "1 running"],
+          stats: ["1 tool", "1 running", "bash"],
         }),
       }),
     );
@@ -368,7 +392,15 @@ test.describe("run event state", () => {
           headline: "Tool failed",
           detail: "Shell command",
           recovery: "Fix the failing test and rerun it.",
-          stats: ["3 tools", "2 done", "1 failed", "1 file changed", "1 validation"],
+          stats: [
+            "3 tools",
+            "2 done",
+            "1 failed",
+            "bash x2",
+            "file_edit",
+            "1 file changed",
+            "1 validation",
+          ],
         }),
       }),
     );
@@ -380,7 +412,15 @@ test.describe("run event state", () => {
           kind: "run",
           stage: "completed",
           detail: "1 tool needs attention",
-          stats: ["3 tools", "2 done", "1 failed", "1 file changed", "1 validation"],
+          stats: [
+            "3 tools",
+            "2 done",
+            "1 failed",
+            "bash x2",
+            "file_edit",
+            "1 file changed",
+            "1 validation",
+          ],
         }),
       }),
     );
@@ -537,6 +577,74 @@ test.describe("run event state", () => {
           diagnosticsDelta: "new_errors",
           diagnosticsErrorDelta: 1,
           diagnosticsWarningDelta: 0,
+        }),
+      }),
+    );
+  });
+
+  test("coalesces exact repeated file reads without hiding tool usage counts", () => {
+    let state = applyRunEvent(initialRunViewState, {
+      type: "run_started",
+      run_id: "run-1",
+    }).state;
+    state = applyRunEvent(state, {
+      type: "tool_started",
+      id: "read-1",
+      name: "file_read",
+    }).state;
+    state = applyRunEvent(state, {
+      type: "tool_completed",
+      id: "read-1",
+      result_preview: "README",
+      metadata: {
+        tool: "file_read",
+        success: true,
+        path: "/Users/georgexu/Desktop/phageGPT/README.md",
+        line_start: 1,
+        line_end: 82,
+        read_coverage: "full",
+      },
+    }).state;
+    state = applyRunEvent(state, {
+      type: "tool_started",
+      id: "read-2",
+      name: "file_read",
+    }).state;
+    state = applyRunEvent(state, {
+      type: "tool_completed",
+      id: "read-2",
+      result_preview: "README again",
+      metadata: {
+        tool: "file_read",
+        success: true,
+        path: "/Users/georgexu/Desktop/phageGPT/README.md",
+        line_start: 1,
+        line_end: 82,
+        read_coverage: "full",
+      },
+    }).state;
+
+    const readItems = state.items.filter(
+      (item) =>
+        item.role === "timeline" &&
+        item.kind === "tool" &&
+        item.summary?.kind === "file" &&
+        item.summary.action === "read",
+    );
+    expect(readItems).toHaveLength(1);
+    expect(readItems[0]).toEqual(
+      expect.objectContaining({
+        summary: expect.objectContaining({
+          repeatCount: 2,
+          path: "/Users/georgexu/Desktop/phageGPT/README.md",
+        }),
+      }),
+    );
+    expect(state.items).toContainEqual(
+      expect.objectContaining({
+        id: "run-1",
+        summary: expect.objectContaining({
+          stats: ["2 tools", "2 done", "file_read x2"],
         }),
       }),
     );
@@ -835,7 +943,7 @@ test.describe("run event state", () => {
     });
   });
 
-  test("surfaces ledger reuse when final answer avoided a repeated read", () => {
+  test("keeps ledger reuse details out of the main transcript", () => {
     let state = submitUserMessage(initialRunViewState, "再看一下 README", [], () => "user-1");
     state = applyRunEvent(
       state,
@@ -852,12 +960,11 @@ test.describe("run event state", () => {
     ).state;
     state = applyRunEvent(state, { type: "run_completed" }, () => "done-1").state;
 
-    expect(state.items).toContainEqual(
+    expect(state.items).not.toContainEqual(
       expect.objectContaining({
         role: "timeline",
         kind: "compact",
         title: "Reused session context",
-        detail: "ledger: file `README.md` was read previously",
       }),
     );
   });

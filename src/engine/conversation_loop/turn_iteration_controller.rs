@@ -101,8 +101,18 @@ impl TurnIterationController {
             TurnIterationSetupFlow::Continue { exposure_plan } => exposure_plan,
             TurnIterationSetupFlow::Stop => return Ok(TurnIterationFlow::Break),
         };
-        let tools = exposure_plan.tools;
-        let exposed_tool_names = exposure_plan.exposed_tool_names;
+        let mut tools = exposure_plan.tools;
+        let mut exposed_tool_names = exposure_plan.exposed_tool_names;
+        if context.turn_state.force_synthesis_without_tools {
+            context.turn_state.force_synthesis_without_tools = false;
+            tools.clear();
+            exposed_tool_names.clear();
+            context.trace.record(TraceEvent::WorkflowFallback {
+                error:
+                    "forcing synthesis-only model step after exact duplicate read-only tool loop"
+                        .to_string(),
+            });
+        }
 
         let (content, mut tool_calls, pre_executed) =
             match TurnModelStepController::run(TurnModelStepContext {
@@ -225,6 +235,20 @@ impl TurnIterationController {
             tool_calls.len(),
             false,
         );
+
+        if let Some(prompt) = duplicate_successful_read_only_synthesis_prompt(
+            &tool_calls,
+            context.turn_state,
+            context.last_user_preview,
+        ) {
+            context.trace.record(TraceEvent::WorkflowFallback {
+                error: "exact duplicate read-only tools converted to synthesis-only follow-up"
+                    .to_string(),
+            });
+            context.messages.push(Message::system(prompt));
+            context.turn_state.force_synthesis_without_tools = true;
+            return Ok(TurnIterationFlow::Continue);
+        }
 
         if duplicate_read_only_closeout_allowed(context.route, context.required_validation_commands)
         {
@@ -517,11 +541,90 @@ fn duplicate_read_only_closeout_allowed(
     route: &IntentRoute,
     required_validation_commands: &[String],
 ) -> bool {
-    !crate::engine::code_change_workflow::is_programming_workflow(route.workflow)
-        && required_validation_commands.is_empty()
+    let _ = (route, required_validation_commands);
+    false
+}
+
+fn duplicate_successful_read_only_synthesis_prompt(
+    tool_calls: &[ToolCall],
+    turn_state: &TurnRuntimeState,
+    last_user_preview: &str,
+) -> Option<String> {
+    if tool_calls.is_empty() {
+        return None;
+    }
+
+    let mut duplicate_labels = Vec::new();
+    for tool_call in tool_calls {
+        if !is_read_only(&tool_call.name) {
+            return None;
+        }
+        let count = *turn_state
+            .successful_read_only_tool_fingerprints
+            .get(&tool_call_fingerprint(tool_call))
+            .unwrap_or(&0);
+        if count < 2 {
+            return None;
+        }
+        duplicate_labels.push(read_only_tool_label(tool_call));
+    }
+
+    duplicate_labels.sort();
+    duplicate_labels.dedup();
+    let duplicate_labels = duplicate_labels.join(", ");
+    let chinese = contains_cjk(last_user_preview);
+    if chinese {
+        Some(format!(
+            "Exact duplicate read-only loop guard: 刚才的工具回合只是在重复读取已经成功读取过的同一目标（{duplicate_labels}），没有产生新的信息。下一次回复不要调用工具，直接根据已有工具结果回答用户；如果已有内容确实不足，只说明还需要读取哪个不同文件或哪个不同 offset/limit 行范围。允许继续阅读，但必须改变 path、offset 或 limit；不要再次用相同参数读取。"
+        ))
+    } else {
+        Some(format!(
+            "Exact duplicate read-only loop guard: the last tool round only reread targets that were already read successfully ({duplicate_labels}) and produced no new information. In the next response, do not call tools; answer from the existing tool results. If the evidence is insufficient, state the different file or different offset/limit range needed next. Further reading is allowed only with changed path, offset, or limit; do not repeat the same arguments."
+        ))
+    }
+}
+
+fn read_only_tool_label(tool_call: &ToolCall) -> String {
+    let target = tool_call
+        .arguments
+        .get("path")
+        .or_else(|| tool_call.arguments.get("pattern"))
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("");
+    let offset = tool_call
+        .arguments
+        .get("offset")
+        .and_then(serde_json::Value::as_u64);
+    let limit = tool_call
+        .arguments
+        .get("limit")
+        .and_then(serde_json::Value::as_u64);
+    let range = match (offset, limit) {
+        (Some(offset), Some(limit)) => format!(" offset={offset} limit={limit}"),
+        (Some(offset), None) => format!(" offset={offset}"),
+        (None, Some(limit)) => format!(" limit={limit}"),
+        (None, None) => String::new(),
+    };
+    if target.is_empty() {
+        format!("{}{}", tool_call.name, range)
+    } else {
+        format!("{} `{}`{}", tool_call.name, target, range)
+    }
 }
 
 fn drop_duplicate_successful_read_only_tool_calls(
+    tool_calls: &[ToolCall],
+    turn_state: &TurnRuntimeState,
+) -> Option<Vec<ToolCall>> {
+    let _ = (tool_calls, turn_state);
+    None
+}
+
+#[cfg(test)]
+#[allow(dead_code)]
+fn legacy_drop_duplicate_successful_read_only_tool_calls(
     tool_calls: &[ToolCall],
     turn_state: &TurnRuntimeState,
 ) -> Option<Vec<ToolCall>> {
@@ -551,6 +654,16 @@ fn drop_duplicate_successful_read_only_tool_calls(
 }
 
 fn redirect_duplicate_directory_file_reads(
+    tool_calls: &mut [ToolCall],
+    turn_state: &TurnRuntimeState,
+) -> usize {
+    let _ = (tool_calls, turn_state);
+    0
+}
+
+#[cfg(test)]
+#[allow(dead_code)]
+fn legacy_redirect_duplicate_directory_file_reads(
     tool_calls: &mut [ToolCall],
     turn_state: &TurnRuntimeState,
 ) -> usize {
@@ -592,6 +705,8 @@ fn redirect_duplicate_directory_file_reads(
     redirected
 }
 
+#[cfg(test)]
+#[allow(dead_code)]
 fn single_file_entry_from_directory_listing(result_text: &str) -> Option<String> {
     let lines = normalized_result_lines(result_text);
     if !lines.iter().any(|line| line.starts_with("Directory:")) {
@@ -1292,7 +1407,7 @@ mod tests {
     }
 
     #[test]
-    fn mixed_read_only_batch_drops_duplicate_successful_read_and_keeps_new_search() {
+    fn mixed_read_only_batch_keeps_duplicate_successful_reads() {
         let duplicate_read = ToolCall {
             id: "call_read_again".to_string(),
             name: "file_read".to_string(),
@@ -1312,19 +1427,15 @@ mod tests {
             .successful_read_only_tool_fingerprints
             .insert(fingerprint, 1);
 
-        let filtered = drop_duplicate_successful_read_only_tool_calls(
-            &[duplicate_read, search.clone()],
-            &turn_state,
+        assert!(drop_duplicate_successful_read_only_tool_calls(
+            &[duplicate_read, search],
+            &turn_state
         )
-        .expect("mixed batch should drop the duplicate read");
-
-        assert_eq!(filtered.len(), 1);
-        assert_eq!(filtered[0].id, search.id);
-        assert_eq!(filtered[0].name, "grep");
+        .is_none());
     }
 
     #[test]
-    fn repeated_directory_read_redirects_to_single_child_file() {
+    fn repeated_directory_read_stays_under_model_control() {
         let mut tool_call = ToolCall {
             id: "call_read_dir_again".to_string(),
             name: "file_read".to_string(),
@@ -1346,13 +1457,13 @@ mod tests {
             &turn_state,
         );
 
-        assert_eq!(redirected, 1);
+        assert_eq!(redirected, 0);
         assert_eq!(
             tool_call
                 .arguments
                 .get("path")
                 .and_then(|value| value.as_str()),
-            Some("fixtures/project_partner_resume/memory/project.md")
+            Some("fixtures/project_partner_resume/memory")
         );
     }
 
@@ -1409,7 +1520,7 @@ mod tests {
     }
 
     #[test]
-    fn duplicate_read_only_closeout_is_disabled_for_programming_work() {
+    fn duplicate_read_only_closeout_is_disabled_for_all_workflows() {
         let direct_route = IntentRoute {
             intent: IntentKind::DirectAnswer,
             confidence: 0.95,
@@ -1429,12 +1540,51 @@ mod tests {
             ..direct_route.clone()
         };
 
-        assert!(duplicate_read_only_closeout_allowed(&direct_route, &[]));
+        assert!(!duplicate_read_only_closeout_allowed(&direct_route, &[]));
         assert!(!duplicate_read_only_closeout_allowed(
             &direct_route,
             &["cargo test -q".to_string()]
         ));
         assert!(!duplicate_read_only_closeout_allowed(&code_route, &[]));
+    }
+
+    #[test]
+    fn exact_duplicate_read_only_requests_synthesis_without_blocking_new_ranges() {
+        let duplicate_read = ToolCall {
+            id: "call_read_again".to_string(),
+            name: "file_read".to_string(),
+            arguments: serde_json::json!({"path": "~/Desktop/phageGPT/README.md"}),
+        };
+        let next_range_read = ToolCall {
+            id: "call_read_next_range".to_string(),
+            name: "file_read".to_string(),
+            arguments: serde_json::json!({
+                "path": "~/Desktop/phageGPT/README.md",
+                "offset": 81,
+                "limit": 80
+            }),
+        };
+        let duplicate_fingerprint = tool_call_fingerprint(&duplicate_read);
+        let mut turn_state = TurnRuntimeState::new(true);
+        turn_state
+            .successful_read_only_tool_fingerprints
+            .insert(duplicate_fingerprint, 2);
+
+        let prompt = duplicate_successful_read_only_synthesis_prompt(
+            std::slice::from_ref(&duplicate_read),
+            &turn_state,
+            "帮我看看 phageGPT 是什么",
+        )
+        .expect("exact duplicate should request synthesis");
+
+        assert!(prompt.contains("不要调用工具"));
+        assert!(prompt.contains("offset"));
+        assert!(duplicate_successful_read_only_synthesis_prompt(
+            std::slice::from_ref(&next_range_read),
+            &turn_state,
+            "帮我继续看后面的内容",
+        )
+        .is_none());
     }
 
     #[test]

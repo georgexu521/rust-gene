@@ -915,8 +915,8 @@ export async function pickProjectFile(): Promise<string | null> {
 
 export function sendMessage(message: string, contexts: DesktopRunContext[] = []): Promise<void> {
   if (!isTauriRuntime()) {
-    if (shouldUseQuietMainLoopPreview(message, contexts)) {
-      emitQuietMainLoopPreviewResponse(message);
+    if (!shouldUseWebPreviewFixtureRun(message, contexts)) {
+      emitWebPreviewUnavailableResponse(message, contexts);
       return Promise.resolve();
     }
 
@@ -1165,41 +1165,42 @@ export function sendMessage(message: string, contexts: DesktopRunContext[] = [])
   return invoke("send_message", { contexts, message });
 }
 
-function shouldUseQuietMainLoopPreview(message: string, contexts: DesktopRunContext[]) {
-  if (contexts.length > 0) {
+function shouldUseWebPreviewFixtureRun(message: string, contexts: DesktopRunContext[]) {
+  if (!webPreviewFixtureMode()) {
     return false;
   }
 
   const normalized = message.trim().toLowerCase();
-  if (!normalized) {
-    return true;
-  }
-
-  const heavyIntent = /\b(inspect|review|edit|fix|build|test|verify|run|diff|trace|debug|implement|refactor|check)\b/.test(
-    normalized,
+  return (
+    contexts.length > 0 ||
+    normalized.includes("timeline") ||
+    normalized.includes("fixture") ||
+    normalized.includes("trace")
   );
-  const chineseHeavyIntent =
-    /检查|审查|修改|修复|构建|测试|验证|运行|差异|调试|实现|重构|查看|看看|做|创建|生成|写|开发|网页|页面|网站|应用|组件|前端|后端|接口|代码|报错|错误|失败/.test(
-      normalized,
-    );
-  return !heavyIntent && !chineseHeavyIntent && normalized.length <= 80;
 }
 
-function emitQuietMainLoopPreviewResponse(message: string) {
-  const trimmed = message.trim();
+function webPreviewFixtureMode() {
+  if (typeof window === "undefined") {
+    return false;
+  }
+
+  const params = new URLSearchParams(window.location.search);
+  return (
+    params.has("previewFixture") ||
+    window.localStorage.getItem("priority-agent.previewFixture") === "1"
+  );
+}
+
+function emitWebPreviewUnavailableResponse(message: string, contexts: DesktopRunContext[]) {
+  const contextLine = contexts.length
+    ? `\n\n已附加上下文：${contexts.map((context) => context.label).join(", ")}。`
+    : "";
+  const promptLine = message.trim() ? `\n\n你的消息还在输入框历史里：${message.trim()}` : "";
   emitWebPreview({
     type: "assistant_delta",
-    text: quietMainLoopPreviewReply(trimmed),
+    text: `当前打开的是浏览器预览（web-preview），这条消息没有发送给 LLM，也不能访问桌面或运行工具。请在 Tauri 桌面应用窗口里使用真实 agent。${contextLine}${promptLine}`,
   });
   emitWebPreview({ type: "run_completed" });
-}
-
-function quietMainLoopPreviewReply(message: string) {
-  if (/^(你好|您好|嗨|哈喽|hello|hi|hey)[!.。！\s]*$/i.test(message)) {
-    return "你好，我在。";
-  }
-
-  return `收到：${message || "空消息"}`;
 }
 
 export function compactContext(): Promise<DesktopCompactionAttempt | null> {

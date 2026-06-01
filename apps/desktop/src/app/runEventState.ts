@@ -180,14 +180,18 @@ export function applyRunEvent(
           summary: toolPresentation.summary,
         }),
       );
+      const coalescedState = {
+        ...result.state,
+        items: coalesceRepeatedReadToolItems(result.state.items),
+      };
       return {
         ...result,
-        state: updateLatestOpenRunSummary(result.state, {
+        state: updateLatestOpenRunSummary(coalescedState, {
           stage: toolPresentation.status === "failed" ? "failed" : "running",
           headline: toolPresentation.status === "failed" ? "Tool failed" : "Tool completed",
           detail: toolPresentation.title,
           recovery: runRecovery(toolPresentation.summary),
-          stats: runStats(result.state.items),
+          stats: runStats(coalescedState.items),
         }),
       };
     }
@@ -524,6 +528,10 @@ function appendAssistantDelta(
 ): TranscriptItem[] {
   const last = items[items.length - 1];
   if (last?.role === "assistant") {
+    if (last.text === text) {
+      return items;
+    }
+
     return [
       ...items.slice(0, -1),
       {
@@ -691,7 +699,7 @@ function completeLatestRun(items: TranscriptItem[]): TranscriptItem[] {
     }
   }
   if (index < 0) {
-    const completedItems = appendLedgerReuseCard(markLatestAssistantAsFinal(items));
+    const completedItems = markLatestAssistantAsFinal(items);
     if (runStats(items).length === 0) {
       return completedItems;
     }
@@ -713,7 +721,7 @@ function completeLatestRun(items: TranscriptItem[]): TranscriptItem[] {
     ];
   }
 
-  const nextItems = [...appendLedgerReuseCard(markLatestAssistantAsFinal(items))];
+  const nextItems = [...markLatestAssistantAsFinal(items)];
   const item = nextItems[index];
   if (item.role === "timeline") {
     nextItems[index] = {
@@ -735,44 +743,6 @@ function completeLatestRun(items: TranscriptItem[]): TranscriptItem[] {
     };
   }
   return nextItems;
-}
-
-function appendLedgerReuseCard(items: TranscriptItem[]): TranscriptItem[] {
-  const lastAssistant = [...items]
-    .reverse()
-    .find((item): item is Extract<TranscriptItem, { role: "assistant" }> => item.role === "assistant");
-  if (!lastAssistant) {
-    return items;
-  }
-  const reuseBasis = extractLedgerReuseBasis(lastAssistant.text);
-  if (!reuseBasis) {
-    return items;
-  }
-  if (items.some((item) => item.role === "timeline" && item.id === `ledger-reuse-${lastAssistant.id}`)) {
-    return items;
-  }
-  return [
-    ...items,
-    timelineEvent({
-      id: `ledger-reuse-${lastAssistant.id}`,
-      kind: "compact",
-      title: "Reused session context",
-      detail: reuseBasis,
-      facts: ["ledger", "no repeated read"],
-      status: "completed",
-    }),
-  ];
-}
-
-function extractLedgerReuseBasis(text: string): string | null {
-  const match = text.match(/(?:复用依据：|Reuse basis:\s*)(.+)$/s);
-  if (match?.[1]) {
-    return match[1].trim().split("\n")[0];
-  }
-  if (text.includes("重复读取被已有会话上下文接住") || text.includes("repeated read was handled from session context")) {
-    return "Answered from existing session ledger.";
-  }
-  return null;
 }
 
 function markLatestAssistantAsFinal(items: TranscriptItem[]): TranscriptItem[] {
@@ -834,9 +804,16 @@ function runRecovery(summary: TimelineSummary | undefined): string | undefined {
 
 function runStats(items: TranscriptItem[]): string[] {
   const tools = timelineTools(items);
-  const completed = tools.filter((item) => item.status === "completed").length;
-  const failed = tools.filter((item) => item.status === "failed").length;
-  const running = tools.filter((item) => item.status === "running").length;
+  const toolCount = tools.reduce((sum, item) => sum + toolExecutionCount(item), 0);
+  const completed = tools
+    .filter((item) => item.status === "completed")
+    .reduce((sum, item) => sum + toolExecutionCount(item), 0);
+  const failed = tools
+    .filter((item) => item.status === "failed")
+    .reduce((sum, item) => sum + toolExecutionCount(item), 0);
+  const running = tools
+    .filter((item) => item.status === "running")
+    .reduce((sum, item) => sum + toolExecutionCount(item), 0);
   const fileChanges = uniqueToolValues(
     tools
       .map((item) => item.summary)
@@ -849,13 +826,43 @@ function runStats(items: TranscriptItem[]): string[] {
     .length;
 
   return compactFacts([
-    tools.length > 0 ? `${tools.length} tool${tools.length === 1 ? "" : "s"}` : null,
+    toolCount > 0 ? `${toolCount} tool${toolCount === 1 ? "" : "s"}` : null,
     running > 0 ? `${running} running` : null,
     completed > 0 ? `${completed} done` : null,
     failed > 0 ? `${failed} failed` : null,
+    ...toolUsageStats(tools),
     fileChanges > 0 ? `${fileChanges} file${fileChanges === 1 ? "" : "s"} changed` : null,
     validations > 0 ? `${validations} validation${validations === 1 ? "" : "s"}` : null,
   ]);
+}
+
+function toolUsageStats(tools: Array<Extract<TranscriptItem, { role: "timeline" }>>): string[] {
+  const counts = new Map<string, number>();
+  for (const item of tools) {
+    const name = toolNameFromTimeline(item);
+    if (!name) {
+      continue;
+    }
+    counts.set(name, (counts.get(name) || 0) + toolExecutionCount(item));
+  }
+
+  const labels = Array.from(counts.entries())
+    .sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]))
+    .slice(0, 4)
+    .map(([name, count]) => (count > 1 ? `${name} x${count}` : name));
+  const hidden = counts.size - labels.length;
+  return hidden > 0 ? [...labels, `+${hidden} tools`] : labels;
+}
+
+function toolNameFromTimeline(item: Extract<TranscriptItem, { role: "timeline" }>): string | null {
+  const factName = item.facts
+    ?.find((fact) => fact.startsWith("tool "))
+    ?.replace(/^tool\s+/, "")
+    .trim();
+  if (factName) {
+    return factName;
+  }
+  return item.title || null;
 }
 
 function runtimeStatsFromRunSummary(summary: TimelineSummary | undefined): string[] {
@@ -913,6 +920,77 @@ function timelineTools(items: TranscriptItem[]): Array<Extract<TranscriptItem, {
     (item): item is Extract<TranscriptItem, { role: "timeline" }> =>
       item.role === "timeline" && item.kind === "tool",
   );
+}
+
+function toolExecutionCount(item: Extract<TranscriptItem, { role: "timeline" }>): number {
+  const repeatCount =
+    item.summary?.kind === "file" && item.summary.action === "read"
+      ? item.summary.repeatCount
+      : undefined;
+  return Math.max(1, repeatCount || 1);
+}
+
+function coalesceRepeatedReadToolItems(items: TranscriptItem[]): TranscriptItem[] {
+  const next: TranscriptItem[] = [];
+  const readIndexes = new Map<string, number>();
+  for (const item of items) {
+    const key = repeatedReadKey(item);
+    if (!key) {
+      next.push(item);
+      continue;
+    }
+    const existingIndex = readIndexes.get(key);
+    if (existingIndex === undefined) {
+      readIndexes.set(key, next.length);
+      next.push(item);
+      continue;
+    }
+
+    const existing = next[existingIndex];
+    if (existing?.role !== "timeline" || existing.summary?.kind !== "file") {
+      next.push(item);
+      continue;
+    }
+    const repeated = existing as Extract<TranscriptItem, { role: "timeline" }> & {
+      summary: Extract<TimelineSummary, { kind: "file" }>;
+    };
+    const current = item as Extract<TranscriptItem, { role: "timeline" }> & {
+      summary: Extract<TimelineSummary, { kind: "file" }>;
+    };
+    const itemRepeat = current.summary.repeatCount || 1;
+    const existingRepeat = repeated.summary.repeatCount || 1;
+    next[existingIndex] = {
+      ...repeated,
+      detail: repeated.detail || current.detail,
+      status: current.status || repeated.status,
+      traceId: current.traceId || repeated.traceId,
+      summary: {
+        ...repeated.summary,
+        repeatCount: existingRepeat + itemRepeat,
+      },
+    };
+  }
+  return next;
+}
+
+function repeatedReadKey(item: TranscriptItem): string | null {
+  if (
+    item.role !== "timeline" ||
+    item.kind !== "tool" ||
+    item.status !== "completed" ||
+    item.summary?.kind !== "file" ||
+    item.summary.action !== "read" ||
+    !item.summary.path
+  ) {
+    return null;
+  }
+  return [
+    "file_read",
+    item.summary.path,
+    item.summary.lineStart || "",
+    item.summary.lineEnd || "",
+    item.summary.readCoverage || "",
+  ].join(":");
 }
 
 function uniqueToolValues(values: string[]): string[] {
@@ -1043,6 +1121,9 @@ type ToolSummary = {
   diagnostics_delta_diagnostic_count?: number;
   diagnostics_delta_error_count?: number;
   diagnostics_delta_warning_count?: number;
+  line_start?: number;
+  line_end?: number;
+  read_coverage?: string;
   output_chars?: number;
   terminal_task?: Record<string, unknown>;
   terminal_tasks_count?: number;
@@ -1298,6 +1379,9 @@ function timelineSummary(summary: ToolSummary, resultPreview: string): TimelineS
       diagnosticsDelta: summary.diagnostics_delta_status,
       diagnosticsErrorDelta: summary.diagnostics_delta_error_count,
       diagnosticsWarningDelta: summary.diagnostics_delta_warning_count,
+      lineStart: summary.line_start,
+      lineEnd: summary.line_end,
+      readCoverage: summary.read_coverage,
     };
   }
 

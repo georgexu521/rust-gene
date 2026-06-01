@@ -54,6 +54,10 @@ export type TimelineSummary =
       diagnosticsDelta?: string;
       diagnosticsErrorDelta?: number;
       diagnosticsWarningDelta?: number;
+      lineStart?: number;
+      lineEnd?: number;
+      readCoverage?: string;
+      repeatCount?: number;
     }
   | {
       kind: "failure";

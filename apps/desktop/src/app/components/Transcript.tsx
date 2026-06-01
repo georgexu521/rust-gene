@@ -165,6 +165,9 @@ function shouldHideTimelineItem(item: Extract<TranscriptItem, { role: "timeline"
   if (item.kind === "permission") {
     return item.status !== "waiting";
   }
+  if (item.kind === "tool") {
+    return false;
+  }
 
   return true;
 }
@@ -465,13 +468,15 @@ function TimelineSummaryView({
 
   if (summary.kind === "file") {
     return (
-      <div className="timeline-summary file">
+      <div className={`timeline-summary file${compact ? " compact" : ""}`}>
         <FilePenLine aria-hidden="true" size={15} />
         <div>
           <strong>{fileActionLabel(summary.action)}</strong>
           <div className="timeline-summary-meta">
             {compactSummaryMeta([
               summary.path,
+              summary.repeatCount && summary.repeatCount > 1 ? `repeated ${summary.repeatCount}x` : null,
+              readRangeLabel(summary),
               summary.replacements !== undefined ? `${summary.replacements} replacements` : null,
               summary.operations !== undefined ? `${summary.operations} operations` : null,
               summary.additions !== undefined ? `+${summary.additions}` : null,
@@ -548,8 +553,18 @@ function permissionHeadline(summary: Extract<TimelineSummary, { kind: "permissio
   return `Review ${family} permission`;
 }
 
+function readRangeLabel(summary: Extract<TimelineSummary, { kind: "file" }>) {
+  if (summary.action !== "read" || !summary.lineStart || !summary.lineEnd) {
+    return null;
+  }
+  if (summary.readCoverage === "full") {
+    return `${summary.lineEnd} lines`;
+  }
+  return `lines ${summary.lineStart}-${summary.lineEnd}`;
+}
+
 function isCompactToolEvent(item: TimelineEventItem) {
-  return item.kind === "tool" && item.status === "completed" && item.summary?.kind === "shell";
+  return item.kind === "tool" && item.status !== "failed";
 }
 
 function diagnosticsDeltaLabel(summary: Extract<TimelineSummary, { kind: "file" }>) {

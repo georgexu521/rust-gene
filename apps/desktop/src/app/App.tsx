@@ -103,12 +103,20 @@ export function App() {
   useEffect(() => {
     void initialize();
 
-    let cleanup = () => {};
-    onDesktopRunEvent(handleRunEvent).then((unlisten) => {
+    let disposed = false;
+    let cleanup: (() => void) | null = null;
+    void onDesktopRunEvent(handleRunEvent).then((unlisten) => {
+      if (disposed) {
+        unlisten();
+        return;
+      }
       cleanup = unlisten;
     });
 
-    return () => cleanup();
+    return () => {
+      disposed = true;
+      cleanup?.();
+    };
   }, []);
 
   useEffect(() => {
@@ -122,43 +130,75 @@ export function App() {
   }, [runState.pendingPermission]);
 
   async function initialize() {
-    try {
-      const [
-        nextHealth,
-        nextSettings,
-        nextSessions,
-        nextDiagnostics,
-        nextProviderSetup,
-        nextPermissionOptions,
-        nextProviderStatus,
-        nextContextSnapshot,
-        nextWorkbenchSnapshot,
-      ] =
-        await Promise.all([
-          desktopHealth(),
-          desktopSettings(),
-          listRecentSessions(),
-          desktopDiagnostics(),
-          providerSetupInfo(),
-          permissionModeOptions(),
-          providerModelStatus(),
-          desktopContextSnapshot(),
-          desktopWorkbenchSnapshot(),
-        ]);
+    const [
+      healthResult,
+      settingsResult,
+      sessionsResult,
+      diagnosticsResult,
+      providerSetupResult,
+      permissionOptionsResult,
+      providerStatusResult,
+    ] = await Promise.allSettled([
+      desktopHealth(),
+      desktopSettings(),
+      listRecentSessions(),
+      desktopDiagnostics(),
+      providerSetupInfo(),
+      permissionModeOptions(),
+      providerModelStatus(),
+    ]);
+
+    const startupErrors = [
+      healthResult,
+      settingsResult,
+      sessionsResult,
+      diagnosticsResult,
+      providerSetupResult,
+      permissionOptionsResult,
+      providerStatusResult,
+    ]
+      .filter((result): result is PromiseRejectedResult => result.status === "rejected")
+      .map((result) => result.reason);
+
+    const nextHealth = healthResult.status === "fulfilled" ? healthResult.value : null;
+    const nextSettings = settingsResult.status === "fulfilled" ? settingsResult.value : null;
+    const nextSessions = sessionsResult.status === "fulfilled" ? sessionsResult.value : [];
+
+    if (nextHealth) {
       setHealth(nextHealth);
+    }
+    if (nextSettings) {
       setSettings(nextSettings);
-      setPermissionOptions(nextPermissionOptions);
-      setProviderSetup(nextProviderSetup);
-      setProviderStatus(nextProviderStatus);
-      setContextSnapshot(nextContextSnapshot);
-      setWorkbenchSnapshot(nextWorkbenchSnapshot);
-      setProjectPath(nextSettings.selected_project || nextHealth.cwd);
-      setSessions(nextSessions);
+    }
+    if (permissionOptionsResult.status === "fulfilled") {
+      setPermissionOptions(permissionOptionsResult.value);
+    }
+    if (providerSetupResult.status === "fulfilled") {
+      setProviderSetup(providerSetupResult.value);
+    }
+    if (providerStatusResult.status === "fulfilled") {
+      setProviderStatus(providerStatusResult.value);
+    }
+    setSessions(nextSessions);
+    if (nextSettings || nextHealth) {
+      setProjectPath(nextSettings?.selected_project || nextHealth?.cwd || "");
+    }
+    if (nextSettings) {
       setSelectedSessionSummary(
         nextSessions.find((session) => session.id === nextSettings.active_session_id) || null,
       );
-      setDiagnostics(nextDiagnostics.items);
-      if (nextSettings.active_session_id) {
+    }
+    if (diagnosticsResult.status === "fulfilled") {
+      setDiagnostics(diagnosticsResult.value.items);
+    }
+    if (startupErrors.length > 0) {
+      setRunState((current) => withError(current, startupErrors[0]));
+    }
+
+    await refreshStartupSnapshots();
+
+    if (nextSettings?.active_session_id) {
+      try {
         const resumed = await resumeSession(nextSettings.active_session_id);
         setRunState((current) =>
           loadSessionTranscript(
@@ -168,10 +208,37 @@ export function App() {
             resumed.compact_boundaries,
           ),
         );
-        setContextSnapshot(await desktopContextSnapshot());
+        await refreshContextSnapshot();
+      } catch (err) {
+        setRunState((current) => withError(current, err));
       }
-    } catch (err) {
-      setRunState((current) => withError(current, err));
+    }
+  }
+
+  async function refreshStartupSnapshots() {
+    const [contextResult, workbenchResult] = await Promise.allSettled([
+      desktopContextSnapshot(),
+      desktopWorkbenchSnapshot(),
+    ]);
+
+    if (contextResult.status === "fulfilled") {
+      setContextSnapshot(contextResult.value);
+    }
+    if (workbenchResult.status === "fulfilled") {
+      setWorkbenchSnapshot(workbenchResult.value);
+      if (workbenchResult.value.runtime_context) {
+        setContextSnapshot(workbenchResult.value.runtime_context);
+      }
+    }
+
+    const snapshotError =
+      contextResult.status === "rejected"
+        ? contextResult.reason
+        : workbenchResult.status === "rejected"
+          ? workbenchResult.reason
+          : null;
+    if (snapshotError) {
+      setRunState((current) => withError(current, snapshotError));
     }
   }
 

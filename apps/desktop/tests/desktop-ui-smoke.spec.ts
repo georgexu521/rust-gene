@@ -2,7 +2,7 @@ import { expect, test, type Page } from "@playwright/test";
 
 test.describe("desktop UI smoke", () => {
   test("desktop layout renders core controls and settings drawer", async ({ page }, testInfo) => {
-    await page.goto("/");
+    await page.goto("/?previewFixture=1");
 
     await expect(page.getByRole("heading", { name: "Desktop app Phase 1" })).toBeVisible();
     await expect(page.locator(".startup-state-card")).toContainText("Restored session");
@@ -117,7 +117,7 @@ test.describe("desktop UI smoke", () => {
     await expect(page.getByPlaceholder("Ask anything")).toBeVisible();
     await page.getByRole("textbox", { name: "Message" }).fill("你好");
     await page.getByRole("button", { name: "Send message" }).click();
-    await expect(page.getByText("你好，我在。")).toBeVisible();
+    await expect(page.getByText("这条消息没有发送给 LLM")).toBeVisible();
     await expect(page.locator(".timeline-run-row")).not.toBeVisible();
     await expect(page.locator(".timeline-event", { hasText: "Pnpm Test" })).not.toBeVisible();
     await page.locator(".recent-item", { hasText: "Daily desktop flow" }).hover();
@@ -151,14 +151,19 @@ test.describe("desktop UI smoke", () => {
     await expect(page.getByRole("complementary", { name: "Context details" })).toContainText("Changed files");
     await page.getByRole("button", { name: "Close context details" }).click();
     await expect(page.locator(".timeline-run-stats span", { hasText: "3 tools" })).toBeVisible();
+    await expect(page.locator(".timeline-run-stats span", { hasText: "bash x2" })).toBeVisible();
+    await expect(page.locator(".timeline-run-stats span", { hasText: "file_edit" })).toBeVisible();
     await expect(page.locator(".timeline-run-stats span", { hasText: "1 failed" })).toBeVisible();
     await expect(page.locator(".timeline-run-stats span", { hasText: "1 file changed" })).toBeVisible();
     await expect(page.locator(".timeline-run-stats span", { hasText: "spine 7/7" })).toBeVisible();
+    await expect(page.locator(".timeline-event.tool", { hasText: "Pnpm Test" })).toBeVisible();
+    await expect(page.locator(".timeline-event.tool", { hasText: "Edited file" })).toBeVisible();
+    await expect(page.locator(".timeline-event.tool", { hasText: "Cargo Test" })).toBeVisible();
     await expect(page.locator(".message.assistant.final", { hasText: "Web preview received" })).toBeVisible();
     await expect(page.locator(".message.assistant.final")).toHaveClass(/run-group-final/);
-    await expect(page.locator(".timeline-event", { hasText: "Pnpm Test" })).not.toBeVisible();
-    await expect(page.locator(".timeline-event", { hasText: "Edited file" })).not.toBeVisible();
-    await expect(page.locator(".timeline-event", { hasText: "cargo test failed" })).not.toBeVisible();
+    await expect(page.locator(".timeline-event", { hasText: "Pnpm Test" })).toBeVisible();
+    await expect(page.locator(".timeline-event", { hasText: "Edited file" })).toBeVisible();
+    await expect(page.locator(".timeline-event", { hasText: "cargo test failed" })).toBeVisible();
     await expect(page.locator(".timeline-event.usage", { hasText: "Token usage" })).not.toBeVisible();
     await expect(page.locator(".timeline-event.permission", { hasText: "Allow git push" })).toBeVisible();
     await expect(page.locator(".timeline-event.permission", { hasText: "checkpoint unavailable" })).not.toBeVisible();
@@ -259,6 +264,28 @@ test.describe("desktop UI smoke", () => {
       path: testInfo.outputPath("mobile-main.png"),
       fullPage: true,
     });
+  });
+
+  test("web preview does not fake agent replies and remains responsive", async ({ page }) => {
+    await page.goto("/");
+
+    await page.getByRole("button", { name: "New Chat" }).click();
+    const composer = page.locator(".composer");
+    const textbox = page.getByRole("textbox", { name: "Message" });
+    const send = page.getByRole("button", { name: "Send message" });
+
+    await textbox.fill("你好");
+    await send.click();
+    await expect(page.getByText("这条消息没有发送给 LLM")).toBeVisible();
+    await expect(page.getByText("你好，我在。")).not.toBeVisible();
+    await expect(composer).not.toHaveClass(/running/);
+
+    await textbox.fill("请帮我看看桌面上有什么东西");
+    await expect(send).toBeEnabled();
+    await send.click();
+    await expect(page.getByText("你的消息还在输入框历史里：请帮我看看桌面上有什么东西")).toBeVisible();
+    await expect(page.locator(".timeline-run-row")).not.toBeVisible();
+    await expect(composer).not.toHaveClass(/running/);
   });
 });
 

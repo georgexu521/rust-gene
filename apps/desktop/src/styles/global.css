@@ -1735,11 +1735,23 @@ h1 {
   background: #ffffff;
 }
 
+.timeline-summary.file.compact {
+  margin-top: 5px;
+  padding: 5px 7px;
+  border-color: #e2e7ed;
+  background: #ffffff;
+}
+
 .timeline-summary.shell.compact code {
   font-size: 11px;
 }
 
-.timeline-summary.shell.compact .timeline-summary-meta {
+.timeline-summary.file.compact strong {
+  font-size: 11px;
+}
+
+.timeline-summary.shell.compact .timeline-summary-meta,
+.timeline-summary.file.compact .timeline-summary-meta {
   margin-top: 2px;
 }
 

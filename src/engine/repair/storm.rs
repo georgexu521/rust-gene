@@ -1,8 +1,10 @@
-//! Storm breaker — detect and suppress repeated tool calls.
+//! Storm breaker — detect and suppress repeated mutating tool calls.
 //!
 //! Tracks a sliding window of recent (tool_name, normalized_args) pairs.
 //! If the same call appears ≥3 times in the window, the agent is stuck in
 //! a repeat loop and the call is suppressed with an error result.
+//! Read-only calls are allowed to repeat; cache and context ledgers may reduce
+//! their cost, but the runtime should not block the model from re-reading.
 
 use serde_json::Value;
 use std::collections::VecDeque;
@@ -58,12 +60,13 @@ impl StormState {
         if storm_exempt {
             return StormDecision::Allow;
         }
+        if read_only {
+            return StormDecision::Allow;
+        }
 
         let hash = normalize_and_hash_args(args);
 
-        if !read_only {
-            self.window.retain(|entry| !entry.read_only);
-        }
+        self.window.retain(|entry| !entry.read_only);
 
         // Count occurrences of this exact (name, args_hash) in the window.
         let count = self
@@ -182,16 +185,25 @@ mod tests {
     }
 
     #[test]
-    fn storm_suppresses_repeated_calls() {
+    fn storm_allows_repeated_read_only_calls() {
         let mut state = StormState::default();
         let args = json!({"path": "/tmp/a.txt"});
 
-        // First 2 calls allowed.
         assert_eq!(read(&mut state, "file_read", &args), StormDecision::Allow);
         assert_eq!(read(&mut state, "file_read", &args), StormDecision::Allow);
-        // 3rd identical call suppressed.
+        assert_eq!(read(&mut state, "file_read", &args), StormDecision::Allow);
+        assert_eq!(read(&mut state, "file_read", &args), StormDecision::Allow);
+    }
+
+    #[test]
+    fn storm_suppresses_repeated_mutating_calls() {
+        let mut state = StormState::default();
+        let args = json!({"path": "/tmp/a.txt"});
+
+        assert_eq!(write(&mut state, "file_edit", &args), StormDecision::Allow);
+        assert_eq!(write(&mut state, "file_edit", &args), StormDecision::Allow);
         assert!(matches!(
-            read(&mut state, "file_read", &args),
+            write(&mut state, "file_edit", &args),
             StormDecision::Suppress(_)
         ));
     }
@@ -228,11 +240,8 @@ mod tests {
         assert_eq!(read(&mut state, "file_read", &args), StormDecision::Allow);
         assert_eq!(read(&mut state, "glob", &args), StormDecision::Allow);
         assert_eq!(read(&mut state, "grep", &args), StormDecision::Allow);
-        // Different tools, same args — not suppressed.
-        assert!(matches!(
-            read(&mut state, "file_read", &args),
-            StormDecision::Suppress(_)
-        ));
+        // Repeated read-only calls stay under model control.
+        assert_eq!(read(&mut state, "file_read", &args), StormDecision::Allow);
     }
 
     #[test]
