@@ -146,7 +146,29 @@ impl TurnIterationController {
             .await?
             {
                 TurnModelStepFlow::Retry => return Ok(TurnIterationFlow::Continue),
-                TurnModelStepFlow::Finish => return Ok(TurnIterationFlow::Break),
+                TurnModelStepFlow::Finish => {
+                    // Guard: if the model produces empty content, inject a
+                    // prompt asking it to summarize and give it one more try.
+                    // Mirrors Reasonix: empty finish is treated as a retry
+                    // with an explicit prompt rather than silently ending.
+                    if context.loop_state.final_content.trim().is_empty()
+                        && context.iteration < context.conversation.max_iterations
+                    {
+                        context.messages.push(Message::system(
+                            "Your last response was empty. Please summarize what you have \
+                             learned from the tool results above in a few sentences. \
+                             If you need more information, call the appropriate tool. \
+                             Otherwise, provide a direct answer to the user's question."
+                                .to_string(),
+                        ));
+                        context.trace.record(TraceEvent::WorkflowFallback {
+                            error: "empty assistant response — injecting retry prompt"
+                                .to_string(),
+                        });
+                        return Ok(TurnIterationFlow::Continue);
+                    }
+                    return Ok(TurnIterationFlow::Break);
+                }
                 TurnModelStepFlow::ToolRound {
                     content,
                     tool_calls,
