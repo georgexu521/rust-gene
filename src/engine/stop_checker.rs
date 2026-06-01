@@ -170,20 +170,25 @@ impl StopChecker {
             );
         }
 
+        // Reasonix alignment: duplicate read-only calls should NEVER cause a
+        // hard stop. The model owns its read strategy; the iteration budget +
+        // force summary handle loops. Tracking the count is still useful for
+        // traces, but it must not gate a Stop or Closeout.
         if input.duplicate_read_only_tools > 0 {
             return decision(
                 &input,
-                StopCheckStatus::Stop,
+                StopCheckStatus::Checkpoint,
                 StopCheckReason::DuplicateReadOnly,
-                Some(TaskTerminalStatus::Partial),
-                StopAction::Closeout,
+                None,
+                StopAction::Continue,
                 format!(
-                    "stopping after {} duplicate successful read-only tool result(s)",
+                    "{} duplicate successful read-only tool result(s) — continuing",
                     input.duplicate_read_only_tools
                 ),
-                vec!["duplicate read-only calls would not change task state".to_string()],
+                vec!["duplicate read-only calls are advisory only; iteration budget handles loops"
+                    .to_string()],
                 Some("duplicate_read_only".to_string()),
-                Some("close out with the already-observed evidence".to_string()),
+                Some("continue with existing tool results; model decides when to stop".to_string()),
             );
         }
 
@@ -605,16 +610,16 @@ mod tests {
     }
 
     #[test]
-    fn duplicate_read_only_result_stops_before_more_tools() {
+    fn duplicate_read_only_result_never_stops_anymore() {
+        // Reasonix alignment: duplicate reads are advisory, never a hard stop.
         let decision = StopChecker::evaluate(StopCheckInput {
             duplicate_read_only_tools: 1,
             ..input()
         });
 
-        assert_eq!(decision.status, StopCheckStatus::Stop);
+        assert_eq!(decision.status, StopCheckStatus::Checkpoint);
         assert_eq!(decision.reason, StopCheckReason::DuplicateReadOnly);
-        assert_eq!(decision.terminal_status, Some(TaskTerminalStatus::Partial));
-        assert_eq!(decision.action, StopAction::Closeout);
+        assert_eq!(decision.action, StopAction::Continue);
     }
 
     #[test]
