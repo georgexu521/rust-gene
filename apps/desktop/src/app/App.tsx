@@ -7,9 +7,12 @@ import {
   Globe,
   Info,
   LayoutDashboard,
+  Moon,
   MoreHorizontal,
   PanelRight,
+  Plus,
   Settings,
+  Sun,
 } from "lucide-react";
 import {
   DesktopDiagnostic,
@@ -58,13 +61,19 @@ import {
   setPermissionMode,
 } from "../runtime/desktopApi";
 import { Composer } from "./components/Composer";
+import { CommandPalette, useCommandPalette, type Command } from "./components/CommandPalette";
 import { ContextDetailDrawer } from "./components/ContextDetailDrawer";
+import { ErrorBoundary } from "./components/ErrorBoundary";
+import { JumpBar } from "./components/JumpBar";
+import { Splash, shouldShowSplash } from "./components/Splash";
+import { StatusBar } from "./components/StatusBar";
 import { PermissionCard } from "./components/PermissionCard";
 import { SettingsDrawer } from "./components/SettingsDrawer";
 import { Sidebar } from "./components/Sidebar";
 import { Transcript } from "./components/Transcript";
 import { TraceDrawer } from "./components/TraceDrawer";
 import { WorkbenchDrawer } from "./components/WorkbenchDrawer";
+import { useTheme } from "./theme";
 import {
   applyRunEvent,
   appendPermissionAnswer,
@@ -75,6 +84,9 @@ import {
 } from "./runEventState";
 
 export function App() {
+  const { theme, toggle: toggleTheme } = useTheme();
+  const { open: paletteOpen, setOpen: setPaletteOpen } = useCommandPalette();
+  const [showSplash, setShowSplash] = useState(() => shouldShowSplash());
   const [health, setHealth] = useState<DesktopHealth | null>(null);
   const [settings, setSettings] = useState<DesktopSettings | null>(null);
   const [permissionOptions, setPermissionOptions] = useState<PermissionModeOption[]>([]);
@@ -588,7 +600,18 @@ export function App() {
   const conversationTitle =
     selectedSessionSummary?.title || (isEmptyConversation ? "New Chat" : "Priority Agent");
 
+  const commands: Command[] = [
+    { id: "new-chat", label: "New Chat", icon: <Plus size={14} />, group: "action", run: () => void handleNewChat() },
+    { id: "settings", label: "Open Settings", icon: <Settings size={14} />, group: "settings", run: () => setIsSettingsOpen(true) },
+    { id: "browse-project", label: "Switch Project", icon: <Folder size={14} />, group: "workspace", run: () => void handleBrowseProject() },
+  ];
+
+  if (showSplash) {
+    return <Splash onDone={() => setShowSplash(false)} />;
+  }
+
   return (
+    <ErrorBoundary label="App">
     <main className="app-shell">
       <Sidebar
         projectPath={projectPath}
@@ -701,6 +724,7 @@ export function App() {
           projectPath={projectPath}
           providerStatus={providerStatus}
         />
+        <JumpBar items={runState.items} />
 
         <TraceDrawer
           activeItemId={activeTraceId}
@@ -817,7 +841,21 @@ export function App() {
           </section>
         </div>
       ) : null}
+
+      <StatusBar
+        health={health}
+        providerStatus={providerStatus}
+        contextSnapshot={contextSnapshot}
+        projectPath={projectPath}
+        isRunning={runState.isRunning}
+      />
     </main>
+      <CommandPalette
+        open={paletteOpen}
+        onClose={() => setPaletteOpen(false)}
+        commands={commands}
+      />
+    </ErrorBoundary>
   );
 }
 
