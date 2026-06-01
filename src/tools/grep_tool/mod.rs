@@ -2,7 +2,7 @@
 //!
 //! 在文件中搜索文本内容
 
-use crate::tools::file_tool::resolve_path;
+use crate::tools::file_tool::resolve_read_path;
 use crate::tools::{Tool, ToolContext, ToolOperationKind, ToolResult};
 use async_trait::async_trait;
 use serde_json::json;
@@ -127,7 +127,7 @@ impl Tool for GrepTool {
         }
 
         let search_path = match params["path"].as_str() {
-            Some(path_str) => match resolve_path(path_str, &context.working_dir) {
+            Some(path_str) => match resolve_read_path(path_str, &context.working_dir) {
                 Ok(path) => path,
                 Err(msg) => return ToolResult::error(msg),
             },
@@ -450,6 +450,38 @@ mod tests {
         assert_eq!(data["matches"][0]["match_end_byte"], "summary_task".len());
         assert_eq!(data["matches"][0]["raw_line"], "summary_task() {");
         assert!(data["matches"][0]["line_hash"].as_str().unwrap_or("").len() >= 8);
+    }
+
+    #[tokio::test]
+    async fn grep_allows_runtime_tool_result_artifacts_read_only() {
+        let mut env = crate::test_utils::env_guard::EnvVarGuard::acquire().await;
+        let home = tempfile::tempdir().unwrap();
+        env.set("HOME", home.path().to_str().unwrap());
+        env.remove("XDG_DATA_HOME");
+        env.remove("PRIORITY_AGENT_READ_ROOTS");
+
+        let tool_results = dirs::data_local_dir()
+            .unwrap()
+            .join("priority-agent")
+            .join("tool-results");
+        let artifact_path = tool_results.join("file_read_call_large.txt");
+        tokio::fs::create_dir_all(&tool_results).await.unwrap();
+        tokio::fs::write(&artifact_path, "engine.max_iterations = 50\n")
+            .await
+            .unwrap();
+
+        let tool = GrepTool;
+        let working = tempfile::tempdir().unwrap();
+        let params = json!({
+            "pattern": "max_iterations",
+            "path": artifact_path,
+        });
+        let context = ToolContext::new(working.path(), "test-session");
+
+        let result = tool.execute(params, context).await;
+
+        assert!(result.success, "{}", result.content);
+        assert!(result.content.contains("max_iterations"));
     }
 
     #[tokio::test]

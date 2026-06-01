@@ -16,7 +16,7 @@ use super::turn_post_change_closeout_controller::{
 use super::turn_runtime_context::TurnRuntimeContext;
 use super::turn_runtime_state::TurnRuntimeState;
 use super::turn_tool_failure_followup_controller::{
-    TurnToolFailureFollowupContext, TurnToolFailureFollowupController,
+    TurnToolFailureFollowupContext, TurnToolFailureFollowupController, TurnToolFailureFollowupFlow,
 };
 use super::turn_tool_round_step_controller::{
     TurnToolRoundStepContext, TurnToolRoundStepController,
@@ -359,7 +359,7 @@ impl TurnIterationController {
             return Ok(TurnIterationFlow::Continue);
         }
 
-        let _followup_flow =
+        let followup_flow =
             TurnToolFailureFollowupController::run(TurnToolFailureFollowupContext {
                 provider: context.conversation.provider.as_ref(),
                 model: context.conversation.model.clone(),
@@ -377,6 +377,9 @@ impl TurnIterationController {
                 messages: &mut *context.messages,
             })
             .await;
+        if let Some(flow) = flow_after_tool_failure_followup(followup_flow) {
+            return Ok(flow);
+        }
 
         let _closeout_flow = TurnPostChangeCloseoutController::run(TurnPostChangeCloseoutContext {
             conversation: context.conversation,
@@ -397,6 +400,15 @@ impl TurnIterationController {
         .await;
 
         Ok(TurnIterationFlow::Continue)
+    }
+}
+
+fn flow_after_tool_failure_followup(
+    followup_flow: TurnToolFailureFollowupFlow,
+) -> Option<TurnIterationFlow> {
+    match followup_flow {
+        TurnToolFailureFollowupFlow::Stop => Some(TurnIterationFlow::Break),
+        TurnToolFailureFollowupFlow::Continue => None,
     }
 }
 
@@ -1565,6 +1577,15 @@ mod tests {
                 .unwrap(),
             2
         );
+    }
+
+    #[test]
+    fn tool_failure_followup_stop_breaks_turn_loop() {
+        assert!(matches!(
+            flow_after_tool_failure_followup(TurnToolFailureFollowupFlow::Stop),
+            Some(TurnIterationFlow::Break)
+        ));
+        assert!(flow_after_tool_failure_followup(TurnToolFailureFollowupFlow::Continue).is_none());
     }
 
     #[test]

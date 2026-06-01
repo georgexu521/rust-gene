@@ -294,7 +294,7 @@ pub struct QueryOptions {
 impl Default for QueryOptions {
     fn default() -> Self {
         Self {
-            max_tool_iterations: Some(10),
+            max_tool_iterations: None,
             context_messages: None,
             temperature: Some(0.2),
             allowed_tools: None,

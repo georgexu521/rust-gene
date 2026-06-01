@@ -2823,7 +2823,8 @@ pub fn resolve_path(
 }
 
 /// 解析只读路径。相对路径仍限制在工作区内；绝对路径除工作区和临时目录外，
-/// 允许读取用户桌面和 `PRIORITY_AGENT_READ_ROOTS` 声明的只读根目录。
+/// 允许读取用户桌面、runtime tool-result artifacts 和
+/// `PRIORITY_AGENT_READ_ROOTS` 声明的只读根目录。
 pub fn resolve_read_path(
     path: &str,
     working_dir: &std::path::Path,
@@ -2959,6 +2960,9 @@ fn read_allowed_roots() -> Vec<PathBuf> {
     if let Some(home) = std::env::var_os("HOME") {
         roots.push(PathBuf::from(home).join("Desktop"));
     }
+    if let Some(tool_results) = runtime_tool_result_read_root() {
+        roots.push(tool_results);
+    }
     if let Ok(raw) = std::env::var("PRIORITY_AGENT_READ_ROOTS") {
         roots.extend(
             raw.split(':')
@@ -2968,6 +2972,10 @@ fn read_allowed_roots() -> Vec<PathBuf> {
         );
     }
     roots
+}
+
+fn runtime_tool_result_read_root() -> Option<PathBuf> {
+    dirs::data_local_dir().map(|dir| dir.join("priority-agent").join("tool-results"))
 }
 
 pub fn normalize_path(path: &std::path::Path) -> std::path::PathBuf {
@@ -3727,6 +3735,39 @@ mod tests {
 
         let write_path = resolve_path("~/Desktop/gex", working.path());
         assert!(write_path.is_err());
+    }
+
+    #[test]
+    fn resolve_read_path_allows_runtime_tool_result_artifacts_without_allowing_writes() {
+        let mut env = crate::test_utils::env_guard::EnvVarGuard::acquire_blocking();
+        let home = tempfile::tempdir().unwrap();
+        env.set("HOME", home.path().to_str().unwrap());
+        env.remove("XDG_DATA_HOME");
+        env.remove("PRIORITY_AGENT_READ_ROOTS");
+
+        let tool_results = runtime_tool_result_read_root().unwrap();
+        let artifact_path = tool_results.join("file_read_call_large.txt");
+        std::fs::create_dir_all(&tool_results).unwrap();
+        std::fs::write(&artifact_path, "full truncated output").unwrap();
+
+        let unrelated_app_data = tool_results
+            .parent()
+            .unwrap()
+            .join("sessions")
+            .join("session.db");
+        std::fs::create_dir_all(unrelated_app_data.parent().unwrap()).unwrap();
+        std::fs::write(&unrelated_app_data, "not a tool result").unwrap();
+
+        let working = tempfile::tempdir().unwrap();
+        let read_path = resolve_read_path(artifact_path.to_str().unwrap(), working.path()).unwrap();
+        assert_eq!(read_path, normalize_path(&artifact_path));
+
+        let write_path = resolve_path(artifact_path.to_str().unwrap(), working.path());
+        assert!(write_path.is_err());
+
+        let unrelated_read =
+            resolve_read_path(unrelated_app_data.to_str().unwrap(), working.path());
+        assert!(unrelated_read.is_err());
     }
 
     #[test]

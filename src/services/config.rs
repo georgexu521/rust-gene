@@ -135,7 +135,7 @@ impl AppConfig {
             .set_default("features.agent_enabled", true)?
             .set_default("features.llm_memory_extraction", true)?
             .set_default("features.plugin_trust_mode", "warn")?
-            .set_default("engine.max_iterations", 10)?
+            .set_default("engine.max_iterations", 50)?
             .set_default("memory.external_provider.enabled", false)?
             .set_default("memory.external_provider.provider_type", "none")?
             .set_default("memory.external_provider.name", "external-memory")?
@@ -787,7 +787,7 @@ pub struct EngineConfig {
 impl Default for EngineConfig {
     fn default() -> Self {
         Self {
-            max_iterations: 10,
+            max_iterations: 50,
             mcp_servers: Vec::new(),
         }
     }
@@ -803,6 +803,7 @@ mod tests {
         assert_eq!(config.api.model, "");
         assert_eq!(config.api.base_url, "");
         assert!(config.storage.persistence_enabled);
+        assert_eq!(config.engine.max_iterations, 50);
     }
 
     #[test]
