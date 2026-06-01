@@ -24,7 +24,11 @@ fn normalize_path_args(args: &serde_json::Value) -> serde_json::Value {
     let mut value = args.clone();
     if let Some(obj) = value.as_object_mut() {
         for (key, val) in obj.iter_mut() {
-            if key == "path" || key == "pattern" || key.ends_with("_path") || key.ends_with("_pattern") {
+            if key == "path"
+                || key == "pattern"
+                || key.ends_with("_path")
+                || key.ends_with("_pattern")
+            {
                 if let Some(s) = val.as_str() {
                     let trimmed = s.trim_end_matches('/');
                     if !trimmed.is_empty() {

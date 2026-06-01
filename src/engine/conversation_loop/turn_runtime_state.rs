@@ -16,7 +16,6 @@ pub(super) struct TurnRuntimeState {
     pub(super) acceptance_repair_attempts: usize,
     pub(super) reserved_repair_rounds: usize,
     pub(super) successful_read_only_tool_fingerprints: HashMap<String, usize>,
-    pub(super) successful_read_only_tool_results: HashMap<String, String>,
     pub(super) storm_state: StormState,
 }
 
@@ -50,7 +49,6 @@ impl TurnRuntimeState {
             acceptance_repair_attempts: 0,
             reserved_repair_rounds: 0,
             successful_read_only_tool_fingerprints: HashMap::new(),
-            successful_read_only_tool_results: HashMap::new(),
             storm_state: StormState::default(),
         }
     }

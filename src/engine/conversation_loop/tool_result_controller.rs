@@ -1439,9 +1439,8 @@ fn model_content_for_visibility(
         out.push_str("\nRecovery kind: ");
         out.push_str(recovery_kind);
     }
-    if let Some(raw_ref) = observation.raw_result_ref.as_deref() {
-        out.push_str("\nRaw result artifact: ");
-        out.push_str(raw_ref);
+    if observation.raw_result_ref.is_some() {
+        out.push_str("\nRaw result stored outside provider-visible context; use targeted follow-up tools if more detail is needed.");
     }
     append_lines(&mut out, "Observer warnings", &observation.quality_warnings);
     if model_visibility == "raw_excerpt" {

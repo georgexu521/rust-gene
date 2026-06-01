@@ -1,6 +1,6 @@
 use crate::services::api::ToolCall;
 use crate::tools::ToolResult;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum ToolCallStatus {
@@ -74,10 +74,29 @@ impl ToolCallLifecycle {
         self.update(tool_call, status, true, true);
     }
 
+    #[cfg(test)]
     pub(super) fn snapshot(&self) -> Vec<(String, ToolCallLifecycleRecord)> {
         let mut records = self
             .records
             .iter()
+            .map(|(id, record)| (id.clone(), record.clone()))
+            .collect::<Vec<_>>();
+        records.sort_by(|left, right| left.0.cmp(&right.0));
+        records
+    }
+
+    pub(super) fn snapshot_for(
+        &self,
+        tool_calls: &[ToolCall],
+    ) -> Vec<(String, ToolCallLifecycleRecord)> {
+        let ids = tool_calls
+            .iter()
+            .map(|tool_call| tool_call.id.as_str())
+            .collect::<HashSet<_>>();
+        let mut records = self
+            .records
+            .iter()
+            .filter(|(id, _)| ids.contains(id.as_str()))
             .map(|(id, record)| (id.clone(), record.clone()))
             .collect::<Vec<_>>();
         records.sort_by(|left, right| left.0.cmp(&right.0));
@@ -147,5 +166,21 @@ mod tests {
         assert_eq!(snapshot[1].1.status, ToolCallStatus::ProviderExecuted);
         assert!(snapshot[1].1.parallel);
         assert!(snapshot[1].1.pre_executed);
+    }
+
+    #[test]
+    fn snapshot_for_limits_records_to_current_batch() {
+        let previous = tool_call("call_previous", "file_read");
+        let current = tool_call("call_current", "grep");
+        let mut lifecycle = ToolCallLifecycle::default();
+
+        lifecycle.provider_executed(&previous, &ToolResult::success("cached"));
+        lifecycle.pending_batch(std::slice::from_ref(&current));
+
+        let snapshot = lifecycle.snapshot_for(std::slice::from_ref(&current));
+
+        assert_eq!(snapshot.len(), 1);
+        assert_eq!(snapshot[0].0, "call_current");
+        assert_eq!(snapshot[0].1.status, ToolCallStatus::Pending);
     }
 }

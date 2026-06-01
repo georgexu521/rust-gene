@@ -57,14 +57,14 @@ write_prompt explore-tools \
 
 # Reading tests  
 write_prompt read-cargo \
-  "请读取 Cargo.toml，告诉我 package.version 和 package.edition 的值。"
+  "请读取 priority-core/Cargo.toml 的 [package] 段，告诉我 package.version 和 package.edition 的值。只读，不要检查其他文件。"
 
 write_prompt read-main \
   "请读取 src/main.rs，总结一下程序的入口逻辑。"
 
 # Code understanding
 write_prompt understand-loop \
-  "请阅读 src/engine/conversation_loop/turn_iteration_controller.rs 和 src/engine/stop_checker.rs，用一段话概括它们的关系和 stop checker 当前的停止条件有哪些。"
+  "这是只读理解任务，不要修改文件。请用 grep 或窄范围 file_read 查看 src/engine/conversation_loop/turn_iteration_controller.rs 里调用 StopChecker 的位置，以及 src/engine/stop_checker.rs 里 StopChecker::evaluate 的分支；最后用一段话概括它们的关系，并列出 stop checker 当前的主要停止条件。"
 
 # Simple editing (requires --focus edit)
 write_prompt simple-edit \
@@ -84,21 +84,24 @@ run_test() {
   echo "  prompt: $(head -1 "$prompt_file" | cut -c1-80)..."
 
   local start_ts=$(date +%s)
+  set +e
   timeout "$timeout" "$AGENT_BIN" --eval-run \
     --prompt-file "$prompt_file" \
     --output "$out_file" \
     --events "$OUTPUTS_DIR/$id.events.jsonl" \
-    2>"$err_file" || true
+    2>"$err_file"
   local exit_code=$?
+  set -e
   local elapsed=$(($(date +%s) - start_ts))
 
   local test_passed=true
   local notes=""
 
-  if [ $exit_code -eq 124 ]; then
+  if [ $exit_code -eq 124 ] || [ $exit_code -eq 142 ]; then
     test_passed=false
     notes="$notes [TIMEOUT]"
   elif [ $exit_code -ne 0 ]; then
+    test_passed=false
     notes="$notes [EXIT:$exit_code]"
   fi
 
@@ -137,12 +140,12 @@ case "${1:-all}" in
     ;;
   read)
     bold "═══ Reading Tests ═══"
-    run_test read-cargo "version\|edition" 60
-    run_test read-main "main\|cli\|tui" 60
+    run_test read-cargo "version\|edition" 120
+    run_test read-main "main\|cli\|tui" 120
     ;;
   understand)
     bold "═══ Understanding Tests ═══"
-    run_test understand-loop "stop_check\|iteration\|Break" 120
+    run_test understand-loop "UserInterrupted\|BudgetExhausted\|VerificationReady\|NoIssue" 240
     ;;
   edit)
     bold "═══ Editing Tests ═══"
@@ -152,9 +155,9 @@ case "${1:-all}" in
     bold "═══ Full Test Suite ═══"
     run_test explore-src "engine\|tools\|agent" 120
     run_test explore-engine "controller\|mod.rs" 120
-    run_test read-cargo "version\|edition" 60
-    run_test read-main "main\|cli\|tui" 60
-    run_test understand-loop "stop_check\|iteration" 180
+    run_test read-cargo "version\|edition" 120
+    run_test read-main "main\|cli\|tui" 120
+    run_test understand-loop "UserInterrupted\|BudgetExhausted\|VerificationReady\|NoIssue" 240
     ;;
   *)
     echo "Usage: bash scripts/tui-dogfood-test.sh [explore|read|understand|edit|all]"

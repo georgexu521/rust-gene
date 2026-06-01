@@ -14,8 +14,6 @@ use crate::services::api::{Message, ToolCall};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
-const DUPLICATE_READ_ONLY_RESULT_CHAR_LIMIT: usize = 6_000;
-
 pub(super) struct ToolBatchProcessingContext<'a> {
     pub(super) tool_calls: &'a [ToolCall],
     pub(super) tool_batch: &'a mut ToolExecutionBatch,
@@ -50,14 +48,6 @@ pub(super) struct ToolBatchProcessingOutcome {
     pub(super) file_edit_failure_correction_added: bool,
     pub(super) successful_validation_commands: Vec<String>,
     pub(super) duplicate_successful_read_only_tools: Vec<String>,
-    pub(super) duplicate_successful_read_only_results: Vec<DuplicateSuccessfulReadOnlyToolResult>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct DuplicateSuccessfulReadOnlyToolResult {
-    pub(super) tool_name: String,
-    pub(super) result_text: String,
-    pub(super) ledger_summary: Option<String>,
 }
 
 pub(super) struct ToolBatchResultProcessor;
@@ -105,7 +95,6 @@ impl ToolBatchResultProcessor {
             file_edit_failure_correction_added: false,
             successful_validation_commands: Vec::new(),
             duplicate_successful_read_only_tools: Vec::new(),
-            duplicate_successful_read_only_results: Vec::new(),
         };
 
         if outcome.used_write_tool && !required_validation_commands.is_empty() {
@@ -181,16 +170,6 @@ impl ToolBatchResultProcessor {
             }
         }
 
-        if !outcome.duplicate_successful_read_only_tools.is_empty() {
-            let mut tools = outcome.duplicate_successful_read_only_tools.clone();
-            tools.sort();
-            tools.dedup();
-            messages.push(Message::system(format!(
-                "The last successful read-only tool call duplicated an earlier result: {}. Stop calling the same read-only tool with the same arguments. Answer the user from the tool output already present in this conversation.",
-                tools.join(", ")
-            )));
-        }
-
         Self::append_destructive_scope_guard(
             &mut outcome,
             tool_batch,
@@ -245,42 +224,15 @@ impl ToolBatchResultProcessor {
         let fingerprint = tool_call_fingerprint(tool_call);
         if result.success {
             if is_read_only(&tool_call.name) {
-                let result_text = tool_result_dialog_content(result);
-                let cached_result_text = turn_state
-                    .successful_read_only_tool_results
-                    .entry(fingerprint.clone())
-                    .and_modify(|cached| {
-                        if is_read_cache_notice(cached) && !is_read_cache_notice(&result_text) {
-                            *cached = bounded_duplicate_read_only_result(&result_text);
-                        }
-                    })
-                    .or_insert_with(|| bounded_duplicate_read_only_result(&result_text))
-                    .clone();
                 let success_count = turn_state
                     .successful_read_only_tool_fingerprints
                     .entry(fingerprint.clone())
                     .or_insert(0);
                 *success_count += 1;
                 if *success_count >= 2 {
-                    let message = format!(
-                        "Repeated successful read-only tool call detected: {}. You already have this result; answer from existing tool output now and do not call the same read-only tool with the same arguments again.",
-                        tool_call.name
-                    );
-                    if *success_count == 2 {
-                        outcome.tool_results_text.push('\n');
-                        outcome.tool_results_text.push_str(&message);
-                        outcome.tool_results_text.push('\n');
-                    }
                     outcome
                         .duplicate_successful_read_only_tools
                         .push(tool_call.name.clone());
-                    outcome.duplicate_successful_read_only_results.push(
-                        DuplicateSuccessfulReadOnlyToolResult {
-                            tool_name: tool_call.name.clone(),
-                            result_text: cached_result_text,
-                            ledger_summary: ledger_summary_from_result(result),
-                        },
-                    );
                 }
             }
             failed_tool_fingerprints.remove(&fingerprint);
@@ -393,42 +345,6 @@ impl ToolBatchResultProcessor {
     }
 }
 
-fn ledger_summary_from_result(result: &crate::tools::ToolResult) -> Option<String> {
-    let data = result.data.as_ref()?;
-    if let Some(path) = data.get("path").and_then(serde_json::Value::as_str) {
-        let total_lines = data
-            .get("total_lines")
-            .and_then(serde_json::Value::as_u64)
-            .unwrap_or(0);
-        let coverage = data
-            .get("read_coverage")
-            .and_then(serde_json::Value::as_str)
-            .unwrap_or("read");
-        let preview = data
-            .get("content_preview")
-            .and_then(serde_json::Value::as_str)
-            .map(|preview| format!(", evidence \"{}\"", compact_text(preview, 160)))
-            .unwrap_or_default();
-        return Some(format!(
-            "ledger: file `{path}` is unchanged in this session ({coverage}, {total_lines} lines{preview})"
-        ));
-    }
-    if let Some(shell_result) = data.get("shell_result") {
-        let command = shell_result
-            .get("command")
-            .and_then(serde_json::Value::as_str)
-            .unwrap_or("bash");
-        let exit_code = shell_result
-            .get("exit_code")
-            .and_then(serde_json::Value::as_i64)
-            .unwrap_or(0);
-        return Some(format!(
-            "ledger: read-only command `{command}` already ran in this session with exit {exit_code}"
-        ));
-    }
-    None
-}
-
 fn task_mode_label(mode: AgentTaskMode) -> &'static str {
     match mode {
         AgentTaskMode::Direct => "direct",
@@ -437,38 +353,6 @@ fn task_mode_label(mode: AgentTaskMode) -> &'static str {
         AgentTaskMode::HighRisk => "high_risk",
     }
 }
-
-fn bounded_duplicate_read_only_result(text: &str) -> String {
-    let trimmed = text.trim();
-    let mut preview = String::new();
-    let mut truncated = false;
-    for (idx, ch) in trimmed.chars().enumerate() {
-        if idx >= DUPLICATE_READ_ONLY_RESULT_CHAR_LIMIT {
-            truncated = true;
-            break;
-        }
-        preview.push(ch);
-    }
-    if truncated {
-        preview.push_str("\n\n[stored read-only result truncated]");
-    }
-    preview
-}
-
-fn compact_text(value: &str, max_chars: usize) -> String {
-    let trimmed = value.trim();
-    let mut text = trimmed.chars().take(max_chars).collect::<String>();
-    if trimmed.chars().count() > max_chars {
-        text.push_str("...");
-    }
-    text
-}
-
-fn is_read_cache_notice(text: &str) -> bool {
-    text.trim_start()
-        .starts_with("[File unchanged since last read:")
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -620,7 +504,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn repeated_successful_read_only_uses_first_full_result_for_closeout() {
+    async fn repeated_successful_read_only_is_counted_without_model_prompt() {
         let call = tool_call(
             "call_1",
             "file_read",
@@ -665,7 +549,7 @@ mod tests {
         })
         .await;
         assert!(first_outcome
-            .duplicate_successful_read_only_results
+            .duplicate_successful_read_only_tools
             .is_empty());
 
         let mut second_batch = ToolExecutionBatch::new(
@@ -703,10 +587,10 @@ mod tests {
             second_outcome.duplicate_successful_read_only_tools,
             vec!["file_read".to_string()]
         );
-        assert_eq!(
-            second_outcome.duplicate_successful_read_only_results[0].result_text,
-            "1 | # PhageMatch\n   2 | first full result"
-        );
+        assert!(!second_messages.iter().any(|message| matches!(
+            message,
+            Message::System { content } if content.contains("duplicated an earlier result")
+        )));
     }
 
     #[tokio::test]

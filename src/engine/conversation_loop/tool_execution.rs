@@ -227,9 +227,8 @@ pub(crate) async fn truncate_tool_result(
                 format!("\n\n--- Relevant snippets ---\n{}", relevant)
             };
             result.content = format!(
-                "[Output truncated: {} bytes -> saved to {}]\n\n--- First {} bytes ---\n{}\n\n--- Last {} bytes ---\n{}{}",
+                "[Output truncated: {} bytes; full result stored in runtime metadata]\n\n--- First {} bytes ---\n{}\n\n--- Last {} bytes ---\n{}{}",
                 original_len,
-                file_path.display(),
                 first.len(),
                 first,
                 last.len(),
@@ -305,8 +304,7 @@ pub(crate) fn tool_call_is_storm_exempt(registry: &ToolRegistry, tool_name: &str
         .unwrap_or(false)
         || matches!(
             tool_name,
-            "file_read"
-                | "project_list"
+            "project_list"
                 | "memory_load"
                 | "skills_list"
                 | "skill_view"
@@ -408,6 +406,7 @@ mod tests {
         let mut result = ToolResult::success("A".repeat(40_000));
         truncate_tool_result(&mut result, "grep", "call_large").await;
         assert!(result.content.contains("Output truncated"));
+        assert!(!result.content.contains("tool-results"));
         assert!(result.content.contains("--- First"));
         assert!(result.content.contains("--- Last"));
     }

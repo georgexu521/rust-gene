@@ -1,6 +1,4 @@
-use super::tool_batch_result_processor::{
-    DuplicateSuccessfulReadOnlyToolResult, ToolBatchProcessingOutcome,
-};
+use super::tool_batch_result_processor::ToolBatchProcessingOutcome;
 use std::path::PathBuf;
 
 pub(super) struct TurnToolRoundState {
@@ -17,7 +15,6 @@ pub(super) struct TurnToolRoundState {
     pub(super) file_edit_failure_correction_added: bool,
     pub(super) successful_validation_commands: Vec<String>,
     pub(super) duplicate_successful_read_only_tools: Vec<String>,
-    pub(super) duplicate_successful_read_only_results: Vec<DuplicateSuccessfulReadOnlyToolResult>,
     pub(super) should_closeout_after_verified_change: bool,
 }
 
@@ -53,7 +50,6 @@ impl TurnToolRoundOutcomeController {
             file_edit_failure_correction_added: outcome.file_edit_failure_correction_added,
             successful_validation_commands: outcome.successful_validation_commands,
             duplicate_successful_read_only_tools: outcome.duplicate_successful_read_only_tools,
-            duplicate_successful_read_only_results: outcome.duplicate_successful_read_only_results,
             should_closeout_after_verified_change: false,
         }
     }
@@ -79,11 +75,6 @@ mod tests {
             file_edit_failure_correction_added: false,
             successful_validation_commands: vec!["cargo test -q".to_string()],
             duplicate_successful_read_only_tools: vec!["file_read".to_string()],
-            duplicate_successful_read_only_results: vec![DuplicateSuccessfulReadOnlyToolResult {
-                tool_name: "file_read".to_string(),
-                result_text: "# Readme".to_string(),
-                ledger_summary: None,
-            }],
         });
 
         assert_eq!(state.tool_results_text, "result text");
@@ -104,10 +95,6 @@ mod tests {
         assert_eq!(
             state.duplicate_successful_read_only_tools,
             vec!["file_read".to_string()]
-        );
-        assert_eq!(
-            state.duplicate_successful_read_only_results[0].result_text,
-            "# Readme"
         );
         assert!(!state.should_closeout_after_verified_change);
     }

@@ -1932,7 +1932,7 @@ impl ToolExecutionController {
             results.extend(parallel_results);
         }
 
-        let lifecycle_snapshot = lifecycle.snapshot();
+        let lifecycle_snapshot = lifecycle.snapshot_for(tool_calls);
         let lifecycle_summary = lifecycle_snapshot
             .iter()
             .map(|(id, record)| {

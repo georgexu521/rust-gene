@@ -2960,9 +2960,6 @@ fn read_allowed_roots() -> Vec<PathBuf> {
     if let Some(home) = std::env::var_os("HOME") {
         roots.push(PathBuf::from(home).join("Desktop"));
     }
-    if let Some(tool_results) = runtime_tool_result_read_root() {
-        roots.push(tool_results);
-    }
     if let Ok(raw) = std::env::var("PRIORITY_AGENT_READ_ROOTS") {
         roots.extend(
             raw.split(':')
@@ -2972,10 +2969,6 @@ fn read_allowed_roots() -> Vec<PathBuf> {
         );
     }
     roots
-}
-
-fn runtime_tool_result_read_root() -> Option<PathBuf> {
-    dirs::data_local_dir().map(|dir| dir.join("priority-agent").join("tool-results"))
 }
 
 pub fn normalize_path(path: &std::path::Path) -> std::path::PathBuf {
@@ -3738,14 +3731,17 @@ mod tests {
     }
 
     #[test]
-    fn resolve_read_path_allows_runtime_tool_result_artifacts_without_allowing_writes() {
+    fn resolve_read_path_rejects_runtime_tool_result_artifacts_by_default() {
         let mut env = crate::test_utils::env_guard::EnvVarGuard::acquire_blocking();
         let home = tempfile::tempdir().unwrap();
         env.set("HOME", home.path().to_str().unwrap());
         env.remove("XDG_DATA_HOME");
         env.remove("PRIORITY_AGENT_READ_ROOTS");
 
-        let tool_results = runtime_tool_result_read_root().unwrap();
+        let tool_results = dirs::data_local_dir()
+            .unwrap()
+            .join("priority-agent")
+            .join("tool-results");
         let artifact_path = tool_results.join("file_read_call_large.txt");
         std::fs::create_dir_all(&tool_results).unwrap();
         std::fs::write(&artifact_path, "full truncated output").unwrap();
@@ -3759,8 +3755,8 @@ mod tests {
         std::fs::write(&unrelated_app_data, "not a tool result").unwrap();
 
         let working = tempfile::tempdir().unwrap();
-        let read_path = resolve_read_path(artifact_path.to_str().unwrap(), working.path()).unwrap();
-        assert_eq!(read_path, normalize_path(&artifact_path));
+        let read_path = resolve_read_path(artifact_path.to_str().unwrap(), working.path());
+        assert!(read_path.is_err());
 
         let write_path = resolve_path(artifact_path.to_str().unwrap(), working.path());
         assert!(write_path.is_err());
