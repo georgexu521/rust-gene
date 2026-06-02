@@ -338,6 +338,58 @@ pub fn render_input_area(f: &mut Frame, app: &TuiApp, area: Rect) {
     }
 }
 
+/// 渲染实时活动行（Reasonix 风格：显示当前运行的 tool 或 thinking 状态）
+pub fn render_live_activity_row(f: &mut Frame, app: &TuiApp, area: Rect) {
+    if !app.is_querying {
+        return;
+    }
+    let runtime = app.runtime_status_snapshot_now();
+    let tool_label = runtime.current_tool_label.as_deref().unwrap_or("Thinking");
+
+    let frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+    let ch = frames[app.tick_count % frames.len()];
+
+    let mut spans = vec![
+        Span::styled(
+            format!("{} ", ch),
+            Style::default().fg(app.theme.tokens.tone.brand),
+        ),
+        Span::styled(
+            tool_label,
+            Style::default().fg(app.theme.tokens.tone.brand).add_modifier(Modifier::BOLD),
+        ),
+    ];
+
+    // Token rate
+    if let Some(usage) = app.stream_usage_snapshot {
+        let tps = if usage.completion_tokens > 0 {
+            Some(format!("{} tok", usage.completion_tokens))
+        } else {
+            None
+        };
+        if let Some(tps_str) = tps {
+            spans.push(Span::styled(
+                format!(" · {}", tps_str),
+                Style::default().fg(app.theme.tokens.fg.faint),
+            ));
+        }
+    }
+
+    // Active tool count
+    if runtime.active_tool_count > 1 {
+        spans.push(Span::styled(
+            format!(" · {} tools running", runtime.active_tool_count),
+            Style::default().fg(app.theme.tokens.fg.faint),
+        ));
+    }
+
+    let line = Line::from(spans);
+    f.render_widget(
+        Paragraph::new(line).style(Style::default().bg(app.theme.tokens.surface.bg_elev)),
+        area,
+    );
+}
+
 /// 渲染状态栏（Reasonix 风格：mode glyph · session · cost · cache · ctx）
 pub fn render_status_bar(f: &mut Frame, app: &TuiApp, area: Rect) {
     let mut parts = Vec::new();
@@ -428,9 +480,18 @@ pub fn render_status_bar(f: &mut Frame, app: &TuiApp, area: Rect) {
             format!("ctx {bar} {pct}%"),
             Style::default().fg(bar_color),
         ));
+
+        // Cache hit %
+        if usage.cached_tokens.unwrap_or(0) > 0 && usage.prompt_tokens > 0 {
+            let hit_pct = (usage.cached_tokens.unwrap_or(0) as f64 / usage.prompt_tokens as f64 * 100.0) as u32;
+            parts.push(Span::styled(
+                format!("cache {}%", hit_pct),
+                Style::default().fg(app.theme.tokens.tone.accent),
+            ));
+        }
     }
 
-    // Token usage
+    // Turn cost (from last usage)
     if !app.is_querying {
         if let Some(usage) = app.stream_usage_label() {
             parts.push(Span::styled(
@@ -469,6 +530,10 @@ pub fn render_status_bar(f: &mut Frame, app: &TuiApp, area: Rect) {
             Style::default().fg(app.theme.tokens.fg.faint),
         ));
     }
+    parts.push(Span::styled(
+        format!("v{}", env!("CARGO_PKG_VERSION")),
+        Style::default().fg(app.theme.tokens.fg.faint),
+    ));
     parts.push(Span::styled(
         "? shortcuts",
         Style::default().fg(app.theme.tokens.fg.faint),
