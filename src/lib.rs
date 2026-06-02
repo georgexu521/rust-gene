@@ -4,7 +4,6 @@
 //! desktop application entrypoints.
 
 pub mod agent;
-#[cfg(feature = "experimental-task-analyzer")]
 pub mod ai_analyzer;
 #[cfg(feature = "experimental-api-server")]
 pub mod api;
@@ -24,13 +23,11 @@ pub mod memory;
 pub mod migrations;
 pub mod onboarding;
 pub mod permissions;
-#[cfg(feature = "experimental-platform")]
+#[cfg(feature = "experimental-api-server")]
 pub mod platform;
 pub mod plugins;
 pub mod ports;
-#[cfg(feature = "experimental-priority")]
 pub mod priority;
-#[cfg(feature = "experimental-priority")]
 pub mod quality_gates;
 pub mod remote;
 pub mod security;
@@ -40,7 +37,6 @@ pub mod shell;
 pub mod skills;
 pub mod slo;
 pub mod state;
-#[cfg(feature = "experimental-task-analyzer")]
 pub mod task_analyzer;
 pub mod task_manager;
 pub mod team;

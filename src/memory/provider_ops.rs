@@ -37,15 +37,15 @@ impl MemoryManager {
             return Ok(false);
         }
         let capabilities = MemoryProviderCapabilities {
-            prompt_block: config.prompt_block,
-            prefetch: config.prefetch,
-            search: config.search,
-            queue_prefetch: config.queue_prefetch,
-            sync_turn: config.sync_turn,
-            session_end: config.session_end,
-            pre_compress: config.pre_compress,
-            write_mirror: config.write_mirror,
-            tools: config.tools,
+            prompt_block: true,
+            prefetch: true,
+            search: true,
+            queue_prefetch: false,
+            sync_turn: false,
+            session_end: false,
+            pre_compress: false,
+            write_mirror: false,
+            tools: false,
         };
         match config.provider_type.as_str() {
             "no_network_jsonl" => {
@@ -55,7 +55,7 @@ impl MemoryManager {
                     )
                 })?;
                 let provider = NoNetworkMemoryProvider::from_jsonl_file_with_capabilities(
-                    config.name.clone(),
+                    "external-memory".to_string(),
                     records_path,
                     capabilities,
                 )?;
