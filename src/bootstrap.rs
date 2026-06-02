@@ -6,7 +6,7 @@
 use anyhow::Result;
 use std::path::PathBuf;
 use std::sync::Arc;
-use tracing::{info, warn};
+use tracing::info;
 
 use crate::engine::streaming::StreamingQueryEngine;
 use crate::engine::QueryEngine;
@@ -215,19 +215,6 @@ pub async fn init_components(
     let app_config = crate::services::config::AppConfig::load().unwrap_or_default();
     let engine_config = app_config.engine.clone();
 
-    // SessionStore
-    let db_path = crate::session_store::SessionStore::default_path();
-    let session_store = match crate::session_store::SessionStore::open(&db_path) {
-        Ok(store) => {
-            info!("SessionStore opened at {:?}", db_path);
-            Some(Arc::new(store))
-        }
-        Err(e) => {
-            warn!("Failed to open SessionStore: {}", e);
-            None
-        }
-    };
-
     // LSP 管理器
     let mut lsp_manager = crate::engine::lsp::LspManager::new();
     lsp_manager.detect_servers(working_dir);
@@ -292,29 +279,6 @@ pub async fn init_components(
             .with_llm_memory_extraction(llm_memory_extraction);
     if let Some(ref mcp) = mcp_manager {
         streaming_engine_builder = streaming_engine_builder.with_mcp_manager(mcp.clone());
-    }
-
-    // 记忆快照
-    let mem_manager = Arc::new(tokio::sync::Mutex::new(crate::memory::MemoryManager::new()));
-    {
-        let mut mgr = mem_manager.lock().await;
-        mgr.freeze_snapshot();
-    }
-    let snapshot = {
-        let mgr = mem_manager.lock().await;
-        mgr.get_snapshot()
-    };
-    if !snapshot.is_empty() {
-        info!("Memory snapshot prepared");
-    }
-    streaming_engine_builder = streaming_engine_builder.with_memory_manager(mem_manager);
-
-    // SessionStore 接入
-    if let Some(ref store) = session_store {
-        let session_id = format!("session-{}", uuid::Uuid::new_v4());
-        let _ = store.create_session(&session_id, "CLI Session", &model);
-        streaming_engine_builder =
-            streaming_engine_builder.with_session_store(store.clone(), session_id);
     }
 
     // AgentManager

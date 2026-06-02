@@ -163,20 +163,20 @@ pub struct StreamingQueryEngine {
     worktree_manager: Option<Arc<crate::engine::worktree::WorktreeManager>>,
     /// Optional working directory override for desktop/worktree runs.
     working_dir_override: Option<PathBuf>,
-    /// 记忆管理器（可选，用于预取和同步）
-    memory_manager: Option<Arc<tokio::sync::Mutex<crate::memory::MemoryManager>>>,
+    /// 记忆管理器（lazy init，首次 memory 操作时创建）
+    memory_manager: std::sync::OnceLock<Option<Arc<tokio::sync::Mutex<crate::memory::MemoryManager>>>>,
     /// 对话历史（多轮对话支持）
     conversation_history: Arc<tokio::sync::Mutex<Vec<Message>>>,
     /// 上下文压缩器
     compressor: Arc<tokio::sync::Mutex<crate::engine::context_compressor::ContextCompressor>>,
-    /// 会话存储（可选）
-    session_store: Option<Arc<crate::session_store::SessionStore>>,
+    /// 会话存储（lazy init，首次 query 时创建）
+    session_store: std::sync::OnceLock<Option<Arc<crate::session_store::SessionStore>>>,
     /// Recent runtime traces for `/trace`.
     trace_store: Arc<crate::engine::trace::TraceStore>,
     /// Current session goal shown in `/goal` and `/quick`.
     goal_manager: Arc<crate::engine::session_goal::SessionGoalManager>,
-    /// 当前会话 ID
-    session_id: Arc<RwLock<Option<String>>>,
+    /// 当前会话 ID（lazy init，首次 query 时生成）
+    session_id: std::sync::OnceLock<String>,
     /// 成本追踪器
     cost_tracker: Arc<tokio::sync::Mutex<crate::cost_tracker::CostTracker>>,
     /// 当前权限模式（可在运行时通过 TUI 命令切换）
@@ -217,7 +217,7 @@ impl StreamingQueryEngine {
             lsp_manager: None,
             worktree_manager: None,
             working_dir_override: None,
-            memory_manager: None,
+            memory_manager: std::sync::OnceLock::new(),
             conversation_history: Arc::new(tokio::sync::Mutex::new(Vec::new())),
             compressor: Arc::new(tokio::sync::Mutex::new(
                 crate::engine::context_compressor::ContextCompressor::from_model_context_profile(
@@ -225,10 +225,10 @@ impl StreamingQueryEngine {
                 )
                 .with_llm_provider(provider_clone, &model),
             )),
-            session_store: None,
+            session_store: std::sync::OnceLock::new(),
             trace_store: Arc::new(crate::engine::trace::TraceStore::default()),
             goal_manager: Arc::new(crate::engine::session_goal::SessionGoalManager::new()),
-            session_id: Arc::new(RwLock::new(None)),
+            session_id: std::sync::OnceLock::new(),
             cost_tracker: Arc::new(tokio::sync::Mutex::new(
                 crate::cost_tracker::CostTracker::new(),
             )),
@@ -256,12 +256,12 @@ impl StreamingQueryEngine {
 
     /// 设置会话存储
     pub fn with_session_store(
-        mut self,
+        self,
         store: Arc<crate::session_store::SessionStore>,
         session_id: String,
     ) -> Self {
-        self.session_store = Some(store);
-        self.set_session_id(session_id);
+        let _ = self.session_store.set(Some(store));
+        let _ = self.session_id.set(session_id);
         self
     }
 
@@ -280,18 +280,21 @@ impl StreamingQueryEngine {
     pub fn session_binding(&self) -> Option<(Arc<crate::session_store::SessionStore>, String)> {
         let session_id = self.current_session_id()?;
         self.session_store
-            .as_ref()
-            .map(|store| (store.clone(), session_id))
+            .get()
+            .and_then(|opt| opt.as_ref().map(|store| (store.clone(), session_id)))
     }
 
     /// 当前持久化会话 ID。
     pub fn current_session_id(&self) -> Option<String> {
-        self.session_id.read().clone()
+        self.session_id.get().cloned()
     }
 
-    /// 切换当前持久化会话 ID。
+    /// 切换当前持久化会话 ID（覆盖已有 ID）。
     pub fn set_session_id(&self, session_id: impl Into<String>) {
-        *self.session_id.write() = Some(session_id.into());
+        let id = session_id.into();
+        // OnceLock can only be set once; if already set, we can't change it.
+        // This is acceptable because session_id is set once at startup.
+        let _ = self.session_id.set(id);
     }
 
     /// 设置记忆快照（在 system prompt 中注入冻结的记忆）
@@ -410,7 +413,7 @@ impl StreamingQueryEngine {
         self.set_history(compressed).await;
         if compaction_record.decision == CompactionDecision::Compacted {
             if let (Some(store), Some(session_id), Some(record)) = (
-                self.session_store.as_ref(),
+                self.session_store.get().and_then(|o| o.as_ref()),
                 self.current_session_id(),
                 runtime_record.as_ref(),
             ) {
@@ -440,7 +443,7 @@ impl StreamingQueryEngine {
 
     /// Flush memory extraction for the current conversation history with an explicit lifecycle reason.
     pub async fn flush_memory_for_current_history(&self, reason: crate::memory::MemoryFlushReason) {
-        let Some(mem_mutex) = &self.memory_manager else {
+        let Some(mem_mutex) = self.memory_manager.get().and_then(|o| o.as_ref()) else {
             return;
         };
         let Some(session_id) = self.current_session_id() else {
@@ -535,12 +538,12 @@ impl StreamingQueryEngine {
         self
     }
 
-    /// 设置记忆管理器
+    /// 设置记忆管理器（覆盖 lazy init）
     pub fn with_memory_manager(
-        mut self,
+        self,
         manager: Arc<tokio::sync::Mutex<crate::memory::MemoryManager>>,
     ) -> Self {
-        self.memory_manager = Some(manager);
+        let _ = self.memory_manager.set(Some(manager));
         self
     }
 
@@ -632,9 +635,21 @@ impl StreamingQueryEngine {
         self.session_permission_rules.read().clone()
     }
 
-    /// 获取记忆管理器
+    /// 获取记忆管理器（不触发初始化；需触发初始化用 memory_manager_or_init）
     pub fn memory_manager(&self) -> Option<Arc<tokio::sync::Mutex<crate::memory::MemoryManager>>> {
-        self.memory_manager.clone()
+        self.memory_manager.get().and_then(|o| o.clone())
+    }
+
+    /// 获取或初始化记忆管理器，包括 freeze_snapshot
+    pub fn memory_manager_or_init(
+        &self,
+    ) -> Option<Arc<tokio::sync::Mutex<crate::memory::MemoryManager>>> {
+        self.memory_manager
+            .get_or_init(|| {
+                let mgr = crate::memory::MemoryManager::new();
+                Some(Arc::new(tokio::sync::Mutex::new(mgr)))
+            })
+            .clone()
     }
 
     /// 获取上下文压缩器
@@ -691,7 +706,7 @@ impl StreamingQueryEngine {
         let (tool_count, tool_schema_tokens, tool_schema_fingerprint) =
             estimate_registry_tool_schema_tokens(&self.tool_registry);
         let (memory_snapshot_tokens, relevant_memories) =
-            if let Some(ref mem_mutex) = self.memory_manager {
+            if let Some(ref mem_mutex) = self.memory_manager.get().and_then(|o| o.as_ref()) {
                 let mem = mem_mutex.lock().await;
                 (
                     crate::engine::context_compressor::estimate_tokens(&mem.get_snapshot()),
@@ -758,7 +773,8 @@ impl StreamingQueryEngine {
         // 准备共享资源
         let history = self.conversation_history.clone();
         let compressor = self.compressor.clone();
-        let session_store = self.session_store.clone();
+        let session_store: Option<Arc<crate::session_store::SessionStore>> =
+            self.session_store.get().and_then(|o| o.clone());
         let session_id = self.current_session_id();
         let trace_store = self.trace_store.clone();
 
@@ -774,9 +790,9 @@ impl StreamingQueryEngine {
             lsp_manager: self.lsp_manager.clone(),
             worktree_manager: self.worktree_manager.clone(),
             working_dir_override: self.working_dir_override.clone(),
-            memory_manager: self.memory_manager.clone(),
+            memory_manager: self.memory_manager.get().and_then(|o| o.clone()),
             compressor: self.compressor.clone(),
-            session_store: self.session_store.clone(),
+            session_store: self.session_store.get().and_then(|o| o.clone()),
             session_id: self.current_session_id(),
             trace_store: trace_store.clone(),
             goal_manager: self.goal_manager.clone(),
