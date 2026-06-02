@@ -2030,6 +2030,11 @@ impl TuiApp {
             let user_msg = content.clone();
             let agent_mode = self.agent_mode;
 
+            // Phase 1: sync session memory controls to engine
+            if let Some(ref engine) = self.streaming_engine {
+                engine.set_memory_use(self.memory_use);
+            }
+
             let handle = tokio::spawn(async move {
                 let mut stream = engine_clone
                     .query_stream_with_agent_mode(user_msg, agent_mode)

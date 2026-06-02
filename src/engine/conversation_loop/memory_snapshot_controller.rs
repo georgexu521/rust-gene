@@ -11,7 +11,6 @@ use tracing::debug;
 pub(super) struct MemorySnapshotInjectionContext<'a> {
     pub(super) retrieval_policy: RetrievalPolicy,
     pub(super) memory_manager: Option<&'a Arc<Mutex<MemoryManager>>>,
-    pub(super) retrieval_context: Option<&'a RetrievalContext>,
     pub(super) messages: &'a mut Vec<Message>,
     pub(super) runtime_diet: &'a mut RuntimeDietSnapshot,
     pub(super) trace: &'a TraceCollector,
@@ -24,9 +23,10 @@ impl MemorySnapshotController {
         if !context.retrieval_policy.allows_memory_context() {
             return false;
         }
-        if Self::has_dynamic_memory_recall(context.retrieval_context) {
-            return false;
-        }
+        // Phase 0 Risk 2: Always inject pinned snapshot when memory is enabled,
+        // even when dynamic recall also exists. The pinned snapshot is a compact
+        // index that keeps the stable prefix consistent across turns.
+        // Dynamic recall details are in the user tail / relevant_material zone.
 
         let Some(memory_manager) = context.memory_manager else {
             return false;
@@ -41,6 +41,7 @@ impl MemorySnapshotController {
         )
     }
 
+    #[allow(dead_code)] // kept for diagnostics/trace (Phase 0 Risk 2)
     fn has_dynamic_memory_recall(retrieval_context: Option<&RetrievalContext>) -> bool {
         retrieval_context
             .map(|ctx| ctx.item_count_by_source(RetrievalSource::Memory) > 0)
@@ -114,7 +115,7 @@ mod tests {
     }
 
     #[test]
-    fn skips_snapshot_when_dynamic_memory_recall_exists() {
+    fn dynamic_memory_recall_detection_still_works_for_diagnostics() {
         let memory_context = RetrievalContext::from_memory_prefetch(
             "fix bug",
             "Run cargo check after edits.",
@@ -122,6 +123,8 @@ mod tests {
         )
         .expect("memory context");
 
+        // Phase 0 Risk 2: dynamic recall no longer blocks pinned snapshot,
+        // but the detection is still available for diagnostics/trace
         assert!(MemorySnapshotController::has_dynamic_memory_recall(Some(
             &memory_context
         )));

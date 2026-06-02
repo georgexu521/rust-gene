@@ -188,8 +188,8 @@ pub struct StreamingQueryEngine {
     permission_mode: Arc<RwLock<crate::permissions::PermissionMode>>,
     /// 当前 CLI 会话内临时权限规则
     session_permission_rules: Arc<RwLock<crate::permissions::PermissionRules>>,
-    /// 是否启用 LLM 驱动的记忆提取
-    llm_memory_extraction: bool,
+    /// 是否启用 LLM 驱动的记忆提取（可运行时切换）
+    llm_memory_extraction: std::sync::atomic::AtomicBool,
     /// 工具授权通道（用于交互式 MCP 授权）
     approval_channel: Option<Arc<crate::engine::conversation_loop::ToolApprovalChannel>>,
     /// Fallback 模型名称（当主模型失败时使用）
@@ -243,7 +243,7 @@ impl StreamingQueryEngine {
             session_permission_rules: Arc::new(RwLock::new(
                 crate::permissions::PermissionRules::new(),
             )),
-            llm_memory_extraction: false,
+            llm_memory_extraction: std::sync::atomic::AtomicBool::new(false),
             approval_channel: None,
             fallback_model: std::env::var("PRIORITY_AGENT_FALLBACK_MODEL").ok(),
             read_tracker: None,
@@ -602,9 +602,21 @@ impl StreamingQueryEngine {
     }
 
     /// 设置是否启用 LLM 驱动的记忆提取
-    pub fn with_llm_memory_extraction(mut self, enabled: bool) -> Self {
-        self.llm_memory_extraction = enabled;
+    pub fn with_llm_memory_extraction(self, enabled: bool) -> Self {
+        self.llm_memory_extraction
+            .store(enabled, std::sync::atomic::Ordering::Relaxed);
         self
+    }
+
+    /// Set memory use on/off at runtime (Phase 1)
+    pub fn set_memory_use(&self, enabled: bool) {
+        self.llm_memory_extraction
+            .store(enabled, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    pub fn memory_use_enabled(&self) -> bool {
+        self.llm_memory_extraction
+            .load(std::sync::atomic::Ordering::Relaxed)
     }
 
     /// 设置工具授权通道
@@ -850,7 +862,7 @@ impl StreamingQueryEngine {
         } else {
             self.agent_manager()
         };
-        let memory_manager = if self.llm_memory_extraction {
+        let memory_manager = if self.memory_use_enabled() {
             self.memory_manager_or_init()
         } else {
             self.memory_manager()
@@ -877,7 +889,7 @@ impl StreamingQueryEngine {
             cost_tracker: self.cost_tracker.clone(),
             permission_mode: self.permission_mode(),
             session_permission_rules: self.session_permission_rules.clone(),
-            llm_memory_extraction: self.llm_memory_extraction,
+            llm_memory_extraction: self.memory_use_enabled(),
             approval_channel: self.approval_channel.clone(),
             fallback_model: self.fallback_model.clone(),
             fallback_state: None,
