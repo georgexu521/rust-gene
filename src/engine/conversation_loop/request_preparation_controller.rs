@@ -154,7 +154,7 @@ impl RequestPreparationController {
             return;
         }
         let block = format!("<task-state>\n{}\n</task-state>", state.trim());
-                prepend_to_last_user_message(request_messages, block);
+        prepend_to_last_user_message(request_messages, block);
     }
 
     fn inject_task_contract_zone(
@@ -185,7 +185,7 @@ impl RequestPreparationController {
             ));
         }
         let block = sections.join("\n");
-                prepend_to_last_user_message(request_messages, block);
+        prepend_to_last_user_message(request_messages, block);
     }
 
     fn inject_mva_candidate_action_hint(request_messages: &mut Vec<Message>, tools: &[Tool]) {
@@ -513,7 +513,7 @@ impl RequestPreparationController {
             )],
             conflicts: 0,
         });
-                prepend_to_last_user_message(request_messages, block);
+        prepend_to_last_user_message(request_messages, block);
     }
 
     async fn inject_memory_prefetch(
@@ -644,20 +644,13 @@ impl RequestPreparationController {
             tagged_content(request_messages, "relevant_material").unwrap_or_default();
         let recent_observation =
             tagged_content(request_messages, "recent_observation").unwrap_or_default();
-        let current_decision_request = request_messages
-            .iter()
-            .rev()
-            .find_map(|message| match message {
-                Message::User { content } => Some(content.as_str()),
-                _ => None,
-            })
-            .unwrap_or("");
+        let current_decision_request = current_decision_request_content(request_messages);
         let plan = ContextAssemblyPlan::new(ContextAssemblyInput {
             stable_prefix: stable_prefix.to_string(),
             task_state,
             relevant_material,
             recent_observation,
-            current_decision_request: current_decision_request.to_string(),
+            current_decision_request,
         });
 
         trace.record(TraceEvent::ContextZonesMaterialized {
@@ -709,9 +702,7 @@ impl RequestPreparationController {
         let manifest = crate::engine::cache_stability::provider_tool_schema_manifest(tools);
         let dynamic_zone_messages = request_messages
             .iter()
-            .filter(|message| {
-                matches!(message, Message::System { content } if is_dynamic_context_system_message(content))
-            })
+            .filter(|message| message_contains_dynamic_context(message))
             .count();
         let last_user_index = request_messages
             .iter()
@@ -720,8 +711,10 @@ impl RequestPreparationController {
             .iter()
             .enumerate()
             .filter(|(index, message)| {
-                matches!(message, Message::System { content } if is_dynamic_context_system_message(content))
-                    && last_user_index.map(|last_user| *index < last_user).unwrap_or(false)
+                message_contains_dynamic_context(message)
+                    && last_user_index
+                        .map(|last_user| *index < last_user)
+                        .unwrap_or(false)
             })
             .count();
         trace.record(TraceEvent::CacheStabilitySnapshot {
@@ -1037,10 +1030,11 @@ fn tagged_content(messages: &[Message], tag: &str) -> Option<String> {
     let end = format!("</{tag}>");
     let mut blocks = Vec::new();
     for message in messages {
-        let Message::System { content } = message else {
-            continue;
+        let content = match message {
+            Message::System { content } | Message::User { content } => content.as_str(),
+            _ => continue,
         };
-        let mut rest = content.as_str();
+        let mut rest = content;
         while let Some(start_idx) = rest.find(&start) {
             let after_start = &rest[start_idx + start.len()..];
             let Some(end_idx) = after_start.find(&end) else {
@@ -1054,6 +1048,56 @@ fn tagged_content(messages: &[Message], tag: &str) -> Option<String> {
         }
     }
     (!blocks.is_empty()).then(|| blocks.join("\n"))
+}
+
+fn current_decision_request_content(messages: &[Message]) -> String {
+    let mut content = messages
+        .iter()
+        .rev()
+        .find_map(|message| match message {
+            Message::User { content } => Some(content.clone()),
+            _ => None,
+        })
+        .unwrap_or_default();
+    strip_context_zone_tags(&mut content);
+    content.trim().to_string()
+}
+
+fn strip_context_zone_tags(content: &mut String) {
+    for tag in [
+        "task-state",
+        "task_state",
+        "task-contract",
+        "context-pack",
+        "relevant_material",
+        "recent_observation",
+        "self-evolution-guidance",
+    ] {
+        consume_tagged_blocks(content, tag, |_| {});
+    }
+    *content = clean_context_zone_remainder(content);
+}
+
+fn message_contains_dynamic_context(message: &Message) -> bool {
+    match message {
+        Message::System { content } => is_dynamic_context_system_message(content),
+        Message::User { content } => user_message_contains_dynamic_context(content),
+        _ => false,
+    }
+}
+
+fn user_message_contains_dynamic_context(content: &str) -> bool {
+    [
+        "<task-state>",
+        "<task_state>",
+        "<task-contract>",
+        "<context-pack>",
+        "<relevant_material>",
+        "<recent_observation>",
+        "<self-evolution-guidance>",
+    ]
+    .iter()
+    .any(|tag| content.contains(tag))
 }
 
 fn is_dynamic_context_system_message(content: &str) -> bool {
@@ -1831,11 +1875,33 @@ mod tests {
         ));
 
         let trace = trace.finish(crate::engine::trace::TurnStatus::Completed);
-        // Zones are now in the user message (not separate system messages)
-        assert!(trace.events.iter().any(|event| matches!(
-            event,
-            TraceEvent::CacheStabilitySnapshot { .. }
-        )));
+        let cache_snapshot = trace
+            .events
+            .iter()
+            .find_map(|event| match event {
+                TraceEvent::CacheStabilitySnapshot {
+                    dynamic_zone_messages,
+                    dynamic_zones_before_last_user,
+                    ..
+                } => Some((*dynamic_zone_messages, *dynamic_zones_before_last_user)),
+                _ => None,
+            })
+            .expect("cache snapshot should be recorded");
+        assert_eq!(cache_snapshot, (1, 0));
+        let context_zones = trace
+            .events
+            .iter()
+            .find_map(|event| match event {
+                TraceEvent::ContextZonesMaterialized {
+                    task_state_tokens,
+                    current_decision_request_tokens,
+                    ..
+                } => Some((*task_state_tokens, *current_decision_request_tokens)),
+                _ => None,
+            })
+            .expect("context zones should be recorded");
+        assert!(context_zones.0 > 0);
+        assert!(context_zones.1 > 0);
     }
 
     #[tokio::test]
@@ -2030,10 +2096,7 @@ mod tests {
 
     #[test]
     fn prepend_to_last_user_empty_block_is_noop() {
-        let mut messages = vec![
-            Message::system("stable"),
-            Message::user("hello"),
-        ];
+        let mut messages = vec![Message::system("stable"), Message::user("hello")];
         prepend_to_last_user_message(&mut messages, "");
 
         assert_eq!(messages.len(), 2);
@@ -2049,15 +2112,15 @@ mod tests {
         let mut messages = vec![
             Message::system("stable system prompt"),
             Message::user("previous question"),
-            Message::Assistant { content: "previous answer".into(), tool_calls: None },
+            Message::Assistant {
+                content: "previous answer".into(),
+                tool_calls: None,
+            },
             Message::user("current question"),
         ];
 
         // Simulate injecting a dynamic zone
-        prepend_to_last_user_message(
-            &mut messages,
-            "<task-state>\nGoal: fix bug\n</task-state>",
-        );
+        prepend_to_last_user_message(&mut messages, "<task-state>\nGoal: fix bug\n</task-state>");
 
         // The system messages should only contain the stable prompt
         let system_msgs: Vec<_> = messages

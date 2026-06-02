@@ -23,8 +23,8 @@ pub use calibration::{
 pub use eval::{run_memory_eval_suite, MemoryEvalFailureOwner, MemoryEvalReport, MemoryEvalResult};
 pub use manager::{
     MemoryFlushReason, MemoryFlushRecord, MemoryFlushStatus, MemoryFlushSummary, MemoryManager,
-    MemoryMigrationFileReport, MemoryMigrationReport, MemoryRecordSummary, MemorySnapshotReport,
-    MemoryWriteTarget,
+    MemoryMigrationFileReport, MemoryMigrationReport, MemoryProductContractReport,
+    MemoryRecordSummary, MemorySnapshotReport, MemoryWriteTarget,
 };
 pub use provider::{
     LocalMemoryProvider, LocalMemoryRecordWriteStatus, MemoryOperationJournalEntry, MemoryProvider,

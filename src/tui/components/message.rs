@@ -21,9 +21,15 @@ fn card_header(
     let glyph_owned = glyph.to_string();
     let label_owned = role_label.to_string();
     let mut spans = vec![
-        Span::styled(glyph_owned, Style::default().fg(color).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            glyph_owned,
+            Style::default().fg(color).add_modifier(Modifier::BOLD),
+        ),
         Span::styled("  ", Style::default()),
-        Span::styled(label_owned, Style::default().fg(color).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            label_owned,
+            Style::default().fg(color).add_modifier(Modifier::BOLD),
+        ),
     ];
     if let Some(m) = meta {
         spans.push(Span::styled(" · ", Style::default().fg(faint)));
@@ -45,10 +51,15 @@ pub struct StreamMeta {
 fn format_relative_time(ts: std::time::SystemTime) -> String {
     let elapsed = ts.elapsed().unwrap_or_default();
     let secs = elapsed.as_secs();
-    if secs < 5 { "just now".into() }
-    else if secs < 60 { format!("{}s ago", secs) }
-    else if secs < 3600 { format!("{}m ago", secs / 60) }
-    else { format!("{}h ago", secs / 3600) }
+    if secs < 5 {
+        "just now".into()
+    } else if secs < 60 {
+        format!("{}s ago", secs)
+    } else if secs < 3600 {
+        format!("{}m ago", secs / 60)
+    } else {
+        format!("{}h ago", secs / 3600)
+    }
 }
 
 /// Detects card kind from message content for rich rendering.
@@ -160,7 +171,11 @@ fn render_assistant_message<'a>(
     // Header: pulse animation during streaming, static glyph when done
     let (glyph, label, header_color) = if is_streaming {
         let frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
-        (frames[tick % frames.len()], "Writing", theme.tokens.tone.brand)
+        (
+            frames[tick % frames.len()],
+            "Writing",
+            theme.tokens.tone.brand,
+        )
     } else {
         ("‹", "Reply", theme.tokens.tone.ok)
     };
@@ -182,7 +197,8 @@ fn render_assistant_message<'a>(
     };
 
     // Model badge appended to meta
-    let meta = if let Some(model) = stream.and_then(|s| s.model_label.as_ref().map(|m| m.as_str())) {
+    let meta = if let Some(model) = stream.and_then(|s| s.model_label.as_ref().map(|m| m.as_str()))
+    {
         match meta {
             Some(m) => Some(format!("{} · {}", m, model)),
             None => Some(model.to_string()),
@@ -344,7 +360,10 @@ mod tests {
     #[test]
     fn test_role_colors() {
         let theme = Theme::dark();
-        assert_eq!(role_color(MessageRole::User, &theme), theme.tokens.card.user.color);
+        assert_eq!(
+            role_color(MessageRole::User, &theme),
+            theme.tokens.card.user.color
+        );
         assert_eq!(
             role_color(MessageRole::Assistant, &theme),
             theme.tokens.tone.ok
@@ -354,7 +373,10 @@ mod tests {
     #[test]
     fn test_detect_card_kind_error() {
         assert!(matches!(
-            detect_card_kind(&make_msg(MessageRole::System, "Error: something went wrong")),
+            detect_card_kind(&make_msg(
+                MessageRole::System,
+                "Error: something went wrong"
+            )),
             Some(CardKind::Error)
         ));
         assert!(matches!(
@@ -372,7 +394,10 @@ mod tests {
             Some(CardKind::Search)
         ));
         assert!(matches!(
-            detect_card_kind(&make_msg(MessageRole::Tool, "12 matches found across 4 files")),
+            detect_card_kind(&make_msg(
+                MessageRole::Tool,
+                "12 matches found across 4 files"
+            )),
             Some(CardKind::Search)
         ));
     }
@@ -380,7 +405,11 @@ mod tests {
     #[test]
     fn test_detect_card_kind_default() {
         // Regular tool message without search/agent keywords
-        assert!(detect_card_kind(&make_msg(MessageRole::Tool, "Command executed successfully.")).is_none());
+        assert!(detect_card_kind(&make_msg(
+            MessageRole::Tool,
+            "Command executed successfully."
+        ))
+        .is_none());
         // Regular system message
         assert!(detect_card_kind(&make_msg(MessageRole::System, "Session started.")).is_none());
     }

@@ -2007,10 +2007,14 @@ mod tests {
     use tokio::sync::Mutex;
 
     fn tool_call(id: &str, name: &str) -> ToolCall {
+        tool_call_with_args(id, name, serde_json::json!({}))
+    }
+
+    fn tool_call_with_args(id: &str, name: &str, arguments: serde_json::Value) -> ToolCall {
         ToolCall {
             id: id.to_string(),
             name: name.to_string(),
-            arguments: serde_json::json!({}),
+            arguments,
         }
     }
 
@@ -2325,6 +2329,59 @@ mod tests {
         assert_eq!(results[0].1.content, "writes_seen=0");
         assert_eq!(results[1].1.content, "writes_before=0");
         assert_eq!(results[2].1.content, "writes_seen=1");
+    }
+
+    #[tokio::test]
+    async fn exact_duplicate_read_only_call_is_suppressed_before_dispatch() {
+        let writes = Arc::new(AtomicUsize::new(0));
+        let loop_instance = probe_loop(writes);
+        let args = json!({"path": "README.md", "offset": 0, "limit": 80});
+        let tool_calls = vec![
+            tool_call_with_args("read_1", "probe_read", args.clone()),
+            tool_call_with_args("read_2", "probe_read", args.clone()),
+            tool_call_with_args("read_3", "probe_read", args),
+        ];
+
+        let batch = execute_probe_tools(&loop_instance, &tool_calls, HashMap::new()).await;
+        let results = batch.results();
+
+        assert_eq!(results.len(), 3);
+        assert!(results[0].1.success);
+        assert!(results[1].1.success);
+        assert!(!results[2].1.success);
+        assert!(results[2]
+            .1
+            .error
+            .as_deref()
+            .unwrap_or_default()
+            .contains("detected repeated call"));
+    }
+
+    #[tokio::test]
+    async fn changed_read_only_ranges_are_not_suppressed_as_duplicates() {
+        let writes = Arc::new(AtomicUsize::new(0));
+        let loop_instance = probe_loop(writes);
+        let tool_calls = vec![
+            tool_call_with_args(
+                "read_1",
+                "probe_read",
+                json!({"path": "README.md", "offset": 0, "limit": 80}),
+            ),
+            tool_call_with_args(
+                "read_2",
+                "probe_read",
+                json!({"path": "README.md", "offset": 80, "limit": 80}),
+            ),
+            tool_call_with_args(
+                "read_3",
+                "probe_read",
+                json!({"path": "README.md", "offset": 160, "limit": 80}),
+            ),
+        ];
+
+        let batch = execute_probe_tools(&loop_instance, &tool_calls, HashMap::new()).await;
+
+        assert!(batch.results().iter().all(|(_, result)| result.success));
     }
 
     #[tokio::test]

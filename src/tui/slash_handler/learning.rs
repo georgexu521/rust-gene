@@ -1097,7 +1097,7 @@ pub fn handle_memory_proposals(app: &mut TuiApp, args: &str) -> String {
             let created = if let Some(manager) = app
                 .streaming_engine
                 .as_ref()
-                .and_then(|engine| engine.memory_manager())
+                .and_then(|engine| engine.memory_manager_or_init())
             {
                 match manager.try_lock() {
                     Ok(memory) => memory.upsert_projection_repair_proposals(limit),

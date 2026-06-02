@@ -151,8 +151,10 @@ pub struct StreamingQueryEngine {
     system_prompt: String,
     /// 最大工具调用迭代次数
     max_iterations: usize,
-    /// Agent 管理器（lazy init，用于子 Agent 创建）
+    /// Agent 管理器（按需用于子 Agent 创建）
     agent_manager: std::sync::OnceLock<Arc<crate::agent::AgentManager>>,
+    /// QueryEngine dependency used to lazily construct AgentManager.
+    agent_manager_query_engine: Option<Arc<super::QueryEngine>>,
     /// 任务管理器（可选，用于 task_tool 等）
     task_manager: Option<Arc<crate::task_manager::TaskManager>>,
     /// MCP 管理器（可选，用于调用外部 MCP 工具）
@@ -164,7 +166,8 @@ pub struct StreamingQueryEngine {
     /// Optional working directory override for desktop/worktree runs.
     working_dir_override: Option<PathBuf>,
     /// 记忆管理器（lazy init，首次 memory 操作时创建）
-    memory_manager: std::sync::OnceLock<Option<Arc<tokio::sync::Mutex<crate::memory::MemoryManager>>>>,
+    memory_manager:
+        std::sync::OnceLock<Option<Arc<tokio::sync::Mutex<crate::memory::MemoryManager>>>>,
     /// 对话历史（多轮对话支持）
     conversation_history: Arc<tokio::sync::Mutex<Vec<Message>>>,
     /// 上下文压缩器
@@ -214,6 +217,7 @@ impl StreamingQueryEngine {
             system_prompt: super::default_system_prompt(),
             max_iterations: 50, // Match Reasonix DEFAULT_MAX_ITER_PER_TURN
             agent_manager: std::sync::OnceLock::new(),
+            agent_manager_query_engine: None,
             task_manager: None,
             mcp_manager: None,
             lsp_manager: None,
@@ -291,10 +295,12 @@ impl StreamingQueryEngine {
             return self
                 .session_store
                 .get()
-                .and_then(|opt| opt.as_ref().map(|store| {
-                    let sid = self.current_session_id()?;
-                    Some((store.clone(), sid))
-                }))
+                .and_then(|opt| {
+                    opt.as_ref().map(|store| {
+                        let sid = self.current_session_id()?;
+                        Some((store.clone(), sid))
+                    })
+                })
                 .flatten();
         }
         let store = self
@@ -316,7 +322,8 @@ impl StreamingQueryEngine {
         // Ensure we have a session id; create one if missing
         if self.session_id.read().is_none() {
             let sid = format!("session-{}", uuid::Uuid::new_v4());
-            let _ = store.create_session(&sid, "Session", "");
+            let model = self.model_name();
+            let _ = store.create_session(&sid, "Session", &model);
             *self.session_id.write() = Some(sid);
         }
         let session_id = self.current_session_id()?;
@@ -449,10 +456,9 @@ impl StreamingQueryEngine {
         self.set_history(compressed).await;
         if compaction_record.decision == CompactionDecision::Compacted {
             let binding = self.session_binding();
-            if let (Some((store, session_id)), Some(record)) = (
-                binding.as_ref(),
-                runtime_record.as_ref(),
-            ) {
+            if let (Some((store, session_id)), Some(record)) =
+                (binding.as_ref(), runtime_record.as_ref())
+            {
                 let _ = store.add_compact_boundary_from_runtime_record(
                     &session_id,
                     record,
@@ -540,6 +546,12 @@ impl StreamingQueryEngine {
     /// 设置 Agent 管理器
     pub fn with_agent_manager(self, manager: Arc<crate::agent::AgentManager>) -> Self {
         let _ = self.agent_manager.set(manager);
+        self
+    }
+
+    /// 设置 AgentManager 的 lazy 构造依赖。
+    pub fn with_agent_query_engine(mut self, query_engine: Arc<super::QueryEngine>) -> Self {
+        self.agent_manager_query_engine = Some(query_engine);
         self
     }
 
@@ -671,8 +683,17 @@ impl StreamingQueryEngine {
         self.session_permission_rules.read().clone()
     }
 
-    /// 获取或初始化记忆管理器（自动触发 freeze_snapshot）
+    /// 获取已初始化的记忆管理器，不触发初始化。
     pub fn memory_manager(&self) -> Option<Arc<tokio::sync::Mutex<crate::memory::MemoryManager>>> {
+        self.memory_manager
+            .get()
+            .and_then(|manager| manager.as_ref().cloned())
+    }
+
+    /// 获取或初始化记忆管理器（自动触发 freeze_snapshot）。
+    pub fn memory_manager_or_init(
+        &self,
+    ) -> Option<Arc<tokio::sync::Mutex<crate::memory::MemoryManager>>> {
         self.memory_manager
             .get_or_init(|| {
                 let mut mgr = crate::memory::MemoryManager::new();
@@ -697,6 +718,21 @@ impl StreamingQueryEngine {
     /// 获取 Agent 管理器
     pub fn agent_manager(&self) -> Option<Arc<crate::agent::AgentManager>> {
         self.agent_manager.get().cloned()
+    }
+
+    /// 获取或按需初始化 Agent 管理器。
+    pub fn agent_manager_or_init(&self) -> Option<Arc<crate::agent::AgentManager>> {
+        if let Some(manager) = self.agent_manager() {
+            return Some(manager);
+        }
+        let query_engine = self.agent_manager_query_engine.as_ref()?.clone();
+        Some(
+            self.agent_manager
+                .get_or_init(|| {
+                    Arc::new(crate::agent::AgentManager::new().with_query_engine(query_engine))
+                })
+                .clone(),
+        )
     }
 
     /// 获取工具授权通道
@@ -808,6 +844,17 @@ impl StreamingQueryEngine {
             binding.as_ref().map(|(s, _)| s.clone());
         let session_id = binding.as_ref().map(|(_, id)| id.clone());
         let trace_store = self.trace_store.clone();
+        let route = crate::engine::intent_router::IntentRouter::new().route(&user_msg);
+        let agent_manager = if route_wants_agent_manager(&route) {
+            self.agent_manager_or_init()
+        } else {
+            self.agent_manager()
+        };
+        let memory_manager = if self.llm_memory_extraction {
+            self.memory_manager_or_init()
+        } else {
+            self.memory_manager()
+        };
 
         let mut engine = StreamingEngineInner {
             provider: self.provider(),
@@ -815,13 +862,13 @@ impl StreamingQueryEngine {
             model: self.model_name(),
             system_prompt: self.system_prompt.clone(),
             max_iterations: self.max_iterations,
-            agent_manager: self.agent_manager.get().cloned(),
+            agent_manager,
             task_manager: self.task_manager.clone(),
             mcp_manager: self.mcp_manager.clone(),
             lsp_manager: self.lsp_manager.clone(),
             worktree_manager: self.worktree_manager.clone(),
             working_dir_override: self.working_dir_override.clone(),
-            memory_manager: self.memory_manager(),
+            memory_manager,
             compressor: self.compressor.clone(),
             session_store: binding.as_ref().map(|(s, _)| s.clone()),
             session_id: binding.as_ref().map(|(_, id)| id.clone()),
@@ -1338,6 +1385,13 @@ fn estimate_registry_tool_schema_tokens(registry: &ToolRegistry) -> (usize, u64,
         manifest.estimated_tokens,
         manifest.fingerprint,
     )
+}
+
+fn route_wants_agent_manager(route: &crate::engine::intent_router::IntentRoute) -> bool {
+    route
+        .recommended_tools
+        .iter()
+        .any(|tool| matches!(tool.as_str(), "agent" | "swarm" | "send_message"))
 }
 
 /// 内部执行引擎
@@ -1937,6 +1991,60 @@ mod tests {
         assert!(attempts
             .iter()
             .any(|record| record.decision.label() == "compacted"));
+    }
+
+    #[tokio::test]
+    async fn context_usage_report_does_not_initialize_memory_manager() {
+        let provider = Arc::new(ToolTurnProvider {
+            responses: StdMutex::new(VecDeque::new()),
+        });
+        let registry = Arc::new(ToolRegistry::new());
+        let engine = StreamingQueryEngine::new(provider, registry, "mock-model");
+
+        assert!(engine.memory_manager().is_none());
+        let usage = engine.context_usage_report().await;
+
+        assert_eq!(usage.memory_snapshot_tokens, 0);
+        assert!(usage.relevant_memories.is_empty());
+        assert!(engine.memory_manager().is_none());
+    }
+
+    #[test]
+    fn lazy_session_binding_records_current_model() {
+        let provider = Arc::new(ToolTurnProvider {
+            responses: StdMutex::new(VecDeque::new()),
+        });
+        let registry = Arc::new(ToolRegistry::new());
+        let engine = StreamingQueryEngine::new(provider, registry, "mock-model");
+        let store = Arc::new(crate::session_store::SessionStore::in_memory().unwrap());
+        assert!(engine.session_store.set(Some(store.clone())).is_ok());
+
+        let (_bound_store, session_id) = engine.session_binding().expect("session binding");
+        let session = store
+            .get_session(&session_id)
+            .unwrap()
+            .expect("created session");
+
+        assert_eq!(session.model, "mock-model");
+    }
+
+    #[tokio::test]
+    async fn agent_manager_is_constructed_on_demand() {
+        let provider = Arc::new(ToolTurnProvider {
+            responses: StdMutex::new(VecDeque::new()),
+        });
+        let registry = Arc::new(ToolRegistry::new());
+        let query_engine = Arc::new(crate::engine::QueryEngine::new(
+            provider.clone(),
+            registry.clone(),
+            "mock-model",
+        ));
+        let engine = StreamingQueryEngine::new(provider, registry, "mock-model")
+            .with_agent_query_engine(query_engine);
+
+        assert!(engine.agent_manager().is_none());
+        assert!(engine.agent_manager_or_init().is_some());
+        assert!(engine.agent_manager().is_some());
     }
 
     #[tokio::test]

@@ -768,7 +768,6 @@ mod tests {
         config.memory.external_provider.enabled = true;
         config.memory.external_provider.provider_type = "no_network_jsonl".to_string();
 
-
         let issues = validate_config(&config);
 
         assert!(issues

@@ -55,7 +55,9 @@ pub fn render_diff_viewer(
         } else if raw_line.starts_with("diff --git") {
             Line::from(Span::styled(
                 raw_line.to_string(),
-                Style::default().fg(theme.tokens.fg.body).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(theme.tokens.fg.body)
+                    .add_modifier(Modifier::BOLD),
             ))
         } else if raw_line.starts_with("index ") {
             Line::from(Span::styled(
@@ -100,12 +102,16 @@ pub fn render_diff_viewer(
         Span::styled(" close  ", Style::default().fg(theme.tokens.fg.faint)),
         Span::styled(
             "↑/↓",
-            Style::default().fg(theme.tokens.tone.info).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(theme.tokens.tone.info)
+                .add_modifier(Modifier::BOLD),
         ),
         Span::styled(" scroll  ", Style::default().fg(theme.tokens.fg.faint)),
         Span::styled(
             "PgUp/PgDn",
-            Style::default().fg(theme.tokens.tone.info).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(theme.tokens.tone.info)
+                .add_modifier(Modifier::BOLD),
         ),
         Span::styled(" page", Style::default().fg(theme.tokens.fg.faint)),
     ]));

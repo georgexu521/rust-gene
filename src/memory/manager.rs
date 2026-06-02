@@ -35,9 +35,9 @@ use tracing::{debug, info, warn};
 pub use crate::memory::reports::{
     MemoryDecisionCounts, MemoryEntry, MemoryFileSnapshot, MemoryFlushReason, MemoryFlushRecord,
     MemoryFlushStatus, MemoryFlushSummary, MemoryMaintenanceReport, MemoryMatch,
-    MemoryMigrationFileReport, MemoryMigrationReport, MemoryRecordSummary, MemoryReviewItem,
-    MemoryReviewReport, MemorySnapshotReport, MemorySummary, MemoryTier, MemoryWriteOutcome,
-    MemoryWriteOutcomeStatus, MemoryWriteTarget,
+    MemoryMigrationFileReport, MemoryMigrationReport, MemoryProductContractReport,
+    MemoryRecordSummary, MemoryReviewItem, MemoryReviewReport, MemorySnapshotReport, MemorySummary,
+    MemoryTier, MemoryWriteOutcome, MemoryWriteOutcomeStatus, MemoryWriteTarget,
 };
 
 pub(super) const MAX_LEARNINGS_PER_TURN: usize = 3;
@@ -2652,7 +2652,9 @@ mod tests {
 
         let result = manager.configure_external_memory_provider_from_config(&config);
         assert!(result.is_ok(), "Expected Ok, got {:?}", result.err());
-        assert!(manager.memory_provider_names().contains(&"external-memory".to_string()));
+        assert!(manager
+            .memory_provider_names()
+            .contains(&"external-memory".to_string()));
 
         let _ = std::fs::remove_dir_all(&base);
     }

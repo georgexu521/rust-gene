@@ -333,6 +333,7 @@ struct MemoryDecisionCounts {
 #[derive(Debug, serde::Serialize)]
 struct MemoryDoctorJson {
     root: String,
+    contract: crate::memory::MemoryProductContractReport,
     store_paths: MemoryStorePathsJson,
     documents: MemoryDoctorDocumentsJson,
     snapshot: crate::memory::MemorySnapshotReport,
@@ -838,7 +839,7 @@ fn format_memory_store_paths(paths: &MemoryStorePathsJson) -> String {
 
 fn format_memory_snapshot(snapshot: &crate::memory::MemorySnapshotReport) -> String {
     format!(
-        "Memory Snapshot\n  Status: {}\n  Snapshot id: {}\n  Fingerprint: {}\n  Scope: {}\n  Stable prompt chars: {}\n  Project chars: {}\n  User chars: {}\n  Memory files: {} ({} chars)\n  Skipped records: {} (status={} unsafe={} stale={} conflicts={})",
+        "Pinned Memory Snapshot\n  Status: {}\n  Snapshot id: {}\n  Fingerprint: {}\n  Scope: {}\n  Pinned prompt chars: {}\n  Project chars: {}\n  User chars: {}\n  Memory index files: {} ({} chars)\n  Skipped records: {} (status={} unsafe={} stale={} conflicts={})",
         if snapshot.frozen { "frozen" } else { "live/not frozen" },
         snapshot.snapshot_id,
         snapshot.fingerprint,
@@ -1001,6 +1002,18 @@ fn format_memory_doctor_with_reports(
     let mut out = String::new();
     out.push_str("Memory Doctor\n");
     out.push_str(&format!("  Root: {}\n", memory_root().display()));
+    let contract = crate::memory::MemoryProductContractReport::current();
+    out.push_str("  Surfaces:\n");
+    out.push_str(&format!(
+        "    - pinned_memory: {}\n",
+        contract.pinned_memory
+    ));
+    out.push_str(&format!("    - recall: {}\n", contract.recall));
+    out.push_str(&format!(
+        "    - learning_proposals: {}\n",
+        contract.learning_proposals
+    ));
+    out.push_str(&format!("    - write_policy: {}\n", contract.write_policy));
     out.push_str(&format_memory_store_paths(&store_paths));
     out.push_str(&format!(
         "  Documents: {} total · {} topic · {} agent · {} chars\n",
@@ -1010,7 +1023,7 @@ fn format_memory_doctor_with_reports(
         total_chars
     ));
     out.push_str(&format!(
-        "  Snapshot: {} · fingerprint={} · scope={} · {} chars · {} files · skipped_records={} status={} unsafe={} stale={} conflicts={}\n",
+        "  Pinned snapshot: {} · fingerprint={} · scope={} · {} chars · {} index files · skipped_records={} status={} unsafe={} stale={} conflicts={}\n",
         if snapshot.frozen {
             "frozen"
         } else {
@@ -1272,6 +1285,7 @@ fn memory_doctor_json_with_reports(
         .collect();
     let report = MemoryDoctorJson {
         root: memory_root().display().to_string(),
+        contract: crate::memory::MemoryProductContractReport::current(),
         store_paths,
         documents: MemoryDoctorDocumentsJson {
             total: docs.len(),
@@ -2120,7 +2134,8 @@ mod tests {
         assert!(doctor.contains("Store paths:"));
         assert!(doctor.contains("records:"));
         assert!(doctor.contains("proposals:"));
-        assert!(doctor.contains("Snapshot:"));
+        assert!(doctor.contains("Surfaces:"));
+        assert!(doctor.contains("Pinned snapshot:"));
         assert!(doctor.contains("Pending memory candidates:"));
         assert!(doctor.contains("Providers:"));
         assert!(doctor.contains("Lifecycle:"));

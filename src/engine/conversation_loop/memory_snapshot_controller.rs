@@ -1,5 +1,6 @@
 use super::runtime_diet::RuntimeDietSnapshot;
 use crate::engine::intent_router::RetrievalPolicy;
+use crate::engine::retrieval_context::{RetrievalContext, RetrievalSource};
 use crate::engine::trace::{TraceCollector, TraceEvent};
 use crate::memory::MemoryManager;
 use crate::services::api::Message;
@@ -10,6 +11,7 @@ use tracing::debug;
 pub(super) struct MemorySnapshotInjectionContext<'a> {
     pub(super) retrieval_policy: RetrievalPolicy,
     pub(super) memory_manager: Option<&'a Arc<Mutex<MemoryManager>>>,
+    pub(super) retrieval_context: Option<&'a RetrievalContext>,
     pub(super) messages: &'a mut Vec<Message>,
     pub(super) runtime_diet: &'a mut RuntimeDietSnapshot,
     pub(super) trace: &'a TraceCollector,
@@ -20,6 +22,9 @@ pub(super) struct MemorySnapshotController;
 impl MemorySnapshotController {
     pub(super) async fn inject(context: MemorySnapshotInjectionContext<'_>) -> bool {
         if !context.retrieval_policy.allows_memory_context() {
+            return false;
+        }
+        if Self::has_dynamic_memory_recall(context.retrieval_context) {
             return false;
         }
 
@@ -34,6 +39,12 @@ impl MemorySnapshotController {
             context.runtime_diet,
             context.trace,
         )
+    }
+
+    fn has_dynamic_memory_recall(retrieval_context: Option<&RetrievalContext>) -> bool {
+        retrieval_context
+            .map(|ctx| ctx.item_count_by_source(RetrievalSource::Memory) > 0)
+            .unwrap_or(false)
     }
 
     fn inject_snapshot(
@@ -67,6 +78,7 @@ impl MemorySnapshotController {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::engine::retrieval_context::RetrievalContext;
     use crate::engine::trace::{TurnStatus, TurnTrace};
 
     fn trace() -> TraceCollector {
@@ -98,6 +110,35 @@ mod tests {
         assert!(finished.events.iter().any(|event| matches!(
             event,
             TraceEvent::MemorySnapshotInjected { chars } if *chars == snapshot.chars().count()
+        )));
+    }
+
+    #[test]
+    fn skips_snapshot_when_dynamic_memory_recall_exists() {
+        let memory_context = RetrievalContext::from_memory_prefetch(
+            "fix bug",
+            "Run cargo check after edits.",
+            RetrievalPolicy::Project,
+        )
+        .expect("memory context");
+
+        assert!(MemorySnapshotController::has_dynamic_memory_recall(Some(
+            &memory_context
+        )));
+    }
+
+    #[test]
+    fn allows_snapshot_when_retrieval_context_has_no_memory_recall() {
+        let project_context = RetrievalContext::from_project_summary(
+            "fix bug",
+            "src/main.rs",
+            "/tmp/project",
+            RetrievalPolicy::Project,
+        )
+        .expect("project context");
+
+        assert!(!MemorySnapshotController::has_dynamic_memory_recall(Some(
+            &project_context
         )));
     }
 

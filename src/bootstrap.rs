@@ -281,10 +281,9 @@ pub async fn init_components(
         streaming_engine_builder = streaming_engine_builder.with_mcp_manager(mcp.clone());
     }
 
-    // AgentManager
-    let agent_manager =
-        Arc::new(crate::agent::AgentManager::new().with_query_engine(query_engine.clone()));
-    streaming_engine_builder = streaming_engine_builder.with_agent_manager(agent_manager);
+    // AgentManager is constructed lazily only for routed delegation/sub-agent turns.
+    streaming_engine_builder =
+        streaming_engine_builder.with_agent_query_engine(query_engine.clone());
 
     // 工具授权通道
     let approval_channel = Arc::new(crate::engine::conversation_loop::ToolApprovalChannel::new());

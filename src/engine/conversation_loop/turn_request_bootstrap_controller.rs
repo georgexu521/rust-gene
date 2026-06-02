@@ -52,6 +52,7 @@ impl TurnRequestBootstrapController {
             MemorySnapshotController::inject(MemorySnapshotInjectionContext {
                 retrieval_policy,
                 memory_manager,
+                retrieval_context,
                 messages,
                 runtime_diet,
                 trace,

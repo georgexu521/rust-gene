@@ -208,16 +208,14 @@ impl SettingsState {
     }
 
     fn storage_settings(&self) -> Vec<SettingItem> {
-        vec![
-            SettingItem {
-                key: "storage.persistence_enabled".to_string(),
-                label: "Persistence".to_string(),
-                description: "Enable session persistence".to_string(),
-                value: SettingValue::Bool(self.config.storage.persistence_enabled),
-                editable: true,
-                sensitive: false,
-            },
-        ]
+        vec![SettingItem {
+            key: "storage.persistence_enabled".to_string(),
+            label: "Persistence".to_string(),
+            description: "Enable session persistence".to_string(),
+            value: SettingValue::Bool(self.config.storage.persistence_enabled),
+            editable: true,
+            sensitive: false,
+        }]
     }
 
     fn keybindings_settings(&self) -> Vec<SettingItem> {

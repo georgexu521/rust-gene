@@ -293,7 +293,7 @@ pub async fn render_context_panel(app: &TuiApp) -> String {
             usage.total_estimated_tokens, usage.max_context_tokens, usage_pct
         ));
         lines.push(format!(
-            "Budget: prompt={} history={} tool_schemas={} memory={}",
+            "Budget: prompt={} history={} tool_schemas={} pinned_memory={}",
             usage.prompt.total_tokens,
             usage.history_tokens,
             usage.tool_schema_tokens,

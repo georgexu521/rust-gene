@@ -848,6 +848,7 @@ Secondary interfaces:
 
 ### Active plans (recent, may still be in progress)
 
+- `docs/MEMORY_SYSTEM_SIMPLIFICATION_PLAN_2026-06-02.md`
 - `docs/AGENT_SKILLS_OPTIMIZATION_PLAN_2026-06-01.md`
 - `docs/LIVE_CODING_TEST_PLAN_2026-06-01.md`
 - `docs/NEW_FEATURE_EVAL_PLAN_2026-06-01.md`

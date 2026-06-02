@@ -27,7 +27,11 @@ pub fn render_chat_area(f: &mut Frame, app: &TuiApp, area: Rect) {
     let mut top_offset = 0u16;
     if !app.messages.is_empty() {
         let session_id = app.session_manager.current_session_id().unwrap_or("?");
-        let short_id = if session_id.len() > 8 { &session_id[..8] } else { &session_id };
+        let short_id = if session_id.len() > 8 {
+            &session_id[..8]
+        } else {
+            &session_id
+        };
         let intro = Paragraph::new(Line::from(vec![
             Span::styled(
                 format!("◈ {} · ", short_id),
@@ -123,12 +127,12 @@ pub fn render_chat_area(f: &mut Frame, app: &TuiApp, area: Rect) {
     if show_indicator && max_scroll > 0 {
         let above = scroll_top;
         let remaining = max_scroll.saturating_sub(scroll_top);
-        let mut indicator_parts = vec![
-            Span::styled(
-                format!("{} above", above),
-                Style::default().fg(app.theme.tokens.fg.faint).add_modifier(Modifier::ITALIC),
-            ),
-        ];
+        let mut indicator_parts = vec![Span::styled(
+            format!("{} above", above),
+            Style::default()
+                .fg(app.theme.tokens.fg.faint)
+                .add_modifier(Modifier::ITALIC),
+        )];
         if remaining > 0 {
             indicator_parts.push(Span::styled(
                 format!(" · {} remaining", remaining),
@@ -221,12 +225,10 @@ pub fn render_input_area(f: &mut Frame, app: &TuiApp, area: Rect) {
     let input_text = app.input.value();
 
     let prompt_color = match app.agent_mode {
-        crate::engine::agent_mode::AgentMode::Auto | crate::engine::agent_mode::AgentMode::Build => {
-            app.theme.tokens.tone.brand
-        }
-        crate::engine::agent_mode::AgentMode::Plan | crate::engine::agent_mode::AgentMode::Explore => {
-            app.theme.tokens.tone.accent
-        }
+        crate::engine::agent_mode::AgentMode::Auto
+        | crate::engine::agent_mode::AgentMode::Build => app.theme.tokens.tone.brand,
+        crate::engine::agent_mode::AgentMode::Plan
+        | crate::engine::agent_mode::AgentMode::Explore => app.theme.tokens.tone.accent,
         crate::engine::agent_mode::AgentMode::Review => app.theme.tokens.tone.info,
     };
 
@@ -271,12 +273,18 @@ pub fn render_input_area(f: &mut Frame, app: &TuiApp, area: Rect) {
                 if i == 0 {
                     Line::from(vec![
                         Span::styled("› ", Style::default().fg(prompt_color)),
-                        Span::styled(line.to_string(), Style::default().fg(app.theme.tokens.fg.body)),
+                        Span::styled(
+                            line.to_string(),
+                            Style::default().fg(app.theme.tokens.fg.body),
+                        ),
                     ])
                 } else {
                     Line::from(vec![
                         Span::styled("  ", Style::default()),
-                        Span::styled(line.to_string(), Style::default().fg(app.theme.tokens.fg.body)),
+                        Span::styled(
+                            line.to_string(),
+                            Style::default().fg(app.theme.tokens.fg.body),
+                        ),
                     ])
                 }
             })
@@ -329,7 +337,9 @@ pub fn render_live_activity_row(f: &mut Frame, app: &TuiApp, area: Rect) {
         ),
         Span::styled(
             tool_label,
-            Style::default().fg(app.theme.tokens.tone.brand).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(app.theme.tokens.tone.brand)
+                .add_modifier(Modifier::BOLD),
         ),
     ];
 
@@ -371,7 +381,8 @@ pub fn render_toasts(f: &mut Frame, app: &TuiApp, area: Rect) {
     let mut lines: Vec<Line> = Vec::new();
     for toast in &app.toasts {
         let remaining = toast.expires_at_tick.saturating_sub(app.tick_count);
-        let fade = if remaining < 20 { // last 5s fading
+        let fade = if remaining < 20 {
+            // last 5s fading
             Style::default().fg(app.theme.tokens.fg.faint)
         } else {
             Style::default().fg(toast.color)
@@ -408,12 +419,10 @@ pub fn render_status_bar(f: &mut Frame, app: &TuiApp, area: Rect) {
         crate::engine::agent_mode::AgentMode::Review => "◐",
     };
     let mode_color = match app.agent_mode {
-        crate::engine::agent_mode::AgentMode::Auto | crate::engine::agent_mode::AgentMode::Build => {
-            app.theme.tokens.tone.ok
-        }
-        crate::engine::agent_mode::AgentMode::Plan | crate::engine::agent_mode::AgentMode::Explore => {
-            app.theme.tokens.tone.accent
-        }
+        crate::engine::agent_mode::AgentMode::Auto
+        | crate::engine::agent_mode::AgentMode::Build => app.theme.tokens.tone.ok,
+        crate::engine::agent_mode::AgentMode::Plan
+        | crate::engine::agent_mode::AgentMode::Explore => app.theme.tokens.tone.accent,
         crate::engine::agent_mode::AgentMode::Review => app.theme.tokens.tone.warn,
     };
 
@@ -425,7 +434,10 @@ pub fn render_status_bar(f: &mut Frame, app: &TuiApp, area: Rect) {
             Style::default().fg(app.theme.tokens.tone.warn),
         ));
         if let Some(usage) = app.stream_usage_label() {
-            parts.push(Span::styled(usage, Style::default().fg(app.theme.tokens.fg.faint)));
+            parts.push(Span::styled(
+                usage,
+                Style::default().fg(app.theme.tokens.fg.faint),
+            ));
         }
         parts.push(Span::styled(
             "esc to interrupt",
@@ -445,7 +457,11 @@ pub fn render_status_bar(f: &mut Frame, app: &TuiApp, area: Rect) {
 
     // Session info
     if let Some(session_id) = app.session_manager.current_session_id() {
-        let short_id = if session_id.len() > 8 { &session_id[..8] } else { &session_id };
+        let short_id = if session_id.len() > 8 {
+            &session_id[..8]
+        } else {
+            &session_id
+        };
         parts.push(Span::styled(
             format!("{}", short_id),
             Style::default().fg(app.theme.tokens.fg.faint),
@@ -474,9 +490,13 @@ pub fn render_status_bar(f: &mut Frame, app: &TuiApp, area: Rect) {
         let used = usage.prompt_tokens;
         let ratio = (used as f64 / cap as f64).min(1.0);
         let pct = (ratio * 100.0) as u32;
-        let bar_color = if ratio >= 0.8 { app.theme.tokens.tone.err }
-            else if ratio >= 0.5 { app.theme.tokens.tone.warn }
-            else { app.theme.tokens.tone.ok };
+        let bar_color = if ratio >= 0.8 {
+            app.theme.tokens.tone.err
+        } else if ratio >= 0.5 {
+            app.theme.tokens.tone.warn
+        } else {
+            app.theme.tokens.tone.ok
+        };
         let filled = (ratio * 8.0).round() as usize;
         let empty = 8 - filled;
         let bar = "█".repeat(filled) + &"░".repeat(empty);
@@ -487,7 +507,8 @@ pub fn render_status_bar(f: &mut Frame, app: &TuiApp, area: Rect) {
 
         // Cache hit %
         if usage.cached_tokens.unwrap_or(0) > 0 && usage.prompt_tokens > 0 {
-            let hit_pct = (usage.cached_tokens.unwrap_or(0) as f64 / usage.prompt_tokens as f64 * 100.0) as u32;
+            let hit_pct = (usage.cached_tokens.unwrap_or(0) as f64 / usage.prompt_tokens as f64
+                * 100.0) as u32;
             parts.push(Span::styled(
                 format!("cache {}%", hit_pct),
                 Style::default().fg(app.theme.tokens.tone.accent),
@@ -507,7 +528,10 @@ pub fn render_status_bar(f: &mut Frame, app: &TuiApp, area: Rect) {
 
     if runtime.mcp_server_count > 0 {
         parts.push(Span::styled(
-            format!("mcp:{}/{}", runtime.mcp_available_count, runtime.mcp_server_count),
+            format!(
+                "mcp:{}/{}",
+                runtime.mcp_available_count, runtime.mcp_server_count
+            ),
             Style::default().fg(app.theme.tokens.fg.faint),
         ));
     }
@@ -526,7 +550,10 @@ pub fn render_status_bar(f: &mut Frame, app: &TuiApp, area: Rect) {
             Style::default().fg(app.theme.tokens.fg.faint),
         ));
         parts.push(Span::styled(
-            format!("tools:{}/{}", runtime.active_tool_count, runtime.total_tools),
+            format!(
+                "tools:{}/{}",
+                runtime.active_tool_count, runtime.total_tools
+            ),
             Style::default().fg(app.theme.tokens.fg.faint),
         ));
         parts.push(Span::styled(
@@ -547,7 +574,10 @@ pub fn render_status_bar(f: &mut Frame, app: &TuiApp, area: Rect) {
     let mut spans = Vec::new();
     for (i, part) in parts.iter().enumerate() {
         if i > 0 {
-            spans.push(Span::styled(" · ", Style::default().fg(app.theme.tokens.fg.faint)));
+            spans.push(Span::styled(
+                " · ",
+                Style::default().fg(app.theme.tokens.fg.faint),
+            ));
         }
         spans.push(part.clone());
     }
@@ -1160,7 +1190,10 @@ pub fn render_command_palette(f: &mut Frame, app: &TuiApp, area: Rect) {
             lines.push(Line::from(vec![
                 Span::styled(marker, Style::default().fg(app.theme.tokens.tone.info)),
                 Span::styled(format!("{:<18}", cmd.name), style),
-                Span::styled(cmd.description, Style::default().fg(app.theme.tokens.fg.faint)),
+                Span::styled(
+                    cmd.description,
+                    Style::default().fg(app.theme.tokens.fg.faint),
+                ),
                 Span::styled(alias, Style::default().fg(app.theme.tokens.fg.faint)),
                 Span::styled(maturity, Style::default().fg(app.theme.tokens.tone.warn)),
             ]));
@@ -1177,7 +1210,10 @@ pub fn render_command_palette(f: &mut Frame, app: &TuiApp, area: Rect) {
         lines.push(Line::from(""));
         lines.push(Line::from(vec![
             Span::styled("Action:", Style::default().fg(app.theme.tokens.fg.faint)),
-            Span::styled(format!(" {}", action), Style::default().fg(app.theme.tokens.tone.info)),
+            Span::styled(
+                format!(" {}", action),
+                Style::default().fg(app.theme.tokens.tone.info),
+            ),
         ]));
         lines.push(Line::from(vec![
             Span::styled("Usage: ", Style::default().fg(app.theme.tokens.fg.faint)),
@@ -1387,7 +1423,10 @@ pub fn render_model_select(f: &mut Frame, app: &TuiApp, area: Rect) {
             lines.push(Line::from(vec![
                 Span::styled(marker, Style::default().fg(app.theme.tokens.tone.info)),
                 Span::styled(format!("{:<24}", choice.model), model_style),
-                Span::styled(choice.note.clone(), Style::default().fg(app.theme.tokens.fg.faint)),
+                Span::styled(
+                    choice.note.clone(),
+                    Style::default().fg(app.theme.tokens.fg.faint),
+                ),
             ]));
         }
     }
@@ -1410,7 +1449,10 @@ pub fn render_model_select(f: &mut Frame, app: &TuiApp, area: Rect) {
         Span::styled("esc", Style::default().fg(app.theme.tokens.tone.info)),
         Span::styled(" close  ", Style::default().fg(app.theme.tokens.fg.faint)),
         Span::styled("backspace", Style::default().fg(app.theme.tokens.tone.info)),
-        Span::styled(" edit search  ", Style::default().fg(app.theme.tokens.fg.faint)),
+        Span::styled(
+            " edit search  ",
+            Style::default().fg(app.theme.tokens.fg.faint),
+        ),
         Span::styled("/settings", Style::default().fg(app.theme.tokens.tone.info)),
         Span::styled(
             " provider/API keys",
@@ -1504,7 +1546,10 @@ pub fn render_provider_select(f: &mut Frame, app: &TuiApp, area: Rect) {
                     Style::default().fg(app.theme.tokens.fg.faint),
                 ),
                 Span::styled(format!("{:<20}", choice.model), style),
-                Span::styled(choice.note.clone(), Style::default().fg(app.theme.tokens.fg.faint)),
+                Span::styled(
+                    choice.note.clone(),
+                    Style::default().fg(app.theme.tokens.fg.faint),
+                ),
             ]));
             if selected && !choice.base_url.is_empty() {
                 lines.push(Line::from(vec![
@@ -1516,8 +1561,14 @@ pub fn render_provider_select(f: &mut Frame, app: &TuiApp, area: Rect) {
                 ]));
             } else if selected && !choice.configured {
                 lines.push(Line::from(vec![
-                    Span::styled("  └ setup: ", Style::default().fg(app.theme.tokens.tone.warn)),
-                    Span::styled(choice.note.clone(), Style::default().fg(app.theme.tokens.fg.faint)),
+                    Span::styled(
+                        "  └ setup: ",
+                        Style::default().fg(app.theme.tokens.tone.warn),
+                    ),
+                    Span::styled(
+                        choice.note.clone(),
+                        Style::default().fg(app.theme.tokens.fg.faint),
+                    ),
                     Span::styled(
                         " or open /settings",
                         Style::default().fg(app.theme.tokens.fg.faint),
@@ -1545,7 +1596,10 @@ pub fn render_provider_select(f: &mut Frame, app: &TuiApp, area: Rect) {
         Span::styled("esc", Style::default().fg(app.theme.tokens.tone.info)),
         Span::styled(" close  ", Style::default().fg(app.theme.tokens.fg.faint)),
         Span::styled("backspace", Style::default().fg(app.theme.tokens.tone.info)),
-        Span::styled(" edit search  ", Style::default().fg(app.theme.tokens.fg.faint)),
+        Span::styled(
+            " edit search  ",
+            Style::default().fg(app.theme.tokens.fg.faint),
+        ),
         Span::styled("/settings", Style::default().fg(app.theme.tokens.tone.info)),
         Span::styled(
             " edit keys/base URL",
@@ -1600,10 +1654,15 @@ pub fn render_permission_approval(
             Span::styled("Subject ", Style::default().fg(label_color)),
             Span::styled(
                 review.subject.clone(),
-                Style::default().fg(tokens.tone.brand).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(tokens.tone.brand)
+                    .add_modifier(Modifier::BOLD),
             ),
             Span::styled("  Risk ", Style::default().fg(label_color)),
-            Span::styled(risk, Style::default().fg(risk_color).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                risk,
+                Style::default().fg(risk_color).add_modifier(Modifier::BOLD),
+            ),
         ]),
         Line::from(vec![
             Span::styled("Scope   ", Style::default().fg(label_color)),
@@ -1616,7 +1675,9 @@ pub fn render_permission_approval(
             Span::styled("Rule    ", Style::default().fg(label_color)),
             Span::styled(
                 rule_pattern,
-                Style::default().fg(tokens.tone.brand).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(tokens.tone.brand)
+                    .add_modifier(Modifier::BOLD),
             ),
         ]),
         Line::from(vec![
@@ -1631,7 +1692,9 @@ pub fn render_permission_approval(
             Span::styled("Goal    ", Style::default().fg(label_color)),
             Span::styled(
                 "drift check requires approval",
-                Style::default().fg(tokens.tone.warn).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(tokens.tone.warn)
+                    .add_modifier(Modifier::BOLD),
             ),
         ]));
         lines.push(Line::from(""));
@@ -1642,7 +1705,9 @@ pub fn render_permission_approval(
             Span::styled("Gate    ", Style::default().fg(label_color)),
             Span::styled(
                 "unresolved reflection findings",
-                Style::default().fg(tokens.tone.err).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(tokens.tone.err)
+                    .add_modifier(Modifier::BOLD),
             ),
         ]));
         lines.push(Line::from(""));
@@ -1694,19 +1759,49 @@ pub fn render_permission_approval(
         Style::default().add_modifier(Modifier::BOLD),
     )));
     lines.push(Line::from(vec![
-        Span::styled("y", Style::default().fg(tokens.tone.ok).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            "y",
+            Style::default()
+                .fg(tokens.tone.ok)
+                .add_modifier(Modifier::BOLD),
+        ),
         Span::styled(" allow once  ", Style::default().fg(value_color)),
-        Span::styled("s", Style::default().fg(tokens.tone.ok).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            "s",
+            Style::default()
+                .fg(tokens.tone.ok)
+                .add_modifier(Modifier::BOLD),
+        ),
         Span::styled(" allow session  ", Style::default().fg(value_color)),
-        Span::styled("n", Style::default().fg(tokens.tone.err).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            "n",
+            Style::default()
+                .fg(tokens.tone.err)
+                .add_modifier(Modifier::BOLD),
+        ),
         Span::styled(" deny  ", Style::default().fg(value_color)),
     ]));
     lines.push(Line::from(vec![
-        Span::styled("p", Style::default().fg(tokens.tone.ok).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            "p",
+            Style::default()
+                .fg(tokens.tone.ok)
+                .add_modifier(Modifier::BOLD),
+        ),
         Span::styled(" allow project  ", Style::default().fg(value_color)),
-        Span::styled("a", Style::default().fg(tokens.tone.ok).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            "a",
+            Style::default()
+                .fg(tokens.tone.ok)
+                .add_modifier(Modifier::BOLD),
+        ),
         Span::styled(" allow global  ", Style::default().fg(value_color)),
-        Span::styled("x", Style::default().fg(tokens.tone.err).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            "x",
+            Style::default()
+                .fg(tokens.tone.err)
+                .add_modifier(Modifier::BOLD),
+        ),
         Span::styled(" deny global", Style::default().fg(value_color)),
     ]));
     lines.push(Line::from(vec![
@@ -1916,8 +2011,14 @@ pub fn render_plan_approval(
             Span::styled(plan.goal.clone(), Style::default().fg(tokens.fg.body)),
         ]),
         Line::from(vec![
-            Span::styled("Complexity: ", Style::default().add_modifier(Modifier::BOLD)),
-            Span::styled(plan.estimated_complexity.clone(), Style::default().fg(tokens.tone.brand)),
+            Span::styled(
+                "Complexity: ",
+                Style::default().add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                plan.estimated_complexity.clone(),
+                Style::default().fg(tokens.tone.brand),
+            ),
         ]),
         Line::from(vec![
             Span::styled("Review: ", Style::default().add_modifier(Modifier::BOLD)),
@@ -1928,7 +2029,9 @@ pub fn render_plan_approval(
         Line::from(""),
         Line::from(vec![Span::styled(
             format!("Steps ({}):", plan.steps.len()),
-            Style::default().fg(tokens.fg.body).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(tokens.fg.body)
+                .add_modifier(Modifier::BOLD),
         )]),
         Line::from(Span::styled(
             "────────────────────────────────────────",
@@ -1954,7 +2057,10 @@ pub fn render_plan_approval(
                 format!("  {} {}. ", status_icon, i + 1),
                 Style::default().fg(icon_color),
             ),
-            Span::styled(step.description.clone(), Style::default().fg(tokens.fg.body)),
+            Span::styled(
+                step.description.clone(),
+                Style::default().fg(tokens.fg.body),
+            ),
             Span::styled(tool_info, Style::default().fg(tokens.fg.faint)),
         ]));
     }
@@ -1965,11 +2071,26 @@ pub fn render_plan_approval(
     )));
     lines.push(Line::from(""));
     lines.push(Line::from(vec![
-        Span::styled("y", Style::default().fg(tokens.tone.ok).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            "y",
+            Style::default()
+                .fg(tokens.tone.ok)
+                .add_modifier(Modifier::BOLD),
+        ),
         Span::styled(" = Approve  ", Style::default().fg(tokens.fg.faint)),
-        Span::styled("n", Style::default().fg(tokens.tone.err).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            "n",
+            Style::default()
+                .fg(tokens.tone.err)
+                .add_modifier(Modifier::BOLD),
+        ),
         Span::styled(" = Reject  ", Style::default().fg(tokens.fg.faint)),
-        Span::styled("m", Style::default().fg(tokens.tone.warn).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            "m",
+            Style::default()
+                .fg(tokens.tone.warn)
+                .add_modifier(Modifier::BOLD),
+        ),
         Span::styled(" = Modify", Style::default().fg(tokens.fg.faint)),
     ]));
 

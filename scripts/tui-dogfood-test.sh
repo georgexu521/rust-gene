@@ -1,6 +1,6 @@
 #!/bin/bash
 # Priority Agent TUI Dogfood Test Suite
-# 
+#
 # Runs the TUI agent against real projects and captures results.
 # Requires MINIMAX_API_KEY or equivalent in the environment.
 #
@@ -55,7 +55,7 @@ write_prompt explore-engine \
 write_prompt explore-tools \
   "请查看 src/tools/ 目录，列出有哪些工具模块（子目录或文件）。只读。"
 
-# Reading tests  
+# Reading tests
 write_prompt read-cargo \
   "请读取 priority-core/Cargo.toml 的 [package] 段，告诉我 package.version 和 package.edition 的值。只读，不要检查其他文件。"
 

@@ -641,7 +641,7 @@ fn format_memory_retrieval_context(
 
 fn format_memory_snapshot_report(snapshot: &crate::memory::MemorySnapshotReport) -> String {
     format!(
-        "Memory Snapshot\n- Status: {}\n- Snapshot id: {}\n- Fingerprint: {}\n- Scope: {}\n- Stable prompt chars: {}\n- Project chars: {}\n- User chars: {}\n- Memory files: {} ({} chars)\n- Skipped records: {} (status={} unsafe={} stale={} conflicts={})",
+        "Pinned Memory Snapshot\n- Status: {}\n- Snapshot id: {}\n- Fingerprint: {}\n- Scope: {}\n- Pinned prompt chars: {}\n- Project chars: {}\n- User chars: {}\n- Memory index files: {} ({} chars)\n- Skipped records: {} (status={} unsafe={} stale={} conflicts={})",
         if snapshot.frozen {
             "frozen"
         } else {
@@ -2662,7 +2662,7 @@ impl TuiApp {
                     .unwrap_or("");
 
                 let memory_manager = if let Some(ref engine) = self.streaming_engine {
-                    engine.memory_manager()
+                    engine.memory_manager_or_init()
                 } else {
                     None
                 };
@@ -2989,7 +2989,7 @@ impl TuiApp {
                             .to_string()
                     } else {
                         let memory_manager = if let Some(ref engine) = self.streaming_engine {
-                            engine.memory_manager()
+                            engine.memory_manager_or_init()
                         } else {
                             None
                         };
@@ -3606,7 +3606,7 @@ impl TuiApp {
     /// 添加助手响应
     pub async fn add_assistant_response(&mut self, content: String) {
         self.is_querying = false;
-                self.stream_started_at = None;
+        self.stream_started_at = None;
 
         // 保存助手消息到数据库。流式引擎绑定同一会话时由引擎负责持久化。
         if self.should_persist_messages_from_tui() {
@@ -4134,7 +4134,7 @@ impl TuiApp {
     pub fn set_error(&mut self, error: String) {
         self.error_message = Some(error);
         self.is_querying = false;
-                self.stream_started_at = None;
+        self.stream_started_at = None;
     }
 
     /// 清除错误

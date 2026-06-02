@@ -1256,7 +1256,7 @@ impl TraceEvent {
                 preview(reason)
             ),
             TraceEvent::MemorySnapshotInjected { chars } => {
-                format!("memory snapshot injected: {} chars", chars)
+                format!("pinned memory snapshot injected: {} chars", chars)
             }
             TraceEvent::MemoryPrefetch { chars } => format!("memory prefetch: {} chars", chars),
             TraceEvent::ActiveMemoryEvaluated {
@@ -1525,7 +1525,7 @@ impl TraceEvent {
                     _ => String::new(),
                 };
                 format!(
-                    "{} prompt={} tool_schema={} total={} tools={} tool_results={}ch/~{}t truncated={} artifacts={} memory={}ch/~{}t retrieval={}items/~{}t skills={}ch/~{}t route_scoped={} workflow={} closeout={} validation={} warnings={}{}",
+                    "{} prompt={} tool_schema={} total={} tools={} tool_results={}ch/~{}t truncated={} artifacts={} pinned_memory={}ch/~{}t retrieval={}items/~{}t skills={}ch/~{}t route_scoped={} workflow={} closeout={} validation={} warnings={}{}",
                     level,
                     prompt_tokens,
                     tool_schema_tokens,
@@ -3069,7 +3069,7 @@ mod tests {
         assert!(summary.contains("truncated=1"));
         assert!(summary.contains("artifacts=1"));
         assert!(summary.contains("tools=6"));
-        assert!(summary.contains("memory=180ch/~45t"));
+        assert!(summary.contains("pinned_memory=180ch/~45t"));
         assert!(summary.contains("retrieval=2items/~80t"));
         assert!(summary.contains("skills=120ch/~30t"));
         assert!(summary.contains("workflow=minimal"));

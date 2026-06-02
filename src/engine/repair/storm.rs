@@ -249,6 +249,36 @@ mod tests {
     }
 
     #[test]
+    fn exact_duplicate_read_only_suppresses_without_blocking_new_ranges() {
+        let mut state = StormState::default();
+        let same = json!({"path": "README.md", "offset": 0, "limit": 80});
+
+        assert_eq!(read(&mut state, "file_read", &same), StormDecision::Allow);
+        assert_eq!(read(&mut state, "file_read", &same), StormDecision::Allow);
+        assert!(matches!(
+            read(&mut state, "file_read", &same),
+            StormDecision::Suppress(_)
+        ));
+
+        assert_eq!(
+            read(
+                &mut state,
+                "file_read",
+                &json!({"path": "README.md", "offset": 80, "limit": 80})
+            ),
+            StormDecision::Allow
+        );
+        assert_eq!(
+            read(
+                &mut state,
+                "file_read",
+                &json!({"path": "README.md", "offset": 160, "limit": 80})
+            ),
+            StormDecision::Allow
+        );
+    }
+
+    #[test]
     fn storm_counts_repeats_per_tool() {
         let mut state = StormState::default();
         let args = json!({"path": "/tmp/a.txt"});

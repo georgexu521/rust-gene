@@ -3,6 +3,38 @@ use crate::memory::types::{MemoryRecord, MemoryStatus};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
+/// Current product contract for memory surfaces.
+///
+/// Keep this contract small: durable prompt memory, dynamic recall, and
+/// learning proposals are separate surfaces with different trust and write
+/// policies.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MemoryProductContractReport {
+    pub pinned_memory: String,
+    pub recall: String,
+    pub learning_proposals: String,
+    pub session_search: String,
+    pub project_progress: String,
+    pub stable_prompt_policy: String,
+    pub dynamic_recall_policy: String,
+    pub write_policy: String,
+}
+
+impl MemoryProductContractReport {
+    pub fn current() -> Self {
+        Self {
+            pinned_memory: "small stable prompt memory: accepted user/project conventions and compact indexes".to_string(),
+            recall: "per-turn retrieved context with provenance, score, freshness, and why-recalled trace".to_string(),
+            learning_proposals: "candidate durable memories that must pass deterministic gates before apply".to_string(),
+            session_search: "past conversation recall; not long-term user memory".to_string(),
+            project_progress: "current task/project status ledger; not user profile memory".to_string(),
+            stable_prompt_policy: "pinned memory only; broad recall belongs in dynamic relevant_material".to_string(),
+            dynamic_recall_policy: "memory, project, session, web, MCP, file, and tool context are fenced as background".to_string(),
+            write_policy: "review_required by default unless explicit project policy narrows auto-write".to_string(),
+        }
+    }
+}
+
 /// 记忆层级
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MemoryTier {
@@ -37,7 +69,7 @@ impl MemorySummary {
     /// 获取格式化的摘要字符串
     pub fn format(&self) -> String {
         format!(
-            "Memory Tiers:\n  Project: {} chars, {} files ({} chars)\n  User: {} chars\n  Session: {} items\n  Frozen: {}",
+            "Memory Surfaces:\n  Pinned project: {} chars, {} index files ({} chars)\n  Pinned user: {} chars\n  Session recall: {} items\n  Frozen pinned snapshot: {}",
             self.project_memory_chars,
             self.project_memory_files,
             self.project_memory_file_chars,

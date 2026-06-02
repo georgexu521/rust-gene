@@ -5,9 +5,9 @@
 
 use super::utils::*;
 
-use std::sync::Arc;
 use crate::tools::Tool;
 use crate::tui::app::{AppMode, TuiApp};
+use std::sync::Arc;
 
 // ─── Section 4: vim / onboarding / skip ─────────────────────────────
 
