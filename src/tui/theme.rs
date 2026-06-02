@@ -487,57 +487,29 @@ impl Theme {
     }
     /// Nord 主题
     pub fn nord() -> Self {
-        let theme = Self {
-            bg: Color::Rgb(46, 52, 64), bg_popup: Color::Rgb(59, 66, 82), bg_selected: Color::Rgb(67, 76, 94),
-            text: Color::Rgb(216, 222, 233), text_dim: Color::Rgb(76, 86, 106), text_highlight: Color::Rgb(136, 192, 208),
-            border: Color::Rgb(76, 86, 106), border_active: Color::Rgb(136, 192, 208),
-            user_message: Color::Rgb(136, 192, 208), user_message_bg: Color::Rgb(59, 66, 82),
-            assistant_message: Color::Rgb(163, 190, 140), system_message: Color::Rgb(235, 203, 139),
-            tool_message: Color::Rgb(180, 142, 173),
-            success: Color::Rgb(163, 190, 140), error: Color::Rgb(191, 97, 106),
-            warning: Color::Rgb(235, 203, 139), info: Color::Rgb(136, 192, 208),
-            diff_add: Color::Rgb(163, 190, 140), diff_remove: Color::Rgb(191, 97, 106),
-            diff_header: Color::Rgb(235, 203, 139), diff_line_number: Color::Rgb(76, 86, 106),
-            status_ready: Color::Rgb(163, 190, 140), status_thinking: Color::Rgb(235, 203, 139),
-            status_vim: Color::Rgb(180, 142, 173), status_worktree: Color::Rgb(136, 192, 208),
-            tokens: ThemeTokens {
-                fg: FgTokens { strong: Color::Rgb(216,222,233), body: Color::Rgb(216,222,233), sub: Color::Rgb(143,188,187), meta: Color::Rgb(76,86,106), faint: Color::Rgb(76,86,106) },
-                surface: SurfaceTokens { bg: Color::Rgb(46,52,64), bg_input: Color::Rgb(59,66,82), bg_code: Color::Rgb(46,52,64), bg_elev: Color::Rgb(67,76,94) },
-                tone: ToneTokens { brand: Color::Rgb(136,192,208), accent: Color::Rgb(180,142,173), violet: Color::Rgb(180,142,173), ok: Color::Rgb(163,190,140), warn: Color::Rgb(235,203,139), err: Color::Rgb(191,97,106), info: Color::Rgb(136,192,208) },
-                tone_active: ToneTokens { brand: Color::Rgb(136,192,208), accent: Color::Rgb(180,142,173), violet: Color::Rgb(180,142,173), ok: Color::Rgb(163,190,140), warn: Color::Rgb(235,203,139), err: Color::Rgb(191,97,106), info: Color::Rgb(136,192,208) },
-                card: card_tokens(&ToneTokens { brand: Color::Rgb(136,192,208), accent: Color::Rgb(180,142,173), violet: Color::Rgb(180,142,173), ok: Color::Rgb(163,190,140), warn: Color::Rgb(235,203,139), err: Color::Rgb(191,97,106), info: Color::Rgb(136,192,208) }),
-                pill: pill_tokens(&SurfaceTokens { bg: Color::Rgb(46,52,64), bg_input: Color::Rgb(59,66,82), bg_code: Color::Rgb(46,52,64), bg_elev: Color::Rgb(67,76,94) }, &ToneTokens { brand: Color::Rgb(136,192,208), accent: Color::Rgb(180,142,173), violet: Color::Rgb(180,142,173), ok: Color::Rgb(163,190,140), warn: Color::Rgb(235,203,139), err: Color::Rgb(191,97,106), info: Color::Rgb(136,192,208) }, &FgTokens { strong: Color::Rgb(216,222,233), body: Color::Rgb(216,222,233), sub: Color::Rgb(143,188,187), meta: Color::Rgb(76,86,106), faint: Color::Rgb(76,86,106) }),
-                message_bg: MessageBgTokens { user: Color::Rgb(59,66,82), bash: Color::Rgb(59,66,82), selected: Color::Rgb(67,76,94) },
-            },
+        let tokens = ThemeTokens {
+            fg: FgTokens { strong: Color::Rgb(216,222,233), body: Color::Rgb(216,222,233), sub: Color::Rgb(143,188,187), meta: Color::Rgb(76,86,106), faint: Color::Rgb(76,86,106) },
+            surface: SurfaceTokens { bg: Color::Rgb(46,52,64), bg_input: Color::Rgb(59,66,82), bg_code: Color::Rgb(46,52,64), bg_elev: Color::Rgb(67,76,94) },
+            tone: ToneTokens { brand: Color::Rgb(136,192,208), accent: Color::Rgb(180,142,173), violet: Color::Rgb(180,142,173), ok: Color::Rgb(163,190,140), warn: Color::Rgb(235,203,139), err: Color::Rgb(191,97,106), info: Color::Rgb(136,192,208) },
+            tone_active: ToneTokens { brand: Color::Rgb(136,192,208), accent: Color::Rgb(180,142,173), violet: Color::Rgb(180,142,173), ok: Color::Rgb(163,190,140), warn: Color::Rgb(235,203,139), err: Color::Rgb(191,97,106), info: Color::Rgb(136,192,208) },
+            card: card_tokens(&ToneTokens { brand: Color::Rgb(136,192,208), accent: Color::Rgb(180,142,173), violet: Color::Rgb(180,142,173), ok: Color::Rgb(163,190,140), warn: Color::Rgb(235,203,139), err: Color::Rgb(191,97,106), info: Color::Rgb(136,192,208) }),
+            pill: pill_tokens(&SurfaceTokens { bg: Color::Rgb(46,52,64), bg_input: Color::Rgb(59,66,82), bg_code: Color::Rgb(46,52,64), bg_elev: Color::Rgb(67,76,94) }, &ToneTokens { brand: Color::Rgb(136,192,208), accent: Color::Rgb(180,142,173), violet: Color::Rgb(180,142,173), ok: Color::Rgb(163,190,140), warn: Color::Rgb(235,203,139), err: Color::Rgb(191,97,106), info: Color::Rgb(136,192,208) }, &FgTokens { strong: Color::Rgb(216,222,233), body: Color::Rgb(216,222,233), sub: Color::Rgb(143,188,187), meta: Color::Rgb(76,86,106), faint: Color::Rgb(76,86,106) }),
+            message_bg: MessageBgTokens { user: Color::Rgb(59,66,82), bash: Color::Rgb(59,66,82), selected: Color::Rgb(67,76,94) },
         };
-        theme
+        Self::from_tokens(tokens)
     }
     /// Dracula 主题
     pub fn dracula() -> Self {
-        let theme = Self {
-            bg: Color::Rgb(40, 42, 54), bg_popup: Color::Rgb(68, 71, 90), bg_selected: Color::Rgb(98, 114, 164),
-            text: Color::Rgb(248, 248, 242), text_dim: Color::Rgb(98, 114, 164), text_highlight: Color::Rgb(139, 233, 253),
-            border: Color::Rgb(98, 114, 164), border_active: Color::Rgb(189, 147, 249),
-            user_message: Color::Rgb(139, 233, 253), user_message_bg: Color::Rgb(50, 50, 65),
-            assistant_message: Color::Rgb(80, 250, 123), system_message: Color::Rgb(241, 250, 140),
-            tool_message: Color::Rgb(255, 121, 198),
-            success: Color::Rgb(80, 250, 123), error: Color::Rgb(255, 85, 85),
-            warning: Color::Rgb(241, 250, 140), info: Color::Rgb(139, 233, 253),
-            diff_add: Color::Rgb(80, 250, 123), diff_remove: Color::Rgb(255, 85, 85),
-            diff_header: Color::Rgb(241, 250, 140), diff_line_number: Color::Rgb(98, 114, 164),
-            status_ready: Color::Rgb(80, 250, 123), status_thinking: Color::Rgb(241, 250, 140),
-            status_vim: Color::Rgb(255, 121, 198), status_worktree: Color::Rgb(139, 233, 253),
-            tokens: ThemeTokens {
-                fg: FgTokens { strong: Color::Rgb(248,248,242), body: Color::Rgb(248,248,242), sub: Color::Rgb(98,114,164), meta: Color::Rgb(98,114,164), faint: Color::Rgb(98,114,164) },
-                surface: SurfaceTokens { bg: Color::Rgb(40,42,54), bg_input: Color::Rgb(68,71,90), bg_code: Color::Rgb(40,42,54), bg_elev: Color::Rgb(98,114,164) },
-                tone: ToneTokens { brand: Color::Rgb(139,233,253), accent: Color::Rgb(189,147,249), violet: Color::Rgb(189,147,249), ok: Color::Rgb(80,250,123), warn: Color::Rgb(241,250,140), err: Color::Rgb(255,85,85), info: Color::Rgb(139,233,253) },
-                tone_active: ToneTokens { brand: Color::Rgb(139,233,253), accent: Color::Rgb(189,147,249), violet: Color::Rgb(189,147,249), ok: Color::Rgb(80,250,123), warn: Color::Rgb(241,250,140), err: Color::Rgb(255,85,85), info: Color::Rgb(139,233,253) },
-                card: card_tokens(&ToneTokens { brand: Color::Rgb(139,233,253), accent: Color::Rgb(189,147,249), violet: Color::Rgb(189,147,249), ok: Color::Rgb(80,250,123), warn: Color::Rgb(241,250,140), err: Color::Rgb(255,85,85), info: Color::Rgb(139,233,253) }),
-                pill: pill_tokens(&SurfaceTokens { bg: Color::Rgb(40,42,54), bg_input: Color::Rgb(68,71,90), bg_code: Color::Rgb(40,42,54), bg_elev: Color::Rgb(98,114,164) }, &ToneTokens { brand: Color::Rgb(139,233,253), accent: Color::Rgb(189,147,249), violet: Color::Rgb(189,147,249), ok: Color::Rgb(80,250,123), warn: Color::Rgb(241,250,140), err: Color::Rgb(255,85,85), info: Color::Rgb(139,233,253) }, &FgTokens { strong: Color::Rgb(248,248,242), body: Color::Rgb(248,248,242), sub: Color::Rgb(98,114,164), meta: Color::Rgb(98,114,164), faint: Color::Rgb(98,114,164) }),
-                message_bg: MessageBgTokens { user: Color::Rgb(50,50,65), bash: Color::Rgb(50,50,65), selected: Color::Rgb(98,114,164) },
-            },
+        let tokens = ThemeTokens {
+            fg: FgTokens { strong: Color::Rgb(248,248,242), body: Color::Rgb(248,248,242), sub: Color::Rgb(98,114,164), meta: Color::Rgb(98,114,164), faint: Color::Rgb(98,114,164) },
+            surface: SurfaceTokens { bg: Color::Rgb(40,42,54), bg_input: Color::Rgb(68,71,90), bg_code: Color::Rgb(40,42,54), bg_elev: Color::Rgb(98,114,164) },
+            tone: ToneTokens { brand: Color::Rgb(139,233,253), accent: Color::Rgb(189,147,249), violet: Color::Rgb(189,147,249), ok: Color::Rgb(80,250,123), warn: Color::Rgb(241,250,140), err: Color::Rgb(255,85,85), info: Color::Rgb(139,233,253) },
+            tone_active: ToneTokens { brand: Color::Rgb(139,233,253), accent: Color::Rgb(189,147,249), violet: Color::Rgb(189,147,249), ok: Color::Rgb(80,250,123), warn: Color::Rgb(241,250,140), err: Color::Rgb(255,85,85), info: Color::Rgb(139,233,253) },
+            card: card_tokens(&ToneTokens { brand: Color::Rgb(139,233,253), accent: Color::Rgb(189,147,249), violet: Color::Rgb(189,147,249), ok: Color::Rgb(80,250,123), warn: Color::Rgb(241,250,140), err: Color::Rgb(255,85,85), info: Color::Rgb(139,233,253) }),
+            pill: pill_tokens(&SurfaceTokens { bg: Color::Rgb(40,42,54), bg_input: Color::Rgb(68,71,90), bg_code: Color::Rgb(40,42,54), bg_elev: Color::Rgb(98,114,164) }, &ToneTokens { brand: Color::Rgb(139,233,253), accent: Color::Rgb(189,147,249), violet: Color::Rgb(189,147,249), ok: Color::Rgb(80,250,123), warn: Color::Rgb(241,250,140), err: Color::Rgb(255,85,85), info: Color::Rgb(139,233,253) }, &FgTokens { strong: Color::Rgb(248,248,242), body: Color::Rgb(248,248,242), sub: Color::Rgb(98,114,164), meta: Color::Rgb(98,114,164), faint: Color::Rgb(98,114,164) }),
+            message_bg: MessageBgTokens { user: Color::Rgb(50,50,65), bash: Color::Rgb(50,50,65), selected: Color::Rgb(98,114,164) },
         };
-        theme
+        Self::from_tokens(tokens)
     }
     /// Gruvbox Dark
     pub fn gruvbox_dark() -> Self {
@@ -643,17 +615,38 @@ mod tests {
 
     #[test]
     fn test_flat_compat() {
-        let g = Theme::graphite();
-        assert_eq!(g.text, g.tokens.fg.body);
-        assert_eq!(g.success, g.tokens.tone.ok);
-        assert_eq!(g.error, g.tokens.tone.err);
-        assert_eq!(g.user_message_bg, g.tokens.message_bg.user);
+        for theme in all_themes() {
+            assert_eq!(theme.bg, theme.tokens.surface.bg, "bg mismatch");
+            assert_eq!(theme.text, theme.tokens.fg.body, "text mismatch");
+            assert_eq!(theme.text_dim, theme.tokens.fg.faint, "text_dim mismatch");
+            assert_eq!(theme.success, theme.tokens.tone.ok, "success mismatch");
+            assert_eq!(theme.error, theme.tokens.tone.err, "error mismatch");
+            assert_eq!(theme.warning, theme.tokens.tone.warn, "warning mismatch");
+            assert_eq!(theme.info, theme.tokens.tone.info, "info mismatch");
+            assert_eq!(theme.user_message_bg, theme.tokens.message_bg.user, "user_message_bg mismatch");
+        }
+    }
+
+    fn all_themes() -> Vec<Theme> {
+        vec![
+            Theme::graphite(),
+            Theme::porcelain(),
+            Theme::dark(),
+            Theme::light(),
+            Theme::high_contrast(),
+            Theme::nord(),
+            Theme::dracula(),
+            Theme::gruvbox_dark(),
+            Theme::catppuccin_mocha(),
+        ]
     }
 
     #[test]
     fn test_theme_preset_parse() {
         assert_eq!("graphite".parse::<ThemePreset>().unwrap(), ThemePreset::Graphite);
         assert_eq!("porcelain".parse::<ThemePreset>().unwrap(), ThemePreset::Porcelain);
+        assert_eq!("nord".parse::<ThemePreset>().unwrap(), ThemePreset::Nord);
+        assert_eq!("dark".parse::<ThemePreset>().unwrap(), ThemePreset::Dark);
         assert!("unknown".parse::<ThemePreset>().is_err());
     }
 
@@ -663,5 +656,7 @@ mod tests {
         assert_eq!(g.tokens.card.user.glyph, "◇");
         assert_eq!(g.tokens.card.tool.glyph, "▣");
         assert_eq!(g.tokens.card.streaming.glyph, "◈");
+        assert_eq!(g.tokens.card.error.glyph, "✖");
+        assert_eq!(g.tokens.card.search.glyph, "⊙");
     }
 }

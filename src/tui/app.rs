@@ -1712,7 +1712,11 @@ impl TuiApp {
         self.close_model_select();
     }
 
-    /// Switch theme at runtime
+    /// Switch theme at runtime (in-memory only).
+    ///
+    /// Does NOT persist to config — callers that need persistence must
+    /// also update `AppConfig::ui.theme` and call `.save()`.  The
+    /// `/theme` slash handler and `save_settings()` already do this.
     pub fn set_theme(&mut self, name: &str) {
         self.theme = Arc::new(crate::tui::theme::Theme::from_name(name));
     }

@@ -291,6 +291,16 @@ mod tests {
     use super::*;
     use crate::tui::theme::Theme;
 
+    fn make_msg(role: MessageRole, content: &str) -> MessageItem {
+        MessageItem {
+            id: "test".into(),
+            role,
+            content: content.into(),
+            timestamp: std::time::SystemTime::now(),
+            metadata: Default::default(),
+        }
+    }
+
     #[test]
     fn test_role_colors() {
         let theme = Theme::dark();
@@ -299,5 +309,39 @@ mod tests {
             role_color(MessageRole::Assistant, &theme),
             theme.tokens.tone.ok
         );
+    }
+
+    #[test]
+    fn test_detect_card_kind_error() {
+        assert!(matches!(
+            detect_card_kind(&make_msg(MessageRole::System, "Error: something went wrong")),
+            Some(CardKind::Error)
+        ));
+        assert!(matches!(
+            detect_card_kind(&make_msg(MessageRole::System, "✗ build failed")),
+            Some(CardKind::Error)
+        ));
+        // Should NOT flag "failed" mid-sentence
+        assert!(detect_card_kind(&make_msg(MessageRole::System, "The build failed")).is_none());
+    }
+
+    #[test]
+    fn test_detect_card_kind_search() {
+        assert!(matches!(
+            detect_card_kind(&make_msg(MessageRole::Tool, "Found 5 matches in 3 files")),
+            Some(CardKind::Search)
+        ));
+        assert!(matches!(
+            detect_card_kind(&make_msg(MessageRole::Tool, "12 matches found across 4 files")),
+            Some(CardKind::Search)
+        ));
+    }
+
+    #[test]
+    fn test_detect_card_kind_default() {
+        // Regular tool message without search/agent keywords
+        assert!(detect_card_kind(&make_msg(MessageRole::Tool, "Command executed successfully.")).is_none());
+        // Regular system message
+        assert!(detect_card_kind(&make_msg(MessageRole::System, "Session started.")).is_none());
     }
 }
