@@ -825,37 +825,66 @@ Secondary interfaces:
 
 ## Documentation Status
 
-Canonical current docs:
+**Docs index**: `docs/README.md` — categorized navigation for all docs.
+
+### Canonical current docs
 
 - `README.md`
+- `AGENTS.md`
+- `docs/README.md`
 - `docs/PROJECT_STATUS.md`
+- `docs/PROJECT_MAP.md`
 - `docs/CLAUDE_CODE_GAP_MATRIX_2026-05-03.md`
 - `docs/CLAUDE_CODE_ALIGNMENT_PLAN.md`
+- `docs/CLAUDE_CODE_PARITY_IMPLEMENTATION_PLAN_2026-05-20.md`
 - `docs/REMAINING_CLOSURE_PLAN.md`
 - `docs/LLM_RUNTIME_SIMPLIFICATION_PLAN_2026-05-08.md`
 - `docs/RUNTIME_DIET_UPDATE_2026-06-02.md`
 - `docs/UNIFIED_RUNTIME_ENTRYPOINTS_2026-06-01.md`
-- `docs/AGENT_LEARNING_NOTES_PROJECT_ALIGNMENT_2026-05-24.md`
 - `docs/NEXT_DEVELOPMENT_PLAN_2026-05-09.md`
+- `docs/PERSONAL_AGENT_PRODUCT_PRINCIPLES_2026-05-18.md`
+- `docs/AGENT_LEARNING_NOTES_PROJECT_ALIGNMENT_2026-05-24.md`
 - `docs/AGENT_TESTING_MATRIX_2026-05-08.md`
-- `AGENTS.md`
 
-Historical docs kept for reference:
+### Active plans (recent, may still be in progress)
+
+- `docs/AGENT_SKILLS_OPTIMIZATION_PLAN_2026-06-01.md`
+- `docs/LIVE_CODING_TEST_PLAN_2026-06-01.md`
+- `docs/NEW_FEATURE_EVAL_PLAN_2026-06-01.md`
+- `docs/REAL_WORLD_TEST_PLAN_2026-06-01.md`
+- `docs/TEST_LANES_2026-05-29.md`
+- `docs/DEVELOPMENT_REFACTORING_PLAN_2026-05-28.md`
+- `docs/SELF_EVOLUTION_EVAL_LOOP_PLAN_2026-05-28.md`
+- `docs/CODING_FLOW_POLISH_OBSERVABILITY_PLAN_2026-05-28.md`
+- `docs/BEHAVIOR_ASSERTION_NO_EFFECTIVE_DIFF_REPAIR_PLAN_2026-05-28.md`
+- `docs/FLOW_STABILIZATION_TEST_PLAN_2026-05-27.md`
+- `docs/FLOW_STABILIZATION_TEST_RUN_2026-05-27.md`
+- `docs/HERMES_MEMORY_FEATURE_FOLLOWUP_PLAN_2026-05-27.md`
+- `docs/RUNTIME_SPINE_STABILITY_REVIEW_PLAN_2026-05-26.md`
+
+### Reference docs (design notes, architecture, principles)
+
+- `docs/AGENTIC_DESIGN_PATTERNS_REVIEW.md`
+- `docs/AGENT_RUNTIME_CONTRACT_PLAN.md`
+- `docs/CODING_AGENT_WORKFLOW_DISCUSSION.md`
+- `docs/CONVERSATION_LOOP_RESPONSIBILITY_MAP_2026-05-11.md`
+- `docs/FUNCTIONAL_REALITY_AUDIT.md`
+- `docs/MEMORY_CONTROLLED_SELF_EVOLUTION_DESIGN.md`
+- `docs/PROJECT_FLOW_AND_RUNTIME_ARCHITECTURE_2026-05-26.md`
+- `docs/HERMES_MEMORY_SELF_EVOLUTION_REVIEW.md`
+- `docs/ACTIVE_MEMORY_PROTOTYPE.md`
+- `docs/SKILL_ROOTS_AND_TRUST.md`
+- `docs/SOUL_USER_TOOLS_CONTEXT.md`
+
+### Historical docs (archived)
+
+Completed/expired plans moved to `docs/archive/`. See `docs/archive/ARCHIVE_INDEX.md` for the full inventory and归档原因.
+
+Also kept for reference:
 
 - `PLAN.md`
 - `CAPABILITY_MATRIX.md`
-- `docs/archive/AGENTS_PROJECT_GUIDE_PRE_RUNTIME_DIET_2026-05-08.md`
-- `docs/CLAUDE_GAP_SCORECARD.md`
 - `docs/workflow/*`
-
-Removed as obsolete:
-
-- `FEATURE_COMPARISON_CLAUDE_CODE.md`
-- `FEATURE_COMPLETENESS_REPORT.md`
-
-Both removed reports described an early state with very few tools, no memory,
-and MCP as a stub. That no longer matches the codebase and was more misleading
-than useful.
 
 ## Remaining Work
 

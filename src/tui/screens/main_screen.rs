@@ -3,7 +3,7 @@
 //! 包含聊天区、输入区、状态栏的渲染
 
 use crate::{
-    state::{MessageItem, MessageRole, RuntimeStatusSnapshot},
+    state::{MessageItem, MessageRole},
     tui::{
         app::{StatusBarDensity, TuiApp},
         components::message,
@@ -30,16 +30,16 @@ pub fn render_chat_area(f: &mut Frame, app: &TuiApp, area: Rect) {
             Line::from(vec![Span::styled(
                 "Welcome to Priority Agent",
                 Style::default()
-                    .fg(app.theme.text_highlight)
+                    .fg(app.theme.tokens.fg.strong)
                     .add_modifier(Modifier::BOLD),
             )]),
             Line::from(vec![Span::styled(
                 "Type a message and press Enter to chat.",
-                Style::default().fg(app.theme.text_dim),
+                Style::default().fg(app.theme.tokens.fg.faint),
             )]),
             Line::from(vec![Span::styled(
                 format!("Model: {}", app.current_model_label()),
-                Style::default().fg(app.theme.text_dim),
+                Style::default().fg(app.theme.tokens.fg.faint),
             )]),
         ]))
         .alignment(Alignment::Center)
@@ -81,7 +81,7 @@ pub fn render_chat_area(f: &mut Frame, app: &TuiApp, area: Rect) {
         let indicator_y = inner_area.y;
         let indicator = Paragraph::new("↑ more above").style(
             Style::default()
-                .fg(app.theme.text_dim)
+                .fg(app.theme.tokens.fg.faint)
                 .add_modifier(Modifier::ITALIC),
         );
         f.render_widget(
@@ -129,9 +129,9 @@ pub fn render_chat_area(f: &mut Frame, app: &TuiApp, area: Rect) {
     }
 }
 
-/// 渲染输入区域（Claude Code 风格：底线分隔 + > 前缀）
+/// 渲染输入区域（Reasonix 风格：› prompt + placeholder）
 pub fn render_input_area(f: &mut Frame, app: &TuiApp, area: Rect) {
-    let border_style = Style::default().fg(app.theme.border);
+    let border_style = Style::default().fg(app.theme.tokens.fg.faint);
 
     // 输入区上下分隔线，形成 Claude Code 式的轻量输入槽
     let top_sep = Paragraph::new("").block(
@@ -169,36 +169,46 @@ pub fn render_input_area(f: &mut Frame, app: &TuiApp, area: Rect) {
 
     let input_text = app.input.value();
 
+    let prompt_color = match app.agent_mode {
+        crate::engine::agent_mode::AgentMode::Auto | crate::engine::agent_mode::AgentMode::Build => {
+            app.theme.tokens.tone.brand
+        }
+        crate::engine::agent_mode::AgentMode::Plan | crate::engine::agent_mode::AgentMode::Explore => {
+            app.theme.tokens.tone.accent
+        }
+        crate::engine::agent_mode::AgentMode::Review => app.theme.tokens.tone.info,
+    };
+
     let (display_text, style) = if app.is_querying {
         let mut lines = vec![Line::from(vec![
-            Span::styled("› ", Style::default().fg(app.theme.text_dim)),
+            Span::styled("› ", Style::default().fg(app.theme.tokens.fg.faint)),
             Span::styled(
                 "Thinking...",
-                Style::default().fg(app.theme.status_thinking),
+                Style::default().fg(app.theme.tokens.tone.warn),
             ),
         ])];
         if let Some(ref err) = app.error_message {
             lines.push(Line::from(vec![
                 Span::styled("  ", Style::default()),
-                Span::styled(err.clone(), Style::default().fg(app.theme.error)),
+                Span::styled(err.clone(), Style::default().fg(app.theme.tokens.tone.err)),
             ]));
         }
         (Text::from(lines), Style::default())
     } else if app.mode == crate::tui::app::AppMode::VimNormal {
         let text = Text::from(vec![Line::from(vec![
-            Span::styled("› ", Style::default().fg(app.theme.text_dim)),
+            Span::styled("› ", Style::default().fg(app.theme.tokens.fg.faint)),
             Span::styled(
                 "Vim Normal: j/k scroll, i insert, : command, Ctrl+V toggle",
-                Style::default().fg(app.theme.text_dim),
+                Style::default().fg(app.theme.tokens.fg.faint),
             ),
         ])]);
         (text, Style::default())
     } else if input_text.is_empty() {
         let text = Text::from(vec![Line::from(vec![
-            Span::styled("› ", Style::default().fg(app.theme.text_dim)),
+            Span::styled("› ", Style::default().fg(prompt_color)),
             Span::styled(
                 "Message Priority Agent...",
-                Style::default().fg(app.theme.text_dim),
+                Style::default().fg(app.theme.tokens.fg.faint),
             ),
         ])]);
         (text, Style::default())
@@ -209,13 +219,13 @@ pub fn render_input_area(f: &mut Frame, app: &TuiApp, area: Rect) {
             .map(|(i, line)| {
                 if i == 0 {
                     Line::from(vec![
-                        Span::styled("› ", Style::default().fg(app.theme.text_dim)),
-                        Span::styled(line.to_string(), Style::default().fg(app.theme.text)),
+                        Span::styled("› ", Style::default().fg(prompt_color)),
+                        Span::styled(line.to_string(), Style::default().fg(app.theme.tokens.fg.body)),
                     ])
                 } else {
                     Line::from(vec![
                         Span::styled("  ", Style::default()),
-                        Span::styled(line.to_string(), Style::default().fg(app.theme.text)),
+                        Span::styled(line.to_string(), Style::default().fg(app.theme.tokens.fg.body)),
                     ])
                 }
             })
@@ -223,7 +233,7 @@ pub fn render_input_area(f: &mut Frame, app: &TuiApp, area: Rect) {
         if lines.is_empty() {
             lines.push(Line::from(vec![Span::styled(
                 "› ",
-                Style::default().fg(app.theme.text_dim),
+                Style::default().fg(prompt_color),
             )]));
         }
         (Text::from(lines), Style::default())
@@ -250,112 +260,129 @@ pub fn render_input_area(f: &mut Frame, app: &TuiApp, area: Rect) {
     }
 }
 
-/// 渲染状态栏（Claude Code 风格：单行，简洁，· 分隔）
+/// 渲染状态栏（Reasonix 风格：mode glyph · session · cost · cache · ctx）
 pub fn render_status_bar(f: &mut Frame, app: &TuiApp, area: Rect) {
     let mut parts = Vec::new();
     let runtime = app.runtime_status_snapshot_now();
 
-    // 左侧：状态
+    // Mode glyph (Reasonix style)
+    let mode_glyph = match app.agent_mode {
+        crate::engine::agent_mode::AgentMode::Auto => "●",
+        crate::engine::agent_mode::AgentMode::Build => "●",
+        crate::engine::agent_mode::AgentMode::Plan => "⊞",
+        crate::engine::agent_mode::AgentMode::Explore => "⊙",
+        crate::engine::agent_mode::AgentMode::Review => "◐",
+    };
+    let mode_color = match app.agent_mode {
+        crate::engine::agent_mode::AgentMode::Auto | crate::engine::agent_mode::AgentMode::Build => {
+            app.theme.tokens.tone.ok
+        }
+        crate::engine::agent_mode::AgentMode::Plan | crate::engine::agent_mode::AgentMode::Explore => {
+            app.theme.tokens.tone.accent
+        }
+        crate::engine::agent_mode::AgentMode::Review => app.theme.tokens.tone.warn,
+    };
+
+    // 左侧：mode glyph + 状态
     if runtime.is_querying {
-        let frames = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
-        let ch = frames[app.tick_count % frames.len()];
         let label = runtime.current_tool_label.as_deref().unwrap_or("Thinking");
         parts.push(Span::styled(
-            format!("{} {}...", ch, label),
-            Style::default().fg(app.theme.status_thinking),
+            format!("◌ {}", label),
+            Style::default().fg(app.theme.tokens.tone.warn),
         ));
-        let active_tools = runtime.active_tool_count;
-        if active_tools > 0 {
-            parts.push(Span::styled(
-                format!("{} tools", active_tools),
-                Style::default().fg(app.theme.text_dim),
-            ));
-        }
-        if let Some(label) = terminal_status_from_runtime(&runtime) {
-            parts.push(Span::styled(label, Style::default().fg(app.theme.text_dim)));
-        }
         if let Some(usage) = app.stream_usage_label() {
-            parts.push(Span::styled(usage, Style::default().fg(app.theme.text_dim)));
+            parts.push(Span::styled(usage, Style::default().fg(app.theme.tokens.fg.faint)));
         }
         parts.push(Span::styled(
             "esc to interrupt",
-            Style::default().fg(app.theme.text_dim),
+            Style::default().fg(app.theme.tokens.fg.faint),
         ));
     } else if let Some(ref error) = runtime.last_error {
         parts.push(Span::styled(
             format!("✗ {}", error),
-            Style::default().fg(app.theme.error),
+            Style::default().fg(app.theme.tokens.tone.err),
         ));
     } else {
         parts.push(Span::styled(
-            "Ready",
-            Style::default().fg(app.theme.text_dim),
+            format!("{} {}", mode_glyph, app.current_agent_mode_label()),
+            Style::default().fg(mode_color),
         ));
     }
 
-    match app.status_bar_density {
-        StatusBarDensity::Compact => {
-            if app.vim_mode {
-                parts.push(Span::styled(
-                    "vim",
-                    Style::default().fg(app.theme.status_vim),
-                ));
-            }
+    // Session info
+    if let Some(session_id) = app.session_manager.current_session_id() {
+        let short_id = if session_id.len() > 8 { &session_id[..8] } else { &session_id };
+        parts.push(Span::styled(
+            format!("{}", short_id),
+            Style::default().fg(app.theme.tokens.fg.faint),
+        ));
+    }
+
+    // Permission
+    parts.push(Span::styled(
+        app.current_permission_label(),
+        Style::default().fg(app.theme.tokens.tone.warn),
+    ));
+
+    // Provider / Model
+    parts.push(Span::styled(
+        format!(
+            "{} / {}",
+            app.current_provider_label(),
+            app.current_model_label()
+        ),
+        Style::default().fg(app.theme.tokens.fg.faint),
+    ));
+
+    // Token usage
+    if !app.is_querying {
+        if let Some(usage) = app.stream_usage_label() {
             parts.push(Span::styled(
-                format!("mode:{}", app.current_agent_mode_label()),
-                Style::default().fg(app.theme.info),
-            ));
-            parts.push(Span::styled(
-                app.current_permission_label(),
-                Style::default().fg(app.theme.warning),
-            ));
-            parts.push(Span::styled(
-                format!(
-                    "{} / {}",
-                    app.current_provider_label(),
-                    app.current_model_label()
-                ),
-                Style::default().fg(app.theme.text_dim),
+                format!("last {}", usage),
+                Style::default().fg(app.theme.tokens.fg.faint),
             ));
         }
-        StatusBarDensity::Normal | StatusBarDensity::Debug => {
-            push_normal_status_parts(app, &runtime, &mut parts);
-            if app.status_bar_density == StatusBarDensity::Debug {
-                parts.push(Span::styled(
-                    format!("density:{}", app.status_bar_density.name()),
-                    Style::default().fg(app.theme.text_dim),
-                ));
-                parts.push(Span::styled(
-                    format!(
-                        "base:{}",
-                        compact_status_value(&app.current_provider_base_url(), 28)
-                    ),
-                    Style::default().fg(app.theme.text_dim),
-                ));
-                parts.push(Span::styled(
-                    format!("scroll:{}", app.scroll_offset),
-                    Style::default().fg(app.theme.text_dim),
-                ));
-                parts.push(Span::styled(
-                    format!(
-                        "tools:{}/{}",
-                        runtime.active_tool_count, runtime.total_tools
-                    ),
-                    Style::default().fg(app.theme.text_dim),
-                ));
-            }
-        }
+    }
+
+    if runtime.mcp_server_count > 0 {
+        parts.push(Span::styled(
+            format!("mcp:{}/{}", runtime.mcp_available_count, runtime.mcp_server_count),
+            Style::default().fg(app.theme.tokens.fg.faint),
+        ));
+    }
+
+    if app.vim_mode {
+        parts.push(Span::styled(
+            "vim",
+            Style::default().fg(app.theme.tokens.tone.violet),
+        ));
+    }
+
+    // Debug extras
+    if app.status_bar_density == StatusBarDensity::Debug {
+        parts.push(Span::styled(
+            format!("scroll:{}", app.scroll_offset),
+            Style::default().fg(app.theme.tokens.fg.faint),
+        ));
+        parts.push(Span::styled(
+            format!("tools:{}/{}", runtime.active_tool_count, runtime.total_tools),
+            Style::default().fg(app.theme.tokens.fg.faint),
+        ));
+        parts.push(Span::styled(
+            format!("msgs:{}", runtime.messages),
+            Style::default().fg(app.theme.tokens.fg.faint),
+        ));
     }
     parts.push(Span::styled(
         "? shortcuts",
-        Style::default().fg(app.theme.text_dim),
+        Style::default().fg(app.theme.tokens.fg.faint),
     ));
 
     // 用 " · " 连接所有部分
     let mut spans = Vec::new();
     for (i, part) in parts.iter().enumerate() {
         if i > 0 {
-            spans.push(Span::styled(" · ", Style::default().fg(app.theme.border)));
+            spans.push(Span::styled(" · ", Style::default().fg(app.theme.tokens.fg.faint)));
         }
         spans.push(part.clone());
     }
@@ -364,149 +391,6 @@ pub fn render_status_bar(f: &mut Frame, app: &TuiApp, area: Rect) {
         Paragraph::new(Line::from(spans)).alignment(Alignment::Left),
         area,
     );
-}
-
-fn push_normal_status_parts<'a>(
-    app: &'a TuiApp,
-    runtime: &RuntimeStatusSnapshot,
-    parts: &mut Vec<Span<'a>>,
-) {
-    if app.vim_mode {
-        parts.push(Span::styled(
-            "vim",
-            Style::default().fg(app.theme.status_vim),
-        ));
-    }
-    if app.paused {
-        parts.push(Span::styled(
-            "paused",
-            Style::default().fg(app.theme.warning),
-        ));
-    }
-    if app.focus_mode {
-        parts.push(Span::styled("focus", Style::default().fg(app.theme.info)));
-    }
-    parts.push(Span::styled(
-        format!("mode:{}", app.current_agent_mode_label()),
-        Style::default().fg(app.theme.info),
-    ));
-    parts.push(Span::styled(
-        app.workspace_status_label(),
-        Style::default().fg(app.theme.text_dim),
-    ));
-    if let Some(label) = app.plan_mode_status_label() {
-        parts.push(Span::styled(label, Style::default().fg(app.theme.warning)));
-    }
-    if let Some(label) = app.current_goal_label() {
-        parts.push(Span::styled(label, Style::default().fg(app.theme.info)));
-    }
-    if let Some(pending) = runtime.pending_permission.as_ref() {
-        parts.push(Span::styled(
-            format!("approval:{}", compact_status_value(pending, 32)),
-            Style::default().fg(app.theme.warning),
-        ));
-    }
-    if runtime.failed_tool_count > 0 {
-        parts.push(Span::styled(
-            format!("failed tools:{}", runtime.failed_tool_count),
-            Style::default().fg(app.theme.error),
-        ));
-    }
-    if runtime.backgrounded_tool_count > 0 {
-        parts.push(Span::styled(
-            format!("background:{}", runtime.backgrounded_tool_count),
-            Style::default().fg(app.theme.info),
-        ));
-    }
-    if runtime.mcp_server_count > 0 {
-        let label = if runtime.mcp_repair_hints.is_empty() {
-            format!(
-                "mcp:{}/{}",
-                runtime.mcp_available_count, runtime.mcp_server_count
-            )
-        } else {
-            format!(
-                "mcp:{}/{} repair:{}",
-                runtime.mcp_available_count,
-                runtime.mcp_server_count,
-                runtime.mcp_repair_hints.len()
-            )
-        };
-        parts.push(Span::styled(label, Style::default().fg(app.theme.text_dim)));
-    }
-    let pasted_blocks = app.pasted_block_count();
-    if pasted_blocks > 0 {
-        parts.push(Span::styled(
-            format!("{} pasted", pasted_blocks),
-            Style::default().fg(app.theme.info),
-        ));
-    }
-
-    parts.push(Span::styled(
-        app.current_permission_label(),
-        Style::default().fg(app.theme.warning),
-    ));
-    parts.push(Span::styled(
-        format!(
-            "{} / {}",
-            app.current_provider_label(),
-            app.current_model_label()
-        ),
-        Style::default().fg(app.theme.text_dim),
-    ));
-    parts.push(Span::styled(
-        format!("{} msgs", runtime.messages),
-        Style::default().fg(app.theme.text_dim),
-    ));
-    if !app.is_querying {
-        if let Some(usage) = app.stream_usage_label() {
-            parts.push(Span::styled(
-                format!("last {}", usage),
-                Style::default().fg(app.theme.text_dim),
-            ));
-        }
-    }
-    if let Some(label) = terminal_status_from_runtime(runtime) {
-        parts.push(Span::styled(label, Style::default().fg(app.theme.text_dim)));
-    }
-}
-
-fn terminal_status_from_runtime(runtime: &RuntimeStatusSnapshot) -> Option<String> {
-    if runtime.terminal_task_count == 0 && runtime.backgrounded_tool_count == 0 {
-        return None;
-    }
-    let mut parts = vec![format!(
-        "terminal:{}",
-        runtime
-            .terminal_task_count
-            .max(runtime.backgrounded_tool_count)
-    )];
-    if runtime.running_terminal_task_count > 0 || runtime.backgrounded_tool_count > 0 {
-        parts.push(format!(
-            "running:{}",
-            runtime
-                .running_terminal_task_count
-                .max(runtime.backgrounded_tool_count)
-        ));
-    }
-    if runtime.pty_terminal_task_count > 0 {
-        parts.push(format!("pty:{}", runtime.pty_terminal_task_count));
-    }
-    Some(parts.join(" "))
-}
-
-fn compact_status_value(value: &str, max_chars: usize) -> String {
-    if value.chars().count() <= max_chars {
-        value.to_string()
-    } else {
-        format!(
-            "{}…",
-            value
-                .chars()
-                .take(max_chars.saturating_sub(1))
-                .collect::<String>()
-        )
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -706,11 +590,11 @@ fn render_tool_runs_message<'a>(runs: &'a [ToolRunView], app: &'a TuiApp) -> Par
     for (run_idx, run) in runs.iter().enumerate() {
         let expanded = app.is_tool_run_expanded(run);
         let accent = match run.status {
-            ToolRunStatus::Queued | ToolRunStatus::Running => app.theme.status_thinking,
-            ToolRunStatus::WaitingPermission => app.theme.warning,
-            ToolRunStatus::Backgrounded | ToolRunStatus::Completed => app.theme.text_dim,
-            ToolRunStatus::Cancelled => app.theme.warning,
-            ToolRunStatus::TimedOut | ToolRunStatus::Failed => app.theme.error,
+            ToolRunStatus::Queued | ToolRunStatus::Running => app.theme.tokens.tone.warn,
+            ToolRunStatus::WaitingPermission => app.theme.tokens.tone.warn,
+            ToolRunStatus::Backgrounded | ToolRunStatus::Completed => app.theme.tokens.fg.faint,
+            ToolRunStatus::Cancelled => app.theme.tokens.tone.warn,
+            ToolRunStatus::TimedOut | ToolRunStatus::Failed => app.theme.tokens.tone.err,
         };
         for (line_idx, line) in run.render_lines(expanded).into_iter().enumerate() {
             let prefix = if line_idx == 0 {
@@ -731,9 +615,9 @@ fn render_tool_runs_message<'a>(runs: &'a [ToolRunView], app: &'a TuiApp) -> Par
                 && (matches!(line.trim_start().chars().next(), Some('{' | '}' | '"'))
                     || line.contains("result:"))
             {
-                Style::default().fg(app.theme.text)
+                Style::default().fg(app.theme.tokens.fg.body)
             } else {
-                Style::default().fg(app.theme.text_dim)
+                Style::default().fg(app.theme.tokens.fg.faint)
             };
             lines.push(Line::from(vec![
                 Span::styled(prefix, Style::default().fg(accent)),
@@ -753,8 +637,8 @@ pub fn render_tool_viewer(f: &mut Frame, app: &TuiApp, area: Rect) {
     let block = Block::default()
         .title(format!(" Tool Output: {} ", app.tool_viewer_title))
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(app.theme.border_active))
-        .style(Style::default().bg(app.theme.bg_popup));
+        .border_style(Style::default().fg(app.theme.tokens.tone.brand))
+        .style(Style::default().bg(app.theme.tokens.surface.bg_elev));
 
     let mut lines = app
         .tool_viewer_content
@@ -768,18 +652,18 @@ pub fn render_tool_viewer(f: &mut Frame, app: &TuiApp, area: Rect) {
     if lines.is_empty() {
         lines.push(Line::from(Span::styled(
             "No tool output.",
-            Style::default().fg(app.theme.text_dim),
+            Style::default().fg(app.theme.tokens.fg.faint),
         )));
     }
 
     lines.push(Line::from(""));
     lines.push(Line::from(vec![
-        Span::styled("esc/q", Style::default().fg(app.theme.info)),
-        Span::styled(" close  ", Style::default().fg(app.theme.text_dim)),
-        Span::styled("↑/↓", Style::default().fg(app.theme.info)),
-        Span::styled(" scroll  ", Style::default().fg(app.theme.text_dim)),
-        Span::styled("PgUp/PgDn", Style::default().fg(app.theme.info)),
-        Span::styled(" page", Style::default().fg(app.theme.text_dim)),
+        Span::styled("esc/q", Style::default().fg(app.theme.tokens.tone.info)),
+        Span::styled(" close  ", Style::default().fg(app.theme.tokens.fg.faint)),
+        Span::styled("↑/↓", Style::default().fg(app.theme.tokens.tone.info)),
+        Span::styled(" scroll  ", Style::default().fg(app.theme.tokens.fg.faint)),
+        Span::styled("PgUp/PgDn", Style::default().fg(app.theme.tokens.tone.info)),
+        Span::styled(" page", Style::default().fg(app.theme.tokens.fg.faint)),
     ]));
 
     let total_lines = lines.len().saturating_sub(1) as u16;
@@ -801,7 +685,7 @@ fn tool_viewer_line_style(raw: &str, app: &TuiApp) -> Style {
         || raw.ends_with(':')
     {
         Style::default()
-            .fg(app.theme.text_highlight)
+            .fg(app.theme.tokens.fg.strong)
             .add_modifier(Modifier::BOLD)
     } else if trimmed.starts_with("ERROR")
         || trimmed.starts_with("Error")
@@ -809,21 +693,21 @@ fn tool_viewer_line_style(raw: &str, app: &TuiApp) -> Style {
         || trimmed.contains("panicked")
         || trimmed.contains("failed")
     {
-        Style::default().fg(app.theme.error)
+        Style::default().fg(app.theme.tokens.tone.err)
     } else if trimmed.starts_with('+') && !trimmed.starts_with("+++") {
-        Style::default().fg(app.theme.diff_add)
+        Style::default().fg(app.theme.tokens.tone.ok)
     } else if trimmed.starts_with('-') && !trimmed.starts_with("---") {
-        Style::default().fg(app.theme.diff_remove)
+        Style::default().fg(app.theme.tokens.tone.err)
     } else if trimmed.starts_with("@@") || trimmed.starts_with("diff --git") {
         Style::default()
-            .fg(app.theme.diff_line_number)
+            .fg(app.theme.tokens.fg.faint)
             .add_modifier(Modifier::BOLD)
     } else if matches!(trimmed.chars().next(), Some('{' | '}' | '[' | ']' | '"')) {
-        Style::default().fg(app.theme.info)
+        Style::default().fg(app.theme.tokens.tone.info)
     } else if raw.starts_with("- ") {
-        Style::default().fg(app.theme.text_dim)
+        Style::default().fg(app.theme.tokens.fg.faint)
     } else {
-        Style::default().fg(app.theme.text)
+        Style::default().fg(app.theme.tokens.fg.body)
     }
 }
 
@@ -833,9 +717,9 @@ pub fn render_sidebar(f: &mut Frame, app: &TuiApp, area: Rect) {
 
     let block = Block::default()
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(app.theme.border_active))
+        .border_style(Style::default().fg(app.theme.tokens.tone.brand))
         .title(" Sessions ")
-        .style(Style::default().bg(app.theme.bg));
+        .style(Style::default().bg(app.theme.tokens.surface.bg));
 
     let inner = block.inner(area);
     f.render_widget(block, area);
@@ -859,14 +743,14 @@ pub fn render_sidebar(f: &mut Frame, app: &TuiApp, area: Rect) {
 
             let style = if is_current {
                 Style::default()
-                    .fg(app.theme.assistant_message)
+                    .fg(app.theme.tokens.tone.ok)
                     .add_modifier(Modifier::BOLD)
             } else if is_selected {
                 Style::default()
-                    .fg(app.theme.text_highlight)
+                    .fg(app.theme.tokens.fg.strong)
                     .add_modifier(Modifier::BOLD)
             } else {
-                Style::default().fg(app.theme.text)
+                Style::default().fg(app.theme.tokens.fg.body)
             };
 
             let prefix = if is_current { "● " } else { "○ " };
@@ -896,8 +780,8 @@ pub fn render_message_search(f: &mut Frame, app: &TuiApp, area: Rect) {
     let block = Block::default()
         .title(format!(" {} ", title))
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(app.theme.border_active))
-        .style(Style::default().bg(app.theme.bg_popup));
+        .border_style(Style::default().fg(app.theme.tokens.tone.brand))
+        .style(Style::default().bg(app.theme.tokens.surface.bg_elev));
 
     let inner = block.inner(popup_area);
     f.render_widget(block, popup_area);
@@ -909,7 +793,7 @@ pub fn render_message_search(f: &mut Frame, app: &TuiApp, area: Rect) {
             "No matches found"
         };
         let text = Paragraph::new(hint)
-            .style(Style::default().fg(app.theme.text_dim))
+            .style(Style::default().fg(app.theme.tokens.fg.faint))
             .alignment(Alignment::Center);
         f.render_widget(text, inner);
     } else {
@@ -926,7 +810,7 @@ pub fn render_message_search(f: &mut Frame, app: &TuiApp, area: Rect) {
         height: 1,
     };
     let hint = Paragraph::new("Esc: close | Enter: jump | ↑/↓: navigate | n: toggle case")
-        .style(Style::default().fg(app.theme.text_dim))
+        .style(Style::default().fg(app.theme.tokens.fg.faint))
         .alignment(Alignment::Center);
     f.render_widget(hint, hint_area);
 }
@@ -1025,12 +909,12 @@ pub fn render_command_palette(f: &mut Frame, app: &TuiApp, area: Rect) {
     let block = Block::default()
         .title(" Command Palette ")
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(app.theme.info))
+        .border_style(Style::default().fg(app.theme.tokens.tone.info))
         .style(Style::default().bg(Color::Black));
 
     let mut lines = vec![
         Line::from(vec![
-            Span::styled("Search: ", Style::default().fg(app.theme.text_dim)),
+            Span::styled("Search: ", Style::default().fg(app.theme.tokens.fg.faint)),
             Span::styled(
                 if app.command_palette_query.is_empty() {
                     "type to filter commands"
@@ -1038,9 +922,9 @@ pub fn render_command_palette(f: &mut Frame, app: &TuiApp, area: Rect) {
                     app.command_palette_query.as_str()
                 },
                 if app.command_palette_query.is_empty() {
-                    Style::default().fg(app.theme.text_dim)
+                    Style::default().fg(app.theme.tokens.fg.faint)
                 } else {
-                    Style::default().fg(app.theme.text)
+                    Style::default().fg(app.theme.tokens.fg.body)
                 },
             ),
         ]),
@@ -1056,11 +940,11 @@ pub fn render_command_palette(f: &mut Frame, app: &TuiApp, area: Rect) {
         };
         lines.push(Line::from(Span::styled(
             empty_message,
-            Style::default().fg(app.theme.text_dim),
+            Style::default().fg(app.theme.tokens.fg.faint),
         )));
         lines.push(Line::from(Span::styled(
             "Try a command name, category, alias, or description.",
-            Style::default().fg(app.theme.text_dim),
+            Style::default().fg(app.theme.tokens.fg.faint),
         )));
     } else {
         let mut last_category = "";
@@ -1083,7 +967,7 @@ pub fn render_command_palette(f: &mut Frame, app: &TuiApp, area: Rect) {
                 lines.push(Line::from(Span::styled(
                     display_category,
                     Style::default()
-                        .fg(app.theme.text_highlight)
+                        .fg(app.theme.tokens.fg.strong)
                         .add_modifier(Modifier::BOLD),
                 )));
                 last_category = display_category;
@@ -1093,10 +977,10 @@ pub fn render_command_palette(f: &mut Frame, app: &TuiApp, area: Rect) {
             let marker = if selected { "› " } else { "  " };
             let style = if selected {
                 Style::default()
-                    .fg(app.theme.text)
+                    .fg(app.theme.tokens.fg.body)
                     .add_modifier(Modifier::BOLD)
             } else {
-                Style::default().fg(app.theme.text_dim)
+                Style::default().fg(app.theme.tokens.fg.faint)
             };
             let alias = if cmd.aliases.is_empty() {
                 String::new()
@@ -1109,11 +993,11 @@ pub fn render_command_palette(f: &mut Frame, app: &TuiApp, area: Rect) {
                 format!(" {}", cmd.maturity.badge())
             };
             lines.push(Line::from(vec![
-                Span::styled(marker, Style::default().fg(app.theme.info)),
+                Span::styled(marker, Style::default().fg(app.theme.tokens.tone.info)),
                 Span::styled(format!("{:<18}", cmd.name), style),
-                Span::styled(cmd.description, Style::default().fg(app.theme.text_dim)),
-                Span::styled(alias, Style::default().fg(app.theme.text_dim)),
-                Span::styled(maturity, Style::default().fg(app.theme.warning)),
+                Span::styled(cmd.description, Style::default().fg(app.theme.tokens.fg.faint)),
+                Span::styled(alias, Style::default().fg(app.theme.tokens.fg.faint)),
+                Span::styled(maturity, Style::default().fg(app.theme.tokens.tone.warn)),
             ]));
         }
     }
@@ -1127,42 +1011,42 @@ pub fn render_command_palette(f: &mut Frame, app: &TuiApp, area: Rect) {
         };
         lines.push(Line::from(""));
         lines.push(Line::from(vec![
-            Span::styled("Action:", Style::default().fg(app.theme.text_dim)),
-            Span::styled(format!(" {}", action), Style::default().fg(app.theme.info)),
+            Span::styled("Action:", Style::default().fg(app.theme.tokens.fg.faint)),
+            Span::styled(format!(" {}", action), Style::default().fg(app.theme.tokens.tone.info)),
         ]));
         lines.push(Line::from(vec![
-            Span::styled("Usage: ", Style::default().fg(app.theme.text_dim)),
+            Span::styled("Usage: ", Style::default().fg(app.theme.tokens.fg.faint)),
             Span::styled(
                 selected.usage,
                 Style::default()
-                    .fg(app.theme.text)
+                    .fg(app.theme.tokens.fg.body)
                     .add_modifier(Modifier::BOLD),
             ),
         ]));
         lines.push(Line::from(vec![
-            Span::styled("Info:  ", Style::default().fg(app.theme.text_dim)),
+            Span::styled("Info:  ", Style::default().fg(app.theme.tokens.fg.faint)),
             Span::styled(
                 selected.description,
-                Style::default().fg(app.theme.text_dim),
+                Style::default().fg(app.theme.tokens.fg.faint),
             ),
         ]));
         lines.push(Line::from(vec![
-            Span::styled("Maturity: ", Style::default().fg(app.theme.text_dim)),
+            Span::styled("Maturity: ", Style::default().fg(app.theme.tokens.fg.faint)),
             Span::styled(
                 selected.maturity.label(),
                 Style::default().fg(match selected.maturity {
-                    crate::tui::commands::CommandMaturity::Production => app.theme.success,
-                    crate::tui::commands::CommandMaturity::Usable => app.theme.warning,
-                    crate::tui::commands::CommandMaturity::Placeholder => app.theme.error,
+                    crate::tui::commands::CommandMaturity::Production => app.theme.tokens.tone.ok,
+                    crate::tui::commands::CommandMaturity::Usable => app.theme.tokens.tone.warn,
+                    crate::tui::commands::CommandMaturity::Placeholder => app.theme.tokens.tone.err,
                 }),
             ),
         ]));
         if !selected.aliases.is_empty() {
             lines.push(Line::from(vec![
-                Span::styled("Alias: ", Style::default().fg(app.theme.text_dim)),
+                Span::styled("Alias: ", Style::default().fg(app.theme.tokens.fg.faint)),
                 Span::styled(
                     selected.aliases.join(", "),
-                    Style::default().fg(app.theme.text_dim),
+                    Style::default().fg(app.theme.tokens.fg.faint),
                 ),
             ]));
         }
@@ -1170,15 +1054,15 @@ pub fn render_command_palette(f: &mut Frame, app: &TuiApp, area: Rect) {
 
     lines.push(Line::from(""));
     lines.push(Line::from(vec![
-        Span::styled("enter", Style::default().fg(app.theme.info)),
+        Span::styled("enter", Style::default().fg(app.theme.tokens.tone.info)),
         Span::styled(
             " execute or insert  ",
-            Style::default().fg(app.theme.text_dim),
+            Style::default().fg(app.theme.tokens.fg.faint),
         ),
-        Span::styled("esc", Style::default().fg(app.theme.info)),
-        Span::styled(" close  ", Style::default().fg(app.theme.text_dim)),
-        Span::styled("ctrl+p", Style::default().fg(app.theme.info)),
-        Span::styled(" toggle", Style::default().fg(app.theme.text_dim)),
+        Span::styled("esc", Style::default().fg(app.theme.tokens.tone.info)),
+        Span::styled(" close  ", Style::default().fg(app.theme.tokens.fg.faint)),
+        Span::styled("ctrl+p", Style::default().fg(app.theme.tokens.tone.info)),
+        Span::styled(" toggle", Style::default().fg(app.theme.tokens.fg.faint)),
     ]));
 
     f.render_widget(Clear, popup_area);
@@ -1195,7 +1079,7 @@ pub fn render_shortcut_help(f: &mut Frame, app: &TuiApp, area: Rect) {
     let block = Block::default()
         .title(" Shortcuts ")
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(app.theme.info))
+        .border_style(Style::default().fg(app.theme.tokens.tone.info))
         .style(Style::default().bg(Color::Black));
     let kb = &app.keybindings;
     let lines = vec![
@@ -1203,7 +1087,7 @@ pub fn render_shortcut_help(f: &mut Frame, app: &TuiApp, area: Rect) {
         Line::from(vec![Span::styled(
             "Core",
             Style::default()
-                .fg(app.theme.text_highlight)
+                .fg(app.theme.tokens.fg.strong)
                 .add_modifier(Modifier::BOLD),
         )]),
         Line::from(format!("  {}        send message", kb.chat_submit)),
@@ -1219,7 +1103,7 @@ pub fn render_shortcut_help(f: &mut Frame, app: &TuiApp, area: Rect) {
         Line::from(vec![Span::styled(
             "Navigation",
             Style::default()
-                .fg(app.theme.text_highlight)
+                .fg(app.theme.tokens.fg.strong)
                 .add_modifier(Modifier::BOLD),
         )]),
         Line::from("  ↑/↓          move cursor or scroll at edge"),
@@ -1230,7 +1114,7 @@ pub fn render_shortcut_help(f: &mut Frame, app: &TuiApp, area: Rect) {
         Line::from(vec![Span::styled(
             "Approvals",
             Style::default()
-                .fg(app.theme.text_highlight)
+                .fg(app.theme.tokens.fg.strong)
                 .add_modifier(Modifier::BOLD),
         )]),
         Line::from(format!(
@@ -1248,7 +1132,7 @@ pub fn render_shortcut_help(f: &mut Frame, app: &TuiApp, area: Rect) {
         Line::from(""),
         Line::from(Span::styled(
             "Press any key to close.",
-            Style::default().fg(app.theme.text_dim),
+            Style::default().fg(app.theme.tokens.fg.faint),
         )),
     ];
 
@@ -1266,29 +1150,29 @@ pub fn render_model_select(f: &mut Frame, app: &TuiApp, area: Rect) {
     let block = Block::default()
         .title(" Model ")
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(app.theme.info))
+        .border_style(Style::default().fg(app.theme.tokens.tone.info))
         .style(Style::default().bg(Color::Black));
 
     let mut lines = vec![
         Line::from(""),
         Line::from(vec![
-            Span::styled("Provider ", Style::default().fg(app.theme.text_dim)),
+            Span::styled("Provider ", Style::default().fg(app.theme.tokens.fg.faint)),
             Span::styled(
                 app.current_provider_label(),
                 Style::default()
-                    .fg(app.theme.text_highlight)
+                    .fg(app.theme.tokens.fg.strong)
                     .add_modifier(Modifier::BOLD),
             ),
         ]),
         Line::from(vec![
-            Span::styled("Base URL ", Style::default().fg(app.theme.text_dim)),
+            Span::styled("Base URL ", Style::default().fg(app.theme.tokens.fg.faint)),
             Span::styled(
                 app.current_provider_base_url(),
-                Style::default().fg(app.theme.text_dim),
+                Style::default().fg(app.theme.tokens.fg.faint),
             ),
         ]),
         Line::from(vec![
-            Span::styled("Search  ", Style::default().fg(app.theme.text_dim)),
+            Span::styled("Search  ", Style::default().fg(app.theme.tokens.fg.faint)),
             Span::styled(
                 if app.model_select_query.is_empty() {
                     "type to filter models"
@@ -1296,9 +1180,9 @@ pub fn render_model_select(f: &mut Frame, app: &TuiApp, area: Rect) {
                     app.model_select_query.as_str()
                 },
                 if app.model_select_query.is_empty() {
-                    Style::default().fg(app.theme.text_dim)
+                    Style::default().fg(app.theme.tokens.fg.faint)
                 } else {
-                    Style::default().fg(app.theme.text)
+                    Style::default().fg(app.theme.tokens.fg.body)
                 },
             ),
         ]),
@@ -1314,11 +1198,11 @@ pub fn render_model_select(f: &mut Frame, app: &TuiApp, area: Rect) {
         };
         lines.push(Line::from(Span::styled(
             empty_message,
-            Style::default().fg(app.theme.text_dim),
+            Style::default().fg(app.theme.tokens.fg.faint),
         )));
         lines.push(Line::from(Span::styled(
             "Backspace edits search; /settings changes provider and API configuration.",
-            Style::default().fg(app.theme.text_dim),
+            Style::default().fg(app.theme.tokens.fg.faint),
         )));
     } else {
         for (idx, choice) in choices.iter().enumerate() {
@@ -1326,19 +1210,19 @@ pub fn render_model_select(f: &mut Frame, app: &TuiApp, area: Rect) {
             let marker = if selected { "› " } else { "  " };
             let model_style = if choice.active {
                 Style::default()
-                    .fg(app.theme.text_highlight)
+                    .fg(app.theme.tokens.fg.strong)
                     .add_modifier(Modifier::BOLD)
             } else if selected {
                 Style::default()
-                    .fg(app.theme.text)
+                    .fg(app.theme.tokens.fg.body)
                     .add_modifier(Modifier::BOLD)
             } else {
-                Style::default().fg(app.theme.text)
+                Style::default().fg(app.theme.tokens.fg.body)
             };
             lines.push(Line::from(vec![
-                Span::styled(marker, Style::default().fg(app.theme.info)),
+                Span::styled(marker, Style::default().fg(app.theme.tokens.tone.info)),
                 Span::styled(format!("{:<24}", choice.model), model_style),
-                Span::styled(choice.note.clone(), Style::default().fg(app.theme.text_dim)),
+                Span::styled(choice.note.clone(), Style::default().fg(app.theme.tokens.fg.faint)),
             ]));
         }
     }
@@ -1347,25 +1231,25 @@ pub fn render_model_select(f: &mut Frame, app: &TuiApp, area: Rect) {
         lines.push(Line::from(""));
         lines.push(Line::from(Span::styled(
             notice.clone(),
-            Style::default().fg(app.theme.info),
+            Style::default().fg(app.theme.tokens.tone.info),
         )));
     }
 
     lines.push(Line::from(""));
     lines.push(Line::from(vec![
-        Span::styled("enter", Style::default().fg(app.theme.info)),
+        Span::styled("enter", Style::default().fg(app.theme.tokens.tone.info)),
         Span::styled(
             " switch for next request  ",
-            Style::default().fg(app.theme.text_dim),
+            Style::default().fg(app.theme.tokens.fg.faint),
         ),
-        Span::styled("esc", Style::default().fg(app.theme.info)),
-        Span::styled(" close  ", Style::default().fg(app.theme.text_dim)),
-        Span::styled("backspace", Style::default().fg(app.theme.info)),
-        Span::styled(" edit search  ", Style::default().fg(app.theme.text_dim)),
-        Span::styled("/settings", Style::default().fg(app.theme.info)),
+        Span::styled("esc", Style::default().fg(app.theme.tokens.tone.info)),
+        Span::styled(" close  ", Style::default().fg(app.theme.tokens.fg.faint)),
+        Span::styled("backspace", Style::default().fg(app.theme.tokens.tone.info)),
+        Span::styled(" edit search  ", Style::default().fg(app.theme.tokens.fg.faint)),
+        Span::styled("/settings", Style::default().fg(app.theme.tokens.tone.info)),
         Span::styled(
             " provider/API keys",
-            Style::default().fg(app.theme.text_dim),
+            Style::default().fg(app.theme.tokens.fg.faint),
         ),
     ]));
 
@@ -1383,13 +1267,13 @@ pub fn render_provider_select(f: &mut Frame, app: &TuiApp, area: Rect) {
     let block = Block::default()
         .title(" Provider ")
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(app.theme.info))
+        .border_style(Style::default().fg(app.theme.tokens.tone.info))
         .style(Style::default().bg(Color::Black));
 
     let mut lines = vec![
         Line::from(""),
         Line::from(vec![
-            Span::styled("Current ", Style::default().fg(app.theme.text_dim)),
+            Span::styled("Current ", Style::default().fg(app.theme.tokens.fg.faint)),
             Span::styled(
                 format!(
                     "{} / {}",
@@ -1397,12 +1281,12 @@ pub fn render_provider_select(f: &mut Frame, app: &TuiApp, area: Rect) {
                     app.current_model_label()
                 ),
                 Style::default()
-                    .fg(app.theme.text_highlight)
+                    .fg(app.theme.tokens.fg.strong)
                     .add_modifier(Modifier::BOLD),
             ),
         ]),
         Line::from(vec![
-            Span::styled("Search  ", Style::default().fg(app.theme.text_dim)),
+            Span::styled("Search  ", Style::default().fg(app.theme.tokens.fg.faint)),
             Span::styled(
                 if app.provider_select_query.is_empty() {
                     "type to filter providers"
@@ -1410,9 +1294,9 @@ pub fn render_provider_select(f: &mut Frame, app: &TuiApp, area: Rect) {
                     app.provider_select_query.as_str()
                 },
                 if app.provider_select_query.is_empty() {
-                    Style::default().fg(app.theme.text_dim)
+                    Style::default().fg(app.theme.tokens.fg.faint)
                 } else {
-                    Style::default().fg(app.theme.text)
+                    Style::default().fg(app.theme.tokens.fg.body)
                 },
             ),
         ]),
@@ -1428,11 +1312,11 @@ pub fn render_provider_select(f: &mut Frame, app: &TuiApp, area: Rect) {
         };
         lines.push(Line::from(Span::styled(
             empty_message,
-            Style::default().fg(app.theme.text_dim),
+            Style::default().fg(app.theme.tokens.fg.faint),
         )));
         lines.push(Line::from(Span::styled(
             "Backspace edits search; /settings opens API key and base URL settings.",
-            Style::default().fg(app.theme.text_dim),
+            Style::default().fg(app.theme.tokens.fg.faint),
         )));
     } else {
         for (idx, choice) in choices.iter().enumerate() {
@@ -1440,38 +1324,38 @@ pub fn render_provider_select(f: &mut Frame, app: &TuiApp, area: Rect) {
             let marker = if selected { "› " } else { "  " };
             let style = if choice.active {
                 Style::default()
-                    .fg(app.theme.text_highlight)
+                    .fg(app.theme.tokens.fg.strong)
                     .add_modifier(Modifier::BOLD)
             } else if choice.configured {
-                Style::default().fg(app.theme.text)
+                Style::default().fg(app.theme.tokens.fg.body)
             } else {
-                Style::default().fg(app.theme.text_dim)
+                Style::default().fg(app.theme.tokens.fg.faint)
             };
             lines.push(Line::from(vec![
-                Span::styled(marker, Style::default().fg(app.theme.info)),
+                Span::styled(marker, Style::default().fg(app.theme.tokens.tone.info)),
                 Span::styled(format!("{:<10}", choice.name), style),
                 Span::styled(
                     format!("{:<12}", choice.provider_type),
-                    Style::default().fg(app.theme.text_dim),
+                    Style::default().fg(app.theme.tokens.fg.faint),
                 ),
                 Span::styled(format!("{:<20}", choice.model), style),
-                Span::styled(choice.note.clone(), Style::default().fg(app.theme.text_dim)),
+                Span::styled(choice.note.clone(), Style::default().fg(app.theme.tokens.fg.faint)),
             ]));
             if selected && !choice.base_url.is_empty() {
                 lines.push(Line::from(vec![
-                    Span::styled("  └ ", Style::default().fg(app.theme.text_dim)),
+                    Span::styled("  └ ", Style::default().fg(app.theme.tokens.fg.faint)),
                     Span::styled(
                         choice.base_url.clone(),
-                        Style::default().fg(app.theme.text_dim),
+                        Style::default().fg(app.theme.tokens.fg.faint),
                     ),
                 ]));
             } else if selected && !choice.configured {
                 lines.push(Line::from(vec![
-                    Span::styled("  └ setup: ", Style::default().fg(app.theme.warning)),
-                    Span::styled(choice.note.clone(), Style::default().fg(app.theme.text_dim)),
+                    Span::styled("  └ setup: ", Style::default().fg(app.theme.tokens.tone.warn)),
+                    Span::styled(choice.note.clone(), Style::default().fg(app.theme.tokens.fg.faint)),
                     Span::styled(
                         " or open /settings",
-                        Style::default().fg(app.theme.text_dim),
+                        Style::default().fg(app.theme.tokens.fg.faint),
                     ),
                 ]));
             }
@@ -1482,25 +1366,25 @@ pub fn render_provider_select(f: &mut Frame, app: &TuiApp, area: Rect) {
         lines.push(Line::from(""));
         lines.push(Line::from(Span::styled(
             notice.clone(),
-            Style::default().fg(app.theme.info),
+            Style::default().fg(app.theme.tokens.tone.info),
         )));
     }
 
     lines.push(Line::from(""));
     lines.push(Line::from(vec![
-        Span::styled("enter", Style::default().fg(app.theme.info)),
+        Span::styled("enter", Style::default().fg(app.theme.tokens.tone.info)),
         Span::styled(
             " switch configured provider  ",
-            Style::default().fg(app.theme.text_dim),
+            Style::default().fg(app.theme.tokens.fg.faint),
         ),
-        Span::styled("esc", Style::default().fg(app.theme.info)),
-        Span::styled(" close  ", Style::default().fg(app.theme.text_dim)),
-        Span::styled("backspace", Style::default().fg(app.theme.info)),
-        Span::styled(" edit search  ", Style::default().fg(app.theme.text_dim)),
-        Span::styled("/settings", Style::default().fg(app.theme.info)),
+        Span::styled("esc", Style::default().fg(app.theme.tokens.tone.info)),
+        Span::styled(" close  ", Style::default().fg(app.theme.tokens.fg.faint)),
+        Span::styled("backspace", Style::default().fg(app.theme.tokens.tone.info)),
+        Span::styled(" edit search  ", Style::default().fg(app.theme.tokens.fg.faint)),
+        Span::styled("/settings", Style::default().fg(app.theme.tokens.tone.info)),
         Span::styled(
             " edit keys/base URL",
-            Style::default().fg(app.theme.text_dim),
+            Style::default().fg(app.theme.tokens.fg.faint),
         ),
     ]));
 
@@ -2049,7 +1933,7 @@ pub fn render_onboarding(
         ))
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::Cyan))
-        .style(Style::default().bg(theme.bg));
+        .style(Style::default().bg(theme.tokens.surface.bg));
 
     let mut lines = vec![Line::from("")];
 
@@ -2062,7 +1946,7 @@ pub fn render_onboarding(
                 Span::styled("  • ", Style::default().fg(Color::Cyan)),
                 Span::styled(
                     line.strip_prefix("- ").unwrap_or(line).to_string(),
-                    Style::default().fg(theme.text),
+                    Style::default().fg(theme.tokens.fg.body),
                 ),
             ]));
         } else if line.ends_with(':') && !line.contains(" ") {
@@ -2082,7 +1966,7 @@ pub fn render_onboarding(
         } else {
             lines.push(Line::from(Span::styled(
                 line.to_string(),
-                Style::default().fg(theme.text),
+                Style::default().fg(theme.tokens.fg.body),
             )));
         }
     }
@@ -2401,11 +2285,9 @@ mod tests {
 
         let rendered = render_status_bar_text(&app);
 
-        assert!(rendered.contains("Running tests"));
-        assert!(rendered.contains("1 tools"));
         assert!(rendered.contains("esc to interrupt"));
-        assert!(rendered.contains("density:debug"));
-        assert!(rendered.contains("tools:1"));
+        assert!(rendered.contains("tools:"));
+        assert!(rendered.contains("msgs:"));
         assert!(rendered.contains("? shortcuts"));
     }
 
@@ -2442,10 +2324,9 @@ mod tests {
 
         let rendered = render_status_bar_text(&app);
 
-        assert!(rendered.contains("failed tools:1"));
-        assert!(rendered.contains("background:1"));
-        assert!(rendered.contains("terminal:2"));
-        assert!(rendered.contains("pty:1"));
+        // New status bar shows mode glyph + provider/model, not detailed tool breakdowns
+        assert!(rendered.contains("● auto"));
+        assert!(rendered.contains("? shortcuts"));
     }
 
     #[test]

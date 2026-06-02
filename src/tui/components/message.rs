@@ -1,6 +1,6 @@
 //! 消息渲染组件
 //!
-//! Claude Code 风格：简洁、无边框、用留白和颜色区分角色
+//! Reasonix 风格：Card header (glyph + role + metadata) + Card body
 
 use crate::state::{MessageItem, MessageRole};
 use crate::tui::components::markdown::parse_markdown;
@@ -10,7 +10,27 @@ use ratatui::{
     widgets::{Paragraph, Wrap},
 };
 
-/// 渲染消息为 Paragraph（Claude Code 风格）
+/// Render a card header line: `glyph  ROLE  · meta`
+fn card_header<'a>(
+    glyph: &'a str,
+    role_label: &'a str,
+    color: Color,
+    meta: Option<&'a str>,
+    faint: Color,
+) -> Line<'a> {
+    let mut spans = vec![
+        Span::styled(glyph, Style::default().fg(color).add_modifier(Modifier::BOLD)),
+        Span::styled("  ", Style::default()),
+        Span::styled(role_label, Style::default().fg(color).add_modifier(Modifier::BOLD)),
+    ];
+    if let Some(m) = meta {
+        spans.push(Span::styled(" · ", Style::default().fg(faint)));
+        spans.push(Span::styled(m, Style::default().fg(faint)));
+    }
+    Line::from(spans)
+}
+
+/// 渲染消息为 Paragraph（Reasonix card 风格）
 pub fn render_message<'a>(
     message: &'a MessageItem,
     _width: usize,
@@ -28,44 +48,47 @@ fn render_user_message<'a>(
     message: &'a MessageItem,
     theme: &'a crate::tui::theme::Theme,
 ) -> Paragraph<'a> {
+    let card = &theme.tokens.card.user;
+    let mut lines = vec![card_header(
+        card.glyph,
+        "You",
+        card.color,
+        None,
+        theme.tokens.fg.faint,
+    )];
+    lines.push(Line::from(""));
+
     let markdown_text = parse_markdown(&message.content, theme);
-    let mut lines = Vec::new();
-    for (idx, line) in markdown_text.lines.into_iter().enumerate() {
-        let mut spans = Vec::new();
-        if idx == 0 {
-            spans.push(Span::styled("› ", Style::default().fg(theme.text_dim)));
-        } else {
-            spans.push(Span::styled("  ", Style::default()));
-        }
+    for line in markdown_text.lines {
+        let mut spans = vec![Span::styled("  ", Style::default())];
         spans.extend(line.spans);
         lines.push(Line::from(spans));
     }
     Paragraph::new(Text::from(lines))
         .wrap(Wrap { trim: true })
-        .style(Style::default().bg(theme.user_message_bg))
+        .style(Style::default().bg(theme.tokens.message_bg.user))
 }
 
 fn render_assistant_message<'a>(
     message: &'a MessageItem,
     theme: &'a crate::tui::theme::Theme,
 ) -> Paragraph<'a> {
+    let card = &theme.tokens.card.streaming;
+    let mut lines = vec![
+        card_header(
+            card.glyph,
+            "Reply",
+            theme.tokens.tone.ok,
+            None,
+            theme.tokens.fg.faint,
+        ),
+        Line::from(""),
+    ];
+
     let markdown_text = parse_markdown(&message.content, theme);
-    let mut lines = Vec::new();
     for line in markdown_text.lines {
-        // 助手消息第一行加 ● 前缀，其余行缩进对齐
-        let is_first = lines.is_empty();
-        let mut spans = Vec::new();
-        if is_first {
-            spans.push(Span::styled(
-                "● ",
-                Style::default().fg(theme.assistant_message),
-            ));
-        } else {
-            spans.push(Span::styled("  ", Style::default()));
-        }
-        for span in line.spans {
-            spans.push(span);
-        }
+        let mut spans = vec![Span::styled("  ", Style::default())];
+        spans.extend(line.spans);
         lines.push(Line::from(spans));
     }
     Paragraph::new(Text::from(lines)).wrap(Wrap { trim: true })
@@ -75,33 +98,48 @@ fn render_system_message<'a>(
     message: &'a MessageItem,
     theme: &'a crate::tui::theme::Theme,
 ) -> Paragraph<'a> {
+    let card = &theme.tokens.card.warn;
+    let mut lines = vec![
+        card_header(
+            card.glyph,
+            "System",
+            card.color,
+            None,
+            theme.tokens.fg.faint,
+        ),
+        Line::from(""),
+    ];
+
     let markdown_text = parse_markdown(&message.content, theme);
-    let mut lines = Vec::new();
     for line in markdown_text.lines {
-        let mut spans = Vec::new();
-        spans.push(Span::styled("  ", Style::default()));
-        for span in line.spans {
-            spans.push(span);
-        }
+        let mut spans = vec![Span::styled("  ", Style::default())];
+        spans.extend(line.spans);
         lines.push(Line::from(spans));
     }
     Paragraph::new(Text::from(lines))
         .wrap(Wrap { trim: true })
-        .style(
-            Style::default()
-                .fg(theme.text)
-                .add_modifier(Modifier::ITALIC),
-        )
+        .style(Style::default().add_modifier(Modifier::ITALIC))
 }
 
 fn render_tool_message<'a>(
     message: &'a MessageItem,
     theme: &'a crate::tui::theme::Theme,
 ) -> Paragraph<'a> {
-    let lines = vec![Line::from(vec![
-        Span::styled("⎿ ", Style::default().fg(theme.text_dim)),
-        Span::styled(&message.content, Style::default().fg(theme.text_dim)),
-    ])];
+    let card = &theme.tokens.card.tool;
+    let lines = vec![
+        card_header(
+            card.glyph,
+            "Tool",
+            card.color,
+            None,
+            theme.tokens.fg.faint,
+        ),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("  ", Style::default()),
+            Span::styled(&message.content, Style::default().fg(theme.tokens.fg.faint)),
+        ]),
+    ];
     Paragraph::new(Text::from(lines)).wrap(Wrap { trim: true })
 }
 
@@ -111,10 +149,10 @@ pub fn render_message_compact<'a>(
     theme: &'a crate::tui::theme::Theme,
 ) -> Paragraph<'a> {
     let (prefix, color) = match message.role {
-        MessageRole::User => ("▸", theme.user_message),
-        MessageRole::Assistant => ("◆", theme.assistant_message),
-        MessageRole::System => ("●", theme.system_message),
-        MessageRole::Tool => ("▪", theme.tool_message),
+        MessageRole::User => (theme.tokens.card.user.glyph, theme.tokens.card.user.color),
+        MessageRole::Assistant => (theme.tokens.card.streaming.glyph, theme.tokens.tone.ok),
+        MessageRole::System => (theme.tokens.card.warn.glyph, theme.tokens.tone.warn),
+        MessageRole::Tool => (theme.tokens.card.tool.glyph, theme.tokens.tone.info),
     };
 
     let content = if message.content.len() > 100 {
@@ -126,7 +164,7 @@ pub fn render_message_compact<'a>(
 
     let text = Text::from(vec![Line::from(vec![
         Span::styled(format!("{} ", prefix), Style::default().fg(color)),
-        Span::styled(content, Style::default().fg(theme.text)),
+        Span::styled(content, Style::default().fg(theme.tokens.fg.body)),
     ])]);
 
     Paragraph::new(text)
@@ -135,20 +173,20 @@ pub fn render_message_compact<'a>(
 /// 获取消息角色的颜色
 pub fn role_color(role: MessageRole, theme: &crate::tui::theme::Theme) -> Color {
     match role {
-        MessageRole::User => theme.user_message,
-        MessageRole::Assistant => theme.assistant_message,
-        MessageRole::System => theme.system_message,
-        MessageRole::Tool => theme.tool_message,
+        MessageRole::User => theme.tokens.card.user.color,
+        MessageRole::Assistant => theme.tokens.tone.ok,
+        MessageRole::System => theme.tokens.tone.warn,
+        MessageRole::Tool => theme.tokens.tone.info,
     }
 }
 
-/// 获取消息角色的图标
+/// 获取消息角色的图标（使用 card glyph）
 pub fn role_icon(role: MessageRole) -> &'static str {
     match role {
-        MessageRole::User => "👤",
-        MessageRole::Assistant => "🤖",
-        MessageRole::System => "⚙️",
-        MessageRole::Tool => "🔧",
+        MessageRole::User => "◇",
+        MessageRole::Assistant => "◈",
+        MessageRole::System => "⚠",
+        MessageRole::Tool => "▣",
     }
 }
 
@@ -160,10 +198,10 @@ mod tests {
     #[test]
     fn test_role_colors() {
         let theme = Theme::dark();
-        assert_eq!(role_color(MessageRole::User, &theme), theme.user_message);
+        assert_eq!(role_color(MessageRole::User, &theme), theme.tokens.card.user.color);
         assert_eq!(
             role_color(MessageRole::Assistant, &theme),
-            theme.assistant_message
+            theme.tokens.tone.ok
         );
     }
 }

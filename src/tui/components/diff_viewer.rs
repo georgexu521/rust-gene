@@ -24,7 +24,7 @@ pub fn render_diff_viewer(
     let block = Block::default()
         .title(format!(" Diff: {} ", title))
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(theme.border_active))
+        .border_style(Style::default().fg(theme.tokens.tone.brand))
         .style(Style::default().bg(theme.bg_popup));
 
     let mut lines = Vec::new();
@@ -33,46 +33,46 @@ pub fn render_diff_viewer(
         let line = if raw_line.starts_with("+++") || raw_line.starts_with("---") {
             Line::from(Span::styled(
                 raw_line.to_string(),
-                Style::default().fg(theme.diff_header),
+                Style::default().fg(theme.tokens.tone.warn),
             ))
         } else if raw_line.starts_with("@@") {
             Line::from(Span::styled(
                 raw_line.to_string(),
                 Style::default()
-                    .fg(theme.diff_line_number)
+                    .fg(theme.tokens.fg.faint)
                     .add_modifier(Modifier::BOLD),
             ))
         } else if raw_line.starts_with('+') {
             Line::from(Span::styled(
                 raw_line.to_string(),
-                Style::default().fg(theme.diff_add),
+                Style::default().fg(theme.tokens.tone.ok),
             ))
         } else if raw_line.starts_with('-') {
             Line::from(Span::styled(
                 raw_line.to_string(),
-                Style::default().fg(theme.diff_remove),
+                Style::default().fg(theme.tokens.tone.err),
             ))
         } else if raw_line.starts_with("diff --git") {
             Line::from(Span::styled(
                 raw_line.to_string(),
-                Style::default().fg(theme.text).add_modifier(Modifier::BOLD),
+                Style::default().fg(theme.tokens.fg.body).add_modifier(Modifier::BOLD),
             ))
         } else if raw_line.starts_with("index ") {
             Line::from(Span::styled(
                 raw_line.to_string(),
-                Style::default().fg(theme.border),
+                Style::default().fg(theme.tokens.fg.faint),
             ))
         } else if raw_line.starts_with("No ") || raw_line.starts_with("Not a git") {
             Line::from(Span::styled(
                 raw_line.to_string(),
                 Style::default()
-                    .fg(theme.text_dim)
+                    .fg(theme.tokens.fg.faint)
                     .add_modifier(Modifier::ITALIC),
             ))
         } else {
             Line::from(Span::styled(
                 raw_line.to_string(),
-                Style::default().fg(theme.text_dim),
+                Style::default().fg(theme.tokens.fg.faint),
             ))
         };
         lines.push(line);
@@ -82,7 +82,7 @@ pub fn render_diff_viewer(
         lines.push(Line::from(Span::styled(
             "No differences found.",
             Style::default()
-                .fg(theme.text_dim)
+                .fg(theme.tokens.fg.faint)
                 .add_modifier(Modifier::ITALIC),
         )));
     }
@@ -90,24 +90,24 @@ pub fn render_diff_viewer(
     // 添加底部提示
     lines.push(Line::from(""));
     lines.push(Line::from(vec![
-        Span::styled("Press ", Style::default().fg(theme.border)),
+        Span::styled("Press ", Style::default().fg(theme.tokens.fg.faint)),
         Span::styled(
             "Esc/q",
             Style::default()
-                .fg(theme.warning)
+                .fg(theme.tokens.tone.warn)
                 .add_modifier(Modifier::BOLD),
         ),
-        Span::styled(" close  ", Style::default().fg(theme.border)),
+        Span::styled(" close  ", Style::default().fg(theme.tokens.fg.faint)),
         Span::styled(
             "↑/↓",
-            Style::default().fg(theme.info).add_modifier(Modifier::BOLD),
+            Style::default().fg(theme.tokens.tone.info).add_modifier(Modifier::BOLD),
         ),
-        Span::styled(" scroll  ", Style::default().fg(theme.border)),
+        Span::styled(" scroll  ", Style::default().fg(theme.tokens.fg.faint)),
         Span::styled(
             "PgUp/PgDn",
-            Style::default().fg(theme.info).add_modifier(Modifier::BOLD),
+            Style::default().fg(theme.tokens.tone.info).add_modifier(Modifier::BOLD),
         ),
-        Span::styled(" page", Style::default().fg(theme.border)),
+        Span::styled(" page", Style::default().fg(theme.tokens.fg.faint)),
     ]));
 
     let total_lines = lines.len().saturating_sub(1) as u16;
