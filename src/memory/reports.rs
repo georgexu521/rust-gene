@@ -3,6 +3,8 @@ use crate::memory::types::{MemoryRecord, MemoryStatus};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
+const PINNED_MEMORY_INDEX_HEADING_LIMIT: usize = 8;
+
 /// Current product contract for memory surfaces.
 ///
 /// Keep this contract small: durable prompt memory, dynamic recall, and
@@ -33,6 +35,48 @@ impl MemoryProductContractReport {
             write_policy: "review_required by default unless explicit project policy narrows auto-write".to_string(),
         }
     }
+}
+
+pub(crate) fn format_pinned_memory_text_index(
+    source: &str,
+    content: &str,
+    char_limit: usize,
+) -> Option<String> {
+    let trimmed = content.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    let mut headings = trimmed
+        .lines()
+        .map(str::trim)
+        .filter_map(|line| {
+            let heading = line.trim_start_matches('#').trim();
+            (line.starts_with('#') && !heading.is_empty()).then(|| {
+                heading
+                    .chars()
+                    .take(96)
+                    .collect::<String>()
+                    .replace('\n', " ")
+            })
+        })
+        .collect::<Vec<_>>();
+    headings.sort();
+    headings.dedup();
+    headings.truncate(PINNED_MEMORY_INDEX_HEADING_LIMIT);
+
+    let heading_summary = if headings.is_empty() {
+        "headings: none".to_string()
+    } else {
+        format!("headings: {}", headings.join(" | "))
+    };
+    let line = format!(
+        "- {} ({} chars; {})",
+        source,
+        trimmed.chars().count(),
+        heading_summary
+    );
+    Some(line.chars().take(char_limit).collect())
 }
 
 /// 记忆层级

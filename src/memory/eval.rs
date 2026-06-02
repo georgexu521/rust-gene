@@ -1118,7 +1118,7 @@ fn eval_mid_session_snapshot_is_stable() -> MemoryEvalResult {
     let base = temp_eval_dir("snapshot-stable");
     let memory_path = base.join("MEMORY.md");
     if let Err(error) = std::fs::create_dir_all(&base)
-        .and_then(|_| std::fs::write(&memory_path, "# Memory\nInitial stable memory."))
+        .and_then(|_| std::fs::write(&memory_path, "# Initial Memory\nInitial stable memory."))
     {
         return fail(
             "mid_session_snapshot_stable",
@@ -1130,7 +1130,7 @@ fn eval_mid_session_snapshot_is_stable() -> MemoryEvalResult {
     let mut manager = MemoryManager::with_base_dir(base.clone());
     manager.freeze_snapshot();
     let before = manager.get_snapshot();
-    let write_result = std::fs::write(&memory_path, "# Memory\nChanged during session.");
+    let write_result = std::fs::write(&memory_path, "# Changed Memory\nChanged during session.");
     let after = manager.get_snapshot();
     let _ = std::fs::remove_dir_all(&base);
     if let Err(error) = write_result {
@@ -1141,14 +1141,17 @@ fn eval_mid_session_snapshot_is_stable() -> MemoryEvalResult {
             format!("failed to mutate temp memory: {error}"),
         );
     }
-    if before.contains("Initial stable memory")
-        && after.contains("Initial stable memory")
+    if before.contains("Initial Memory")
+        && after.contains("Initial Memory")
+        && !before.contains("Initial stable memory")
+        && !after.contains("Initial stable memory")
+        && !after.contains("Changed Memory")
         && !after.contains("Changed during session")
     {
         pass(
             "mid_session_snapshot_stable",
             "multi_session",
-            "frozen snapshot stayed stable after mid-session disk mutation",
+            "frozen pinned snapshot index stayed stable after mid-session disk mutation",
         )
     } else {
         fail(

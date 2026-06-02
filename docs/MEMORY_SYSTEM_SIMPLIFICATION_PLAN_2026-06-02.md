@@ -3,6 +3,18 @@
 Date: 2026-06-02
 Status: Draft plan after Hermes/Reasonix comparison
 
+Implementation update:
+
+- 2026-06-02: First code slice implemented. Memory doctor now exposes the
+  pinned memory / recall / learning proposals contract, runtime budget labels
+  stable prompt memory as `pinned_memory`, and `MemorySnapshotController` skips
+  pinned snapshot injection when the current turn already has dynamic memory
+  recall.
+- 2026-06-02: Phase 2 compact pinned snapshot slice implemented. Stable prompt
+  memory now uses index-style entries for `MEMORY.md` and `USER.md` plus the
+  topic memory manifest. Full Markdown bodies stay available to search and
+  dynamic recall instead of being injected into the stable prompt snapshot.
+
 This plan narrows Priority Agent's memory system without discarding the useful
 parts already built. The goal is not to make memory less capable. The goal is
 to make the product contract simple enough that the model, runtime, and user all

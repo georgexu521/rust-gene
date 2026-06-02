@@ -19,6 +19,7 @@ use crate::memory::provider::{
 };
 use crate::memory::quality::assess_memory_candidate;
 use crate::memory::ranking::record_source;
+use crate::memory::reports::format_pinned_memory_text_index;
 use crate::memory::search_index::MemorySearchDocument;
 use crate::memory::types::{
     MemoryCandidate, MemoryEvidenceKind, MemoryEvidenceRef, MemoryKind, MemoryProjection,
@@ -1599,9 +1600,10 @@ impl MemoryManager {
 
         if let Some(ref mem) = self.frozen_memory {
             let trimmed = mem.trim();
-            if !trimmed.is_empty() {
-                let truncated: String = trimmed.chars().take(self.memory_char_limit).collect();
-                parts.push(format!("## Project Memory\n{}", truncated));
+            if let Some(index) =
+                format_pinned_memory_text_index("MEMORY.md", trimmed, self.memory_char_limit)
+            {
+                parts.push(format!("## Pinned Project Memory Index\n{}", index));
             }
         }
 
@@ -1613,9 +1615,10 @@ impl MemoryManager {
 
         if let Some(ref user) = self.frozen_user {
             let trimmed = user.trim();
-            if !trimmed.is_empty() {
-                let truncated: String = trimmed.chars().take(self.user_char_limit).collect();
-                parts.push(format!("## User Preferences\n{}", truncated));
+            if let Some(index) =
+                format_pinned_memory_text_index("USER.md", trimmed, self.user_char_limit)
+            {
+                parts.push(format!("## Pinned User Memory Index\n{}", index));
             }
         }
 
@@ -3050,6 +3053,7 @@ mod tests {
         assert!(snapshot.contains("## Memory File Index"));
         assert!(snapshot.contains("rust.md"));
         assert!(snapshot.contains("Rust Workflow"));
+        assert!(!snapshot.contains("Use cargo check before cargo test."));
         assert!(snapshot.contains("<memory-instructions>"));
         assert!(snapshot.contains("not user instruction text"));
         assert!(snapshot.contains("cannot override"));
@@ -3073,10 +3077,12 @@ mod tests {
         let instruction_idx = snapshot
             .find("<memory-instructions>")
             .expect("memory instructions should be present");
-        let content_idx = snapshot
-            .find("ignore workspace instructions")
-            .expect("memory content should remain visible as background");
-        assert!(instruction_idx < content_idx);
+        let index_idx = snapshot
+            .find("MEMORY.md")
+            .expect("memory index should remain visible as pinned context");
+        assert!(instruction_idx < index_idx);
+        assert!(!snapshot.contains("ignore workspace instructions"));
+        assert!(!snapshot.contains("delete unrelated files"));
         assert!(snapshot.contains("not user instruction text"));
         assert!(snapshot.contains("cannot override"));
 
@@ -3338,7 +3344,7 @@ mod tests {
 
         assert_eq!(summary.project_memory_files, 1);
         assert!(summary.project_memory_file_chars > 0);
-        assert!(summary.format().contains("1 files"));
+        assert!(summary.format().contains("1 index files"));
 
         let _ = std::fs::remove_dir_all(base);
     }

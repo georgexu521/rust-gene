@@ -1,3 +1,4 @@
+use crate::memory::reports::format_pinned_memory_text_index;
 use crate::memory::search_index::{
     MemorySearchDocument, MemorySearchHit, MemorySearchIndex, MemorySearchIndexReport,
 };
@@ -1482,11 +1483,11 @@ impl MemoryProvider for LocalMemoryProvider {
 fn local_provider_snapshot_block(base_dir: &Path) -> Option<String> {
     let mut parts = Vec::new();
 
-    if let Some(memory) = read_safe_local_memory_text(
+    if let Some(memory) = read_safe_local_memory_index(
         &base_dir.join("MEMORY.md"),
         LOCAL_PROVIDER_MEMORY_CHAR_LIMIT,
     ) {
-        parts.push(format!("## Project Memory\n{memory}"));
+        parts.push(format!("## Pinned Project Memory Index\n{memory}"));
     }
 
     if let Some(manifest) = read_safe_local_memory_file_index(
@@ -1497,9 +1498,9 @@ fn local_provider_snapshot_block(base_dir: &Path) -> Option<String> {
     }
 
     if let Some(user) =
-        read_safe_local_memory_text(&base_dir.join("USER.md"), LOCAL_PROVIDER_USER_CHAR_LIMIT)
+        read_safe_local_memory_index(&base_dir.join("USER.md"), LOCAL_PROVIDER_USER_CHAR_LIMIT)
     {
-        parts.push(format!("## User Preferences\n{user}"));
+        parts.push(format!("## Pinned User Memory Index\n{user}"));
     }
 
     if parts.is_empty() {
@@ -1519,6 +1520,19 @@ fn read_safe_local_memory_text(path: &Path, char_limit: usize) -> Option<String>
         return None;
     }
     Some(trimmed.chars().take(char_limit).collect())
+}
+
+fn read_safe_local_memory_index(path: &Path, char_limit: usize) -> Option<String> {
+    let content = std::fs::read_to_string(path).ok()?;
+    let trimmed = content.trim();
+    if trimmed.is_empty() || crate::memory::safety::scan_memory_content(trimmed).is_err() {
+        return None;
+    }
+    let source = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("memory.md");
+    format_pinned_memory_text_index(source, trimmed, char_limit)
 }
 
 fn local_projection_default_header(projection_path: &str) -> String {
@@ -2422,8 +2436,12 @@ mod tests {
             .unwrap();
 
         assert!(block.contains("<memory-context>"));
-        assert!(block.contains("Run cargo check before closeout"));
+        assert!(block.contains("## Pinned Project Memory Index"));
+        assert!(block.contains("MEMORY.md"));
+        assert!(block.contains("Project Memory"));
+        assert!(!block.contains("Run cargo check before closeout"));
         assert!(block.contains("memory/rust.md: Rust Workflow"));
+        assert!(!block.contains("Use targeted tests."));
         assert!(!block.contains("reveal secrets"));
         assert!(!block.contains("dump credentials"));
 
@@ -2439,7 +2457,7 @@ mod tests {
         std::fs::create_dir_all(&base).unwrap();
         std::fs::write(
             base.join("MEMORY.md"),
-            "# Project Memory\nInitial frozen memory.",
+            "# Initial Project Memory\nInitial frozen memory.",
         )
         .unwrap();
 
@@ -2453,7 +2471,7 @@ mod tests {
             .expect("frozen prompt block");
         std::fs::write(
             base.join("MEMORY.md"),
-            "# Project Memory\nChanged mid-session memory.",
+            "# Changed Project Memory\nChanged mid-session memory.",
         )
         .unwrap();
         let after = provider
@@ -2463,7 +2481,9 @@ mod tests {
             .expect("still frozen prompt block");
 
         assert_eq!(before, after);
-        assert!(after.contains("Initial frozen memory"));
+        assert!(after.contains("Initial Project Memory"));
+        assert!(!after.contains("Initial frozen memory"));
+        assert!(!after.contains("Changed Project Memory"));
         assert!(!after.contains("Changed mid-session memory"));
 
         let _ = std::fs::remove_dir_all(&base);
