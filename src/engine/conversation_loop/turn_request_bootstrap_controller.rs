@@ -122,9 +122,10 @@ mod tests {
         .await;
 
         assert!(matches!(rx.recv().await, Some(StreamEvent::Start)));
+        // Phase 0 Risk 3: retrieval is now in user message, not system
         assert!(messages.iter().any(|message| matches!(
             message,
-            Message::System { content } if content.contains("project.index:")
+            Message::User { content } if content.contains("project.index:")
         )));
     }
 }
