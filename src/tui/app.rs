@@ -1124,6 +1124,9 @@ pub struct TuiApp {
     pub stream_started_at: Option<std::time::Instant>,
     /// Toast notifications (auto-dismiss)
     pub toasts: Vec<Toast>,
+    /// Session memory controls (Phase 1)
+    pub memory_use: bool,
+    pub memory_generate: bool,
     /// 是否处于暂停态（不接受新消息发送）
     pub paused: bool,
     /// 是否启用聚焦模式（仅显示 user/assistant）
@@ -1349,6 +1352,8 @@ impl TuiApp {
             is_querying: false,
             stream_started_at: None,
             toasts: Vec::new(),
+            memory_use: true,
+            memory_generate: true,
             paused: false,
             focus_mode: false,
             status_bar_density: StatusBarDensity::Normal,
