@@ -181,6 +181,8 @@ pub fn render_chat_area(f: &mut Frame, app: &TuiApp, area: Rect) {
                         is_streaming: true,
                         tick: app.tick_count,
                         token_count: tokens,
+                        model_label: Some(app.current_model_label()),
+                        started_at: app.stream_started_at,
                     })
                 } else {
                     None

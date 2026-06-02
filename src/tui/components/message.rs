@@ -37,6 +37,8 @@ pub struct StreamMeta {
     pub is_streaming: bool,
     pub tick: usize,
     pub token_count: Option<u32>,
+    pub model_label: Option<String>,
+    pub started_at: Option<std::time::Instant>,
 }
 
 /// Detects card kind from message content for rich rendering.
@@ -148,8 +150,31 @@ fn render_assistant_message<'a>(
         ("‹", "Reply", theme.tokens.tone.ok)
     };
 
-    // Meta: token count if available
-    let meta = stream.and_then(|s| s.token_count.map(|n| format!("{} tok", n)));
+    // Meta: token count + t/s rate if streaming
+    let meta = if is_streaming {
+        let tok = stream.and_then(|s| s.token_count).unwrap_or(0);
+        let tps = stream
+            .and_then(|s| s.started_at)
+            .map(|start| {
+                let elapsed = start.elapsed().as_secs_f64().max(0.5);
+                let rate = tok as f64 / elapsed;
+                format!("{} tok · {:.0} t/s", tok, rate)
+            })
+            .unwrap_or_else(|| format!("{} tok", tok));
+        Some(tps)
+    } else {
+        stream.and_then(|s| s.token_count.map(|n| format!("{} tok", n)))
+    };
+
+    // Model badge appended to meta
+    let meta = if let Some(model) = stream.and_then(|s| s.model_label.as_ref().map(|m| m.as_str())) {
+        match meta {
+            Some(m) => Some(format!("{} · {}", m, model)),
+            None => Some(model.to_string()),
+        }
+    } else {
+        meta
+    };
 
     let mut lines = vec![card_header(
         glyph,

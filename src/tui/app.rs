@@ -1105,6 +1105,8 @@ pub struct TuiApp {
     pub tasks: Vec<TaskItem>,
     /// 是否正在查询中
     pub is_querying: bool,
+    /// Streaming start time for t/s calculation
+    pub stream_started_at: Option<std::time::Instant>,
     /// 是否处于暂停态（不接受新消息发送）
     pub paused: bool,
     /// 是否启用聚焦模式（仅显示 user/assistant）
@@ -1328,6 +1330,7 @@ impl TuiApp {
             messages: vec![welcome_message],
             tasks: Vec::new(),
             is_querying: false,
+            stream_started_at: None,
             paused: false,
             focus_mode: false,
             status_bar_density: StatusBarDensity::Normal,
@@ -1954,6 +1957,7 @@ impl TuiApp {
 
         // 标记正在查询
         self.is_querying = true;
+        self.stream_started_at = Some(std::time::Instant::now());
 
         // Only auto-scroll when pinned
         if self.pinned_to_bottom {
@@ -2198,6 +2202,7 @@ impl TuiApp {
                 // 流式响应完成，发送终端通知
                 crate::tui::notify::send_notification("Priority Agent", "Response ready");
                 self.is_querying = false;
+                self.stream_started_at = None;
                 self.current_tool_anchor_id = None;
             }
         }
@@ -3587,6 +3592,7 @@ impl TuiApp {
     /// 添加助手响应
     pub async fn add_assistant_response(&mut self, content: String) {
         self.is_querying = false;
+                self.stream_started_at = None;
 
         // 保存助手消息到数据库。流式引擎绑定同一会话时由引擎负责持久化。
         if self.should_persist_messages_from_tui() {
@@ -4104,6 +4110,7 @@ impl TuiApp {
     pub fn set_error(&mut self, error: String) {
         self.error_message = Some(error);
         self.is_querying = false;
+                self.stream_started_at = None;
     }
 
     /// 清除错误
