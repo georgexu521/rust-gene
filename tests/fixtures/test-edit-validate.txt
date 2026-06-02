@@ -1,0 +1,6 @@
+Add a comment at the very top of the file src/tui/theme.rs (line 1).
+The comment should be exactly:
+// Hello from Priority Agent eval test
+
+Then run cargo check -q to verify it compiles.
+After that, remove the comment you just added and run cargo check -q again.

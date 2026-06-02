@@ -1,0 +1,8 @@
+Read the file src/tui/theme.rs and analyze it:
+
+1. Find the ThemePreset enum. How many variants does it have? List them.
+2. Find the ThemeTokens struct. What fields does fg have?
+3. Which theme preset would you pick for a light-mode UI?
+4. Is there any code in this file that looks unused or dead?
+
+Just read and analyze — do NOT make any edits.
