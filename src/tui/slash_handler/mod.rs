@@ -355,11 +355,11 @@ mod tests {
             super::handle_focus(&mut app, "status"),
             "Focus mode: disabled"
         );
-        assert_eq!(super::handle_focus(&mut app, "on"), "Focus mode enabled.");
+        assert_eq!(super::handle_focus(&mut app, "on"), "Focus mode enabled (session-only, restart will reset).");
         assert!(app.focus_mode);
         assert_eq!(
             super::handle_focus(&mut app, "toggle"),
-            "Focus mode disabled."
+            "Focus mode disabled (session-only, restart will reset)."
         );
         assert!(!app.focus_mode);
     }

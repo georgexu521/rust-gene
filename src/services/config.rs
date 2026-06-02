@@ -136,16 +136,6 @@ impl AppConfig {
             .set_default("engine.max_iterations", 50)?
             .set_default("memory.external_provider.enabled", false)?
             .set_default("memory.external_provider.provider_type", "none")?
-            .set_default("memory.external_provider.name", "external-memory")?
-            .set_default("memory.external_provider.prompt_block", true)?
-            .set_default("memory.external_provider.prefetch", true)?
-            .set_default("memory.external_provider.search", true)?
-            .set_default("memory.external_provider.queue_prefetch", false)?
-            .set_default("memory.external_provider.sync_turn", false)?
-            .set_default("memory.external_provider.session_end", false)?
-            .set_default("memory.external_provider.pre_compress", false)?
-            .set_default("memory.external_provider.write_mirror", false)?
-            .set_default("memory.external_provider.tools", false)?
             // 2. 配置文件
             .add_source(File::from(config_path).required(false))
             // 3. 环境变量（前缀 PRIORITY_AGENT）
@@ -291,13 +281,6 @@ pub const CONFIG_KEY_SPECS: &[ConfigKeySpec] = &[
         description: "External memory provider adapter type",
     },
     ConfigKeySpec {
-        key: "memory.external_provider.name",
-        value_type: "string",
-        mutable: true,
-        secret: false,
-        description: "External memory provider display name",
-    },
-    ConfigKeySpec {
         key: "memory.external_provider.records_path",
         value_type: "path|none",
         mutable: true,
@@ -333,7 +316,7 @@ pub fn config_schema_json() -> Value {
 
 pub fn format_config_summary(config: &AppConfig) -> String {
     format!(
-        "Config:\n  api.base_url = {}\n  api.model = {}\n  api.temperature = {}\n  api.max_tokens = {}\n  ui.theme = {}\n  ui.show_token_usage = {}\n  storage.persistence_enabled = {}\n  features.mcp_enabled = {}\n  features.skills_enabled = {}\n  features.web_search = {}\n  features.plugin_trust_mode = {}\n  engine.max_iterations = {}\n  memory.external_provider.enabled = {}\n  memory.external_provider.provider_type = {}\n  memory.external_provider.name = {}\n  memory.external_provider.records_path = {}",
+        "Config:\n  api.base_url = {}\n  api.model = {}\n  api.temperature = {}\n  api.max_tokens = {}\n  ui.theme = {}\n  ui.show_token_usage = {}\n  storage.persistence_enabled = {}\n  features.mcp_enabled = {}\n  features.skills_enabled = {}\n  features.web_search = {}\n  features.plugin_trust_mode = {}\n  engine.max_iterations = {}\n  memory.external_provider.enabled = {}\n  memory.external_provider.provider_type = {}\n  memory.external_provider.records_path = {}",
         config.api.base_url,
         config.api.model,
         config.api.temperature,
@@ -348,7 +331,6 @@ pub fn format_config_summary(config: &AppConfig) -> String {
         config.engine.max_iterations,
         config.memory.external_provider.enabled,
         config.memory.external_provider.provider_type,
-        config.memory.external_provider.name,
         config
             .memory
             .external_provider
@@ -385,7 +367,6 @@ pub fn get_config_value(config: &AppConfig, key: &str) -> Option<String> {
         "memory.external_provider.provider_type" => {
             Some(config.memory.external_provider.provider_type.clone())
         }
-        "memory.external_provider.name" => Some(config.memory.external_provider.name.clone()),
         "memory.external_provider.records_path" => Some(
             config
                 .memory
@@ -440,9 +421,6 @@ pub fn set_config_value(config: &mut AppConfig, key: &str, value: &str) -> Resul
         "memory.external_provider.provider_type" => {
             config.memory.external_provider.provider_type = value.to_string();
         }
-        "memory.external_provider.name" => {
-            config.memory.external_provider.name = value.to_string();
-        }
         "memory.external_provider.records_path" => {
             config.memory.external_provider.records_path = if value.eq_ignore_ascii_case("none") {
                 None
@@ -484,15 +462,6 @@ fn validate_external_memory_provider_config(config: &ExternalMemoryProviderConfi
     let mut issues = Vec::new();
     if !config.enabled {
         return issues;
-    }
-    if config.name.trim().is_empty() {
-        issues.push("memory.external_provider.name cannot be empty".to_string());
-    }
-    if config.write_mirror {
-        issues.push("memory.external_provider.write_mirror must remain false".to_string());
-    }
-    if config.tools {
-        issues.push("memory.external_provider.tools must remain false".to_string());
     }
     match config.provider_type.as_str() {
         "no_network_jsonl" => {
@@ -640,40 +609,12 @@ pub struct ExternalMemoryProviderConfig {
     pub enabled: bool,
     #[serde(default = "default_external_memory_provider_type")]
     pub provider_type: String,
-    #[serde(default = "default_external_memory_provider_name")]
-    pub name: String,
     #[serde(default)]
     pub records_path: Option<PathBuf>,
-    #[serde(default = "default_true")]
-    pub prompt_block: bool,
-    #[serde(default = "default_true")]
-    pub prefetch: bool,
-    #[serde(default = "default_true")]
-    pub search: bool,
-    #[serde(default)]
-    pub queue_prefetch: bool,
-    #[serde(default)]
-    pub sync_turn: bool,
-    #[serde(default)]
-    pub session_end: bool,
-    #[serde(default)]
-    pub pre_compress: bool,
-    #[serde(default)]
-    pub write_mirror: bool,
-    #[serde(default)]
-    pub tools: bool,
 }
 
 fn default_external_memory_provider_type() -> String {
     "none".to_string()
-}
-
-fn default_external_memory_provider_name() -> String {
-    "external-memory".to_string()
-}
-
-fn default_true() -> bool {
-    true
 }
 
 impl Default for ExternalMemoryProviderConfig {
@@ -681,17 +622,7 @@ impl Default for ExternalMemoryProviderConfig {
         Self {
             enabled: false,
             provider_type: default_external_memory_provider_type(),
-            name: default_external_memory_provider_name(),
             records_path: None,
-            prompt_block: true,
-            prefetch: true,
-            search: true,
-            queue_prefetch: false,
-            sync_turn: false,
-            session_end: false,
-            pre_compress: false,
-            write_mirror: false,
-            tools: false,
         }
     }
 }
@@ -836,7 +767,7 @@ mod tests {
         config.features.plugin_trust_mode = "invalid".to_string();
         config.memory.external_provider.enabled = true;
         config.memory.external_provider.provider_type = "no_network_jsonl".to_string();
-        config.memory.external_provider.write_mirror = true;
+
 
         let issues = validate_config(&config);
 
@@ -849,9 +780,6 @@ mod tests {
         assert!(issues
             .iter()
             .any(|issue| issue.contains("memory.external_provider.records_path")));
-        assert!(issues
-            .iter()
-            .any(|issue| issue.contains("memory.external_provider.write_mirror")));
     }
 
     #[test]

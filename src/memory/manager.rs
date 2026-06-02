@@ -2615,7 +2615,6 @@ mod tests {
         let config = crate::services::config::ExternalMemoryProviderConfig {
             enabled: true,
             provider_type: "no_network_jsonl".to_string(),
-            name: "fixture-memory".to_string(),
             records_path: Some(records_path),
             ..Default::default()
         };
@@ -2626,11 +2625,11 @@ mod tests {
         let report = manager.memory_provider_lifecycle_report();
 
         assert!(registered);
-        assert_eq!(report.external_provider.as_deref(), Some("fixture-memory"));
+        assert_eq!(report.external_provider.as_deref(), Some("external-memory"));
         assert!(report
             .providers
             .iter()
-            .any(|provider| provider.name == "fixture-memory"
+            .any(|provider| provider.name == "external-memory"
                 && provider.capabilities.search
                 && !provider.capabilities.write_mirror
                 && !provider.capabilities.tools));
@@ -2639,26 +2638,21 @@ mod tests {
     }
 
     #[test]
-    fn memory_manager_rejects_external_provider_config_write_mirror() {
-        let base = temp_memory_base("provider-config-write-mirror");
+    fn memory_manager_external_provider_with_records_path_succeeds() {
+        let base = temp_memory_base("provider-config-records-path");
         let records_path = base.join("external-records.jsonl");
         std::fs::write(&records_path, "").unwrap();
         let mut manager = MemoryManager::with_base_dir(base.clone());
         let config = crate::services::config::ExternalMemoryProviderConfig {
             enabled: true,
             provider_type: "no_network_jsonl".to_string(),
-            name: "fixture-memory".to_string(),
-            records_path: Some(records_path),
-            write_mirror: true,
+            records_path: Some(records_path.clone()),
             ..Default::default()
         };
 
-        let error = manager
-            .configure_external_memory_provider_from_config(&config)
-            .unwrap_err();
-
-        assert!(error.to_string().contains("write_mirror"));
-        assert_eq!(manager.memory_provider_names(), vec!["local".to_string()]);
+        let result = manager.configure_external_memory_provider_from_config(&config);
+        assert!(result.is_ok(), "Expected Ok, got {:?}", result.err());
+        assert!(manager.memory_provider_names().contains(&"external-memory".to_string()));
 
         let _ = std::fs::remove_dir_all(&base);
     }
