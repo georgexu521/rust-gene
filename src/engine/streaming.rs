@@ -171,6 +171,8 @@ pub struct StreamingQueryEngine {
     compressor: Arc<tokio::sync::Mutex<crate::engine::context_compressor::ContextCompressor>>,
     /// 会话存储（lazy init，首次 query 时创建）
     session_store: std::sync::OnceLock<Option<Arc<crate::session_store::SessionStore>>>,
+    /// 禁止 session_store 自动初始化（测试用）
+    disable_session_auto_init: bool,
     /// Recent runtime traces for `/trace`.
     trace_store: Arc<crate::engine::trace::TraceStore>,
     /// Current session goal shown in `/goal` and `/quick`.
@@ -226,6 +228,7 @@ impl StreamingQueryEngine {
                 .with_llm_provider(provider_clone, &model),
             )),
             session_store: std::sync::OnceLock::new(),
+            disable_session_auto_init: false,
             trace_store: Arc::new(crate::engine::trace::TraceStore::default()),
             goal_manager: Arc::new(crate::engine::session_goal::SessionGoalManager::new()),
             session_id: Arc::new(RwLock::new(None)),
@@ -254,7 +257,7 @@ impl StreamingQueryEngine {
         &self.cost_tracker
     }
 
-    /// 设置会话存储
+    /// 设置会话存储（覆盖 lazy init）
     pub fn with_session_store(
         self,
         store: Arc<crate::session_store::SessionStore>,
@@ -262,6 +265,12 @@ impl StreamingQueryEngine {
     ) -> Self {
         let _ = self.session_store.set(Some(store));
         *self.session_id.write() = Some(session_id);
+        self
+    }
+
+    /// 禁止 session_store 自动初始化（测试用）
+    pub fn with_disable_session_auto_init(mut self) -> Self {
+        self.disable_session_auto_init = true;
         self
     }
 
@@ -278,6 +287,16 @@ impl StreamingQueryEngine {
     /// UI 层用这个绑定复用同一个 SessionStore/session_id，避免一轮对话
     /// 同时写入 CLI 会话和引擎会话两套历史。
     pub fn session_binding(&self) -> Option<(Arc<crate::session_store::SessionStore>, String)> {
+        if self.disable_session_auto_init {
+            return self
+                .session_store
+                .get()
+                .and_then(|opt| opt.as_ref().map(|store| {
+                    let sid = self.current_session_id()?;
+                    Some((store.clone(), sid))
+                }))
+                .flatten();
+        }
         let store = self
             .session_store
             .get_or_init(|| {

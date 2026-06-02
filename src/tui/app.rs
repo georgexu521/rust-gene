@@ -4243,11 +4243,14 @@ mod tests {
 
     #[test]
     fn test_tui_persists_when_engine_has_no_session_binding() {
-        let engine = Arc::new(crate::engine::streaming::StreamingQueryEngine::new(
-            Arc::new(MockProvider),
-            Arc::new(crate::tools::ToolRegistry::new()),
-            "mock-model",
-        ));
+        let engine = Arc::new(
+            crate::engine::streaming::StreamingQueryEngine::new(
+                Arc::new(MockProvider),
+                Arc::new(crate::tools::ToolRegistry::new()),
+                "mock-model",
+            )
+            .with_disable_session_auto_init(),
+        );
 
         let app = TuiApp::with_engine(engine, None, None);
 
@@ -4256,11 +4259,14 @@ mod tests {
 
     #[tokio::test]
     async fn test_tui_persists_streaming_assistant_when_engine_has_no_session_binding() {
-        let engine = Arc::new(crate::engine::streaming::StreamingQueryEngine::new(
-            Arc::new(MockProvider),
-            Arc::new(crate::tools::ToolRegistry::new()),
-            "mock-model",
-        ));
+        let engine = Arc::new(
+            crate::engine::streaming::StreamingQueryEngine::new(
+                Arc::new(MockProvider),
+                Arc::new(crate::tools::ToolRegistry::new()),
+                "mock-model",
+            )
+            .with_disable_session_auto_init(),
+        );
         let mut app = TuiApp::with_engine(engine, None, None);
         let session_id = app
             .session_manager
