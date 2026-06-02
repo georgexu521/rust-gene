@@ -373,13 +373,10 @@ pub struct ApiConfigInfo {
 pub struct UiConfigInfo {
     pub theme: String,
     pub show_token_usage: bool,
-    pub compact_mode: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct FeatureFlagsInfo {
-    pub tui_enabled: bool,
-    pub agent_enabled: bool,
     pub mcp_enabled: bool,
     pub skills_enabled: bool,
     pub web_search: bool,

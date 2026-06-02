@@ -340,11 +340,8 @@ impl ApiState {
             ui: UiConfigInfo {
                 theme: config.ui.theme.clone(),
                 show_token_usage: config.ui.show_token_usage,
-                compact_mode: config.ui.compact_mode,
             },
             features: FeatureFlagsInfo {
-                tui_enabled: config.features.tui_enabled,
-                agent_enabled: config.features.agent_enabled,
                 mcp_enabled: config.features.mcp_enabled,
                 skills_enabled: config.features.skills_enabled,
                 web_search: config.features.web_search,
@@ -369,12 +366,9 @@ impl ApiState {
         if let Some(ui) = req.ui {
             config.ui.theme = ui.theme;
             config.ui.show_token_usage = ui.show_token_usage;
-            config.ui.compact_mode = ui.compact_mode;
         }
 
         if let Some(features) = req.features {
-            config.features.tui_enabled = features.tui_enabled;
-            config.features.agent_enabled = features.agent_enabled;
             config.features.mcp_enabled = features.mcp_enabled;
             config.features.skills_enabled = features.skills_enabled;
             config.features.web_search = features.web_search;

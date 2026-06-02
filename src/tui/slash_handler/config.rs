@@ -237,20 +237,8 @@ pub fn handle_focus(app: &mut TuiApp, args: &str) -> String {
     };
 
     app.focus_mode = enable;
-    if let Ok(mut config) = crate::services::config::AppConfig::load() {
-        config.ui.compact_mode = enable;
-        if config.save().is_err() {
-            return format!(
-                "Focus mode set to {} (config save failed)",
-                if enable { "on" } else { "off" }
-            );
-        }
-        if let Some(ref mut settings) = app.settings_state {
-            settings.config.ui.compact_mode = enable;
-        }
-    }
     format!(
-        "Focus mode {}.",
+        "Focus mode {} (session-only, restart will reset).",
         if enable { "enabled" } else { "disabled" }
     )
 }

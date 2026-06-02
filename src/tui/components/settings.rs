@@ -128,14 +128,6 @@ impl SettingsState {
                 editable: true,
                 sensitive: false,
             },
-            SettingItem {
-                key: "ui.compact_mode".to_string(),
-                label: "Compact Mode".to_string(),
-                description: "Use compact UI layout".to_string(),
-                value: SettingValue::Bool(self.config.ui.compact_mode),
-                editable: true,
-                sensitive: false,
-            },
         ]
     }
 
@@ -189,22 +181,6 @@ impl SettingsState {
     fn feature_settings(&self) -> Vec<SettingItem> {
         vec![
             SettingItem {
-                key: "features.tui_enabled".to_string(),
-                label: "Interactive CLI".to_string(),
-                description: "Enable interactive terminal CLI".to_string(),
-                value: SettingValue::Bool(self.config.features.tui_enabled),
-                editable: true,
-                sensitive: false,
-            },
-            SettingItem {
-                key: "features.agent_enabled".to_string(),
-                label: "Agent System".to_string(),
-                description: "Enable sub-agent functionality".to_string(),
-                value: SettingValue::Bool(self.config.features.agent_enabled),
-                editable: true,
-                sensitive: false,
-            },
-            SettingItem {
                 key: "features.mcp_enabled".to_string(),
                 label: "MCP Support".to_string(),
                 description: "Enable Model Context Protocol".to_string(),
@@ -238,14 +214,6 @@ impl SettingsState {
                 label: "Persistence".to_string(),
                 description: "Enable session persistence".to_string(),
                 value: SettingValue::Bool(self.config.storage.persistence_enabled),
-                editable: true,
-                sensitive: false,
-            },
-            SettingItem {
-                key: "storage.auto_save_interval_secs".to_string(),
-                label: "Auto Save Interval".to_string(),
-                description: "Auto-save interval in seconds".to_string(),
-                value: SettingValue::Number(self.config.storage.auto_save_interval_secs as f64),
                 editable: true,
                 sensitive: false,
             },
@@ -398,7 +366,7 @@ impl SettingsState {
                     self.config.ui.show_token_usage = new_value.parse().unwrap_or(true)
                 }
                 "ui.compact_mode" => {
-                    self.config.ui.compact_mode = new_value.parse().unwrap_or(false)
+                    // compact_mode removed; no-op
                 }
                 "api.model" => self.config.api.model = new_value,
                 "api.base_url" => self.config.api.base_url = new_value.clone(),
@@ -415,13 +383,6 @@ impl SettingsState {
                 "api.max_tokens" => {
                     self.config.api.max_tokens = new_value.parse().ok();
                 }
-                "features.tui_enabled" => {
-                    self.config.features.tui_enabled = new_value.parse().unwrap_or(true);
-                    self.pending_restart = true;
-                }
-                "features.agent_enabled" => {
-                    self.config.features.agent_enabled = new_value.parse().unwrap_or(true)
-                }
                 "features.mcp_enabled" => {
                     self.config.features.mcp_enabled = new_value.parse().unwrap_or(false)
                 }
@@ -433,10 +394,6 @@ impl SettingsState {
                 }
                 "storage.persistence_enabled" => {
                     self.config.storage.persistence_enabled = new_value.parse().unwrap_or(true)
-                }
-                "storage.auto_save_interval_secs" => {
-                    self.config.storage.auto_save_interval_secs =
-                        new_value.parse().unwrap_or(300) as u64
                 }
                 _ => {}
             }

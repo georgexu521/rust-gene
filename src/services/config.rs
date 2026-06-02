@@ -131,8 +131,6 @@ impl AppConfig {
             .set_default("api.base_url", "")?
             .set_default("ui.theme", "dark")?
             .set_default("storage.persistence_enabled", true)?
-            .set_default("features.tui_enabled", true)?
-            .set_default("features.agent_enabled", true)?
             .set_default("features.llm_memory_extraction", true)?
             .set_default("features.plugin_trust_mode", "warn")?
             .set_default("engine.max_iterations", 50)?
@@ -237,25 +235,11 @@ pub const CONFIG_KEY_SPECS: &[ConfigKeySpec] = &[
         description: "Show token usage in UI",
     },
     ConfigKeySpec {
-        key: "ui.compact_mode",
-        value_type: "bool",
-        mutable: true,
-        secret: false,
-        description: "Compact UI layout",
-    },
-    ConfigKeySpec {
         key: "storage.persistence_enabled",
         value_type: "bool",
         mutable: true,
         secret: false,
         description: "Persist sessions and state",
-    },
-    ConfigKeySpec {
-        key: "storage.auto_save_interval_secs",
-        value_type: "integer",
-        mutable: true,
-        secret: false,
-        description: "Auto-save interval",
     },
     ConfigKeySpec {
         key: "features.mcp_enabled",
@@ -349,16 +333,14 @@ pub fn config_schema_json() -> Value {
 
 pub fn format_config_summary(config: &AppConfig) -> String {
     format!(
-        "Config:\n  api.base_url = {}\n  api.model = {}\n  api.temperature = {}\n  api.max_tokens = {}\n  ui.theme = {}\n  ui.show_token_usage = {}\n  ui.compact_mode = {}\n  storage.persistence_enabled = {}\n  storage.auto_save_interval_secs = {}\n  features.mcp_enabled = {}\n  features.skills_enabled = {}\n  features.web_search = {}\n  features.plugin_trust_mode = {}\n  engine.max_iterations = {}\n  memory.external_provider.enabled = {}\n  memory.external_provider.provider_type = {}\n  memory.external_provider.name = {}\n  memory.external_provider.records_path = {}",
+        "Config:\n  api.base_url = {}\n  api.model = {}\n  api.temperature = {}\n  api.max_tokens = {}\n  ui.theme = {}\n  ui.show_token_usage = {}\n  storage.persistence_enabled = {}\n  features.mcp_enabled = {}\n  features.skills_enabled = {}\n  features.web_search = {}\n  features.plugin_trust_mode = {}\n  engine.max_iterations = {}\n  memory.external_provider.enabled = {}\n  memory.external_provider.provider_type = {}\n  memory.external_provider.name = {}\n  memory.external_provider.records_path = {}",
         config.api.base_url,
         config.api.model,
         config.api.temperature,
         config.api.max_tokens.map(|v| v.to_string()).unwrap_or_else(|| "none".to_string()),
         config.ui.theme,
         config.ui.show_token_usage,
-        config.ui.compact_mode,
         config.storage.persistence_enabled,
-        config.storage.auto_save_interval_secs,
         config.features.mcp_enabled,
         config.features.skills_enabled,
         config.features.web_search,
@@ -391,11 +373,7 @@ pub fn get_config_value(config: &AppConfig, key: &str) -> Option<String> {
         ),
         "ui.theme" => Some(config.ui.theme.clone()),
         "ui.show_token_usage" => Some(config.ui.show_token_usage.to_string()),
-        "ui.compact_mode" => Some(config.ui.compact_mode.to_string()),
         "storage.persistence_enabled" => Some(config.storage.persistence_enabled.to_string()),
-        "storage.auto_save_interval_secs" => {
-            Some(config.storage.auto_save_interval_secs.to_string())
-        }
         "features.mcp_enabled" => Some(config.features.mcp_enabled.to_string()),
         "features.skills_enabled" => Some(config.features.skills_enabled.to_string()),
         "features.web_search" => Some(config.features.web_search.to_string()),
@@ -443,13 +421,7 @@ pub fn set_config_value(config: &mut AppConfig, key: &str, value: &str) -> Resul
         }
         "ui.theme" => config.ui.theme = value.to_string(),
         "ui.show_token_usage" => config.ui.show_token_usage = parse_bool(value)?,
-        "ui.compact_mode" => config.ui.compact_mode = parse_bool(value)?,
         "storage.persistence_enabled" => config.storage.persistence_enabled = parse_bool(value)?,
-        "storage.auto_save_interval_secs" => {
-            config.storage.auto_save_interval_secs = value
-                .parse::<u64>()
-                .map_err(|_| format!("Invalid integer for {}: {}", key, value))?;
-        }
         "features.mcp_enabled" => config.features.mcp_enabled = parse_bool(value)?,
         "features.skills_enabled" => config.features.skills_enabled = parse_bool(value)?,
         "features.web_search" => config.features.web_search = parse_bool(value)?,
@@ -488,9 +460,6 @@ pub fn validate_config(config: &AppConfig) -> Vec<String> {
 
     if !(0.0..=2.0).contains(&config.api.temperature) {
         issues.push("api.temperature should be between 0.0 and 2.0".to_string());
-    }
-    if config.storage.auto_save_interval_secs == 0 {
-        issues.push("storage.auto_save_interval_secs must be greater than 0".to_string());
     }
     if config.engine.max_iterations == 0 {
         issues.push("engine.max_iterations must be greater than 0".to_string());
@@ -641,7 +610,6 @@ impl Default for ApiConfig {
 pub struct UiConfig {
     pub theme: String,
     pub show_token_usage: bool,
-    pub compact_mode: bool,
 }
 
 impl Default for UiConfig {
@@ -649,7 +617,6 @@ impl Default for UiConfig {
         Self {
             theme: "light".to_string(),
             show_token_usage: true,
-            compact_mode: false,
         }
     }
 }
@@ -659,7 +626,6 @@ impl Default for UiConfig {
 pub struct StorageConfig {
     pub data_dir: Option<PathBuf>,
     pub persistence_enabled: bool,
-    pub auto_save_interval_secs: u64,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
@@ -735,7 +701,6 @@ impl Default for StorageConfig {
         Self {
             data_dir: None,
             persistence_enabled: true,
-            auto_save_interval_secs: 300,
         }
     }
 }
@@ -743,8 +708,6 @@ impl Default for StorageConfig {
 /// 功能开关
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct FeatureFlags {
-    pub tui_enabled: bool,
-    pub agent_enabled: bool,
     pub mcp_enabled: bool,
     pub skills_enabled: bool,
     pub web_search: bool,
@@ -763,8 +726,6 @@ fn default_plugin_trust_mode() -> String {
 impl Default for FeatureFlags {
     fn default() -> Self {
         Self {
-            tui_enabled: true,
-            agent_enabled: true,
             mcp_enabled: false,
             skills_enabled: true,
             web_search: true,
@@ -871,7 +832,6 @@ mod tests {
     #[test]
     fn config_validation_reports_invalid_release_values() {
         let mut config = AppConfig::default();
-        config.storage.auto_save_interval_secs = 0;
         config.engine.max_iterations = 0;
         config.features.plugin_trust_mode = "invalid".to_string();
         config.memory.external_provider.enabled = true;
@@ -880,9 +840,6 @@ mod tests {
 
         let issues = validate_config(&config);
 
-        assert!(issues
-            .iter()
-            .any(|issue| issue.contains("storage.auto_save_interval_secs")));
         assert!(issues
             .iter()
             .any(|issue| issue.contains("engine.max_iterations")));
