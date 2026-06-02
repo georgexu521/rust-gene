@@ -151,8 +151,8 @@ pub struct StreamingQueryEngine {
     system_prompt: String,
     /// 最大工具调用迭代次数
     max_iterations: usize,
-    /// Agent 管理器（可选，用于子 Agent 创建）
-    agent_manager: Option<Arc<crate::agent::AgentManager>>,
+    /// Agent 管理器（lazy init，用于子 Agent 创建）
+    agent_manager: std::sync::OnceLock<Arc<crate::agent::AgentManager>>,
     /// 任务管理器（可选，用于 task_tool 等）
     task_manager: Option<Arc<crate::task_manager::TaskManager>>,
     /// MCP 管理器（可选，用于调用外部 MCP 工具）
@@ -211,7 +211,7 @@ impl StreamingQueryEngine {
             model: Arc::new(RwLock::new(model.clone())),
             system_prompt: super::default_system_prompt(),
             max_iterations: 50, // Match Reasonix DEFAULT_MAX_ITER_PER_TURN
-            agent_manager: None,
+            agent_manager: std::sync::OnceLock::new(),
             task_manager: None,
             mcp_manager: None,
             lsp_manager: None,
@@ -499,8 +499,8 @@ impl StreamingQueryEngine {
     }
 
     /// 设置 Agent 管理器
-    pub fn with_agent_manager(mut self, manager: Arc<crate::agent::AgentManager>) -> Self {
-        self.agent_manager = Some(manager);
+    pub fn with_agent_manager(self, manager: Arc<crate::agent::AgentManager>) -> Self {
+        let _ = self.agent_manager.set(manager);
         self
     }
 
@@ -651,7 +651,7 @@ impl StreamingQueryEngine {
 
     /// 获取 Agent 管理器
     pub fn agent_manager(&self) -> Option<Arc<crate::agent::AgentManager>> {
-        self.agent_manager.clone()
+        self.agent_manager.get().cloned()
     }
 
     /// 获取工具授权通道
@@ -768,7 +768,7 @@ impl StreamingQueryEngine {
             model: self.model_name(),
             system_prompt: self.system_prompt.clone(),
             max_iterations: self.max_iterations,
-            agent_manager: self.agent_manager.clone(),
+            agent_manager: self.agent_manager.get().cloned(),
             task_manager: self.task_manager.clone(),
             mcp_manager: self.mcp_manager.clone(),
             lsp_manager: self.lsp_manager.clone(),
