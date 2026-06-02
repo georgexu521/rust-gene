@@ -1,0 +1,6 @@
+Please read the file src/tui/theme.rs and tell me:
+1. What theme presets are available (list all names)
+2. Which one is the default
+3. What is the current value of the `fg.strong` color in the graphite theme
+
+Just read the file and answer — no need to make any changes.
