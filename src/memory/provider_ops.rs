@@ -33,8 +33,22 @@ impl MemoryManager {
         &mut self,
         config: &crate::services::config::ExternalMemoryProviderConfig,
     ) -> anyhow::Result<bool> {
-        if !config.enabled {
-            return Ok(false);
+        let mode = config.effective_mode();
+        match mode.as_str() {
+            "off" => return Ok(false),
+            "context" => {}
+            "tools" | "hybrid" => {
+                return Err(anyhow::anyhow!(
+                    "memory.external_provider.mode '{}' is reserved; external provider tool schemas are disabled by current policy",
+                    mode
+                ));
+            }
+            other => {
+                return Err(anyhow::anyhow!(
+                    "unsupported external memory provider mode '{}'",
+                    other
+                ));
+            }
         }
         let capabilities = MemoryProviderCapabilities {
             prompt_block: true,

@@ -135,6 +135,8 @@ pub struct MemorySnapshotReport {
     pub user_chars: usize,
     pub memory_file_count: usize,
     pub memory_file_chars: usize,
+    #[serde(default)]
+    pub pinned_sources: Vec<String>,
     pub skipped_record_count: usize,
     pub skipped_status_count: usize,
     pub skipped_unsafe_count: usize,

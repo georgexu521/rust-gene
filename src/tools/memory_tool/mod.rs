@@ -487,6 +487,7 @@ struct MemoryProviderLifecyclePanelJson {
     active_scope: String,
     providers: Vec<crate::memory::MemoryProviderLifecycleEntry>,
     external_provider: Option<String>,
+    external_mode: String,
     lifecycle_hooks: Vec<String>,
 }
 
@@ -774,6 +775,7 @@ async fn memory_provider_lifecycle_panel(
             active_scope: memory_scope_label_for_tool(&manager.active_scope()),
             providers: report.providers,
             external_provider: report.external_provider,
+            external_mode: current_external_memory_provider_mode(),
             lifecycle_hooks: report.lifecycle_hooks,
         };
     }
@@ -799,8 +801,15 @@ fn default_memory_provider_lifecycle_panel() -> MemoryProviderLifecyclePanelJson
         active_scope: memory_scope_label_for_tool(&manager.active_scope()),
         providers: report.providers,
         external_provider: report.external_provider,
+        external_mode: current_external_memory_provider_mode(),
         lifecycle_hooks: report.lifecycle_hooks,
     }
+}
+
+fn current_external_memory_provider_mode() -> String {
+    crate::services::config::AppConfig::load()
+        .map(|config| config.memory.external_provider.effective_mode())
+        .unwrap_or_else(|_| "off".to_string())
 }
 
 fn memory_scope_label_for_tool(scope: &crate::memory::MemoryScope) -> String {
@@ -839,7 +848,7 @@ fn format_memory_store_paths(paths: &MemoryStorePathsJson) -> String {
 
 fn format_memory_snapshot(snapshot: &crate::memory::MemorySnapshotReport) -> String {
     format!(
-        "Pinned Memory Snapshot\n  Status: {}\n  Snapshot id: {}\n  Fingerprint: {}\n  Scope: {}\n  Pinned prompt chars: {}\n  Project chars: {}\n  User chars: {}\n  Memory index files: {} ({} chars)\n  Skipped records: {} (status={} unsafe={} stale={} conflicts={})",
+        "Pinned Memory Snapshot\n  Status: {}\n  Snapshot id: {}\n  Fingerprint: {}\n  Scope: {}\n  Pinned prompt chars: {}\n  Project chars: {}\n  User chars: {}\n  Memory index files: {} ({} chars)\n  Pinned sources: {}\n  Skipped records: {} (status={} unsafe={} stale={} conflicts={})",
         if snapshot.frozen { "frozen" } else { "live/not frozen" },
         snapshot.snapshot_id,
         snapshot.fingerprint,
@@ -849,12 +858,21 @@ fn format_memory_snapshot(snapshot: &crate::memory::MemorySnapshotReport) -> Str
         snapshot.user_chars,
         snapshot.memory_file_count,
         snapshot.memory_file_chars,
+        format_pinned_sources(&snapshot.pinned_sources),
         snapshot.skipped_record_count,
         snapshot.skipped_status_count,
         snapshot.skipped_unsafe_count,
         snapshot.skipped_stale_count,
         snapshot.skipped_conflict_count
     )
+}
+
+fn format_pinned_sources(sources: &[String]) -> String {
+    if sources.is_empty() {
+        "none".to_string()
+    } else {
+        sources.join(", ")
+    }
 }
 
 fn load_memory_proposal_queue() -> MemoryProposalQueueJson {
@@ -1023,7 +1041,7 @@ fn format_memory_doctor_with_reports(
         total_chars
     ));
     out.push_str(&format!(
-        "  Pinned snapshot: {} · fingerprint={} · scope={} · {} chars · {} index files · skipped_records={} status={} unsafe={} stale={} conflicts={}\n",
+        "  Pinned snapshot: {} · fingerprint={} · scope={} · {} chars · {} index files · sources={} · skipped_records={} status={} unsafe={} stale={} conflicts={}\n",
         if snapshot.frozen {
             "frozen"
         } else {
@@ -1033,6 +1051,7 @@ fn format_memory_doctor_with_reports(
         snapshot.scope,
         snapshot.char_count,
         snapshot.memory_file_count,
+        format_pinned_sources(&snapshot.pinned_sources),
         snapshot.skipped_record_count,
         snapshot.skipped_status_count,
         snapshot.skipped_unsafe_count,
@@ -1113,12 +1132,13 @@ fn format_memory_doctor_with_reports(
         }
     }
     out.push_str(&format!(
-        "  Providers: {} total · external={} · active_scope={}\n",
+        "  Providers: {} total · external={} · mode={} · active_scope={}\n",
         provider_lifecycle.providers.len(),
         provider_lifecycle
             .external_provider
             .as_deref()
             .unwrap_or("none"),
+        provider_lifecycle.external_mode,
         provider_lifecycle.active_scope
     ));
     out.push_str(&format!(
@@ -2057,6 +2077,7 @@ mod tests {
             user_chars: 0,
             memory_file_count: 1,
             memory_file_chars: 16,
+            pinned_sources: vec!["MEMORY.md".to_string(), "memory/rust.md".to_string()],
             skipped_record_count: 0,
             skipped_status_count: 0,
             skipped_unsafe_count: 0,
@@ -2138,6 +2159,7 @@ mod tests {
         assert!(doctor.contains("Pinned snapshot:"));
         assert!(doctor.contains("Pending memory candidates:"));
         assert!(doctor.contains("Providers:"));
+        assert!(doctor.contains("mode="));
         assert!(doctor.contains("Lifecycle:"));
         assert!(doctor.contains("Operation journal:"));
         assert!(doctor.contains("Last background review:"));

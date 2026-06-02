@@ -135,6 +135,7 @@ impl AppConfig {
             .set_default("features.plugin_trust_mode", "warn")?
             .set_default("engine.max_iterations", 50)?
             .set_default("memory.external_provider.enabled", false)?
+            .set_default("memory.external_provider.mode", "off")?
             .set_default("memory.external_provider.provider_type", "none")?
             // 2. 配置文件
             .add_source(File::from(config_path).required(false))
@@ -274,6 +275,13 @@ pub const CONFIG_KEY_SPECS: &[ConfigKeySpec] = &[
         description: "Enable one read-only external memory provider",
     },
     ConfigKeySpec {
+        key: "memory.external_provider.mode",
+        value_type: "off|context|tools|hybrid",
+        mutable: true,
+        secret: false,
+        description: "External memory provider mode",
+    },
+    ConfigKeySpec {
         key: "memory.external_provider.provider_type",
         value_type: "none|no_network_jsonl",
         mutable: true,
@@ -316,7 +324,7 @@ pub fn config_schema_json() -> Value {
 
 pub fn format_config_summary(config: &AppConfig) -> String {
     format!(
-        "Config:\n  api.base_url = {}\n  api.model = {}\n  api.temperature = {}\n  api.max_tokens = {}\n  ui.theme = {}\n  ui.show_token_usage = {}\n  storage.persistence_enabled = {}\n  features.mcp_enabled = {}\n  features.skills_enabled = {}\n  features.web_search = {}\n  features.plugin_trust_mode = {}\n  engine.max_iterations = {}\n  memory.external_provider.enabled = {}\n  memory.external_provider.provider_type = {}\n  memory.external_provider.records_path = {}",
+        "Config:\n  api.base_url = {}\n  api.model = {}\n  api.temperature = {}\n  api.max_tokens = {}\n  ui.theme = {}\n  ui.show_token_usage = {}\n  storage.persistence_enabled = {}\n  features.mcp_enabled = {}\n  features.skills_enabled = {}\n  features.web_search = {}\n  features.plugin_trust_mode = {}\n  engine.max_iterations = {}\n  memory.external_provider.enabled = {}\n  memory.external_provider.mode = {}\n  memory.external_provider.provider_type = {}\n  memory.external_provider.records_path = {}",
         config.api.base_url,
         config.api.model,
         config.api.temperature,
@@ -330,6 +338,7 @@ pub fn format_config_summary(config: &AppConfig) -> String {
         config.features.plugin_trust_mode,
         config.engine.max_iterations,
         config.memory.external_provider.enabled,
+        config.memory.external_provider.effective_mode(),
         config.memory.external_provider.provider_type,
         config
             .memory
@@ -364,6 +373,7 @@ pub fn get_config_value(config: &AppConfig, key: &str) -> Option<String> {
         "memory.external_provider.enabled" => {
             Some(config.memory.external_provider.enabled.to_string())
         }
+        "memory.external_provider.mode" => Some(config.memory.external_provider.effective_mode()),
         "memory.external_provider.provider_type" => {
             Some(config.memory.external_provider.provider_type.clone())
         }
@@ -418,6 +428,11 @@ pub fn set_config_value(config: &mut AppConfig, key: &str, value: &str) -> Resul
         "memory.external_provider.enabled" => {
             config.memory.external_provider.enabled = parse_bool(value)?;
         }
+        "memory.external_provider.mode" => {
+            let mode = value.trim().to_ascii_lowercase();
+            config.memory.external_provider.enabled = mode != "off";
+            config.memory.external_provider.mode = mode;
+        }
         "memory.external_provider.provider_type" => {
             config.memory.external_provider.provider_type = value.to_string();
         }
@@ -460,7 +475,20 @@ pub fn validate_config(config: &AppConfig) -> Vec<String> {
 
 fn validate_external_memory_provider_config(config: &ExternalMemoryProviderConfig) -> Vec<String> {
     let mut issues = Vec::new();
-    if !config.enabled {
+    let mode = config.effective_mode();
+    match mode.as_str() {
+        "off" | "context" | "tools" | "hybrid" => {}
+        other => issues.push(format!(
+            "memory.external_provider.mode '{}' is unsupported",
+            other
+        )),
+    }
+    if mode == "tools" || mode == "hybrid" {
+        issues.push(
+            "memory.external_provider.mode tools/hybrid is reserved; external provider tool schemas are disabled by current policy".to_string(),
+        );
+    }
+    if mode == "off" {
         return issues;
     }
     match config.provider_type.as_str() {
@@ -607,20 +635,40 @@ pub struct MemoryConfig {
 pub struct ExternalMemoryProviderConfig {
     #[serde(default)]
     pub enabled: bool,
+    #[serde(default = "default_external_memory_provider_mode")]
+    pub mode: String,
     #[serde(default = "default_external_memory_provider_type")]
     pub provider_type: String,
     #[serde(default)]
     pub records_path: Option<PathBuf>,
 }
 
+fn default_external_memory_provider_mode() -> String {
+    "off".to_string()
+}
+
 fn default_external_memory_provider_type() -> String {
     "none".to_string()
+}
+
+impl ExternalMemoryProviderConfig {
+    pub fn effective_mode(&self) -> String {
+        let mode = self.mode.trim().to_ascii_lowercase();
+        if mode != "off" {
+            mode
+        } else if self.enabled {
+            "context".to_string()
+        } else {
+            "off".to_string()
+        }
+    }
 }
 
 impl Default for ExternalMemoryProviderConfig {
     fn default() -> Self {
         Self {
             enabled: false,
+            mode: default_external_memory_provider_mode(),
             provider_type: default_external_memory_provider_type(),
             records_path: None,
         }
@@ -715,6 +763,9 @@ mod tests {
             .any(|item| item["key"] == "memory.external_provider.enabled"));
         assert!(keys
             .iter()
+            .any(|item| item["key"] == "memory.external_provider.mode"));
+        assert!(keys
+            .iter()
             .any(|item| item["key"] == "memory.external_provider.records_path"));
     }
 
@@ -725,6 +776,7 @@ mod tests {
         set_config_value(&mut config, "features.plugin_trust_mode", "strict").unwrap();
         set_config_value(&mut config, "engine.max_iterations", "7").unwrap();
         set_config_value(&mut config, "memory.external_provider.enabled", "true").unwrap();
+        set_config_value(&mut config, "memory.external_provider.mode", "context").unwrap();
         set_config_value(
             &mut config,
             "memory.external_provider.provider_type",
@@ -751,12 +803,26 @@ mod tests {
             Some("true")
         );
         assert_eq!(
+            get_config_value(&config, "memory.external_provider.mode").as_deref(),
+            Some("context")
+        );
+        assert_eq!(
             get_config_value(&config, "memory.external_provider.provider_type").as_deref(),
             Some("no_network_jsonl")
         );
         assert_eq!(
             get_config_value(&config, "memory.external_provider.records_path").as_deref(),
             Some("/tmp/mem.jsonl")
+        );
+
+        set_config_value(&mut config, "memory.external_provider.mode", "off").unwrap();
+        assert_eq!(
+            get_config_value(&config, "memory.external_provider.mode").as_deref(),
+            Some("off")
+        );
+        assert_eq!(
+            get_config_value(&config, "memory.external_provider.enabled").as_deref(),
+            Some("false")
         );
     }
 
@@ -779,6 +845,18 @@ mod tests {
         assert!(issues
             .iter()
             .any(|issue| issue.contains("memory.external_provider.records_path")));
+    }
+
+    #[test]
+    fn config_validation_reports_reserved_external_memory_tool_modes() {
+        let mut config = AppConfig::default();
+        config.memory.external_provider.mode = "hybrid".to_string();
+        config.memory.external_provider.provider_type = "no_network_jsonl".to_string();
+        config.memory.external_provider.records_path = Some(PathBuf::from("/tmp/mem.jsonl"));
+
+        let issues = validate_config(&config);
+
+        assert!(issues.iter().any(|issue| issue.contains("tools/hybrid")));
     }
 
     #[test]

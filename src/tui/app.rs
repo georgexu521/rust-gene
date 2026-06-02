@@ -640,8 +640,13 @@ fn format_memory_retrieval_context(
 }
 
 fn format_memory_snapshot_report(snapshot: &crate::memory::MemorySnapshotReport) -> String {
+    let pinned_sources = if snapshot.pinned_sources.is_empty() {
+        "none".to_string()
+    } else {
+        snapshot.pinned_sources.join(", ")
+    };
     format!(
-        "Pinned Memory Snapshot\n- Status: {}\n- Snapshot id: {}\n- Fingerprint: {}\n- Scope: {}\n- Pinned prompt chars: {}\n- Project chars: {}\n- User chars: {}\n- Memory index files: {} ({} chars)\n- Skipped records: {} (status={} unsafe={} stale={} conflicts={})",
+        "Pinned Memory Snapshot\n- Status: {}\n- Snapshot id: {}\n- Fingerprint: {}\n- Scope: {}\n- Pinned prompt chars: {}\n- Project chars: {}\n- User chars: {}\n- Memory index files: {} ({} chars)\n- Pinned sources: {}\n- Skipped records: {} (status={} unsafe={} stale={} conflicts={})",
         if snapshot.frozen {
             "frozen"
         } else {
@@ -655,6 +660,7 @@ fn format_memory_snapshot_report(snapshot: &crate::memory::MemorySnapshotReport)
         snapshot.user_chars,
         snapshot.memory_file_count,
         snapshot.memory_file_chars,
+        pinned_sources,
         snapshot.skipped_record_count,
         snapshot.skipped_status_count,
         snapshot.skipped_unsafe_count,
@@ -4232,6 +4238,7 @@ mod tests {
             user_chars: 40,
             memory_file_count: 2,
             memory_file_chars: 64,
+            pinned_sources: vec!["MEMORY.md".to_string(), "memory/design.md".to_string()],
             skipped_record_count: 4,
             skipped_status_count: 1,
             skipped_unsafe_count: 1,
@@ -4242,6 +4249,7 @@ mod tests {
         let formatted = format_memory_snapshot_report(&snapshot);
 
         assert!(formatted.contains("Skipped records: 4"));
+        assert!(formatted.contains("Pinned sources: MEMORY.md, memory/design.md"));
         assert!(formatted.contains("status=1"));
         assert!(formatted.contains("unsafe=1"));
         assert!(formatted.contains("stale=1"));

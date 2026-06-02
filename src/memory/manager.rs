@@ -1640,6 +1640,22 @@ impl MemoryManager {
             || self.frozen_user.is_some()
             || !self.frozen_memory_files.is_empty();
         let skip_report = self.memory_snapshot_skip_report();
+        let mut pinned_sources = Vec::new();
+        if self.frozen_memory.as_deref().is_some_and(|content| {
+            format_pinned_memory_text_index("MEMORY.md", content, self.memory_char_limit).is_some()
+        }) {
+            pinned_sources.push("MEMORY.md".to_string());
+        }
+        if self.frozen_user.as_deref().is_some_and(|content| {
+            format_pinned_memory_text_index("USER.md", content, self.user_char_limit).is_some()
+        }) {
+            pinned_sources.push("USER.md".to_string());
+        }
+        pinned_sources.extend(
+            self.frozen_memory_files
+                .iter()
+                .map(|file| format!("memory/{}", file.relative_path)),
+        );
         MemorySnapshotReport {
             frozen,
             snapshot_id: format!("memsnap-{fingerprint}"),
@@ -1658,6 +1674,7 @@ impl MemoryManager {
                 .unwrap_or(0),
             memory_file_count: self.frozen_memory_files.len(),
             memory_file_chars: self.frozen_memory_files.iter().map(|file| file.chars).sum(),
+            pinned_sources,
             skipped_record_count: skip_report.skipped_record_count,
             skipped_status_count: skip_report.skipped_status_count,
             skipped_unsafe_count: skip_report.skipped_unsafe_count,
@@ -2662,6 +2679,57 @@ mod tests {
         let _ = std::fs::remove_dir_all(&base);
     }
 
+    #[test]
+    fn memory_manager_external_provider_context_mode_registers_without_legacy_enabled() {
+        let base = temp_memory_base("provider-config-context-mode");
+        let records_path = base.join("external-records.jsonl");
+        std::fs::write(&records_path, "").unwrap();
+        let mut manager = MemoryManager::with_base_dir(base.clone());
+        let config = crate::services::config::ExternalMemoryProviderConfig {
+            enabled: false,
+            mode: "context".to_string(),
+            provider_type: "no_network_jsonl".to_string(),
+            records_path: Some(records_path),
+        };
+
+        let registered = manager
+            .configure_external_memory_provider_from_config(&config)
+            .unwrap();
+
+        assert!(registered);
+        assert!(manager
+            .memory_provider_names()
+            .contains(&"external-memory".to_string()));
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn memory_manager_external_provider_tool_modes_are_reserved() {
+        let base = temp_memory_base("provider-config-reserved-tools");
+        let records_path = base.join("external-records.jsonl");
+        std::fs::write(&records_path, "").unwrap();
+        let mut manager = MemoryManager::with_base_dir(base.clone());
+        let config = crate::services::config::ExternalMemoryProviderConfig {
+            enabled: true,
+            mode: "hybrid".to_string(),
+            provider_type: "no_network_jsonl".to_string(),
+            records_path: Some(records_path),
+        };
+
+        let error = manager
+            .configure_external_memory_provider_from_config(&config)
+            .unwrap_err()
+            .to_string();
+
+        assert!(error.contains("tool schemas are disabled"));
+        assert!(!manager
+            .memory_provider_names()
+            .contains(&"external-memory".to_string()));
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
     #[tokio::test]
     async fn manager_local_provider_prefetch_reads_typed_records() {
         let base = temp_memory_base("manager-local-provider-prefetch");
@@ -2975,7 +3043,8 @@ mod tests {
         )
         .unwrap();
 
-        let mgr = MemoryManager::with_base_dir(base.clone());
+        let mut mgr = MemoryManager::with_base_dir(base.clone());
+        mgr.freeze_snapshot();
         let report = mgr.maintain_memory();
 
         assert_eq!(report.files_scanned, 1);
@@ -3001,7 +3070,8 @@ mod tests {
         }
         std::fs::write(&topic_path, content).unwrap();
 
-        let mgr = MemoryManager::with_base_dir(base.clone());
+        let mut mgr = MemoryManager::with_base_dir(base.clone());
+        mgr.freeze_snapshot();
         let report = mgr.maintain_memory();
 
         assert_eq!(report.archives_created, 1);
@@ -3165,10 +3235,14 @@ mod tests {
     #[test]
     fn test_memory_snapshot_report_breaks_down_skipped_records() {
         let base = temp_memory_base("snapshot-skip-report");
+        let memory_dir = base.join(MEMORY_DIR_NAME);
+        std::fs::create_dir_all(&memory_dir).unwrap();
         std::fs::write(base.join("MEMORY.md"), "language: Chinese").unwrap();
         std::fs::write(base.join("USER.md"), "language: English").unwrap();
+        std::fs::write(memory_dir.join("workflow.md"), "# Workflow\nRun tests.").unwrap();
 
-        let mgr = MemoryManager::with_base_dir(base.clone());
+        let mut mgr = MemoryManager::with_base_dir(base.clone());
+        mgr.freeze_snapshot();
         let mut rejected = MemoryRecord::new(
             "Decision: rejected memory must not enter snapshots.",
             MemoryKind::Decision,
@@ -3204,6 +3278,14 @@ mod tests {
         assert_eq!(report.skipped_stale_count, 1);
         assert_eq!(report.skipped_record_count, 3);
         assert_eq!(report.skipped_conflict_count, 1);
+        assert_eq!(
+            report.pinned_sources,
+            vec![
+                "MEMORY.md".to_string(),
+                "USER.md".to_string(),
+                "memory/workflow.md".to_string()
+            ]
+        );
 
         let _ = std::fs::remove_dir_all(base);
     }
