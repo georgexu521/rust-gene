@@ -5,6 +5,7 @@
 
 use super::utils::*;
 
+use std::sync::Arc;
 use crate::tools::Tool;
 use crate::tui::app::{AppMode, TuiApp};
 
@@ -49,7 +50,7 @@ pub async fn handle_reload(app: &mut TuiApp, args: &str) -> String {
         match crate::services::config::AppConfig::load() {
             Ok(config) => {
                 // Apply visible UI config immediately.
-                app.theme = crate::tui::theme::Theme::from_name(&config.ui.theme);
+                app.theme = Arc::new(crate::tui::theme::Theme::from_name(&config.ui.theme));
                 if let Some(ref mut settings) = app.settings_state {
                     settings.config = config.clone();
                 }
@@ -521,13 +522,13 @@ pub fn handle_theme(app: &mut TuiApp, args: &str) -> String {
             .map(|c| c.ui.theme)
             .unwrap_or_else(|_| "dark".to_string());
         return format!(
-            "Current theme: {}\nAvailable: dark, light, high-contrast\nUsage: /theme <preset> or /theme set <preset>",
+            "Current theme: {}\nAvailable: graphite, porcelain, midnight, ember, aurora, nord, dracula, catppuccin-mocha\nUsage: /theme <preset> or /theme set <preset>",
             current
         );
     }
 
     if args == "list" {
-        return "Available themes:\n- dark\n- light\n- high-contrast".to_string();
+        return "Available themes:\n- graphite\n- porcelain\n- midnight\n- ember\n- aurora\n- nord\n- dracula\n- catppuccin-mocha".to_string();
     }
 
     let preset_raw = args.strip_prefix("set ").unwrap_or(args).trim();
@@ -542,7 +543,7 @@ pub fn handle_theme(app: &mut TuiApp, args: &str) -> String {
     };
     let preset_name = preset.to_string();
 
-    app.theme = crate::tui::theme::Theme::from_preset(preset);
+    app.theme = Arc::new(crate::tui::theme::Theme::from_preset(preset));
 
     match crate::services::config::AppConfig::load() {
         Ok(mut config) => {

@@ -115,7 +115,7 @@ impl SettingsState {
             SettingItem {
                 key: "ui.theme".to_string(),
                 label: "Theme".to_string(),
-                description: "UI color theme (dark / light / high-contrast)".to_string(),
+                description: "UI color theme (graphite / porcelain / midnight / ember / aurora / nord / dracula / catppuccin-mocha)".to_string(),
                 value: SettingValue::String(self.config.ui.theme.clone()),
                 editable: true,
                 sensitive: false,

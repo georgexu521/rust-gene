@@ -37,17 +37,52 @@ pub struct StreamMeta {
     pub token_count: Option<u32>,
 }
 
+/// Detects card kind from message content for rich rendering
+fn detect_card_kind(msg: &MessageItem) -> Option<CardKind> {
+    match msg.role {
+        MessageRole::System => {
+            let c = &msg.content;
+            if c.contains("Error:") || c.contains("error:") || c.starts_with("✗") || c.contains("failed") {
+                Some(CardKind::Error)
+            } else if c.contains("⚠") || c.starts_with("Warning:") {
+                Some(CardKind::Warning)
+            } else {
+                None
+            }
+        }
+        MessageRole::Tool => {
+            let c = &msg.content;
+            if c.contains("matches found") || c.contains("grep") || c.starts_with("Found ") {
+                Some(CardKind::Search)
+            } else if c.contains("agent") || c.contains("subagent") || c.starts_with("Agent ") {
+                Some(CardKind::SubAgent)
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }
+}
+
+enum CardKind {
+    Error,
+    Warning,
+    Search,
+    SubAgent,
+}
+
 /// 渲染消息为 Paragraph（Reasonix card 风格）
 pub fn render_message<'a>(
     message: &'a MessageItem,
     _width: usize,
     theme: &'a crate::tui::theme::Theme,
 ) -> Paragraph<'a> {
+    let kind = detect_card_kind(message);
     match message.role {
         MessageRole::User => render_user_message(message, theme),
         MessageRole::Assistant => render_assistant_message(message, theme, None),
-        MessageRole::System => render_system_message(message, theme),
-        MessageRole::Tool => render_tool_message(message, theme),
+        MessageRole::System => render_system_message(message, theme, kind),
+        MessageRole::Tool => render_tool_message(message, theme, kind),
     }
 }
 
@@ -58,11 +93,12 @@ pub fn render_message_with_stream<'a>(
     theme: &'a crate::tui::theme::Theme,
     stream: Option<&StreamMeta>,
 ) -> Paragraph<'a> {
+    let kind = detect_card_kind(message);
     match message.role {
         MessageRole::User => render_user_message(message, theme),
         MessageRole::Assistant => render_assistant_message(message, theme, stream),
-        MessageRole::System => render_system_message(message, theme),
-        MessageRole::Tool => render_tool_message(message, theme),
+        MessageRole::System => render_system_message(message, theme, kind),
+        MessageRole::Tool => render_tool_message(message, theme, kind),
     }
 }
 
@@ -130,16 +166,27 @@ fn render_assistant_message<'a>(
 fn render_system_message<'a>(
     message: &'a MessageItem,
     theme: &'a crate::tui::theme::Theme,
+    kind: Option<CardKind>,
 ) -> Paragraph<'a> {
-    let card = &theme.tokens.card.warn;
-    let mut lines = vec![
-        card_header(
-            card.glyph,
-            "System",
-            card.color,
-            None,
-            theme.tokens.fg.faint,
+    let (glyph, label, color) = match kind {
+        Some(CardKind::Error) => (
+            theme.tokens.card.error.glyph,
+            "Error",
+            theme.tokens.card.error.color,
         ),
+        Some(CardKind::Warning) => (
+            theme.tokens.card.warn.glyph,
+            "Warning",
+            theme.tokens.card.warn.color,
+        ),
+        _ => (
+            theme.tokens.card.warn.glyph,
+            "System",
+            theme.tokens.card.warn.color,
+        ),
+    };
+    let mut lines = vec![
+        card_header(glyph, label, color, None, theme.tokens.fg.faint),
         Line::from(""),
     ];
 
@@ -157,16 +204,27 @@ fn render_system_message<'a>(
 fn render_tool_message<'a>(
     message: &'a MessageItem,
     theme: &'a crate::tui::theme::Theme,
+    kind: Option<CardKind>,
 ) -> Paragraph<'a> {
-    let card = &theme.tokens.card.tool;
-    let lines = vec![
-        card_header(
-            card.glyph,
-            "Tool",
-            card.color,
-            None,
-            theme.tokens.fg.faint,
+    let (glyph, label, color) = match kind {
+        Some(CardKind::Search) => (
+            theme.tokens.card.search.glyph,
+            "Search",
+            theme.tokens.card.search.color,
         ),
+        Some(CardKind::SubAgent) => (
+            theme.tokens.card.subagent.glyph,
+            "Agent",
+            theme.tokens.card.subagent.color,
+        ),
+        _ => (
+            theme.tokens.card.tool.glyph,
+            "Tool",
+            theme.tokens.card.tool.color,
+        ),
+    };
+    let lines = vec![
+        card_header(glyph, label, color, None, theme.tokens.fg.faint),
         Line::from(""),
         Line::from(vec![
             Span::styled("  ", Style::default()),

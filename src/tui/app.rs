@@ -1206,7 +1206,7 @@ pub struct TuiApp {
     /// 键位映射
     pub keybindings: crate::tui::keybindings::Keybindings,
     /// 当前主题
-    pub theme: crate::tui::theme::Theme,
+    pub theme: Arc<crate::tui::theme::Theme>,
     /// 引导状态
     pub onboarding_state: Option<crate::onboarding::OnboardingState>,
     /// Plan Mode 状态标签缓存（用于状态栏显示，避免渲染时异步查询）
@@ -1391,7 +1391,7 @@ impl TuiApp {
             keybindings: crate::tui::keybindings::Keybindings::load(),
             theme: {
                 let config = crate::services::config::AppConfig::load().unwrap_or_default();
-                crate::tui::theme::Theme::from_name(&config.ui.theme)
+                Arc::new(crate::tui::theme::Theme::from_name(&config.ui.theme))
             },
             onboarding_state,
             pasted_blocks: Vec::new(),
@@ -1710,6 +1710,25 @@ impl TuiApp {
         }
         self.model_notice = Some(format!("Model switched to {}", choice.model));
         self.close_model_select();
+    }
+
+    /// Switch theme at runtime
+    pub fn set_theme(&mut self, name: &str) {
+        self.theme = Arc::new(crate::tui::theme::Theme::from_name(name));
+    }
+
+    /// List available theme names
+    pub fn theme_names(&self) -> Vec<String> {
+        vec![
+            "graphite".into(),
+            "porcelain".into(),
+            "midnight".into(),
+            "ember".into(),
+            "aurora".into(),
+            "nord".into(),
+            "dracula".into(),
+            "catppuccin-mocha".into(),
+        ]
     }
 
     pub fn open_provider_select(&mut self) {
@@ -3513,7 +3532,7 @@ impl TuiApp {
         if let Some(ref mut state) = self.settings_state {
             state.save_config()?;
             // 如果主题发生变化，同步更新 TuiApp 的主题
-            self.theme = crate::tui::theme::Theme::from_name(&state.config.ui.theme);
+            self.theme = Arc::new(crate::tui::theme::Theme::from_name(&state.config.ui.theme));
         }
         Ok(())
     }
