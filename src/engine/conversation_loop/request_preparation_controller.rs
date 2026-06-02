@@ -745,13 +745,6 @@ fn overflow_label(zone: &ContextZone) -> String {
         .to_string()
 }
 
-fn dynamic_tail_insert_pos(request_messages: &[Message]) -> usize {
-    request_messages
-        .iter()
-        .rposition(|message| matches!(message, Message::User { .. }))
-        .unwrap_or(request_messages.len())
-}
-
 /// Prepend content to the last user message, keeping the prefix cache-friendly.
 /// Reasonix-style: dynamic context lives in the user message, not as separate system messages.
 fn prepend_to_last_user_message(request_messages: &mut Vec<Message>, block: impl Into<String>) {
@@ -2005,6 +1998,81 @@ mod tests {
                     && content.contains("<context-pack>")
                     && content.contains("allowed_files: src/lib.rs")
                     && content.ends_with("change")
+        ));
+    }
+
+    #[test]
+    fn prepend_to_last_user_message_works_with_existing_user() {
+        let mut messages = vec![
+            Message::system("stable prompt"),
+            Message::user("do something"),
+        ];
+        prepend_to_last_user_message(&mut messages, "<task-state>\nactive\n</task-state>");
+
+        assert_eq!(messages.len(), 2); // no extra system message
+        assert!(matches!(&messages[0], Message::System { .. }));
+        assert!(matches!(&messages[1], Message::User { content }
+            if content.contains("<task-state>")
+                && content.contains("do something")
+        ));
+    }
+
+    #[test]
+    fn prepend_to_last_user_message_falls_back_when_no_user() {
+        let mut messages = vec![Message::system("stable prompt")];
+        prepend_to_last_user_message(&mut messages, "zone content");
+
+        assert_eq!(messages.len(), 2);
+        assert!(matches!(&messages[1], Message::System { content }
+            if content == "zone content"
+        ));
+    }
+
+    #[test]
+    fn prepend_to_last_user_empty_block_is_noop() {
+        let mut messages = vec![
+            Message::system("stable"),
+            Message::user("hello"),
+        ];
+        prepend_to_last_user_message(&mut messages, "");
+
+        assert_eq!(messages.len(), 2);
+        assert!(matches!(&messages[1], Message::User { content }
+            if content == "hello"
+        ));
+    }
+
+    #[test]
+    fn static_prefix_no_dynamic_system_messages() {
+        // Verify that after our refactor, dynamic zones are NOT
+        // separate system messages that would break prefix caching.
+        let mut messages = vec![
+            Message::system("stable system prompt"),
+            Message::user("previous question"),
+            Message::Assistant { content: "previous answer".into(), tool_calls: None },
+            Message::user("current question"),
+        ];
+
+        // Simulate injecting a dynamic zone
+        prepend_to_last_user_message(
+            &mut messages,
+            "<task-state>\nGoal: fix bug\n</task-state>",
+        );
+
+        // The system messages should only contain the stable prompt
+        let system_msgs: Vec<_> = messages
+            .iter()
+            .filter(|m| matches!(m, Message::System { .. }))
+            .collect();
+        assert_eq!(system_msgs.len(), 1);
+        assert!(matches!(system_msgs[0], Message::System { content }
+            if content == "stable system prompt"
+        ));
+
+        // The dynamic zone should be in the last user message
+        assert!(matches!(messages.last().unwrap(), Message::User { content }
+            if content.contains("<task-state>")
+                && content.contains("current question")
         ));
     }
 }
