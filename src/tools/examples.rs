@@ -106,7 +106,7 @@ mod tests {
         assert!(registry.has("bash"));
         assert!(registry.has("glob"));
         assert!(registry.has("grep"));
-        assert!(registry.has("task_create"));
+        assert!(registry.has("todo_write"));
         assert!(registry.has("agent"));
     }
 

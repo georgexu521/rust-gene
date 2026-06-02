@@ -67,15 +67,11 @@ mod examples;
 
 pub use agent_tool::AgentTool;
 pub use bash_tool::{BashCancelTool, BashOutputTool, BashTasksTool, BashTool};
-pub use brief_tool::BriefTool;
 pub use browser_tool::BrowserTool;
 pub use calculate_tool::CalculateTool;
-pub use clear_tool::ClearTool;
-pub use config_tool::ConfigTool;
 pub use context_tool::ContextTool;
 pub use context_vis_tool::ContextVisTool;
 pub use copy_tool::CopyTool;
-pub use cost_tool::CostTool;
 pub use datetime_tool::DatetimeTool;
 pub use desktop_tool::DesktopTool;
 pub use diff_tool::DiffTool;
@@ -112,9 +108,6 @@ pub use share_tool::ShareTool;
 pub use sleep_tool::SleepTool;
 pub use start_dev_server_tool::StartDevServerTool;
 pub use symbol_tool::SymbolQueryTool;
-pub use task_tool::{
-    TaskCreateTool, TaskGetTool, TaskListTool, TaskOutputTool, TaskStopTool, TaskUpdateTool,
-};
 pub use team_tool::TeamTool;
 pub use telemetry_tool::TelemetryTool;
 pub use todo_tool::TodoWriteTool;
@@ -1662,14 +1655,7 @@ impl ToolRegistry {
         registry.register(StartDevServerTool);
         registry.register(InstallDependenciesTool);
 
-        // 注册高级工具
-        let task_manager = crate::task_manager::GLOBAL_TASK_MANAGER.clone();
-        registry.register(TaskCreateTool::new(task_manager.clone()));
-        registry.register(TaskGetTool::new(task_manager.clone()));
-        registry.register(TaskListTool::new(task_manager.clone()));
-        registry.register(TaskUpdateTool::new(task_manager.clone()));
-        registry.register(TaskStopTool::new(task_manager.clone()));
-        registry.register(TaskOutputTool::new(task_manager.clone()));
+        // 注册高级工具（task_* 已退役，由 todo_write 替代）
         registry.register(AgentTool);
 
         // 注册新增工具
@@ -1680,11 +1666,7 @@ impl ToolRegistry {
         registry.register(MemoryClearTool);
         registry.register(TodoWriteTool);
 
-        // 注册核心辅助工具
-        registry.register(CostTool);
-        registry.register(BriefTool);
-        registry.register(ClearTool);
-        registry.register(ConfigTool);
+        // 注册核心辅助工具（cost/clear/config 改为 slash command only）
         registry.register(ContextTool);
         registry.register(ContextVisTool);
         registry.register(CopyTool);
@@ -2099,12 +2081,6 @@ mod tests {
             "bash_output",
             "bash_cancel",
             "bash_tasks",
-            "task_create",
-            "task_get",
-            "task_list",
-            "task_update",
-            "task_stop",
-            "task_output",
             "agent",
             "web_fetch",
             "web_search",
