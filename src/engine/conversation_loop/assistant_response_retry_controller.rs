@@ -140,7 +140,9 @@ Only report a tool as unavailable when it is not exposed in the current tool lis
         Some(AssistantResponseRetryDecision {
             fallback_error,
             assistant_message: Message::assistant(safe_prefix_by_bytes(request.content, 1200)),
-            correction_message: Message::system(correction),
+            correction_message: Message::system(format!(
+                "<recent_observation>\n{}\n</recent_observation>", correction
+            )),
             mark_pseudo_tool_retry_used: !mark_filesystem_grounding_retry_used
                 && !mark_continuation_retry_used,
             mark_filesystem_grounding_retry_used,

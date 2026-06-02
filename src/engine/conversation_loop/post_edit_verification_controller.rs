@@ -393,7 +393,9 @@ impl PostEditVerificationController {
     ) {
         tool_results_text.push('\n');
         tool_results_text.push_str(&text);
-        messages.push(Message::system(text));
+        messages.push(Message::system(format!(
+            "<recent_observation>\n{}\n</recent_observation>", text
+        )));
     }
 }
 
