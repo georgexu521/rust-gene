@@ -1,6 +1,7 @@
 use crate::memory::provider::LocalMemoryMigrationFileReport;
 use crate::memory::types::{MemoryRecord, MemoryStatus};
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 use std::path::PathBuf;
 
 const PINNED_MEMORY_INDEX_HEADING_LIMIT: usize = 8;
@@ -142,6 +143,71 @@ pub struct MemorySnapshotReport {
     pub skipped_unsafe_count: usize,
     pub skipped_stale_count: usize,
     pub skipped_conflict_count: usize,
+}
+
+#[derive(Debug, Clone, Default)]
+pub(crate) struct MemorySnapshotSkipReport {
+    pub skipped_record_count: usize,
+    pub skipped_status_count: usize,
+    pub skipped_unsafe_count: usize,
+    pub skipped_stale_count: usize,
+    pub skipped_conflict_count: usize,
+}
+
+pub(crate) fn pinned_snapshot_sources(
+    frozen_memory: Option<&str>,
+    memory_char_limit: usize,
+    frozen_user: Option<&str>,
+    user_char_limit: usize,
+    frozen_memory_files: &[MemoryFileSnapshot],
+) -> Vec<String> {
+    let mut pinned_sources = Vec::new();
+    if frozen_memory.is_some_and(|content| {
+        format_pinned_memory_text_index("MEMORY.md", content, memory_char_limit).is_some()
+    }) {
+        pinned_sources.push("MEMORY.md".to_string());
+    }
+    if frozen_user.is_some_and(|content| {
+        format_pinned_memory_text_index("USER.md", content, user_char_limit).is_some()
+    }) {
+        pinned_sources.push("USER.md".to_string());
+    }
+    pinned_sources.extend(
+        frozen_memory_files
+            .iter()
+            .map(|file| format!("memory/{}", file.relative_path)),
+    );
+    pinned_sources
+}
+
+pub(crate) fn memory_snapshot_skip_report_from_records(
+    records: &[MemoryRecord],
+    is_unsafe: impl Fn(&MemoryRecord) -> bool,
+    is_stale: impl Fn(&MemoryRecord) -> bool,
+    conflict_count: usize,
+) -> MemorySnapshotSkipReport {
+    let mut skipped_ids = HashSet::<String>::new();
+    let mut report = MemorySnapshotSkipReport::default();
+    for record in records {
+        if !matches!(
+            record.status,
+            MemoryStatus::Accepted | MemoryStatus::Proposed
+        ) {
+            report.skipped_status_count += 1;
+            skipped_ids.insert(record.id.clone());
+        }
+        if is_unsafe(record) {
+            report.skipped_unsafe_count += 1;
+            skipped_ids.insert(record.id.clone());
+        }
+        if is_stale(record) {
+            report.skipped_stale_count += 1;
+            skipped_ids.insert(record.id.clone());
+        }
+    }
+    report.skipped_record_count = skipped_ids.len();
+    report.skipped_conflict_count = conflict_count;
+    report
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -392,6 +458,35 @@ pub struct MemoryRecordSummary {
     pub stale: usize,
     pub used: usize,
     pub projection_drift: usize,
+}
+
+pub(crate) fn memory_record_summary_from_records_with_stale(
+    records: &[MemoryRecord],
+    is_stale: impl Fn(&MemoryRecord) -> bool,
+) -> MemoryRecordSummary {
+    let mut summary = MemoryRecordSummary {
+        total: records.len(),
+        ..Default::default()
+    };
+    for record in records {
+        match record.status {
+            MemoryStatus::Accepted => summary.accepted += 1,
+            MemoryStatus::Proposed => summary.proposed += 1,
+            MemoryStatus::Rejected => summary.rejected += 1,
+            MemoryStatus::Archived => summary.archived += 1,
+            MemoryStatus::Superseded => summary.superseded += 1,
+        }
+        if record.evidence.is_empty() {
+            summary.missing_evidence += 1;
+        }
+        if record.use_count > 0 {
+            summary.used += 1;
+        }
+        if is_stale(record) {
+            summary.stale += 1;
+        }
+    }
+    summary
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

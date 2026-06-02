@@ -77,6 +77,9 @@ pub fn run_memory_eval_suite() -> MemoryEvalReport {
         eval_retrieval_trace_score_explains_scope_and_conflict(),
         eval_retrieval_trace_user_pinned_bonus(),
         eval_coding_session_retrieval_evalset(),
+        eval_paraphrase_recall_fixture(),
+        eval_project_scope_isolation_fixture(),
+        eval_stale_conflict_suppression_fixture(),
         eval_topic_scope_identity_gate(),
         eval_project_scope_monorepo_identity(),
         eval_project_scope_worktree_metadata(),
@@ -359,6 +362,191 @@ fn eval_coding_session_retrieval_evalset() -> MemoryEvalResult {
                 trace.selected_records,
                 trace.selected_chars,
                 trace.max_chars
+            ),
+        )
+    }
+}
+
+fn eval_paraphrase_recall_fixture() -> MemoryEvalResult {
+    let base = temp_eval_dir("paraphrase-recall");
+    let mut manager = MemoryManager::with_base_dir(base.clone());
+    let mut scope = MemoryScope::local("paraphrase-recall");
+    scope.project_root = Some(base.clone());
+    manager.set_active_scope(scope.clone());
+    let mut record = MemoryRecord::new(
+        "User preference: Answer concise Chinese status updates.",
+        MemoryKind::UserPreference,
+        scope,
+        MemoryProvenance::local("eval"),
+    );
+    record.status = MemoryStatus::Accepted;
+    record.id = "paraphrase-concise".to_string();
+    if let Err(error) = write_eval_records(manager.records_path(), &[record]) {
+        let _ = std::fs::remove_dir_all(&base);
+        return fail(
+            "paraphrase_recall_fixture",
+            "retrieval",
+            MemoryEvalFailureOwner::TestHarness,
+            format!("failed to prepare paraphrase fixture: {error}"),
+        );
+    }
+
+    let ctx = manager.preview_retrieval_context(
+        "please keep the reply brief in Chinese",
+        3,
+        RetrievalPolicy::Project,
+    );
+    let selected = ctx.as_ref().is_some_and(|ctx| {
+        ctx.items.iter().any(|item| {
+            item.provenance.contains("paraphrase-concise")
+                && item.content_preview.contains("concise Chinese")
+        })
+    });
+    let _ = std::fs::remove_dir_all(&base);
+    if selected {
+        pass(
+            "paraphrase_recall_fixture",
+            "retrieval",
+            "deterministic local aliases recall concise memory for brief query",
+        )
+    } else {
+        fail(
+            "paraphrase_recall_fixture",
+            "retrieval",
+            MemoryEvalFailureOwner::Framework,
+            "brief/concise paraphrase did not select the accepted user preference",
+        )
+    }
+}
+
+fn eval_project_scope_isolation_fixture() -> MemoryEvalResult {
+    let base = temp_eval_dir("project-scope-isolation");
+    let project_a = base.join("project-a");
+    let project_b = base.join("project-b");
+    if let Err(error) =
+        std::fs::create_dir_all(&project_a).and_then(|_| std::fs::create_dir_all(&project_b))
+    {
+        let _ = std::fs::remove_dir_all(&base);
+        return fail(
+            "project_scope_isolation_fixture",
+            "retrieval",
+            MemoryEvalFailureOwner::TestHarness,
+            format!("failed to prepare project dirs: {error}"),
+        );
+    }
+    let mut scope_a = MemoryScope::local("project-scope-a");
+    scope_a.project_root = Some(project_a);
+    let mut scope_b = MemoryScope::local("project-scope-b");
+    scope_b.project_root = Some(project_b);
+    let mut manager = MemoryManager::with_base_dir(base.clone());
+    manager.set_active_scope(scope_a.clone());
+
+    let mut record_a = MemoryRecord::new(
+        "Project fact: package manager is pnpm for the active project.",
+        MemoryKind::ProjectFact,
+        scope_a,
+        MemoryProvenance::local("eval"),
+    );
+    record_a.status = MemoryStatus::Accepted;
+    record_a.id = "scope-active".to_string();
+    let mut record_b = MemoryRecord::new(
+        "Project fact: package manager is pnpm for the other project.",
+        MemoryKind::ProjectFact,
+        scope_b,
+        MemoryProvenance::local("eval"),
+    );
+    record_b.status = MemoryStatus::Accepted;
+    record_b.id = "scope-other".to_string();
+    if let Err(error) = write_eval_records(manager.records_path(), &[record_a, record_b]) {
+        let _ = std::fs::remove_dir_all(&base);
+        return fail(
+            "project_scope_isolation_fixture",
+            "retrieval",
+            MemoryEvalFailureOwner::TestHarness,
+            format!("failed to prepare scoped records: {error}"),
+        );
+    }
+
+    let matches = manager.preview_relevant_memories("package manager pnpm", 5);
+    let selected_active = matches
+        .iter()
+        .any(|item| item.source.contains("scope-active"));
+    let leaked_other = matches
+        .iter()
+        .any(|item| item.source.contains("scope-other"));
+    let _ = std::fs::remove_dir_all(&base);
+    if selected_active && !leaked_other {
+        pass(
+            "project_scope_isolation_fixture",
+            "retrieval",
+            "typed project records are gated to the active project identity",
+        )
+    } else {
+        fail(
+            "project_scope_isolation_fixture",
+            "retrieval",
+            MemoryEvalFailureOwner::Framework,
+            format!("selected_active={selected_active} leaked_other={leaked_other}"),
+        )
+    }
+}
+
+fn eval_stale_conflict_suppression_fixture() -> MemoryEvalResult {
+    let matches = vec![
+        MemoryMatch {
+            source: "USER.md".to_string(),
+            score: 34,
+            rerank_score: None,
+            snippet: "language: Chinese".to_string(),
+        },
+        MemoryMatch {
+            source: "memory_record/language-old:stale:user_preference".to_string(),
+            score: 33,
+            rerank_score: None,
+            snippet: "language: English".to_string(),
+        },
+    ];
+    let conflicts = vec!["- key 'language' has conflicting values: chinese | english".to_string()];
+    let Some(ctx) = RetrievalContext::from_memory_matches_with_budget(
+        "language Chinese reply preference",
+        matches,
+        &conflicts,
+        RetrievalPolicy::Project,
+        MemoryRetrievalBudget::for_policy(RetrievalPolicy::Project, 3),
+    ) else {
+        return fail(
+            "stale_conflict_suppression_fixture",
+            "retrieval",
+            MemoryEvalFailureOwner::Framework,
+            "stale conflict fixture returned no retrieval context",
+        );
+    };
+    let Some(trace) = ctx.memory_trace.as_ref() else {
+        return fail(
+            "stale_conflict_suppression_fixture",
+            "retrieval",
+            MemoryEvalFailureOwner::Framework,
+            "stale conflict fixture did not include trace",
+        );
+    };
+    let stale_selected = ctx
+        .items
+        .iter()
+        .any(|item| item.provenance.contains("language-old"));
+    if !stale_selected && trace.skipped_stale_conflict == 1 {
+        pass(
+            "stale_conflict_suppression_fixture",
+            "retrieval",
+            "stale conflicting memory is suppressed and traced",
+        )
+    } else {
+        fail(
+            "stale_conflict_suppression_fixture",
+            "retrieval",
+            MemoryEvalFailureOwner::Framework,
+            format!(
+                "stale_selected={stale_selected} skipped_stale_conflict={}",
+                trace.skipped_stale_conflict
             ),
         )
     }
@@ -1358,6 +1546,17 @@ fn eval_migration_backup_rollback() -> MemoryEvalResult {
             ),
         )
     }
+}
+
+fn write_eval_records(path: &std::path::Path, records: &[MemoryRecord]) -> std::io::Result<()> {
+    let mut content = String::new();
+    for record in records {
+        let line = serde_json::to_string(record)
+            .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?;
+        content.push_str(&line);
+        content.push('\n');
+    }
+    std::fs::write(path, content)
 }
 
 fn temp_eval_dir(slug: &str) -> PathBuf {

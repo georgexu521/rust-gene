@@ -15,8 +15,8 @@ use super::manager::{
 };
 use super::ranking::{
     best_memory_file_snippet, dedupe_memory_matches, extract_keywords,
-    memory_record_id_from_source, rank_memory_files, rank_memory_paragraphs, rank_memory_records,
-    rank_project_progress_records, search_memory,
+    memory_record_id_from_source, memory_record_scope_matches, rank_memory_files,
+    rank_memory_paragraphs, rank_memory_records, rank_project_progress_records, search_memory,
 };
 use super::reports::MemoryMatch;
 use super::search_index::{MemorySearchHit, MemorySearchIndexReport};
@@ -150,9 +150,17 @@ impl MemoryManager {
 
         let mut matches = Vec::new();
         if let Ok(index_matches) = self.search_memory_index(user_message, max_results * 2) {
-            matches.extend(index_matches);
+            matches.extend(filter_search_index_matches_for_active_scope(
+                index_matches,
+                &memory_records,
+                &self.active_scope,
+            ));
         }
-        matches.extend(rank_memory_records(&memory_records, &keywords));
+        matches.extend(rank_memory_records(
+            &memory_records,
+            &keywords,
+            &self.active_scope,
+        ));
         matches.extend(rank_project_progress_records(&project_progress, &keywords));
         matches.extend(rank_memory_paragraphs(
             "MEMORY.md",
@@ -287,6 +295,30 @@ fn search_hits_to_memory_matches(hits: Vec<MemorySearchHit>) -> Vec<MemoryMatch>
                 rerank_score: None,
                 snippet: hit.snippet,
             }
+        })
+        .collect()
+}
+
+fn filter_search_index_matches_for_active_scope(
+    matches: Vec<MemoryMatch>,
+    records: &[crate::memory::types::MemoryRecord],
+    active_scope: &crate::memory::types::MemoryScope,
+) -> Vec<MemoryMatch> {
+    let allowed_record_ids = records
+        .iter()
+        .filter(|record| memory_record_scope_matches(record, active_scope))
+        .map(|record| record.id.as_str())
+        .collect::<HashSet<_>>();
+    matches
+        .into_iter()
+        .filter(|item| {
+            let source = item
+                .source
+                .strip_prefix("search_index:")
+                .unwrap_or(item.source.as_str());
+            memory_record_id_from_source(source)
+                .map(|id| allowed_record_ids.contains(id.as_str()))
+                .unwrap_or(true)
         })
         .collect()
 }

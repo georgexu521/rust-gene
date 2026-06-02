@@ -1,7 +1,7 @@
 # Memory System Simplification Plan
 
 Date: 2026-06-02
-Status: Draft plan after Hermes/Reasonix comparison
+Status: Implementation slices complete
 
 Implementation update:
 
@@ -18,6 +18,16 @@ Implementation update:
   by the retrieval pipeline now surface as `Project` retrieval context rather
   than durable `Memory`, while session-search results remain `Session` context.
   Tests cover that project progress recall does not create or write `USER.md`.
+- 2026-06-02: Phase 4 and Phase 5 slices implemented. Doctor and snapshot
+  reports now expose the exact pinned sources used by the stable prompt
+  snapshot. External provider configuration has explicit `off`, `context`,
+  `tools`, and `hybrid` modes; current runtime policy supports read-only
+  `context` and reserves `tools`/`hybrid` without exposing broad tool schemas.
+- 2026-06-02: Phase 6 and Phase 7 slices implemented. Pure report construction
+  moved out of `MemoryManager` into `memory::reports`, while retrieval remains
+  deterministic by default with lightweight paraphrase aliases, typed-record
+  project scope gating, search-index scope filtering, and eval fixtures for
+  paraphrase recall, project-scope isolation, and stale-conflict suppression.
 
 This plan narrows Priority Agent's memory system without discarding the useful
 parts already built. The goal is not to make memory less capable. The goal is

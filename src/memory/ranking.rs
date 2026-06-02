@@ -1,12 +1,13 @@
 use crate::engine::project_progress::{ProjectProgressKind, ProjectProgressRecord};
 use crate::memory::manager::{kind_label, record_needs_revalidation};
 use crate::memory::reports::{MemoryFileSnapshot, MemoryMatch};
-use crate::memory::types::{MemoryRecord, MemoryStatus};
+use crate::memory::types::{MemoryKind, MemoryRecord, MemoryScope, MemoryScopeKind, MemoryStatus};
 use std::collections::HashSet;
 
 pub(super) fn rank_memory_records(
     records: &[MemoryRecord],
     keywords: &[String],
+    active_scope: &MemoryScope,
 ) -> Vec<MemoryMatch> {
     if keywords.is_empty() || records.is_empty() {
         return Vec::new();
@@ -15,6 +16,7 @@ pub(super) fn rank_memory_records(
         .iter()
         .filter(|record| matches!(record.status, MemoryStatus::Accepted))
         .filter(|record| !record.is_expired())
+        .filter(|record| memory_record_scope_matches(record, active_scope))
         .filter_map(|record| {
             let score = semantic_memory_score(&record.content, keywords, &record_source(record));
             if score == 0 {
@@ -41,6 +43,33 @@ pub(super) fn rank_memory_records(
             })
         })
         .collect()
+}
+
+pub(super) fn memory_record_scope_matches(
+    record: &MemoryRecord,
+    active_scope: &MemoryScope,
+) -> bool {
+    if matches!(record.kind, MemoryKind::UserPreference) {
+        return true;
+    }
+
+    let record_identity = record.scope.identity();
+    let active_identity = active_scope.identity();
+    match record_identity.kind {
+        MemoryScopeKind::User | MemoryScopeKind::Agent => true,
+        MemoryScopeKind::Project => {
+            active_identity.kind == MemoryScopeKind::Project
+                && record_identity.id == active_identity.id
+        }
+        MemoryScopeKind::Topic if active_identity.kind == MemoryScopeKind::Project => {
+            record_identity.parent.as_deref() == Some(active_identity.id.as_str())
+        }
+        MemoryScopeKind::Topic => {
+            record_identity.parent.as_deref() == Some(active_identity.id.as_str())
+                || record_identity.parent == active_identity.parent
+        }
+        MemoryScopeKind::Session => record_identity.id == active_identity.id,
+    }
 }
 
 pub(super) fn rank_project_progress_records(
@@ -257,6 +286,17 @@ fn semantic_aliases(keyword: &str) -> &'static [&'static str] {
         "tool" | "tools" | "工具" => &["tool", "tools", "工具", "bash", "mcp"],
         "rust" | "cargo" => &["rust", "cargo", ".rs", "crate"],
         "test" | "tests" | "测试" => &["test", "tests", "测试", "cargo test"],
+        "concise" | "brief" | "terse" | "short" | "简洁" | "简短" => {
+            &["concise", "brief", "terse", "short", "简洁", "简短"]
+        }
+        "verify" | "validate" | "validation" | "proof" | "验证" => &[
+            "verify",
+            "validate",
+            "validation",
+            "proof",
+            "evidence",
+            "验证",
+        ],
         _ => &[],
     }
 }

@@ -19,7 +19,10 @@ use crate::memory::provider::{
 };
 use crate::memory::quality::assess_memory_candidate;
 use crate::memory::ranking::record_source;
-use crate::memory::reports::format_pinned_memory_text_index;
+use crate::memory::reports::{
+    format_pinned_memory_text_index, memory_record_summary_from_records_with_stale,
+    memory_snapshot_skip_report_from_records, pinned_snapshot_sources, MemorySnapshotSkipReport,
+};
 use crate::memory::search_index::MemorySearchDocument;
 use crate::memory::types::{
     MemoryCandidate, MemoryEvidenceKind, MemoryEvidenceRef, MemoryKind, MemoryProjection,
@@ -437,32 +440,6 @@ fn write_memory_records(path: &Path, records: &[MemoryRecord]) -> std::io::Resul
     write_memory_file_atomically(path, &content)
 }
 
-fn memory_record_summary_from_records(records: &[MemoryRecord]) -> MemoryRecordSummary {
-    let mut summary = MemoryRecordSummary {
-        total: records.len(),
-        ..Default::default()
-    };
-    for record in records {
-        match record.status {
-            MemoryStatus::Accepted => summary.accepted += 1,
-            MemoryStatus::Proposed => summary.proposed += 1,
-            MemoryStatus::Rejected => summary.rejected += 1,
-            MemoryStatus::Archived => summary.archived += 1,
-            MemoryStatus::Superseded => summary.superseded += 1,
-        }
-        if record.evidence.is_empty() {
-            summary.missing_evidence += 1;
-        }
-        if record.use_count > 0 {
-            summary.used += 1;
-        }
-        if record_needs_revalidation(record) {
-            summary.stale += 1;
-        }
-    }
-    summary
-}
-
 fn truncate_review_items(items: &mut Vec<MemoryReviewItem>, limit: usize) {
     if limit == 0 {
         items.clear();
@@ -686,15 +663,6 @@ impl MemoryFileLock {
     fn acquire(_path: &Path) -> std::io::Result<Self> {
         Ok(Self)
     }
-}
-
-#[derive(Debug, Clone, Default)]
-struct MemorySnapshotSkipReport {
-    skipped_record_count: usize,
-    skipped_status_count: usize,
-    skipped_unsafe_count: usize,
-    skipped_stale_count: usize,
-    skipped_conflict_count: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -989,7 +957,8 @@ impl MemoryManager {
 
     pub fn memory_record_summary(&self) -> MemoryRecordSummary {
         let records = self.memory_records();
-        let mut summary = memory_record_summary_from_records(&records);
+        let mut summary =
+            memory_record_summary_from_records_with_stale(&records, record_needs_revalidation);
         summary.projection_drift = records
             .iter()
             .filter(|record| {
@@ -1640,21 +1609,12 @@ impl MemoryManager {
             || self.frozen_user.is_some()
             || !self.frozen_memory_files.is_empty();
         let skip_report = self.memory_snapshot_skip_report();
-        let mut pinned_sources = Vec::new();
-        if self.frozen_memory.as_deref().is_some_and(|content| {
-            format_pinned_memory_text_index("MEMORY.md", content, self.memory_char_limit).is_some()
-        }) {
-            pinned_sources.push("MEMORY.md".to_string());
-        }
-        if self.frozen_user.as_deref().is_some_and(|content| {
-            format_pinned_memory_text_index("USER.md", content, self.user_char_limit).is_some()
-        }) {
-            pinned_sources.push("USER.md".to_string());
-        }
-        pinned_sources.extend(
-            self.frozen_memory_files
-                .iter()
-                .map(|file| format!("memory/{}", file.relative_path)),
+        let pinned_sources = pinned_snapshot_sources(
+            self.frozen_memory.as_deref(),
+            self.memory_char_limit,
+            self.frozen_user.as_deref(),
+            self.user_char_limit,
+            &self.frozen_memory_files,
         );
         MemorySnapshotReport {
             frozen,
@@ -1691,28 +1651,12 @@ impl MemoryManager {
                 warn!("failed to read raw local memory records for snapshot report: {error}");
                 Vec::new()
             });
-        let mut skipped_ids = std::collections::HashSet::<String>::new();
-        let mut report = MemorySnapshotSkipReport::default();
-        for record in raw_records {
-            if !matches!(
-                record.status,
-                MemoryStatus::Accepted | MemoryStatus::Proposed
-            ) {
-                report.skipped_status_count += 1;
-                skipped_ids.insert(record.id.clone());
-            }
-            if crate::memory::scan_memory_content(&record.content).is_err() {
-                report.skipped_unsafe_count += 1;
-                skipped_ids.insert(record.id.clone());
-            }
-            if record_needs_revalidation(&record) {
-                report.skipped_stale_count += 1;
-                skipped_ids.insert(record.id.clone());
-            }
-        }
-        report.skipped_record_count = skipped_ids.len();
-        report.skipped_conflict_count = self.memory_conflicts(usize::MAX).len();
-        report
+        memory_snapshot_skip_report_from_records(
+            &raw_records,
+            |record| crate::memory::scan_memory_content(&record.content).is_err(),
+            record_needs_revalidation,
+            self.memory_conflicts(usize::MAX).len(),
+        )
     }
 
     pub fn memory_conflicts(&self, max_conflicts: usize) -> Vec<String> {
