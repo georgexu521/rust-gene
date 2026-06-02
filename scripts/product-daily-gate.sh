@@ -421,7 +421,7 @@ for case_id in "${DAILY_CASES[@]}"; do
 
     # Check quality status
     QUALITY_FILE="$REPORT_DIR/live-$RUN_ID/$case_id/agent-quality-status.txt"
-    if [[ -f "$QUALITY_FILE" ]] && grep -q '^ok' "$QUALITY_FILE"; then
+    if [[ -f "$QUALITY_FILE" ]] && grep -q '^status=ok' "$QUALITY_FILE"; then
       echo "  Result: ok"
       PASSED=$((PASSED + 1))
     else
