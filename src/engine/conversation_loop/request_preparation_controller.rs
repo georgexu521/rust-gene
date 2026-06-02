@@ -740,7 +740,7 @@ fn overflow_label(zone: &ContextZone) -> String {
 
 /// Prepend content to the last user message, keeping the prefix cache-friendly.
 /// Reasonix-style: dynamic context lives in the user message, not as separate system messages.
-fn prepend_to_last_user_message(request_messages: &mut Vec<Message>, block: impl Into<String>) {
+pub(super) fn prepend_to_last_user_message(request_messages: &mut Vec<Message>, block: impl Into<String>) {
     let block = block.into();
     if block.is_empty() {
         return;

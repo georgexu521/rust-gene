@@ -1323,13 +1323,25 @@ fn build_messages_for_turn(
     } else {
         crate::engine::prompt_context::PromptContextAssembler::from_current_dir(system_prompt)
     };
-    let mut prompt_context = assembler.build_for_turn(user_msg, history);
+    // Use assembly plan to keep task-focus out of the stable prefix (Phase 0 Risk 1)
+    let plan = assembler.assembly_plan_for_turn(user_msg, history);
+    let mut system_prompt = plan.stable_prefix.content.clone();
     if let Some(mode_context) = agent_mode.runtime_context() {
-        prompt_context.system_prompt.push_str("\n\n");
-        prompt_context.system_prompt.push_str(mode_context);
+        system_prompt.push_str("\n\n");
+        system_prompt.push_str(mode_context);
     }
-    let mut msgs = vec![Message::system(prompt_context.system_prompt)];
+    let mut msgs = vec![Message::system(system_prompt)];
     msgs.extend(history.to_vec());
+    // Prepend task-focus to the last user message in history (dynamic tail)
+    if !plan.task_state.content.is_empty() {
+        if let Some(Message::User { content }) = msgs.iter_mut().rfind(|m| matches!(m, Message::User { .. })) {
+            *content = format!(
+                "<task-focus>\n{}\n</task-focus>\n\n{}",
+                plan.task_state.content.trim(),
+                content
+            );
+        }
+    }
     msgs
 }
 

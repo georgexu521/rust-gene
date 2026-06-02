@@ -31,11 +31,8 @@ impl RetrievalPromptController {
         } else {
             format!("<relevant_material>\n{block}\n</relevant_material>")
         };
-        let insert_pos = messages
-            .iter()
-            .rposition(|message| matches!(message, Message::User { .. }))
-            .unwrap_or(messages.len());
-        messages.insert(insert_pos, Message::system(block));
+        // Phase 0 Risk 3: inject into user tail, not as separate system message
+        super::request_preparation_controller::prepend_to_last_user_message(messages, &block);
         true
     }
 }
@@ -56,18 +53,15 @@ mod tests {
             "<retrieval-context>\nproject.index: src/main.rs\n</retrieval-context>",
         ));
 
-        assert_eq!(messages.len(), 3);
+        // Phase 0 Risk 3: retrieval is now in the user message, not a separate system message
+        assert_eq!(messages.len(), 2);
         assert!(matches!(
             &messages[1],
-            Message::System { content }
+            Message::User { content }
                 if content.contains("<relevant_material>")
                     && content.contains("<retrieval-context>")
                     && content.contains("project.index: src/main.rs")
-                    && content.contains("</relevant_material>")
-        ));
-        assert!(matches!(
-            &messages[2],
-            Message::User { content } if content == "inspect repo"
+                    && content.ends_with("inspect repo")
         ));
     }
 

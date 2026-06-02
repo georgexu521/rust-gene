@@ -55,11 +55,12 @@ impl QueryEngine {
         let assembler =
             crate::engine::prompt_context::PromptContextAssembler::from_current_dir(base);
         if let Some(hist) = history {
-            assembler.build_for_turn(user_message, hist).system_prompt
+            assembler.assembly_plan_for_turn(user_message, hist).stable_prefix.content
         } else {
             assembler
-                .build_for_single_user_message(user_message)
-                .system_prompt
+                .assembly_plan_for_single_user_message(user_message)
+                .stable_prefix
+                .content
         }
     }
 
