@@ -11,23 +11,30 @@ use ratatui::{
 };
 
 /// Render a card header line: `glyph  ROLE  · meta`
-fn card_header<'a>(
-    glyph: &'a str,
-    role_label: &'a str,
+fn card_header(
+    glyph: &str,
+    role_label: &str,
     color: Color,
-    meta: Option<&'a str>,
+    meta: Option<String>,
     faint: Color,
-) -> Line<'a> {
+) -> Line<'static> {
     let mut spans = vec![
-        Span::styled(glyph, Style::default().fg(color).add_modifier(Modifier::BOLD)),
-        Span::styled("  ", Style::default()),
-        Span::styled(role_label, Style::default().fg(color).add_modifier(Modifier::BOLD)),
+        Span::styled(glyph.to_string(), Style::default().fg(color).add_modifier(Modifier::BOLD)),
+        Span::styled("  ".to_string(), Style::default()),
+        Span::styled(role_label.to_string(), Style::default().fg(color).add_modifier(Modifier::BOLD)),
     ];
     if let Some(m) = meta {
-        spans.push(Span::styled(" · ", Style::default().fg(faint)));
+        spans.push(Span::styled(" · ".to_string(), Style::default().fg(faint)));
         spans.push(Span::styled(m, Style::default().fg(faint)));
     }
     Line::from(spans)
+}
+
+/// Streaming state for assistant card rendering
+pub struct StreamMeta {
+    pub is_streaming: bool,
+    pub tick: usize,
+    pub token_count: Option<u32>,
 }
 
 /// 渲染消息为 Paragraph（Reasonix card 风格）
@@ -38,7 +45,22 @@ pub fn render_message<'a>(
 ) -> Paragraph<'a> {
     match message.role {
         MessageRole::User => render_user_message(message, theme),
-        MessageRole::Assistant => render_assistant_message(message, theme),
+        MessageRole::Assistant => render_assistant_message(message, theme, None),
+        MessageRole::System => render_system_message(message, theme),
+        MessageRole::Tool => render_tool_message(message, theme),
+    }
+}
+
+/// 渲染消息为 Paragraph（带 streaming 状态）
+pub fn render_message_with_stream<'a>(
+    message: &'a MessageItem,
+    _width: usize,
+    theme: &'a crate::tui::theme::Theme,
+    stream: Option<&StreamMeta>,
+) -> Paragraph<'a> {
+    match message.role {
+        MessageRole::User => render_user_message(message, theme),
+        MessageRole::Assistant => render_assistant_message(message, theme, stream),
         MessageRole::System => render_system_message(message, theme),
         MessageRole::Tool => render_tool_message(message, theme),
     }
@@ -72,18 +94,29 @@ fn render_user_message<'a>(
 fn render_assistant_message<'a>(
     message: &'a MessageItem,
     theme: &'a crate::tui::theme::Theme,
+    stream: Option<&StreamMeta>,
 ) -> Paragraph<'a> {
-    let card = &theme.tokens.card.streaming;
-    let mut lines = vec![
-        card_header(
-            card.glyph,
-            "Reply",
-            theme.tokens.tone.ok,
-            None,
-            theme.tokens.fg.faint,
-        ),
-        Line::from(""),
-    ];
+    let is_streaming = stream.map(|s| s.is_streaming).unwrap_or(false);
+    let tick = stream.map(|s| s.tick).unwrap_or(0);
+
+    // Header: pulse animation during streaming, static glyph when done
+    let (glyph, label, header_color) = if is_streaming {
+        let frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+        (frames[tick % frames.len()], "Writing", theme.tokens.tone.brand)
+    } else {
+        ("‹", "Reply", theme.tokens.tone.ok)
+    };
+
+    // Meta: token count if available
+    let meta = stream.and_then(|s| s.token_count.map(|n| format!("{} tok", n)));
+
+    let mut lines = vec![card_header(
+        glyph,
+        label,
+        header_color,
+        meta,
+        theme.tokens.fg.faint,
+    )];
 
     let markdown_text = parse_markdown(&message.content, theme);
     for line in markdown_text.lines {

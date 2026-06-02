@@ -1115,6 +1115,8 @@ pub struct TuiApp {
     command_registry: CommandRegistry,
     /// 滚动位置
     pub scroll_offset: usize,
+    /// 是否自动贴底（用户手动上滚后变为 false，滚到底或新消息时恢复）
+    pub pinned_to_bottom: bool,
     /// 应用上下文
     pub context: AppContext,
     /// 最后错误信息
@@ -1331,6 +1333,7 @@ impl TuiApp {
             status_bar_density: StatusBarDensity::Normal,
             command_registry: default_command_registry(),
             scroll_offset: 0,
+            pinned_to_bottom: true,
             context,
             error_message: None,
             history: VecDeque::with_capacity(100),
@@ -1928,8 +1931,10 @@ impl TuiApp {
         // 标记正在查询
         self.is_querying = true;
 
-        // 滚动到底部
-        self.scroll_to_bottom();
+        // Only auto-scroll when pinned
+        if self.pinned_to_bottom {
+            self.scroll_to_bottom();
+        }
 
         // 使用流式引擎发送查询
         if let Some(engine) = self.streaming_engine.clone() {
@@ -3615,25 +3620,24 @@ impl TuiApp {
         if self.scroll_offset > 0 {
             self.scroll_offset -= 1;
         }
+        self.pinned_to_bottom = false;
     }
 
     /// 向下滚动
     pub fn scroll_down(&mut self) {
-        // 实际应该在渲染时计算最大滚动
         self.scroll_offset += 1;
     }
 
     /// 滚动到底部（显示最新消息）
     pub fn scroll_to_bottom(&mut self) {
-        // Use messages.len() as a bottom-anchor sentinel. The renderer knows the
-        // available viewport height, so it can choose the earliest message that
-        // still keeps the latest exchange visible.
         self.scroll_offset = self.messages.len();
+        self.pinned_to_bottom = true;
     }
 
     /// 向上滚动半页（Vim Ctrl+U）
     pub fn scroll_up_half_page(&mut self) {
         self.scroll_offset = self.scroll_offset.saturating_sub(5);
+        self.pinned_to_bottom = false;
     }
 
     /// 向下滚动半页（Vim Ctrl+D）

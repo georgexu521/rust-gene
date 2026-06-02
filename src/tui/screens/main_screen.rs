@@ -23,6 +23,37 @@ pub fn render_chat_area(f: &mut Frame, app: &TuiApp, area: Rect) {
     // 直接使用 area，不添加外边框
     let inner_area = area;
 
+    // Session intro line (Reasonix style)
+    let mut top_offset = 0u16;
+    if !app.messages.is_empty() {
+        let session_id = app.session_manager.current_session_id().unwrap_or("?");
+        let short_id = if session_id.len() > 8 { &session_id[..8] } else { &session_id };
+        let intro = Paragraph::new(Line::from(vec![
+            Span::styled(
+                format!("◈ {} · ", short_id),
+                Style::default().fg(app.theme.tokens.fg.faint),
+            ),
+            Span::styled(
+                format!("{} · ", app.current_model_label()),
+                Style::default().fg(app.theme.tokens.fg.faint),
+            ),
+            Span::styled(
+                app.current_agent_mode_label(),
+                Style::default().fg(app.theme.tokens.fg.faint),
+            ),
+        ]));
+        f.render_widget(
+            intro,
+            Rect {
+                x: inner_area.x + 2,
+                y: inner_area.y,
+                width: inner_area.width.saturating_sub(4),
+                height: 1,
+            },
+        );
+        top_offset = 1;
+    }
+
     // 如果有消息，渲染它们
     if app.messages.is_empty() {
         let welcome = Paragraph::new(Text::from(vec![
@@ -64,35 +95,63 @@ pub fn render_chat_area(f: &mut Frame, app: &TuiApp, area: Rect) {
     };
 
     let items = transcript_items(&messages, app);
-    let max_y = inner_area.y + inner_area.height;
+    let content_top = inner_area.y + top_offset;
+    let content_height = inner_area.height.saturating_sub(top_offset);
+    let max_y = content_top + content_height;
     let bottom_anchored = app.scroll_offset >= messages.len();
     let window = transcript_window(
         &items,
         app.scroll_offset,
         bottom_anchored,
-        inner_area.height,
+        content_height,
         inner_area.width as usize,
         app,
     );
 
-    let mut current_y = inner_area.y + u16::from(window.more_above);
+    // Compute total scroll rows and remaining
+    let total_rows: usize = item_heights(&items, inner_area.width as usize, app)
+        .iter()
+        .sum();
+    let viewport_rows = content_height as usize;
+    let max_scroll = total_rows.saturating_sub(viewport_rows);
+    let scroll_top = window.start; // approximate
 
-    if window.more_above {
-        let indicator_y = inner_area.y;
-        let indicator = Paragraph::new("↑ more above").style(
-            Style::default()
-                .fg(app.theme.tokens.fg.faint)
-                .add_modifier(Modifier::ITALIC),
-        );
+    let mut current_y = content_top + u16::from(window.more_above);
+
+    // Scroll indicator (Reasonix style)
+    let show_indicator = !window.bottom_anchored || !app.pinned_to_bottom;
+    if show_indicator && max_scroll > 0 {
+        let above = scroll_top;
+        let remaining = max_scroll.saturating_sub(scroll_top);
+        let mut indicator_parts = vec![
+            Span::styled(
+                format!("{} above", above),
+                Style::default().fg(app.theme.tokens.fg.faint).add_modifier(Modifier::ITALIC),
+            ),
+        ];
+        if remaining > 0 {
+            indicator_parts.push(Span::styled(
+                format!(" · {} remaining", remaining),
+                Style::default().fg(app.theme.tokens.fg.faint),
+            ));
+        }
+        indicator_parts.push(Span::styled(
+            " · PgUp/PgDn scroll",
+            Style::default().fg(app.theme.tokens.fg.faint),
+        ));
+
+        let indicator = Paragraph::new(Line::from(indicator_parts))
+            .style(Style::default().bg(app.theme.tokens.surface.bg_elev));
         f.render_widget(
             indicator,
             Rect {
                 x: inner_area.x,
-                y: indicator_y,
+                y: content_top,
                 width: inner_area.width,
                 height: 1,
             },
         );
+        current_y = content_top + 1;
     }
 
     for item in items.iter().skip(window.start) {
@@ -112,10 +171,29 @@ pub fn render_chat_area(f: &mut Frame, app: &TuiApp, area: Rect) {
         match item {
             TranscriptItem::Message { message_index, msg } => {
                 let collapsed = app.collapsed_indices.contains(message_index);
+                // Streaming state for last assistant message
+                let stream_meta = if app.is_querying
+                    && msg.role == MessageRole::Assistant
+                    && *message_index == messages.len() - 1
+                {
+                    let tokens = app.stream_usage_snapshot.map(|u| u.total_tokens());
+                    Some(message::StreamMeta {
+                        is_streaming: true,
+                        tick: app.tick_count,
+                        token_count: tokens,
+                    })
+                } else {
+                    None
+                };
                 let paragraph = if collapsed {
                     message::render_message_compact(msg, &app.theme)
                 } else {
-                    message::render_message(msg, inner_area.width as usize, &app.theme)
+                    message::render_message_with_stream(
+                        msg,
+                        inner_area.width as usize,
+                        &app.theme,
+                        stream_meta.as_ref(),
+                    )
                 };
                 f.render_widget(paragraph, msg_area);
             }
@@ -333,6 +411,24 @@ pub fn render_status_bar(f: &mut Frame, app: &TuiApp, area: Rect) {
         ),
         Style::default().fg(app.theme.tokens.fg.faint),
     ));
+
+    // Context usage bar (Reasonix style: 8 cells)
+    if let Some(usage) = app.stream_usage_snapshot {
+        let cap: u32 = 128_000; // rough context cap, configurable
+        let used = usage.prompt_tokens;
+        let ratio = (used as f64 / cap as f64).min(1.0);
+        let pct = (ratio * 100.0) as u32;
+        let bar_color = if ratio >= 0.8 { app.theme.tokens.tone.err }
+            else if ratio >= 0.5 { app.theme.tokens.tone.warn }
+            else { app.theme.tokens.tone.ok };
+        let filled = (ratio * 8.0).round() as usize;
+        let empty = 8 - filled;
+        let bar = "█".repeat(filled) + &"░".repeat(empty);
+        parts.push(Span::styled(
+            format!("ctx {bar} {pct}%"),
+            Style::default().fg(bar_color),
+        ));
+    }
 
     // Token usage
     if !app.is_querying {
@@ -1803,12 +1899,12 @@ pub fn render_plan_approval(f: &mut Frame, plan: &crate::engine::plan_mode::Plan
     ];
 
     for (i, step) in plan.steps.iter().enumerate() {
-        let status_icon = match step.status {
-            crate::engine::plan_mode::StepStatus::Pending => "[ ]",
-            crate::engine::plan_mode::StepStatus::InProgress => "[~]",
-            crate::engine::plan_mode::StepStatus::Completed => "[x]",
-            crate::engine::plan_mode::StepStatus::Skipped => "[s]",
-            crate::engine::plan_mode::StepStatus::Failed(_) => "[!]",
+        let (status_icon, icon_color) = match step.status {
+            crate::engine::plan_mode::StepStatus::Pending => ("○", Color::DarkGray),
+            crate::engine::plan_mode::StepStatus::InProgress => ("●", Color::Cyan),
+            crate::engine::plan_mode::StepStatus::Completed => ("✓", Color::Green),
+            crate::engine::plan_mode::StepStatus::Skipped => ("·", Color::DarkGray),
+            crate::engine::plan_mode::StepStatus::Failed(_) => ("✗", Color::Red),
         };
         let tool_info = step
             .tool
@@ -1818,7 +1914,7 @@ pub fn render_plan_approval(f: &mut Frame, plan: &crate::engine::plan_mode::Plan
         lines.push(Line::from(vec![
             Span::styled(
                 format!("  {} {}. ", status_icon, i + 1),
-                Style::default().fg(Color::Gray),
+                Style::default().fg(icon_color),
             ),
             Span::styled(step.description.clone(), Style::default().fg(Color::White)),
             Span::styled(tool_info, Style::default().fg(Color::DarkGray)),
