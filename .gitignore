@@ -27,3 +27,4 @@ docs/benchmarks/live-*/**/diff-stat.txt
 docs/benchmarks/live-*/**/git-status.txt
 docs/benchmarks/live-*/**/required-commands.log
 .priority-agent/
+.reasonix/
