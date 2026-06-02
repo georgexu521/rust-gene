@@ -102,7 +102,6 @@ impl ConversationLoop {
                 "ask_user",
             ],
             IntentKind::Configuration => &[
-                "config",
                 "mcp",
                 "mcp_tool",
                 "list_mcp_resources",
@@ -116,12 +115,6 @@ impl ConversationLoop {
             IntentKind::Delegation => &[
                 "agent",
                 "swarm",
-                "task_create",
-                "task_get",
-                "task_list",
-                "task_update",
-                "task_stop",
-                "task_output",
                 "project_list",
                 "grep",
                 "file_read",
@@ -193,12 +186,6 @@ impl ConversationLoop {
                 WorkflowKind::Delegation => &[
                     "agent",
                     "swarm",
-                    "task_create",
-                    "task_get",
-                    "task_list",
-                    "task_update",
-                    "task_stop",
-                    "task_output",
                     "project_list",
                     "grep",
                     "file_read",

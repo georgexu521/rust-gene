@@ -1,382 +1,585 @@
 # 运行时精简优化计划
 
 日期：2026-06-02
-状态：讨论稿，待评审
+状态：评审后修订版
 
-本文档详细规划了 Priority Agent 运行时的 4 项精简优化。
-每项包含现状分析、具体改动、影响评估和验收标准，可直接作为执行清单。
+本文档规划 Priority Agent 运行时的精简路线。目标不是简单追求更少代码，
+而是让模型默认看到更少、更清晰的能力，同时保留验证、权限、checkpoint、
+证据记录和诚实 closeout 这些硬约束。
+
+参考对象：`/Users/georgexu/Downloads/DeepSeek-Reasonix-main`。
+Reasonix 的可取点不是没有护栏，而是把模型可见工具压成少数明确能力：
+文件、shell/jobs、todo/plan、memory/skills/web/MCP；安全和恢复主要挂在
+shell allowlist、edit gate、pause gate、sandbox、hook 和 tool dispatcher 上。
+Priority Agent 可以学习这个方向，但不能把已有的 runtime proof 边界删掉。
 
 ---
 
-## 1. 配置系统精简（18 key → ~10 key）
+## 0. 精简原则
 
-### 1.1 现状
+### 0.1 保留硬边界
 
-配置定义在 `src/services/config.rs`，当前有 **18 个可配置 key**：
+以下能力不能为了减少工具数或让弱模型更容易通过 eval 而削弱：
 
-```
+- 权限和 action review：高风险、网络、安装、原始 bash 写入、外部路径访问仍需确定性拦截或确认。
+- checkpoint 和文件变更证据：文件工具、format、diff、git evidence 的绑定关系必须保留。
+- 验证闭环：验证失败必须形成 `ToolObservation`，进入下一轮上下文，阻止虚假 verified closeout。
+- route-scoped tools：默认暴露面可以收缩，但特定 route 需要的工具应按需暴露。
+- memory gates：记忆可以精简配置，但持久化、review、scope、敏感信息过滤不能弱化。
+
+### 0.2 优先减少“模型可见复杂度”
+
+Reasonix 的启发是：工具实现可以有内部复杂度，但模型看到的入口要少。
+因此本项目的优先级应是：
+
+1. 缩小默认 tool exposure，而不是先删除工具实现。
+2. 合并重复的模型入口，而不是删除 runtime evidence 分类。
+3. 删除真正没有协议价值、没有运行时消费、没有 UI/API 语义的配置。
+4. lazy 初始化冷路径组件，但保留 `Option`/失败语义和现有调用方行为。
+
+---
+
+## 1. 配置系统精简
+
+### 1.1 当前状态
+
+配置定义在 `src/services/config.rs`，包含：
+
+```text
 AppConfig
-├── api (5): base_url, model, temperature, max_tokens, api_key
-├── ui (3): theme, show_token_usage, compact_mode
-├── storage (3): data_dir, persistence_enabled, auto_save_interval_secs
-├── features (7): tui_enabled, agent_enabled, mcp_enabled, skills_enabled,
-│                 web_search, llm_memory_extraction, plugin_trust_mode
-├── engine (2): max_iterations, mcp_servers
-└── memory.external_provider (13): enabled, provider_type, name, records_path,
-    prompt_block, prefetch, search, queue_prefetch, sync_turn, session_end,
-    pre_compress, write_mirror, tools
+├── api: base_url, model, temperature, max_tokens, api_key
+├── ui: theme, show_token_usage, compact_mode
+├── storage: data_dir, persistence_enabled, auto_save_interval_secs
+├── features: tui_enabled, agent_enabled, mcp_enabled, skills_enabled,
+│            web_search, llm_memory_extraction, plugin_trust_mode
+├── engine: max_iterations, mcp_servers
+└── memory.external_provider: enabled, provider_type, name, records_path,
+   prompt_block, prefetch, search, queue_prefetch, sync_turn, session_end,
+   pre_compress, write_mirror, tools
 ```
 
-加上 `ConfigLoader`/`ConfigHook` 回调系统、三级 scope path、`CONFIG_KEY_SPECS` schema、`config_schema_json()`、`redacted_config_export()` 等辅助设施，**总代码约 800 行**。
+辅助设施包括 `ConfigLoader`/`ConfigHook`、scope paths、`CONFIG_KEY_SPECS`、
+`config_schema_json()`、`redacted_config_export()`、summary/get/set/validate。
 
-对照 Reasonix：配置约 6 个 key（model、theme、edit mode、max iterations、endpoint、cache）。
+### 1.2 修正后的消费分析
 
-### 1.2 运行时消费分析
+原计划把部分字段标为“只在 settings 出现”，这个判断需要修正：
 
-以下 key **从未被渲染/决策代码读取**（仅在 settings 面板出现）：
+| Key | 当前消费 | 结论 |
+|-----|----------|------|
+| `ui.compact_mode` | settings、API config、`/focus` 持久化 | 可删，但要同步改 `/focus` 和 API DTO |
+| `features.tui_enabled` | settings、API config | 可删，但属于外部配置协议收缩 |
+| `features.agent_enabled` | settings、API config | 可删，但属于外部配置协议收缩 |
+| `storage.auto_save_interval_secs` | config validation、settings | 可删，当前没有实际 autosave loop |
 
-| Key | 定义位置 | 运行时消费 |
-|-----|---------|-----------|
-| `ui.compact_mode` | `config.rs:UiConfig` | ❌ 无渲染代码消费 |
-| `features.tui_enabled` | `config.rs:FeatureFlags` | ❌ 无分支检查此 flag |
-| `features.agent_enabled` | `config.rs:FeatureFlags` | ❌ 无运行时检查 |
-| `storage.auto_save_interval_secs` | `config.rs:StorageConfig` | ❌ 无自动保存逻辑 |
+`memory.external_provider` 的大量 capability flag 只在 provider 初始化时使用。
+其中 `write_mirror`/`tools` 还被 validation 禁止打开。这里可以收缩，但要把
+capability 常量化，不要移除 read-only external memory provider 的安全语义。
 
-以下 key **仅在 memory provider 初始化时消费一次**，且大多数值始终为默认值：
+### 1.3 Phase 1：删除 4 个低价值配置字段
 
-| Key | 默认值 | 实际使用 |
-|-----|--------|---------|
-| `memory.external_provider.name` | `"external-memory"` | 仅传给 `MemoryProviderCapabilities` |
-| `memory.external_provider.prompt_block` | `true` | 同上 |
-| `memory.external_provider.prefetch` | `true` | 同上 |
-| `memory.external_provider.search` | `true` | 同上 |
-| `memory.external_provider.queue_prefetch` | `false` | 同上 |
-| `memory.external_provider.sync_turn` | `false` | 同上 |
-| `memory.external_provider.session_end` | `false` | 同上 |
-| `memory.external_provider.pre_compress` | `false` | 同上 |
-| `memory.external_provider.write_mirror` | `false` — 且 validation 禁止设为 true |
-| `memory.external_provider.tools` | `false` — 且 validation 禁止设为 true |
+改动范围：
 
-10 个 external provider 子 key 中，仅 `enabled`、`provider_type`、`records_path` 有实际语义。
+- `src/services/config.rs`
+  - 删除 `ui.compact_mode`
+  - 删除 `features.tui_enabled`
+  - 删除 `features.agent_enabled`
+  - 删除 `storage.auto_save_interval_secs`
+  - 同步更新 defaults、`CONFIG_KEY_SPECS`、summary、get/set、validation、tests
+- `src/tui/components/settings.rs`
+  - 删除对应 settings 项
+- `src/tui/slash_handler/config.rs`
+  - `/focus` 不再写 `config.ui.compact_mode`
+  - focus mode 改为纯会话状态，或新增更明确的 `focus` 会话状态持久化方案
+- `src/api/state.rs`、`src/api/routes.rs`
+  - 删除 config response/update DTO 中对应字段
 
-### 1.3 建议改动
+风险：中低。
+不是“纯 dead code 删除”，因为会改变 `/focus` 的持久化行为和 API shape。
+如果保留 API 兼容性，可先让 update request 忽略旧字段，再在后续版本删除 DTO 字段。
 
-**第一阶段（安全，纯删除）**：
-- 删除 `ui.compact_mode`、`features.tui_enabled`、`features.agent_enabled`、`storage.auto_save_interval_secs`
-- 从 `UiConfig`、`FeatureFlags`、`StorageConfig` 移除对应字段
-- 从 `AppConfig::load()` 的 `set_default` 移除对应行
-- 从 `CONFIG_KEY_SPECS` 移除对应条目
-- 从 `get_config_value()`/`set_config_value()` 移除对应分支
-- 从 `format_config_summary()` 移除对应参数
-- 从 `validate_config()` 移除对应检查
+验收：
 
-影响文件：`src/services/config.rs`（约 -80 行）
-协议兼容：向后兼容（TOML 中多余的 key 会被忽略，多余的 key 在 `get_config_value` 返回 `None`）
+```bash
+cargo fmt --check
+cargo check -q
+cargo test -q services::config
+cargo test -q tui::slash_handler::config
+cargo test -q api
+```
 
-**第二阶段（需讨论）**：
-- 将 `memory.external_provider` 的 10 个 sub-key 合并为 3 个（enabled、provider_type、records_path）
-- 其余 7 个 flag（prompt_block 等）改为硬编码默认值
-- 从 `ExternalMemoryProviderConfig` 移除对应字段
-- 更新 `src/memory/provider_ops.rs` 的 `MemoryProviderCapabilities` 构造（从 config 字段 → 常量）
+### 1.4 Phase 2：收缩 external memory provider 配置
 
-影响文件：`src/services/config.rs`（约 -60 行）、`src/memory/provider_ops.rs`（约 -15 行）
+目标字段：
 
-**第三阶段（可选）**：
-- 删除 `ConfigLoader`/`ConfigHook`（仅测试使用，生产路径不触发）
-- 合并三级 scope path 为二级（user/legacy）
-- 删除 `config_schema_json()`、`redacted_config_export()`
+```text
+memory.external_provider.enabled
+memory.external_provider.provider_type
+memory.external_provider.records_path
+```
 
-### 1.4 风险
+改动：
 
-- **第一阶段低风险**：删除的是运行时零消费的字段
-- **第二阶段中风险**：如果外部有 TOML 配置文件写了这些字段，反序列化会静默忽略（serde 默认行为），不会报错
-- **第三阶段需确认**：`ConfigLoader` 的 `load_from_env()` 是否有非测试调用方
+- `ExternalMemoryProviderConfig` 只保留上述 3 个字段。
+- `MemoryProviderCapabilities` 中以下值改为常量：
+  - `name = "external-memory"`
+  - `prompt_block = true`
+  - `prefetch = true`
+  - `search = true`
+  - `queue_prefetch = false`
+  - `sync_turn = false`
+  - `session_end = false`
+  - `pre_compress = false`
+  - `write_mirror = false`
+  - `tools = false`
+- 旧 TOML 字段允许被 serde 忽略；测试覆盖旧字段不报错。
 
-### 1.5 验收
+风险：中。
+这是配置协议收缩，但安全方向更清晰：外部 provider 只能是只读背景上下文。
 
-- `cargo check` clean
-- `cargo test --lib services::config::tests` 全部通过
-- 配置文件 `config.toml` 中写旧字段不报错（向后兼容验证）
-- 最终 config key 数从 18 降到 ≤10
+验收：
+
+```bash
+cargo fmt --check
+cargo check -q
+cargo test -q memory::provider_ops
+cargo test -q services::config
+```
+
+### 1.5 暂缓项
+
+暂缓删除：
+
+- `config_schema_json()`
+- `redacted_config_export()`
+- `config_scope_paths()`
+- `ConfigLoader`/`ConfigHook`
+
+原因：`redacted_config_export()` 被 `/config export` 和 `config` tool 使用；
+`config_scope_paths()` 被 `/config paths` 使用。第三阶段应先决定是否保留
+`config` tool 或仅保留 `/config` slash command，再处理这些辅助函数。
 
 ---
 
-## 2. 工具注册精简（80+ tools → ~45）
+## 2. 工具面精简
 
-### 2.1 现状
+### 2.1 当前问题
 
-工具注册在 `src/tools/mod.rs:1643-1788` 的 `with_profile()` 函数。
-当前共有 **82 个注册工具**（73 个 Core + 9 个 Full-only）。
+`src/tools/mod.rs::with_profile()` 默认注册大量工具。真正的问题不是实现文件多，
+而是模型默认暴露面过宽，导致：
 
-工具分为两个 profile：
-- `Core`（默认）：73 个工具
-- `Full`（`PRIORITY_AGENT_TOOL_PROFILE=full`）：额外 9 个工具
+- 工具选择噪声大；
+- route-specific 工具混入普通编码任务；
+- session/UI 命令和模型 action 混在一起；
+- 重复任务工具和 `todo_write` 并存；
+- 一些工具名已经被 action policy、evidence、route tests、scenario matrix 绑定，
+  直接删除会破坏 runtime contract。
 
-### 2.2 分类分析
+### 2.2 Reasonix 对照
 
-**A. 核心编码工具（必须保留）— 约 15 个**
+Reasonix 工具面更简单，但不是完全无结构：
 
-| 工具 | 用途 |
-|------|------|
-| `file_read` / `file_write` / `file_edit` / `file_patch` | 文件操作 |
-| `glob` / `grep` | 搜索 |
-| `bash` / `bash_output` / `bash_cancel` | Shell 执行 |
-| `diff` / `git` / `git_status` / `git_diff` | 版本控制 |
-| `symbol_query` / `project_list` | 代码理解 |
+- shell 合并为 `run_command`、`run_background`、`job_output`、`wait_for_job`、
+  `stop_job`、`list_jobs`。
+- 文件工具少数原语覆盖读、搜索、写、编辑、移动、删除。
+- `todo_write` 是单一 in-session task tracker，不维护一组 task CRUD 工具。
+- plan mode 在 registry dispatch 层拒绝非 readonly 工具。
+- shell mutating/network/install 通过 allowlist 和 pause gate 确认，而不是靠模型自觉。
 
-**B. Bash 包装器（可删除，bash 可替代）— 3 个**
+对 Priority Agent 的启发：
 
-| 工具 | 等价 bash 命令 |
-|------|---------------|
-| `run_tests` | `bash` + `cargo test` |
-| `start_dev_server` | `bash` + `npm dev` |
-| `install_dependencies` | `bash` + `pip install` |
+- 可以减少模型可见入口，但不要把 `run_tests`、`start_dev_server`、
+  `install_dependencies` 的确定性安全语义退化成裸 `bash`。
+- 更适合先做 exposure profile，而不是删实现。
 
-这些工具本质上是预设的 bash 命令，没有专门的参数校验或后处理。
-删除后模型可以直接用 `bash` 执行等价命令。
+### 2.3 工具分层
 
-**C. Task 管理工具（可删除，过度工程化）— 6 个**
+#### A. 默认编码核心
 
-| 工具 | 说明 |
-|------|------|
-| `task_create` / `task_get` / `task_list` / `task_update` / `task_stop` / `task_output` | 6 个文件均在 `src/tools/task_tool/mod.rs` |
+默认编码 route 应优先暴露：
 
-这些工具模仿 Claude Code 的 TodoWrite 系统，但 Claude Code 只有 1 个 `todo_write`，
-Reasonix 完全不提供 task 管理工具（交给模型的 reasoning 自行规划）。
-
-当前项目已有 `todo_write` 工具（#26），task_* 工具与其功能重叠。
-**建议**：保留 `todo_write`，删除全部 6 个 task_* 工具。
-
-**D. 会话/UI 工具（可删除，slash command 替代）— 4 个**
-
-| 工具 | slash command 替代 |
-|------|-------------------|
-| `cost` | `/cost` |
-| `brief` | 无 — 用途不明 |
-| `clear` | `/clear` |
-| `config` | `/config` |
-
-这些工具不应该是模型可调用的工具（模型不需要关心 cost/clear/config）。
-应该只保留为 slash command，从 tool registry 中移除。
-
-**E. 效用工具（可保留但需评估）— 约 10 个**
-
-| 工具 | 评估 |
-|------|------|
-| `calculate` | 简单计算，有时有用 |
-| `datetime` | 日期时间查询 |
-| `json_query` | JSON 数据查询，偶尔有用 |
-| `encode` | 编解码 |
-| `notebook` | Jupyter notebook 操作 |
-| `repl` | REPL 交互 |
-| `powershell` | Windows PowerShell |
-| `send_message` | 发送消息 |
-| `share` | 分享 |
-| `tool_search` | 工具搜索 |
-| `sleep` | 等待 |
-
-这些工具各有用处，但使用频率低。建议保留。
-
-**F. 计划/推理工具 — 3 个**
-
-| 工具 | 评估 |
-|------|------|
-| `enter_plan_mode` / `exit_plan_mode` | Plan 模式管理 |
-| `socratic_analyze` | 苏格拉底式分析 |
-| `plan` | Plan 审批工具 |
-
-保留。
-
-**G. MCP/集成工具 — 7 个**
-
-保留：`mcp`、`mcp_tool`、`mcp_auth`、`list_mcp_resources`、`read_mcp_resource`、`lsp`、`worktree`
-
-**H. Agent/协作工具 — 7 个**
-
-保留：`agent`、`swarm`、`workbench`、`refactor`、`cron`、`skill_manage`、`skills_list`、`skill_view`
-
-**I. 其他 — 约 10 个**
-
-| 工具 | 保留？ |
-|------|--------|
-| `web_fetch` / `web_search` | ✅ 保留 |
-| `memory_save` / `memory_load` / `memory_clear` | ✅ 保留 |
-| `todo_write` | ✅ 保留 |
-| `context` / `context_visualization` | ✅ 保留 |
-| `copy` / `resume` / `rewind` | ✅ 保留 |
-| `format` / `github` | ✅ 保留 |
-| `ask_user` | ✅ 保留 |
-
-### 2.3 建议改动
-
-**删除 13 个工具**：
-```
-run_tests, start_dev_server, install_dependencies,     (3 bash wrappers)
-task_create, task_get, task_list, task_update, task_stop, task_output,  (6 task tools)
-cost, brief, clear, config                              (4 session/UI tools)
+```text
+file_read, file_write, file_edit, file_patch
+glob, grep
+bash, bash_output, bash_cancel
+diff, git_status, git_diff
+todo_write
+ask_user
 ```
 
-**删除对应的源文件**：
+按 route 追加：
+
+```text
+run_tests              # BugFix/CodeChange 验证 route
+start_dev_server       # Frontend/App route 或显式启动服务意图
+install_dependencies   # 只有 dependency install intent
+git                    # 只有明确 git mutation intent
+format                 # 只有 formatting intent 或 post-edit verify
+symbol_query, lsp      # 代码理解 route
+web_search, web_fetch  # research/current-info route
+mcp*, skills*, memory* # 显式集成/记忆/技能 route
+agent, swarm, workbench, refactor, cron # 显式协作/批处理 route
 ```
-src/tools/run_tests_tool.rs
-src/tools/start_dev_server_tool.rs
-src/tools/install_dependencies_tool.rs
-src/tools/task_tool/mod.rs (整个目录)
-src/tools/cost_tool/mod.rs
-src/tools/brief_tool/mod.rs
-src/tools/clear_tool/mod.rs
-src/tools/config_tool/mod.rs
+
+#### B. 不应默认暴露给模型的 session/UI 工具
+
+候选：
+
+```text
+cost, clear, config, brief
 ```
 
-**修改文件**：
-- `src/tools/mod.rs`：从 `with_profile()` 移除 13 个注册调用
-- `src/tools/mod.rs`：移除对应的 `mod` 声明和 `pub use`
+建议：
 
-### 2.4 风险
+- 第一阶段：从默认 exposure 中移除，保留注册和 slash command。
+- 第二阶段：确认没有 route 需要后，从 tool registry 删除。
+- `/config`、`/clear`、`/cost` 继续作为用户命令存在。
+- `brief` 先查清调用价值；如果无 slash/API 替代，可直接删除。
 
-- **模型行为变化**：模型可能依赖被删的工具。需要跑 live eval 验证
-- **import 清理**：被删模块可能有其他模块的 import，需确认
-- **测试**：`src/tools/task_tool/mod.rs` 有测试，删除测试需确认无其他测试依赖
+#### C. task_* 工具
 
-### 2.5 验证
+候选：
 
+```text
+task_create, task_get, task_list, task_update, task_stop, task_output
 ```
+
+建议删除，但分两步：
+
+1. 先从 default/route exposure 中移除，只保留 `todo_write`。
+2. 跑 route tests 和 live eval 后，再删除 `src/tools/task_tool/`、
+   `task_manager` 注入、permissions/action weights/reliability samples 里的 task 分支。
+
+删除时必须同步：
+
+- `src/tools/mod.rs`
+- `src/tools/reliability.rs`
+- `src/permissions/mod.rs`
+- `src/engine/workflow/weights.rs`
+- `src/engine/conversation_loop/tool_orchestrator.rs`
+- `src/engine/conversation_loop/route_scoped_tools_tests.rs`
+- `src/tools/examples.rs`
+
+#### D. 暂不删除的 facade tools
+
+以下工具不应在第一轮删除：
+
+```text
+run_tests
+start_dev_server
+install_dependencies
+```
+
+原因：
+
+- `run_tests` 是 safe validation facade，拒绝 mutation/install/network/任意 shell，
+  并产出结构化 `validation_result`。
+- `start_dev_server` 是 background task facade，带 dev-server 分类和 metadata。
+- `install_dependencies` 是 package manager contract，参数化生成 argv，
+  明确 `requires_confirmation` 和 network/install 风险。
+
+可做的精简：
+
+- 默认不暴露 `start_dev_server` 和 `install_dependencies`。
+- `run_tests` 只在需要验证的 route 暴露。
+- 如果未来要向 Reasonix 靠拢，可把三者折叠为 `bash` 的 runtime intent wrapper，
+  但 evidence/result/action policy 必须保留同等结构化分类。
+
+### 2.4 建议执行顺序
+
+#### Phase 1：收缩默认 exposure，不删实现
+
+目标：
+
+- 默认编码工具面降到约 20 个。
+- route-specific 工具仍能按需暴露。
+- 不改 tool implementation。
+
+验证：
+
+```bash
+cargo fmt --check
 cargo check -q
-cargo test -q --lib tools::
-scripts/run_live_eval.sh --case <推荐用例> --mode agent-run
+cargo test -q route_scoped_tools
+cargo test -q tool_exposure
+cargo test -q tool_orchestrator
+cargo test -q action_review
 ```
+
+#### Phase 2：删除 task_* 工具
+
+目标：
+
+- `todo_write` 成为唯一 in-session task tracker。
+- 删除 task CRUD 工具和相关注入。
+
+验证：
+
+```bash
+cargo fmt --check
+cargo check -q
+cargo test -q tools
+cargo test -q permissions
+cargo test -q route_scoped_tools
+cargo test -q tool_orchestrator
+```
+
+#### Phase 3：删除 session/UI tools
+
+目标：
+
+- `cost`、`clear`、`config` 只保留 slash command。
+- `brief` 若无明确用户价值则删除。
+
+注意：
+
+- 删除 `config` tool 前必须确认 `/config export` 仍覆盖 schema/export 需求。
+- 删除 `clear` tool 前确认模型没有合法场景需要主动清理上下文。
+
+验证：
+
+```bash
+cargo fmt --check
+cargo check -q
+cargo test -q tools
+cargo test -q permissions
+cargo test -q closeout
+```
+
+#### Phase 4：重新评估 facade tools
+
+只有在 Phase 1-3 稳定后，再评估是否把 `run_tests`、`start_dev_server`、
+`install_dependencies` 合并进更通用的 shell/jobs facade。
+
+必要条件：
+
+- `bash` 能产出等价 `validation_result`、`dev_server`、`install` evidence。
+- action policy 仍能识别 install/network/local machine mutation。
+- route/scenario matrix 更新且 live eval 没有 false green closeout。
 
 ---
 
 ## 3. 启动组件 Lazy 初始化
 
-### 3.1 现状
+### 3.1 当前状态
 
-`src/bootstrap.rs:init_components()` 在每次启动时创建 11 个组件。
-其中 3 个可以安全延迟到首次使用时初始化，减少启动 I/O：
+`src/bootstrap.rs::init_components()` 每次启动会创建：
 
-| 组件 | 启动行为 | 可 lazy？ |
-|------|---------|-----------|
-| **SessionStore** | 打开 SQLite DB，写入 session 行 | ✅ 首次 query 时 |
-| **MemoryManager** | 创建目录，读配置，初始化 external provider | ✅ 首次 memory 快照时 |
-| **AgentManager** | 仅 heap alloc，无 I/O | ✅ 首次 agent 分发时 |
+- `SessionStore`：打开 SQLite DB，并创建 session 行。
+- `MemoryManager`：创建目录、读配置、初始化 external provider、freeze snapshot。
+- `AgentManager`：构造 agent manager 并绑定 query engine。
 
-### 3.2 建议改动
+这些可以减少启动 I/O，但不能破坏当前 `Option<Arc<...>>` 语义。
 
-在 `StreamingQueryEngine` 中添加 3 个 `OnceLock` 字段：
+### 3.2 修正后的设计
 
-```rust
-// 新增字段（src/engine/streaming.rs）
-session_store: OnceLock<Option<Arc<SessionStore>>>,
-memory_manager: OnceLock<Arc<MemoryManager>>,
-agent_manager: OnceLock<Arc<AgentManager>>,
+不要直接把字段改成非 optional 的 `OnceLock<Arc<...>>`。
+应保留三态：
+
+```text
+disabled / open failed / initialized
 ```
 
-提供 accessor 方法：
+建议形状：
 
 ```rust
-impl StreamingQueryEngine {
-    pub fn session_store(&self) -> Option<&Arc<SessionStore>> {
-        self.session_store.get_or_init(|| {
-            // 原 bootstrap.rs:218-227 的初始化逻辑移到这里
-        }).as_ref()
-    }
+session_store: OnceLock<Option<Arc<SessionStore>>>
+memory_manager: OnceLock<Option<Arc<Mutex<MemoryManager>>>>
+agent_manager: OnceLock<Option<Arc<AgentManager>>>
+```
 
-    pub fn memory_manager(&self) -> &Arc<MemoryManager> {
-        self.memory_manager.get_or_init(|| {
-            // 原 bootstrap.rs:286-292 的初始化逻辑移到这里
-        })
-    }
+或使用显式 lazy factory：
 
-    pub fn agent_manager(&self) -> Option<&Arc<AgentManager>> {
-        self.agent_manager.get_or_init(|| {
-            // 原 bootstrap.rs:300-301 的初始化逻辑移到这里
-        })
-    }
+```rust
+LazyComponent<T> {
+    enabled: bool,
+    init: OnceLock<Option<Arc<T>>>,
 }
 ```
 
-### 3.3 改动文件
+`memory_manager` 必须保留 `Arc<tokio::sync::Mutex<MemoryManager>>`，
+因为现有调用方依赖 lock 后做 snapshot/prefetch/sync。
 
-- `src/bootstrap.rs`：移除 3 个组件的创建，改为传递初始化参数到 engine
-- `src/engine/streaming.rs`：添加 3 个 `OnceLock` 字段和 accessor
-- `src/engine/query_engine.rs`：更新 `agent_manager()` / `memory_manager()` 调用为 engine 方法
-- `src/tui/app.rs`：更新 `flush_memory_for_current_history` 调用路径
+### 3.3 分阶段执行
 
-### 3.4 影响
+#### Phase 1：lazy AgentManager
 
-- 启动时间减少约 100-300ms（取决于 SQLite 和文件系统速度）
-- CLI `--cli` 首次输入前不创建 session/memory/agent
-- 向后兼容：accessor 透明返回相同类型，调用方无感知
+风险最低。`AgentManager` 基本无 I/O，只是减少启动对象图和默认 wiring。
 
-### 3.5 验收
+改动：
 
-```
+- `StreamingQueryEngine::agent_manager()` 首次调用时创建。
+- 保留返回 `Option<Arc<AgentManager>>`。
+- `QueryEngine` 相关调用保持行为一致。
+
+验证：
+
+```bash
+cargo fmt --check
 cargo check -q
-cargo test -q --lib engine::streaming
-cargo test -q --lib tui::
+cargo test -q agent
+cargo test -q route_scoped_tools
+```
+
+#### Phase 2：lazy SessionStore
+
+改动：
+
+- 首次需要 session binding、ledger、history persistence 时打开。
+- 创建 session 行延迟到首次 query，而不是进程启动。
+- `session_binding()` 仍返回 `Option<(Arc<SessionStore>, String)>`。
+- 打开失败仍是 `None`，不能 panic。
+
+验证：
+
+```bash
+cargo fmt --check
+cargo check -q
+cargo test -q session
+cargo test -q context_ledger
+cargo test -q conversation_loop
+```
+
+#### Phase 3：lazy MemoryManager
+
+风险最高，最后做。
+
+改动：
+
+- 首次 memory snapshot/prefetch/sync/flush 时初始化。
+- 保留 `llm_memory_extraction` feature 开关。
+- 初始化后仍执行 `freeze_snapshot()`，但时间点变为首次需要 memory 时。
+- `engine.memory_manager().is_some()` 这种能力判断要谨慎替换，避免查询动作反而触发初始化。
+
+建议新增两个方法：
+
+```rust
+memory_manager_if_initialized()
+memory_manager_or_init()
+```
+
+验证：
+
+```bash
+cargo fmt --check
+cargo check -q
+cargo test -q memory_snapshot
+cargo test -q memory_sync
+cargo test -q prompt_context
+cargo test -q closeout
 ```
 
 ---
 
 ## 4. 权限模式评估
 
-### 4.1 现状
+### 4.1 当前状态
 
-`src/permissions/mod.rs:58-72` 定义了 5 种 `PermissionMode`：
+`PermissionMode` 包含：
 
 ```rust
-pub enum PermissionMode {
-    Default,       // 根据规则决定（只问规则说 Ask 的）
-    AutoLowRisk,   // 自动允许低风险操作
-    AutoAll,       // [默认] 开发者自动模式
-    ReadOnly,      // 只读模式
-    Once,          // 一次性授权模式
-}
+Default
+AutoLowRisk
+AutoAll
+ReadOnly
+Once
 ```
 
-### 4.2 消费分析
+原计划认为 `Default` 和 `AutoLowRisk` 只差 confidence score。这个判断不准确。
 
-经审计，**所有 5 种变体都在 `requires_confirmation()` 决策逻辑中有独立分支**（`src/permissions/mod.rs:394-457`）。不是 dead code。
+### 4.2 语义差异
 
-但它们的实际使用分布极不均匀：
+- `Default`：根据规则决定，只有规则结果为 `Ask` 时询问。
+- `AutoLowRisk`：规则优先；未命中规则时，`RiskLevel >= Medium` 询问。
+- `AutoAll`：开发者默认自动模式，但保留 deny/ask 规则和高风险兜底。
+- `ReadOnly`：计划/只读探索路径使用。
+- `Once`：一次性授权模式。
 
-| 变体 | 默认值？ | 实际使用场景 |
-|------|---------|-------------|
-| `AutoAll` | ✅ 是 | 开发者日常使用的默认模式 |
-| `Default` | ❌ | 按规则决定，用户手动 `/permissions default` 切换 |
-| `ReadOnly` | ❌ | plan sub-agent 使用（`conversation_loop/mod.rs:1091`） |
-| `Once` | ❌ | `/permissions once` 手动切换 |
-| `AutoLowRisk` | ❌ | 无特定场景，可能是早期设计遗留 |
+`AutoLowRisk` 还暴露在 TUI `/permissions mode`、mode parser、action review tests、
+permissions tests 中。因此合并它不是 10 行清理，而是权限 UX 语义变更。
 
 ### 4.3 建议
 
-**不建议删除任何变体**（它们都在决策逻辑中），但可以做以下简化：
+短期保留所有 5 种模式。
 
-1. **合并 `Default` 和 `AutoLowRisk`**：`Default` 已经是"按规则决定"，`AutoLowRisk` 只在 score 上略有不同（0.75 vs 0.7）。可以将 `AutoLowRisk` 的语义合并到 `Default` 中。
+可做的精简：
 
-2. **保留 4 种模式**：`Default`、`AutoAll`、`ReadOnly`、`Once`
+- 文案层面把 `AutoLowRisk` 标为“保守自动模式”。
+- `/permissions mode` 输出里说明 `default` 和 `auto_low_risk` 的差异。
+- confidence scoring 可简化，但不要改变 `requires_confirmation()` 行为。
 
-3. **简化 confidence scoring**：将 5-分支 match 简化为 3 级（AutoAll=0.9, Once=0.8, ReadOnly/Default=0.7）
+如果未来要合并：
 
-改动范围极小，约 10 行。
+- 优先删除 `Default`，让 `auto_low_risk` 成为“规则 + 风险”的普通模式；
+  或者保留 `Default`，但把它语义改为当前 `AutoLowRisk`。
+- 需要迁移 `/permissions` 文案、parser、tests、action_review 测试。
+- 必须跑 permissions/action_review/action_policy 全套。
 
-### 4.4 验收
+验收：
 
-```
-cargo test -q --lib permissions::
+```bash
+cargo fmt --check
+cargo check -q
+cargo test -q permissions
+cargo test -q action_review
+cargo test -q action_policy
 ```
 
 ---
 
-## 执行顺序建议
+## 5. 推荐执行顺序
 
-| 顺序 | 优化项 | 风险 | 预计改动行数 |
-|------|--------|------|-------------|
-| 1 | 配置精简 Phase 1（删 4 个死字段） | 低 | -80 行 |
-| 2 | 工具精简（删 13 个工具） | 高 | -2000 行 |
-| 3 | 启动 lazy init（3 个 OnceLock） | 中 | +30/-50 行 |
-| 4 | 配置精简 Phase 2（external provider 合并） | 中 | -60 行 |
-| 5 | 权限合并（AutoLowRisk → Default） | 低 | -15 行 |
+| 顺序 | 工作 | 风险 | 目标 |
+|------|------|------|------|
+| 1 | 工具默认 exposure 收缩 | 中 | 先减少模型可见复杂度，不删实现 |
+| 2 | 配置 Phase 1 | 中低 | 删除 4 个低价值字段，同步 UI/API/slash |
+| 3 | Lazy AgentManager | 低 | 验证 lazy 形状和调用方习惯 |
+| 4 | 删除 task_* | 中 | 用 `todo_write` 取代 task CRUD |
+| 5 | Lazy SessionStore | 中 | 减少启动 SQLite/session 写入 |
+| 6 | 配置 Phase 2 | 中 | external memory provider 配置常量化 |
+| 7 | 删除 session/UI tools | 中 | slash command 保留，tool registry 收缩 |
+| 8 | Lazy MemoryManager | 中高 | 最后处理 memory snapshot/prefetch/sync |
+| 9 | 权限模式合并评估 | 中 | 单独作为权限 UX 变更 |
+| 10 | facade tools 合并评估 | 高 | 只有 evidence/action policy 等价后才做 |
 
-建议先执行 1、3、5（低风险），验证后再执行 2、4（需 live eval 验证）。
+---
+
+## 6. 全局验收门槛
+
+每个阶段至少运行对应窄测试；触及共享 runtime contract 时加宽：
+
+```bash
+cargo fmt --check
+cargo check -q
+cargo test -q route_scoped_tools
+cargo test -q action_review
+cargo test -q action_policy
+cargo test -q permissions
+cargo test -q closeout
+```
+
+触及工具 evidence、验证、live eval 或 closeout 时追加：
+
+```bash
+cargo test -q tool_execution_controller
+cargo test -q tool_result_controller
+cargo test -q prompt_context
+bash scripts/workflow-production-gates.sh
+bash -n scripts/run_live_eval.sh
+python3 -m py_compile scripts/live_eval_report_parser.py
+```
+
+执行后再选择 2-3 个代表性 live eval：
+
+- 简单代码修改 + 必须验证；
+- 前端/服务启动场景；
+- dependency install intent 场景；
+- 权限拒绝或 validation failure 后的 repair 场景。
+
+通过标准不是“工具数最少”，而是：
+
+- 默认模型可见工具明显减少；
+- route 需要的工具仍能出现；
+- 验证证据和 closeout proof 不退化；
+- 高风险/网络/install/raw bash 写入仍被正确分类；
+- 弱模型失败时能 honest `failed`/`partial`/`not_verified`，不能 false green。
