@@ -30,7 +30,7 @@ pub fn render_chat_area(f: &mut Frame, app: &TuiApp, area: Rect) {
         let short_id = if session_id.len() > 8 {
             &session_id[..8]
         } else {
-            &session_id
+            session_id
         };
         let intro = Paragraph::new(Line::from(vec![
             Span::styled(
@@ -343,6 +343,21 @@ pub fn render_live_activity_row(f: &mut Frame, app: &TuiApp, area: Rect) {
         ),
     ];
 
+    // Elapsed time for active tool
+    if let Some(tool) = app
+        .runtime_state_snapshot
+        .tool_uses
+        .iter()
+        .rev()
+        .find(|t| t.active)
+    {
+        let elapsed = tool.elapsed_ms.unwrap_or_default() / 1000;
+        spans.push(Span::styled(
+            format!(" · {}s", elapsed),
+            Style::default().fg(app.theme.tokens.fg.faint),
+        ));
+    }
+
     // Token rate
     if let Some(usage) = app.stream_usage_snapshot {
         let tps = if usage.completion_tokens > 0 {
@@ -361,8 +376,16 @@ pub fn render_live_activity_row(f: &mut Frame, app: &TuiApp, area: Rect) {
     // Active tool count
     if runtime.active_tool_count > 1 {
         spans.push(Span::styled(
-            format!(" · {} tools running", runtime.active_tool_count),
+            format!(" · {} tools", runtime.active_tool_count),
             Style::default().fg(app.theme.tokens.fg.faint),
+        ));
+    }
+
+    // Memory recall indicator
+    if app.memory_use {
+        spans.push(Span::styled(
+            " · mem",
+            Style::default().fg(app.theme.tokens.tone.info),
         ));
     }
 
@@ -460,10 +483,10 @@ pub fn render_status_bar(f: &mut Frame, app: &TuiApp, area: Rect) {
         let short_id = if session_id.len() > 8 {
             &session_id[..8]
         } else {
-            &session_id
+            session_id
         };
         parts.push(Span::styled(
-            format!("{}", short_id),
+            short_id.to_string(),
             Style::default().fg(app.theme.tokens.fg.faint),
         ));
     }
@@ -540,6 +563,21 @@ pub fn render_status_bar(f: &mut Frame, app: &TuiApp, area: Rect) {
         parts.push(Span::styled(
             "vim",
             Style::default().fg(app.theme.tokens.tone.violet),
+        ));
+    }
+
+    // Memory mode
+    if app.memory_use {
+        let recall_label = match app.memory_recall_mode.as_str() {
+            "off" => "mem:off",
+            "strict" => "mem:strict",
+            "balanced" => "mem:bal",
+            "preference-only" => "mem:pref",
+            _ => "mem",
+        };
+        parts.push(Span::styled(
+            recall_label,
+            Style::default().fg(app.theme.tokens.tone.info),
         ));
     }
 

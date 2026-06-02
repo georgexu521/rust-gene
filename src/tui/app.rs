@@ -897,26 +897,53 @@ fn explain_memory_retrieval_item(
 fn parse_memory_why_args<'a>(
     args: &'a str,
     latest_user_message: &'a str,
-) -> Option<(&'a str, Option<&'a str>)> {
+) -> Option<(&'a str, Option<&'a str>, bool)> {
     let args = args.trim();
     if args.is_empty() {
         return None;
     }
+    let last_turn = args.contains("--last-turn");
+    // Handle --last-turn first
+    if last_turn {
+        // Try to find --item in the args
+        if let Some(selector) = args.strip_prefix("--item ") {
+            let query = latest_user_message.trim();
+            if query.is_empty() {
+                return None;
+            }
+            return Some((query, Some(selector.trim()), last_turn));
+        }
+        if let Some((_query, selector)) = args.split_once(" --item ") {
+            let selector = selector.trim();
+            let query = latest_user_message.trim();
+            if query.is_empty() {
+                return None;
+            }
+            return Some((query, Some(selector), last_turn));
+        }
+        // No --item, use latest_user_message
+        let query = latest_user_message.trim();
+        if query.is_empty() {
+            return None;
+        }
+        return Some((query, None, last_turn));
+    }
+    // No --last-turn
     if let Some(selector) = args.strip_prefix("--item ") {
         let query = latest_user_message.trim();
         if query.is_empty() {
             return None;
         }
-        return Some((query, Some(selector.trim())));
+        return Some((query, Some(selector.trim()), false));
     }
     if let Some((query, selector)) = args.split_once(" --item ") {
         let query = query.trim();
         if query.is_empty() {
             return None;
         }
-        return Some((query, Some(selector.trim())));
+        return Some((query, Some(selector.trim()), false));
     }
-    Some((args, None))
+    Some((args, None, false))
 }
 
 fn read_git_branch_fast(cwd: &std::path::Path) -> Option<String> {
@@ -2706,19 +2733,103 @@ impl TuiApp {
                     .split_once(' ')
                     .map(|(action, rest)| (action, rest.trim()))
                     .unwrap_or((query, ""));
+                if memory_action == "status" {
+                    let write_policy = std::env::var("PRIORITY_AGENT_AUTO_MEMORY_WRITE")
+                        .unwrap_or_else(|_| "review_only".to_string());
+                    let active_memory = std::env::var("PRIORITY_AGENT_ACTIVE_MEMORY")
+                        .map(|v| v == "1")
+                        .unwrap_or(false);
+                    let use_status = if self.memory_use { "on" } else { "off" };
+                    let generate_status = if self.memory_generate { "on" } else { "off" };
+                    let recall_status = &self.memory_recall_mode;
+                    let active_status = if active_memory { "on" } else { "off" };
+
+                    let use_explanation = if self.memory_use {
+                        "Memory is being loaded into context. Pinned items, project notes, and user preferences are available."
+                    } else {
+                        "Memory is disabled. No memory items will be loaded into context."
+                    };
+                    let generate_explanation = if self.memory_generate {
+                        "The agent will propose memory updates during closeout. Proposals go to review first."
+                    } else {
+                        "Memory generation is off. The agent will not propose memory updates."
+                    };
+                    let recall_explanation = match recall_status.as_str() {
+                        "off" => "Active recall is disabled. Memory is only loaded from pinned and static sources.",
+                        "strict" => "Strict recall: only high-confidence, directly relevant memories are retrieved.",
+                        "balanced" => "Balanced recall: relevant memories are retrieved with moderate filtering.",
+                        "preference-only" => "Only explicit user preferences are recalled, not project facts.",
+                        _ => "Unknown recall mode.",
+                    };
+                    let write_explanation = match write_policy.as_str() {
+                        "review_only" => "All memory proposals require manual review before persistence.",
+                        "narrow" => "Only explicit user preference statements are auto-persisted during closeout.",
+                        "legacy" => "Legacy auto-write: memory proposals are auto-persisted without review.",
+                        _ => &write_policy,
+                    };
+                    let active_explanation = if active_memory {
+                        "Active memory is enabled. A background FTS worker may retrieve additional context for interactive sessions."
+                    } else {
+                        "Active memory is off. Only pinned and recall-based memory is used."
+                    };
+
+                    if memory_arg.contains("--json") {
+                        return self.add_system_message(
+                            serde_json::json!({
+                                "use": use_status,
+                                "generate": generate_status,
+                                "recall": recall_status,
+                                "write_policy": write_policy,
+                                "active": active_status,
+                                "explanations": {
+                                    "use": use_explanation,
+                                    "generate": generate_explanation,
+                                    "recall": recall_explanation,
+                                    "write_policy": write_explanation,
+                                    "active": active_explanation,
+                                }
+                            })
+                            .to_string(),
+                        );
+                    }
+
+                    return self.add_system_message(format!(
+                        "Memory Status\n\n\
+                         Controls:\n\
+                         - use: {use_status}\n\
+                         - generate: {generate_status}\n\
+                         - recall: {recall_status}\n\
+                         - write-policy: {write_policy}\n\
+                         - active: {active_status}\n\n\
+                         What this means:\n\
+                         - {use_explanation}\n\
+                         - {generate_explanation}\n\
+                         - {recall_explanation}\n\
+                         - {write_explanation}\n\
+                         - {active_explanation}\n\n\
+                         Commands:\n\
+                         - /memory control use on|off\n\
+                         - /memory control generate on|off\n\
+                         - /memory control recall off|strict|balanced|preference-only\n\
+                         - /memory status (this view)\n\
+                         - /memory status --json (machine-readable)\n\
+                         - /memory doctor (detailed diagnostics)"
+                    ));
+                }
                 if memory_action == "control" {
                     let mut parts = memory_arg.split_whitespace();
                     let Some(control) = parts.next() else {
                         return self.add_system_message(format!(
-                            "Memory controls\n- use: {}\n- generate: {}\n- recall: {}\n\nUsage:\n- /memory control use on|off\n- /memory control generate on|off\n- /memory control recall off|strict|balanced|preference-only",
+                            "Memory controls\n- use: {}\n- generate: {}\n- recall: {}\n- write-policy: {}\n\nUsage:\n- /memory control use on|off\n- /memory control generate on|off\n- /memory control recall off|strict|balanced|preference-only\n- /memory control write-policy review_only|narrow|legacy",
                             if self.memory_use { "on" } else { "off" },
                             if self.memory_generate { "on" } else { "off" },
-                            self.memory_recall_mode
+                            self.memory_recall_mode,
+                            std::env::var("PRIORITY_AGENT_AUTO_MEMORY_WRITE").unwrap_or_else(|_| "review_only".to_string())
                         ));
                     };
                     let Some(value) = parts.next() else {
                         return self.add_system_message(
-                            "Usage: /memory control use on|off\n       /memory control generate on|off\n       /memory control recall off|strict|balanced|preference-only"
+                            "Usage: /memory control use on|off\n       /memory control generate on|off\n       /memory control recall off|strict|balanced|preference-only\n       /memory control write-policy review_only|narrow|legacy"
                                 .to_string(),
                         );
                     };
@@ -2761,18 +2872,31 @@ impl TuiApp {
                                 engine.set_memory_recall_mode(self.memory_recall_mode.clone());
                             }
                         }
+                        "write-policy" | "write_policy" => {
+                            let policy = value.to_ascii_lowercase();
+                            if !matches!(policy.as_str(), "review_only" | "narrow" | "legacy") {
+                                return self.add_system_message(
+                                    "Usage: /memory control write-policy review_only|narrow|legacy"
+                                        .to_string(),
+                                );
+                            }
+                            std::env::set_var("PRIORITY_AGENT_AUTO_MEMORY_WRITE", &policy);
+                        }
                         _ => {
                             return self.add_system_message(
-                                "Usage: /memory control use on|off\n       /memory control generate on|off\n       /memory control recall off|strict|balanced|preference-only"
+                                "Usage: /memory control use on|off\n       /memory control generate on|off\n       /memory control recall off|strict|balanced|preference-only\n       /memory control write-policy review_only|narrow|legacy"
                                     .to_string(),
                             );
                         }
                     }
+                    let write_policy = std::env::var("PRIORITY_AGENT_AUTO_MEMORY_WRITE")
+                        .unwrap_or_else(|_| "review_only".to_string());
                     return self.add_system_message(format!(
-                        "Memory controls\n- use: {}\n- generate: {}\n- recall: {}",
+                        "Memory controls\n- use: {}\n- generate: {}\n- recall: {}\n- write-policy: {}",
                         if self.memory_use { "on" } else { "off" },
                         if self.memory_generate { "on" } else { "off" },
-                        self.memory_recall_mode
+                        self.memory_recall_mode,
+                        write_policy
                     ));
                 }
                 let latest_user_message = self
@@ -2918,7 +3042,7 @@ impl TuiApp {
                             None => format!("No memory retrieval hits for '{}'.", search_query),
                         }
                     } else if matches!(memory_action, "explain" | "why") {
-                        if let Some((search_query, selector)) =
+                        if let Some((search_query, selector, last_turn)) =
                             parse_memory_why_args(memory_arg, latest_user_message)
                         {
                             match mem.preview_retrieval_context(
@@ -2934,10 +3058,23 @@ impl TuiApp {
                                     {
                                         warn!("failed to write last memory retrieval trace: {}", error);
                                     }
-                                    if let Some(selector) = selector {
-                                        explain_memory_retrieval_item(&ctx, selector)
+                                    let prefix = if last_turn {
+                                        format!("Last-turn query: {}\n\n", search_query)
                                     } else {
-                                        format_memory_retrieval_context(&ctx)
+                                        String::new()
+                                    };
+                                    if let Some(selector) = selector {
+                                        format!(
+                                            "{}{}",
+                                            prefix,
+                                            explain_memory_retrieval_item(&ctx, selector)
+                                        )
+                                    } else {
+                                        format!(
+                                            "{}{}",
+                                            prefix,
+                                            format_memory_retrieval_context(&ctx)
+                                        )
                                     }
                                 }
                                 None => format!(
@@ -2946,7 +3083,7 @@ impl TuiApp {
                                 ),
                             }
                         } else {
-                            "Usage: /memory why <query> [--item <retrieval-id-or-source>]"
+                            "Usage: /memory why <query> [--last-turn] [--item <retrieval-id-or-source>]"
                                 .to_string()
                         }
                     } else {
@@ -4494,17 +4631,31 @@ mod tests {
     fn test_parse_memory_why_args_defaults_to_query() {
         assert_eq!(
             parse_memory_why_args("cache stability", "latest user"),
-            Some(("cache stability", None))
+            Some(("cache stability", None, false))
         );
         assert_eq!(
             parse_memory_why_args("cache stability --item USER.md", "latest user"),
-            Some(("cache stability", Some("USER.md")))
+            Some(("cache stability", Some("USER.md"), false))
         );
         assert_eq!(
             parse_memory_why_args("--item USER.md", "latest user"),
-            Some(("latest user", Some("USER.md")))
+            Some(("latest user", Some("USER.md"), false))
         );
         assert_eq!(parse_memory_why_args("--item USER.md", ""), None);
+        assert_eq!(
+            parse_memory_why_args("--last-turn", "latest user"),
+            Some(("latest user", None, true))
+        );
+        // Combined: --last-turn with --item
+        assert_eq!(
+            parse_memory_why_args("--last-turn --item USER.md", "latest user"),
+            Some(("latest user", Some("USER.md"), true))
+        );
+        // Combined: query with --last-turn
+        assert_eq!(
+            parse_memory_why_args("cache stability --last-turn", "latest user"),
+            Some(("latest user", None, true))
+        );
     }
 
     #[test]

@@ -197,8 +197,7 @@ fn render_assistant_message<'a>(
     };
 
     // Model badge appended to meta
-    let meta = if let Some(model) = stream.and_then(|s| s.model_label.as_ref().map(|m| m.as_str()))
-    {
+    let meta = if let Some(model) = stream.and_then(|s| s.model_label.as_deref()) {
         match meta {
             Some(m) => Some(format!("{} · {}", m, model)),
             None => Some(model.to_string()),

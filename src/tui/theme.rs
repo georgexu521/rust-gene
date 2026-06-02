@@ -8,6 +8,36 @@ use ratatui::style::Color;
 use serde::{Deserialize, Serialize};
 use std::str::FromStr;
 
+// ── Flat color tuple for backward compatibility ──
+
+type FlatColors = (
+    Color,
+    Color,
+    Color,
+    Color,
+    Color,
+    Color,
+    Color,
+    Color,
+    Color,
+    Color,
+    Color,
+    Color,
+    Color,
+    Color,
+    Color,
+    Color,
+    Color,
+    Color,
+    Color,
+    Color,
+    Color,
+    Color,
+    Color,
+    Color,
+    Color,
+);
+
 // ── Token 层定义 ──
 
 /// 文字颜色 token
@@ -326,35 +356,7 @@ fn pill_tokens(surface: &SurfaceTokens, tone: &ToneTokens, _fg: &FgTokens) -> Pi
     }
 }
 
-fn flat_from_tokens(
-    tokens: &ThemeTokens,
-) -> (
-    Color,
-    Color,
-    Color,
-    Color,
-    Color,
-    Color,
-    Color,
-    Color,
-    Color,
-    Color,
-    Color,
-    Color,
-    Color,
-    Color,
-    Color,
-    Color,
-    Color,
-    Color,
-    Color,
-    Color,
-    Color,
-    Color,
-    Color,
-    Color,
-    Color,
-) {
+fn flat_from_tokens(tokens: &ThemeTokens) -> FlatColors {
     (
         tokens.surface.bg,
         tokens.surface.bg_elev,
@@ -879,7 +881,7 @@ impl Theme {
     }
     /// Gruvbox Dark
     pub fn gruvbox_dark() -> Self {
-        let theme = Self {
+        Self {
             bg: Color::Rgb(40, 40, 40),
             bg_popup: Color::Rgb(60, 56, 54),
             bg_selected: Color::Rgb(80, 73, 69),
@@ -976,12 +978,11 @@ impl Theme {
                     selected: Color::Rgb(80, 73, 69),
                 },
             },
-        };
-        theme
+        }
     }
     /// Catppuccin Mocha
     pub fn catppuccin_mocha() -> Self {
-        let theme = Self {
+        Self {
             bg: Color::Rgb(30, 30, 46),
             bg_popup: Color::Rgb(49, 50, 68),
             bg_selected: Color::Rgb(69, 71, 90),
@@ -1078,8 +1079,7 @@ impl Theme {
                     selected: Color::Rgb(69, 71, 90),
                 },
             },
-        };
-        theme
+        }
     }
 
     /// 从字符串解析

@@ -422,8 +422,8 @@ impl ConversationLoop {
         &self,
     ) -> Option<&Arc<Mutex<crate::memory::MemoryManager>>> {
         self.memory_use_enabled
-            .then_some(())
-            .and_then(|_| self.memory_manager.as_ref())
+            .then_some(self.memory_manager.as_ref())
+            .flatten()
     }
 
     pub(super) fn memory_manager_for_dynamic_recall(
@@ -431,16 +431,16 @@ impl ConversationLoop {
     ) -> Option<&Arc<Mutex<crate::memory::MemoryManager>>> {
         let recall_enabled = !self.memory_recall_mode.eq_ignore_ascii_case("off");
         (self.memory_use_enabled && recall_enabled)
-            .then_some(())
-            .and_then(|_| self.memory_manager.as_ref())
+            .then_some(self.memory_manager.as_ref())
+            .flatten()
     }
 
     pub(super) fn memory_manager_for_generate(
         &self,
     ) -> Option<&Arc<Mutex<crate::memory::MemoryManager>>> {
         self.memory_generate_enabled
-            .then_some(())
-            .and_then(|_| self.memory_manager.as_ref())
+            .then_some(self.memory_manager.as_ref())
+            .flatten()
     }
 
     pub fn with_approval_channel(mut self, channel: Arc<ToolApprovalChannel>) -> Self {

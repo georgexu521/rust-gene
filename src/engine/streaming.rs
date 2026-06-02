@@ -469,7 +469,7 @@ impl StreamingQueryEngine {
                 (binding.as_ref(), runtime_record.as_ref())
             {
                 let _ = store.add_compact_boundary_from_runtime_record(
-                    &session_id,
+                    session_id,
                     record,
                     Some("manual compact"),
                     "manual compact requested",
