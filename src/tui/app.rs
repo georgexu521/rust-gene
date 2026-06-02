@@ -23,6 +23,15 @@ use tracing::{debug, info, warn};
 
 use super::commands::{default_command_registry, CommandRegistry};
 
+/// Auto-dismissing toast notification (Reasonix-style)
+#[derive(Debug, Clone)]
+pub struct Toast {
+    pub message: String,
+    pub glyph: &'static str,
+    pub color: ratatui::style::Color,
+    pub expires_at_tick: usize,
+}
+
 const LONG_PASTE_CHAR_THRESHOLD: usize = 600;
 const LONG_PASTE_LINE_THRESHOLD: usize = 12;
 
@@ -1107,6 +1116,8 @@ pub struct TuiApp {
     pub is_querying: bool,
     /// Streaming start time for t/s calculation
     pub stream_started_at: Option<std::time::Instant>,
+    /// Toast notifications (auto-dismiss)
+    pub toasts: Vec<Toast>,
     /// 是否处于暂停态（不接受新消息发送）
     pub paused: bool,
     /// 是否启用聚焦模式（仅显示 user/assistant）
@@ -1331,6 +1342,7 @@ impl TuiApp {
             tasks: Vec::new(),
             is_querying: false,
             stream_started_at: None,
+            toasts: Vec::new(),
             paused: false,
             focus_mode: false,
             status_bar_density: StatusBarDensity::Normal,
@@ -2158,6 +2170,8 @@ impl TuiApp {
     /// 定时更新 - 处理流式响应刷新和计划审批检查
     pub async fn on_tick(&mut self) {
         self.tick_count += 1;
+        // Clean up expired toasts
+        self.toasts.retain(|t| t.expires_at_tick > self.tick_count);
 
         if self.is_querying {
             self.refresh_response().await;
@@ -3629,6 +3643,16 @@ impl TuiApp {
     }
 
     /// 添加工具消息
+    /// Add a Reasonix-style auto-dismissing toast notification
+    pub fn add_toast(&mut self, message: impl Into<String>, glyph: &'static str) {
+        self.toasts.push(Toast {
+            message: message.into(),
+            glyph,
+            color: self.theme.tokens.tone.info,
+            expires_at_tick: self.tick_count + 60,
+        });
+    }
+
     pub fn add_tool_message(&mut self, tool_call_id: String, content: String) {
         let tool_msg = MessageItem {
             id: format!("msg_{}", self.messages.len()),

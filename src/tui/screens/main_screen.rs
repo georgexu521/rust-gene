@@ -209,42 +209,13 @@ pub fn render_chat_area(f: &mut Frame, app: &TuiApp, area: Rect) {
     }
 }
 
-/// 渲染输入区域（Reasonix 风格：› prompt + placeholder）
+/// 渲染输入区域（Reasonix 风格：› prompt + placeholder，无边框）
 pub fn render_input_area(f: &mut Frame, app: &TuiApp, area: Rect) {
-    let border_style = Style::default().fg(app.theme.tokens.fg.faint);
-
-    // 输入区上下分隔线，形成 Claude Code 式的轻量输入槽
-    let top_sep = Paragraph::new("").block(
-        Block::default()
-            .borders(Borders::TOP)
-            .border_style(border_style),
-    );
-    let sep_area = Rect {
-        x: area.x,
-        y: area.y,
-        width: area.width,
-        height: 1,
-    };
-    f.render_widget(top_sep, sep_area);
-
-    let bottom_sep = Paragraph::new("").block(
-        Block::default()
-            .borders(Borders::TOP)
-            .border_style(border_style),
-    );
-    let bottom_area = Rect {
-        x: area.x,
-        y: area.y + area.height.saturating_sub(1),
-        width: area.width,
-        height: 1,
-    };
-    f.render_widget(bottom_sep, bottom_area);
-
     let inner_area = Rect {
         x: area.x + 2,
-        y: area.y + 1,
+        y: area.y,
         width: area.width.saturating_sub(4),
-        height: area.height.saturating_sub(2),
+        height: area.height,
     };
 
     let input_text = app.input.value();
@@ -389,6 +360,37 @@ pub fn render_live_activity_row(f: &mut Frame, app: &TuiApp, area: Rect) {
     f.render_widget(
         Paragraph::new(line).style(Style::default().bg(app.theme.tokens.surface.bg_elev)),
         area,
+    );
+}
+
+/// 渲染 Toast 通知（Reasonix 风格：底部自动消失）
+pub fn render_toasts(f: &mut Frame, app: &TuiApp, area: Rect) {
+    if app.toasts.is_empty() {
+        return;
+    }
+    let mut lines: Vec<Line> = Vec::new();
+    for toast in &app.toasts {
+        let remaining = toast.expires_at_tick.saturating_sub(app.tick_count);
+        let fade = if remaining < 20 { // last 5s fading
+            Style::default().fg(app.theme.tokens.fg.faint)
+        } else {
+            Style::default().fg(toast.color)
+        };
+        lines.push(Line::from(vec![
+            Span::styled(toast.glyph, fade.add_modifier(Modifier::BOLD)),
+            Span::styled(" ", Style::default()),
+            Span::styled(&toast.message, fade),
+        ]));
+    }
+    let n = lines.len() as u16;
+    f.render_widget(
+        Paragraph::new(Text::from(lines)),
+        Rect {
+            x: area.x + 2,
+            y: area.y + area.height.saturating_sub(n),
+            width: area.width.saturating_sub(4),
+            height: n,
+        },
     );
 }
 

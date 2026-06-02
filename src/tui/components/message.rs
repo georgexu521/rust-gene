@@ -41,6 +41,16 @@ pub struct StreamMeta {
     pub started_at: Option<std::time::Instant>,
 }
 
+/// Format relative time like Reasonix: "just now", "5s ago", "3m ago"
+fn format_relative_time(ts: std::time::SystemTime) -> String {
+    let elapsed = ts.elapsed().unwrap_or_default();
+    let secs = elapsed.as_secs();
+    if secs < 5 { "just now".into() }
+    else if secs < 60 { format!("{}s ago", secs) }
+    else if secs < 3600 { format!("{}m ago", secs / 60) }
+    else { format!("{}h ago", secs / 3600) }
+}
+
 /// Detects card kind from message content for rich rendering.
 /// Uses conservative heuristics — prefers false-negative over false-positive.
 fn detect_card_kind(msg: &MessageItem) -> Option<CardKind> {
@@ -114,18 +124,23 @@ fn render_user_message<'a>(
     theme: &'a crate::tui::theme::Theme,
 ) -> Paragraph<'a> {
     let card = &theme.tokens.card.user;
+    let time_str = format_relative_time(message.timestamp);
     let mut lines = vec![card_header(
         card.glyph,
         "You",
         card.color,
-        None,
+        Some(time_str),
         theme.tokens.fg.faint,
     )];
     lines.push(Line::from(""));
 
     let markdown_text = parse_markdown(&message.content, theme);
-    for line in markdown_text.lines {
-        let mut spans = vec![Span::styled("  ", Style::default())];
+    for (i, line) in markdown_text.lines.into_iter().enumerate() {
+        let mut spans = if i == 0 {
+            vec![Span::styled("↳ ", Style::default().fg(theme.tokens.fg.sub))]
+        } else {
+            vec![Span::styled("  ", Style::default())]
+        };
         spans.extend(line.spans);
         lines.push(Line::from(spans));
     }
