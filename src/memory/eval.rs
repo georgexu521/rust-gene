@@ -201,6 +201,18 @@ fn eval_retrieval_trace_skips_bad_memory() -> MemoryEvalResult {
         );
     };
     if trace.selected_records == 1 && trace.skipped_unrelated == 1 && trace.skipped_unsafe == 1 {
+        let progress_is_project_source = ctx.items.iter().any(|item| {
+            item.provenance.contains("project_progress/")
+                && item.source == crate::engine::retrieval_context::RetrievalSource::Project
+        });
+        if !progress_is_project_source {
+            return fail(
+                "retrieval_trace_skips_bad_memory",
+                "retrieval",
+                MemoryEvalFailureOwner::Framework,
+                "project progress recall was not classified as project retrieval context",
+            );
+        }
         pass(
             "retrieval_trace_skips_bad_memory",
             "retrieval",

@@ -3617,6 +3617,10 @@ mod tests {
             assumptions: Vec::new(),
         };
         ledger.append_execution_report(&report).unwrap();
+        assert!(
+            !mgr.user_path.exists(),
+            "project progress ledger must not create USER.md"
+        );
 
         let ctx = mgr
             .preview_retrieval_context(
@@ -3633,7 +3637,15 @@ mod tests {
             .expect("project progress retrieval item");
         assert_eq!(
             item.source,
-            crate::engine::retrieval_context::RetrievalSource::Memory
+            crate::engine::retrieval_context::RetrievalSource::Project
+        );
+        assert_eq!(
+            ctx.item_count_by_source(crate::engine::retrieval_context::RetrievalSource::Memory),
+            0
+        );
+        assert!(
+            !mgr.user_path.exists(),
+            "project progress recall must not write user memory"
         );
         assert!(item
             .reason

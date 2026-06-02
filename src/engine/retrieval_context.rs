@@ -434,7 +434,7 @@ impl RetrievalContext {
             );
             ctx.add_item(
                 RetrievalItem::new(
-                    RetrievalSource::Memory,
+                    retrieval_source_for_memory_match(&item),
                     item.source.clone(),
                     &item.snippet,
                     score,
@@ -597,6 +597,16 @@ impl RetrievalContext {
 
     pub fn conflict_count(&self) -> usize {
         self.items.iter().filter(|item| item.conflict).count()
+    }
+}
+
+fn retrieval_source_for_memory_match(
+    item: &crate::memory::manager::MemoryMatch,
+) -> RetrievalSource {
+    if item.source.starts_with("project_progress/") {
+        RetrievalSource::Project
+    } else {
+        RetrievalSource::Memory
     }
 }
 
@@ -1209,6 +1219,9 @@ mod tests {
         assert_eq!(trace.skipped_unrelated, 1);
         assert_eq!(trace.skipped_unsafe, 1);
         assert!(ctx.items[0].provenance.contains("project_progress/"));
+        assert_eq!(ctx.items[0].source, RetrievalSource::Project);
+        assert_eq!(ctx.item_count_by_source(RetrievalSource::Memory), 0);
+        assert_eq!(ctx.item_count_by_source(RetrievalSource::Project), 1);
     }
 
     #[test]
@@ -1553,5 +1566,7 @@ mod tests {
         )
         .expect("session context");
         assert_eq!(session.item_count_by_source(RetrievalSource::Session), 1);
+        assert_eq!(session.item_count_by_source(RetrievalSource::Memory), 0);
+        assert!(session.items[0].provenance.starts_with("session.message:"));
     }
 }

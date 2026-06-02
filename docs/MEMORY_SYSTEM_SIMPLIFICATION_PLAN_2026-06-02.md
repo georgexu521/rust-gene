@@ -14,6 +14,10 @@ Implementation update:
   memory now uses index-style entries for `MEMORY.md` and `USER.md` plus the
   topic memory manifest. Full Markdown bodies stay available to search and
   dynamic recall instead of being injected into the stable prompt snapshot.
+- 2026-06-02: Phase 3 boundary slice started. Project progress records selected
+  by the retrieval pipeline now surface as `Project` retrieval context rather
+  than durable `Memory`, while session-search results remain `Session` context.
+  Tests cover that project progress recall does not create or write `USER.md`.
 
 This plan narrows Priority Agent's memory system without discarding the useful
 parts already built. The goal is not to make memory less capable. The goal is
