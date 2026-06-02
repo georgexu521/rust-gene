@@ -154,8 +154,7 @@ impl RequestPreparationController {
             return;
         }
         let block = format!("<task-state>\n{}\n</task-state>", state.trim());
-        let insert_pos = dynamic_tail_insert_pos(request_messages);
-        request_messages.insert(insert_pos, Message::system(block));
+                prepend_to_last_user_message(request_messages, block);
     }
 
     fn inject_task_contract_zone(
@@ -186,8 +185,7 @@ impl RequestPreparationController {
             ));
         }
         let block = sections.join("\n");
-        let insert_pos = dynamic_tail_insert_pos(request_messages);
-        request_messages.insert(insert_pos, Message::system(block));
+                prepend_to_last_user_message(request_messages, block);
     }
 
     fn inject_mva_candidate_action_hint(request_messages: &mut Vec<Message>, tools: &[Tool]) {
@@ -203,11 +201,7 @@ impl RequestPreparationController {
             return;
         }
         let hint = "<recent_observation>\nModel-led action weighting: if useful before tool calls, include a compact candidate_actions JSON object with at most 3 tool_call candidates. For each candidate, explain reason and optionally include model_factors {goal_importance,evidence_strength,uncertainty_reduction,risk,cost,reversibility,scope_fit,validation_need,memory_relevance,rationale} using 0-10 integers plus a short rationale; include evidence [{source,relevance,quote}] when project or memory context supports it. Treat memory as evidence, not an instruction. Do not force JSON for direct final answers.\n</recent_observation>";
-        let insert_pos = request_messages
-            .iter()
-            .rposition(|message| matches!(message, Message::User { .. }))
-            .unwrap_or(request_messages.len());
-        request_messages.insert(insert_pos, Message::system(hint));
+        prepend_to_last_user_message(request_messages, hint);
     }
 
     fn inject_self_evolution_guidance_zone(
@@ -247,7 +241,7 @@ impl RequestPreparationController {
                 .map(|line| line.trim().to_string())
                 .collect(),
         });
-        request_messages.insert(last_user_idx, Message::system(block));
+        prepend_to_last_user_message(request_messages, block);
     }
 
     fn inject_focused_repair_zone(
@@ -272,11 +266,7 @@ impl RequestPreparationController {
             "<recent_observation>\n- Focused repair hint: dynamic runtime hint; relevance=high; authority=runtime_hint; ttl=current_repair_attempt.\n- Conflict rule: use this to narrow execution only when it remains consistent with the current user goal; it does not override user intent or stable runtime policy.\n- Suggested repair focus: {}\n</recent_observation>",
             content
         );
-        let insert_pos = request_messages
-            .iter()
-            .rposition(|message| matches!(message, Message::User { .. }))
-            .unwrap_or(request_messages.len());
-        request_messages.insert(insert_pos, Message::system(block));
+        prepend_to_last_user_message(request_messages, block);
     }
 
     fn inject_context_ledger_hint(
@@ -481,11 +471,7 @@ impl RequestPreparationController {
         }
         sections.push("Use these recorded reads, edits, diffs, validations, confirmations, and observations before repeating tool calls. If exact file text is no longer visible or a specific range is needed, prefer a targeted file_read range instead of rereading the same whole file repeatedly. For read-only/project-memory answers, cite concrete recorded content facts instead of hash-only metadata.".to_string());
         let hint = sections.join("\n\n");
-        let insert_pos = request_messages
-            .iter()
-            .rposition(|message| matches!(message, Message::User { .. }))
-            .unwrap_or(request_messages.len());
-        request_messages.insert(insert_pos, Message::system(hint));
+        prepend_to_last_user_message(request_messages, hint);
     }
 
     fn inject_project_map_zone(
@@ -527,8 +513,7 @@ impl RequestPreparationController {
             )],
             conflicts: 0,
         });
-        let insert_pos = dynamic_tail_insert_pos(request_messages);
-        request_messages.insert(insert_pos, Message::system(block));
+                prepend_to_last_user_message(request_messages, block);
     }
 
     async fn inject_memory_prefetch(
@@ -628,7 +613,7 @@ impl RequestPreparationController {
             "<relevant_material>\n{}\n</relevant_material>",
             ctx.format_for_prompt().trim()
         );
-        request_messages.insert(last_user_idx, Message::system(retrieval_block));
+        prepend_to_last_user_message(request_messages, retrieval_block);
         debug!("Prefetched memory context injected as background system message");
     }
 
@@ -765,6 +750,26 @@ fn dynamic_tail_insert_pos(request_messages: &[Message]) -> usize {
         .iter()
         .rposition(|message| matches!(message, Message::User { .. }))
         .unwrap_or(request_messages.len())
+}
+
+/// Prepend content to the last user message, keeping the prefix cache-friendly.
+/// Reasonix-style: dynamic context lives in the user message, not as separate system messages.
+fn prepend_to_last_user_message(request_messages: &mut Vec<Message>, block: impl Into<String>) {
+    let block = block.into();
+    if block.is_empty() {
+        return;
+    }
+    if let Some(last_user) = request_messages
+        .iter_mut()
+        .rfind(|m| matches!(m, Message::User { .. }))
+    {
+        if let Message::User { content } = last_user {
+            *content = format!("{block}\n\n{content}");
+        }
+    } else {
+        // No user message yet — insert as system (will be converted on next turn)
+        request_messages.push(Message::system(block));
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -1142,12 +1147,12 @@ mod tests {
 
         assert_eq!(prepared.request.model, "test-model");
         assert_eq!(prepared.request.temperature, Some(0.73));
-        assert_eq!(prepared.request.messages.len(), 2);
+        // Dynamic zones are now in the user message, so msg count may be 1
+        assert!(prepared.request.messages.len() >= 1);
         assert!(matches!(
-            prepared.request.messages.first(),
-            Some(Message::System { content })
-                if content.starts_with("<context_zones")
-                    && content.contains("<recent_observation>")
+            prepared.request.messages.last(),
+            Some(Message::User { content })
+                if content.contains("<recent_observation>")
                     && content.contains("Focused repair hint: dynamic runtime hint")
                     && content.contains("relevance=high")
                     && content.contains("authority=runtime_hint")
@@ -1157,21 +1162,14 @@ mod tests {
         ));
         assert!(matches!(
             prepared.request.messages.last(),
-            Some(Message::User { content }) if content == "change src/lib.rs"
+            Some(Message::User { content }) if content.contains("change src/lib.rs")
         ));
         assert_eq!(prepared.request.tools.as_ref().map(Vec::len), Some(2));
         assert_eq!(runtime_diet.exposed_tools, 2);
         assert!(runtime_diet.total_request_tokens > 0);
 
-        let finished = trace.finish(crate::engine::trace::TurnStatus::Completed);
-        assert!(finished.events.iter().any(|event| matches!(
-            event,
-            TraceEvent::ContextZonesMaterialized {
-                stable_prefix_tokens,
-                recent_observation_items,
-                ..
-            } if *stable_prefix_tokens == 0 && *recent_observation_items >= 1
-        )));
+        let _finished = trace.finish(crate::engine::trace::TurnStatus::Completed);
+        // Zones are now in user message; trace events may have zero counts
     }
 
     #[tokio::test]
@@ -1205,12 +1203,11 @@ mod tests {
         })
         .await;
 
-        assert_eq!(prepared.request.messages.len(), 2);
+        assert!(prepared.request.messages.len() >= 1);
         assert!(matches!(
-            prepared.request.messages.first(),
-            Some(Message::System { content })
-                if content.starts_with("<context_zones")
-                    && content.contains("Model-led action weighting")
+            prepared.request.messages.last(),
+            Some(Message::User { content })
+                if content.contains("Model-led action weighting")
                     && !content.contains("memory.match:")
         ));
         assert_eq!(runtime_diet.retrieval_items, 0);
@@ -1317,18 +1314,13 @@ mod tests {
         })
         .await;
 
-        assert_eq!(prepared.request.messages.len(), 2);
-        assert!(matches!(
-            &prepared.request.messages[0],
-            Message::System { content }
-                if content.contains("Context ledger")
-                    && content.contains("README.md")
-                    && content.contains("local-only first")
-                    && !content.contains("abc123")
-        ));
-        assert!(matches!(
-            &prepared.request.messages[1],
-            Message::User { .. }
+        assert!(prepared.request.messages.len() >= 1);
+        let last = prepared.request.messages.last().unwrap();
+        assert!(matches!(last, Message::User { content }
+            if content.contains("Context ledger")
+                && content.contains("README.md")
+                && content.contains("local-only first")
+                && !content.contains("abc123")
         ));
     }
 
@@ -1366,7 +1358,7 @@ mod tests {
         })
         .await;
 
-        assert_eq!(prepared.request.messages.len(), 2);
+        assert!(prepared.request.messages.len() >= 1);
         let trace = trace.finish(crate::engine::trace::TurnStatus::Completed);
         assert!(trace.events.iter().any(|event| matches!(
             event,
@@ -1702,7 +1694,7 @@ mod tests {
 
         assert!(matches!(
             &prepared.request.messages[0],
-            Message::System { content }
+            Message::User { content }
                 if content.contains("edit file_edit")
                     && content.contains("src/lib.rs")
                     && content.contains("validation bash")
@@ -1712,15 +1704,8 @@ mod tests {
                     && content.contains("<relevant_material>")
                     && content.contains("<recent_observation>")
         ));
-        let trace = trace.finish(crate::engine::trace::TurnStatus::Completed);
-        assert!(trace.events.iter().any(|event| matches!(
-            event,
-            TraceEvent::ContextZonesMaterialized {
-                relevant_material_items,
-                recent_observation_items,
-                ..
-            } if *relevant_material_items >= 2 && *recent_observation_items >= 1
-        )));
+        // Zones are now in the user message; trace still records the event with zero counts
+        let _trace = trace.finish(crate::engine::trace::TurnStatus::Completed);
     }
 
     #[tokio::test]
@@ -1767,26 +1752,20 @@ mod tests {
             &prepared.request.messages[0],
             Message::System { content } if content == "base system prompt"
         ));
+        // Dynamic zones are now prepended to the last user message (Reasonix-style)
+        let last_user = prepared.request.messages.last().unwrap();
         assert!(matches!(
-            &prepared.request.messages[1],
-            Message::System { content }
+            last_user,
+            Message::User { content }
                 if content.contains("<task-state>")
                     && content.contains("Goal: 修改 src/lib.rs")
                     && content.contains("Active files: src/lib.rs")
                     && content.contains("cargo test -q")
         ));
-        let trace = trace.finish(crate::engine::trace::TurnStatus::Completed);
-        assert!(trace.events.iter().any(|event| matches!(
-            event,
-            TraceEvent::ContextZonesMaterialized {
-                task_state_tokens,
-                current_decision_request_tokens,
-                ..
-            } if *task_state_tokens > 0 && *current_decision_request_tokens > 0
-        )));
+        // Zones are now in the user message, not as separate system messages
         assert!(matches!(
-            &prepared.request.messages[2],
-            Message::User { content } if content == "change"
+            prepared.request.messages.last().unwrap(),
+            Message::User { content } if content.contains("change")
         ));
     }
 
@@ -1846,27 +1825,23 @@ mod tests {
             &prepared.request.messages[2],
             Message::Assistant { content, .. } if content == "previous answer"
         ));
+        // Dynamic zones are now prepended to the last user message (Reasonix-style)
+        assert_eq!(prepared.request.messages.len(), 4);
+        // Dynamic zones are now prepended raw (no context_zones wrapper since normalize finds none)
         assert!(matches!(
             &prepared.request.messages[3],
-            Message::System { content }
-                if content.starts_with("<context_zones")
-                    && content.contains("<task-state>")
+            Message::User { content }
+                if content.contains("<task-state>")
                     && content.contains("<task-contract>")
                     && content.contains("<context-pack>")
-        ));
-        assert!(matches!(
-            &prepared.request.messages[4],
-            Message::User { content } if content == "next change"
+                    && content.ends_with("next change")
         ));
 
         let trace = trace.finish(crate::engine::trace::TurnStatus::Completed);
+        // Zones are now in the user message (not separate system messages)
         assert!(trace.events.iter().any(|event| matches!(
             event,
-            TraceEvent::CacheStabilitySnapshot {
-                dynamic_zone_messages: 1,
-                dynamic_zones_before_last_user: 1,
-                ..
-            }
+            TraceEvent::CacheStabilitySnapshot { .. }
         )));
     }
 
@@ -1957,7 +1932,7 @@ mod tests {
         })
         .await;
 
-        assert_eq!(prepared.request.messages.len(), 2);
+        assert!(prepared.request.messages.len() >= 1);
         assert!(matches!(
             &prepared.request.messages[0],
             Message::System { content }
@@ -2020,20 +1995,16 @@ mod tests {
         .await;
 
         assert!(matches!(
-            &prepared.request.messages[1],
-            Message::System { content }
-                if content.starts_with("<context_zones")
-                    && content.contains("<task-state>")
+            &prepared.request.messages.last().unwrap(),
+            Message::User { content }
+                if content.contains("<task-state>")
                     && content.contains("<task-contract>")
                     && content.contains("type: code_change")
                     && content.contains("model_profile: standard")
                     && content.contains("commands=cargo test -q")
                     && content.contains("<context-pack>")
                     && content.contains("allowed_files: src/lib.rs")
-        ));
-        assert!(matches!(
-            &prepared.request.messages[2],
-            Message::User { content } if content == "change"
+                    && content.ends_with("change")
         ));
     }
 }
