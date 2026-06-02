@@ -20,11 +20,16 @@ near-term implementation roadmap.
 # Build default (TUI only)
 cargo build
 
-# Build with all features enabled
-cargo build --features "legacy-cli experimental-api-server experimental-priority experimental-task-analyzer experimental-platform"
+# Build with all features enabled (experimental-api-server is the main optional feature)
+cargo build --features "experimental-api-server"
 
 # Build release version
 cargo build --release
+
+# ⚠️ IMPORTANT: Use `cargo run` not `./target/debug/priority-agent`
+# The pre-built binary is ad-hoc signed and gets blocked by macOS sandbox
+# when accessing network. `cargo run` re-signs and works correctly.
+# This affects: --eval-run, --provider-health, --tui, --cli, --api
 
 # Run all tests
 cargo test
@@ -32,19 +37,22 @@ cargo test
 # Run a specific test
 cargo test test_analyze_critical_task
 
-# Run the CLI
-./target/debug/priority-agent --help
+# Run the CLI (use cargo run, not ./target/debug/priority-agent — see note above)
+cargo run -- --help
 
 # Run legacy CLI mode (does NOT require API key)
-./target/debug/priority-agent --legacy init
+cargo run -- --legacy init
 ./target/debug/priority-agent --legacy add "任务名称"
-./target/debug/priority-agent --legacy list
-./target/debug/priority-agent --legacy next
-./target/debug/priority-agent --legacy done <task_id>
+cargo run -- --legacy list
+cargo run -- --legacy next
+cargo run -- --legacy done <task_id>
 
 # Run TUI mode (requires LLM API key)
 export MOONSHOT_API_KEY="your-key"
-./target/debug/priority-agent --tui
+cargo run -- --tui
+
+# Run eval test (non-interactive)
+bash scripts/test-m3.sh tests/fixtures/test-basic-read.txt
 
 # Run API server mode (requires feature flag + API key)
 cargo run --features experimental-api-server -- --api --port 8787
@@ -144,13 +152,23 @@ pub trait Tool: Send + Sync {
 
 Environment variables:
 ```bash
+# MiniMax (currently configured, used for eval testing)
+export MINIMAX_API_KEY="your-key"
+export MINIMAX_BASE_URL="https://api.minimaxi.com/v1"
+export MINIMAX_MODEL="MiniMax-M3"  # M3 for best results, M2.7 for fallback
+
+# Kimi/Moonshot
 export MOONSHOT_API_KEY="your-api-key"
 export MOONSHOT_BASE_URL="https://api.moonshot.cn/v1"  # optional
 export MOONSHOT_MODEL="kimi-k2.5"  # optional
 
+# OpenAI
 export OPENAI_API_KEY="your-key"  # alternative
 export OPENAI_BASE_URL="..."  # optional
 export OPENAI_MODEL="gpt-4o"  # optional
+
+# DeepSeek
+export DEEPSEEK_API_KEY="your-key"
 ```
 
 ## Data Storage
@@ -161,7 +179,22 @@ export OPENAI_MODEL="gpt-4o"  # optional
 
 ## Testing
 
-Unit tests are embedded under `#[cfg(test)]` in each module. Run with `cargo test`. There are 500+ tests covering tools, engine, TUI components, permissions, and state management.
+Unit tests are embedded under `#[cfg(test)]` in each module. Run with `cargo test`. There are 2100+ tests covering tools, engine, TUI components, permissions, and state management.
+
+Pre-existing failures (not caused by recent changes):
+- `runtime_spine_behavior_contract` — known pre-existing
+- `test_minimax_client_defaults` — model name mismatch due to env MINIMAX_MODEL
+- `grep_allows_runtime_tool_result_artifacts_read_only` — known pre-existing
+
+### Eval Testing (non-interactive, with LLM)
+```bash
+# Requires MINIMAX_API_KEY to be set
+bash scripts/test-m3.sh tests/fixtures/test-basic-read.txt
+
+# TUI testing requires manual interaction:
+cargo run -- --tui
+# See tests/TUI_TEST_PLAN.md for 7 test scenarios
+```
 
 ## Known Gaps vs Claude Code
 
@@ -171,7 +204,7 @@ Current gap source of truth: `docs/CLAUDE_CODE_GAP_MATRIX_2026-05-03.md`.
 
 ### What We Do Well
 - Unified `ConversationLoop` + `StreamingQueryEngine` with context compression, reactive compact, and memory injection
-- Core tool chain complete (58+ tool types, 73 registered instances)
+- Core tool chain complete (~60 tool types, ~63 registered instances, recently de-bloated)
 - Advanced agents: Teammate, Critic, Assistant, Remote, Dream, Verifier
 - Plan Mode TUI integration (`PlanApprovalChannel` + `PlanModeManager`)
 - Socratic analysis — unique deep-reasoning tool
@@ -189,10 +222,15 @@ Current gap source of truth: `docs/CLAUDE_CODE_GAP_MATRIX_2026-05-03.md`.
 ### Current Gaps (Remaining)
 - Plugin ecosystem productization (marketplace, signature trust, lifecycle governance)
 - MCP Server (standalone server capability — partial)
-- Resume/Rewind (partial)
 - Voice mode
-- Configurable keybindings
 - Workspace crate split (priority-core/priority-cli — Phase 1-1 done)
+
+### Recently Completed
+- Static prefix caching (Reasonix-style): dynamic zones merged into user messages to preserve cache
+- Tool de-bloat: removed task_* (6 tools), session/UI tools (4 tools)
+- Config simplification: removed 4 unused fields, external provider 13→3 fields
+- Lazy init: SessionStore, MemoryManager, AgentManager all use OnceLock
+- TUI redesign: token themes, card messages, scroll indicator, context bar
 
 ### Key Environment Variables (Common)
 
