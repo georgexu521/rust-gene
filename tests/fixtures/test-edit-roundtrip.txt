@@ -1,0 +1,11 @@
+There is a bug in src/tui/theme.rs. The file header comment on line 1 says:
+
+//! TUI 主题系统
+
+It should say:
+
+//! TUI 主题系统 — Priority Agent
+
+Please edit line 1 to add " — Priority Agent" at the end. After editing, run:
+  cargo check -q
+to verify. Then revert the change back.

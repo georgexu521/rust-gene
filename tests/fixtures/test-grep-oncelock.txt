@@ -1,0 +1,7 @@
+Search the codebase for all places that reference "OnceLock" in src/engine/.
+For each match, tell me:
+1. Which file it's in
+2. What line it's on
+3. What it's used for (initialize, get, set, etc.)
+
+Just search and analyze — do NOT edit anything.
