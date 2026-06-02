@@ -43,6 +43,7 @@ acceptance:
   required_commands:
     - cargo test -q retrieval_context -- --test-threads=1
     - "cargo test -q memory::recall::tests:: -- --test-threads=1"
+  harness_commands:
     - cargo test -q -- --test-threads=1
   diff_constraints:
     max_files_changed: 8

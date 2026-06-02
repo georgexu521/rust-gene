@@ -1,0 +1,29 @@
+{
+  "schema": "agent_run_bundle.v1",
+  "task_id": "core-multi-file-edit",
+  "run_id": "product-daily-20260602-230826",
+  "generated_at": "2026-06-02T15:12:22.466881+00:00",
+  "goal_summary": "seeded_code_change",
+  "mode": "agent-run",
+  "final_status": "passed",
+  "terminal_status": "completed",
+  "stop_reason": "no_issue",
+  "modified_files": "2",
+  "validation_status": "ok",
+  "verification_status": "passed",
+  "closeout_status": "passed",
+  "scores": {
+    "outcome": "100",
+    "process": "100",
+    "efficiency": "100",
+    "agent": "100",
+    "penalties": "none"
+  },
+  "artifacts": {
+    "source_report": "docs/benchmarks/live-product-daily-20260602-230826/core-multi-file-edit/report.md",
+    "source_events": "docs/benchmarks/live-product-daily-20260602-230826/core-multi-file-edit/agent-events.jsonl",
+    "steps": "docs/benchmarks/live-product-daily-20260602-230826/core-multi-file-edit/run-bundle/steps.jsonl",
+    "events": "docs/benchmarks/live-product-daily-20260602-230826/core-multi-file-edit/run-bundle/events.jsonl",
+    "final_report": "docs/benchmarks/live-product-daily-20260602-230826/core-multi-file-edit/run-bundle/final_report.md"
+  }
+}

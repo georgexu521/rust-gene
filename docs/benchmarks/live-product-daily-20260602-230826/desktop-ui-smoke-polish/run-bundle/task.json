@@ -1,0 +1,29 @@
+{
+  "schema": "agent_run_bundle.v1",
+  "task_id": "desktop-ui-smoke-polish",
+  "run_id": "product-daily-20260602-230826",
+  "generated_at": "2026-06-02T15:51:38.465789+00:00",
+  "goal_summary": "audit_or_regression_check",
+  "mode": "agent-run",
+  "final_status": "failed",
+  "terminal_status": "failed",
+  "stop_reason": "no_issue",
+  "modified_files": "0",
+  "validation_status": "failed",
+  "verification_status": "failed",
+  "closeout_status": "failed",
+  "scores": {
+    "outcome": "15",
+    "process": "60",
+    "efficiency": "65",
+    "agent": "38",
+    "penalties": "run_failed,required_commands_failed,verification_failed,closeout_not_successful,scope_drift,invalid_action,failed_actions,llm_call_budget_pressure"
+  },
+  "artifacts": {
+    "source_report": "docs/benchmarks/live-product-daily-20260602-230826/desktop-ui-smoke-polish/report.md",
+    "source_events": "docs/benchmarks/live-product-daily-20260602-230826/desktop-ui-smoke-polish/agent-events.jsonl",
+    "steps": "docs/benchmarks/live-product-daily-20260602-230826/desktop-ui-smoke-polish/run-bundle/steps.jsonl",
+    "events": "docs/benchmarks/live-product-daily-20260602-230826/desktop-ui-smoke-polish/run-bundle/events.jsonl",
+    "final_report": "docs/benchmarks/live-product-daily-20260602-230826/desktop-ui-smoke-polish/run-bundle/final_report.md"
+  }
+}

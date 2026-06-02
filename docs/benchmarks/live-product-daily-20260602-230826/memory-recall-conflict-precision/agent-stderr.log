@@ -1,0 +1,4 @@
+[required validation still running after 30s] cargo test -q retrieval_context -- --test-threads=1
+[required validation still running after 60s] cargo test -q retrieval_context -- --test-threads=1
+[required validation still running after 90s] cargo test -q retrieval_context -- --test-threads=1
+[required validation still running after 120s] cargo test -q retrieval_context -- --test-threads=1

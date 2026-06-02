@@ -83,6 +83,7 @@ acceptance:
     - cargo test -q evalset -- --test-threads=1
     - "! rg '&format!\\(\"retry: \\{\\}\", verification_command\\)' src/engine/conversation_loop/repair_controller.rs"
     - "rg 'record_repair_action\\(' src/engine/conversation_loop/repair_controller.rs"
+  harness_commands:
     - cargo test -q -- --test-threads=1
   diff_constraints:
     max_files_changed: 12

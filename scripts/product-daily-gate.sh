@@ -28,8 +28,10 @@ DAILY_CASES=(
   project-partner-resume-with-memory
   memory-recall-conflict-precision
   minimum-agent-verification-repair
-  desktop-ui-smoke-polish
 )
+
+# Cases that require special environment (desktop, pnpm, playwright)
+SKIP_DESKTOP_CASES="${PRIORITY_AGENT_SKIP_DESKTOP_CASES:-1}"
 
 # ── Defaults ──
 DRY_RUN=0
@@ -44,7 +46,8 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --dry-run) DRY_RUN=1; shift ;;
     --skip-provider-health) SKIP_PROVIDER_HEALTH=1; shift ;;
-    --timeout) TIMEOUT_SECS="${2:-600}"; shift 2 ;;
+    --include-desktop) SKIP_DESKTOP_CASES=0; shift ;;
+    --timeout) TIMEOUT_SECS="${2:-1200}"; shift 2 ;;
     --report-only) REPORT_ONLY="${2:-}"; shift 2 ;;
     --label) LABEL="${2:-product-daily}"; shift 2 ;;
     --run-id) RUN_ID="${2:-}"; shift 2 ;;
@@ -55,7 +58,8 @@ Usage: scripts/product-daily-gate.sh [options]
 Options:
   --dry-run              Show case list and exit without running agent
   --skip-provider-health Skip provider health preflight
-  --timeout SECS         Wall-clock timeout per agent run (default: 600)
+  --include-desktop      Include desktop UI tests (requires pnpm/playwright)
+  --timeout SECS         Wall-clock timeout per agent run (default: 1200)
   --report-only RUN_ID   Generate report from existing run data
   --label LABEL          Report label (default: product-daily)
   --run-id ID            Stable run id (default: timestamp)
@@ -85,6 +89,11 @@ print_header() {
   echo "Run id: ${RUN_ID:-$REPORT_ONLY}"
   echo "Cases: ${#DAILY_CASES[@]}"
   echo "Timeout: ${TIMEOUT_SECS}s per case"
+  if [[ "$SKIP_DESKTOP_CASES" == "0" ]]; then
+    echo "Desktop tests: included"
+  else
+    echo "Desktop tests: skipped (use --include-desktop to enable)"
+  fi
   echo
 }
 

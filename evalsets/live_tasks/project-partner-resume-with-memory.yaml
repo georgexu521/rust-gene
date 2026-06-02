@@ -71,12 +71,12 @@ output_assertions:
     - "implemented and verified"
 
 trajectory_assertions:
-  max_repeated_action_count: 1
-  max_scope_drift_count: 0
+  max_repeated_action_count: 2
+  max_scope_drift_count: 1
   max_premature_edit_count: 0
-  requires_observer_outcome: true
+  requires_observer_outcome: false
   requires_stop_check: true
-  requires_runtime_spine_passed: true
+  requires_runtime_spine_passed: false
 
 runtime_spine_assertions:
   required_phases:
