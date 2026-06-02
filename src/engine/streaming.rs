@@ -175,8 +175,8 @@ pub struct StreamingQueryEngine {
     trace_store: Arc<crate::engine::trace::TraceStore>,
     /// Current session goal shown in `/goal` and `/quick`.
     goal_manager: Arc<crate::engine::session_goal::SessionGoalManager>,
-    /// 当前会话 ID（lazy init，首次 query 时生成）
-    session_id: std::sync::OnceLock<String>,
+    /// 当前会话 ID（可运行时切换）
+    session_id: Arc<RwLock<Option<String>>>,
     /// 成本追踪器
     cost_tracker: Arc<tokio::sync::Mutex<crate::cost_tracker::CostTracker>>,
     /// 当前权限模式（可在运行时通过 TUI 命令切换）
@@ -228,7 +228,7 @@ impl StreamingQueryEngine {
             session_store: std::sync::OnceLock::new(),
             trace_store: Arc::new(crate::engine::trace::TraceStore::default()),
             goal_manager: Arc::new(crate::engine::session_goal::SessionGoalManager::new()),
-            session_id: std::sync::OnceLock::new(),
+            session_id: Arc::new(RwLock::new(None)),
             cost_tracker: Arc::new(tokio::sync::Mutex::new(
                 crate::cost_tracker::CostTracker::new(),
             )),
@@ -261,7 +261,7 @@ impl StreamingQueryEngine {
         session_id: String,
     ) -> Self {
         let _ = self.session_store.set(Some(store));
-        let _ = self.session_id.set(session_id);
+        *self.session_id.write() = Some(session_id);
         self
     }
 
@@ -278,23 +278,40 @@ impl StreamingQueryEngine {
     /// UI 层用这个绑定复用同一个 SessionStore/session_id，避免一轮对话
     /// 同时写入 CLI 会话和引擎会话两套历史。
     pub fn session_binding(&self) -> Option<(Arc<crate::session_store::SessionStore>, String)> {
+        let store = self
+            .session_store
+            .get_or_init(|| {
+                let db_path = crate::session_store::SessionStore::default_path();
+                match crate::session_store::SessionStore::open(&db_path) {
+                    Ok(s) => {
+                        tracing::info!("SessionStore opened at {:?}", db_path);
+                        Some(Arc::new(s))
+                    }
+                    Err(e) => {
+                        tracing::warn!("Failed to open SessionStore: {}", e);
+                        None
+                    }
+                }
+            })
+            .as_ref()?;
+        // Ensure we have a session id; create one if missing
+        if self.session_id.read().is_none() {
+            let sid = format!("session-{}", uuid::Uuid::new_v4());
+            let _ = store.create_session(&sid, "Session", "");
+            *self.session_id.write() = Some(sid);
+        }
         let session_id = self.current_session_id()?;
-        self.session_store
-            .get()
-            .and_then(|opt| opt.as_ref().map(|store| (store.clone(), session_id)))
+        Some((store.clone(), session_id))
     }
 
     /// 当前持久化会话 ID。
     pub fn current_session_id(&self) -> Option<String> {
-        self.session_id.get().cloned()
+        self.session_id.read().clone()
     }
 
-    /// 切换当前持久化会话 ID（覆盖已有 ID）。
+    /// 切换当前持久化会话 ID。
     pub fn set_session_id(&self, session_id: impl Into<String>) {
-        let id = session_id.into();
-        // OnceLock can only be set once; if already set, we can't change it.
-        // This is acceptable because session_id is set once at startup.
-        let _ = self.session_id.set(id);
+        *self.session_id.write() = Some(session_id.into());
     }
 
     /// 设置记忆快照（在 system prompt 中注入冻结的记忆）
@@ -412,9 +429,9 @@ impl StreamingQueryEngine {
 
         self.set_history(compressed).await;
         if compaction_record.decision == CompactionDecision::Compacted {
-            if let (Some(store), Some(session_id), Some(record)) = (
-                self.session_store.get().and_then(|o| o.as_ref()),
-                self.current_session_id(),
+            let binding = self.session_binding();
+            if let (Some((store, session_id)), Some(record)) = (
+                binding.as_ref(),
                 runtime_record.as_ref(),
             ) {
                 let _ = store.add_compact_boundary_from_runtime_record(
@@ -443,7 +460,7 @@ impl StreamingQueryEngine {
 
     /// Flush memory extraction for the current conversation history with an explicit lifecycle reason.
     pub async fn flush_memory_for_current_history(&self, reason: crate::memory::MemoryFlushReason) {
-        let Some(mem_mutex) = self.memory_manager.get().and_then(|o| o.as_ref()) else {
+        let Some(mem_mutex) = self.memory_manager() else {
             return;
         };
         let Some(session_id) = self.current_session_id() else {
@@ -635,18 +652,12 @@ impl StreamingQueryEngine {
         self.session_permission_rules.read().clone()
     }
 
-    /// 获取记忆管理器（不触发初始化；需触发初始化用 memory_manager_or_init）
+    /// 获取或初始化记忆管理器（自动触发 freeze_snapshot）
     pub fn memory_manager(&self) -> Option<Arc<tokio::sync::Mutex<crate::memory::MemoryManager>>> {
-        self.memory_manager.get().and_then(|o| o.clone())
-    }
-
-    /// 获取或初始化记忆管理器，包括 freeze_snapshot
-    pub fn memory_manager_or_init(
-        &self,
-    ) -> Option<Arc<tokio::sync::Mutex<crate::memory::MemoryManager>>> {
         self.memory_manager
             .get_or_init(|| {
-                let mgr = crate::memory::MemoryManager::new();
+                let mut mgr = crate::memory::MemoryManager::new();
+                mgr.freeze_snapshot();
                 Some(Arc::new(tokio::sync::Mutex::new(mgr)))
             })
             .clone()
@@ -706,7 +717,7 @@ impl StreamingQueryEngine {
         let (tool_count, tool_schema_tokens, tool_schema_fingerprint) =
             estimate_registry_tool_schema_tokens(&self.tool_registry);
         let (memory_snapshot_tokens, relevant_memories) =
-            if let Some(ref mem_mutex) = self.memory_manager.get().and_then(|o| o.as_ref()) {
+            if let Some(mem_mutex) = self.memory_manager() {
                 let mem = mem_mutex.lock().await;
                 (
                     crate::engine::context_compressor::estimate_tokens(&mem.get_snapshot()),
@@ -773,9 +784,10 @@ impl StreamingQueryEngine {
         // 准备共享资源
         let history = self.conversation_history.clone();
         let compressor = self.compressor.clone();
+        let binding = self.session_binding();
         let session_store: Option<Arc<crate::session_store::SessionStore>> =
-            self.session_store.get().and_then(|o| o.clone());
-        let session_id = self.current_session_id();
+            binding.as_ref().map(|(s, _)| s.clone());
+        let session_id = binding.as_ref().map(|(_, id)| id.clone());
         let trace_store = self.trace_store.clone();
 
         let mut engine = StreamingEngineInner {
@@ -790,10 +802,10 @@ impl StreamingQueryEngine {
             lsp_manager: self.lsp_manager.clone(),
             worktree_manager: self.worktree_manager.clone(),
             working_dir_override: self.working_dir_override.clone(),
-            memory_manager: self.memory_manager.get().and_then(|o| o.clone()),
+            memory_manager: self.memory_manager(),
             compressor: self.compressor.clone(),
-            session_store: self.session_store.get().and_then(|o| o.clone()),
-            session_id: self.current_session_id(),
+            session_store: binding.as_ref().map(|(s, _)| s.clone()),
+            session_id: binding.as_ref().map(|(_, id)| id.clone()),
             trace_store: trace_store.clone(),
             goal_manager: self.goal_manager.clone(),
             cost_tracker: self.cost_tracker.clone(),

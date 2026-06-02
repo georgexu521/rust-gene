@@ -365,9 +365,6 @@ impl SettingsState {
                 "ui.show_token_usage" => {
                     self.config.ui.show_token_usage = new_value.parse().unwrap_or(true)
                 }
-                "ui.compact_mode" => {
-                    // compact_mode removed; no-op
-                }
                 "api.model" => self.config.api.model = new_value,
                 "api.base_url" => self.config.api.base_url = new_value.clone(),
                 "api.api_key" => {
