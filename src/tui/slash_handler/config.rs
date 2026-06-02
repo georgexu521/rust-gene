@@ -522,13 +522,13 @@ pub fn handle_theme(app: &mut TuiApp, args: &str) -> String {
             .map(|c| c.ui.theme)
             .unwrap_or_else(|_| "dark".to_string());
         return format!(
-            "Current theme: {}\nAvailable: graphite, porcelain, midnight, ember, aurora, nord, dracula, catppuccin-mocha\nUsage: /theme <preset> or /theme set <preset>",
+            "Current theme: {}\nAvailable: graphite, porcelain, nord, dracula, gruvbox-dark, catppuccin-mocha, dark, light, high-contrast\nUsage: /theme <preset> or /theme set <preset>",
             current
         );
     }
 
     if args == "list" {
-        return "Available themes:\n- graphite\n- porcelain\n- midnight\n- ember\n- aurora\n- nord\n- dracula\n- catppuccin-mocha".to_string();
+        return "Available themes:\n- graphite\n- porcelain\n- nord\n- dracula\n- gruvbox-dark\n- catppuccin-mocha\n- dark\n- light\n- high-contrast".to_string();
     }
 
     let preset_raw = args.strip_prefix("set ").unwrap_or(args).trim();
@@ -536,7 +536,7 @@ pub fn handle_theme(app: &mut TuiApp, args: &str) -> String {
         Ok(v) => v,
         Err(_) => {
             return format!(
-                "Unknown theme '{}'. Available: dark, light, high-contrast",
+                "Unknown theme '{}'. Available: graphite, porcelain, nord, dracula, gruvbox-dark, catppuccin-mocha, dark, light, high-contrast",
                 preset_raw
             );
         }

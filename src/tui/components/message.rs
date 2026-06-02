@@ -18,13 +18,15 @@ fn card_header(
     meta: Option<String>,
     faint: Color,
 ) -> Line<'static> {
+    let glyph_owned = glyph.to_string();
+    let label_owned = role_label.to_string();
     let mut spans = vec![
-        Span::styled(glyph.to_string(), Style::default().fg(color).add_modifier(Modifier::BOLD)),
-        Span::styled("  ".to_string(), Style::default()),
-        Span::styled(role_label.to_string(), Style::default().fg(color).add_modifier(Modifier::BOLD)),
+        Span::styled(glyph_owned, Style::default().fg(color).add_modifier(Modifier::BOLD)),
+        Span::styled("  ", Style::default()),
+        Span::styled(label_owned, Style::default().fg(color).add_modifier(Modifier::BOLD)),
     ];
     if let Some(m) = meta {
-        spans.push(Span::styled(" · ".to_string(), Style::default().fg(faint)));
+        spans.push(Span::styled(" · ", Style::default().fg(faint)));
         spans.push(Span::styled(m, Style::default().fg(faint)));
     }
     Line::from(spans)
@@ -37,14 +39,16 @@ pub struct StreamMeta {
     pub token_count: Option<u32>,
 }
 
-/// Detects card kind from message content for rich rendering
+/// Detects card kind from message content for rich rendering.
+/// Uses conservative heuristics — prefers false-negative over false-positive.
 fn detect_card_kind(msg: &MessageItem) -> Option<CardKind> {
     match msg.role {
         MessageRole::System => {
             let c = &msg.content;
-            if c.contains("Error:") || c.contains("error:") || c.starts_with("✗") || c.contains("failed") {
+            // Only flag as error if the message clearly starts with an error indicator
+            if c.starts_with("Error:") || c.starts_with("✗") || c.starts_with("[Error") {
                 Some(CardKind::Error)
-            } else if c.contains("⚠") || c.starts_with("Warning:") {
+            } else if c.starts_with("⚠") || c.starts_with("Warning:") {
                 Some(CardKind::Warning)
             } else {
                 None
@@ -52,9 +56,10 @@ fn detect_card_kind(msg: &MessageItem) -> Option<CardKind> {
         }
         MessageRole::Tool => {
             let c = &msg.content;
-            if c.contains("matches found") || c.contains("grep") || c.starts_with("Found ") {
+            // Search: typical grep/glob result header patterns
+            if c.contains("matches found") || c.starts_with("Found ") && c.contains("matches") {
                 Some(CardKind::Search)
-            } else if c.contains("agent") || c.contains("subagent") || c.starts_with("Agent ") {
+            } else if c.starts_with("Agent ") || c.contains(" subagent ") {
                 Some(CardKind::SubAgent)
             } else {
                 None

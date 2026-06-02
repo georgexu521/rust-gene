@@ -25,7 +25,7 @@ pub fn render_diff_viewer(
         .title(format!(" Diff: {} ", title))
         .borders(Borders::ALL)
         .border_style(Style::default().fg(theme.tokens.tone.brand))
-        .style(Style::default().bg(theme.bg_popup));
+        .style(Style::default().bg(theme.tokens.surface.bg_elev));
 
     let mut lines = Vec::new();
 

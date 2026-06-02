@@ -172,7 +172,7 @@ fn draw_ui(f: &mut Frame, app: &TuiApp) {
             screens::main_screen::render_status_bar(f, app, main_chunks[2]);
 
             if let Some(ref plan) = app.pending_plan {
-                screens::main_screen::render_plan_approval(f, plan, f.area());
+                screens::main_screen::render_plan_approval(f, plan, f.area(), &app.theme);
             }
         }
         app::AppMode::PermissionApproval => {
@@ -191,7 +191,7 @@ fn draw_ui(f: &mut Frame, app: &TuiApp) {
             screens::main_screen::render_status_bar(f, app, main_chunks[2]);
 
             if let Some(ref req) = app.pending_permission_request {
-                screens::main_screen::render_permission_approval(f, req, f.area());
+                screens::main_screen::render_permission_approval(f, req, f.area(), &app.theme);
             }
         }
         app::AppMode::AskUser => {

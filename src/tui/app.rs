@@ -1722,12 +1722,13 @@ impl TuiApp {
         vec![
             "graphite".into(),
             "porcelain".into(),
-            "midnight".into(),
-            "ember".into(),
-            "aurora".into(),
             "nord".into(),
             "dracula".into(),
+            "gruvbox-dark".into(),
             "catppuccin-mocha".into(),
+            "dark".into(),
+            "light".into(),
+            "high-contrast".into(),
         ]
     }
 
@@ -3645,6 +3646,10 @@ impl TuiApp {
     /// 向下滚动
     pub fn scroll_down(&mut self) {
         self.scroll_offset += 1;
+        // Re-pin if scrolled past the last message
+        if self.scroll_offset >= self.messages.len() {
+            self.pinned_to_bottom = true;
+        }
     }
 
     /// 滚动到底部（显示最新消息）

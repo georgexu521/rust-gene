@@ -119,7 +119,7 @@ pub fn render_chat_area(f: &mut Frame, app: &TuiApp, area: Rect) {
     let mut current_y = content_top + u16::from(window.more_above);
 
     // Scroll indicator (Reasonix style)
-    let show_indicator = !window.bottom_anchored || !app.pinned_to_bottom;
+    let show_indicator = !window.bottom_anchored;
     if show_indicator && max_scroll > 0 {
         let above = scroll_top;
         let remaining = max_scroll.saturating_sub(scroll_top);
@@ -176,7 +176,7 @@ pub fn render_chat_area(f: &mut Frame, app: &TuiApp, area: Rect) {
                     && msg.role == MessageRole::Assistant
                     && *message_index == messages.len() - 1
                 {
-                    let tokens = app.stream_usage_snapshot.map(|u| u.total_tokens());
+                    let tokens = app.stream_usage_snapshot.map(|u| u.completion_tokens);
                     Some(message::StreamMeta {
                         is_streaming: true,
                         tick: app.tick_count,
@@ -1498,8 +1498,10 @@ pub fn render_permission_approval(
     f: &mut Frame,
     req: &crate::engine::conversation_loop::ToolApprovalRequest,
     area: Rect,
+    theme: &crate::tui::theme::Theme,
 ) {
     let popup_area = centered_rect(76, 64, area);
+    let tokens = &theme.tokens;
     let review = req.human_review_request();
     let permission_review = req.permission_review();
     let goal_drift_approval =
@@ -1510,64 +1512,57 @@ pub fn render_permission_approval(
     let risk_reason = review.reason.as_str();
     let rule_pattern = permission_review.rule_pattern.as_str();
     let risk_color = match risk {
-        "high" => Color::Red,
-        "medium" => Color::Yellow,
-        _ => Color::Green,
+        "high" => tokens.tone.err,
+        "medium" => tokens.tone.warn,
+        _ => tokens.tone.ok,
     };
+    let label_color = tokens.fg.faint;
+    let value_color = tokens.fg.body;
 
     let block = Block::default()
         .title(format!(" {} ", review.title))
         .borders(Borders::ALL)
         .border_style(Style::default().fg(risk_color))
-        .style(Style::default().bg(Color::Black));
+        .style(Style::default().bg(tokens.surface.bg));
 
     let mut lines = vec![
         Line::from(""),
         Line::from(vec![
-            Span::styled("Subject ", Style::default().fg(Color::DarkGray)),
+            Span::styled("Subject ", Style::default().fg(label_color)),
             Span::styled(
                 review.subject.clone(),
-                Style::default()
-                    .fg(Color::Cyan)
-                    .add_modifier(Modifier::BOLD),
+                Style::default().fg(tokens.tone.brand).add_modifier(Modifier::BOLD),
             ),
-            Span::styled("  Risk ", Style::default().fg(Color::DarkGray)),
-            Span::styled(
-                risk,
-                Style::default().fg(risk_color).add_modifier(Modifier::BOLD),
-            ),
+            Span::styled("  Risk ", Style::default().fg(label_color)),
+            Span::styled(risk, Style::default().fg(risk_color).add_modifier(Modifier::BOLD)),
         ]),
         Line::from(vec![
-            Span::styled("Scope   ", Style::default().fg(Color::DarkGray)),
+            Span::styled("Scope   ", Style::default().fg(label_color)),
             Span::styled(
                 permission_scope_label(&req.tool_call.name, &req.tool_call.arguments),
-                Style::default().fg(Color::Gray),
+                Style::default().fg(value_color),
             ),
         ]),
         Line::from(vec![
-            Span::styled("Rule    ", Style::default().fg(Color::DarkGray)),
+            Span::styled("Rule    ", Style::default().fg(label_color)),
             Span::styled(
                 rule_pattern,
-                Style::default()
-                    .fg(Color::Cyan)
-                    .add_modifier(Modifier::BOLD),
+                Style::default().fg(tokens.tone.brand).add_modifier(Modifier::BOLD),
             ),
         ]),
         Line::from(vec![
-            Span::styled("Why     ", Style::default().fg(Color::DarkGray)),
-            Span::styled(risk_reason, Style::default().fg(Color::Gray)),
+            Span::styled("Why     ", Style::default().fg(label_color)),
+            Span::styled(risk_reason, Style::default().fg(value_color)),
         ]),
         Line::from(""),
     ];
 
     if goal_drift_approval {
         lines.push(Line::from(vec![
-            Span::styled("Goal    ", Style::default().fg(Color::DarkGray)),
+            Span::styled("Goal    ", Style::default().fg(label_color)),
             Span::styled(
                 "drift check requires approval",
-                Style::default()
-                    .fg(Color::Yellow)
-                    .add_modifier(Modifier::BOLD),
+                Style::default().fg(tokens.tone.warn).add_modifier(Modifier::BOLD),
             ),
         ]));
         lines.push(Line::from(""));
@@ -1575,10 +1570,10 @@ pub fn render_permission_approval(
 
     if reflection_gate {
         lines.push(Line::from(vec![
-            Span::styled("Gate    ", Style::default().fg(Color::DarkGray)),
+            Span::styled("Gate    ", Style::default().fg(label_color)),
             Span::styled(
                 "unresolved reflection findings",
-                Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+                Style::default().fg(tokens.tone.err).add_modifier(Modifier::BOLD),
             ),
         ]));
         lines.push(Line::from(""));
@@ -1593,7 +1588,7 @@ pub fn render_permission_approval(
         for line in summary.1.lines().take(6) {
             lines.push(Line::from(Span::styled(
                 format!("  {}", line),
-                Style::default().fg(Color::Gray),
+                Style::default().fg(value_color),
             )));
         }
         lines.push(Line::from(""));
@@ -1606,7 +1601,7 @@ pub fn render_permission_approval(
     for line in req.prompt.lines().take(4) {
         lines.push(Line::from(Span::styled(
             format!("  {}", line),
-            Style::default().fg(Color::White),
+            Style::default().fg(tokens.fg.body),
         )));
     }
 
@@ -1619,7 +1614,7 @@ pub fn render_permission_approval(
         for line in args.lines().take(8) {
             lines.push(Line::from(Span::styled(
                 format!("  {}", line),
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(tokens.fg.faint),
             )));
         }
     }
@@ -1630,46 +1625,20 @@ pub fn render_permission_approval(
         Style::default().add_modifier(Modifier::BOLD),
     )));
     lines.push(Line::from(vec![
-        Span::styled(
-            "y",
-            Style::default()
-                .fg(Color::Green)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(" allow once  ", Style::default().fg(Color::Gray)),
-        Span::styled(
-            "s",
-            Style::default()
-                .fg(Color::Green)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(" allow session  ", Style::default().fg(Color::Gray)),
-        Span::styled(
-            "n",
-            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(" deny  ", Style::default().fg(Color::Gray)),
+        Span::styled("y", Style::default().fg(tokens.tone.ok).add_modifier(Modifier::BOLD)),
+        Span::styled(" allow once  ", Style::default().fg(value_color)),
+        Span::styled("s", Style::default().fg(tokens.tone.ok).add_modifier(Modifier::BOLD)),
+        Span::styled(" allow session  ", Style::default().fg(value_color)),
+        Span::styled("n", Style::default().fg(tokens.tone.err).add_modifier(Modifier::BOLD)),
+        Span::styled(" deny  ", Style::default().fg(value_color)),
     ]));
     lines.push(Line::from(vec![
-        Span::styled(
-            "p",
-            Style::default()
-                .fg(Color::Green)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(" allow project  ", Style::default().fg(Color::Gray)),
-        Span::styled(
-            "a",
-            Style::default()
-                .fg(Color::Green)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(" allow global  ", Style::default().fg(Color::Gray)),
-        Span::styled(
-            "x",
-            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(" deny global", Style::default().fg(Color::Gray)),
+        Span::styled("p", Style::default().fg(tokens.tone.ok).add_modifier(Modifier::BOLD)),
+        Span::styled(" allow project  ", Style::default().fg(value_color)),
+        Span::styled("a", Style::default().fg(tokens.tone.ok).add_modifier(Modifier::BOLD)),
+        Span::styled(" allow global  ", Style::default().fg(value_color)),
+        Span::styled("x", Style::default().fg(tokens.tone.err).add_modifier(Modifier::BOLD)),
+        Span::styled(" deny global", Style::default().fg(value_color)),
     ]));
     lines.push(Line::from(vec![
         Span::styled(
@@ -1850,61 +1819,61 @@ fn compact_permission_line(text: &str, max_chars: usize) -> String {
 }
 
 /// 渲染计划审批弹窗
-pub fn render_plan_approval(f: &mut Frame, plan: &crate::engine::plan_mode::Plan, area: Rect) {
+pub fn render_plan_approval(
+    f: &mut Frame,
+    plan: &crate::engine::plan_mode::Plan,
+    area: Rect,
+    theme: &crate::tui::theme::Theme,
+) {
     let popup_area = centered_rect(70, 70, area);
+    let tokens = &theme.tokens;
     let review = plan.human_review_request();
     let risk_color = match review.risk {
-        crate::engine::human_review::HumanReviewRisk::High => Color::Red,
-        crate::engine::human_review::HumanReviewRisk::Medium => Color::Yellow,
-        crate::engine::human_review::HumanReviewRisk::Low => Color::Green,
+        crate::engine::human_review::HumanReviewRisk::High => tokens.tone.err,
+        crate::engine::human_review::HumanReviewRisk::Medium => tokens.tone.warn,
+        crate::engine::human_review::HumanReviewRisk::Low => tokens.tone.ok,
     };
 
     let block = Block::default()
         .title(format!(" Plan Approval: {} ", plan.title))
         .borders(Borders::ALL)
         .border_style(Style::default().fg(risk_color))
-        .style(Style::default().bg(Color::Black));
+        .style(Style::default().bg(tokens.surface.bg));
 
     let mut lines = vec![
         Line::from(""),
         Line::from(vec![
             Span::styled("Goal: ", Style::default().add_modifier(Modifier::BOLD)),
-            Span::styled(plan.goal.clone(), Style::default().fg(Color::White)),
+            Span::styled(plan.goal.clone(), Style::default().fg(tokens.fg.body)),
         ]),
         Line::from(vec![
-            Span::styled(
-                "Complexity: ",
-                Style::default().add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(
-                plan.estimated_complexity.clone(),
-                Style::default().fg(Color::Cyan),
-            ),
+            Span::styled("Complexity: ", Style::default().add_modifier(Modifier::BOLD)),
+            Span::styled(plan.estimated_complexity.clone(), Style::default().fg(tokens.tone.brand)),
         ]),
         Line::from(vec![
             Span::styled("Review: ", Style::default().add_modifier(Modifier::BOLD)),
             Span::styled(review.risk.as_str(), Style::default().fg(risk_color)),
-            Span::styled(" · ", Style::default().fg(Color::DarkGray)),
-            Span::styled(review.reason, Style::default().fg(Color::Gray)),
+            Span::styled(" · ", Style::default().fg(tokens.fg.faint)),
+            Span::styled(review.reason, Style::default().fg(tokens.fg.sub)),
         ]),
         Line::from(""),
         Line::from(vec![Span::styled(
             format!("Steps ({}):", plan.steps.len()),
-            Style::default().add_modifier(Modifier::BOLD),
+            Style::default().fg(tokens.fg.body).add_modifier(Modifier::BOLD),
         )]),
         Line::from(Span::styled(
             "────────────────────────────────────────",
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(tokens.fg.faint),
         )),
     ];
 
     for (i, step) in plan.steps.iter().enumerate() {
         let (status_icon, icon_color) = match step.status {
-            crate::engine::plan_mode::StepStatus::Pending => ("○", Color::DarkGray),
-            crate::engine::plan_mode::StepStatus::InProgress => ("●", Color::Cyan),
-            crate::engine::plan_mode::StepStatus::Completed => ("✓", Color::Green),
-            crate::engine::plan_mode::StepStatus::Skipped => ("·", Color::DarkGray),
-            crate::engine::plan_mode::StepStatus::Failed(_) => ("✗", Color::Red),
+            crate::engine::plan_mode::StepStatus::Pending => ("○", tokens.fg.faint),
+            crate::engine::plan_mode::StepStatus::InProgress => ("●", tokens.tone.brand),
+            crate::engine::plan_mode::StepStatus::Completed => ("✓", tokens.tone.ok),
+            crate::engine::plan_mode::StepStatus::Skipped => ("·", tokens.fg.faint),
+            crate::engine::plan_mode::StepStatus::Failed(_) => ("✗", tokens.tone.err),
         };
         let tool_info = step
             .tool
@@ -1916,36 +1885,23 @@ pub fn render_plan_approval(f: &mut Frame, plan: &crate::engine::plan_mode::Plan
                 format!("  {} {}. ", status_icon, i + 1),
                 Style::default().fg(icon_color),
             ),
-            Span::styled(step.description.clone(), Style::default().fg(Color::White)),
-            Span::styled(tool_info, Style::default().fg(Color::DarkGray)),
+            Span::styled(step.description.clone(), Style::default().fg(tokens.fg.body)),
+            Span::styled(tool_info, Style::default().fg(tokens.fg.faint)),
         ]));
     }
 
     lines.push(Line::from(Span::styled(
         "────────────────────────────────────────",
-        Style::default().fg(Color::DarkGray),
+        Style::default().fg(tokens.fg.faint),
     )));
     lines.push(Line::from(""));
     lines.push(Line::from(vec![
-        Span::styled(
-            "y",
-            Style::default()
-                .fg(Color::Green)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(" = Approve  ", Style::default().fg(Color::Gray)),
-        Span::styled(
-            "n",
-            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(" = Reject  ", Style::default().fg(Color::Gray)),
-        Span::styled(
-            "m",
-            Style::default()
-                .fg(Color::Yellow)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(" = Modify", Style::default().fg(Color::Gray)),
+        Span::styled("y", Style::default().fg(tokens.tone.ok).add_modifier(Modifier::BOLD)),
+        Span::styled(" = Approve  ", Style::default().fg(tokens.fg.faint)),
+        Span::styled("n", Style::default().fg(tokens.tone.err).add_modifier(Modifier::BOLD)),
+        Span::styled(" = Reject  ", Style::default().fg(tokens.fg.faint)),
+        Span::styled("m", Style::default().fg(tokens.tone.warn).add_modifier(Modifier::BOLD)),
+        Span::styled(" = Modify", Style::default().fg(tokens.fg.faint)),
     ]));
 
     let text = Text::from(lines);
@@ -2159,7 +2115,8 @@ mod tests {
         let mut terminal = Terminal::new(backend).unwrap();
         terminal
             .draw(|frame| {
-                render_permission_approval(frame, req, frame.area());
+                let theme = crate::tui::theme::Theme::graphite();
+                render_permission_approval(frame, req, frame.area(), &theme);
             })
             .unwrap();
         terminal
