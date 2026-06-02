@@ -209,7 +209,8 @@ impl ToolBatchResultProcessor {
                 outcome.tool_results_text.push_str(&note.text);
                 outcome.tool_results_text.push('\n');
                 messages.push(Message::system(format!(
-                    "<recent_observation>\n{}\n</recent_observation>", note.text
+                    "<recent_observation>\n{}\n</recent_observation>",
+                    note.text
                 )));
             }
         }
@@ -297,7 +298,8 @@ impl ToolBatchResultProcessor {
 
         super::turn_recording::record_recovery_plan(trace, &decision.plan);
         messages.push(Message::system(format!(
-            "<recent_observation>\n{}\n</recent_observation>", decision.correction
+            "<recent_observation>\n{}\n</recent_observation>",
+            decision.correction
         )));
         outcome.tool_results_text.push('\n');
         outcome.tool_results_text.push_str(&decision.correction);
@@ -324,7 +326,8 @@ impl ToolBatchResultProcessor {
                 reason: guard.clone(),
             });
             messages.push(Message::system(format!(
-                "<recent_observation>\n{}\n</recent_observation>", guard
+                "<recent_observation>\n{}\n</recent_observation>",
+                guard
             )));
             outcome.tool_results_text.push('\n');
             outcome.tool_results_text.push_str(&guard);
@@ -347,7 +350,8 @@ impl ToolBatchResultProcessor {
             outcome.tool_results_text.push('\n');
             outcome.tool_results_text.push_str(&correction);
             messages.push(Message::system(format!(
-                "<recent_observation>\n{}\n</recent_observation>", correction
+                "<recent_observation>\n{}\n</recent_observation>",
+                correction
             )));
         }
     }

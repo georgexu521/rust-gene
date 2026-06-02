@@ -1663,8 +1663,8 @@ impl Tool for MemoryLoadTool {
             "properties": {
                 "action": {
                     "type": "string",
-                    "description": "load returns memory content, search filters by query, doctor summarizes health, doctor_json returns machine-readable health, snapshot reports the frozen prompt memory snapshot, eval runs deterministic memory lifecycle evals, conflicts lists conflicts, review summarizes decisions/flushes/conflicts, repair_proposals creates review-required proposals for projection drift, migrate_dry_run/migrate_backup/migrate_rollback manage conservative memory backups, explain shows why a matching memory was retrieved.",
-                    "enum": ["load", "search", "doctor", "doctor_json", "snapshot", "eval", "conflicts", "review", "repair_proposals", "migrate_dry_run", "migrate_backup", "migrate_rollback", "explain"],
+                    "description": "load returns memory content, search filters by query, doctor summarizes health, doctor_json returns machine-readable health, snapshot reports the frozen prompt memory snapshot, eval runs deterministic memory lifecycle evals, conflicts lists conflicts, review summarizes decisions/flushes/conflicts, repair_proposals creates review-required proposals for projection drift, migrate_dry_run/migrate_backup/migrate_rollback manage conservative memory backups, explain/why shows why a matching memory was retrieved.",
+                    "enum": ["load", "search", "doctor", "doctor_json", "snapshot", "eval", "conflicts", "review", "repair_proposals", "migrate_dry_run", "migrate_backup", "migrate_rollback", "explain", "why"],
                     "default": "load"
                 },
                 "query": {
@@ -1844,9 +1844,9 @@ impl Tool for MemoryLoadTool {
             ));
         }
 
-        if action == "explain" {
+        if matches!(action, "explain" | "why") {
             if query.trim().is_empty() {
-                return ToolResult::error("query is required for memory explain");
+                return ToolResult::error("query is required for memory why");
             }
             let matching = search_memory_documents(&docs, query);
             return if matching.is_empty() {

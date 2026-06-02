@@ -25,6 +25,7 @@ pub(super) struct TurnCompletionContext<'a> {
     pub(super) max_iterations: usize,
     pub(super) tool_calls_made: bool,
     pub(super) evidence_ledger: &'a EvidenceLedger,
+    pub(super) memory_generate_enabled: bool,
     pub(super) tx: Option<&'a mpsc::Sender<StreamEvent>>,
 }
 
@@ -43,6 +44,7 @@ impl TurnCompletionController {
             iterations_used: context.iterations_used,
             max_iterations: context.max_iterations,
             evidence_ledger: context.evidence_ledger,
+            memory_generate_enabled: context.memory_generate_enabled,
             tx: context.tx,
         })
         .await;
@@ -690,6 +692,7 @@ mod tests {
             max_iterations: 8,
             tool_calls_made: true,
             evidence_ledger: &evidence_ledger,
+            memory_generate_enabled: true,
             tx: Some(&tx),
         })
         .await;

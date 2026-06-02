@@ -251,6 +251,104 @@ fn format_agent_mode_exposure_matrix(
     .join("; ")
 }
 
+fn format_route_tool_schema_cache_matrix(
+    app: &TuiApp,
+    registry: &crate::tools::ToolRegistry,
+    context: &crate::tools::ToolContext,
+    learning_events: &[crate::session_store::LearningEventRecord],
+) -> String {
+    let available_tools = available_provider_tools(registry, context);
+    [
+        AgentMode::Auto,
+        AgentMode::Build,
+        AgentMode::Plan,
+        AgentMode::Explore,
+        AgentMode::Review,
+    ]
+    .into_iter()
+    .map(|mode| {
+        let route =
+            route_for_agent_mode_with_learning(TERMINAL_EXPOSURE_PROMPT, mode, learning_events);
+        let scoped_tools =
+            if crate::engine::conversation_loop::ConversationLoop::route_scoped_tools_enabled() {
+                let allowlist =
+                    crate::engine::conversation_loop::ConversationLoop::route_tool_allowlist(
+                        &route,
+                    );
+                available_tools
+                    .iter()
+                    .filter(|tool| allowlist.contains(tool.name.as_str()))
+                    .cloned()
+                    .collect::<Vec<_>>()
+            } else {
+                available_tools.clone()
+            };
+        let manifest = crate::engine::cache_stability::provider_tool_schema_manifest(&scoped_tools);
+        format!(
+            "{}:{} tools={} tool_fp={} route={}",
+            if mode == app.agent_mode { "*" } else { "" },
+            mode.label(),
+            manifest.tool_count,
+            short_hash(&manifest.fingerprint),
+            route.compact_label()
+        )
+    })
+    .collect::<Vec<_>>()
+    .join("; ")
+}
+
+fn available_provider_tools(
+    registry: &crate::tools::ToolRegistry,
+    context: &crate::tools::ToolContext,
+) -> Vec<crate::services::api::Tool> {
+    registry
+        .iter_tools()
+        .filter(|tool| {
+            tool.is_available(context) && context.permission_context.should_expose_tool(tool.name())
+        })
+        .map(|tool| crate::services::api::Tool {
+            name: tool.name().to_string(),
+            description: tool.description().to_string(),
+            parameters: tool.parameters(),
+            strict_schema: tool.strict_schema(),
+        })
+        .collect()
+}
+
+fn format_prompt_cache_doctor_line(tracker: &crate::cost_tracker::CostTracker) -> String {
+    let hit_rate = if tracker.total_tokens.prompt == 0 {
+        0.0
+    } else {
+        tracker.total_tokens.cached.min(tracker.total_tokens.prompt) as f64
+            / tracker.total_tokens.prompt as f64
+            * 100.0
+    };
+    let base = format!(
+        "requests={} prompt={} cached={} miss={} hit_rate={:.1}%",
+        tracker.total_requests,
+        tracker.total_tokens.prompt,
+        tracker.total_tokens.cached,
+        tracker.total_tokens.cache_miss,
+        hit_rate
+    );
+    let Some(last) = tracker.prompt_cache_diagnostics.last() else {
+        return format!("{base}; no per-turn cache-shape diagnostics yet");
+    };
+    format!(
+        "{base}; last_reason={} detail={} tools={} tool_fp={} dynamic_zones={} before_last_user={}",
+        last.miss_reason,
+        last.miss_reason_detail,
+        last.tool_count,
+        short_hash(&last.tool_schema_fingerprint),
+        last.dynamic_zone_messages,
+        last.dynamic_zones_before_last_user
+    )
+}
+
+fn short_hash(hash: &str) -> String {
+    hash.chars().take(12).collect()
+}
+
 fn exposure_label(report: &crate::engine::tool_exposure::ToolExposureReport) -> &'static str {
     if report.model_exposed {
         "exposed"
@@ -723,6 +821,10 @@ pub async fn handle_doctor(app: &TuiApp, args: &str) -> String {
         "agent_mode_matrix",
         format_agent_mode_exposure_matrix(&registry, &context, &learning_events),
     ));
+    report.checks.push(crate::diagnostics::CheckResult::info(
+        "route_tool_schema_cache",
+        format_route_tool_schema_cache_matrix(app, &registry, &context, &learning_events),
+    ));
 
     if let Some(ref engine) = app.streaming_engine {
         report.checks.push(crate::diagnostics::CheckResult::ok(
@@ -790,6 +892,10 @@ pub async fn handle_doctor(app: &TuiApp, args: &str) -> String {
         report.checks.push(crate::diagnostics::CheckResult::info(
             "cost_tracker",
             tracker.tool_diagnostics_line(),
+        ));
+        report.checks.push(crate::diagnostics::CheckResult::info(
+            "prompt_cache",
+            format_prompt_cache_doctor_line(&tracker),
         ));
 
         // W4-2: Performance panel - tool P95 latency
@@ -2640,6 +2746,65 @@ mod tests {
 
         assert!(route.reason.contains("recent failure"));
         assert!(allowlist.contains("bash"));
+    }
+
+    #[test]
+    fn doctor_prompt_cache_line_reports_tool_schema_miss_reason() {
+        let mut tracker = crate::cost_tracker::CostTracker::new();
+        tracker.record_api_call_with_cache_shape(
+            "kimi-k2.5",
+            1000,
+            100,
+            Some(0),
+            Some(
+                crate::engine::cache_stability::request_cache_diagnostic_shape(
+                    &[
+                        crate::services::api::Message::system("stable"),
+                        crate::services::api::Message::user("one"),
+                    ],
+                    &[crate::services::api::Tool {
+                        name: "alpha".to_string(),
+                        description: "Alpha tool".to_string(),
+                        parameters: serde_json::json!({"type":"object","properties":{}}),
+                        strict_schema: false,
+                    }],
+                ),
+            ),
+        );
+        tracker.record_api_call_with_cache_shape(
+            "kimi-k2.5",
+            1000,
+            100,
+            Some(500),
+            Some(
+                crate::engine::cache_stability::request_cache_diagnostic_shape(
+                    &[
+                        crate::services::api::Message::system("stable"),
+                        crate::services::api::Message::user("two"),
+                    ],
+                    &[
+                        crate::services::api::Tool {
+                            name: "alpha".to_string(),
+                            description: "Alpha tool".to_string(),
+                            parameters: serde_json::json!({"type":"object","properties":{}}),
+                            strict_schema: false,
+                        },
+                        crate::services::api::Tool {
+                            name: "beta".to_string(),
+                            description: "Beta tool".to_string(),
+                            parameters: serde_json::json!({"type":"object","properties":{}}),
+                            strict_schema: false,
+                        },
+                    ],
+                ),
+            ),
+        );
+
+        let line = format_prompt_cache_doctor_line(&tracker);
+
+        assert!(line.contains("last_reason=tool-list-changed"));
+        assert!(line.contains("tool_fp="));
+        assert!(line.contains("before_last_user=0"));
     }
 
     #[test]

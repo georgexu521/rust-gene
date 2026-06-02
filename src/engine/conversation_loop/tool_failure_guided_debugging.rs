@@ -97,7 +97,8 @@ impl GuidedToolFailureDebuggingController {
                 context.tool_results_text.push('\n');
                 context.tool_results_text.push_str(&debugging_text);
                 context.messages.push(Message::system(format!(
-                    "<recent_observation>\n{}\n</recent_observation>", debugging_text
+                    "<recent_observation>\n{}\n</recent_observation>",
+                    debugging_text
                 )));
                 apply_workflow_feedback_and_trace(
                     context.task_bundle,

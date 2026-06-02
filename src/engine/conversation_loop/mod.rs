@@ -231,6 +231,12 @@ pub struct ConversationLoop {
     session_permission_rules: crate::permissions::PermissionRules,
     /// 是否启用 LLM 驱动的记忆提取
     llm_memory_extraction: bool,
+    /// Whether existing memory may be injected/recalled for model requests.
+    memory_use_enabled: bool,
+    /// Whether this session may generate future memory proposals/sync output.
+    memory_generate_enabled: bool,
+    /// Dynamic memory recall mode: balanced, strict, preference-only, or off.
+    memory_recall_mode: String,
     /// 工具授权通道（用于 MCP 等工具的交互式授权）
     approval_channel: Option<Arc<ToolApprovalChannel>>,
     /// 工具白名单（用于子 Agent 隔离；None 表示不限制）
@@ -297,6 +303,9 @@ impl ConversationLoop {
             permission_mode: crate::permissions::PermissionMode::AutoAll,
             session_permission_rules: crate::permissions::PermissionRules::new(),
             llm_memory_extraction: false,
+            memory_use_enabled: true,
+            memory_generate_enabled: true,
+            memory_recall_mode: "balanced".to_string(),
             approval_channel: None,
             allowed_tools: None,
             working_dir_override: None,
@@ -392,6 +401,46 @@ impl ConversationLoop {
     pub fn with_llm_memory_extraction(mut self, enabled: bool) -> Self {
         self.llm_memory_extraction = enabled;
         self
+    }
+
+    pub fn with_memory_use(mut self, enabled: bool) -> Self {
+        self.memory_use_enabled = enabled;
+        self
+    }
+
+    pub fn with_memory_generate(mut self, enabled: bool) -> Self {
+        self.memory_generate_enabled = enabled;
+        self
+    }
+
+    pub fn with_memory_recall_mode(mut self, mode: impl Into<String>) -> Self {
+        self.memory_recall_mode = mode.into();
+        self
+    }
+
+    pub(super) fn memory_manager_for_static_memory(
+        &self,
+    ) -> Option<&Arc<Mutex<crate::memory::MemoryManager>>> {
+        self.memory_use_enabled
+            .then_some(())
+            .and_then(|_| self.memory_manager.as_ref())
+    }
+
+    pub(super) fn memory_manager_for_dynamic_recall(
+        &self,
+    ) -> Option<&Arc<Mutex<crate::memory::MemoryManager>>> {
+        let recall_enabled = !self.memory_recall_mode.eq_ignore_ascii_case("off");
+        (self.memory_use_enabled && recall_enabled)
+            .then_some(())
+            .and_then(|_| self.memory_manager.as_ref())
+    }
+
+    pub(super) fn memory_manager_for_generate(
+        &self,
+    ) -> Option<&Arc<Mutex<crate::memory::MemoryManager>>> {
+        self.memory_generate_enabled
+            .then_some(())
+            .and_then(|_| self.memory_manager.as_ref())
     }
 
     pub fn with_approval_channel(mut self, channel: Arc<ToolApprovalChannel>) -> Self {
@@ -669,6 +718,7 @@ impl ConversationLoop {
             max_iterations: self.max_iterations,
             tool_calls_made: loop_state.tool_calls_made,
             evidence_ledger: &turn_state.evidence_ledger,
+            memory_generate_enabled: self.memory_generate_enabled,
             tx,
         })
         .await;
@@ -715,6 +765,51 @@ mod tests {
         fn default_model(&self) -> &str {
             self.model
         }
+    }
+
+    #[test]
+    fn memory_use_and_generate_controls_are_independent() {
+        let memory_manager = Arc::new(Mutex::new(crate::memory::MemoryManager::with_base_dir(
+            tempdir().unwrap().path().to_path_buf(),
+        )));
+        let conversation = ConversationLoop::new(
+            Arc::new(CapabilityProbeProvider {
+                base_url: "https://api.openai.com/v1",
+                model: "gpt-test",
+            }),
+            Arc::new(ToolRegistry::new()),
+            Arc::new(Mutex::new(crate::cost_tracker::CostTracker::new())),
+            "gpt-test".to_string(),
+        )
+        .with_memory_manager(memory_manager)
+        .with_memory_use(false)
+        .with_memory_generate(true);
+
+        assert!(conversation.memory_manager_for_static_memory().is_none());
+        assert!(conversation.memory_manager_for_dynamic_recall().is_none());
+        assert!(conversation.memory_manager_for_generate().is_some());
+    }
+
+    #[test]
+    fn recall_off_keeps_static_memory_snapshot_available() {
+        let memory_manager = Arc::new(Mutex::new(crate::memory::MemoryManager::with_base_dir(
+            tempdir().unwrap().path().to_path_buf(),
+        )));
+        let conversation = ConversationLoop::new(
+            Arc::new(CapabilityProbeProvider {
+                base_url: "https://api.openai.com/v1",
+                model: "gpt-test",
+            }),
+            Arc::new(ToolRegistry::new()),
+            Arc::new(Mutex::new(crate::cost_tracker::CostTracker::new())),
+            "gpt-test".to_string(),
+        )
+        .with_memory_manager(memory_manager)
+        .with_memory_use(true)
+        .with_memory_recall_mode("off");
+
+        assert!(conversation.memory_manager_for_static_memory().is_some());
+        assert!(conversation.memory_manager_for_dynamic_recall().is_none());
     }
 
     #[tokio::test]

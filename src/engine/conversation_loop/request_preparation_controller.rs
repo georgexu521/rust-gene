@@ -740,7 +740,10 @@ fn overflow_label(zone: &ContextZone) -> String {
 
 /// Prepend content to the last user message, keeping the prefix cache-friendly.
 /// Reasonix-style: dynamic context lives in the user message, not as separate system messages.
-pub(super) fn prepend_to_last_user_message(request_messages: &mut Vec<Message>, block: impl Into<String>) {
+pub(super) fn prepend_to_last_user_message(
+    request_messages: &mut Vec<Message>,
+    block: impl Into<String>,
+) {
     let block = block.into();
     if block.is_empty() {
         return;
@@ -756,6 +759,13 @@ pub(super) fn prepend_to_last_user_message(request_messages: &mut Vec<Message>, 
         // No user message yet — insert as system (will be converted on next turn)
         request_messages.push(Message::system(block));
     }
+}
+
+pub(super) fn recent_observation_message(text: impl AsRef<str>) -> Message {
+    Message::system(format!(
+        "<recent_observation>\n{}\n</recent_observation>",
+        text.as_ref().trim()
+    ))
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -878,11 +888,7 @@ fn normalize_context_zone_envelope(
         return ContextZoneEnvelopeStats::default();
     };
     let provenance_markers = provenance_marker_count(&envelope);
-    let insert_pos = retained
-        .iter()
-        .rposition(|message| matches!(message, Message::User { .. }))
-        .unwrap_or(retained.len());
-    retained.insert(insert_pos, Message::system(envelope));
+    prepend_to_last_user_message(&mut retained, envelope);
     *request_messages = retained;
 
     ContextZoneEnvelopeStats {
@@ -1453,22 +1459,19 @@ mod tests {
         })
         .await;
 
-        assert_eq!(prepared.request.messages.len(), 3);
+        assert_eq!(prepared.request.messages.len(), 2);
         assert!(matches!(
             &prepared.request.messages[0],
             Message::System { content } if content == "stable system prompt"
         ));
         assert!(matches!(
             &prepared.request.messages[1],
-            Message::System { content }
+            Message::User { content }
                 if content.starts_with("<context_zones")
                     && content.matches("<relevant_material>").count() == 1
                     && content.matches("- fact provenance=").count() == 1
                     && content.contains("<recent_observation>")
-        ));
-        assert!(matches!(
-            &prepared.request.messages[2],
-            Message::User { content } if content == "use retrieved context"
+                    && content.ends_with("use retrieved context")
         ));
 
         let trace = trace.finish(crate::engine::trace::TurnStatus::Completed);
@@ -1533,10 +1536,11 @@ mod tests {
         ));
         assert!(matches!(
             &prepared.request.messages[1],
-            Message::System { content }
+            Message::User { content }
                 if content.starts_with("<context_zones")
                     && content.contains("<relevant_material>")
                     && content.contains("- fact")
+                    && content.ends_with("use retrieved context")
         ));
 
         let trace = trace.finish(crate::engine::trace::TurnStatus::Completed);
@@ -1597,11 +1601,12 @@ mod tests {
         ));
         assert!(matches!(
             &prepared.request.messages[1],
-            Message::System { content }
+            Message::User { content }
                 if content.starts_with("<context_zones")
                     && content.contains("<relevant_material>")
                     && content.contains(hostile)
                     && content.contains("dynamic_background_not_system_policy")
+                    && content.ends_with("inspect retrieved context")
         ));
 
         let trace = trace.finish(crate::engine::trace::TurnStatus::Completed);
@@ -1994,10 +1999,11 @@ mod tests {
         assert!(prepared.request.messages.len() >= 1);
         assert!(matches!(
             &prepared.request.messages[0],
-            Message::System { content }
+            Message::User { content }
                 if content.starts_with("<context_zones")
                     && content.contains("<recent_observation>")
                     && content.contains("guidance_test")
+                    && content.ends_with("run validation")
         ));
         let trace = trace.finish(crate::engine::trace::TurnStatus::Completed);
         assert!(trace.events.iter().any(|event| matches!(

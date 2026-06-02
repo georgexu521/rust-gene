@@ -21,6 +21,7 @@ pub(super) struct TurnRetrievalContextRequest<'a> {
     pub(super) session_store: Option<Arc<SessionStore>>,
     pub(super) session_id: Option<&'a str>,
     pub(super) memory_manager: Option<&'a Arc<Mutex<MemoryManager>>>,
+    pub(super) memory_recall_mode: &'a str,
     pub(super) provider: &'a dyn LlmProvider,
     pub(super) model: &'a str,
     pub(super) trace: &'a TraceCollector,
@@ -59,6 +60,8 @@ impl TurnRetrievalContextController {
             }
         }
 
+        apply_memory_recall_mode(&mut turn_retrieval_context, context.memory_recall_mode);
+
         if let Some(ref ctx) = turn_retrieval_context {
             Self::record_context_built(context.trace, ctx);
         }
@@ -72,14 +75,19 @@ impl TurnRetrievalContextController {
         let memory_manager = context.memory_manager?;
         let mut memory = memory_manager.lock().await;
         memory.reset_turn();
-        memory
+        let ctx = memory
             .prefetch_retrieval_context_with_llm_rerank(
                 context.last_user_preview,
                 context.provider,
                 context.model,
                 context.retrieval_policy,
             )
-            .await
+            .await?;
+        if ctx.items.is_empty() {
+            None
+        } else {
+            Some(ctx)
+        }
     }
 
     async fn build_active_memory_context(
@@ -156,10 +164,44 @@ impl TurnRetrievalContextController {
     }
 }
 
+fn apply_memory_recall_mode(context: &mut Option<RetrievalContext>, mode: &str) {
+    let Some(ctx) = context.as_mut() else {
+        return;
+    };
+    match mode.trim().to_ascii_lowercase().as_str() {
+        "strict" => {
+            ctx.items.retain(|item| item.score >= 0.70);
+        }
+        "preference-only" | "preference_only" | "preferences" => {
+            ctx.items.retain(is_preference_memory_item);
+        }
+        _ => {}
+    }
+    ctx.token_estimate = ctx.items.iter().map(|item| item.token_estimate).sum();
+    if ctx.items.is_empty() {
+        *context = None;
+    }
+}
+
+fn is_preference_memory_item(item: &crate::engine::retrieval_context::RetrievalItem) -> bool {
+    if item.source != crate::engine::retrieval_context::RetrievalSource::Memory {
+        return false;
+    }
+    let title = item.title.to_ascii_lowercase();
+    let provenance = item.provenance.to_ascii_lowercase();
+    let content = item.content_preview.to_ascii_lowercase();
+    title.contains("preference")
+        || title.contains("collaboration style")
+        || provenance.contains("user")
+        || content.contains("preference")
+        || content.contains("collaboration style")
+        || item.content_preview.contains("偏好")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::engine::retrieval_context::RetrievalSource;
+    use crate::engine::retrieval_context::{RetrievalItem, RetrievalSource, TrustLevel};
     use crate::engine::trace::{TurnStatus, TurnTrace};
     use crate::services::api::{ChatRequest, ChatResponse};
     use async_openai::types::ChatCompletionResponseStream;
@@ -212,6 +254,83 @@ mod tests {
     }
 
     #[test]
+    fn preference_only_recall_keeps_only_preference_memory_items() {
+        let mut context = Some(RetrievalContext::new(
+            "preferences",
+            RetrievalPolicy::Project,
+        ));
+        let ctx = context.as_mut().expect("context");
+        ctx.add_item(RetrievalItem::new(
+            RetrievalSource::Project,
+            "Project index summary",
+            "src/main.rs",
+            0.90,
+            "project.index:/tmp/repo",
+            TrustLevel::High,
+        ));
+        ctx.add_item(RetrievalItem::new(
+            RetrievalSource::Session,
+            "Session previous user",
+            "Temporary debugging note",
+            0.80,
+            "session.message:s1:1",
+            TrustLevel::Medium,
+        ));
+        ctx.add_item(RetrievalItem::new(
+            RetrievalSource::Memory,
+            "Build habit",
+            "Run cargo check after edits",
+            0.85,
+            "memory.match:MEMORY.md:score=90",
+            TrustLevel::Medium,
+        ));
+        ctx.add_item(RetrievalItem::new(
+            RetrievalSource::Memory,
+            "User preference",
+            "User preference: keep final answers concise",
+            0.82,
+            "memory.match:USER.md:score=88",
+            TrustLevel::High,
+        ));
+
+        apply_memory_recall_mode(&mut context, "preference-only");
+
+        let context = context.expect("preference memory should remain");
+        assert_eq!(context.items.len(), 1);
+        assert_eq!(context.items[0].title, "User preference");
+        assert_eq!(context.item_count_by_source(RetrievalSource::Project), 0);
+        assert_eq!(context.item_count_by_source(RetrievalSource::Session), 0);
+    }
+
+    #[test]
+    fn strict_recall_filters_all_low_confidence_sources() {
+        let mut context = Some(RetrievalContext::new("strict", RetrievalPolicy::Project));
+        let ctx = context.as_mut().expect("context");
+        ctx.add_item(RetrievalItem::new(
+            RetrievalSource::Project,
+            "Project index summary",
+            "src/main.rs",
+            0.75,
+            "project.index:/tmp/repo",
+            TrustLevel::High,
+        ));
+        ctx.add_item(RetrievalItem::new(
+            RetrievalSource::Memory,
+            "Weak memory",
+            "Maybe related",
+            0.40,
+            "memory.match:MEMORY.md:score=40",
+            TrustLevel::Medium,
+        ));
+
+        apply_memory_recall_mode(&mut context, "strict");
+
+        let context = context.expect("strict context should retain high-confidence project item");
+        assert_eq!(context.items.len(), 1);
+        assert_eq!(context.items[0].title, "Project index summary");
+    }
+
+    #[test]
     fn record_context_built_preserves_trace_fields() {
         let trace = TraceCollector::new(TurnTrace::new("session-test", 1, "fix bug"));
         let context = RetrievalContext::from_project_summary(
@@ -255,6 +374,7 @@ mod tests {
             session_store: None,
             session_id: Some("session-test"),
             memory_manager: None,
+            memory_recall_mode: "balanced",
             provider: &provider,
             model: "mock-model",
             trace: &trace,

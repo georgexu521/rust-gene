@@ -138,12 +138,13 @@ impl TurnIterationController {
                     if context.loop_state.final_content.trim().is_empty() {
                         // Empty content is always bad — prompt the model.
                         if context.iteration < context.conversation.max_iterations {
-                            context.messages.push(Message::system(
-                                "Your last response was empty. Please summarize what you \
-                                 have learned from the tool results above in a few \
-                                 sentences, or call tools if you need more information."
-                                    .to_string(),
-                            ));
+                            context.messages.push(
+                                super::request_preparation_controller::recent_observation_message(
+                                    "Your last response was empty. Please summarize what you \
+                                     have learned from the tool results above in a few \
+                                     sentences, or call tools if you need more information.",
+                                ),
+                            );
                             context.trace.record(TraceEvent::WorkflowFallback {
                                 error: "empty assistant response — injecting retry prompt"
                                     .to_string(),

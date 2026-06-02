@@ -122,7 +122,7 @@ impl FocusedRepairRecoveryController {
         prompt: impl Into<String>,
     ) {
         let prompt = prompt.into();
-        messages.push(Message::system(prompt.clone()));
+        messages.push(super::request_preparation_controller::recent_observation_message(&prompt));
         tool_results_text.push('\n');
         tool_results_text.push_str(&prompt);
     }

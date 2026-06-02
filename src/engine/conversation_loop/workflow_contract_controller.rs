@@ -183,14 +183,9 @@ impl WorkflowContractController {
         );
         context.task_bundle.apply_workflow_judgment(judgment);
         context.code_workflow.refresh_policy(context.task_bundle);
-        let insert_at = context
-            .messages
-            .iter()
-            .take_while(|message| matches!(message, Message::System { .. }))
-            .count();
         context
             .messages
-            .insert(insert_at, Message::system(context_note));
+            .push(super::request_preparation_controller::recent_observation_message(&context_note));
     }
 
     pub(super) fn record_analysis_error(trace: &TraceCollector, err: &anyhow::Error) {

@@ -153,6 +153,9 @@ pub struct ConversationLoopBuilder {
     hook_manager: Option<std::sync::Arc<self::hooks::ToolHookManager>>,
     permission_mode: crate::permissions::PermissionMode,
     session_permission_rules: crate::permissions::PermissionRules,
+    memory_use_enabled: bool,
+    memory_generate_enabled: bool,
+    memory_recall_mode: String,
     llm_memory_extraction: bool,
     approval_channel: Option<std::sync::Arc<self::conversation_loop::ToolApprovalChannel>>,
     allowed_tools: Option<std::collections::HashSet<String>>,
@@ -190,6 +193,9 @@ impl ConversationLoopBuilder {
             hook_manager: None,
             permission_mode: crate::permissions::PermissionMode::AutoAll,
             session_permission_rules: crate::permissions::PermissionRules::new(),
+            memory_use_enabled: true,
+            memory_generate_enabled: true,
+            memory_recall_mode: "balanced".to_string(),
             llm_memory_extraction: false,
             approval_channel: None,
             allowed_tools: None,
@@ -271,6 +277,21 @@ impl ConversationLoopBuilder {
 
     pub fn with_llm_memory_extraction(mut self, enabled: bool) -> Self {
         self.llm_memory_extraction = enabled;
+        self
+    }
+
+    pub fn with_memory_use(mut self, enabled: bool) -> Self {
+        self.memory_use_enabled = enabled;
+        self
+    }
+
+    pub fn with_memory_generate(mut self, enabled: bool) -> Self {
+        self.memory_generate_enabled = enabled;
+        self
+    }
+
+    pub fn with_memory_recall_mode(mut self, mode: impl Into<String>) -> Self {
+        self.memory_recall_mode = mode.into();
         self
     }
 
@@ -373,6 +394,9 @@ impl ConversationLoopBuilder {
         .with_temperature(self.temperature)
         .with_permission_mode(self.permission_mode)
         .with_session_permission_rules(self.session_permission_rules)
+        .with_memory_use(self.memory_use_enabled)
+        .with_memory_generate(self.memory_generate_enabled)
+        .with_memory_recall_mode(self.memory_recall_mode)
         .with_llm_memory_extraction(self.llm_memory_extraction)
         .with_agent_mode(self.agent_mode);
 

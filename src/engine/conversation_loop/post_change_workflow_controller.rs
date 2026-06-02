@@ -174,7 +174,7 @@ fn append_system_text(tool_results_text: &mut String, messages: &mut Vec<Message
             tool_results_text.push_str("\n\n");
         }
         tool_results_text.push_str(&text);
-        messages.push(Message::system(text));
+        messages.push(super::request_preparation_controller::recent_observation_message(&text));
     }
 }
 

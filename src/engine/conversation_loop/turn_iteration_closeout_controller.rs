@@ -24,7 +24,7 @@ impl TurnIterationCloseoutController {
         context: TurnIterationCloseoutContext<'_>,
     ) -> TurnIterationCloseoutOutcome {
         MemorySyncController::sync_turn(MemorySyncContext {
-            memory_manager: context.conversation.memory_manager.as_ref(),
+            memory_manager: context.conversation.memory_manager_for_generate(),
             llm_memory_extraction: context.conversation.llm_memory_extraction,
             provider: Some(context.conversation.provider.clone()),
             model: &context.conversation.model,

@@ -28,6 +28,7 @@ pub(super) struct FinalCloseoutContext<'a> {
     pub(super) iterations_used: usize,
     pub(super) max_iterations: usize,
     pub(super) evidence_ledger: &'a EvidenceLedger,
+    pub(super) memory_generate_enabled: bool,
     pub(super) tx: Option<&'a mpsc::Sender<super::super::streaming::StreamEvent>>,
 }
 
@@ -319,19 +320,30 @@ impl FinalCloseoutController {
                 .task_contract(context.required_validation_commands);
             let report = ExecutionReport::from_closeout(&contract, &closeout);
             let _ = ProjectProgressLedger::default().append_execution_report(&report);
-            let memory_proposal = MemoryProposal::from_execution_report(&report);
-            let proposal_store = MemoryProposalReviewStore::default();
-            let recent_proposals = proposal_store.list();
-            let _ = proposal_store.upsert(&memory_proposal);
-            let background_packet =
-                BackgroundReviewPacket::from_execution_report(&report, &recent_proposals);
-            let background_output =
-                BackgroundMemoryReviewWorker::review_execution_report(&background_packet, &report);
-            let background_proposal = BackgroundMemoryReviewWorker::proposal_from_output(
-                &background_packet,
-                background_output,
-            );
-            let _ = proposal_store.upsert(&background_proposal);
+            let memory_proposal = context
+                .memory_generate_enabled
+                .then(|| MemoryProposal::from_execution_report(&report));
+            let background_proposal = if context.memory_generate_enabled {
+                let proposal_store = MemoryProposalReviewStore::default();
+                let recent_proposals = proposal_store.list();
+                if let Some(memory_proposal) = memory_proposal.as_ref() {
+                    let _ = proposal_store.upsert(memory_proposal);
+                }
+                let background_packet =
+                    BackgroundReviewPacket::from_execution_report(&report, &recent_proposals);
+                let background_output = BackgroundMemoryReviewWorker::review_execution_report(
+                    &background_packet,
+                    &report,
+                );
+                let background_proposal = BackgroundMemoryReviewWorker::proposal_from_output(
+                    &background_packet,
+                    background_output,
+                );
+                let _ = proposal_store.upsert(&background_proposal);
+                Some(background_proposal)
+            } else {
+                None
+            };
             context.trace.record(TraceEvent::ExecutionReportPrepared {
                 task_id: report.task_id.clone(),
                 status: report.status.label().to_string(),
@@ -340,26 +352,41 @@ impl FinalCloseoutController {
                 risks: report.risks.len(),
                 next_steps: report.next_steps.len(),
             });
-            context.trace.record(TraceEvent::MemoryProposalPrepared {
-                task_id: memory_proposal.task_id.clone(),
-                status: memory_proposal.status.label().to_string(),
-                candidates: memory_proposal.candidates.len(),
-                candidate_kinds: memory_proposal.candidate_kinds(),
-                evidence_items: memory_proposal.evidence_items(),
-                write_policy: memory_proposal.write_policy.clone(),
-                write_performed: memory_proposal.write_performed,
-                reason: memory_proposal.reason.clone(),
-            });
-            context.trace.record(TraceEvent::MemoryProposalPrepared {
-                task_id: background_proposal.task_id.clone(),
-                status: background_proposal.status.label().to_string(),
-                candidates: background_proposal.candidates.len(),
-                candidate_kinds: background_proposal.candidate_kinds(),
-                evidence_items: background_proposal.evidence_items(),
-                write_policy: background_proposal.write_policy.clone(),
-                write_performed: background_proposal.write_performed,
-                reason: background_proposal.reason.clone(),
-            });
+            if let Some(memory_proposal) = memory_proposal.as_ref() {
+                context.trace.record(TraceEvent::MemoryProposalPrepared {
+                    task_id: memory_proposal.task_id.clone(),
+                    status: memory_proposal.status.label().to_string(),
+                    candidates: memory_proposal.candidates.len(),
+                    candidate_kinds: memory_proposal.candidate_kinds(),
+                    evidence_items: memory_proposal.evidence_items(),
+                    write_policy: memory_proposal.write_policy.clone(),
+                    write_performed: memory_proposal.write_performed,
+                    reason: memory_proposal.reason.clone(),
+                });
+            } else {
+                context.trace.record(TraceEvent::MemoryProposalPrepared {
+                    task_id: report.task_id.clone(),
+                    status: "skipped".to_string(),
+                    candidates: 0,
+                    candidate_kinds: Vec::new(),
+                    evidence_items: 0,
+                    write_policy: "generation_disabled".to_string(),
+                    write_performed: false,
+                    reason: "memory.generate is off for this session".to_string(),
+                });
+            }
+            if let Some(background_proposal) = background_proposal.as_ref() {
+                context.trace.record(TraceEvent::MemoryProposalPrepared {
+                    task_id: background_proposal.task_id.clone(),
+                    status: background_proposal.status.label().to_string(),
+                    candidates: background_proposal.candidates.len(),
+                    candidate_kinds: background_proposal.candidate_kinds(),
+                    evidence_items: background_proposal.evidence_items(),
+                    write_policy: background_proposal.write_policy.clone(),
+                    write_performed: background_proposal.write_performed,
+                    reason: background_proposal.reason.clone(),
+                });
+            }
             context.runtime_diet.closeout_visibility =
                 format!("{:?}", closeout.visibility_from_env()).to_ascii_lowercase();
             context.runtime_diet.validation_evidence = runtime_validation_label
@@ -368,10 +395,12 @@ impl FinalCloseoutController {
             let closeout_text = if structured_closeout_runtime_profile_enabled() {
                 let mut text = format!("Task contract: {}\n", contract.compact_summary());
                 text.push_str(&closeout.format_for_final_response());
-                let memory_proposal_text = memory_proposal.format_for_final_response();
-                if !memory_proposal_text.is_empty() {
-                    text.push_str(&memory_proposal_text);
-                    text.push('\n');
+                if let Some(memory_proposal) = memory_proposal.as_ref() {
+                    let memory_proposal_text = memory_proposal.format_for_final_response();
+                    if !memory_proposal_text.is_empty() {
+                        text.push_str(&memory_proposal_text);
+                        text.push('\n');
+                    }
                 }
                 text
             } else {
@@ -783,6 +812,7 @@ mod tests {
             iterations_used: 1,
             max_iterations: 10,
             evidence_ledger: &evidence_ledger,
+            memory_generate_enabled: true,
             tx: None,
         })
         .await;
@@ -863,6 +893,7 @@ mod tests {
             iterations_used: 1,
             max_iterations: 10,
             evidence_ledger: &evidence_ledger,
+            memory_generate_enabled: true,
             tx: None,
         })
         .await;
@@ -937,6 +968,7 @@ mod tests {
             iterations_used: 1,
             max_iterations: 10,
             evidence_ledger: &evidence_ledger,
+            memory_generate_enabled: true,
             tx: None,
         })
         .await;
@@ -1009,6 +1041,7 @@ mod tests {
             iterations_used: 1,
             max_iterations: 10,
             evidence_ledger: &evidence_ledger,
+            memory_generate_enabled: true,
             tx: None,
         })
         .await;

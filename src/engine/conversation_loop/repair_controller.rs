@@ -141,7 +141,11 @@ impl ConversationLoop {
             let repair_spec_text = repair_spec.format_for_prompt();
             context.tool_results_text.push('\n');
             context.tool_results_text.push_str(&repair_spec_text);
-            context.messages.push(Message::system(repair_spec_text));
+            context.messages.push(
+                super::request_preparation_controller::recent_observation_message(
+                    &repair_spec_text,
+                ),
+            );
         }
 
         post_edit_reflection
@@ -204,7 +208,11 @@ impl ConversationLoop {
                 let debugging_text = debugging.format_for_prompt();
                 context.tool_results_text.push('\n');
                 context.tool_results_text.push_str(&debugging_text);
-                context.messages.push(Message::system(debugging_text));
+                context.messages.push(
+                    super::request_preparation_controller::recent_observation_message(
+                        &debugging_text,
+                    ),
+                );
             }
             Err(err) => {
                 warn!("Guided validation debugging failed: {}", err);
@@ -337,7 +345,9 @@ impl ConversationLoop {
                 let review_text = review.format_for_prompt();
                 context.tool_results_text.push('\n');
                 context.tool_results_text.push_str(&review_text);
-                context.messages.push(Message::system(review_text.clone()));
+                context.messages.push(
+                    super::request_preparation_controller::recent_observation_message(&review_text),
+                );
                 if !review_accepted
                     && matches!(
                         review_next_action,
@@ -389,11 +399,16 @@ impl ConversationLoop {
                     let repair_spec_text = repair_spec.format_for_prompt();
                     context.tool_results_text.push('\n');
                     context.tool_results_text.push_str(&repair_spec_text);
-                    context.messages.push(Message::system(repair_spec_text));
-                    context.messages.push(Message::system(
-                        "Acceptance review did not pass. If verification or compile errors are present, fix those first using the latest verification source context; only then address the unresolved acceptance items. Continue repair if possible; otherwise report the unresolved items clearly."
-                            .to_string(),
-                    ));
+                    context.messages.push(
+                        super::request_preparation_controller::recent_observation_message(
+                            &repair_spec_text,
+                        ),
+                    );
+                    context.messages.push(
+                        super::request_preparation_controller::recent_observation_message(
+                            "Acceptance review did not pass. If verification or compile errors are present, fix those first using the latest verification source context; only then address the unresolved acceptance items. Continue repair if possible; otherwise report the unresolved items clearly.",
+                        ),
+                    );
                     if high_risk
                         && (*context.acceptance_repair_attempts
                             > context.code_workflow.max_repair_attempts()
@@ -427,10 +442,11 @@ impl ConversationLoop {
                             *context.action_checkpoint_active = false;
                             *context.action_checkpoint_lookup_count = 0;
                             *context.file_edit_failure_retry_used = false;
-                            context.messages.push(Message::system(
-                                "Acceptance review gaps remain after compile/code review checks. Restore investigation mode: inspect the unresolved acceptance items against the implementation, identify every acceptance-critical bypass or missing call site, then make the smallest targeted fix. If multiple independent acceptance-critical bypasses are visible, fix them together."
-                                    .to_string(),
-                            ));
+                            context.messages.push(
+                                super::request_preparation_controller::recent_observation_message(
+                                    "Acceptance review gaps remain after compile/code review checks. Restore investigation mode: inspect the unresolved acceptance items against the implementation, identify every acceptance-critical bypass or missing call site, then make the smallest targeted fix. If multiple independent acceptance-critical bypasses are visible, fix them together.",
+                                ),
+                            );
                             context.trace.record(TraceEvent::WorkflowFallback {
                                 error:
                                     "acceptance review requested broader repair; restored read/search tools for acceptance-gap investigation"
@@ -442,10 +458,11 @@ impl ConversationLoop {
                                 ConversationLoop::ACTION_CHECKPOINT_TARGETED_LOOKUP_BUDGET;
                             *context.file_edit_failure_retry_used = false;
                             *context.action_checkpoint_requires_patch_before_validation = true;
-                            context.messages.push(Message::system(
-                                "Repair must patch before validation: the latest verification/acceptance evidence already shows the current diff is invalid. Use file_edit/file_write first; run bash validation only after that new patch succeeds."
-                                    .to_string(),
-                            ));
+                            context.messages.push(
+                                super::request_preparation_controller::recent_observation_message(
+                                    "Repair must patch before validation: the latest verification/acceptance evidence already shows the current diff is invalid. Use file_edit/file_write first; run bash validation only after that new patch succeeds.",
+                                ),
+                            );
                             context.trace.record(TraceEvent::WorkflowFallback {
                                 error:
                                     "acceptance review requested repair; switching to action-only repair mode"

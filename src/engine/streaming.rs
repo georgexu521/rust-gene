@@ -188,6 +188,12 @@ pub struct StreamingQueryEngine {
     permission_mode: Arc<RwLock<crate::permissions::PermissionMode>>,
     /// 当前 CLI 会话内临时权限规则
     session_permission_rules: Arc<RwLock<crate::permissions::PermissionRules>>,
+    /// Whether existing memory may be used for request context in this session.
+    memory_use: std::sync::atomic::AtomicBool,
+    /// Whether this session may generate future memory proposals/sync output.
+    memory_generate: std::sync::atomic::AtomicBool,
+    /// Dynamic memory recall mode for this session.
+    memory_recall_mode: Arc<RwLock<String>>,
     /// 是否启用 LLM 驱动的记忆提取（可运行时切换）
     llm_memory_extraction: std::sync::atomic::AtomicBool,
     /// 工具授权通道（用于交互式 MCP 授权）
@@ -243,6 +249,9 @@ impl StreamingQueryEngine {
             session_permission_rules: Arc::new(RwLock::new(
                 crate::permissions::PermissionRules::new(),
             )),
+            memory_use: std::sync::atomic::AtomicBool::new(true),
+            memory_generate: std::sync::atomic::AtomicBool::new(true),
+            memory_recall_mode: Arc::new(RwLock::new("balanced".to_string())),
             llm_memory_extraction: std::sync::atomic::AtomicBool::new(false),
             approval_channel: None,
             fallback_model: std::env::var("PRIORITY_AGENT_FALLBACK_MODEL").ok(),
@@ -610,13 +619,31 @@ impl StreamingQueryEngine {
 
     /// Set memory use on/off at runtime (Phase 1)
     pub fn set_memory_use(&self, enabled: bool) {
-        self.llm_memory_extraction
+        self.memory_use
+            .store(enabled, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// Set whether this session can generate future memory proposals.
+    pub fn set_memory_generate(&self, enabled: bool) {
+        self.memory_generate
             .store(enabled, std::sync::atomic::Ordering::Relaxed);
     }
 
     pub fn memory_use_enabled(&self) -> bool {
-        self.llm_memory_extraction
+        self.memory_use.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    pub fn memory_generate_enabled(&self) -> bool {
+        self.memory_generate
             .load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    pub fn set_memory_recall_mode(&self, mode: impl Into<String>) {
+        *self.memory_recall_mode.write() = mode.into();
+    }
+
+    pub fn memory_recall_mode(&self) -> String {
+        self.memory_recall_mode.read().clone()
     }
 
     /// 设置工具授权通道
@@ -862,10 +889,10 @@ impl StreamingQueryEngine {
         } else {
             self.agent_manager()
         };
-        let memory_manager = if self.memory_use_enabled() {
+        let memory_manager = if self.memory_use_enabled() || self.memory_generate_enabled() {
             self.memory_manager_or_init()
         } else {
-            self.memory_manager()
+            None
         };
 
         let mut engine = StreamingEngineInner {
@@ -889,7 +916,13 @@ impl StreamingQueryEngine {
             cost_tracker: self.cost_tracker.clone(),
             permission_mode: self.permission_mode(),
             session_permission_rules: self.session_permission_rules.clone(),
-            llm_memory_extraction: self.memory_use_enabled(),
+            memory_use_enabled: self.memory_use_enabled(),
+            memory_generate_enabled: self.memory_generate_enabled(),
+            memory_recall_mode: self.memory_recall_mode(),
+            llm_memory_extraction: self.memory_generate_enabled()
+                && self
+                    .llm_memory_extraction
+                    .load(std::sync::atomic::Ordering::Relaxed),
             approval_channel: self.approval_channel.clone(),
             fallback_model: self.fallback_model.clone(),
             fallback_state: None,
@@ -1210,6 +1243,9 @@ impl StreamingQueryEngine {
                                 cost_tracker: engine.cost_tracker.clone(),
                                 permission_mode: engine.permission_mode,
                                 session_permission_rules: engine.session_permission_rules.clone(),
+                                memory_use_enabled: engine.memory_use_enabled,
+                                memory_generate_enabled: engine.memory_generate_enabled,
+                                memory_recall_mode: engine.memory_recall_mode.clone(),
                                 llm_memory_extraction: engine.llm_memory_extraction,
                                 approval_channel: engine.approval_channel.clone(),
                                 fallback_model: None, // 防止无限 fallback
@@ -1346,7 +1382,9 @@ fn build_messages_for_turn(
     msgs.extend(history.to_vec());
     // Prepend task-focus to the last user message in history (dynamic tail)
     if !plan.task_state.content.is_empty() {
-        if let Some(Message::User { content }) = msgs.iter_mut().rfind(|m| matches!(m, Message::User { .. })) {
+        if let Some(Message::User { content }) =
+            msgs.iter_mut().rfind(|m| matches!(m, Message::User { .. }))
+        {
             *content = format!(
                 "<task-focus>\n{}\n</task-focus>\n\n{}",
                 plan.task_state.content.trim(),
@@ -1440,6 +1478,9 @@ struct StreamingEngineInner {
     cost_tracker: Arc<tokio::sync::Mutex<crate::cost_tracker::CostTracker>>,
     permission_mode: crate::permissions::PermissionMode,
     session_permission_rules: Arc<RwLock<crate::permissions::PermissionRules>>,
+    memory_use_enabled: bool,
+    memory_generate_enabled: bool,
+    memory_recall_mode: String,
     llm_memory_extraction: bool,
     approval_channel: Option<Arc<crate::engine::conversation_loop::ToolApprovalChannel>>,
     fallback_model: Option<String>,
@@ -1559,6 +1600,9 @@ impl StreamingEngineInner {
         .with_max_iterations(self.max_iterations)
         .with_permission_mode(self.permission_mode)
         .with_session_permission_rules(self.session_permission_rules.read().clone())
+        .with_memory_use(self.memory_use_enabled)
+        .with_memory_generate(self.memory_generate_enabled)
+        .with_memory_recall_mode(self.memory_recall_mode.clone())
         .with_llm_memory_extraction(self.llm_memory_extraction)
         .with_compressor(self.compressor.clone())
         .with_trace_store(self.trace_store.clone())

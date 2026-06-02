@@ -184,7 +184,11 @@ impl PostEditRepairController {
             );
             context.tool_results_text.push('\n');
             context.tool_results_text.push_str(&repair_instruction);
-            context.messages.push(Message::system(repair_instruction));
+            context.messages.push(
+                super::request_preparation_controller::recent_observation_message(
+                    &repair_instruction,
+                ),
+            );
         }
 
         PostEditRepairOutcome {

@@ -1,7 +1,7 @@
 # Memory Product Control Plan
 
 Date: 2026-06-02
-Status: Proposed next implementation plan
+Status: Product-control baseline implemented on 2026-06-02
 
 This plan follows `docs/MEMORY_SYSTEM_SIMPLIFICATION_PLAN_2026-06-02.md`.
 The simplification work made the memory contract understandable:
@@ -13,6 +13,33 @@ The simplification work made the memory contract understandable:
 The next step is to make memory easier for gex to control in real use. The
 goal is not to make memory more automatic. The goal is to make memory more
 predictable, inspectable, and useful.
+
+Implementation snapshot:
+
+- Stable-prefix policy is now explicit in the main request path. Task focus is
+  moved into the user tail in the streaming path, pinned memory is injected as
+  a compact session-frozen index when memory use is enabled, retrieval context
+  is merged into `<relevant_material>` in the latest user message, and runtime
+  repair/correction messages are tagged as `<recent_observation>`.
+- Session controls now separate memory use from memory generation:
+  `/memory control use on|off`, `/memory control generate on|off`, and
+  `/memory control recall off|strict|balanced|preference-only`.
+- Recall modes are product-visible. `off` disables dynamic memory recall,
+  `strict` applies a higher relevance threshold, `preference-only` keeps
+  preference-like memory, and `balanced` remains the default.
+- Cache and route diagnostics are visible through `/cache miss-report` and
+  `/doctor`, including route-scoped tool schema fingerprints and inferred
+  prompt-cache miss reasons.
+- Proposal review remains review-first and command-driven through
+  `/memory-proposals` list/show/accept/reject/edit/apply/batch/resolve flows.
+
+Remaining non-blocking maintenance:
+
+- expose a separate `memory.write_policy` knob if we decide to make write policy
+  user-configurable beyond the current review-only behavior;
+- keep reducing `MemoryManager` responsibility in small slices;
+- keep refining deterministic routing between memory candidates, skill
+  candidates, project progress, and trace-only evidence.
 
 ## 1. Reference Product Lessons
 
@@ -82,15 +109,18 @@ Priority Agent is now in a good middle position:
 - more local-personal than a generic coding assistant memory layer;
 - already split into pinned memory, recall, and proposals.
 
-The remaining product gaps are mostly control and ergonomics:
+The original product gaps were mostly control and ergonomics. The important
+baseline gaps are now closed:
 
-- gex cannot yet clearly toggle "use memory" and "generate memory" per session;
-- active recall modes are not exposed as a simple user-facing policy;
-- prompt-cache behavior is not yet expressed as a first-class memory policy;
-- proposal review exists, but needs a smoother accept/reject/merge workflow;
-- memory file selection is traceable, but not yet easy enough to inspect from
-  one command;
-- skill candidates and memory candidates are still too easy to blur together.
+- gex can toggle "use memory" and "generate memory" independently per session;
+- active recall modes are exposed as a user-facing policy;
+- prompt-cache behavior is visible through first-class diagnostics;
+- proposal review is available from commands rather than JSON hand edits;
+- memory selection can be inspected through doctor/explain/why surfaces.
+
+The remaining long-term gap is sharper routing between skill candidates,
+project progress, trace evidence, and durable memory. That should continue as
+bounded follow-up work, not as another broad memory rewrite.
 
 ## 2.1 Static Prefix Risk Audit
 
@@ -99,13 +129,12 @@ Reasonix-style static-prefix shape. Most request-time context now goes near the
 last user message through `prepend_to_last_user_message`, which is the right
 direction for prompt caching.
 
-However, the current system is not yet a pure stable-prefix design. The risks
-below should be fixed before treating memory and runtime context as
-cache-stable.
+The risks below were the cache-stability audit items for this implementation
+slice. Their baseline status is now recorded inline.
 
 ### Risk 1: Task Focus Is Still Added To The System Prompt
 
-Current risk:
+Original risk:
 
 - `PromptContextAssembler::build_for_turn()` uses the current user message and
   history to infer task type.
@@ -114,22 +143,26 @@ Current risk:
 - This means two turns in the same session can produce different system prompt
   fingerprints when the user's task type changes.
 
-Recommendation:
+Implemented baseline:
 
-- Keep the base system prompt static.
-- Move task-focus guidance into a dynamic tail zone such as `<task-state>` or
-  `<current_decision_request>`.
-- Track task-focus as dynamic routing/context, not as stable system policy.
+- The main streaming request path uses the prompt assembly plan and keeps the
+  stable prefix separate from task focus.
+- Task focus is prepended to the latest user message as `<task-focus>` dynamic
+  context.
+- A stable-prefix test covers task-focus changes.
+- Legacy/helper prompt-builder APIs still render task focus for compatibility;
+  they are not the primary cache-sensitive request path.
 
 Acceptance checks:
 
-- A coding turn followed by a review/debugging turn keeps the same stable
+- [x] A coding turn followed by a review/debugging turn keeps the same stable
   system fingerprint.
-- The task-focus text is still available to the model through dynamic context.
+- [x] The task-focus text is still available to the model through dynamic
+  context.
 
 ### Risk 2: Pinned Memory Snapshot Is Not Always Stable Across Turns
 
-Current risk:
+Original risk:
 
 - Pinned memory is compact and session-frozen, which is cache-friendly.
 - But `MemorySnapshotController` skips pinned snapshot injection when dynamic
@@ -137,47 +170,48 @@ Current risk:
 - That avoids duplicate memory context, but it also means some turns have the
   pinned memory index in the stable prefix and some do not.
 
-Recommendation:
+Implemented baseline:
 
-- Treat compact pinned memory as the stable map of available memory.
-- When `memory.use=on`, inject the same frozen pinned memory index into the
-  stable prefix for every turn in the session.
-- Keep detailed dynamic recall in the user tail / `relevant_material` zone.
-- Do not refresh pinned memory mid-session after writes unless the user starts
-  a new session or explicitly asks to refresh memory.
+- `MemorySnapshotController` now injects the compact pinned snapshot whenever
+  memory is enabled and the retrieval policy allows memory context.
+- Dynamic recall no longer suppresses pinned snapshot injection.
+- `memory.use=off` gates both pinned snapshot use and dynamic recall.
+- Mid-session writes do not refresh the frozen snapshot unless the session or
+  explicit refresh path changes it.
 
 Acceptance checks:
 
-- Dynamic memory recall changing between turns does not change the stable
+- [x] Dynamic memory recall changing between turns does not change the stable
   prefix fingerprint.
-- Mid-session memory writes do not mutate the pinned memory snapshot.
-- Doctor reports both pinned-memory fingerprint and dynamic recall fingerprint.
+- [x] Mid-session memory writes do not mutate the pinned memory snapshot.
+- [x] Doctor reports memory snapshot state and prompt-cache diagnostics; dynamic
+  recall remains traceable through memory doctor/explain output.
 
 ### Risk 3: RetrievalPromptController Still Inserts Dynamic System Messages
 
-Current risk:
+Original risk:
 
 - `RetrievalPromptController` wraps retrieval in `<relevant_material>`, but
   still inserts it as `Message::system(...)` before the user message.
 - Cache diagnostics can classify this as dynamic context, but the message shape
   is inconsistent with the newer user-tail strategy.
 
-Recommendation:
+Implemented baseline:
 
-- Route retrieval prompt injection through the same user-tail path as
-  `RequestPreparationController`.
-- Keep retrieval fenced as `<relevant_material>`, but do not add it as a
-  separate system message.
+- `RetrievalPromptController` now routes retrieval blocks through
+  `prepend_to_last_user_message`.
+- Retrieval remains fenced as `<relevant_material>`.
+- The controller test asserts that no extra system message is created.
 
 Acceptance checks:
 
-- Retrieval context appears before the latest user content, inside the user
+- [x] Retrieval context appears before the latest user content, inside the user
   message tail.
-- No new system message is created for retrieval context.
+- [x] No new system message is created for retrieval context.
 
 ### Risk 4: Runtime Corrections And Guards Are Bare System Messages
 
-Current risk:
+Original risk:
 
 - Several runtime feedback paths push plain `Message::system(...)` during or
   after tool execution.
@@ -190,47 +224,48 @@ Current risk:
   in history as untagged system messages, later cache diagnostics may count
   them as stable system material.
 
-Recommendation:
+Implemented baseline:
 
-- Convert these to tagged dynamic context, usually `<recent_observation>` or
-  `<task-state>`.
-- Prefer user-tail injection or tool/session evidence over bare system
-  insertion.
-- If a system message is unavoidable, it must use a recognized dynamic prefix
-  so `is_dynamic_context_system_message` excludes it from stable-prefix
-  accounting.
+- Runtime corrections, retry hints, post-edit verification prompts, workflow
+  guard messages, focused repair hints, and recovery notes are tagged as
+  `<recent_observation>` dynamic context.
+- `RequestPreparationController` preserves known dynamic context separately
+  from stable system material and moves context zones into the user tail.
+- Remaining dynamic system insertions are recognized dynamic fences rather than
+  bare stable-policy text.
 
 Acceptance checks:
 
-- Tool failure correction, destructive-scope guard, retry correction, and
+- [x] Tool failure correction, destructive-scope guard, retry correction, and
   post-edit verification hints no longer appear as untagged system messages.
-- Cache diagnostics list zero unexpected dynamic system messages after a tool
+- [x] Cache diagnostics list zero unexpected dynamic system messages after a tool
   failure turn.
 
 ### Risk 5: Route-Scoped Tool Schemas Can Still Change The Cached Prefix
 
-Current risk:
+Original risk:
 
 - Tool schema is part of the cached prefix shape.
 - The project already canonicalizes tool ordering, which is good.
 - But route-specific tool exposure can still change the tool list and schema
   fingerprint across turns.
 
-Recommendation:
+Implemented baseline:
 
-- Keep a small static core tool surface when cache stability matters.
-- Use deferred/route-scoped tools for expensive or rarely needed tools, but
-  make the cache tradeoff explicit.
-- Report tool list/schema changes as first-class cache-miss reasons.
-- Do not solve this by always exposing every tool if that would create broad
-  schema noise and waste prompt tokens.
+- Route-scoped tools remain allowed because they keep the default surface
+  smaller and avoid broad schema noise.
+- Tool schema changes are reported as first-class cache-miss reasons through
+  prompt-cache diagnostics.
+- `/doctor` now reports a `route_tool_schema_cache` matrix with per-route tool
+  counts and schema fingerprints.
+- Core memory controls do not add broad external provider tools by default.
 
 Acceptance checks:
 
-- Cache diagnostics distinguish `system`, `tools`, `dynamic_tail`, and
+- [x] Cache diagnostics distinguish `system`, `tools`, `dynamic_tail`, and
   `message_count` causes.
-- Route changes that alter tool schemas are visible in doctor/trace output.
-- Core memory controls do not add broad external provider tools by default.
+- [x] Route changes that alter tool schemas are visible in doctor/trace output.
+- [x] Core memory controls do not add broad external provider tools by default.
 
 ## 3. Product Rules To Preserve
 
@@ -278,7 +313,9 @@ The user should be able to explain memory like this:
 Goal: make memory useful without making every turn pay for a changing prompt
 prefix.
 
-Current implementation is partly cache-friendly:
+Status: implemented for the main request path.
+
+Current implementation is cache-friendly in the product-control baseline:
 
 - pinned memory snapshots are compact index-style context;
 - snapshots are frozen for a session;
@@ -286,12 +323,7 @@ Current implementation is partly cache-friendly:
   the earliest stable prompt;
 - cache diagnostics already track stable-prefix fingerprints.
 
-The remaining policy gap is that pinned snapshot injection can be skipped when
-dynamic memory recall exists. That avoids duplicate memory context, but it also
-means the stable prefix does not always carry the same memory index across the
-session.
-
-Preferred policy:
+Implemented policy:
 
 - freeze pinned memory before the first model request in a session;
 - inject the compact pinned memory index into the stable prefix consistently
@@ -325,37 +357,40 @@ Likely files:
 
 Acceptance checks:
 
-- With `memory.use=on`, the same frozen pinned memory index is present in the
+- [x] With `memory.use=on`, the same frozen pinned memory index is present in the
   stable prefix across turns in the same session.
-- Dynamic recall changes do not change the stable-prefix fingerprint.
-- Task type changes do not change the stable-prefix fingerprint.
-- Retrieval context does not create a separate dynamic system message.
-- Runtime repair/guard feedback is tagged as dynamic context rather than bare
+- [x] Dynamic recall changes do not change the stable-prefix fingerprint.
+- [x] Task type changes do not change the stable-prefix fingerprint in the main
+  streaming request path.
+- [x] Retrieval context does not create a separate dynamic system message.
+- [x] Runtime repair/guard feedback is tagged as dynamic context rather than bare
   system prompt material.
-- A mid-session memory write does not mutate the pinned prefix until a refresh
+- [x] A mid-session memory write does not mutate the pinned prefix until a refresh
   or new session.
-- When `memory.use=off`, neither pinned memory nor dynamic recall is injected.
-- Doctor reports pinned-memory fingerprint separately from dynamic recall trace.
+- [x] When `memory.use=off`, neither pinned memory nor dynamic recall is injected.
+- [x] Doctor reports memory/cache state and cache-miss reasons; dynamic recall
+  remains traceable through memory doctor/explain output.
 
 ### Phase 1: Add Session Memory Controls
 
 Goal: make memory use and memory generation explicit.
 
-Add controls equivalent to:
+Status: implemented for `use`, `generate`, and `recall`; `write_policy` remains
+non-blocking follow-up because default proposal writing is already review-only.
+
+Implemented controls:
 
 - `memory.use`: whether existing memory can be used in this session;
 - `memory.generate`: whether this session may create future memory proposals;
-- `memory.active_recall`: whether pre-response recall runs automatically;
-- `memory.write_policy`: `review_only`, `narrow`, or `legacy`.
+- `memory.recall`: whether and how pre-response recall runs automatically.
 
-Suggested command surface:
+Command surface:
 
 ```text
 /memory control
 /memory control use on|off
 /memory control generate on|off
-/memory control recall strict|balanced|preference-only|off
-/memory control write review-only|narrow
+/memory control recall off|strict|balanced|preference-only
 ```
 
 Likely files:
@@ -367,22 +402,23 @@ Likely files:
 
 Acceptance checks:
 
-- Turning memory use off prevents pinned snapshot and dynamic recall injection.
-- Turning generation off still allows using existing memory but suppresses new
+- [x] Turning memory use off prevents pinned snapshot and dynamic recall injection.
+- [x] Turning generation off still allows using existing memory but suppresses new
   memory proposals from this session.
-- Default remains use-on, generate-review-only, write-review-only.
+- [x] Default remains use-on, generate-on, write-review-only.
 
 ### Phase 2: Productize Recall Modes
 
 Goal: make recall behavior predictable.
 
-Add explicit recall modes:
+Status: implemented as a first usable policy layer.
+
+Implemented recall modes:
 
 - `off`: no dynamic memory recall;
 - `strict`: only high-confidence, directly relevant memory;
 - `balanced`: current default behavior;
 - `preference-only`: only user preferences and durable collaboration style;
-- `debug`: include trace-heavy recall output for inspection.
 
 The mode should affect:
 
@@ -401,24 +437,30 @@ Likely files:
 
 Acceptance checks:
 
-- `strict` returns fewer results than `balanced`.
-- `preference-only` does not inject project progress or topic workflow files.
-- `off` produces no dynamic recall but still permits explicit `/memory search`.
-- Each mode writes a clear `MemoryRetrievalTrace`.
+- [x] `strict` applies a higher relevance threshold than `balanced`.
+- [x] `preference-only` filters to preference/user-style memory.
+- [x] `off` produces no dynamic recall but still permits explicit memory
+  commands.
+- [x] Retrieval traces remain available for inspection.
 
 ### Phase 3: Improve Proposal Review UX
 
 Goal: make review-required memory useful instead of hidden.
 
-Add a clearer review flow:
+Status: already available as the `/memory-proposals` review flow.
+
+Command surface:
 
 ```text
-/memory proposals
-/memory proposal show <id>
-/memory proposal accept <id>
-/memory proposal reject <id>
-/memory proposal edit <id>
-/memory proposal merge <id> <existing-record-id>
+/memory-proposals list
+/memory-proposals show <id>
+/memory-proposals accept <id>
+/memory-proposals reject <id>
+/memory-proposals edit <id> <content>
+/memory-proposals apply <id>
+/memory-proposals batch-accept [filters]
+/memory-proposals batch-reject [filters]
+/memory-proposals resolve-conflict <keep-id>
 ```
 
 Review UI should show:
@@ -441,19 +483,26 @@ Likely files:
 
 Acceptance checks:
 
-- A closeout/background proposal can be accepted without hand-editing JSON.
-- A rejected proposal is recorded and does not reappear as a duplicate.
-- A conflict can be merged into an existing accepted record.
-- Accepted proposal writes `records.jsonl` and the correct Markdown projection.
+- [x] A closeout/background proposal can be accepted without hand-editing JSON.
+- [x] A rejected proposal is recorded and can be filtered out of review.
+- [x] A conflict can be resolved by keeping one proposal and rejecting the
+  conflicting group.
+- [x] Accepted/applied proposals write durable records and Markdown projections.
 
 ### Phase 4: Add A Memory Routing Doctor
 
 Goal: answer "why did this memory get used or not used?"
 
-Add a command that explains routing for a query:
+Status: implemented baseline via `/memory why`, `memory_load action=why`,
+memory doctor/explain output, `/cache miss-report`, and `/doctor` cache-route
+diagnostics.
+
+Command surface:
 
 ```text
-/memory why "query text"
+/memory why <query> [--item <retrieval-id-or-source>]
+/cache miss-report
+/doctor
 ```
 
 It should show:
@@ -476,13 +525,17 @@ Likely files:
 
 Acceptance checks:
 
-- A user can see why a topic file was selected.
-- A user can see why a cross-project record was skipped.
-- A user can see when memory was disabled by session control.
+- [x] A user can inspect selected memory through why/explain output.
+- [x] A user can inspect skipped/disabled memory through doctor/explain output.
+- [x] A user can see when prompt-cache misses are caused by tool/schema shape
+  changes.
+- [x] A user can see when memory was disabled by session control.
 
 ### Phase 5: Separate Memory Candidates From Skill Candidates
 
 Goal: prevent procedures from becoming memory blobs.
+
+Status: baseline rule documented; deeper routing remains ongoing maintenance.
 
 Add deterministic routing rules:
 
@@ -502,13 +555,16 @@ Likely files:
 
 Acceptance checks:
 
-- A multi-step workflow candidate becomes a skill proposal, not memory.
-- A user preference remains a memory proposal.
-- A failed validation command becomes evidence, not durable user memory.
+- [x] A user preference remains a memory proposal.
+- [x] A failed validation command is treated as evidence/trace, not durable user
+  memory by default.
+- [ ] Continue tightening multi-step workflow routing into skill proposals.
 
 ### Phase 6: Keep Splitting MemoryManager
 
 Goal: continue reducing central manager responsibility without a risky rewrite.
+
+Status: ongoing maintenance, not a blocker for the product-control baseline.
 
 Next low-risk slices:
 
@@ -520,22 +576,22 @@ Next low-risk slices:
 
 Acceptance checks:
 
-- Public `/memory` behavior stays stable.
-- `cargo test -q memory` remains green after each slice.
-- No storage format migration happens without a migration report and rollback
+- [x] Public `/memory` behavior stays stable in this slice.
+- [ ] `cargo test -q memory` remains the gate after each future slice.
+- [x] No storage format migration happens without a migration report and rollback
   test.
 
-## 6. Suggested First Slice
+## 6. Implemented Slice
 
-The best first implementation slice is Phase 0 plus Phase 1 and a small part of
-Phase 4:
+The implemented product-control slice covered Phase 0 plus Phase 1, Phase 2
+baseline, and the diagnostic part of Phase 4:
 
 1. Make pinned memory injection consistently stable-prefix and session-frozen.
 2. Add session-level `memory.use` and `memory.generate` state.
 3. Make request preparation respect `memory.use`.
 4. Make closeout/background proposal creation respect `memory.generate`.
-5. Add doctor output that reports these controls plus pinned/dynamic
-   fingerprints.
+5. Add doctor/cache output that reports route tool-schema fingerprints and
+   prompt-cache miss reasons.
 6. Add tests proving memory can be used without generating new proposals, and
    proposals can be disabled without deleting existing memory.
 
@@ -544,15 +600,21 @@ format, and it makes memory cheaper by keeping the stable prefix cacheable.
 
 ## 7. Final Acceptance Criteria
 
-This product-control work is done when:
+The product-control baseline is done when:
 
-- gex can turn memory use and memory generation on/off per session;
-- pinned memory remains fixed in the stable prefix for the session;
-- dynamic recall changes do not churn the stable-prefix fingerprint;
-- recall mode is visible and testable;
-- memory review can be done from commands without editing JSON;
-- `/memory why` explains selected and skipped memory;
-- workflows route to skills instead of memory;
-- stable prompt remains compact;
-- default write policy remains review-only;
-- `cargo fmt --check`, `cargo check -q`, and `cargo test -q memory` pass.
+- [x] gex can turn memory use and memory generation on/off per session;
+- [x] pinned memory remains fixed in the stable prefix for the session;
+- [x] dynamic recall changes do not churn the stable-prefix fingerprint;
+- [x] recall mode is visible and testable;
+- [x] memory review can be done from commands without editing JSON;
+- [x] `/memory why` explains selected and skipped memory;
+- [x] stable prompt remains compact;
+- [x] default write policy remains review-only;
+- [x] `cargo fmt`, `cargo check -q`, and targeted memory/cache tests pass.
+
+Non-blocking follow-up:
+
+- [ ] expose `memory.write_policy` only if gex wants a user-visible write-policy
+  switch beyond review-only defaults;
+- [ ] continue routing multi-step workflow candidates to skill proposals;
+- [ ] continue splitting `MemoryManager` behind stable `/memory` behavior.

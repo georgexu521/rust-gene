@@ -599,7 +599,7 @@ pub const CMD_MEMORY: CommandDef = CommandDef::new(
     "/memory",
     &[],
     "Memory",
-    "/memory [search|snapshot|records [--scope project]|eval|doctor|review|migrate|repair-proposals|conflicts]",
+    "/memory [control|search|why|snapshot|records [--scope project]|eval|doctor|review|migrate|repair-proposals|conflicts]",
     "Show saved memory",
 );
 

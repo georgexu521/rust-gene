@@ -112,7 +112,7 @@ impl TurnEntryGateController {
             base_context: context
                 .conversation
                 .create_tool_context_with_trace(context.trace),
-            memory_manager: context.conversation.memory_manager.as_ref(),
+            memory_manager: context.conversation.memory_manager_for_generate(),
             tx: context.tx,
             trace: context.trace,
         })

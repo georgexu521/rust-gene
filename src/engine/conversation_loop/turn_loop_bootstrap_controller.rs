@@ -58,7 +58,7 @@ impl TurnLoopBootstrapController {
         });
         TurnRequestBootstrapController::run(TurnRequestBootstrapContext {
             retrieval_policy: context.route.retrieval,
-            memory_manager: context.conversation.memory_manager.as_ref(),
+            memory_manager: context.conversation.memory_manager_for_static_memory(),
             compressor: context.conversation.compressor.as_ref(),
             session_store: context.conversation.session_store.as_ref(),
             session_id: &context.conversation.session_id,

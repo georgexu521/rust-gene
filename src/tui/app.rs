@@ -894,6 +894,31 @@ fn explain_memory_retrieval_item(
     )
 }
 
+fn parse_memory_why_args<'a>(
+    args: &'a str,
+    latest_user_message: &'a str,
+) -> Option<(&'a str, Option<&'a str>)> {
+    let args = args.trim();
+    if args.is_empty() {
+        return None;
+    }
+    if let Some(selector) = args.strip_prefix("--item ") {
+        let query = latest_user_message.trim();
+        if query.is_empty() {
+            return None;
+        }
+        return Some((query, Some(selector.trim())));
+    }
+    if let Some((query, selector)) = args.split_once(" --item ") {
+        let query = query.trim();
+        if query.is_empty() {
+            return None;
+        }
+        return Some((query, Some(selector.trim())));
+    }
+    Some((args, None))
+}
+
 fn read_git_branch_fast(cwd: &std::path::Path) -> Option<String> {
     let head_path = cwd.join(".git").join("HEAD");
     let head = std::fs::read_to_string(head_path).ok()?;
@@ -1127,6 +1152,7 @@ pub struct TuiApp {
     /// Session memory controls (Phase 1)
     pub memory_use: bool,
     pub memory_generate: bool,
+    pub memory_recall_mode: String,
     /// 是否处于暂停态（不接受新消息发送）
     pub paused: bool,
     /// 是否启用聚焦模式（仅显示 user/assistant）
@@ -1261,6 +1287,14 @@ pub struct TuiApp {
     pending_skill_invocations: Vec<PendingSkillInvocation>,
 }
 
+fn parse_on_off(value: &str) -> Option<bool> {
+    match value.to_ascii_lowercase().as_str() {
+        "on" | "true" | "yes" | "1" => Some(true),
+        "off" | "false" | "no" | "0" => Some(false),
+        _ => None,
+    }
+}
+
 impl TuiApp {
     pub fn new() -> Self {
         Self::create(None, None, None)
@@ -1354,6 +1388,7 @@ impl TuiApp {
             toasts: Vec::new(),
             memory_use: true,
             memory_generate: true,
+            memory_recall_mode: "balanced".to_string(),
             paused: false,
             focus_mode: false,
             status_bar_density: StatusBarDensity::Normal,
@@ -2033,6 +2068,8 @@ impl TuiApp {
             // Phase 1: sync session memory controls to engine
             if let Some(ref engine) = self.streaming_engine {
                 engine.set_memory_use(self.memory_use);
+                engine.set_memory_generate(self.memory_generate);
+                engine.set_memory_recall_mode(self.memory_recall_mode.clone());
             }
 
             let handle = tokio::spawn(async move {
@@ -2669,6 +2706,75 @@ impl TuiApp {
                     .split_once(' ')
                     .map(|(action, rest)| (action, rest.trim()))
                     .unwrap_or((query, ""));
+                if memory_action == "control" {
+                    let mut parts = memory_arg.split_whitespace();
+                    let Some(control) = parts.next() else {
+                        return self.add_system_message(format!(
+                            "Memory controls\n- use: {}\n- generate: {}\n- recall: {}\n\nUsage:\n- /memory control use on|off\n- /memory control generate on|off\n- /memory control recall off|strict|balanced|preference-only",
+                            if self.memory_use { "on" } else { "off" },
+                            if self.memory_generate { "on" } else { "off" },
+                            self.memory_recall_mode
+                        ));
+                    };
+                    let Some(value) = parts.next() else {
+                        return self.add_system_message(
+                            "Usage: /memory control use on|off\n       /memory control generate on|off\n       /memory control recall off|strict|balanced|preference-only"
+                                .to_string(),
+                        );
+                    };
+                    match control {
+                        "use" => {
+                            let Some(enabled) = parse_on_off(value) else {
+                                return self.add_system_message(
+                                    "Usage: /memory control use on|off".to_string(),
+                                );
+                            };
+                            self.memory_use = enabled;
+                            if let Some(ref engine) = self.streaming_engine {
+                                engine.set_memory_use(enabled);
+                            }
+                        }
+                        "generate" => {
+                            let Some(enabled) = parse_on_off(value) else {
+                                return self.add_system_message(
+                                    "Usage: /memory control generate on|off".to_string(),
+                                );
+                            };
+                            self.memory_generate = enabled;
+                            if let Some(ref engine) = self.streaming_engine {
+                                engine.set_memory_generate(enabled);
+                            }
+                        }
+                        "recall" | "active_recall" => {
+                            let mode = value.to_ascii_lowercase();
+                            if !matches!(
+                                mode.as_str(),
+                                "off" | "strict" | "balanced" | "preference-only"
+                            ) {
+                                return self.add_system_message(
+                                    "Usage: /memory control recall off|strict|balanced|preference-only"
+                                        .to_string(),
+                                );
+                            }
+                            self.memory_recall_mode = mode;
+                            if let Some(ref engine) = self.streaming_engine {
+                                engine.set_memory_recall_mode(self.memory_recall_mode.clone());
+                            }
+                        }
+                        _ => {
+                            return self.add_system_message(
+                                "Usage: /memory control use on|off\n       /memory control generate on|off\n       /memory control recall off|strict|balanced|preference-only"
+                                    .to_string(),
+                            );
+                        }
+                    }
+                    return self.add_system_message(format!(
+                        "Memory controls\n- use: {}\n- generate: {}\n- recall: {}",
+                        if self.memory_use { "on" } else { "off" },
+                        if self.memory_generate { "on" } else { "off" },
+                        self.memory_recall_mode
+                    ));
+                }
                 let latest_user_message = self
                     .messages
                     .iter()
@@ -2811,26 +2917,37 @@ impl TuiApp {
                             }
                             None => format!("No memory retrieval hits for '{}'.", search_query),
                         }
-                    } else if memory_action == "explain" {
-                        if memory_arg.is_empty() {
-                            "Usage: /memory explain <retrieval-id-or-source>".to_string()
-                        } else {
-                            let search_query = if latest_user_message.is_empty() {
-                                memory_arg
-                            } else {
-                                latest_user_message
-                            };
+                    } else if matches!(memory_action, "explain" | "why") {
+                        if let Some((search_query, selector)) =
+                            parse_memory_why_args(memory_arg, latest_user_message)
+                        {
                             match mem.preview_retrieval_context(
                                 search_query,
                                 20,
                                 crate::engine::intent_router::RetrievalPolicy::Memory,
                             ) {
-                                Some(ctx) => explain_memory_retrieval_item(&ctx, memory_arg),
+                                Some(ctx) => {
+                                    if let Err(error) =
+                                        crate::tools::memory_tool::record_last_memory_retrieval_trace(
+                                            &ctx,
+                                        )
+                                    {
+                                        warn!("failed to write last memory retrieval trace: {}", error);
+                                    }
+                                    if let Some(selector) = selector {
+                                        explain_memory_retrieval_item(&ctx, selector)
+                                    } else {
+                                        format_memory_retrieval_context(&ctx)
+                                    }
+                                }
                                 None => format!(
                                     "No memory retrieval context available for '{}'.",
                                     search_query
                                 ),
                             }
+                        } else {
+                            "Usage: /memory why <query> [--item <retrieval-id-or-source>]"
+                                .to_string()
                         }
                     } else {
                         let summary = mem.memory_summary();
@@ -4371,6 +4488,23 @@ mod tests {
                 "track token budget"
             )
         );
+    }
+
+    #[test]
+    fn test_parse_memory_why_args_defaults_to_query() {
+        assert_eq!(
+            parse_memory_why_args("cache stability", "latest user"),
+            Some(("cache stability", None))
+        );
+        assert_eq!(
+            parse_memory_why_args("cache stability --item USER.md", "latest user"),
+            Some(("cache stability", Some("USER.md")))
+        );
+        assert_eq!(
+            parse_memory_why_args("--item USER.md", "latest user"),
+            Some(("latest user", Some("USER.md")))
+        );
+        assert_eq!(parse_memory_why_args("--item USER.md", ""), None);
     }
 
     #[test]

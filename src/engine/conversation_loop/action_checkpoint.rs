@@ -342,7 +342,8 @@ impl ProgressCheckpointActionApplier {
         tool_results_text: &mut String,
         checkpoint: String,
     ) {
-        messages.push(Message::system(checkpoint.clone()));
+        messages
+            .push(super::request_preparation_controller::recent_observation_message(&checkpoint));
         tool_results_text.push('\n');
         tool_results_text.push_str(&checkpoint);
     }
