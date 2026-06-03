@@ -360,6 +360,7 @@ impl WorkflowPlanner {
             temperature: Some(0.1),
             max_tokens: Some(1000),
             thinking_budget: None,
+            retry_observer: None,
         };
 
         let response = provider.chat(request).await?;
@@ -507,6 +508,7 @@ impl WorkflowPlanner {
             temperature: Some(0.0),
             max_tokens: Some(500),
             thinking_budget: None,
+            retry_observer: None,
         };
 
         let response = provider.chat(request).await?;

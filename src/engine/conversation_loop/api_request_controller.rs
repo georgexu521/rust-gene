@@ -1,17 +1,18 @@
+use super::runtime_timeouts::{profile_driven_slow_warning, profile_driven_timeout};
 use super::session_processor::SessionStepResult;
 use super::tool_execution::{tool_call_is_concurrency_safe, tool_call_is_read_only};
 use super::turn_recording::record_recovery_plan;
 use super::ConversationLoop;
 use crate::engine::context_collapse::{CompactionDecision, ContextCompactionStrategy};
 use crate::engine::context_compressor::{estimate_messages_tokens, CompactionAttemptInput};
-use crate::engine::error_classifier::{ClassifiedError, ErrorCategory};
+use crate::engine::error_classifier::{ClassifiedError, ErrorCategory, ProviderFailureKind};
 use crate::engine::resource_policy::ResourcePolicy;
 use crate::engine::streaming::StreamEvent;
 use crate::engine::trace::{TraceCollector, TraceEvent};
 use crate::services::api::provider_protocol::{
-    provider_message_normalization_report, ProviderCapabilities,
+    provider_message_normalization_report, ProviderCapabilities, ProviderLatencyProfile,
 };
-use crate::services::api::{ChatRequest, Message, Tool, ToolCall};
+use crate::services::api::{ChatRequest, Message, ProviderRetryObserver, Tool, ToolCall};
 use crate::tools::{ToolRegistry, ToolResult};
 use anyhow::Result;
 use std::collections::{HashMap, HashSet};
@@ -120,6 +121,31 @@ impl ApiRequestController {
             let nonstreaming_tool_request = context.tx.is_some()
                 && request_has_tools
                 && provider_capabilities.requires_nonstreaming_tool_calls;
+            let latency_profile = ProviderLatencyProfile::for_request(
+                &provider_capabilities,
+                &request.model,
+                request_has_tools,
+                context.tx.is_some() && !nonstreaming_tool_request,
+                fallback_attempted,
+                request.messages.len(),
+                request_tools.len(),
+            );
+            let profile_timeout = profile_driven_timeout(&latency_profile);
+            let slow_warning_threshold = profile_driven_slow_warning(&latency_profile);
+            let actual_timeout_ms = profile_timeout.as_millis() as u64;
+            let slow_warning_threshold_ms = slow_warning_threshold.as_millis() as u64;
+            let provider_family_label = provider_capabilities.protocol_family.label().to_string();
+            let request_shape_label = latency_profile.request_shape.label().to_string();
+            context.trace.record(TraceEvent::ProviderRequestStarted {
+                provider_family: provider_family_label.clone(),
+                model: request.model.clone(),
+                request_shape: request_shape_label.clone(),
+                timeout_secs: profile_timeout.as_secs(),
+                slow_warning_threshold_secs: slow_warning_threshold.as_secs(),
+                message_count: request.messages.len(),
+                tool_count: request_tools.len(),
+                is_known_slow_path: latency_profile.is_known_slow_path(),
+            });
             if let Some(tx) = context.tx {
                 let _ = tx
                     .send(StreamEvent::RuntimeDiagnostic {
@@ -130,47 +156,256 @@ impl ApiRequestController {
                             "model": request.model.clone(),
                             "tools": request_tools.len(),
                             "streaming": !nonstreaming_tool_request,
-                            "provider_family": provider_capabilities.protocol_family.label(),
+                            "provider_family": provider_family_label.clone(),
+                            "request_shape": request_shape_label.clone(),
+                            "timeout_ms": actual_timeout_ms,
+                            "slow_warning_threshold_ms": slow_warning_threshold_ms,
+                            "is_known_slow_path": latency_profile.is_known_slow_path(),
                             "nonstreaming_tool_request": nonstreaming_tool_request,
                         }),
                     })
                     .await;
             }
             let request_started_at = Instant::now();
-            api_result = if let Some(tx) = context.tx {
-                if nonstreaming_tool_request {
-                    context.trace.record(TraceEvent::WorkflowFallback {
-                        error: "provider stream is incompatible with tool/usage chunks; using non-streaming tool request".to_string(),
+            let retry_observer: ProviderRetryObserver = {
+                let trace = context.trace.clone();
+                let tx = context.tx.cloned();
+                let provider_family = provider_family_label.clone();
+                let model = request.model.clone();
+                let request_shape = request_shape_label.clone();
+                std::sync::Arc::new(move |notice| {
+                    let elapsed_ms = request_started_at.elapsed().as_millis() as u64;
+                    let delay_ms = notice.delay.as_millis() as u64;
+                    trace.record(TraceEvent::ProviderRequestRetrying {
+                        provider_family: provider_family.clone(),
+                        model: model.clone(),
+                        request_shape: request_shape.clone(),
+                        attempt: notice.attempt,
+                        max_attempts: notice.max_attempts,
+                        delay_ms,
+                        elapsed_ms,
+                        error_preview: notice.error.clone(),
                     });
-                    context.conversation.call_api(request.clone()).await
+                    if let Some(tx) = &tx {
+                        let _ = tx.try_send(StreamEvent::RuntimeDiagnostic {
+                            diagnostic: serde_json::json!({
+                                "schema": "provider_request.v1",
+                                "stage": "provider_request_retrying",
+                                "provider_family": provider_family.clone(),
+                                "model": model.clone(),
+                                "request_shape": request_shape.clone(),
+                                "attempt": notice.attempt,
+                                "max_attempts": notice.max_attempts,
+                                "delay_ms": delay_ms,
+                                "elapsed_ms": elapsed_ms,
+                                "error_preview": notice.error.clone(),
+                            }),
+                        });
+                    }
+                })
+            };
+            request.retry_observer = Some(retry_observer);
+            let request_for_provider = request.clone();
+            let provider_request = async {
+                if let Some(tx) = context.tx {
+                    if nonstreaming_tool_request {
+                        context.trace.record(TraceEvent::WorkflowFallback {
+                            error: "provider stream is incompatible with tool/usage chunks; using non-streaming tool request".to_string(),
+                        });
+                        context
+                            .conversation
+                            .call_api_with_timeout(request_for_provider.clone(), profile_timeout)
+                            .await
+                    } else {
+                        context
+                            .conversation
+                            .call_api_streaming(
+                                request_for_provider.clone(),
+                                tx,
+                                context.trace,
+                                context.exposed_tool_names,
+                            )
+                            .await
+                    }
                 } else {
                     context
                         .conversation
-                        .call_api_streaming(
-                            request.clone(),
-                            tx,
-                            context.trace,
-                            context.exposed_tool_names,
-                        )
+                        .call_api_with_timeout(request_for_provider.clone(), profile_timeout)
                         .await
                 }
-            } else {
-                context.conversation.call_api(request.clone()).await
+            };
+            tokio::pin!(provider_request);
+            let slow_warning_sleep = tokio::time::sleep(slow_warning_threshold);
+            tokio::pin!(slow_warning_sleep);
+            let mut slow_warning_sent = false;
+            api_result = loop {
+                tokio::select! {
+                    result = &mut provider_request => break result,
+                    _ = &mut slow_warning_sleep, if !slow_warning_sent
+                        && !slow_warning_threshold.is_zero()
+                        && slow_warning_threshold < profile_timeout => {
+                        slow_warning_sent = true;
+                        let elapsed_ms = request_started_at.elapsed().as_millis() as u64;
+                        let message = if latency_profile.is_known_slow_path() {
+                            format!(
+                                "{} tool-call requests use non-streaming mode for provider protocol compatibility.",
+                                provider_capabilities.protocol_family.label()
+                            )
+                        } else {
+                            "provider request is taking longer than expected".to_string()
+                        };
+                        context.trace.record(TraceEvent::ProviderRequestSlowWarning {
+                            provider_family: provider_capabilities.protocol_family.label().to_string(),
+                            model: request.model.clone(),
+                            request_shape: latency_profile.request_shape.label().to_string(),
+                            elapsed_ms,
+                            timeout_ms: actual_timeout_ms,
+                            message: message.clone(),
+                        });
+                        if let Some(tx) = context.tx {
+                            let _ = tx
+                                .send(StreamEvent::RuntimeDiagnostic {
+                                    diagnostic: serde_json::json!({
+                                        "schema": "provider_request.v1",
+                                        "stage": "provider_request_slow_warning",
+                                        "provider_family": provider_capabilities.protocol_family.label(),
+                                        "model": request.model.clone(),
+                                        "request_shape": latency_profile.request_shape.label(),
+                                        "elapsed_ms": elapsed_ms,
+                                        "timeout_ms": actual_timeout_ms,
+                                        "slow_warning_threshold_ms": slow_warning_threshold_ms,
+                                        "is_known_slow_path": latency_profile.is_known_slow_path(),
+                                        "message": message,
+                                    }),
+                                })
+                                .await;
+                        }
+                    }
+                }
             };
 
             match &api_result {
                 Ok(step) => {
+                    let elapsed_ms = request_started_at.elapsed().as_millis() as u64;
+                    context.trace.record(TraceEvent::ProviderRequestCompleted {
+                        provider_family: provider_capabilities.protocol_family.label().to_string(),
+                        model: request.model.clone(),
+                        request_shape: latency_profile.request_shape.label().to_string(),
+                        elapsed_ms,
+                        success: true,
+                    });
+                    if let Some(tx) = context.tx {
+                        let _ = tx
+                            .send(StreamEvent::RuntimeDiagnostic {
+                                diagnostic: serde_json::json!({
+                                    "schema": "provider_request.v1",
+                                    "stage": "provider_request_completed",
+                                    "provider_family": provider_capabilities.protocol_family.label(),
+                                    "model": request.model.clone(),
+                                    "request_shape": latency_profile.request_shape.label(),
+                                    "elapsed_ms": elapsed_ms,
+                                    "timeout_ms": actual_timeout_ms,
+                                    "success": true,
+                                }),
+                            })
+                            .await;
+                    }
                     Self::record_streaming_tool_shadow(
                         context.trace,
                         context.conversation.tool_registry.as_ref(),
                         provider_capabilities,
                         !nonstreaming_tool_request && context.tx.is_some(),
-                        request_started_at.elapsed().as_millis() as u64,
+                        elapsed_ms,
                         step,
                     );
                     break;
                 }
                 Err(error) => {
+                    let elapsed_ms = request_started_at.elapsed().as_millis() as u64;
+                    let error_str = error.to_string();
+                    let failure_kind = ProviderFailureKind::from_error(&error_str);
+                    let is_timeout = matches!(
+                        failure_kind,
+                        ProviderFailureKind::Timeout | ProviderFailureKind::StreamIdle
+                    ) || elapsed_ms >= actual_timeout_ms;
+                    if matches!(failure_kind, ProviderFailureKind::Cancelled) {
+                        context.trace.record(TraceEvent::ProviderRequestCancelled {
+                            provider_family: provider_capabilities
+                                .protocol_family
+                                .label()
+                                .to_string(),
+                            model: request.model.clone(),
+                            request_shape: latency_profile.request_shape.label().to_string(),
+                            elapsed_ms,
+                        });
+                        if let Some(tx) = context.tx {
+                            let _ = tx
+                                .send(StreamEvent::RuntimeDiagnostic {
+                                    diagnostic: serde_json::json!({
+                                        "schema": "provider_request.v1",
+                                        "stage": "provider_request_cancelled",
+                                        "provider_family": provider_capabilities.protocol_family.label(),
+                                        "model": request.model.clone(),
+                                        "request_shape": latency_profile.request_shape.label(),
+                                        "elapsed_ms": elapsed_ms,
+                                    }),
+                                })
+                                .await;
+                        }
+                    } else if is_timeout {
+                        context.trace.record(TraceEvent::ProviderRequestTimeout {
+                            provider_family: provider_capabilities
+                                .protocol_family
+                                .label()
+                                .to_string(),
+                            model: request.model.clone(),
+                            request_shape: latency_profile.request_shape.label().to_string(),
+                            elapsed_ms,
+                            timeout_ms: actual_timeout_ms,
+                        });
+                        if let Some(tx) = context.tx {
+                            let _ = tx
+                                .send(StreamEvent::RuntimeDiagnostic {
+                                    diagnostic: serde_json::json!({
+                                        "schema": "provider_request.v1",
+                                        "stage": "provider_request_timeout",
+                                        "provider_family": provider_capabilities.protocol_family.label(),
+                                        "model": request.model.clone(),
+                                        "request_shape": latency_profile.request_shape.label(),
+                                        "elapsed_ms": elapsed_ms,
+                                        "timeout_ms": actual_timeout_ms,
+                                    }),
+                                })
+                                .await;
+                        }
+                    } else {
+                        context.trace.record(TraceEvent::ProviderRequestCompleted {
+                            provider_family: provider_capabilities
+                                .protocol_family
+                                .label()
+                                .to_string(),
+                            model: request.model.clone(),
+                            request_shape: latency_profile.request_shape.label().to_string(),
+                            elapsed_ms,
+                            success: false,
+                        });
+                        if let Some(tx) = context.tx {
+                            let _ = tx
+                                .send(StreamEvent::RuntimeDiagnostic {
+                                    diagnostic: serde_json::json!({
+                                        "schema": "provider_request.v1",
+                                        "stage": "provider_request_completed",
+                                        "provider_family": provider_capabilities.protocol_family.label(),
+                                        "model": request.model.clone(),
+                                        "request_shape": latency_profile.request_shape.label(),
+                                        "elapsed_ms": elapsed_ms,
+                                        "timeout_ms": actual_timeout_ms,
+                                        "success": false,
+                                    }),
+                                })
+                                .await;
+                        }
+                    }
                     let mut recovered = false;
                     if Self::is_context_size_error(error) && compress_retry < 2 {
                         let classified =

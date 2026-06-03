@@ -454,11 +454,35 @@ pub fn render_status_bar(f: &mut Frame, app: &TuiApp, area: Rect) {
 
     // 左侧：mode glyph + 状态
     if runtime.is_querying {
-        let label = runtime.current_tool_label.as_deref().unwrap_or("Thinking");
+        let provider_label = app.provider_request_state.status_label();
+        let label = if !provider_label.is_empty() {
+            provider_label
+        } else {
+            runtime
+                .current_tool_label
+                .clone()
+                .unwrap_or_else(|| "Thinking".to_string())
+        };
+        let spinner_color = if app.provider_request_state.is_known_slow_path {
+            app.theme.tokens.tone.err
+        } else if app.provider_request_state.is_active() {
+            app.theme.tokens.tone.warn
+        } else {
+            app.theme.tokens.tone.warn
+        };
         parts.push(Span::styled(
             format!("◌ {}", label),
-            Style::default().fg(app.theme.tokens.tone.warn),
+            Style::default().fg(spinner_color),
         ));
+        if app.provider_request_state.is_active() {
+            let elapsed = app.provider_request_state.elapsed_ms;
+            if elapsed > 0 {
+                parts.push(Span::styled(
+                    format!("{:.1}s", elapsed as f64 / 1000.0),
+                    Style::default().fg(app.theme.tokens.fg.faint),
+                ));
+            }
+        }
         if let Some(usage) = app.stream_usage_label() {
             parts.push(Span::styled(
                 usage,

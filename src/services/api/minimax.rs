@@ -215,6 +215,7 @@ fn parse_minimax_chat_response_body(body: &str) -> Result<ChatResponse> {
 #[async_trait]
 impl LlmProvider for MiniMaxClient {
     async fn chat(&self, request: ChatRequest) -> Result<ChatResponse> {
+        let retry_observer = request.retry_observer.clone();
         use super::openai_compat::{
             convert_request_for_capabilities, convert_response_for_capabilities,
         };
@@ -223,10 +224,15 @@ impl LlmProvider for MiniMaxClient {
         let capabilities = ProviderCapabilities::for_family(ProviderProtocolFamily::MiniMax);
         let req = convert_request_for_capabilities(request, &self.model, capabilities);
         let response = match ProviderRetryPolicy::from_env()
-            .retry("MiniMax", "chat.completions", || {
-                let req = req.clone();
-                async move { self.client.chat().create(req).await }
-            })
+            .retry_with_optional_observer(
+                "MiniMax",
+                "chat.completions",
+                || {
+                    let req = req.clone();
+                    async move { self.client.chat().create(req).await }
+                },
+                retry_observer.as_deref(),
+            )
             .await
         {
             Ok(resp) => resp,
@@ -259,6 +265,7 @@ impl LlmProvider for MiniMaxClient {
 
     async fn chat_stream(&self, request: ChatRequest) -> Result<ChatCompletionResponseStream> {
         use super::openai_compat::convert_request_for_capabilities;
+        let retry_observer = request.retry_observer.clone();
         let mut request = request;
         request.messages = Self::normalize_messages_for_minimax(request.messages);
         let capabilities = ProviderCapabilities::for_family(ProviderProtocolFamily::MiniMax);
@@ -272,10 +279,15 @@ impl LlmProvider for MiniMaxClient {
         // records usage when needed.
         req.stream_options = None;
         match ProviderRetryPolicy::from_env()
-            .retry("MiniMax", "chat.completions.stream", || {
-                let req = req.clone();
-                async move { self.client.chat().create_stream(req).await }
-            })
+            .retry_with_optional_observer(
+                "MiniMax",
+                "chat.completions.stream",
+                || {
+                    let req = req.clone();
+                    async move { self.client.chat().create_stream(req).await }
+                },
+                retry_observer.as_deref(),
+            )
             .await
         {
             Ok(stream) => Ok(stream),

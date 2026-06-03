@@ -14,10 +14,12 @@ pub mod tool_call_repair;
 
 use async_openai::types::ChatCompletionResponseStream;
 use async_trait::async_trait;
+use std::sync::Arc;
 
 type PreHookFn = dyn Fn(ChatRequest) -> ChatRequest + Send + Sync;
 type PostHookFn = dyn Fn(&ChatRequest, &ChatResponse) + Send + Sync;
 type ErrorHookFn = dyn Fn(&str) + Send + Sync;
+pub type ProviderRetryObserver = Arc<dyn Fn(retry::ProviderRetryNotice) + Send + Sync>;
 
 /// LLM Provider trait - 抽象不同的 API 提供商
 #[async_trait]
@@ -109,7 +111,7 @@ impl ProviderHook {
 }
 
 /// 聊天请求
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct ChatRequest {
     pub model: String,
     pub messages: Vec<Message>,
@@ -120,6 +122,22 @@ pub struct ChatRequest {
     /// Thinking budget (token 数)，启用 extended thinking
     /// 仅 Claude 4+ 和部分模型支持
     pub thinking_budget: Option<u32>,
+    pub retry_observer: Option<ProviderRetryObserver>,
+}
+
+impl std::fmt::Debug for ChatRequest {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ChatRequest")
+            .field("model", &self.model)
+            .field("messages", &self.messages)
+            .field("tools", &self.tools)
+            .field("tool_choice", &self.tool_choice)
+            .field("temperature", &self.temperature)
+            .field("max_tokens", &self.max_tokens)
+            .field("thinking_budget", &self.thinking_budget)
+            .field("retry_observer", &self.retry_observer.is_some())
+            .finish()
+    }
 }
 
 impl ChatRequest {
@@ -132,6 +150,7 @@ impl ChatRequest {
             temperature: Some(0.2),
             max_tokens: None,
             thinking_budget: None,
+            retry_observer: None,
         }
     }
 

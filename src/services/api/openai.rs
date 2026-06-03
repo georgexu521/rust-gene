@@ -79,13 +79,19 @@ impl LlmProvider for OpenAiClient {
             convert_request_for_capabilities, convert_response_for_capabilities,
         };
         use super::provider_protocol::ProviderCapabilities;
+        let retry_observer = request.retry_observer.clone();
         let capabilities = ProviderCapabilities::detect(&self.base_url, &self.model);
         let req = convert_request_for_capabilities(request, &self.model, capabilities);
         let response = ProviderRetryPolicy::from_env()
-            .retry(self.provider_label.as_str(), "chat.completions", || {
-                let req = req.clone();
-                async move { self.client.chat().create(req).await }
-            })
+            .retry_with_optional_observer(
+                self.provider_label.as_str(),
+                "chat.completions",
+                || {
+                    let req = req.clone();
+                    async move { self.client.chat().create(req).await }
+                },
+                retry_observer.as_deref(),
+            )
             .await
             .with_context(|| format!("Failed to get response from {} API", self.provider_label))?;
         convert_response_for_capabilities(response, capabilities)
@@ -95,6 +101,7 @@ impl LlmProvider for OpenAiClient {
         use super::openai_compat::convert_request_for_capabilities;
         use super::provider_protocol::ProviderCapabilities;
         use async_openai::types::ChatCompletionStreamOptions;
+        let retry_observer = request.retry_observer.clone();
         let capabilities = ProviderCapabilities::detect(&self.base_url, &self.model);
         let mut req = convert_request_for_capabilities(request, &self.model, capabilities);
         req.stream = Some(true);
@@ -102,13 +109,14 @@ impl LlmProvider for OpenAiClient {
             include_usage: true,
         });
         ProviderRetryPolicy::from_env()
-            .retry(
+            .retry_with_optional_observer(
                 self.provider_label.as_str(),
                 "chat.completions.stream",
                 || {
                     let req = req.clone();
                     async move { self.client.chat().create_stream(req).await }
                 },
+                retry_observer.as_deref(),
             )
             .await
             .with_context(|| {

@@ -218,15 +218,21 @@ impl LlmProvider for KimiClient {
             self.config.thinking_enabled
         );
 
+        let retry_observer = request.retry_observer.clone();
         let req = convert_request_for_kimi(request, self.config.thinking_budget);
 
         debug!("Request: {:?}", req);
 
         let response = ProviderRetryPolicy::from_env()
-            .retry("Kimi", "chat.completions", || {
-                let req = req.clone();
-                async move { self.client.chat().create(req).await }
-            })
+            .retry_with_optional_observer(
+                "Kimi",
+                "chat.completions",
+                || {
+                    let req = req.clone();
+                    async move { self.client.chat().create(req).await }
+                },
+                retry_observer.as_deref(),
+            )
             .await
             .context("Failed to get response from Kimi API")?;
 
@@ -294,6 +300,7 @@ impl LlmProvider for KimiClient {
             self.config.thinking_enabled
         );
 
+        let retry_observer = request.retry_observer.clone();
         let mut req = convert_request_for_kimi(request, self.config.thinking_budget);
 
         // 启用流式响应
@@ -303,10 +310,15 @@ impl LlmProvider for KimiClient {
         });
 
         let stream = ProviderRetryPolicy::from_env()
-            .retry("Kimi", "chat.completions.stream", || {
-                let req = req.clone();
-                async move { self.client.chat().create_stream(req).await }
-            })
+            .retry_with_optional_observer(
+                "Kimi",
+                "chat.completions.stream",
+                || {
+                    let req = req.clone();
+                    async move { self.client.chat().create_stream(req).await }
+                },
+                retry_observer.as_deref(),
+            )
             .await
             .context("Failed to create streaming response from Kimi API")?;
 

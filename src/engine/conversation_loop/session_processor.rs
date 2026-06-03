@@ -85,9 +85,19 @@ fn cache_shape_for_messages_and_tools(
 }
 
 impl ConversationLoop {
+    #[cfg(test)]
     pub(super) async fn call_api(&self, request: ChatRequest) -> Result<SessionStepResult> {
+        self.call_api_with_timeout(request, llm_request_timeout())
+            .await
+    }
+
+    pub(super) async fn call_api_with_timeout(
+        &self,
+        request: ChatRequest,
+        timeout: std::time::Duration,
+    ) -> Result<SessionStepResult> {
         let response = self
-            .provider_chat_with_tracking(request, "non-streaming chat")
+            .provider_chat_with_tracking(request, "non-streaming chat", timeout)
             .await?;
 
         let content = strip_hidden_blocks(&response.content);
@@ -110,9 +120,12 @@ impl ConversationLoop {
         &self,
         request: ChatRequest,
         purpose: &str,
+        timeout: std::time::Duration,
     ) -> Result<ChatResponse> {
         let cache_shape = cache_shape_for_request(&request);
-        let response = self.provider_chat_with_timeout(request, purpose).await?;
+        let response = self
+            .provider_chat_with_timeout(request, purpose, timeout)
+            .await?;
         self.record_cost(&response, Some(cache_shape)).await;
         Ok(response)
     }
@@ -121,8 +134,8 @@ impl ConversationLoop {
         &self,
         request: ChatRequest,
         purpose: &str,
+        timeout: std::time::Duration,
     ) -> Result<ChatResponse> {
-        let timeout = llm_request_timeout();
         match tokio::time::timeout(timeout, self.provider.chat(request)).await {
             Ok(result) => result,
             Err(_) => Err(anyhow::anyhow!(
@@ -515,11 +528,13 @@ impl ConversationLoop {
                     let base_request = ChatRequest::new(&self.model)
                         .with_messages(fallback_messages.clone())
                         .with_temperature(0.2);
+                    let default_timeout = llm_request_timeout();
                     let response = if let Some(tools) = fallback_tools.clone() {
                         match self
                             .provider_chat_with_tracking(
                                 base_request.clone().with_tools(tools),
                                 "non-streaming fallback with tools",
+                                default_timeout,
                             )
                             .await
                         {
@@ -532,13 +547,18 @@ impl ConversationLoop {
                                 self.provider_chat_with_tracking(
                                     base_request,
                                     "non-streaming fallback without tools",
+                                    default_timeout,
                                 )
                                 .await?
                             }
                         }
                     } else {
-                        self.provider_chat_with_tracking(base_request, "non-streaming fallback")
-                            .await?
+                        self.provider_chat_with_tracking(
+                            base_request,
+                            "non-streaming fallback",
+                            default_timeout,
+                        )
+                        .await?
                     };
                     emit_usage_event(&response, tx).await;
 
@@ -585,11 +605,13 @@ impl ConversationLoop {
                 let base_request = ChatRequest::new(&self.model)
                     .with_messages(fallback_messages.clone())
                     .with_temperature(0.2);
+                let default_timeout = llm_request_timeout();
                 let response = if let Some(tools) = fallback_tools.clone() {
                     match self
                         .provider_chat_with_tracking(
                             base_request.clone().with_tools(tools),
                             "non-streaming fallback with tools",
+                            default_timeout,
                         )
                         .await
                     {
@@ -602,13 +624,18 @@ impl ConversationLoop {
                             self.provider_chat_with_tracking(
                                 base_request,
                                 "non-streaming fallback without tools",
+                                default_timeout,
                             )
                             .await?
                         }
                     }
                 } else {
-                    self.provider_chat_with_tracking(base_request, "non-streaming fallback")
-                        .await?
+                    self.provider_chat_with_tracking(
+                        base_request,
+                        "non-streaming fallback",
+                        default_timeout,
+                    )
+                    .await?
                 };
                 emit_usage_event(&response, tx).await;
 
@@ -644,11 +671,13 @@ impl ConversationLoop {
                 let base_request = ChatRequest::new(&self.model)
                     .with_messages(fallback_messages.clone())
                     .with_temperature(0.2);
+                let default_timeout = llm_request_timeout();
                 let response = if let Some(tools) = fallback_tools.clone() {
                     match self
                         .provider_chat_with_tracking(
                             base_request.clone().with_tools(tools),
                             "non-streaming fallback with tools",
+                            default_timeout,
                         )
                         .await
                     {
@@ -661,13 +690,18 @@ impl ConversationLoop {
                             self.provider_chat_with_tracking(
                                 base_request,
                                 "non-streaming fallback without tools",
+                                default_timeout,
                             )
                             .await?
                         }
                     }
                 } else {
-                    self.provider_chat_with_tracking(base_request, "non-streaming fallback")
-                        .await?
+                    self.provider_chat_with_tracking(
+                        base_request,
+                        "non-streaming fallback",
+                        default_timeout,
+                    )
+                    .await?
                 };
                 emit_usage_event(&response, tx).await;
 

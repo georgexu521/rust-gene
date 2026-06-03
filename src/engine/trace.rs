@@ -499,6 +499,59 @@ pub enum TraceEvent {
         tool_calls: usize,
         content_chars: usize,
     },
+    ProviderRequestStarted {
+        provider_family: String,
+        model: String,
+        request_shape: String,
+        timeout_secs: u64,
+        slow_warning_threshold_secs: u64,
+        message_count: usize,
+        tool_count: usize,
+        is_known_slow_path: bool,
+    },
+    ProviderRequestRetrying {
+        provider_family: String,
+        #[serde(default)]
+        model: String,
+        request_shape: String,
+        attempt: usize,
+        max_attempts: usize,
+        delay_ms: u64,
+        elapsed_ms: u64,
+        error_preview: String,
+    },
+    ProviderRequestSlowWarning {
+        provider_family: String,
+        #[serde(default)]
+        model: String,
+        request_shape: String,
+        elapsed_ms: u64,
+        timeout_ms: u64,
+        message: String,
+    },
+    ProviderRequestCompleted {
+        provider_family: String,
+        #[serde(default)]
+        model: String,
+        request_shape: String,
+        elapsed_ms: u64,
+        success: bool,
+    },
+    ProviderRequestTimeout {
+        provider_family: String,
+        #[serde(default)]
+        model: String,
+        request_shape: String,
+        elapsed_ms: u64,
+        timeout_ms: u64,
+    },
+    ProviderRequestCancelled {
+        provider_family: String,
+        #[serde(default)]
+        model: String,
+        request_shape: String,
+        elapsed_ms: u64,
+    },
     ToolStarted {
         tool: String,
         call_id: String,
@@ -847,6 +900,12 @@ impl TraceEvent {
             TraceEvent::ProviderToolCallRepairApplied { .. } => "provider.tool_repair",
             TraceEvent::StreamingToolExecutionShadow { .. } => "streaming.tool.shadow",
             TraceEvent::ApiRequestCompleted { .. } => "api.done",
+            TraceEvent::ProviderRequestStarted { .. } => "provider.request.start",
+            TraceEvent::ProviderRequestRetrying { .. } => "provider.request.retry",
+            TraceEvent::ProviderRequestSlowWarning { .. } => "provider.request.slow",
+            TraceEvent::ProviderRequestCompleted { .. } => "provider.request.done",
+            TraceEvent::ProviderRequestTimeout { .. } => "provider.request.timeout",
+            TraceEvent::ProviderRequestCancelled { .. } => "provider.request.cancelled",
             TraceEvent::ToolStarted { .. } => "tool.start",
             TraceEvent::ActionDecisionEvaluated { .. } => "action.decision",
             TraceEvent::CandidateActionsEvaluated { .. } => "action.candidates",
@@ -1648,6 +1707,76 @@ impl TraceEvent {
             } => format!(
                 "api response #{}: {} tool calls, {} chars",
                 iteration, tool_calls, content_chars
+            ),
+            TraceEvent::ProviderRequestStarted {
+                provider_family,
+                model,
+                request_shape,
+                timeout_secs,
+                slow_warning_threshold_secs,
+                message_count,
+                tool_count,
+                is_known_slow_path,
+            } => format!(
+                "provider request started: family={} model={} shape={} timeout={}s slow_warning={}s msgs={} tools={} slow_path={}",
+                provider_family, model, request_shape, timeout_secs, slow_warning_threshold_secs, message_count, tool_count, is_known_slow_path
+            ),
+            TraceEvent::ProviderRequestRetrying {
+                provider_family,
+                model,
+                request_shape,
+                attempt,
+                max_attempts,
+                delay_ms,
+                elapsed_ms,
+                error_preview,
+            } => format!(
+                "provider request retrying: family={} model={} shape={} attempt={}/{} delay={}ms elapsed={}ms error={}",
+                provider_family, model, request_shape, attempt, max_attempts, delay_ms, elapsed_ms, preview(error_preview)
+            ),
+            TraceEvent::ProviderRequestSlowWarning {
+                provider_family,
+                model,
+                request_shape,
+                elapsed_ms,
+                timeout_ms,
+                message,
+            } => format!(
+                "provider slow warning: family={} model={} shape={} elapsed={}ms timeout={}ms: {}",
+                provider_family, model, request_shape, elapsed_ms, timeout_ms, message
+            ),
+            TraceEvent::ProviderRequestCompleted {
+                provider_family,
+                model,
+                request_shape,
+                elapsed_ms,
+                success,
+            } => format!(
+                "provider request {}: family={} model={} shape={} elapsed={}ms",
+                if *success { "completed" } else { "failed" },
+                provider_family,
+                model,
+                request_shape,
+                elapsed_ms
+            ),
+            TraceEvent::ProviderRequestTimeout {
+                provider_family,
+                model,
+                request_shape,
+                elapsed_ms,
+                timeout_ms,
+            } => format!(
+                "provider request timeout: family={} model={} shape={} elapsed={}ms timeout={}ms",
+                provider_family, model, request_shape, elapsed_ms, timeout_ms
+            ),
+            TraceEvent::ProviderRequestCancelled {
+                provider_family,
+                model,
+                request_shape,
+                elapsed_ms,
+            } => format!(
+                "provider request cancelled: family={} model={} shape={} elapsed={}ms",
+                provider_family, model, request_shape, elapsed_ms
             ),
             TraceEvent::ToolStarted {
                 tool,
@@ -2490,7 +2619,13 @@ fn control_loop_phase_for_event(event: &TraceEvent) -> Option<&'static str> {
         | TraceEvent::ApiRequestStarted { .. }
         | TraceEvent::ProviderMessageSequenceNormalized { .. }
         | TraceEvent::ProviderToolCallRepairApplied { .. }
-        | TraceEvent::StreamingToolExecutionShadow { .. } => Some("context"),
+        | TraceEvent::StreamingToolExecutionShadow { .. }
+        | TraceEvent::ProviderRequestStarted { .. }
+        | TraceEvent::ProviderRequestRetrying { .. }
+        | TraceEvent::ProviderRequestSlowWarning { .. }
+        | TraceEvent::ProviderRequestCompleted { .. }
+        | TraceEvent::ProviderRequestTimeout { .. }
+        | TraceEvent::ProviderRequestCancelled { .. } => Some("context"),
         TraceEvent::ImplementationIntentRecorded { .. }
         | TraceEvent::WorkflowJudgmentCompleted { .. }
         | TraceEvent::WorkflowPlanProgress { .. }

@@ -24,6 +24,16 @@ pub struct ProviderRetryPolicy {
     jitter: Duration,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProviderRetryNotice {
+    pub provider: String,
+    pub operation: String,
+    pub attempt: usize,
+    pub max_attempts: usize,
+    pub delay: Duration,
+    pub error: String,
+}
+
 impl ProviderRetryPolicy {
     pub fn from_env() -> Self {
         Self {
@@ -81,7 +91,23 @@ impl ProviderRetryPolicy {
         self,
         provider: &str,
         operation: &str,
+        request: F,
+    ) -> Result<T, E>
+    where
+        F: FnMut() -> Fut,
+        Fut: Future<Output = Result<T, E>>,
+        E: Display,
+    {
+        self.retry_with_optional_observer(provider, operation, request, None)
+            .await
+    }
+
+    pub async fn retry_with_optional_observer<F, Fut, T, E>(
+        self,
+        provider: &str,
+        operation: &str,
         mut request: F,
+        observer: Option<&(dyn Fn(ProviderRetryNotice) + Send + Sync)>,
     ) -> Result<T, E>
     where
         F: FnMut() -> Fut,
@@ -92,13 +118,24 @@ impl ProviderRetryPolicy {
             match request().await {
                 Ok(value) => return Ok(value),
                 Err(error) => {
+                    let error_string = error.to_string();
                     if reconnect >= self.reconnect_attempts
-                        || !is_retryable_provider_error(&error.to_string())
+                        || !is_retryable_provider_error(&error_string)
                     {
                         return Err(error);
                     }
                     let next_attempt = reconnect + 1;
                     let delay = self.delay_for_reconnect(next_attempt);
+                    if let Some(observer) = observer {
+                        observer(ProviderRetryNotice {
+                            provider: provider.to_string(),
+                            operation: operation.to_string(),
+                            attempt: next_attempt,
+                            max_attempts: self.reconnect_attempts,
+                            delay,
+                            error: error_string.clone(),
+                        });
+                    }
                     warn!(
                         "Provider request failed transiently; reconnecting {}/{} for {} {} after {:?}: {}",
                         next_attempt,
@@ -106,7 +143,7 @@ impl ProviderRetryPolicy {
                         provider,
                         operation,
                         delay,
-                        error
+                        error_string
                     );
                     if !delay.is_zero() {
                         tokio::time::sleep(delay).await;
@@ -246,6 +283,51 @@ mod tests {
 
         assert_eq!(result, "ok");
         assert_eq!(attempts.load(Ordering::SeqCst), 3);
+    }
+
+    #[tokio::test]
+    async fn observer_records_actual_reconnect_attempts() {
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let observed = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let policy = ProviderRetryPolicy::for_tests(3, Duration::ZERO);
+        let observer = {
+            let observed = observed.clone();
+            move |notice: ProviderRetryNotice| {
+                observed.lock().unwrap().push(notice);
+            }
+        };
+
+        let result = policy
+            .retry_with_optional_observer(
+                "test",
+                "chat",
+                {
+                    let attempts = attempts.clone();
+                    move || {
+                        let attempts = attempts.clone();
+                        async move {
+                            let current = attempts.fetch_add(1, Ordering::SeqCst);
+                            if current == 0 {
+                                Err(TestError("error sending request for url"))
+                            } else {
+                                Ok("ok")
+                            }
+                        }
+                    }
+                },
+                Some(&observer),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(result, "ok");
+        let observed = observed.lock().unwrap();
+        assert_eq!(observed.len(), 1);
+        assert_eq!(observed[0].provider, "test");
+        assert_eq!(observed[0].operation, "chat");
+        assert_eq!(observed[0].attempt, 1);
+        assert_eq!(observed[0].max_attempts, 3);
+        assert!(observed[0].error.contains("error sending request"));
     }
 
     #[tokio::test]

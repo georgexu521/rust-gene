@@ -104,6 +104,99 @@ impl fmt::Display for ErrorCategory {
     }
 }
 
+/// Provider failure classification for slow-tail recovery decisions.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProviderFailureKind {
+    Timeout,
+    StreamIdle,
+    TransientTransport,
+    RateLimit,
+    Auth,
+    ProviderProtocol,
+    ContextTooLong,
+    Cancelled,
+}
+
+impl ProviderFailureKind {
+    pub fn from_error(error: &str) -> Self {
+        let lower = error.to_ascii_lowercase();
+        if lower.contains("stream") && lower.contains("idle") {
+            Self::StreamIdle
+        } else if lower.contains("timed out") || lower.contains("timeout") {
+            Self::Timeout
+        } else if lower.contains("401")
+            || lower.contains("403")
+            || lower.contains("unauthorized")
+            || lower.contains("forbidden")
+        {
+            Self::Auth
+        } else if lower.contains("429") || lower.contains("rate limit") {
+            Self::RateLimit
+        } else if lower.contains("context_length_exceeded")
+            || lower.contains("maximum context length")
+            || lower.contains("too many tokens")
+        {
+            Self::ContextTooLong
+        } else if lower.contains("tool call result does not follow")
+            || lower.contains("schema")
+            || lower.contains("invalid params")
+        {
+            Self::ProviderProtocol
+        } else if lower.contains("cancelled") || lower.contains("canceled") {
+            Self::Cancelled
+        } else {
+            Self::TransientTransport
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Timeout => "timeout",
+            Self::StreamIdle => "stream_idle",
+            Self::TransientTransport => "transient_transport",
+            Self::RateLimit => "rate_limit",
+            Self::Auth => "auth",
+            Self::ProviderProtocol => "provider_protocol",
+            Self::ContextTooLong => "context_too_long",
+            Self::Cancelled => "cancelled",
+        }
+    }
+
+    pub fn is_retryable(self) -> bool {
+        matches!(
+            self,
+            Self::Timeout | Self::StreamIdle | Self::TransientTransport
+        )
+    }
+
+    pub fn allows_fallback_model(self) -> bool {
+        matches!(
+            self,
+            Self::Timeout | Self::StreamIdle | Self::TransientTransport | Self::RateLimit
+        )
+    }
+
+    pub fn user_hint(self) -> &'static str {
+        match self {
+            Self::Timeout => "The provider took too long to respond. You can retry, switch provider, or increase timeout.",
+            Self::StreamIdle => "The provider stream went idle. You can retry or switch provider.",
+            Self::TransientTransport => "A network error occurred. You can retry.",
+            Self::RateLimit => "The provider rate limit was hit. You can wait and retry, or switch provider.",
+            Self::Auth => "Provider authentication failed. Check your API key.",
+            Self::ProviderProtocol => "The provider rejected the request format. This may be a provider compatibility issue.",
+            Self::ContextTooLong => "The conversation context is too long. Try compacting context or starting a new session.",
+            Self::Cancelled => "The request was cancelled.",
+        }
+    }
+}
+
+impl fmt::Display for ProviderFailureKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.label())
+    }
+}
+
 /// 分类后的错误
 #[derive(Debug, Clone)]
 pub struct ClassifiedError {
@@ -498,6 +591,18 @@ mod tests {
         let err = ErrorClassifier::from_anyhow(&anyhow::anyhow!("connection timed out after 30s"));
         assert_eq!(err.category, ErrorCategory::Timeout);
         assert!(err.retryable);
+    }
+
+    #[test]
+    fn provider_failure_kind_preserves_stream_idle_owner() {
+        assert_eq!(
+            ProviderFailureKind::from_error("stream idle timeout after 120s"),
+            ProviderFailureKind::StreamIdle
+        );
+        assert_eq!(
+            ProviderFailureKind::from_error("non-streaming chat timed out after 300s"),
+            ProviderFailureKind::Timeout
+        );
     }
 
     #[test]

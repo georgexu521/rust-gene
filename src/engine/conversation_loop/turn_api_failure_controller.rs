@@ -2,6 +2,7 @@ use super::runtime_diet::{trace_runtime_diet_report, RuntimeDietSnapshot};
 use super::turn_recording::record_recovery_plan;
 use super::ConversationLoop;
 use crate::engine::code_change_workflow::CodeChangeWorkflowRunner;
+use crate::engine::error_classifier::ProviderFailureKind;
 use crate::engine::intent_router::IntentRoute;
 use crate::engine::recovery_plan::{RecoveryPlan, RecoveryStatus};
 use crate::engine::trace::{TraceCollector, TraceEvent, TurnStatus};
@@ -19,20 +20,21 @@ pub(super) struct TurnApiFailureController;
 
 impl TurnApiFailureController {
     pub(super) async fn record(context: TurnApiFailureContext<'_>) {
+        let failure_kind = ProviderFailureKind::from_error(context.error_message);
         context.trace.record(TraceEvent::Error {
-            message: context.error_message.to_string(),
+            message: format!("[{}] {}", failure_kind.label(), context.error_message),
         });
         let classified = crate::engine::error_classifier::ErrorClassifier::from_anyhow(
             &anyhow::anyhow!(context.error_message.to_string()),
         );
-        let status = if classified.retryable {
+        let status = if failure_kind.is_retryable() {
             RecoveryStatus::Planned
         } else {
             RecoveryStatus::Aborted
         };
         let plan = RecoveryPlan::from_classified("api_failure", &classified).with_status(status);
         record_recovery_plan(context.trace, &plan);
-        context.runtime_diet.validation_evidence = "api_error".to_string();
+        context.runtime_diet.validation_evidence = format!("api_error:{}", failure_kind.label());
         trace_runtime_diet_report(
             context.trace,
             context.route,
@@ -110,12 +112,12 @@ mod tests {
         })
         .await;
 
-        assert_eq!(runtime_diet.validation_evidence, "api_error");
+        assert!(runtime_diet.validation_evidence.starts_with("api_error:"));
         let finished = trace.finish(TurnStatus::Failed);
         assert_eq!(finished.status, TurnStatus::Failed);
         assert!(finished.events.iter().any(|event| matches!(
             event,
-            TraceEvent::Error { message } if message == "provider unavailable"
+            TraceEvent::Error { message } if message.contains("provider unavailable")
         )));
         assert!(finished
             .events

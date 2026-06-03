@@ -7,6 +7,8 @@ use crate::services::api::{
     normalize_tool_message_sequence_with_report, Message, ToolMessageSequenceNormalizationReport,
 };
 use serde::{Deserialize, Serialize};
+use std::fmt;
+use std::time::Duration;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -115,6 +117,178 @@ impl ProviderCapabilities {
         };
         Self::for_family(family)
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProviderRequestShape {
+    StreamingText,
+    StreamingToolCall,
+    NonStreamingToolCall,
+    FallbackNonStreaming,
+}
+
+impl ProviderRequestShape {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::StreamingText => "streaming_text",
+            Self::StreamingToolCall => "streaming_tool_call",
+            Self::NonStreamingToolCall => "nonstreaming_tool_call",
+            Self::FallbackNonStreaming => "fallback_nonstreaming",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProviderLatencyProfile {
+    pub provider_family: ProviderProtocolFamily,
+    pub request_shape: ProviderRequestShape,
+    pub timeout: Duration,
+    pub slow_warning_threshold: Duration,
+    pub model: String,
+    pub message_count: usize,
+    pub tool_count: usize,
+}
+
+impl ProviderLatencyProfile {
+    pub fn for_request(
+        capabilities: &ProviderCapabilities,
+        model: &str,
+        has_tools: bool,
+        is_streaming: bool,
+        is_fallback: bool,
+        message_count: usize,
+        tool_count: usize,
+    ) -> Self {
+        let shape = if is_fallback {
+            ProviderRequestShape::FallbackNonStreaming
+        } else if has_tools && capabilities.requires_nonstreaming_tool_calls {
+            ProviderRequestShape::NonStreamingToolCall
+        } else if has_tools && is_streaming {
+            ProviderRequestShape::StreamingToolCall
+        } else {
+            ProviderRequestShape::StreamingText
+        };
+
+        let (timeout_secs, slow_warning_secs) =
+            Self::defaults_for_shape(capabilities.protocol_family, shape);
+
+        Self {
+            provider_family: capabilities.protocol_family,
+            request_shape: shape,
+            timeout: Duration::from_secs(timeout_secs),
+            slow_warning_threshold: Duration::from_secs(slow_warning_secs),
+            model: model.to_string(),
+            message_count,
+            tool_count,
+        }
+    }
+
+    fn defaults_for_shape(
+        family: ProviderProtocolFamily,
+        shape: ProviderRequestShape,
+    ) -> (u64, u64) {
+        match (family, shape) {
+            (ProviderProtocolFamily::MiniMax, ProviderRequestShape::NonStreamingToolCall) => {
+                (300, 90)
+            }
+            (_, ProviderRequestShape::NonStreamingToolCall) => (240, 90),
+            (_, ProviderRequestShape::FallbackNonStreaming) => (180, 60),
+            (_, ProviderRequestShape::StreamingText) => (180, 45),
+            (_, ProviderRequestShape::StreamingToolCall) => (180, 60),
+        }
+    }
+
+    pub fn is_known_slow_path(&self) -> bool {
+        matches!(
+            self.request_shape,
+            ProviderRequestShape::NonStreamingToolCall
+        )
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProviderStatus {
+    Configured,
+    Healthy,
+    SlowToolCallPath,
+    QuotaProblem,
+    AuthProblem,
+    Unreachable,
+}
+
+impl ProviderStatus {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Configured => "configured",
+            Self::Healthy => "healthy",
+            Self::SlowToolCallPath => "slow-tool-call path",
+            Self::QuotaProblem => "quota/auth problem",
+            Self::AuthProblem => "auth problem",
+            Self::Unreachable => "unreachable",
+        }
+    }
+
+    pub fn recommended_for_coding(self) -> bool {
+        matches!(self, Self::Healthy | Self::SlowToolCallPath)
+    }
+
+    pub fn recommended_for_fast_answers(self) -> bool {
+        matches!(self, Self::Healthy)
+    }
+
+    pub fn from_capabilities(capabilities: &ProviderCapabilities) -> Self {
+        if capabilities.requires_nonstreaming_tool_calls {
+            Self::SlowToolCallPath
+        } else {
+            Self::Configured
+        }
+    }
+}
+
+impl fmt::Display for ProviderStatus {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.label())
+    }
+}
+
+/// Short provider doctor output for diagnostics.
+pub fn provider_doctor(
+    family: ProviderProtocolFamily,
+    capabilities: &ProviderCapabilities,
+    last_timeout: Option<Duration>,
+) -> String {
+    let status = ProviderStatus::from_capabilities(capabilities);
+    let mut lines = vec![
+        format!("provider_family: {}", family.label()),
+        format!("status: {}", status),
+        format!("supports_tool_calls: {}", capabilities.supports_tool_calls),
+        format!(
+            "supports_streaming_tool_calls: {}",
+            capabilities.supports_streaming_tool_calls
+        ),
+        format!(
+            "requires_nonstreaming_tool_calls: {}",
+            capabilities.requires_nonstreaming_tool_calls
+        ),
+        format!(
+            "requires_tool_result_adjacency: {}",
+            capabilities.requires_tool_result_adjacency
+        ),
+        format!(
+            "recommended_for_coding: {}",
+            status.recommended_for_coding()
+        ),
+        format!(
+            "recommended_for_fast_answers: {}",
+            status.recommended_for_fast_answers()
+        ),
+    ];
+    if let Some(timeout) = last_timeout {
+        lines.push(format!("last_timeout: {:.1}s", timeout.as_secs_f64()));
+    }
+    lines.join("\n")
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

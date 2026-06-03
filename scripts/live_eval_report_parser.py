@@ -30,6 +30,12 @@ RUNTIME_SPINE_PHASE_EVENT_TYPES = {
         "api_request_started",
         "provider_message_sequence_normalized",
         "streaming_tool_execution_shadow",
+        "provider_request_started",
+        "provider_request_retrying",
+        "provider_request_slow_warning",
+        "provider_request_completed",
+        "provider_request_timeout",
+        "provider_request_cancelled",
     },
     "decision": {
         "implementation_intent_recorded",
@@ -1109,6 +1115,36 @@ def runtime_spine_metrics_from_events(events, report_text="", assertions=None):
         for event in trace_items
         if token(event.get("type", "")) == "streaming_tool_execution_shadow"
     ]
+    provider_request_started_events = [
+        event
+        for event in trace_items
+        if token(event.get("type", "")) == "provider_request_started"
+    ]
+    provider_request_completed_events = [
+        event
+        for event in trace_items
+        if token(event.get("type", "")) == "provider_request_completed"
+    ]
+    provider_request_timeout_events = [
+        event
+        for event in trace_items
+        if token(event.get("type", "")) == "provider_request_timeout"
+    ]
+    provider_request_retrying_events = [
+        event
+        for event in trace_items
+        if token(event.get("type", "")) == "provider_request_retrying"
+    ]
+    provider_request_slow_warning_events = [
+        event
+        for event in trace_items
+        if token(event.get("type", "")) == "provider_request_slow_warning"
+    ]
+    provider_request_cancelled_events = [
+        event
+        for event in trace_items
+        if token(event.get("type", "")) == "provider_request_cancelled"
+    ]
     stop_check_events = [
         event for event in trace_items if token(event.get("type", "")) == "stop_check_evaluated"
     ]
@@ -1362,6 +1398,41 @@ def runtime_spine_metrics_from_events(events, report_text="", assertions=None):
     )
     streaming_shadow_eligible = sum(
         int_value(event.get("eligible_tool_calls", 0)) for event in streaming_shadow_events
+    )
+    provider_request_durations = [
+        int_value(event.get("elapsed_ms", 0))
+        for event in provider_request_completed_events
+        if int_value(event.get("elapsed_ms", 0)) > 0
+    ]
+    provider_timeout_durations = [
+        int_value(event.get("elapsed_ms", 0))
+        for event in provider_request_timeout_events
+        if int_value(event.get("elapsed_ms", 0)) > 0
+    ]
+    provider_timeout_models = unique_items(
+        meaningful_token(event.get("model", ""))
+        for event in provider_request_timeout_events
+        if meaningful_token(event.get("model", ""))
+    )
+    if not provider_timeout_models and provider_request_timeout_events:
+        timeout_shapes = {event.get("request_shape") for event in provider_request_timeout_events}
+        provider_timeout_models = unique_items(
+            meaningful_token(event.get("model", ""))
+            for event in provider_request_started_events
+            if meaningful_token(event.get("model", ""))
+            and event.get("request_shape") in timeout_shapes
+        )
+    nonstreaming_tool_requests = [
+        event for event in provider_request_started_events
+        if event.get("is_known_slow_path")
+    ]
+    provider_median_ms = (
+        sorted(provider_request_durations)[len(provider_request_durations) // 2]
+        if provider_request_durations else 0
+    )
+    provider_p95_ms = (
+        sorted(provider_request_durations)[int(len(provider_request_durations) * 0.95)]
+        if provider_request_durations else 0
     )
     state_transition_recorded = any(
         token(event.get("stage_before", "")) != token(event.get("stage_after", ""))
@@ -1618,6 +1689,12 @@ def runtime_spine_metrics_from_events(events, report_text="", assertions=None):
         f"provider_protocol_repairs={provider_protocol_repair_count} "
         f"streaming_tool_shadow_events={len(streaming_shadow_events)} "
         f"streaming_tool_shadow_eligible={streaming_shadow_eligible} "
+        f"provider_request_started={len(provider_request_started_events)} "
+        f"provider_request_completed={len(provider_request_completed_events)} "
+        f"provider_request_timeout={len(provider_request_timeout_events)} "
+        f"provider_request_retrying={len(provider_request_retrying_events)} "
+        f"provider_request_slow_warning={len(provider_request_slow_warning_events)} "
+        f"provider_request_cancelled={len(provider_request_cancelled_events)} "
         f"memory_boundary_recorded={bool_text(bool(memory_boundary_events))} "
         f"task_contract_recorded={bool_text(bool(task_contract_events))} "
         f"context_pack_recorded={bool_text(bool(context_pack_events))} "
@@ -1699,6 +1776,15 @@ def runtime_spine_metrics_from_events(events, report_text="", assertions=None):
         "observer_outcome_latest_status": str((tool_observation_events[-1] if tool_observation_events else {}).get("status", "missing")),
         "observer_outcome_latest_findings": str((tool_observation_events[-1] if tool_observation_events else {}).get("key_findings", "missing")),
         "observer_outcome_latest_evidence": str((tool_observation_events[-1] if tool_observation_events else {}).get("evidence_items", "missing")),
+        "provider_request_count": str(len(provider_request_started_events)),
+        "provider_request_timeout_count": str(len(provider_request_timeout_events)),
+        "provider_request_retry_count": str(len(provider_request_retrying_events)),
+        "provider_request_slow_warning_count": str(len(provider_request_slow_warning_events)),
+        "provider_request_cancelled_count": str(len(provider_request_cancelled_events)),
+        "provider_request_median_ms": str(provider_median_ms),
+        "provider_request_p95_ms": str(provider_p95_ms),
+        "provider_timeout_models": ",".join(provider_timeout_models) if provider_timeout_models else "none",
+        "nonstreaming_tool_request_count": str(len(nonstreaming_tool_requests)),
         "memory_boundary_recorded": bool_text(bool(memory_boundary_events)),
         "task_contract_recorded": bool_text(bool(task_contract_events)),
         "context_pack_recorded": bool_text(bool(context_pack_events)),
