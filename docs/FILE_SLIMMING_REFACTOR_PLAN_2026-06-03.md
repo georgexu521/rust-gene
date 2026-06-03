@@ -248,6 +248,27 @@ cargo test -q closeout -- --test-threads=1
 cargo test -q runtime_spine_behavior_contract_covers_context_action_progress_stop_and_proof -- --test-threads=1
 ```
 
+### 2026-06-03 Slice 6: File Tool Test Boundary
+
+Status: completed.
+
+Changes:
+
+- moved the large inline `file_tool` test module into
+  `src/tools/file_tool/tests.rs`;
+- kept it as a child module so private helper coverage remains intact;
+- reduced `src/tools/file_tool/mod.rs` from 4975 lines to 2820 lines after the
+  earlier path-policy extraction.
+
+Validation:
+
+```bash
+cargo fmt
+cargo test -q file_tool -- --test-threads=1
+cargo test -q route_scoped_tools -- --test-threads=1
+cargo test -q grep_allows_runtime_tool_result_artifacts_read_only -- --test-threads=1
+```
+
 ### 3. Memory Manager And Provider
 
 Files:
