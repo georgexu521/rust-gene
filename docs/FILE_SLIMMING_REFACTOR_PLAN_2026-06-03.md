@@ -269,6 +269,35 @@ cargo test -q route_scoped_tools -- --test-threads=1
 cargo test -q grep_allows_runtime_tool_result_artifacts_read_only -- --test-threads=1
 ```
 
+### 2026-06-03 Slice 7: TUI App Boundary
+
+Status: completed.
+
+Changes:
+
+- moved the large inline `TuiApp` regression test module into
+  `src/tui/app/tests.rs`, preserving private helper coverage through a child
+  module;
+- extracted memory-save parsing, memory retrieval rendering, memory snapshot
+  and proposal display helpers, and welcome/palette support helpers into
+  `src/tui/app/memory.rs`;
+- extracted runtime tool/status display helpers, stream usage snapshots,
+  permission-mode helpers, permission-rule persistence, and lightweight
+  provider/git display helpers into `src/tui/app/runtime.rs`;
+- moved command palette, model selector, provider selector, and provider switch
+  implementations into `src/tui/app/palette.rs`;
+- reduced `src/tui/app.rs` from 5607 lines to 2992 lines without changing TUI
+  behavior.
+
+Validation:
+
+```bash
+cargo fmt
+cargo check -q
+cargo test -q app::tests -- --test-threads=1
+cargo test -q tui -- --test-threads=1
+```
+
 ### 3. Memory Manager And Provider
 
 Files:
