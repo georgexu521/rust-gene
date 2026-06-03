@@ -274,7 +274,7 @@ mod tests {
 
     fn context() -> ToolContext {
         ToolContext {
-            working_dir: std::env::current_dir().unwrap(),
+            working_dir: std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")),
             session_id: "run-tests-tool-test".to_string(),
             model: "test".to_string(),
             permissions: ToolPermissions::default(),
