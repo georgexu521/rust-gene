@@ -844,12 +844,41 @@ pub async fn handle_doctor(app: &TuiApp, args: &str) -> String {
     let mut registry = crate::tools::ToolRegistry::default_registry();
     let injected =
         crate::tools::plugin_tool::register_enabled_plugin_tools(&mut registry, &working_dir);
+    let total_tools = registry.tool_names().len();
     report.checks.push(crate::diagnostics::CheckResult::info(
         "tools",
         format!(
             "{} tools registered ({} plugin runtime injected)",
-            registry.tool_names().len(),
-            injected
+            total_tools, injected
+        ),
+    ));
+
+    // Tool availability check
+    let context = app.build_tool_context().await;
+    let route = crate::engine::intent_router::IntentRouter::new().route("general coding task");
+    let mut available_count = 0;
+    let mut hidden_by_route = 0;
+    let mut hidden_by_permission = 0;
+    let mut unavailable_count = 0;
+    for tool_name in registry.tool_names() {
+        let exposure = crate::engine::tool_exposure::diagnose_tool_exposure(
+            &registry, &context, &route, tool_name,
+        );
+        if exposure.model_exposed {
+            available_count += 1;
+        } else if !exposure.route_exposed {
+            hidden_by_route += 1;
+        } else if !exposure.permission_exposed {
+            hidden_by_permission += 1;
+        } else {
+            unavailable_count += 1;
+        }
+    }
+    report.checks.push(crate::diagnostics::CheckResult::info(
+        "tool_availability",
+        format!(
+            "available={} hidden_by_route={} hidden_by_permission={} unavailable={}",
+            available_count, hidden_by_route, hidden_by_permission, unavailable_count
         ),
     ));
 

@@ -454,7 +454,7 @@ pub fn render_status_bar(f: &mut Frame, app: &TuiApp, area: Rect) {
 
     // 左侧：mode glyph + 状态
     if runtime.is_querying {
-        let provider_label = app.provider_request_state.status_label();
+        let provider_label = app.facade_snapshot.provider_request.status_label();
         let label = if !provider_label.is_empty() {
             provider_label
         } else {
@@ -463,9 +463,9 @@ pub fn render_status_bar(f: &mut Frame, app: &TuiApp, area: Rect) {
                 .clone()
                 .unwrap_or_else(|| "Thinking".to_string())
         };
-        let spinner_color = if app.provider_request_state.lifecycle.is_known_slow_path {
+        let spinner_color = if app.facade_snapshot.provider_request.is_known_slow_path {
             app.theme.tokens.tone.err
-        } else if app.provider_request_state.is_active() {
+        } else if app.facade_snapshot.provider_request.phase.is_active() {
             app.theme.tokens.tone.warn
         } else {
             app.theme.tokens.tone.warn
@@ -474,8 +474,8 @@ pub fn render_status_bar(f: &mut Frame, app: &TuiApp, area: Rect) {
             format!("◌ {}", label),
             Style::default().fg(spinner_color),
         ));
-        if app.provider_request_state.is_active() {
-            let elapsed = app.provider_request_state.lifecycle.elapsed_ms;
+        if app.facade_snapshot.provider_request.phase.is_active() {
+            let elapsed = app.facade_snapshot.provider_request.elapsed_ms;
             if elapsed > 0 {
                 parts.push(Span::styled(
                     format!("{:.1}s", elapsed as f64 / 1000.0),

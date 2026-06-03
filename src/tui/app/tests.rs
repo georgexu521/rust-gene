@@ -1,5 +1,6 @@
 use super::*;
 use crate::engine::human_review::PermissionReviewDecision;
+use crate::engine::runtime_facade::{ProviderPhase, ProviderRequestLifecycle};
 use crate::services::api::{
     ChatRequest as LlmChatRequest, ChatResponse as LlmChatResponse, LlmProvider, Usage,
 };
@@ -1175,26 +1176,24 @@ fn skill_outcome_blocks_on_unresolved_acceptance() {
 }
 
 #[test]
-fn provider_request_state_clears_timer_on_terminal_diagnostic() {
-    let mut state = ProviderRequestState::default();
+fn provider_lifecycle_clears_timer_on_terminal_diagnostic() {
+    let mut lifecycle = ProviderRequestLifecycle::default();
 
-    state.update_from_diagnostic(&serde_json::json!({
+    lifecycle.update_from_diagnostic(&serde_json::json!({
         "schema": "api_request_stage.v1",
         "stage": "api_request_started",
         "provider_family": "openai",
         "slow_warning_threshold_ms": 10
     }));
-    assert!(state.is_active());
-    assert!(state.started_at.is_some());
+    assert!(lifecycle.phase.is_active());
 
-    state.update_from_diagnostic(&serde_json::json!({
+    lifecycle.update_from_diagnostic(&serde_json::json!({
         "schema": "provider_request.v1",
         "stage": "provider_request_completed",
         "elapsed_ms": 12
     }));
 
-    assert!(!state.is_active());
-    assert!(state.started_at.is_none());
-    assert_eq!(state.lifecycle.phase, ProviderPhase::Completed);
-    assert_eq!(state.lifecycle.elapsed_ms, 12);
+    assert!(!lifecycle.phase.is_active());
+    assert_eq!(lifecycle.phase, ProviderPhase::Completed);
+    assert_eq!(lifecycle.elapsed_ms, 12);
 }

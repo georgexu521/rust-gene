@@ -1,9 +1,8 @@
 //! Runtime facade for unified frontend behavior.
 //!
-//! This module is the migration point for product runtime state that should be
-//! shared across frontends. TUI currently mirrors provider lifecycle and stream
-//! usage into this state; desktop/headless callers can move onto the same
-//! facade without reimplementing provider slow-tail policy.
+//! This module is the single source of truth for product runtime state that
+//! should be shared across frontends. TUI and desktop render facade events
+//! rather than duplicating runtime policy.
 
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -172,6 +171,12 @@ impl ProviderRequestLifecycle {
         false
     }
 
+    pub fn mark_cancelled(&mut self) {
+        if self.phase.is_active() {
+            self.phase = ProviderPhase::Cancelled;
+        }
+    }
+
     pub fn reset(&mut self) {
         *self = Self::default();
     }
@@ -242,6 +247,16 @@ pub struct RuntimeStateSnapshot {
     pub is_querying: bool,
     pub current_tool_label: Option<String>,
     pub stream_usage: Option<StreamUsageSnapshot>,
+    pub turn_counter: u64,
+    pub checkpoint_boundaries: Vec<CheckpointBoundary>,
+}
+
+/// Checkpoint boundary for precise turn-level rewind.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct CheckpointBoundary {
+    pub turn: u64,
+    pub message_index: usize,
+    pub timestamp: u64,
 }
 
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
@@ -276,28 +291,86 @@ impl StreamUsageSnapshot {
 }
 
 /// Shared runtime facade state.
+///
+/// This is the single source of truth for runtime state. TUI and desktop
+/// should read from this facade rather than maintaining their own state.
 #[derive(Clone)]
 pub struct RuntimeFacadeState {
     inner: Arc<Mutex<RuntimeStateSnapshot>>,
+    started_at: Arc<Mutex<Option<std::time::Instant>>>,
 }
 
 impl RuntimeFacadeState {
     pub fn new() -> Self {
         Self {
             inner: Arc::new(Mutex::new(RuntimeStateSnapshot::default())),
+            started_at: Arc::new(Mutex::new(None)),
         }
     }
 
     pub async fn snapshot(&self) -> RuntimeStateSnapshot {
-        self.inner.lock().await.clone()
+        let mut state = self.inner.lock().await;
+        // Update elapsed time from started_at if active
+        if state.provider_request.phase.is_active() {
+            if let Some(started) = *self.started_at.lock().await {
+                state.provider_request.elapsed_ms = started.elapsed().as_millis() as u64;
+            }
+        }
+        state.clone()
     }
 
-    pub async fn update_provider_request<F>(&self, updater: F)
-    where
-        F: FnOnce(&mut ProviderRequestLifecycle),
-    {
+    pub async fn process_diagnostic(&self, diagnostic: &serde_json::Value) {
+        let schema = diagnostic
+            .get("schema")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        let stage = diagnostic
+            .get("stage")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        let is_start = matches!(
+            (schema, stage),
+            ("api_request_stage.v1", "api_request_started")
+                | ("provider_request.v1", "provider_request_started")
+        );
+
         let mut state = self.inner.lock().await;
-        updater(&mut state.provider_request);
+
+        if is_start {
+            *self.started_at.lock().await = Some(std::time::Instant::now());
+        } else if let Some(started) = *self.started_at.lock().await {
+            state.provider_request.elapsed_ms = started.elapsed().as_millis() as u64;
+        }
+
+        state.provider_request.update_from_diagnostic(diagnostic);
+
+        if !state.provider_request.phase.is_active() {
+            *self.started_at.lock().await = None;
+        }
+    }
+
+    pub async fn mark_cancelled(&self) {
+        let mut state = self.inner.lock().await;
+        if state.provider_request.phase.is_active() {
+            if let Some(started) = *self.started_at.lock().await {
+                state.provider_request.elapsed_ms = started.elapsed().as_millis() as u64;
+            }
+            state.provider_request.mark_cancelled();
+            *self.started_at.lock().await = None;
+        }
+    }
+
+    pub async fn check_slow_warning(&self) -> bool {
+        let mut state = self.inner.lock().await;
+        if state.provider_request.phase != ProviderPhase::Started
+            || state.provider_request.slow_warning_emitted
+        {
+            return false;
+        }
+        if let Some(started) = *self.started_at.lock().await {
+            state.provider_request.elapsed_ms = started.elapsed().as_millis() as u64;
+        }
+        state.provider_request.check_slow_warning()
     }
 
     pub async fn set_querying(&self, querying: bool) {
@@ -315,9 +388,44 @@ impl RuntimeFacadeState {
         state.stream_usage = usage;
     }
 
-    pub async fn reset_provider_request(&self) {
+    pub async fn increment_turn(&self, message_index: usize) -> u64 {
         let mut state = self.inner.lock().await;
-        state.provider_request.reset();
+        state.turn_counter += 1;
+        let turn = state.turn_counter;
+        state.checkpoint_boundaries.push(CheckpointBoundary {
+            turn,
+            message_index,
+            timestamp: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs(),
+        });
+        turn
+    }
+
+    pub async fn turn_counter(&self) -> u64 {
+        let state = self.inner.lock().await;
+        state.turn_counter
+    }
+
+    pub async fn checkpoint_boundaries(&self) -> Vec<CheckpointBoundary> {
+        let state = self.inner.lock().await;
+        state.checkpoint_boundaries.clone()
+    }
+
+    pub async fn message_index_for_turn(&self, turn: u64) -> Option<usize> {
+        let state = self.inner.lock().await;
+        state
+            .checkpoint_boundaries
+            .iter()
+            .find(|b| b.turn == turn)
+            .map(|b| b.message_index)
+    }
+
+    pub async fn reset(&self) {
+        let mut state = self.inner.lock().await;
+        *state = RuntimeStateSnapshot::default();
+        *self.started_at.lock().await = None;
     }
 }
 

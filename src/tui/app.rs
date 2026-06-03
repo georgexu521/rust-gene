@@ -4,10 +4,7 @@
 
 use crate::engine::agent_mode::AgentMode;
 use crate::engine::conversation_loop::ToolApprovalResponse;
-use crate::engine::runtime_facade::{
-    ProviderPhase, ProviderRequestLifecycle, RuntimeFacadeState,
-    StreamUsageSnapshot as RuntimeFacadeStreamUsageSnapshot,
-};
+use crate::engine::runtime_facade::{RuntimeFacadeState, RuntimeStateSnapshot};
 use crate::engine::streaming::{StreamEvent, StreamingQueryEngine};
 use crate::permissions::RuleSource;
 use crate::state::{
@@ -133,75 +130,6 @@ impl StatusBarDensity {
     }
 }
 
-/// TUI-specific wrapper around the shared provider request lifecycle.
-#[derive(Debug, Clone, Default)]
-pub struct ProviderRequestState {
-    pub lifecycle: ProviderRequestLifecycle,
-    pub started_at: Option<std::time::Instant>,
-}
-
-impl ProviderRequestState {
-    pub fn is_active(&self) -> bool {
-        self.lifecycle.phase.is_active()
-    }
-
-    pub fn status_label(&self) -> String {
-        self.lifecycle.status_label()
-    }
-
-    pub fn update_from_diagnostic(&mut self, diagnostic: &serde_json::Value) {
-        let schema = diagnostic
-            .get("schema")
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
-        let stage = diagnostic
-            .get("stage")
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
-        let is_start = matches!(
-            (schema, stage),
-            ("api_request_stage.v1", "api_request_started")
-                | ("provider_request.v1", "provider_request_started")
-        );
-
-        if is_start {
-            self.started_at = Some(std::time::Instant::now());
-        } else if let Some(started) = self.started_at {
-            self.lifecycle.elapsed_ms = started.elapsed().as_millis() as u64;
-        }
-
-        self.lifecycle.update_from_diagnostic(diagnostic);
-
-        if !self.lifecycle.phase.is_active() {
-            self.started_at = None;
-        }
-    }
-
-    pub fn mark_cancelled(&mut self) {
-        if self.is_active() {
-            if let Some(started) = self.started_at {
-                self.lifecycle.elapsed_ms = started.elapsed().as_millis() as u64;
-            }
-            self.lifecycle.phase = ProviderPhase::Cancelled;
-            self.started_at = None;
-        }
-    }
-
-    pub fn check_slow_warning(&mut self) -> bool {
-        if self.lifecycle.phase != ProviderPhase::Started || self.lifecycle.slow_warning_emitted {
-            return false;
-        }
-        if let Some(started) = self.started_at {
-            self.lifecycle.elapsed_ms = started.elapsed().as_millis() as u64;
-        }
-        self.lifecycle.check_slow_warning()
-    }
-
-    pub fn reset(&mut self) {
-        *self = Self::default();
-    }
-}
-
 /// 交互式 CLI 应用状态
 pub struct TuiApp {
     /// 当前模式
@@ -230,8 +158,6 @@ pub struct TuiApp {
     pub focus_mode: bool,
     /// 状态栏信息密度
     pub status_bar_density: StatusBarDensity,
-    /// Provider request state for slow-tail visibility
-    pub provider_request_state: ProviderRequestState,
     /// 命令注册表
     command_registry: CommandRegistry,
     /// 滚动位置
@@ -267,8 +193,8 @@ pub struct TuiApp {
     pub expanded_tool_run_id: Option<String>,
     stream_usage: Arc<Mutex<Option<StreamUsageSnapshot>>>,
     pub stream_usage_snapshot: Option<StreamUsageSnapshot>,
-    /// Provider request state shared with background task
-    provider_request: Arc<Mutex<ProviderRequestState>>,
+    /// Cached facade snapshot for synchronous rendering
+    pub facade_snapshot: RuntimeStateSnapshot,
     /// 流是否已完成（由后台任务设置）
     stream_done: Arc<AtomicBool>,
     /// 后台流式任务句柄（用于取消）
@@ -469,7 +395,6 @@ impl TuiApp {
             paused: false,
             focus_mode: false,
             status_bar_density: StatusBarDensity::Normal,
-            provider_request_state: ProviderRequestState::default(),
             command_registry: default_command_registry(),
             scroll_offset: 0,
             pinned_to_bottom: true,
@@ -489,7 +414,7 @@ impl TuiApp {
             expanded_tool_run_id: None,
             stream_usage: Arc::new(Mutex::new(None)),
             stream_usage_snapshot: None,
-            provider_request: Arc::new(Mutex::new(ProviderRequestState::default())),
+            facade_snapshot: RuntimeStateSnapshot::default(),
             stream_done: Arc::new(AtomicBool::new(true)),
             stream_handle: None,
             session_manager,
@@ -654,9 +579,7 @@ impl TuiApp {
         // 取消之前的流式任务（如果有）
         if let Some(handle) = self.stream_handle.take() {
             handle.abort();
-            self.provider_request_state.mark_cancelled();
-            let mut provider_request = self.provider_request.lock().await;
-            provider_request.mark_cancelled();
+            self.runtime_facade_state.mark_cancelled().await;
         }
 
         // 添加到历史
@@ -719,12 +642,7 @@ impl TuiApp {
                 let mut usage = self.stream_usage.lock().await;
                 *usage = None;
             }
-            {
-                let mut prs = self.provider_request.lock().await;
-                prs.reset();
-            }
-            self.provider_request_state.reset();
-            self.runtime_facade_state.reset_provider_request().await;
+            self.runtime_facade_state.reset().await;
             self.runtime_facade_state.set_querying(true).await;
             self.runtime_facade_state.set_stream_usage(None).await;
             self.tool_runs_snapshot.clear();
@@ -751,7 +669,6 @@ impl TuiApp {
             let response_clone = self.current_response.clone();
             let tool_runs_clone = self.tool_runs.clone();
             let usage_clone = self.stream_usage.clone();
-            let provider_request_clone = self.provider_request.clone();
             let runtime_facade_state_clone = self.runtime_facade_state.clone();
             let done_flag = self.stream_done.clone();
             let user_msg = content.clone();
@@ -832,12 +749,14 @@ impl TuiApp {
                                 cached_tokens,
                             });
                             runtime_facade_state_clone
-                                .set_stream_usage(Some(RuntimeFacadeStreamUsageSnapshot {
-                                    prompt_tokens,
-                                    completion_tokens,
-                                    reasoning_tokens,
-                                    cached_tokens,
-                                }))
+                                .set_stream_usage(Some(
+                                    crate::engine::runtime_facade::StreamUsageSnapshot {
+                                        prompt_tokens,
+                                        completion_tokens,
+                                        reasoning_tokens,
+                                        cached_tokens,
+                                    },
+                                ))
                                 .await;
                         }
                         StreamEvent::Error(e) => {
@@ -848,13 +767,8 @@ impl TuiApp {
                             break;
                         }
                         StreamEvent::RuntimeDiagnostic { diagnostic } => {
-                            let lifecycle = {
-                                let mut state = provider_request_clone.lock().await;
-                                state.update_from_diagnostic(&diagnostic);
-                                state.lifecycle.clone()
-                            };
                             runtime_facade_state_clone
-                                .update_provider_request(|provider| *provider = lifecycle)
+                                .process_diagnostic(&diagnostic)
                                 .await;
                         }
                         _ => {}
@@ -920,20 +834,8 @@ impl TuiApp {
             }
         }
         self.stream_usage_snapshot = *self.stream_usage.lock().await;
-        {
-            let mut prs = self.provider_request.lock().await;
-            if prs.is_active() {
-                if let Some(started) = prs.started_at {
-                    prs.lifecycle.elapsed_ms = started.elapsed().as_millis() as u64;
-                }
-                prs.check_slow_warning();
-            }
-            self.provider_request_state = prs.clone();
-            let lifecycle = prs.lifecycle.clone();
-            self.runtime_facade_state
-                .update_provider_request(|provider| *provider = lifecycle)
-                .await;
-        }
+        self.runtime_facade_state.check_slow_warning().await;
+        self.facade_snapshot = self.runtime_facade_state.snapshot().await;
         self.runtime_state_snapshot = self.build_runtime_state_snapshot();
         self.sync_context_runtime_state().await;
 

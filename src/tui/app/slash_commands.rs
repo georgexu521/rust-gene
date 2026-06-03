@@ -115,18 +115,22 @@ impl TuiApp {
 
                     return self.add_system_message(format!(
                         "Memory Status\n\n\
+                         Stable Prefix:\n\
+                         - project memory: loaded into system prompt\n\
+                         - user memory: loaded if available\n\
+                         - accepted facts: indexed for recall\n\n\
+                         Turn-Tail Updates:\n\
+                         - proposals pending: checked during closeout\n\
+                         - new memories: apply on next session reload\n\n\
+                         On-Demand Reads:\n\
+                         - retrieval policy: {recall_status}\n\
+                         - active memory: {active_status}\n\n\
                          Controls:\n\
-                         - use: {use_status}\n\
-                         - generate: {generate_status}\n\
-                         - recall: {recall_status}\n\
-                         - write-policy: {write_policy}\n\
-                         - active: {active_status}\n\n\
-                         What this means:\n\
-                         - {use_explanation}\n\
-                         - {generate_explanation}\n\
-                         - {recall_explanation}\n\
-                         - {write_explanation}\n\
-                         - {active_explanation}\n\n\
+                         - use: {use_status} (load memory into context)\n\
+                         - generate: {generate_status} (propose memory updates)\n\
+                         - recall: {recall_status} (active retrieval mode)\n\
+                         - write-policy: {write_policy} (auto-persist policy)\n\
+                         - active: {active_status} (background FTS worker)\n\n\
                          Commands:\n\
                          - /memory control use on|off\n\
                          - /memory control generate on|off\n\

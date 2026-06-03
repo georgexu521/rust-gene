@@ -114,6 +114,9 @@ pub struct AppConfig {
     /// Memory provider configuration
     #[serde(default)]
     pub memory: MemoryConfig,
+    /// Hooks configuration
+    #[serde(default)]
+    pub hooks: HooksConfig,
 }
 
 impl AppConfig {
@@ -673,6 +676,32 @@ impl Default for ExternalMemoryProviderConfig {
             records_path: None,
         }
     }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
+pub struct HooksConfig {
+    /// Pre-tool hook command
+    #[serde(default)]
+    pub pre_tool: Option<String>,
+    /// Post-tool hook command
+    #[serde(default)]
+    pub post_tool: Option<String>,
+    /// Permission request hook command
+    #[serde(default)]
+    pub permission_request: Option<String>,
+    /// Permission resolved hook command
+    #[serde(default)]
+    pub permission_resolved: Option<String>,
+    /// Hook timeout in milliseconds
+    #[serde(default = "default_hook_timeout_ms")]
+    pub timeout_ms: u64,
+    /// Whether to fail closed (deny) on hook error
+    #[serde(default)]
+    pub fail_closed: bool,
+}
+
+fn default_hook_timeout_ms() -> u64 {
+    5000
 }
 
 impl Default for StorageConfig {
