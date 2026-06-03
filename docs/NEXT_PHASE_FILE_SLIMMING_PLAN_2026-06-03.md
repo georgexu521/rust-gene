@@ -353,3 +353,35 @@ scripts/file-size-report.sh --threshold 1500 --top 5
 scripts/file-size-report.sh --threshold 3000 --json
 scripts/product-daily-gate.sh --dry-run --layer smoke
 ```
+
+### 2026-06-03 Phase 2: Tool And Memory Safety Boundaries
+
+Status: completed.
+
+Changes:
+
+- moved large inline tests out of Band 1 runtime files into child test modules:
+  `src/memory/provider/tests.rs`, `src/tools/agent_tool/tests.rs`,
+  `src/tools/memory_tool/tests.rs`, `src/tools/bash_tool/tests.rs`,
+  `src/tools/tests.rs`, and `src/permissions/tests.rs`;
+- split `src/tools/file_tool/mod.rs` into focused `read`, `write`, and
+  `state` child modules while keeping the public file-tool API stable;
+- kept read-before-write tracking, file state checks, edit previews, and diff
+  rendering behind the same `file_tool` boundary;
+- reduced all Band 1 target runtime files below the 2000-line warning
+  threshold without weakening tool, memory, checkpoint, or permission behavior.
+
+Validation:
+
+```bash
+cargo fmt --check
+cargo check -q
+cargo test -q file_tool -- --test-threads=1
+cargo test -q route_scoped_tools -- --test-threads=1
+cargo test -q memory -- --test-threads=1
+cargo test -q permission -- --test-threads=1
+cargo test -q agent_tool -- --test-threads=1
+cargo test -q memory_tool -- --test-threads=1
+cargo test -q bash_tool -- --test-threads=1
+scripts/file-size-report.sh --threshold 2000 --top 35
+```
