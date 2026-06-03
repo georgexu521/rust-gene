@@ -203,10 +203,21 @@ pub(crate) async fn truncate_tool_result(
         let cache_dir = tool_result_cache_dir();
         let _ = tokio::fs::create_dir_all(&cache_dir).await;
 
+        // Sanitize filename to prevent path traversal
+        let safe_tool_name: String = tool_name
+            .chars()
+            .filter(|c| c.is_alphanumeric() || *c == '_' || *c == '-')
+            .collect();
+        let safe_call_id: String = tool_call_id
+            .chars()
+            .filter(|c| c.is_alphanumeric() || *c == '_' || *c == '-')
+            .take(32)
+            .collect();
+
         let filename = format!(
             "{}_{}_{}.txt",
-            tool_name,
-            tool_call_id,
+            safe_tool_name,
+            safe_call_id,
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap_or_default()

@@ -294,29 +294,45 @@ impl StreamUsageSnapshot {
 ///
 /// This is the single source of truth for runtime state. TUI and desktop
 /// should read from this facade rather than maintaining their own state.
+///
+/// Both `state` and `started_at` are in a single Mutex to avoid nested
+/// lock acquisition which could cause deadlocks.
 #[derive(Clone)]
 pub struct RuntimeFacadeState {
-    inner: Arc<Mutex<RuntimeStateSnapshot>>,
-    started_at: Arc<Mutex<Option<std::time::Instant>>>,
+    inner: Arc<Mutex<FacadeInner>>,
+}
+
+#[derive(Debug, Clone)]
+struct FacadeInner {
+    state: RuntimeStateSnapshot,
+    started_at: Option<std::time::Instant>,
+}
+
+impl Default for FacadeInner {
+    fn default() -> Self {
+        Self {
+            state: RuntimeStateSnapshot::default(),
+            started_at: None,
+        }
+    }
 }
 
 impl RuntimeFacadeState {
     pub fn new() -> Self {
         Self {
-            inner: Arc::new(Mutex::new(RuntimeStateSnapshot::default())),
-            started_at: Arc::new(Mutex::new(None)),
+            inner: Arc::new(Mutex::new(FacadeInner::default())),
         }
     }
 
     pub async fn snapshot(&self) -> RuntimeStateSnapshot {
-        let mut state = self.inner.lock().await;
+        let mut inner = self.inner.lock().await;
         // Update elapsed time from started_at if active
-        if state.provider_request.phase.is_active() {
-            if let Some(started) = *self.started_at.lock().await {
-                state.provider_request.elapsed_ms = started.elapsed().as_millis() as u64;
+        if inner.state.provider_request.phase.is_active() {
+            if let Some(started) = inner.started_at {
+                inner.state.provider_request.elapsed_ms = started.elapsed().as_millis() as u64;
             }
         }
-        state.clone()
+        inner.state.clone()
     }
 
     pub async fn process_diagnostic(&self, diagnostic: &serde_json::Value) {
@@ -334,65 +350,68 @@ impl RuntimeFacadeState {
                 | ("provider_request.v1", "provider_request_started")
         );
 
-        let mut state = self.inner.lock().await;
+        let mut inner = self.inner.lock().await;
 
         if is_start {
-            *self.started_at.lock().await = Some(std::time::Instant::now());
-        } else if let Some(started) = *self.started_at.lock().await {
-            state.provider_request.elapsed_ms = started.elapsed().as_millis() as u64;
+            inner.started_at = Some(std::time::Instant::now());
+        } else if let Some(started) = inner.started_at {
+            inner.state.provider_request.elapsed_ms = started.elapsed().as_millis() as u64;
         }
 
-        state.provider_request.update_from_diagnostic(diagnostic);
+        inner
+            .state
+            .provider_request
+            .update_from_diagnostic(diagnostic);
 
-        if !state.provider_request.phase.is_active() {
-            *self.started_at.lock().await = None;
+        if !inner.state.provider_request.phase.is_active() {
+            inner.started_at = None;
         }
     }
 
     pub async fn mark_cancelled(&self) {
-        let mut state = self.inner.lock().await;
-        if state.provider_request.phase.is_active() {
-            if let Some(started) = *self.started_at.lock().await {
-                state.provider_request.elapsed_ms = started.elapsed().as_millis() as u64;
+        let mut inner = self.inner.lock().await;
+        if inner.state.provider_request.phase.is_active() {
+            if let Some(started) = inner.started_at {
+                inner.state.provider_request.elapsed_ms = started.elapsed().as_millis() as u64;
             }
-            state.provider_request.mark_cancelled();
-            *self.started_at.lock().await = None;
+            inner.state.provider_request.mark_cancelled();
+            inner.started_at = None;
         }
     }
 
     pub async fn check_slow_warning(&self) -> bool {
-        let mut state = self.inner.lock().await;
-        if state.provider_request.phase != ProviderPhase::Started
-            || state.provider_request.slow_warning_emitted
+        let mut inner = self.inner.lock().await;
+        if inner.state.provider_request.phase != ProviderPhase::Started
+            || inner.state.provider_request.slow_warning_emitted
         {
             return false;
         }
-        if let Some(started) = *self.started_at.lock().await {
-            state.provider_request.elapsed_ms = started.elapsed().as_millis() as u64;
+        if let Some(started) = inner.started_at {
+            inner.state.provider_request.elapsed_ms = started.elapsed().as_millis() as u64;
         }
-        state.provider_request.check_slow_warning()
+        inner.state.provider_request.check_slow_warning()
     }
 
     pub async fn set_querying(&self, querying: bool) {
-        let mut state = self.inner.lock().await;
-        state.is_querying = querying;
+        let mut inner = self.inner.lock().await;
+        inner.state.is_querying = querying;
     }
 
     pub async fn set_tool_label(&self, label: Option<String>) {
-        let mut state = self.inner.lock().await;
-        state.current_tool_label = label;
+        let mut inner = self.inner.lock().await;
+        inner.state.current_tool_label = label;
     }
 
     pub async fn set_stream_usage(&self, usage: Option<StreamUsageSnapshot>) {
-        let mut state = self.inner.lock().await;
-        state.stream_usage = usage;
+        let mut inner = self.inner.lock().await;
+        inner.state.stream_usage = usage;
     }
 
     pub async fn increment_turn(&self, message_index: usize) -> u64 {
-        let mut state = self.inner.lock().await;
-        state.turn_counter += 1;
-        let turn = state.turn_counter;
-        state.checkpoint_boundaries.push(CheckpointBoundary {
+        let mut inner = self.inner.lock().await;
+        inner.state.turn_counter += 1;
+        let turn = inner.state.turn_counter;
+        inner.state.checkpoint_boundaries.push(CheckpointBoundary {
             turn,
             message_index,
             timestamp: std::time::SystemTime::now()
@@ -400,22 +419,27 @@ impl RuntimeFacadeState {
                 .unwrap_or_default()
                 .as_secs(),
         });
+        // Bound checkpoint boundaries to prevent unbounded growth
+        if inner.state.checkpoint_boundaries.len() > 1000 {
+            inner.state.checkpoint_boundaries.drain(0..500);
+        }
         turn
     }
 
     pub async fn turn_counter(&self) -> u64 {
-        let state = self.inner.lock().await;
-        state.turn_counter
+        let inner = self.inner.lock().await;
+        inner.state.turn_counter
     }
 
     pub async fn checkpoint_boundaries(&self) -> Vec<CheckpointBoundary> {
-        let state = self.inner.lock().await;
-        state.checkpoint_boundaries.clone()
+        let inner = self.inner.lock().await;
+        inner.state.checkpoint_boundaries.clone()
     }
 
     pub async fn message_index_for_turn(&self, turn: u64) -> Option<usize> {
-        let state = self.inner.lock().await;
-        state
+        let inner = self.inner.lock().await;
+        inner
+            .state
             .checkpoint_boundaries
             .iter()
             .find(|b| b.turn == turn)
@@ -423,9 +447,8 @@ impl RuntimeFacadeState {
     }
 
     pub async fn reset(&self) {
-        let mut state = self.inner.lock().await;
-        *state = RuntimeStateSnapshot::default();
-        *self.started_at.lock().await = None;
+        let mut inner = self.inner.lock().await;
+        *inner = FacadeInner::default();
     }
 }
 

@@ -11,7 +11,7 @@ use std::sync::Arc;
 use tracing::{info, warn};
 
 /// Provider 配置
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct ProviderConfig {
     /// Provider 名称
     pub name: String,
@@ -25,6 +25,19 @@ pub struct ProviderConfig {
     pub default_model: String,
     /// 是否启用
     pub enabled: bool,
+}
+
+impl std::fmt::Debug for ProviderConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ProviderConfig")
+            .field("name", &self.name)
+            .field("provider_type", &self.provider_type)
+            .field("api_key", &"[REDACTED]")
+            .field("base_url", &self.base_url)
+            .field("default_model", &self.default_model)
+            .field("enabled", &self.enabled)
+            .finish()
+    }
 }
 
 /// Provider 类型
