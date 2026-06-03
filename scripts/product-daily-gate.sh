@@ -259,6 +259,12 @@ fi
 echo "=== Preflight ==="
 check_live_tasks || { echo "Missing live tasks. Aborting." >&2; exit 1; }
 echo "All ${#DAILY_CASES[@]} live tasks found."
+echo
+echo "=== File Size Guard ==="
+scripts/file-size-report.sh --threshold 3000 --fail-over 3000
+echo
+echo "=== File Size Watchlist ==="
+scripts/file-size-report.sh --threshold 1500 --top 20
 
 # Build binary
 echo

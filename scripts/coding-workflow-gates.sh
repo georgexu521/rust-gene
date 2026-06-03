@@ -42,6 +42,10 @@ run_step() {
 }
 
 quick_gate() {
+  run_step "file size no-regression gate" \
+    scripts/file-size-report.sh --threshold 3000 --fail-over 3000
+  run_step "file size watchlist" \
+    scripts/file-size-report.sh --threshold 1500 --top 20
   run_step "closeout evidence contract" \
     cargo test -q closeout -- --test-threads=1
   run_step "tool progress labels" \
