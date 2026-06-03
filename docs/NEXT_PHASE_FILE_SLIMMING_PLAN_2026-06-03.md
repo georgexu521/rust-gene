@@ -2,7 +2,7 @@
 
 Date: 2026-06-03
 
-Status: proposed next-phase engineering plan
+Status: completed through Phase 5 on 2026-06-03
 
 ## Summary
 
@@ -447,4 +447,58 @@ cargo check -q
 cargo test -q tui -- --test-threads=1
 (cd apps/desktop/src-tauri && cargo fmt --check && cargo check -q && cargo test -q)
 scripts/file-size-report.sh --threshold 2000 --top 30
+```
+
+### 2026-06-03 Phase 5: Eval And Script Maintenance
+
+Status: completed.
+
+Changes:
+
+- moved eval external-baseline models, report JSON, trend, validation, and
+  parity helpers from `src/engine/evalset.rs` into
+  `src/engine/evalset/external_baseline.rs`;
+- moved the large `ContextCompressor` implementation from
+  `src/engine/context_compressor.rs` into
+  `src/engine/context_compressor/compressor.rs`, keeping public methods on
+  `ContextCompressor` unchanged;
+- moved live-eval task listing/group selection helpers into
+  `scripts/run_live_eval_tasks.sh`;
+- moved live-eval summary generation into
+  `scripts/run_live_eval_summary.sh`;
+- reduced `scripts/run_live_eval.sh`, `src/engine/evalset.rs`, and
+  `src/engine/context_compressor.rs` below the 2000-line warning threshold;
+- kept `scripts/live_eval_report_parser.py` as the remaining Band 4
+  `split_plan` script because its scoring, specialty metrics, and row
+  rendering helpers are tightly coupled; this file is still below the
+  3000-line hard gate and covered by parser compilation plus summary smoke.
+
+Latest size report after Phase 5:
+
+```bash
+scripts/file-size-report.sh --threshold 3000
+# files: 0
+
+scripts/file-size-report.sh --threshold 2000
+# files: 6
+# remaining: live_eval_report_parser.py, task_contract.rs, trace.rs,
+# memory/manager.rs, plus two test-only exceptions
+
+scripts/file-size-report.sh --threshold 1500
+# files: 40
+```
+
+Validation:
+
+```bash
+cargo fmt
+cargo check -q
+cargo test -q evalset -- --test-threads=1
+cargo test -q context_compressor -- --test-threads=1
+bash -n scripts/run_live_eval.sh scripts/run_live_eval_tasks.sh scripts/run_live_eval_summary.sh scripts/product-daily-gate.sh
+python3 -m py_compile scripts/live_eval_report_parser.py scripts/live_eval_quality_status.py scripts/product_daily_summary.py
+bash scripts/live-eval-summary-smoke.sh
+bash scripts/product-daily-gate.sh --dry-run --layer product
+scripts/file-size-report.sh --threshold 2000 --top 40
+scripts/file-size-report.sh --threshold 3000 --top 10
 ```
