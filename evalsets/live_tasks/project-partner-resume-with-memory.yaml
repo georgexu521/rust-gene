@@ -2,6 +2,7 @@ id: project-partner-resume-with-memory
 title: project partner resumes from project memory and prior execution evidence
 type: audit
 eval_intent: read_only_audit
+capability_level: 2
 complexity: low
 risk: low
 runtime_profile: project_partner_alignment

@@ -30,6 +30,10 @@ DAILY_CASES=(
   minimum-agent-verification-repair
 )
 
+DESKTOP_CASES=(
+  desktop-ui-smoke-polish
+)
+
 # Cases that require special environment (desktop, pnpm, playwright)
 SKIP_DESKTOP_CASES="${PRIORITY_AGENT_SKIP_DESKTOP_CASES:-1}"
 
@@ -70,6 +74,10 @@ EOF
     *) echo "Unknown option: $1" >&2; exit 1 ;;
   esac
 done
+
+if [[ "$SKIP_DESKTOP_CASES" == "0" ]]; then
+  DAILY_CASES+=("${DESKTOP_CASES[@]}")
+fi
 
 if [[ -z "$RUN_ID" && -z "$REPORT_ONLY" ]]; then
   RUN_ID="${LABEL}-$(date +%Y%m%d-%H%M%S)"
@@ -134,15 +142,19 @@ generate_report() {
   python3 - "$run_dir" "${DAILY_CASES[*]}" "$run_id" "$report_file" "$json_file" <<'PY'
 import json
 import pathlib
+import re
 import sys
 from scripts.live_eval_report_parser import (
     derived_trajectory_metrics_from_events,
     evaluate_output_assertions,
     evaluate_trajectory_assertions,
     memory_proposal_metrics_from_trace,
+    report_value,
     normalized_runtime_spine_assertions,
     runtime_spine_metrics_from_events,
     score_live_eval_record,
+    status_value,
+    status_values,
 )
 
 run_dir = pathlib.Path(sys.argv[1])
@@ -150,6 +162,26 @@ daily_cases = sys.argv[2].split()
 run_id = sys.argv[3]
 report_path = pathlib.Path(sys.argv[4])
 json_path = pathlib.Path(sys.argv[5])
+repo_root = pathlib.Path.cwd()
+
+def capability_level(case_id):
+    task_file = repo_root / "evalsets" / "live_tasks" / f"{case_id}.yaml"
+    if not task_file.exists():
+        return "unknown"
+    match = re.search(r"^capability_level:\s*(\d+)\s*$", task_file.read_text(encoding="utf-8"), re.MULTILINE)
+    return match.group(1) if match else "unknown"
+
+def summary_failure_owner(quality_owner, stderr, output):
+    text = "\n".join([stderr, output]).lower()
+    provider_timeout_markers = (
+        "non-streaming chat timed out after",
+        "chat timed out after",
+        "tool-result continuation timed out after",
+        "provider health step timed out after",
+    )
+    if any(marker in text for marker in provider_timeout_markers):
+        return "environment"
+    return quality_owner
 
 results = []
 for case_id in daily_cases:
@@ -158,6 +190,7 @@ for case_id in daily_cases:
         results.append({
             "id": case_id,
             "status": "missing",
+            "capability_level": capability_level(case_id),
             "reason": "no run directory",
         })
         continue
@@ -197,7 +230,11 @@ for case_id in daily_cases:
 
     # Load agent quality status
     quality_file = case_dir / "agent-quality-status.txt"
-    quality_status = quality_file.read_text().strip() if quality_file.exists() else "unknown"
+    quality_text = quality_file.read_text(encoding="utf-8") if quality_file.exists() else ""
+    quality_status = status_value(quality_text, "status", "missing")
+    quality_failures = status_values(quality_text, "failure")
+    quality_warnings = status_values(quality_text, "warning")
+    quality_owner = status_value(quality_text, "failure_owner", "unknown")
 
     # Load required commands log
     cmd_log_file = case_dir / "required-commands.log"
@@ -207,17 +244,38 @@ for case_id in daily_cases:
     stderr_file = case_dir / "agent-stderr.log"
     stderr = stderr_file.read_text(encoding="utf-8") if stderr_file.exists() else ""
 
+    report_file = case_dir / "report.md"
+    report_text = report_file.read_text(encoding="utf-8") if report_file.exists() else ""
+    required_status = report_value(report_text, "required_command_status", test_status)
+    closeout_status = report_value(report_text, "closeout_status", "unknown")
+    verification_passed_text = report_value(report_text, "verification_passed", "unknown")
+    verification_status = (
+        "passed" if verification_passed_text == "true"
+        else "failed" if verification_passed_text == "false"
+        else "unknown"
+    )
+    runtime_spine_status = report_value(report_text, "runtime_spine_status", "unknown")
+    behavior_status = report_value(report_text, "behavior_assertion_status", "none")
+    output_status = report_value(report_text, "output_assertion_status", "none")
+    trajectory_status = report_value(report_text, "trajectory_assertion_status", "none")
+    eval_intent = report_value(report_text, "eval_intent", "unknown")
+
     # Score
     try:
-        score_result = score_live_eval_record(
-            output=output,
-            diff=diff,
-            events=events,
-            sample=sample,
-            test_status=test_status,
-            cmd_log=cmd_log,
-            stderr=stderr,
-        )
+        score_result = score_live_eval_record({
+            "status": "failed" if quality_status == "failed" else quality_status,
+            "intent": eval_intent,
+            "required": required_status,
+            "verification": verification_status,
+            "closeout": closeout_status,
+            "behavior_assertion_status": behavior_status,
+            "output_assertion_status": output_status,
+            "trajectory_assertion_status": trajectory_status,
+            "runtime_spine_status": runtime_spine_status,
+            "diff": "yes" if diff.strip() else "no",
+            "warnings": quality_warnings,
+            "failures": quality_failures,
+        })
     except Exception:
         score_result = {}
 
@@ -241,17 +299,20 @@ for case_id in daily_cases:
 
     result = {
         "id": case_id,
-        "status": quality_status if quality_status != "unknown" else test_status,
+        "capability_level": capability_level(case_id),
+        "status": quality_status if quality_status != "missing" else test_status,
         "test_status": test_status,
         "quality_status": quality_status,
+        "failures": quality_failures,
+        "warnings": quality_warnings,
         "outcome_score": score_result.get("outcome_score"),
         "process_score": score_result.get("process_score"),
         "efficiency_score": score_result.get("efficiency_score"),
         "agent_score": score_result.get("agent_score"),
-        "failure_owner": score_result.get("failure_owner", "unknown"),
-        "closeout_status": score_result.get("closeout_status", "unknown"),
-        "verification_passed": score_result.get("verification_passed"),
-        "required_command_status": score_result.get("required_command_status", "unknown"),
+        "failure_owner": summary_failure_owner(quality_owner, stderr, output),
+        "closeout_status": closeout_status,
+        "verification_passed": verification_passed_text,
+        "required_command_status": required_status,
         "runtime_spine_phases": spine_metrics.get("phases_seen", []),
         "memory_active": memory_metrics.get("active", False),
         "memory_proposals": memory_metrics.get("proposal_count", 0),
@@ -261,8 +322,8 @@ for case_id in daily_cases:
     results.append(result)
 
 # Compute summary
-passed = sum(1 for r in results if r.get("status") == "ok" or r.get("quality_status") == "ok")
-failed = sum(1 for r in results if r.get("status") in ("failed", "not_verified"))
+passed = sum(1 for r in results if r.get("status") == "ok")
+failed = sum(1 for r in results if r.get("status") in ("failed", "not_verified", "error"))
 missing = sum(1 for r in results if r.get("status") == "missing")
 total = len(results)
 
@@ -290,19 +351,20 @@ lines = [
     "",
     "## Results",
     "",
-    f"| {'Case':<40} | {'Status':<12} | {'Score':<6} | {'Owner':<15} | {'Closeout':<12} | {'Phases':<20} | {'Memory':<8} |",
-    f"|{'-'*42}|{'-'*14}|{'-'*8}|{'-'*17}|{'-'*14}|{'-'*22}|{'-'*10}|",
+    f"| {'Case':<40} | {'Level':<5} | {'Status':<12} | {'Score':<6} | {'Owner':<15} | {'Closeout':<12} | {'Phases':<20} | {'Memory':<8} |",
+    f"|{'-'*42}|{'-'*7}|{'-'*14}|{'-'*8}|{'-'*17}|{'-'*14}|{'-'*22}|{'-'*10}|",
 ]
 
 for r in results:
-    status_icon = "ok" if r.get("status") == "ok" or r.get("quality_status") == "ok" else r.get("status", "?")
+    status_icon = r.get("status", "?")
+    level = r.get("capability_level", "unknown")
     score = r.get("agent_score")
-    score_str = f"{score:.0f}" if score is not None else "-"
+    score_str = f"{score:.0f}" if isinstance(score, (int, float)) else str(score or "-")
     owner = r.get("failure_owner", "-") or "-"
     closeout = r.get("closeout_status", "-") or "-"
     phases = ", ".join(r.get("runtime_spine_phases", [])[:3]) or "-"
     memory = "yes" if r.get("memory_active") else "no"
-    lines.append(f"| {r['id']:<40} | {status_icon:<12} | {score_str:<6} | {owner:<15} | {closeout:<12} | {phases:<20} | {memory:<8} |")
+    lines.append(f"| {r['id']:<40} | {level:<5} | {status_icon:<12} | {score_str:<6} | {owner:<15} | {closeout:<12} | {phases:<20} | {memory:<8} |")
 
 lines.extend([
     "",
@@ -313,7 +375,7 @@ lines.extend([
 owner_counts = {}
 for r in results:
     owner = r.get("failure_owner", "unknown") or "unknown"
-    if owner != "none" and r.get("status") != "ok":
+    if owner != "none" and r.get("status") not in ("ok", "missing"):
         owner_counts[owner] = owner_counts.get(owner, 0) + 1
 
 if owner_counts:
@@ -348,7 +410,7 @@ lines.extend([
 if failed > 0:
     lines.append(f"- {failed} case(s) failed. Check failure owners above for triage.")
     for r in results:
-        if r.get("status") not in ("ok", "missing") and r.get("quality_status") != "ok":
+        if r.get("status") not in ("ok", "missing"):
             lines.append(f"  - `{r['id']}`: owner=`{r.get('failure_owner', 'unknown')}`")
 else:
     lines.append("- All cases passed. No immediate action required.")
@@ -401,19 +463,28 @@ echo
 PASSED=0
 FAILED=0
 FAILED_CASES=()
+RUN_LIVE_EVAL_ARGS=()
+if [[ "$SKIP_PROVIDER_HEALTH" == "1" ]]; then
+  RUN_LIVE_EVAL_ARGS+=(--skip-provider-health)
+fi
 
 for case_id in "${DAILY_CASES[@]}"; do
   echo "--- $case_id ---"
 
   # Use run_live_eval.sh in agent-run mode
-  if scripts/run_live_eval.sh \
+  RUN_CMD=(
+    scripts/run_live_eval.sh
     --case "$case_id" \
     --mode agent-run \
     --run-id "$RUN_ID" \
     --label "$LABEL" \
-    --timeout "$TIMEOUT_SECS" \
-    ${SKIP_PROVIDER_HEALTH:+--skip-provider-health} \
-    2>&1; then
+    --timeout "$TIMEOUT_SECS"
+  )
+  if [[ "${#RUN_LIVE_EVAL_ARGS[@]}" -gt 0 ]]; then
+    RUN_CMD+=("${RUN_LIVE_EVAL_ARGS[@]}")
+  fi
+
+  if "${RUN_CMD[@]}" 2>&1; then
 
     # Collect results
     WORK_DIR="$WORK_ROOT/$RUN_ID/$case_id/worktree"

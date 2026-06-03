@@ -183,9 +183,15 @@ impl WorkflowContractController {
         );
         context.task_bundle.apply_workflow_judgment(judgment);
         context.code_workflow.refresh_policy(context.task_bundle);
-        context
+        let insert_pos = context
             .messages
-            .push(super::request_preparation_controller::recent_observation_message(&context_note));
+            .iter()
+            .position(|message| !matches!(message, Message::System { .. }))
+            .unwrap_or(context.messages.len());
+        context.messages.insert(
+            insert_pos,
+            super::request_preparation_controller::recent_observation_message(&context_note),
+        );
     }
 
     pub(super) fn record_analysis_error(trace: &TraceCollector, err: &anyhow::Error) {

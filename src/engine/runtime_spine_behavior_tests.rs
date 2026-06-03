@@ -133,7 +133,7 @@ fn runtime_spine_behavior_contract_covers_context_action_progress_stop_and_proof
         recovery_plan_id: None,
     });
     assert_eq!(stop.status, StopCheckStatus::Continue);
-    assert_eq!(stop.reason, StopCheckReason::NoProgress);
+    assert_eq!(stop.reason, StopCheckReason::NoIssue);
     StopChecker::apply_to_task_state(&mut task_bundle.agent_state, &stop);
     assert_eq!(task_bundle.agent_state.stage, AgentTaskStage::Validate);
     assert!(task_bundle

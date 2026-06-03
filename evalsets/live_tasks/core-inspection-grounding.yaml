@@ -2,6 +2,7 @@ id: core-inspection-grounding
 title: inspect filesystem facts without hallucinating metadata
 type: audit
 eval_intent: audit_or_regression_check
+capability_level: 1
 complexity: low
 risk: low
 

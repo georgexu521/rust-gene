@@ -1981,6 +1981,13 @@ def infer_failure_owner():
     )
     provider_text = "\n".join([stderr_without_recovered_retries, output]).lower()
     if (
+        "non-streaming chat timed out after" in provider_text
+        or "chat timed out after" in provider_text
+        or "tool-result continuation timed out after" in provider_text
+        or "provider health step timed out after" in provider_text
+    ):
+        return "environment"
+    if (
         "error sending request for url" in provider_text
         or "connection refused" in provider_text
         or "connection reset" in provider_text

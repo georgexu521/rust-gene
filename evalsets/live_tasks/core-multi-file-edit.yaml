@@ -2,6 +2,7 @@ id: core-multi-file-edit
 title: coordinate a two-file code and docs edit
 type: feature
 eval_intent: seeded_code_change
+capability_level: 4
 complexity: medium
 risk: medium
 

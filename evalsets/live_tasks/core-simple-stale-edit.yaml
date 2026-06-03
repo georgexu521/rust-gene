@@ -2,6 +2,7 @@ id: core-simple-stale-edit
 title: read before a focused single-file edit
 type: bug_fix
 eval_intent: seeded_code_change
+capability_level: 3
 complexity: low
 risk: medium
 

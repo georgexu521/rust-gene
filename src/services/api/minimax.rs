@@ -329,7 +329,7 @@ mod tests {
     #[test]
     fn test_minimax_client_defaults() {
         let client = MiniMaxClient::new("test-key", None, None);
-        assert_eq!(client.default_model(), "MiniMax-M2.7");
+        assert_eq!(client.default_model(), "MiniMax-M3");
         assert_eq!(
             client.base_url(),
             crate::services::api::provider::MINIMAX_DEFAULT_BASE_URL

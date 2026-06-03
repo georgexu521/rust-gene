@@ -15,7 +15,7 @@ progress.
 | Level | Name | Description | Example Tasks |
 |-------|------|-------------|---------------|
 | 1 | Inspect and Explain | Read-only inspection of codebase | `core-inspection-grounding` |
-| 2 | One-File Bug Fix | Fix a bug in a single file with test | `core-simple-stale-edit` |
+| 2 | Project Memory Grounding | Resume from local project memory and prior execution evidence | `project-partner-resume-with-memory`, `memory-recall-conflict-precision` |
 | 3 | Stale Edit Repair | Recover from stale read conflicts | `core-simple-stale-edit` |
 | 4 | Multi-File Refactor | Change multiple files coherently | `core-multi-file-edit`, `core-rust-multi-file-refactor` |
 | 5 | Validation Failure Repair | Recover from failed validation | `code-change-verification-repair-loop` |
@@ -23,7 +23,7 @@ progress.
 
 ## Classification
 
-Each live task YAML should include `capability_level` field:
+Curated daily-gate live task YAML should include `capability_level` field:
 
 ```yaml
 id: core-inspection-grounding

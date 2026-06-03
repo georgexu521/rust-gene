@@ -2960,6 +2960,9 @@ fn read_allowed_roots() -> Vec<PathBuf> {
     if let Some(home) = std::env::var_os("HOME") {
         roots.push(PathBuf::from(home).join("Desktop"));
     }
+    if let Some(data_dir) = dirs::data_local_dir() {
+        roots.push(data_dir.join("priority-agent").join("tool-results"));
+    }
     if let Ok(raw) = std::env::var("PRIORITY_AGENT_READ_ROOTS") {
         roots.extend(
             raw.split(':')
@@ -3731,7 +3734,7 @@ mod tests {
     }
 
     #[test]
-    fn resolve_read_path_rejects_runtime_tool_result_artifacts_by_default() {
+    fn resolve_read_path_allows_runtime_tool_result_artifacts_read_only() {
         let mut env = crate::test_utils::env_guard::EnvVarGuard::acquire_blocking();
         let home = tempfile::tempdir().unwrap();
         env.set("HOME", home.path().to_str().unwrap());
@@ -3756,7 +3759,7 @@ mod tests {
 
         let working = tempfile::tempdir().unwrap();
         let read_path = resolve_read_path(artifact_path.to_str().unwrap(), working.path());
-        assert!(read_path.is_err());
+        assert!(read_path.is_ok());
 
         let write_path = resolve_path(artifact_path.to_str().unwrap(), working.path());
         assert!(write_path.is_err());

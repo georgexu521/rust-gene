@@ -2,6 +2,7 @@ id: core-rust-multi-file-refactor
 title: multi-file Rust refactor with focused tests
 type: refactor
 eval_intent: seeded_code_change
+capability_level: 4
 complexity: medium
 risk: medium
 

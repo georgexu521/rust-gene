@@ -30,10 +30,10 @@ Run ID: product-daily-20260603-001622
 
 | Case | Level | Failure Owner | Root Cause |
 |------|-------|---------------|------------|
-| `core-simple-stale-edit` | 3 | agent_flow | API timeout (180s) |
-| `code-change-verification-repair-loop` | 5 | agent_flow | API timeout (180s) |
-| `project-partner-resume-with-memory` | 2 | agent_flow | API timeout (180s) |
-| `memory-recall-conflict-precision` | 2 | agent_flow | Slow verification compilation |
+| `core-simple-stale-edit` | 3 | environment | Provider API timeout (180s) |
+| `code-change-verification-repair-loop` | 5 | environment | Provider API timeout (180s) |
+| `project-partner-resume-with-memory` | 2 | environment | Provider API timeout (180s) |
+| `memory-recall-conflict-precision` | 2 | agent_flow | Full-suite regression + behavior assertions failed |
 
 ## Detailed Analysis
 
@@ -67,34 +67,35 @@ MiniMax M3 model has high latency for non-streaming tool requests. The runtime u
 3. Optimize prompt to reduce token count
 4. Implement streaming tool calls for MiniMax
 
-### 2. Slow Verification Compilation (1 case)
+### 2. Full-Suite / Behavior Assertion Failure (1 case)
 
 **Affected case:**
 - `memory-recall-conflict-precision`
 
-**Error message:**
+**Observed signals:**
 ```
 [required validation still running after 120s] cargo test -q retrieval_context -- --test-threads=1
+test result: FAILED. 2182 passed; 4 failed; 1 ignored
 ```
 
 **Root cause:**
-The verification command `cargo test -q retrieval_context -- --test-threads=1` requires compiling the entire project in the isolated worktree. First compilation takes 2-3 minutes.
+The targeted required commands eventually produced validation evidence, but the harness full-suite command failed with 4 tests and behavior assertions did not pass. The slow first compile is a cost issue, not the full root cause.
 
 **Evidence:**
-- Test itself runs in <1s
-- Compilation takes 120-180s
-- Each agent run creates a new worktree with fresh compilation
+- Required validation proof was collected for the targeted commands.
+- Full-suite harness command reported 4 test failures.
+- `behavior_assertion_status` was failed for memory conflict precision / demotion.
 
 **Possible solutions:**
-1. Share cargo target directory across worktrees
-2. Pre-compile before agent run
-3. Use `cargo test` with shared target dir
+1. Re-run the targeted memory tests in the current tree to decide whether this is a real product regression.
+2. If targeted tests pass, inspect the 4 full-suite failures before changing memory logic.
+3. Share cargo target directory across worktrees to reduce compile overhead, but keep it separate from correctness triage.
 
 ### 3. Previous Run Issues (Fixed)
 
 | Issue | Status | Fix |
 |-------|--------|-----|
-| Quality status parsing | ✅ Fixed | `grep -q '^status=ok'` instead of `grep -q '^ok'` |
+| Quality status parsing | ✅ Fixed in loop, report generator needed follow-up | `grep -q '^status=ok'`; product summary now parses key/value status fields |
 | Timeout too short (600s) | ✅ Fixed | Increased to 1200s |
 | `file_patch` forbidden | ✅ Fixed | Removed from `forbidden_tools` |
 | Heavy verification commands | ✅ Fixed | Moved to `harness_commands` |
@@ -185,11 +186,37 @@ The verification command `cargo test -q retrieval_context -- --test-threads=1` r
 
 ## Recommendations
 
+### Follow-up Fixes Applied
+
+After reviewing the raw artifacts, the daily gate tooling and deterministic test regressions were corrected:
+
+1. Product daily summary now parses `agent-quality-status.txt` as key/value status fields and reports `4/8`, not `0/8`.
+2. Provider chat timeout is classified as `environment` in daily summary backfill and in new `run_live_eval.sh` quality status generation.
+3. `--include-desktop` now actually adds `desktop-ui-smoke-polish` to the daily case list.
+4. Daily-gate tasks now carry `capability_level` metadata.
+5. Active-memory baseline now reports matched test counts and fails on zero-test filters.
+6. The full-suite failures behind `memory-recall-conflict-precision` were fixed in the current tree:
+   - workflow contract context is inserted into the system-prefix area instead of after the user message;
+   - stop-check behavior test now matches the current boundary where no-progress is handled outside `StopChecker`;
+   - MiniMax default-model test matches the current `MiniMax-M3` default;
+   - read-only runtime `tool-results` artifacts are allowed while writes and unrelated app data remain denied.
+
+Validation after these fixes:
+
+```bash
+cargo fmt --check
+cargo test -q retrieval_context -- --test-threads=1
+cargo test -q memory::recall::tests:: -- --test-threads=1
+cargo test -q -- --test-threads=1
+```
+
+All above commands passed in the current tree. The old live run still contains the original MiniMax timeout outputs, so a fresh daily live eval is required before changing the recorded live pass rate.
+
 ### Short-term (Next Run)
 
-1. **Increase API timeout** to 300s for MiniMax M3
-2. **Share cargo target directory** across worktrees to speed up compilation
-3. **Run with faster model** (DeepSeek, Kimi) for comparison
+1. **Classify provider API timeout separately** from `agent_flow`
+2. **Increase provider non-streaming API timeout** to 300s for MiniMax M3, or use a faster model for comparison
+3. **Re-run targeted memory gates** before changing memory logic
 
 ### Medium-term (Next Week)
 
@@ -234,7 +261,7 @@ PRIORITY_AGENT_LIVE_EVAL_MIN_FREE_GB=8
 
 ## Conclusion
 
-The daily gate infrastructure is working correctly. The main blocker is **MiniMax M3 model latency** for non-streaming tool requests. With a faster model or increased timeout, we expect 6-7/8 pass rate.
+The daily gate infrastructure is mostly in place, but the report generator and failure-owner classification needed correction before the run can be used as a stable baseline. The main non-product blocker is **MiniMax M3 model latency** for non-streaming tool requests. The remaining product-side question is `memory-recall-conflict-precision`, which needs targeted memory test triage before changing runtime logic.
 
 The second issue is **compilation time** in isolated worktrees. This can be solved by sharing cargo target directory.
 

@@ -2,6 +2,7 @@ id: memory-recall-conflict-precision
 title: memory recall should demote only relevant conflicts
 type: bug_fix
 eval_intent: audit_or_regression_check
+capability_level: 2
 complexity: medium
 risk: high
 

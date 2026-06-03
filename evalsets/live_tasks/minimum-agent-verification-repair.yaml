@@ -2,6 +2,7 @@ id: minimum-agent-verification-repair
 title: minimum agent repairs after observing failing validation
 type: bug_fix
 eval_intent: seeded_code_change
+capability_level: 6
 complexity: medium
 risk: medium
 runtime_profile: minimum_viable_agent
