@@ -2,7 +2,7 @@
 
 Date: 2026-06-03
 
-Status: active implementation plan
+Status: priority implementation pass complete; follow-on 1000-line backlog active
 
 ## Summary
 
@@ -60,6 +60,29 @@ Largest files observed:
 2520  src/tools/agent_tool/mod.rs
 2357  src/tools/memory_tool/mod.rs
 ```
+
+## Current Implementation Result
+
+After the 2026-06-03 priority pass, no non-generated engineering file remains
+over 3000 lines:
+
+```bash
+scripts/file-size-report.sh --threshold 3000
+# threshold: 3000
+# files: 0
+```
+
+The strict 1000-line report still lists many files. That is expected after this
+pass for two reasons:
+
+- this pass deliberately prioritized the highest-risk 3000+ line modules first;
+- moving large inline tests into `tests.rs` files can increase the raw over-1000
+  count while making runtime modules easier to inspect.
+
+Treat remaining 1000-3000 line runtime files as the next backlog, not as a
+reason to keep unrelated behavior changes open. Test-only files over 1000 lines
+are acceptable when they preserve fixture locality and are cheaper to review
+than hiding those fixtures inside runtime modules.
 
 ## Engineering Interpretation
 
@@ -296,6 +319,45 @@ cargo fmt
 cargo check -q
 cargo test -q app::tests -- --test-threads=1
 cargo test -q tui -- --test-threads=1
+```
+
+### 2026-06-03 Slice 8: Engine, TUI Slash, And Desktop Test Boundaries
+
+Status: completed.
+
+Changes:
+
+- moved large inline test modules out of the remaining 3000+ line hotspots:
+  `src/engine/evalset.rs`, `src/engine/task_contract.rs`,
+  `src/engine/context_compressor.rs`, `src/engine/evidence_ledger.rs`,
+  `src/engine/trace.rs`, `src/tui/slash_handler/learning.rs`, and
+  `apps/desktop/src-tauri/src/lib.rs`;
+- regenerated moved test modules with raw string fixture indentation preserved,
+  so YAML/markdown fixtures keep their original semantics;
+- extracted evalset schema/default data models into
+  `src/engine/evalset/model.rs`;
+- extracted skill proposal, skill fitness, disabled-skill backup, and evolution
+  gate helpers from the learning slash handler into
+  `src/tui/slash_handler/learning/skills.rs`;
+- reduced all previously 3000+ line non-generated engineering files below the
+  priority threshold.
+
+Validation:
+
+```bash
+cargo fmt
+cargo check -q
+cargo test -q evalset -- --test-threads=1
+cargo test -q task_contract -- --test-threads=1
+cargo test -q context_compressor -- --test-threads=1
+cargo test -q evidence_ledger -- --test-threads=1
+cargo test -q trace -- --test-threads=1
+cargo test -q tui -- --test-threads=1
+(cd apps/desktop/src-tauri && cargo test -q)
+scripts/file-size-report.sh --threshold 3000
+scripts/runtime-entrypoint-smoke.sh --cli --timeout 5
+scripts/runtime-entrypoint-smoke.sh --tui --timeout 5
+scripts/runtime-entrypoint-smoke.sh --desktop-quick
 ```
 
 ### 3. Memory Manager And Provider
