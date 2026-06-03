@@ -433,3 +433,26 @@ scripts/file-size-report.sh --threshold 3000
 bash scripts/product-daily-gate.sh --dry-run --layer product
 bash scripts/product-daily-gate.sh --report-only product-daily-tui-20260603-093401
 ```
+
+### 2026-06-03 Slice 2: Live Eval Quality Status Extraction
+
+Status: completed.
+
+Changes:
+
+- extracted the quality-signal and `failure_owner` generation heredoc from
+  `scripts/run_live_eval.sh` into `scripts/live_eval_quality_status.py`;
+- preserved the existing command-line arguments, stdout report text, and
+  `agent-quality-status.txt` output format;
+- reduced `scripts/run_live_eval.sh` by another large embedded Python block.
+
+Validation:
+
+```bash
+bash -n scripts/run_live_eval.sh scripts/product-daily-gate.sh
+python3 -m py_compile scripts/live_eval_quality_status.py scripts/product_daily_summary.py scripts/live_eval_report_parser.py
+bash scripts/live-eval-summary-smoke.sh
+bash scripts/product-daily-gate.sh --dry-run --layer product
+bash scripts/product-daily-gate.sh --report-only product-daily-tui-20260603-093401
+scripts/file-size-report.sh --top 20
+```
