@@ -456,3 +456,25 @@ bash scripts/product-daily-gate.sh --dry-run --layer product
 bash scripts/product-daily-gate.sh --report-only product-daily-tui-20260603-093401
 scripts/file-size-report.sh --top 20
 ```
+
+### 2026-06-03 Slice 3: File Tool Path Policy Extraction
+
+Status: completed.
+
+Changes:
+
+- extracted file-tool path resolution, normalization, absolute path allowlist,
+  read-only root policy, and UNC/network-path detection into
+  `src/tools/file_tool/path_policy.rs`;
+- kept `src/tools/file_tool/mod.rs` as the public compatibility surface via
+  re-exports, so existing callers still use `crate::tools::file_tool::*`;
+- did not change file read/write behavior or permission policy.
+
+Validation:
+
+```bash
+cargo fmt
+cargo test -q file_tool -- --test-threads=1
+cargo test -q route_scoped_tools -- --test-threads=1
+cargo test -q grep_allows_runtime_tool_result_artifacts_read_only -- --test-threads=1
+```
