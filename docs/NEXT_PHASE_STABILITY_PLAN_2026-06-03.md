@@ -2,7 +2,7 @@
 
 Date: 2026-06-03
 
-Status: proposed plan
+Status: active implementation plan
 
 ## Summary
 
@@ -63,6 +63,8 @@ acceptable when the evidence is honest. False green closeout is not acceptable.
 Goal: preserve the known-good stabilization work before starting deeper repair
 loop changes.
 
+Implementation status: done in baseline commit `5ca87926`.
+
 ### Work
 
 - Commit the current source and documentation fixes as one scoped baseline
@@ -92,6 +94,11 @@ Expected result:
 
 Goal: make `code-change-verification-repair-loop` reliable with capable
 providers and honest, bounded, diagnosable with weak providers.
+
+Implementation status: in progress. The daily runner now supports single-case
+execution, and `code-change-verification-repair-loop` runs with an explicit
+no-effective-worktree-progress timeout so weak-provider slow tails close out
+with structured evidence instead of only hitting the wall timeout.
 
 The repair loop should be treated as a product workflow:
 
@@ -136,18 +143,26 @@ The repair loop should be treated as a product workflow:
 
 ```bash
 bash scripts/product-daily-gate.sh --case code-change-verification-repair-loop
+PRIORITY_AGENT_DAILY_REPAIR_NO_EFFECTIVE_PROGRESS_SECS=360 \
+  bash scripts/product-daily-gate.sh --case code-change-verification-repair-loop
 cargo test -q reflection_pass -- --test-threads=1
 cargo test -q evalset -- --test-threads=1
 cargo test -q closeout
 ```
 
-If the daily script does not yet support single-case execution, add that as a
-small daily-gate improvement before using this validation command.
+Single-case execution is now available through `--case`.
 
 ## Phase 2: Prove TUI And Desktop Real Paths
 
 Goal: prove the user-facing entrypoints, not only the noninteractive eval-run
 path.
+
+Implementation status: initial entrypoint smoke is available through
+`scripts/runtime-entrypoint-smoke.sh`. It separates headless runtime dogfood,
+real pseudo-terminal CLI/TUI launch smoke, desktop quick smoke, and packaged
+native desktop smoke. Full automated TUI task submission remains a later stretch
+item because the current full-screen interface still requires terminal
+interaction.
 
 The current daily runner validates the runtime through `--eval-run`. That is
 useful, but it does not fully prove the real TUI and desktop experience. The
@@ -189,17 +204,26 @@ Recommended commands should be finalized after checking the current app launch
 scripts. The expected shape is:
 
 ```bash
-cargo run -- --cli
-cargo run -- --tui
-cd apps/desktop && pnpm tauri dev
+scripts/runtime-entrypoint-smoke.sh --dry-run --all
+scripts/runtime-entrypoint-smoke.sh --headless
+scripts/runtime-entrypoint-smoke.sh --cli
+scripts/runtime-entrypoint-smoke.sh --tui
+scripts/runtime-entrypoint-smoke.sh --desktop-quick
+scripts/runtime-entrypoint-smoke.sh --desktop-native
 ```
 
-For automated smoke, prefer a small dedicated script once the manual path is
-confirmed.
+`--desktop-native` builds and launches the packaged macOS app through the
+existing native smoke path. Use it as a scheduled or pre-release check, not as
+the default fast daily gate.
 
 ## Phase 3: Provider Timeout And Slow-Tail Control
 
 Goal: make provider weakness, latency, and timeout behavior visible and bounded.
+
+Implementation status: in progress. Agent-run now writes
+`agent-run-metrics.json` with elapsed time, first activity, first worktree diff,
+no-effective-progress duration, termination reason, provider family/model, and
+streaming tool mode. Product daily summaries include these slow-tail fields.
 
 The runtime should not assume every provider has the same latency, tool-call
 behavior, streaming support, or repair ability. It should also avoid mixing
@@ -242,6 +266,15 @@ provider failures with agent-flow defects.
 ## Phase 4: Formalize The Daily Baseline
 
 Goal: turn daily evals from ad hoc evidence into a stable health dashboard.
+
+Implementation status: daily layers are now script-level concepts:
+
+```bash
+bash scripts/product-daily-gate.sh --layer smoke --dry-run
+bash scripts/product-daily-gate.sh --layer product --dry-run
+bash scripts/product-daily-gate.sh --layer stretch --dry-run
+bash scripts/product-daily-gate.sh --case code-change-verification-repair-loop --dry-run
+```
 
 The daily baseline should have three layers.
 

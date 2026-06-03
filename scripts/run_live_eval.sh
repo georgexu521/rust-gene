@@ -18,6 +18,7 @@ RUN_TESTS=0
 AGENT_TIMEOUT_SECS="${PRIORITY_AGENT_LIVE_EVAL_TIMEOUT_SECS:-0}"
 AGENT_IDLE_SECS="${PRIORITY_AGENT_LIVE_EVAL_IDLE_SECS:-0}"
 AGENT_MONITOR_INTERVAL_SECS="${PRIORITY_AGENT_LIVE_EVAL_MONITOR_INTERVAL_SECS:-30}"
+AGENT_NO_EFFECTIVE_PROGRESS_SECS="${PRIORITY_AGENT_LIVE_EVAL_NO_EFFECTIVE_PROGRESS_SECS:-0}"
 MIN_FREE_GB="${PRIORITY_AGENT_LIVE_EVAL_MIN_FREE_GB:-8}"
 OVERLAY_WORKTREE="${PRIORITY_AGENT_LIVE_EVAL_OVERLAY_WORKTREE:-0}"
 SKIP_PROVIDER_HEALTH="${PRIORITY_AGENT_LIVE_EVAL_SKIP_PROVIDER_HEALTH:-0}"
@@ -143,6 +144,9 @@ Options:
   --idle-timeout SECS
                      Kill agent-run if output/events/stderr stay idle. 0 disables it
                      (default: 0; monitor log still records liveness).
+  --no-effective-progress-timeout SECS
+                     Kill agent-run if no worktree diff appears for SECS. 0 disables it
+                     (default: 0; intended for repair-loop slow-tail checks).
   -h, --help         Show this help.
 
 MiniMax:
@@ -166,6 +170,7 @@ while [[ $# -gt 0 ]]; do
     --overlay-working-tree) OVERLAY_WORKTREE=1; shift ;;
     --timeout) AGENT_TIMEOUT_SECS="${2:-}"; shift 2 ;;
     --idle-timeout) AGENT_IDLE_SECS="${2:-}"; shift 2 ;;
+    --no-effective-progress-timeout) AGENT_NO_EFFECTIVE_PROGRESS_SECS="${2:-}"; shift 2 ;;
     -h|--help) usage; exit 0 ;;
     *) echo "Unknown option: $1" >&2; usage; exit 1 ;;
   esac
@@ -1122,7 +1127,7 @@ PY
 
 agent_run_task() {
   local file="$1" task_workdir="$2"
-  local id report_dir agent_stdout agent_stderr agent_monitor agent_output agent_events exit_file prompt_file env_base cargo_target_dir runtime_profile
+  local id report_dir agent_stdout agent_stderr agent_monitor agent_metrics agent_output agent_events exit_file prompt_file env_base cargo_target_dir runtime_profile
   id="$(yaml_get "$file" id)"
   runtime_profile="$(yaml_get "$file" runtime_profile "")"
   report_dir="$REPORT_DIR/live-$RUN_ID/$id"
@@ -1130,6 +1135,7 @@ agent_run_task() {
   agent_stdout="$report_dir/agent-stdout.log"
   agent_stderr="$report_dir/agent-stderr.log"
   agent_monitor="$report_dir/agent-monitor.log"
+  agent_metrics="$report_dir/agent-run-metrics.json"
   agent_output="$ROOT_DIR/$report_dir/agent-output.md"
   agent_events="$ROOT_DIR/$report_dir/agent-events.jsonl"
   exit_file="$report_dir/agent-exit-status.txt"
@@ -1161,11 +1167,13 @@ agent_run_task() {
   python3 - \
     "$AGENT_TIMEOUT_SECS" \
     "$AGENT_IDLE_SECS" \
+    "$AGENT_NO_EFFECTIVE_PROGRESS_SECS" \
     "$AGENT_MONITOR_INTERVAL_SECS" \
     "$task_workdir" \
     "$agent_stdout" \
     "$agent_stderr" \
     "$agent_monitor" \
+    "$agent_metrics" \
     "$ROOT_DIR/target/release/priority-agent" \
     "$prompt_file" \
     "$agent_output" \
@@ -1174,24 +1182,27 @@ agent_run_task() {
     "$cargo_target_dir" \
     "$runtime_profile" <<'PY' >"$exit_file"
 import os
+import json
 import subprocess
 import sys
 import time
 
 timeout = int(sys.argv[1])
 idle_timeout = int(sys.argv[2])
-monitor_interval = int(sys.argv[3])
-workdir = sys.argv[4]
-stdout_path = sys.argv[5]
-stderr_path = sys.argv[6]
-monitor_path = sys.argv[7]
-binary = sys.argv[8]
-prompt_file = sys.argv[9]
-output_file = sys.argv[10]
-events_file = sys.argv[11]
-env_base = sys.argv[12]
-cargo_target_dir = sys.argv[13]
-runtime_profile = sys.argv[14]
+no_effective_progress_timeout = int(sys.argv[3])
+monitor_interval = int(sys.argv[4])
+workdir = sys.argv[5]
+stdout_path = sys.argv[6]
+stderr_path = sys.argv[7]
+monitor_path = sys.argv[8]
+metrics_path = sys.argv[9]
+binary = sys.argv[10]
+prompt_file = sys.argv[11]
+output_file = sys.argv[12]
+events_file = sys.argv[13]
+env_base = sys.argv[14]
+cargo_target_dir = sys.argv[15]
+runtime_profile = sys.argv[16]
 
 env = os.environ.copy()
 real_home = env.get("HOME", "")
@@ -1271,15 +1282,56 @@ def activity_signature():
         file_signature(events_file),
     )
 
+def worktree_diff_signature():
+    try:
+        result = subprocess.run(
+            ["git", "-C", workdir, "status", "--porcelain"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            timeout=5,
+        )
+    except Exception:
+        return ""
+    return result.stdout.strip()
+
 started_at = time.monotonic()
+started_wall = time.time()
 last_activity_at = started_at
+last_effective_action_at = started_at
 last_monitor_at = started_at
 last_signature = activity_signature()
+last_diff_signature = worktree_diff_signature()
+first_activity_after_start_secs = None
+first_effective_action_after_start_secs = None
+termination_reason = "process_exit"
 
 def append_monitor(message):
     timestamp = time.strftime("%Y-%m-%dT%H:%M:%S%z")
     with open(monitor_path, "a", encoding="utf-8") as monitor:
         monitor.write(f"[{timestamp}] {message}\n")
+
+def write_metrics(status):
+    now = time.monotonic()
+    metrics = {
+        "status": status,
+        "termination_reason": termination_reason,
+        "started_at_epoch": started_wall,
+        "elapsed_secs": round(max(0, now - started_at), 3),
+        "idle_for_secs": round(max(0, now - last_activity_at), 3),
+        "no_effective_progress_for_secs": round(max(0, now - last_effective_action_at), 3),
+        "first_activity_after_start_secs": first_activity_after_start_secs,
+        "first_effective_action_after_start_secs": first_effective_action_after_start_secs,
+        "provider_family": "minimax",
+        "provider_model": env.get("MINIMAX_MODEL", ""),
+        "streaming_tool_mode": "non_streaming",
+        "wall_timeout_secs": timeout,
+        "idle_timeout_secs": idle_timeout,
+        "no_effective_progress_timeout_secs": no_effective_progress_timeout,
+    }
+    with open(metrics_path, "w", encoding="utf-8") as metrics_file:
+        json.dump(metrics, metrics_file, ensure_ascii=False, indent=2)
+        metrics_file.write("\n")
 
 with open(stdout_path, "wb") as stdout, open(stderr_path, "wb") as stderr:
     proc = subprocess.Popen(
@@ -1298,6 +1350,15 @@ with open(stdout_path, "wb") as stdout, open(stderr_path, "wb") as stderr:
         if current_signature != last_signature:
             last_signature = current_signature
             last_activity_at = now
+            if first_activity_after_start_secs is None:
+                first_activity_after_start_secs = round(now - started_at, 3)
+
+        current_diff_signature = worktree_diff_signature()
+        if current_diff_signature and current_diff_signature != last_diff_signature:
+            last_diff_signature = current_diff_signature
+            last_effective_action_at = now
+            if first_effective_action_after_start_secs is None:
+                first_effective_action_after_start_secs = round(now - started_at, 3)
 
         if status is not None:
             break
@@ -1315,6 +1376,7 @@ with open(stdout_path, "wb") as stdout, open(stderr_path, "wb") as stderr:
             )
 
         if timeout > 0 and now - started_at > timeout:
+            termination_reason = "wall_timeout"
             proc.terminate()
             try:
                 proc.wait(timeout=10)
@@ -1327,6 +1389,7 @@ with open(stdout_path, "wb") as stdout, open(stderr_path, "wb") as stderr:
             break
 
         if idle_timeout > 0 and now - last_activity_at > idle_timeout:
+            termination_reason = "idle_timeout"
             proc.terminate()
             try:
                 proc.wait(timeout=10)
@@ -1338,8 +1401,26 @@ with open(stdout_path, "wb") as stdout, open(stderr_path, "wb") as stderr:
             status = 125
             break
 
+        if no_effective_progress_timeout > 0 and now - last_effective_action_at > no_effective_progress_timeout:
+            termination_reason = "no_effective_progress_timeout"
+            proc.terminate()
+            try:
+                proc.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait()
+            stderr.write(f"\n[no effective progress timeout after {no_effective_progress_timeout}s without worktree diff]\n".encode())
+            append_monitor(
+                "agent-run no effective progress timeout "
+                f"elapsed={int(now - started_at)}s "
+                f"no_effective_progress_for={int(now - last_effective_action_at)}s"
+            )
+            status = 126
+            break
+
         time.sleep(5)
 
+write_metrics(status)
 print(status)
 PY
 
@@ -1489,6 +1570,9 @@ File.write(json_path, JSON.generate(YAML.load_file(sample_path) || {}) + "\n")
       fi
       if [[ -f "$report_dir/agent-monitor.log" ]]; then
         echo "- Monitor: \`$report_dir/agent-monitor.log\`"
+      fi
+      if [[ -f "$report_dir/agent-run-metrics.json" ]]; then
+        echo "- Metrics: \`$report_dir/agent-run-metrics.json\`"
       fi
       if [[ -f "$report_dir/agent-events.jsonl" ]]; then
         echo
@@ -1888,6 +1972,9 @@ if not diff.strip():
 if tool_errors:
     print("warning: tool_errors_seen")
     warnings.append("tool_errors_seen")
+if "no effective progress timeout after" in stderr_text.lower():
+    print("warning: no_effective_progress_timeout")
+    failures.append("no_effective_progress_timeout")
 if stale_edit_warnings >= 2:
     print("warning: repeated_stale_edit_warnings")
     warnings.append("repeated_stale_edit_warnings")
@@ -1987,6 +2074,8 @@ def infer_failure_owner():
         or "provider health step timed out after" in provider_text
     ):
         return "environment"
+    if "no effective progress timeout after" in provider_text:
+        return "llm_reasoning"
     if (
         "error sending request for url" in provider_text
         or "connection refused" in provider_text

@@ -64,6 +64,24 @@ and model-flow behavior. It cannot prove desktop-specific behavior such as
 Tauri command wiring, event delivery to React, packaged-app environment,
 window state, or visual rendering. Those stay as small desktop smoke tests.
 
+## Entrypoint Smoke
+
+Use the entrypoint smoke wrapper when the question is whether the real launch
+paths still start and route into the shared runtime shell:
+
+```bash
+scripts/runtime-entrypoint-smoke.sh --dry-run --all
+scripts/runtime-entrypoint-smoke.sh --headless
+scripts/runtime-entrypoint-smoke.sh --cli
+scripts/runtime-entrypoint-smoke.sh --tui
+scripts/runtime-entrypoint-smoke.sh --desktop-quick
+scripts/runtime-entrypoint-smoke.sh --desktop-native
+```
+
+The CLI and TUI checks run in a pseudo-terminal and verify startup output. The
+desktop checks delegate to `scripts/desktop-smoke.sh`; `--desktop-native`
+launches the packaged macOS app and captures native artifacts.
+
 ## Runtime Diet Boundary
 
 The shared runtime should not infer semantic intent from natural-language model

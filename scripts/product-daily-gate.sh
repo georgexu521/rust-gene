@@ -7,6 +7,8 @@
 # Usage:
 #   scripts/product-daily-gate.sh                    # full run
 #   scripts/product-daily-gate.sh --dry-run           # show cases, skip agent run
+#   scripts/product-daily-gate.sh --layer smoke       # fast daily smoke layer
+#   scripts/product-daily-gate.sh --case <id>         # run one case
 #   scripts/product-daily-gate.sh --skip-provider-health
 #   scripts/product-daily-gate.sh --timeout 600
 #   scripts/product-daily-gate.sh --report-only RUN_ID
@@ -16,10 +18,17 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
-# ── Daily eval case list ──
-# These cases cover the core product surface: inspection, stale edit,
-# multi-file edit, repair loop, memory, and agent verification.
-DAILY_CASES=(
+# ── Daily eval case lists ──
+# smoke: fast must-pass health; product: main daily line; stretch: slower
+# entrypoint/provider stress that should not mask the product layer signal.
+DAILY_SMOKE_CASES=(
+  core-inspection-grounding
+  core-simple-stale-edit
+  project-partner-resume-with-memory
+  minimum-agent-verification-repair
+)
+
+DAILY_PRODUCT_CASES=(
   core-inspection-grounding
   core-simple-stale-edit
   core-multi-file-edit
@@ -28,6 +37,13 @@ DAILY_CASES=(
   project-partner-resume-with-memory
   memory-recall-conflict-precision
   minimum-agent-verification-repair
+)
+
+DAILY_STRETCH_CASES=(
+  desktop-ui-smoke-polish
+  code-change-verification-repair-loop
+  core-long-output-artifact
+  core-provider-roundtrip
 )
 
 DESKTOP_CASES=(
@@ -41,14 +57,19 @@ SKIP_DESKTOP_CASES="${PRIORITY_AGENT_SKIP_DESKTOP_CASES:-1}"
 DRY_RUN=0
 SKIP_PROVIDER_HEALTH=0
 TIMEOUT_SECS="${PRIORITY_AGENT_DAILY_TIMEOUT_SECS:-1200}"
+REPAIR_NO_EFFECTIVE_PROGRESS_SECS="${PRIORITY_AGENT_DAILY_REPAIR_NO_EFFECTIVE_PROGRESS_SECS:-360}"
 REPORT_ONLY=""
-LABEL="product-daily"
+LABEL=""
 RUN_ID=""
+LAYER="${PRIORITY_AGENT_DAILY_LAYER:-product}"
+CASE_OVERRIDE=""
 
 # ── Parse args ──
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --dry-run) DRY_RUN=1; shift ;;
+    --layer) LAYER="${2:-product}"; shift 2 ;;
+    --case) CASE_OVERRIDE="${2:-}"; shift 2 ;;
     --skip-provider-health) SKIP_PROVIDER_HEALTH=1; shift ;;
     --include-desktop) SKIP_DESKTOP_CASES=0; shift ;;
     --timeout) TIMEOUT_SECS="${2:-1200}"; shift 2 ;;
@@ -61,6 +82,8 @@ Usage: scripts/product-daily-gate.sh [options]
 
 Options:
   --dry-run              Show case list and exit without running agent
+  --layer LAYER          daily layer: smoke, product, stretch, all (default: product)
+  --case ID              Run a single live task case
   --skip-provider-health Skip provider health preflight
   --include-desktop      Include desktop UI tests (requires pnpm/playwright)
   --timeout SECS         Wall-clock timeout per agent run (default: 1200)
@@ -75,9 +98,66 @@ EOF
   esac
 done
 
+case "$LAYER" in
+  smoke) DAILY_CASES=("${DAILY_SMOKE_CASES[@]}") ;;
+  product) DAILY_CASES=("${DAILY_PRODUCT_CASES[@]}") ;;
+  stretch) DAILY_CASES=("${DAILY_STRETCH_CASES[@]}") ;;
+  all) DAILY_CASES=("${DAILY_SMOKE_CASES[@]}" "${DAILY_PRODUCT_CASES[@]}" "${DAILY_STRETCH_CASES[@]}") ;;
+  *) echo "Unknown layer: $LAYER" >&2; exit 1 ;;
+esac
+
+UNIQUE_CASES=()
+for candidate_case in "${DAILY_CASES[@]}"; do
+  found=0
+  if [[ "${#UNIQUE_CASES[@]}" -gt 0 ]]; then
+    for id in "${UNIQUE_CASES[@]}"; do
+      if [[ "$id" == "$candidate_case" ]]; then
+        found=1
+        break
+      fi
+    done
+  fi
+  if [[ "$found" == "0" ]]; then
+    UNIQUE_CASES+=("$candidate_case")
+  fi
+done
+DAILY_CASES=("${UNIQUE_CASES[@]}")
+
 if [[ "$SKIP_DESKTOP_CASES" == "0" ]]; then
-  DAILY_CASES+=("${DESKTOP_CASES[@]}")
+  for desktop_case in "${DESKTOP_CASES[@]}"; do
+    found=0
+    for id in "${DAILY_CASES[@]}"; do
+      if [[ "$id" == "$desktop_case" ]]; then
+        found=1
+        break
+      fi
+    done
+    if [[ "$found" == "0" ]]; then
+      DAILY_CASES+=("$desktop_case")
+    fi
+  done
 fi
+
+if [[ -n "$CASE_OVERRIDE" ]]; then
+  DAILY_CASES=("$CASE_OVERRIDE")
+fi
+
+if [[ -z "$LABEL" ]]; then
+  if [[ "$LAYER" == "product" ]]; then
+    LABEL="product-daily"
+  else
+    LABEL="daily-${LAYER}"
+  fi
+fi
+
+DESKTOP_INCLUDED=0
+for id in "${DAILY_CASES[@]}"; do
+  for desktop_case in "${DESKTOP_CASES[@]}"; do
+    if [[ "$id" == "$desktop_case" ]]; then
+      DESKTOP_INCLUDED=1
+    fi
+  done
+done
 
 if [[ -z "$RUN_ID" && -z "$REPORT_ONLY" ]]; then
   RUN_ID="${LABEL}-$(date +%Y%m%d-%H%M%S)"
@@ -95,9 +175,14 @@ print_header() {
   echo "╚══════════════════════════════════════════════════════════╝"
   echo
   echo "Run id: ${RUN_ID:-$REPORT_ONLY}"
+  echo "Layer: $LAYER"
+  if [[ -n "$CASE_OVERRIDE" ]]; then
+    echo "Single case: $CASE_OVERRIDE"
+  fi
   echo "Cases: ${#DAILY_CASES[@]}"
   echo "Timeout: ${TIMEOUT_SECS}s per case"
-  if [[ "$SKIP_DESKTOP_CASES" == "0" ]]; then
+  echo "Repair no-effective-progress timeout: ${REPAIR_NO_EFFECTIVE_PROGRESS_SECS}s"
+  if [[ "$DESKTOP_INCLUDED" == "1" ]]; then
     echo "Desktop tests: included"
   else
     echo "Desktop tests: skipped (use --include-desktop to enable)"
@@ -139,7 +224,7 @@ generate_report() {
 
   mkdir -p "$run_dir"
 
-  python3 - "$run_dir" "${DAILY_CASES[*]}" "$run_id" "$report_file" "$json_file" <<'PY'
+  python3 - "$run_dir" "${DAILY_CASES[*]}" "$run_id" "$LAYER" "$report_file" "$json_file" <<'PY'
 import json
 import pathlib
 import re
@@ -160,8 +245,9 @@ from scripts.live_eval_report_parser import (
 run_dir = pathlib.Path(sys.argv[1])
 daily_cases = sys.argv[2].split()
 run_id = sys.argv[3]
-report_path = pathlib.Path(sys.argv[4])
-json_path = pathlib.Path(sys.argv[5])
+layer = sys.argv[4]
+report_path = pathlib.Path(sys.argv[5])
+json_path = pathlib.Path(sys.argv[6])
 repo_root = pathlib.Path.cwd()
 
 def capability_level(case_id):
@@ -244,6 +330,14 @@ for case_id in daily_cases:
     stderr_file = case_dir / "agent-stderr.log"
     stderr = stderr_file.read_text(encoding="utf-8") if stderr_file.exists() else ""
 
+    metrics_file = case_dir / "agent-run-metrics.json"
+    metrics = {}
+    if metrics_file.exists():
+        try:
+            metrics = json.loads(metrics_file.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            metrics = {}
+
     report_file = case_dir / "report.md"
     report_text = report_file.read_text(encoding="utf-8") if report_file.exists() else ""
     required_status = report_value(report_text, "required_command_status", test_status)
@@ -317,7 +411,16 @@ for case_id in daily_cases:
         "memory_active": memory_metrics.get("active", False),
         "memory_proposals": memory_metrics.get("proposal_count", 0),
         "tool_errors": trajectory_metrics.get("tool_errors", 0),
+        "tool_round_count": trajectory_metrics.get("tool_call_count", 0),
         "changed_files": trajectory_metrics.get("changed_files", 0),
+        "provider_family": metrics.get("provider_family", "unknown"),
+        "provider_model": metrics.get("provider_model", "unknown"),
+        "streaming_tool_mode": metrics.get("streaming_tool_mode", "unknown"),
+        "termination_reason": metrics.get("termination_reason", "unknown"),
+        "elapsed_secs": metrics.get("elapsed_secs"),
+        "first_activity_after_start_secs": metrics.get("first_activity_after_start_secs"),
+        "first_effective_action_after_start_secs": metrics.get("first_effective_action_after_start_secs"),
+        "no_effective_progress_for_secs": metrics.get("no_effective_progress_for_secs"),
     }
     results.append(result)
 
@@ -329,6 +432,7 @@ total = len(results)
 
 summary = {
     "run_id": run_id,
+    "layer": layer,
     "generated": __import__("datetime").datetime.now().isoformat(),
     "total": total,
     "passed": passed,
@@ -346,13 +450,14 @@ lines = [
     "# Product Daily Gate Summary",
     "",
     f"- Run id: `{run_id}`",
+    f"- Layer: `{layer}`",
     f"- Generated: {summary['generated']}",
     f"- Pass rate: **{summary['pass_rate']}**",
     "",
     "## Results",
     "",
-    f"| {'Case':<40} | {'Level':<5} | {'Status':<12} | {'Score':<6} | {'Owner':<15} | {'Closeout':<12} | {'Phases':<20} | {'Memory':<8} |",
-    f"|{'-'*42}|{'-'*7}|{'-'*14}|{'-'*8}|{'-'*17}|{'-'*14}|{'-'*22}|{'-'*10}|",
+    f"| {'Case':<40} | {'Level':<5} | {'Status':<12} | {'Score':<6} | {'Owner':<15} | {'Time':<8} | {'Provider':<18} | {'Closeout':<12} |",
+    f"|{'-'*42}|{'-'*7}|{'-'*14}|{'-'*8}|{'-'*17}|{'-'*10}|{'-'*20}|{'-'*14}|",
 ]
 
 for r in results:
@@ -362,9 +467,31 @@ for r in results:
     score_str = f"{score:.0f}" if isinstance(score, (int, float)) else str(score or "-")
     owner = r.get("failure_owner", "-") or "-"
     closeout = r.get("closeout_status", "-") or "-"
-    phases = ", ".join(r.get("runtime_spine_phases", [])[:3]) or "-"
-    memory = "yes" if r.get("memory_active") else "no"
-    lines.append(f"| {r['id']:<40} | {level:<5} | {status_icon:<12} | {score_str:<6} | {owner:<15} | {closeout:<12} | {phases:<20} | {memory:<8} |")
+    elapsed = r.get("elapsed_secs")
+    time_str = f"{elapsed:.0f}s" if isinstance(elapsed, (int, float)) else "-"
+    provider = r.get("provider_model") or r.get("provider_family") or "-"
+    provider = provider[:18]
+    lines.append(f"| {r['id']:<40} | {level:<5} | {status_icon:<12} | {score_str:<6} | {owner:<15} | {time_str:<8} | {provider:<18} | {closeout:<12} |")
+
+lines.extend([
+    "",
+    "## Slow Tail Metrics",
+    "",
+])
+
+lines.append(f"| {'Case':<40} | {'Termination':<28} | {'First activity':<14} | {'First diff':<12} | {'No effective progress':<22} | {'Tool rounds':<11} |")
+lines.append(f"|{'-'*42}|{'-'*30}|{'-'*16}|{'-'*14}|{'-'*24}|{'-'*13}|")
+def secs(value):
+    return f"{value:.0f}s" if isinstance(value, (int, float)) else "-"
+
+for r in results:
+    lines.append(
+        f"| {r['id']:<40} | {str(r.get('termination_reason') or '-'):<28} | "
+        f"{secs(r.get('first_activity_after_start_secs')):<14} | "
+        f"{secs(r.get('first_effective_action_after_start_secs')):<12} | "
+        f"{secs(r.get('no_effective_progress_for_secs')):<22} | "
+        f"{str(r.get('tool_round_count', '-')):<11} |"
+    )
 
 lines.extend([
     "",
@@ -480,6 +607,9 @@ for case_id in "${DAILY_CASES[@]}"; do
     --label "$LABEL" \
     --timeout "$TIMEOUT_SECS"
   )
+  if [[ "$case_id" == "code-change-verification-repair-loop" && "$REPAIR_NO_EFFECTIVE_PROGRESS_SECS" -gt 0 ]]; then
+    RUN_CMD+=(--no-effective-progress-timeout "$REPAIR_NO_EFFECTIVE_PROGRESS_SECS")
+  fi
   if [[ "${#RUN_LIVE_EVAL_ARGS[@]}" -gt 0 ]]; then
     RUN_CMD+=("${RUN_LIVE_EVAL_ARGS[@]}")
   fi
