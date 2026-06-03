@@ -385,3 +385,35 @@ cargo test -q memory_tool -- --test-threads=1
 cargo test -q bash_tool -- --test-threads=1
 scripts/file-size-report.sh --threshold 2000 --top 35
 ```
+
+### 2026-06-03 Phase 3: Runtime Repair Loop Boundaries
+
+Status: completed.
+
+Changes:
+
+- moved inline tests out of runtime repair/control files into child test
+  modules for `tool_execution_controller`, `request_preparation_controller`,
+  `tool_result_controller`, `streaming`, `task_context`, and
+  `workflow_contract`;
+- moved deterministic patch repair rule implementations from
+  `patch_recovery.rs` into `patch_repair_rules.rs`, leaving
+  `patch_recovery.rs` focused on synthesis flow and patch validation;
+- moved MCP local tool adapter and `/mcp` management tool code into
+  `src/engine/mcp/tool.rs`, keeping `mcp.rs` focused on client/manager state;
+- moved evidence-ledger tool-result summary and metadata helpers into
+  `src/engine/evidence_ledger/tool_records.rs`;
+- reduced all Band 2 target files below the 2000-line warning threshold.
+
+Validation:
+
+```bash
+cargo fmt --check
+cargo check -q
+cargo test -q conversation_loop -- --test-threads=1
+cargo test -q closeout -- --test-threads=1
+cargo test -q runtime_spine_behavior_contract_covers_context_action_progress_stop_and_proof -- --test-threads=1
+cargo test -q evidence_ledger -- --test-threads=1
+cargo test -q mcp -- --test-threads=1
+scripts/file-size-report.sh --threshold 2000 --top 30
+```

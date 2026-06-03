@@ -1,0 +1,852 @@
+use super::*;
+
+pub(super) fn tool_arguments_hash(arguments: &serde_json::Value) -> String {
+    let rendered = serde_json::to_string(arguments).unwrap_or_else(|_| arguments.to_string());
+    let digest = format!("{:x}", md5::compute(rendered));
+    digest.chars().take(HASH_PREVIEW_CHARS).collect()
+}
+
+pub(super) fn tool_summary(result: &ToolResult) -> Option<&serde_json::Value> {
+    result
+        .data
+        .as_ref()
+        .and_then(|data| data.get("tool_summary"))
+}
+
+pub(super) fn summary_string(summary: Option<&serde_json::Value>, key: &str) -> Option<String> {
+    summary
+        .and_then(|summary| summary.get(key))
+        .and_then(serde_json::Value::as_str)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+}
+
+pub(super) fn summary_string_array(summary: Option<&serde_json::Value>, key: &str) -> Vec<String> {
+    summary
+        .and_then(|summary| summary.get(key))
+        .and_then(serde_json::Value::as_array)
+        .map(|values| {
+            values
+                .iter()
+                .filter_map(serde_json::Value::as_str)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+pub(super) fn summary_bool(summary: Option<&serde_json::Value>, key: &str) -> Option<bool> {
+    summary
+        .and_then(|summary| summary.get(key))
+        .and_then(serde_json::Value::as_bool)
+}
+
+pub(super) fn summary_search_or_read(
+    summary: Option<&serde_json::Value>,
+) -> ToolSearchOrReadRecord {
+    let Some(value) = summary.and_then(|summary| summary.get("search_or_read")) else {
+        return ToolSearchOrReadRecord::default();
+    };
+    ToolSearchOrReadRecord {
+        is_search: value
+            .get("is_search")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false),
+        is_read: value
+            .get("is_read")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false),
+        is_list: value
+            .get("is_list")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false),
+    }
+}
+
+pub(super) fn tool_permission_record(result: &ToolResult) -> Option<ToolPermissionRecord> {
+    let permission_request = result
+        .data
+        .as_ref()
+        .and_then(|data| data.get("permission_request"))?;
+    let metadata = permission_request.get("metadata");
+    Some(ToolPermissionRecord {
+        kind: permission_request
+            .get("kind")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string),
+        approved: permission_request_approved(permission_request, result.success),
+        request_id: json_string(permission_request, "id"),
+        session_id: json_string(permission_request, "session_id"),
+        patterns: json_string_array(permission_request, "patterns"),
+        allowed_always_rules: json_string_array(permission_request, "allowed_always_rules"),
+        source: ToolPermissionSourceRecord {
+            permission_source: nested_string(metadata, "permission_source")
+                .or_else(|| json_string(permission_request, "permission_source")),
+            resolved_permission_source: nested_string(metadata, "resolved_permission_source")
+                .or_else(|| json_string(permission_request, "permission_source")),
+            permission_requires: nested_bool(metadata, "permission_requires"),
+            tool_requires: nested_bool(metadata, "tool_requires"),
+            raw_tool_requires: nested_bool(metadata, "raw_tool_requires"),
+            drift_requires_approval: nested_bool(metadata, "drift_requires_approval"),
+            permission_family: nested_string(metadata, "permission_family"),
+            permission_decision: nested_string(metadata, "permission_decision"),
+            risk_level: nested_string(metadata, "risk_level"),
+        },
+    })
+}
+
+pub(super) fn permission_request_approved(
+    permission_request: &serde_json::Value,
+    fallback: bool,
+) -> bool {
+    permission_request
+        .get("approved")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(fallback)
+}
+
+pub(super) fn permission_source_label(permission_request: &serde_json::Value) -> Option<String> {
+    permission_request
+        .get("permission_source")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string)
+        .or_else(|| {
+            permission_request
+                .get("metadata")
+                .and_then(|metadata| nested_string(Some(metadata), "resolved_permission_source"))
+        })
+        .or_else(|| {
+            permission_request
+                .get("metadata")
+                .and_then(|metadata| nested_string(Some(metadata), "permission_source"))
+        })
+}
+
+pub(super) fn subagent_proof_kind(data: &serde_json::Value) -> Option<VerificationProofKind> {
+    let label = data
+        .get("verification_proof_kind")
+        .or_else(|| data.get("proof_kind"))
+        .and_then(serde_json::Value::as_str)?;
+    let value = serde_json::Value::String(label.to_string());
+    let proof_kind = serde_json::from_value::<VerificationProofKind>(value).ok()?;
+    match proof_kind {
+        VerificationProofKind::SubagentClaimOnly
+        | VerificationProofKind::ParentVerifiedSubagentResult => Some(proof_kind),
+        _ => None,
+    }
+}
+
+pub(super) struct ParentVerificationBindingInput<'a> {
+    pub(super) data: &'a serde_json::Value,
+    pub(super) source_agent: &'a str,
+    pub(super) parent_verified: bool,
+    pub(super) claim_id: Option<&'a str>,
+    pub(super) claim_type: Option<&'a str>,
+    pub(super) artifact_ids: &'a [String],
+    pub(super) verification_verdict: Option<&'a str>,
+    pub(super) verified_at: Option<&'a str>,
+}
+
+pub(super) fn parent_verification_record_is_bound(
+    input: ParentVerificationBindingInput<'_>,
+) -> bool {
+    input.parent_verified
+        && !matches!(input.source_agent.trim(), "" | "unknown")
+        && json_string(input.data, "scope").as_deref() == Some("parent_runtime_verification")
+        && input.claim_id.is_some_and(|value| !value.trim().is_empty())
+        && input
+            .claim_type
+            .is_some_and(|value| !value.trim().is_empty())
+        && !input.artifact_ids.is_empty()
+        && related_to_changed_files_is_bound(input.data)
+        && input
+            .verification_verdict
+            .is_some_and(|value| value.trim().to_ascii_lowercase().starts_with("verified"))
+        && input
+            .verified_at
+            .is_some_and(|value| !value.trim().is_empty())
+}
+
+pub(super) fn related_to_changed_files_is_bound(data: &serde_json::Value) -> bool {
+    match data.get("related_to_changed_files") {
+        Some(serde_json::Value::Bool(_)) => true,
+        Some(serde_json::Value::String(value)) => {
+            let normalized = value.trim().to_ascii_lowercase();
+            !normalized.is_empty()
+                && !matches!(
+                    normalized.as_str(),
+                    "unknown" | "unknown_child_worktree" | "unbound"
+                )
+        }
+        _ => false,
+    }
+}
+
+pub(super) fn subagent_parent_artifact_ids(data: &serde_json::Value) -> Vec<String> {
+    let mut ids = json_string_array(data, "artifact_ids");
+    for key in ["artifact_id", "tool_run_id", "parent_tool_run_id"] {
+        if let Some(id) = json_identifier(data, key) {
+            ids.push(id);
+        }
+    }
+    ids.sort();
+    ids.dedup();
+    ids
+}
+
+pub(super) fn json_identifier(value: &serde_json::Value, key: &str) -> Option<String> {
+    let value = value.get(key)?;
+    if let Some(text) = value.as_str().filter(|value| !value.trim().is_empty()) {
+        return Some(text.to_string());
+    }
+    if let Some(number) = value.as_i64() {
+        return Some(number.to_string());
+    }
+    if let Some(number) = value.as_u64() {
+        return Some(number.to_string());
+    }
+    None
+}
+
+pub(super) fn result_has_subagent_proof(data: &serde_json::Value) -> bool {
+    subagent_proof_kind(data).is_some()
+        || data
+            .get("results")
+            .and_then(serde_json::Value::as_array)
+            .is_some_and(|items| items.iter().any(result_has_subagent_proof))
+        || data
+            .get("branches")
+            .and_then(serde_json::Value::as_array)
+            .is_some_and(|items| items.iter().any(result_has_subagent_proof))
+}
+
+pub(super) fn tool_output_metadata_record(result: &ToolResult) -> ToolOutputMetadataRecord {
+    let data = result.data.as_ref();
+    let summary = data
+        .and_then(|data| data.get("tool_summary"))
+        .filter(|value| value.is_object());
+    let diagnostics = data.and_then(|data| data.get("diagnostics"));
+    let shell = data.and_then(|data| data.get("shell_result"));
+    ToolOutputMetadataRecord {
+        data_keys: json_object_keys(data),
+        summary_keys: json_object_keys(summary),
+        display_format: nested_string(data, "display_format"),
+        truncated: nested_bool(data, "truncated"),
+        file_count: data
+            .and_then(|data| data.get("files"))
+            .and_then(serde_json::Value::as_array)
+            .map(Vec::len),
+        diagnostics: diagnostics
+            .filter(|value| value.is_object())
+            .map(tool_diagnostics_metadata_record),
+        shell_status: nested_string(shell, "status"),
+        shell_evidence_status: nested_string(shell, "evidence_status"),
+        shell_exit_code: nested_i64(shell, "exit_code"),
+        shell_background: nested_bool(shell, "background"),
+    }
+}
+
+pub(super) fn tool_diagnostics_metadata_record(
+    value: &serde_json::Value,
+) -> ToolDiagnosticsMetadataRecord {
+    ToolDiagnosticsMetadataRecord {
+        status: nested_string(Some(value), "status"),
+        checked: nested_bool(Some(value), "checked"),
+        diagnostic_count: nested_u64(Some(value), "diagnostic_count"),
+        error_count: nested_u64(Some(value), "error_count"),
+        warning_count: nested_u64(Some(value), "warning_count"),
+        first_error_line: value
+            .get("first_error")
+            .and_then(|error| error.get("range"))
+            .and_then(|range| range.get("start_line"))
+            .and_then(serde_json::Value::as_u64),
+    }
+}
+
+pub(super) fn terminal_task_record(result: &ToolResult) -> Option<TerminalTaskRecord> {
+    let data = result.data.as_ref()?;
+    let task = data
+        .get("tool_summary")
+        .and_then(|summary| summary.get("terminal_task"))
+        .or_else(|| data.get("terminal_task"))?;
+    Some(TerminalTaskRecord {
+        task_id: task_string(task, "task_id"),
+        status: task_string(task, "status"),
+        terminal_kind: task_string(task, "terminal_kind"),
+        handle: task_string(task, "handle"),
+        output_path: task_string(task, "output_path"),
+        duration_ms: task.get("duration_ms").and_then(serde_json::Value::as_u64),
+        exit_code: task.get("exit_code").and_then(serde_json::Value::as_i64),
+    })
+}
+
+pub(super) fn task_string(task: &serde_json::Value, key: &str) -> Option<String> {
+    task.get(key)
+        .and_then(serde_json::Value::as_str)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+}
+
+pub(super) fn changed_paths_for_tool_result(
+    tool_call: &ToolCall,
+    result: &ToolResult,
+) -> Vec<String> {
+    let mut paths = BTreeSet::new();
+    if result.success && matches!(tool_call.name.as_str(), "file_write" | "file_edit") {
+        if let Some(path) = tool_call.arguments["path"].as_str() {
+            paths.insert(path.to_string());
+        }
+    }
+    if tool_call.name == "file_patch" && result.success {
+        if let Some(files) = result
+            .data
+            .as_ref()
+            .and_then(|data| data.get("files"))
+            .and_then(serde_json::Value::as_array)
+        {
+            for file in files {
+                if let Some(path) = file
+                    .get("path")
+                    .or_else(|| file.get("resolved_path"))
+                    .and_then(serde_json::Value::as_str)
+                {
+                    paths.insert(path.to_string());
+                }
+            }
+        }
+    }
+    if tool_call.name == "bash" && result.success {
+        if let Some(command) = tool_call.arguments["command"].as_str() {
+            let classification =
+                crate::tools::bash_tool::command_classifier::classify_command(command);
+            if matches!(
+                classification.category,
+                crate::tools::bash_tool::command_classifier::ShellCommandCategory::FileMutation
+                    | crate::tools::bash_tool::command_classifier::ShellCommandCategory::GitMutation
+            ) {
+                paths.extend(classification.path_patterns);
+            }
+        }
+    }
+    paths.into_iter().collect()
+}
+
+pub(super) fn tool_execution_relevance(
+    result: &ToolResult,
+    safe_for_closeout: Option<bool>,
+    validation_family: Option<&str>,
+    changed_paths: &[String],
+    permission: Option<&ToolPermissionRecord>,
+    route: Option<&ToolRouteRecord>,
+) -> ToolExecutionRelevance {
+    let subagent_proof = result.data.as_ref().is_some_and(result_has_subagent_proof);
+    let validation =
+        safe_for_closeout.unwrap_or(false) || validation_family.is_some() || subagent_proof;
+    let closeout = validation || !changed_paths.is_empty() || permission.is_some();
+    let repair = !result.success || !changed_paths.is_empty();
+    let mut closeout_reasons = Vec::new();
+    if validation {
+        closeout_reasons.push("validation".to_string());
+    }
+    if !changed_paths.is_empty() {
+        closeout_reasons.push("changed_paths".to_string());
+    }
+    if permission.is_some() {
+        closeout_reasons.push("permission".to_string());
+    }
+    let mut repair_reasons = Vec::new();
+    if !result.success {
+        repair_reasons.push("tool_failed".to_string());
+    }
+    if !changed_paths.is_empty() {
+        repair_reasons.push("changed_paths".to_string());
+    }
+    ToolExecutionRelevance {
+        validation,
+        closeout,
+        repair,
+        policy: ToolExecutionRelevancePolicyRecord {
+            route_workflow: route.and_then(|route| route.workflow.clone()),
+            closeout_reasons,
+            repair_reasons,
+        },
+    }
+}
+
+pub(super) fn tool_execution_context_record(result: &ToolResult) -> ToolExecutionContextRecord {
+    let Some(runtime) = result
+        .data
+        .as_ref()
+        .and_then(|data| data.get("tool_runtime"))
+    else {
+        return ToolExecutionContextRecord::default();
+    };
+    let execution = runtime.get("execution");
+    ToolExecutionContextRecord {
+        route: runtime
+            .get("route")
+            .filter(|value| value.is_object())
+            .map(tool_route_record),
+        policy: runtime.get("policy").map(tool_execution_policy_record),
+        parallel: nested_bool(execution, "parallel").unwrap_or(false),
+        pre_executed: nested_bool(execution, "pre_executed").unwrap_or(false),
+        action_checkpoint_active: nested_bool(execution, "action_checkpoint_active")
+            .unwrap_or(false),
+        has_changes_before_tools: nested_bool(execution, "has_changes_before_tools")
+            .unwrap_or(false),
+        exposed_tools_count: nested_usize(execution, "exposed_tools_count"),
+        started_at_unix_ms: nested_u64(execution, "started_at_unix_ms"),
+        finished_at_unix_ms: nested_u64(execution, "finished_at_unix_ms"),
+    }
+}
+
+pub(super) fn tool_route_record(value: &serde_json::Value) -> ToolRouteRecord {
+    ToolRouteRecord {
+        intent: nested_string(Some(value), "intent"),
+        workflow: nested_string(Some(value), "workflow"),
+        retrieval: nested_string(Some(value), "retrieval"),
+        reasoning: nested_string(Some(value), "reasoning"),
+        risk: nested_string(Some(value), "risk"),
+    }
+}
+
+pub(super) fn tool_execution_policy_record(value: &serde_json::Value) -> ToolExecutionPolicyRecord {
+    ToolExecutionPolicyRecord {
+        latency: nested_string(Some(value), "latency"),
+        parallelism_limit: nested_usize(Some(value), "parallelism_limit"),
+        max_tool_calls: nested_usize(Some(value), "max_tool_calls"),
+        context_budget_tokens: nested_usize(Some(value), "context_budget_tokens"),
+        allow_fallback_model: nested_bool(Some(value), "allow_fallback_model"),
+        cost_ceiling_usd: nested_string(Some(value), "cost_ceiling_usd"),
+    }
+}
+
+pub(super) fn bash_result_command(result: &ToolResult) -> Option<&str> {
+    result
+        .data
+        .as_ref()
+        .and_then(|data| data.get("shell_result"))
+        .and_then(|shell| shell.get("command"))
+        .and_then(serde_json::Value::as_str)
+}
+
+pub(super) fn result_summary(result: &ToolResult) -> String {
+    let text = if !result.content.trim().is_empty() {
+        result.content.as_str()
+    } else {
+        result.error.as_deref().unwrap_or("")
+    };
+    preview(text)
+}
+
+pub(super) fn file_result_summary(result: &ToolResult) -> String {
+    let summary = result_summary(result);
+    let Some(data) = result.data.as_ref() else {
+        return summary;
+    };
+    let mut metadata = Vec::new();
+    for key in [
+        "kind",
+        "total_lines",
+        "displayed_lines",
+        "line_start",
+        "line_end",
+        "truncated",
+        "read_coverage",
+        "content_hash",
+        "display_format",
+    ] {
+        let Some(value) = data.get(key) else {
+            continue;
+        };
+        if value.is_null() {
+            continue;
+        }
+        let rendered = value
+            .as_str()
+            .map(str::to_string)
+            .unwrap_or_else(|| value.to_string());
+        metadata.push(format!("{key}={rendered}"));
+    }
+    if let Some(rendered) = diagnostics_metadata_summary(data.get("diagnostics")) {
+        metadata.push(rendered);
+    }
+    if metadata.is_empty() {
+        return summary;
+    }
+    preview(&format!("[metadata: {}] {}", metadata.join(" "), summary))
+}
+
+pub(super) fn file_patch_result_summary(result: &ToolResult, file: &serde_json::Value) -> String {
+    let mut metadata = Vec::new();
+    metadata.push("kind=patch".to_string());
+    for key in ["path", "replacements", "bytes_written"] {
+        let Some(value) = file.get(key) else {
+            continue;
+        };
+        if value.is_null() {
+            continue;
+        }
+        let rendered = value
+            .as_str()
+            .map(str::to_string)
+            .unwrap_or_else(|| value.to_string());
+        metadata.push(format!("{key}={rendered}"));
+    }
+    if let Some(diff) = file.get("diff") {
+        for key in [
+            "additions",
+            "deletions",
+            "changed_line_start",
+            "changed_line_end",
+            "preview_truncated",
+        ] {
+            let Some(value) = diff.get(key) else {
+                continue;
+            };
+            if value.is_null() {
+                continue;
+            }
+            metadata.push(format!("{key}={value}"));
+        }
+    }
+    preview(&format!(
+        "[metadata: {}] {}",
+        metadata.join(" "),
+        result_summary(result)
+    ))
+}
+
+pub(super) fn diagnostics_metadata_summary(value: Option<&serde_json::Value>) -> Option<String> {
+    let diagnostics = value?;
+    let status = diagnostics
+        .get("status")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("unknown");
+    let total = diagnostics
+        .get("diagnostic_count")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(0);
+    let errors = diagnostics
+        .get("error_count")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(0);
+    let warnings = diagnostics
+        .get("warning_count")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(0);
+    let checked = diagnostics
+        .get("checked")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
+    let mut parts = vec![format!(
+        "lsp_diagnostics=status:{status} checked:{checked} total:{total} errors:{errors} warnings:{warnings}"
+    )];
+    if let Some(first_error) = diagnostic_item_metadata(diagnostics.get("first_error")) {
+        parts.push(format!("first_error:{first_error}"));
+    }
+    Some(parts.join(" "))
+}
+
+pub(super) fn diagnostic_item_metadata(value: Option<&serde_json::Value>) -> Option<String> {
+    let item = value?;
+    if item.is_null() {
+        return None;
+    }
+    let message = item.get("message").and_then(serde_json::Value::as_str)?;
+    let line = item
+        .get("range")
+        .and_then(|range| range.get("start_line"))
+        .and_then(serde_json::Value::as_u64)
+        .map(|line| format!("line:{line}"))
+        .unwrap_or_else(|| "line:unknown".to_string());
+    let source = item
+        .get("source")
+        .and_then(serde_json::Value::as_str)
+        .filter(|source| !source.is_empty())
+        .map(|source| format!(" source:{source}"))
+        .unwrap_or_default();
+    let code = item
+        .get("code")
+        .filter(|code| !code.is_null())
+        .map(|code| {
+            code.as_str()
+                .map(str::to_string)
+                .unwrap_or_else(|| code.to_string())
+        })
+        .filter(|code| !code.is_empty())
+        .map(|code| format!(" code:{code}"))
+        .unwrap_or_default();
+    let mut preview = message.chars().take(80).collect::<String>();
+    if message.chars().count() > 80 {
+        preview.push_str("...");
+    }
+    Some(format!("{line}{source}{code} message:{preview}"))
+}
+
+pub(super) fn nested_u64(value: Option<&serde_json::Value>, key: &str) -> Option<u64> {
+    value
+        .and_then(|value| value.get(key))
+        .and_then(serde_json::Value::as_u64)
+}
+
+pub(super) fn nested_i64(value: Option<&serde_json::Value>, key: &str) -> Option<i64> {
+    value
+        .and_then(|value| value.get(key))
+        .and_then(serde_json::Value::as_i64)
+}
+
+pub(super) fn nested_usize(value: Option<&serde_json::Value>, key: &str) -> Option<usize> {
+    nested_u64(value, key).and_then(|value| usize::try_from(value).ok())
+}
+
+pub(super) fn nested_bool(value: Option<&serde_json::Value>, key: &str) -> Option<bool> {
+    value
+        .and_then(|value| value.get(key))
+        .and_then(serde_json::Value::as_bool)
+}
+
+pub(super) fn nested_string(value: Option<&serde_json::Value>, key: &str) -> Option<String> {
+    value
+        .and_then(|value| value.get(key))
+        .and_then(serde_json::Value::as_str)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+}
+
+pub(super) fn json_string(value: &serde_json::Value, key: &str) -> Option<String> {
+    value
+        .get(key)
+        .and_then(serde_json::Value::as_str)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+}
+
+pub(super) fn json_string_array(value: &serde_json::Value, key: &str) -> Vec<String> {
+    value
+        .get(key)
+        .and_then(serde_json::Value::as_array)
+        .map(|values| {
+            values
+                .iter()
+                .filter_map(serde_json::Value::as_str)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+pub(super) fn json_object_keys(value: Option<&serde_json::Value>) -> Vec<String> {
+    let mut keys: Vec<String> = value
+        .and_then(serde_json::Value::as_object)
+        .map(|object| object.keys().cloned().collect())
+        .unwrap_or_default();
+    keys.sort();
+    keys
+}
+
+pub(super) fn result_data_string(result: &ToolResult, key: &str) -> Option<String> {
+    result
+        .data
+        .as_ref()
+        .and_then(|data| data.get(key))
+        .and_then(|value| value.as_str())
+        .map(str::to_string)
+}
+
+pub(super) fn result_data_u64(result: &ToolResult, key: &str) -> Option<u64> {
+    result
+        .data
+        .as_ref()
+        .and_then(|data| data.get(key))
+        .and_then(|value| value.as_u64())
+}
+
+pub(super) fn result_data_bool(result: &ToolResult, key: &str) -> Option<bool> {
+    result
+        .data
+        .as_ref()
+        .and_then(|data| data.get(key))
+        .and_then(|value| value.as_bool())
+}
+
+pub(super) fn preview(text: &str) -> String {
+    let trimmed = text.trim();
+    let mut out = trimmed.chars().take(PREVIEW_CHARS).collect::<String>();
+    if trimmed.chars().count() > PREVIEW_CHARS {
+        out.push_str("...");
+    }
+    out
+}
+
+pub(super) fn contains_any(text: &str, needles: &[&str]) -> bool {
+    needles.iter().any(|needle| text.contains(needle))
+}
+
+pub(super) fn validation_identity(fact: &ValidationEvidence) -> String {
+    if let Some(command) = fact.command.as_deref() {
+        let normalized = normalize_command_identity(command);
+        if !normalized.is_empty() {
+            return format!("command:{normalized}");
+        }
+    }
+    format!("source:{}", fact.source.trim())
+}
+
+pub(super) fn normalize_command_identity(command: &str) -> String {
+    command.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+pub(super) fn command_fact_satisfies_required(
+    fact: &CommandEvidence,
+    required_command: &str,
+) -> bool {
+    let fallback;
+    let executed = if fact.normalized_command.is_empty() {
+        fallback = normalize_command_identity(&fact.command);
+        fallback.as_str()
+    } else {
+        fact.normalized_command.as_str()
+    };
+    executed == required_command
+        || (fact.safe_for_closeout && shell_assertion_covers_required(executed, required_command))
+}
+
+pub(super) fn shell_assertion_covers_required(executed: &str, required_command: &str) -> bool {
+    if !(required_command.starts_with("test ")
+        || required_command.starts_with("[ ")
+        || required_command.starts_with("[[ "))
+    {
+        return false;
+    }
+    let Some(rest) = executed.strip_prefix(required_command) else {
+        return false;
+    };
+    let rest = rest.trim_start();
+    rest.starts_with("&& ")
+}
+
+pub(super) fn tool_record_relevant_for_repair(
+    record: &ToolExecutionRecord,
+    failed_command_identities: &BTreeSet<String>,
+) -> bool {
+    matches!(
+        record.status,
+        ToolExecutionStatus::Failed | ToolExecutionStatus::Denied
+    ) || record.relevance.repair
+        || !record.changed_paths.is_empty()
+        || record.command.as_deref().is_some_and(|command| {
+            failed_command_identities.contains(&normalize_command_identity(command))
+        })
+}
+
+pub(super) fn format_repair_tool_record(
+    record: &ToolExecutionRecord,
+    file_facts: &[FileEvidence],
+) -> String {
+    let terminal = record
+        .terminal_task
+        .as_ref()
+        .map(|task| {
+            format!(
+                "status={} exit={} task={}",
+                task.status.as_deref().unwrap_or("unknown"),
+                task.exit_code
+                    .map(|code| code.to_string())
+                    .unwrap_or_else(|| "unknown".to_string()),
+                task.task_id.as_deref().unwrap_or("none")
+            )
+        })
+        .unwrap_or_else(|| "none".to_string());
+    let file_evidence = record
+        .file_evidence
+        .iter()
+        .take(3)
+        .filter_map(|link| {
+            let fact = file_facts.get(link.fact_index)?;
+            Some(format!(
+                "{}:{}-{} kind={} success={}",
+                link.path
+                    .as_deref()
+                    .or(fact.path.as_deref())
+                    .unwrap_or("unknown"),
+                link.line_start
+                    .or(fact.line_start)
+                    .map(|line| line.to_string())
+                    .unwrap_or_else(|| "?".to_string()),
+                link.line_end
+                    .or(fact.line_end)
+                    .map(|line| line.to_string())
+                    .unwrap_or_else(|| "?".to_string()),
+                link.kind
+                    .as_deref()
+                    .or(fact.kind.as_deref())
+                    .unwrap_or("unknown"),
+                fact.success
+            ))
+        })
+        .collect::<Vec<_>>();
+    let changed_paths = if record.changed_paths.is_empty() {
+        "none".to_string()
+    } else {
+        record.changed_paths.join(",")
+    };
+    let path_patterns = if record.path_patterns.is_empty() {
+        "none".to_string()
+    } else {
+        record.path_patterns.join(",")
+    };
+    let file_evidence = if file_evidence.is_empty() {
+        "none".to_string()
+    } else {
+        file_evidence.join(" | ")
+    };
+    let repair_reasons = if record.relevance.policy.repair_reasons.is_empty() {
+        "none".to_string()
+    } else {
+        record.relevance.policy.repair_reasons.join(",")
+    };
+    let status = match record.status {
+        ToolExecutionStatus::Completed => "completed",
+        ToolExecutionStatus::Failed => "failed",
+        ToolExecutionStatus::Denied => "denied",
+    };
+
+    preview(&format!(
+        "tool record evidence: tool={} status={} command={} normalized_command={} validation_family={} path_patterns={} network_access={} external_path_access={} expected_silent_output={} safe_for_closeout={} duration_ms={} output_chars={} terminal={} changed_paths={} file_evidence={} repair_reasons={} error={}",
+        record.tool,
+        status,
+        record.command.as_deref().unwrap_or("none"),
+        record.normalized_command.as_deref().unwrap_or("none"),
+        record.validation_family.as_deref().unwrap_or("none"),
+        path_patterns,
+        record
+            .network_access
+            .map(|value| value.to_string())
+            .unwrap_or_else(|| "unknown".to_string()),
+        record
+            .external_path_access
+            .map(|value| value.to_string())
+            .unwrap_or_else(|| "unknown".to_string()),
+        record
+            .expected_silent_output
+            .map(|value| value.to_string())
+            .unwrap_or_else(|| "unknown".to_string()),
+        record
+            .safe_for_closeout
+            .map(|value| value.to_string())
+            .unwrap_or_else(|| "unknown".to_string()),
+        record
+            .duration_ms
+            .map(|value| value.to_string())
+            .unwrap_or_else(|| "unknown".to_string()),
+        record.output_chars,
+        terminal,
+        changed_paths,
+        file_evidence,
+        repair_reasons,
+        record.error_preview.as_deref().unwrap_or("none")
+    ))
+}
