@@ -225,6 +225,29 @@ cargo test -q retrieval_context -- --test-threads=1
 bash scripts/active-memory-baseline.sh
 ```
 
+### 2026-06-03 Slice 5: Conversation Loop Test Boundary
+
+Status: completed.
+
+Changes:
+
+- moved the large inline `conversation_loop` regression test module into
+  `src/engine/conversation_loop/tests.rs`;
+- kept it as a child module of `conversation_loop`, preserving access to
+  private helpers and deterministic patch-repair fixtures;
+- preserved raw string fixture indentation so deterministic patch anchors stay
+  byte-for-byte meaningful;
+- reduced `src/engine/conversation_loop/mod.rs` from 3704 lines to 733 lines.
+
+Validation:
+
+```bash
+cargo fmt
+cargo test -q conversation_loop -- --test-threads=1
+cargo test -q closeout -- --test-threads=1
+cargo test -q runtime_spine_behavior_contract_covers_context_action_progress_stop_and_proof -- --test-threads=1
+```
+
 ### 3. Memory Manager And Provider
 
 Files:
