@@ -417,3 +417,34 @@ cargo test -q evidence_ledger -- --test-threads=1
 cargo test -q mcp -- --test-threads=1
 scripts/file-size-report.sh --threshold 2000 --top 30
 ```
+
+### 2026-06-03 Phase 4: TUI And Desktop Real-Path Cleanup
+
+Status: completed.
+
+Changes:
+
+- moved large TUI inline tests into child test modules for commands, agent
+  slash handlers, and the main screen renderer;
+- split TUI agent slash handlers into focused `history_mode`, `lsp`, `npm`,
+  `auth_status`, and `launchers` modules;
+- split TUI learning slash handlers into `memory_proposals` and
+  `improvements` modules;
+- moved the `TuiApp` slash-command dispatcher into `src/tui/app/slash_commands.rs`;
+- moved main-screen approval/onboarding renderers into
+  `src/tui/screens/main_screen/approvals.rs`;
+- moved session action slash commands into `src/tui/slash_handler/session/actions.rs`;
+- split desktop Tauri state/settings/native-smoke helpers and diagnostic
+  helpers into `desktop_state.rs` and `diagnostics.rs`;
+- reduced all Band 3 TUI and desktop target files below the 2000-line warning
+  threshold.
+
+Validation:
+
+```bash
+cargo fmt --check
+cargo check -q
+cargo test -q tui -- --test-threads=1
+(cd apps/desktop/src-tauri && cargo fmt --check && cargo check -q && cargo test -q)
+scripts/file-size-report.sh --threshold 2000 --top 30
+```
