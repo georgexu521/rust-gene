@@ -199,6 +199,32 @@ cargo test -q route_scoped_tools -- --test-threads=1
 cargo test -q grep_allows_runtime_tool_result_artifacts_read_only -- --test-threads=1
 ```
 
+### 2026-06-03 Slice 4: Memory Manager Files And Tests Boundary
+
+Status: completed.
+
+Changes:
+
+- moved the large `MemoryManager` test module into
+  `src/memory/manager/tests.rs`, keeping it as a child module so private test
+  coverage remains intact;
+- extracted markdown memory file loading, file manifest rendering, topic path
+  inference, section maintenance, archiving, hashing, atomic writes, and file
+  locks into `src/memory/files.rs`;
+- updated memory persistence and retrieval modules to call the file boundary
+  directly;
+- reduced `src/memory/manager.rs` from 4461 lines to 2010 lines while keeping
+  `MemoryManager` as the runtime facade.
+
+Validation:
+
+```bash
+cargo fmt --check
+cargo test -q memory -- --test-threads=1
+cargo test -q retrieval_context -- --test-threads=1
+bash scripts/active-memory-baseline.sh
+```
+
 ### 3. Memory Manager And Provider
 
 Files:

@@ -3,11 +3,12 @@
 //! 会话结束时的 flush、长期记忆文件维护、typed memory records 生命周期管理。
 //! 所有方法都是 `MemoryManager` 的编排层。
 
+use super::files::{collect_memory_file_paths, maintain_memory_file, MemoryFileLock};
 use super::manager::{
-    collect_memory_file_paths, maintain_memory_file, memory_flush_records_from_jsonl,
-    memory_messages_hash, record_needs_revalidation, MemoryDecisionEvent, MemoryFileLock,
-    MemoryFlushReason, MemoryFlushRecord, MemoryFlushStatus, MemoryMaintenanceReport,
-    MemoryManager, MAX_LEARNINGS_PER_SESSION_EXTRACT, MEMORY_FLUSH_MAX_ATTEMPTS,
+    memory_flush_records_from_jsonl, memory_messages_hash, record_needs_revalidation,
+    MemoryDecisionEvent, MemoryFlushReason, MemoryFlushRecord, MemoryFlushStatus,
+    MemoryMaintenanceReport, MemoryManager, MAX_LEARNINGS_PER_SESSION_EXTRACT,
+    MEMORY_FLUSH_MAX_ATTEMPTS,
 };
 use super::types::MemoryStatus;
 use crate::memory::extraction::extract_session_learnings;

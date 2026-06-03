@@ -9,16 +9,14 @@
 //! - search / search_tier：按查询或层级搜索
 //! - search_memory_index / rebuild_search_index：全文索引检索
 
-use super::manager::{
-    load_memory_files, memory_llm_timeout, parse_rerank_ids, MemoryFileSnapshot, MemoryManager,
-    MemoryTier,
-};
+use super::files::{load_memory_files, parse_rerank_ids};
+use super::manager::{memory_llm_timeout, MemoryManager, MemoryTier};
 use super::ranking::{
     best_memory_file_snippet, dedupe_memory_matches, extract_keywords,
     memory_record_id_from_source, memory_record_scope_matches, rank_memory_files,
     rank_memory_paragraphs, rank_memory_records, rank_project_progress_records, search_memory,
 };
-use super::reports::MemoryMatch;
+use super::reports::{MemoryFileSnapshot, MemoryMatch};
 use super::search_index::{MemorySearchHit, MemorySearchIndexReport};
 use crate::services::api::{ChatRequest, LlmProvider, Message};
 use std::collections::HashSet;

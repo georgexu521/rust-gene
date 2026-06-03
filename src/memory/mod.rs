@@ -2,6 +2,7 @@ pub mod active;
 pub mod calibration;
 pub mod eval;
 pub mod extraction;
+pub(super) mod files;
 pub mod manager;
 pub mod persistence;
 pub mod provider;
