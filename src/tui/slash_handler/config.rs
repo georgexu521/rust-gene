@@ -377,6 +377,65 @@ pub fn handle_color(app: &mut TuiApp, args: &str) -> String {
 // Batch 4: config, copy, desktop, chrome, effort, preamble, untrap, verbose, write
 // ═══════════════════════════════════════
 
+fn format_effective_config() -> String {
+    let mut lines = vec!["Effective Configuration\n".to_string()];
+
+    // Provider settings
+    lines.push("Provider:".to_string());
+    lines.push(format!(
+        "  timeout: {}s (env: PRIORITY_AGENT_LLM_REQUEST_TIMEOUT_SECS)",
+        std::env::var("PRIORITY_AGENT_LLM_REQUEST_TIMEOUT_SECS")
+            .unwrap_or_else(|_| "180".to_string())
+    ));
+    lines.push(format!(
+        "  stream_idle_timeout: {}s (env: PRIORITY_AGENT_STREAM_IDLE_TIMEOUT_SECS)",
+        std::env::var("PRIORITY_AGENT_STREAM_IDLE_TIMEOUT_SECS")
+            .unwrap_or_else(|_| "120".to_string())
+    ));
+    lines.push(format!(
+        "  reconnect_attempts: {} (env: PRIORITY_AGENT_PROVIDER_RECONNECT_ATTEMPTS)",
+        std::env::var("PRIORITY_AGENT_PROVIDER_RECONNECT_ATTEMPTS")
+            .unwrap_or_else(|_| "5".to_string())
+    ));
+
+    // Tool settings
+    lines.push("\nTools:".to_string());
+    lines.push(format!(
+        "  profile: {} (env: PRIORITY_AGENT_TOOL_PROFILE)",
+        std::env::var("PRIORITY_AGENT_TOOL_PROFILE").unwrap_or_else(|_| "core".to_string())
+    ));
+    lines.push(format!(
+        "  route_scoped: {} (env: PRIORITY_AGENT_ROUTE_SCOPED_TOOLS)",
+        std::env::var("PRIORITY_AGENT_ROUTE_SCOPED_TOOLS").unwrap_or_else(|_| "true".to_string())
+    ));
+
+    // Memory settings
+    lines.push("\nMemory:".to_string());
+    lines.push(format!(
+        "  write_policy: {} (env: PRIORITY_AGENT_AUTO_MEMORY_WRITE)",
+        std::env::var("PRIORITY_AGENT_AUTO_MEMORY_WRITE")
+            .unwrap_or_else(|_| "review_only".to_string())
+    ));
+    lines.push(format!(
+        "  active_memory: {} (env: PRIORITY_AGENT_ACTIVE_MEMORY)",
+        std::env::var("PRIORITY_AGENT_ACTIVE_MEMORY").unwrap_or_else(|_| "0".to_string())
+    ));
+
+    // Fallback settings
+    lines.push("\nFallback:".to_string());
+    lines.push(format!(
+        "  model: {} (env: PRIORITY_AGENT_FALLBACK_MODEL)",
+        std::env::var("PRIORITY_AGENT_FALLBACK_MODEL").unwrap_or_else(|_| "none".to_string())
+    ));
+
+    lines.push("\nNotes:".to_string());
+    lines.push("  - Environment variables override config file values".to_string());
+    lines.push("  - Use /config list to see config file values".to_string());
+    lines.push("  - Use /config doctor to validate configuration".to_string());
+
+    lines.join("\n")
+}
+
 /// /config - Configuration viewer/editor
 pub fn handle_config(_app: &TuiApp, args: &str) -> String {
     let args = args.trim();
@@ -426,6 +485,10 @@ pub fn handle_config(_app: &TuiApp, args: &str) -> String {
             }
             Err(e) => format!("Failed to load config: {}", e),
         };
+    }
+
+    if args == "effective" {
+        return format_effective_config();
     }
 
     if let Some(key) = args.strip_prefix("get ").map(str::trim) {

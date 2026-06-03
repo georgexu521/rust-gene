@@ -607,4 +607,171 @@ mod tests {
         let inferred = infer_cache_miss_reason(Some(&previous), &tail_changed, usage);
         assert_eq!(inferred.reason, CacheMissReason::DynamicTailChanged);
     }
+
+    #[test]
+    fn cache_stability_matrix_dynamic_zones_excluded_from_prefix() {
+        let tool = provider_tool("bash", serde_json::json!({"type": "object"}));
+        let messages = vec![
+            Message::system("stable system prefix"),
+            Message::system("<task-state>turn-1-state</task-state>"),
+            Message::system("<recent_observation>obs-1</recent_observation>"),
+            Message::user("fix the bug"),
+        ];
+
+        let shape = request_cache_diagnostic_shape(&messages, std::slice::from_ref(&tool));
+
+        assert_eq!(shape.dynamic_zone_messages, 2);
+        assert!(!shape.prefix_fingerprint.is_empty());
+        assert!(shape.prefix_fingerprint.len() == 12);
+    }
+
+    #[test]
+    fn stable_prefix_unchanged_by_dynamic_context_changes() {
+        let tool = provider_tool("bash", serde_json::json!({"type": "object"}));
+        let base_messages = vec![
+            Message::system("stable system"),
+            Message::system("<task-state>state-v1</task-state>"),
+            Message::user("do something"),
+        ];
+        let with_update = vec![
+            Message::system("stable system"),
+            Message::system("<task-state>state-v2</task-state>"),
+            Message::user("do something"),
+        ];
+
+        let base = request_cache_diagnostic_shape(&base_messages, std::slice::from_ref(&tool));
+        let updated = request_cache_diagnostic_shape(&with_update, std::slice::from_ref(&tool));
+
+        assert_eq!(base.prefix_fingerprint, updated.prefix_fingerprint);
+        assert_ne!(
+            base.dynamic_tail_fingerprint,
+            updated.dynamic_tail_fingerprint
+        );
+    }
+
+    #[test]
+    fn stable_prefix_unchanged_by_user_message_count() {
+        let tool = provider_tool("bash", serde_json::json!({"type": "object"}));
+        let single_turn = vec![
+            Message::system("stable system"),
+            Message::user("first request"),
+        ];
+        let multi_turn = vec![
+            Message::system("stable system"),
+            Message::user("first request"),
+            Message::assistant("done"),
+            Message::user("second request"),
+        ];
+
+        let first = request_cache_diagnostic_shape(&single_turn, std::slice::from_ref(&tool));
+        let second = request_cache_diagnostic_shape(&multi_turn, std::slice::from_ref(&tool));
+
+        assert_eq!(first.prefix_fingerprint, second.prefix_fingerprint);
+        assert_ne!(
+            first.dynamic_tail_fingerprint,
+            second.dynamic_tail_fingerprint
+        );
+    }
+
+    #[test]
+    fn stable_prefix_unchanged_by_dynamic_memory_context() {
+        let tool = provider_tool("bash", serde_json::json!({"type": "object"}));
+        let base_messages = vec![
+            Message::system("stable system"),
+            Message::system("<context-pack>memory-records=0</context-pack>"),
+            Message::user("remember this"),
+        ];
+        let with_record = vec![
+            Message::system("stable system"),
+            Message::system(
+                "<context-pack>memory-records=1: user prefers dark mode</context-pack>",
+            ),
+            Message::user("remember this"),
+        ];
+
+        let base = request_cache_diagnostic_shape(&base_messages, std::slice::from_ref(&tool));
+        let record = request_cache_diagnostic_shape(&with_record, std::slice::from_ref(&tool));
+
+        assert_eq!(base.prefix_fingerprint, record.prefix_fingerprint);
+    }
+
+    #[test]
+    fn stable_prefix_unchanged_by_dynamic_retrieval_context() {
+        let tool = provider_tool("bash", serde_json::json!({"type": "object"}));
+        let base_messages = vec![
+            Message::system("stable system"),
+            Message::system("<retrieval-context>items=0</retrieval-context>"),
+            Message::user("search for something"),
+        ];
+        let with_results = vec![
+            Message::system("stable system"),
+            Message::system("<retrieval-context>items=3: found relevant docs</retrieval-context>"),
+            Message::user("search for something"),
+        ];
+
+        let base = request_cache_diagnostic_shape(&base_messages, std::slice::from_ref(&tool));
+        let results = request_cache_diagnostic_shape(&with_results, std::slice::from_ref(&tool));
+
+        assert_eq!(base.prefix_fingerprint, results.prefix_fingerprint);
+    }
+
+    #[test]
+    fn prefix_change_reasons_detects_only_real_changes() {
+        let tool = provider_tool("bash", serde_json::json!({"type": "object"}));
+        let messages_a = vec![Message::system("system v1"), Message::user("request")];
+        let messages_b = vec![Message::system("system v2"), Message::user("request")];
+
+        let shape_a = request_cache_diagnostic_shape(&messages_a, std::slice::from_ref(&tool));
+        let shape_b = request_cache_diagnostic_shape(&messages_b, std::slice::from_ref(&tool));
+
+        let reasons = prefix_change_reasons(Some(&shape_a), &shape_b);
+        assert!(reasons.contains(&"system".to_string()));
+        assert!(!reasons.contains(&"tools".to_string()));
+
+        let no_change = prefix_change_reasons(Some(&shape_a), &shape_a);
+        assert!(no_change.is_empty());
+    }
+
+    #[test]
+    fn stable_prefix_stable_across_equivalent_tool_sets() {
+        let tool_a = provider_tool("alpha", serde_json::json!({"type": "object"}));
+        let tool_b = provider_tool("beta", serde_json::json!({"type": "object"}));
+        let messages = vec![Message::system("system"), Message::user("go")];
+
+        let ab = request_cache_diagnostic_shape(&messages, &[tool_a.clone(), tool_b.clone()]);
+        let ba = request_cache_diagnostic_shape(&messages, &[tool_b, tool_a]);
+
+        assert_eq!(ab.prefix_fingerprint, ba.prefix_fingerprint);
+        assert_eq!(ab.tool_schema_fingerprint, ba.tool_schema_fingerprint);
+        assert_eq!(ab.tool_names, ba.tool_names);
+    }
+
+    #[test]
+    fn stable_prefix_changes_when_system_prompt_changes() {
+        let tool = provider_tool("bash", serde_json::json!({"type": "object"}));
+        let v1 = vec![Message::system("instructions v1"), Message::user("go")];
+        let v2 = vec![Message::system("instructions v2"), Message::user("go")];
+
+        let shape_v1 = request_cache_diagnostic_shape(&v1, std::slice::from_ref(&tool));
+        let shape_v2 = request_cache_diagnostic_shape(&v2, std::slice::from_ref(&tool));
+
+        assert_ne!(shape_v1.prefix_fingerprint, shape_v2.prefix_fingerprint);
+        assert_ne!(shape_v1.system_fingerprint, shape_v2.system_fingerprint);
+    }
+
+    #[test]
+    fn stable_prefix_changes_when_tool_added_or_removed() {
+        let tool_a = provider_tool("alpha", serde_json::json!({"type": "object"}));
+        let tool_b = provider_tool("beta", serde_json::json!({"type": "object"}));
+        let messages = vec![Message::system("system"), Message::user("go")];
+
+        let one_tool = request_cache_diagnostic_shape(&messages, std::slice::from_ref(&tool_a));
+        let two_tools = request_cache_diagnostic_shape(&messages, &[tool_a, tool_b]);
+
+        assert_ne!(one_tool.prefix_fingerprint, two_tools.prefix_fingerprint);
+        assert_ne!(
+            one_tool.tool_schema_fingerprint,
+            two_tools.tool_schema_fingerprint
+        );
+    }
 }

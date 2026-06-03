@@ -56,6 +56,7 @@ SKIP_DESKTOP_CASES="${PRIORITY_AGENT_SKIP_DESKTOP_CASES:-1}"
 # ── Defaults ──
 DRY_RUN=0
 SKIP_PROVIDER_HEALTH=0
+CLEAN_OLD_RUNS=0
 TIMEOUT_SECS="${PRIORITY_AGENT_DAILY_TIMEOUT_SECS:-1200}"
 REPAIR_NO_EFFECTIVE_PROGRESS_SECS="${PRIORITY_AGENT_DAILY_REPAIR_NO_EFFECTIVE_PROGRESS_SECS:-360}"
 REPORT_ONLY=""
@@ -76,6 +77,7 @@ while [[ $# -gt 0 ]]; do
     --report-only) REPORT_ONLY="${2:-}"; shift 2 ;;
     --label) LABEL="${2:-product-daily}"; shift 2 ;;
     --run-id) RUN_ID="${2:-}"; shift 2 ;;
+    --clean) CLEAN_OLD_RUNS=1; shift ;;
     -h|--help)
       cat <<'EOF'
 Usage: scripts/product-daily-gate.sh [options]
@@ -90,6 +92,7 @@ Options:
   --report-only RUN_ID   Generate report from existing run data
   --label LABEL          Report label (default: product-daily)
   --run-id ID            Stable run id (default: timestamp)
+  --clean                Remove old generated run bundles before running
   -h, --help             Show this help
 EOF
       exit 0
@@ -165,6 +168,21 @@ fi
 
 REPORT_DIR="docs/benchmarks"
 WORK_ROOT="target/live-evals"
+
+# ── Clean old generated run bundles if requested ──
+if [[ "$CLEAN_OLD_RUNS" == "1" ]]; then
+  echo "Cleaning old generated run bundles..."
+  rm -rf \
+    eval-benchmarks/ \
+    eval-summaries/ \
+    "$REPORT_DIR"/live-product-daily* \
+    2>/dev/null || true
+  # Clean old target/live-evals runs older than 7 days
+  if [[ -d "$WORK_ROOT" ]]; then
+    find "$WORK_ROOT" -maxdepth 1 -type d -mtime +7 -exec rm -rf {} + 2>/dev/null || true
+  fi
+  echo "Cleanup complete."
+fi
 
 # ── Helpers ──
 

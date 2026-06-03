@@ -221,28 +221,84 @@ fn tool_schema_includes_contract_metadata() {
 /// 防止"文档写了有，模型调不到"的问题
 #[test]
 fn test_all_core_tools_registered() {
-    let registry = ToolRegistry::default_registry();
+    let registry = ToolRegistry::with_profile(ToolRegistryProfile::Core);
     let registered = registry.tool_names();
 
     let expected_core = [
         "file_read",
         "file_write",
         "file_edit",
+        "file_patch",
         "glob",
         "grep",
         "bash",
         "bash_output",
         "bash_cancel",
         "bash_tasks",
-        "agent",
-        "web_fetch",
-        "web_search",
+        "run_tests",
+        "start_dev_server",
         "memory_save",
         "memory_load",
         "memory_clear",
         "todo_write",
+        "git_status",
+        "git_diff",
+        "context",
+        "context_visualization",
         "calculate",
         "datetime",
+        "enter_plan_mode",
+        "exit_plan_mode",
+        "skill_manage",
+        "skills_list",
+        "skill_view",
+        "ask_user",
+        "plan",
+    ];
+
+    for &name in &expected_core {
+        assert!(
+            registered.contains(&name),
+            "Core tool '{}' NOT in default_registry! Models can't call it.",
+            name
+        );
+    }
+
+    for &name in &[
+        "agent",
+        "web_fetch",
+        "web_search",
+        "json_query",
+        "git",
+        "notebook",
+        "repl",
+        "powershell",
+        "send_message",
+        "tool_search",
+        "mcp",
+        "mcp_tool",
+        "lsp",
+        "worktree",
+        "workbench",
+        "refactor",
+    ] {
+        assert!(
+            !registered.contains(&name),
+            "Extended tool '{}' should not be in the Core default surface.",
+            name
+        );
+    }
+}
+
+#[test]
+fn test_full_registry_includes_low_frequency_tools() {
+    let registry = ToolRegistry::full_registry();
+    let registered = registry.tool_names();
+
+    for &name in &[
+        "agent",
+        "web_fetch",
+        "web_search",
         "json_query",
         "encode",
         "diff",
@@ -251,8 +307,6 @@ fn test_all_core_tools_registered() {
         "notebook",
         "repl",
         "powershell",
-        "enter_plan_mode",
-        "exit_plan_mode",
         "send_message",
         "tool_search",
         "sleep",
@@ -270,28 +324,6 @@ fn test_all_core_tools_registered() {
         "workbench",
         "project_list",
         "refactor",
-        "skill_manage",
-        "skills_list",
-        "skill_view",
-        "ask_user",
-        "plan",
-    ];
-
-    for &name in &expected_core {
-        assert!(
-            registered.contains(&name),
-            "Core tool '{}' NOT in default_registry! Models can't call it.",
-            name
-        );
-    }
-}
-
-#[test]
-fn test_full_registry_includes_low_frequency_tools() {
-    let registry = ToolRegistry::full_registry();
-    let registered = registry.tool_names();
-
-    for &name in &[
         "desktop",
         "remote_trigger",
         "remote_dev",
@@ -313,13 +345,13 @@ fn test_full_registry_includes_low_frequency_tools() {
 
 #[test]
 fn core_tool_contract_descriptions_stay_compact() {
-    let registry = ToolRegistry::default_registry();
+    let registry = ToolRegistry::with_profile(ToolRegistryProfile::Core);
     let budgets = [
         ("file_read", 320usize),
         ("file_write", 360usize),
         ("file_edit", 900usize),
         ("bash", 420usize),
-        ("agent", 650usize),
+        ("run_tests", 520usize),
         ("skill_view", 260usize),
     ];
 

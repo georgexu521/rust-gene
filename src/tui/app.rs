@@ -4,6 +4,10 @@
 
 use crate::engine::agent_mode::AgentMode;
 use crate::engine::conversation_loop::ToolApprovalResponse;
+use crate::engine::runtime_facade::{
+    ProviderPhase, ProviderRequestLifecycle, RuntimeFacadeState,
+    StreamUsageSnapshot as RuntimeFacadeStreamUsageSnapshot,
+};
 use crate::engine::streaming::{StreamEvent, StreamingQueryEngine};
 use crate::permissions::RuleSource;
 use crate::state::{
@@ -129,97 +133,20 @@ impl StatusBarDensity {
     }
 }
 
-/// Provider request lifecycle state for slow-tail visibility.
+/// TUI-specific wrapper around the shared provider request lifecycle.
 #[derive(Debug, Clone, Default)]
 pub struct ProviderRequestState {
-    pub phase: ProviderRequestPhase,
-    pub provider_family: Option<String>,
-    pub request_shape: Option<String>,
-    pub model: Option<String>,
+    pub lifecycle: ProviderRequestLifecycle,
     pub started_at: Option<std::time::Instant>,
-    pub elapsed_ms: u64,
-    pub timeout_ms: u64,
-    pub is_known_slow_path: bool,
-    pub slow_warning_threshold_ms: u64,
-    pub slow_warning_emitted: bool,
-    pub message: Option<String>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum ProviderRequestPhase {
-    #[default]
-    Idle,
-    Started,
-    Retrying,
-    SlowWarning,
-    Completed,
-    TimedOut,
-    Cancelled,
-}
-
-impl ProviderRequestPhase {
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::Idle => "",
-            Self::Started => "waiting for provider",
-            Self::Retrying => "retrying provider",
-            Self::SlowWarning => "slow provider",
-            Self::Completed => "provider done",
-            Self::TimedOut => "provider timeout",
-            Self::Cancelled => "cancelled",
-        }
-    }
 }
 
 impl ProviderRequestState {
     pub fn is_active(&self) -> bool {
-        matches!(
-            self.phase,
-            ProviderRequestPhase::Started
-                | ProviderRequestPhase::Retrying
-                | ProviderRequestPhase::SlowWarning
-        )
+        self.lifecycle.phase.is_active()
     }
 
     pub fn status_label(&self) -> String {
-        match self.phase {
-            ProviderRequestPhase::Idle => String::new(),
-            ProviderRequestPhase::Started => {
-                if self.is_known_slow_path {
-                    format!(
-                        "non-streaming tool request ({})",
-                        self.provider_family.as_deref().unwrap_or("unknown")
-                    )
-                } else {
-                    format!(
-                        "waiting on {}",
-                        self.provider_family.as_deref().unwrap_or("provider")
-                    )
-                }
-            }
-            ProviderRequestPhase::Retrying => {
-                format!(
-                    "retrying {}",
-                    self.provider_family.as_deref().unwrap_or("provider")
-                )
-            }
-            ProviderRequestPhase::SlowWarning => {
-                format!(
-                    "slow {} ({:.1}s)",
-                    self.provider_family.as_deref().unwrap_or("provider"),
-                    self.elapsed_ms as f64 / 1000.0
-                )
-            }
-            ProviderRequestPhase::Completed => String::new(),
-            ProviderRequestPhase::TimedOut => {
-                format!(
-                    "{} timed out ({:.1}s)",
-                    self.provider_family.as_deref().unwrap_or("provider"),
-                    self.elapsed_ms as f64 / 1000.0
-                )
-            }
-            ProviderRequestPhase::Cancelled => "cancelled".to_string(),
-        }
+        self.lifecycle.status_label()
     }
 
     pub fn update_from_diagnostic(&mut self, diagnostic: &serde_json::Value) {
@@ -231,151 +158,43 @@ impl ProviderRequestState {
             .get("stage")
             .and_then(|v| v.as_str())
             .unwrap_or("");
+        let is_start = matches!(
+            (schema, stage),
+            ("api_request_stage.v1", "api_request_started")
+                | ("provider_request.v1", "provider_request_started")
+        );
 
-        match (schema, stage) {
-            ("api_request_stage.v1", "api_request_started") => {
-                self.phase = ProviderRequestPhase::Started;
-                self.started_at = Some(std::time::Instant::now());
-                self.elapsed_ms = 0;
-                self.provider_family = diagnostic
-                    .get("provider_family")
-                    .and_then(|v| v.as_str())
-                    .map(|s| s.to_string());
-                self.request_shape = diagnostic
-                    .get("request_shape")
-                    .and_then(|v| v.as_str())
-                    .map(|s| s.to_string());
-                self.model = diagnostic
-                    .get("model")
-                    .and_then(|v| v.as_str())
-                    .map(|s| s.to_string());
-                self.timeout_ms = diagnostic
-                    .get("timeout_ms")
-                    .and_then(|v| v.as_u64())
-                    .unwrap_or(0);
-                self.slow_warning_threshold_ms = diagnostic
-                    .get("slow_warning_threshold_ms")
-                    .and_then(|v| v.as_u64())
-                    .unwrap_or(0);
-                self.is_known_slow_path = diagnostic
-                    .get("is_known_slow_path")
-                    .and_then(|v| v.as_bool())
-                    .or_else(|| {
-                        diagnostic
-                            .get("nonstreaming_tool_request")
-                            .and_then(|v| v.as_bool())
-                    })
-                    .unwrap_or(false);
-                self.slow_warning_emitted = false;
-                self.message = None;
-            }
-            ("provider_request.v1", "provider_request_slow_warning") => {
-                self.phase = ProviderRequestPhase::SlowWarning;
-                self.elapsed_ms = diagnostic
-                    .get("elapsed_ms")
-                    .and_then(|v| v.as_u64())
-                    .unwrap_or(self.elapsed_ms);
-                self.timeout_ms = diagnostic
-                    .get("timeout_ms")
-                    .and_then(|v| v.as_u64())
-                    .unwrap_or(self.timeout_ms);
-                self.slow_warning_threshold_ms = diagnostic
-                    .get("slow_warning_threshold_ms")
-                    .and_then(|v| v.as_u64())
-                    .unwrap_or(self.slow_warning_threshold_ms);
-                self.provider_family = diagnostic
-                    .get("provider_family")
-                    .and_then(|v| v.as_str())
-                    .map(|s| s.to_string())
-                    .or_else(|| self.provider_family.clone());
-                self.request_shape = diagnostic
-                    .get("request_shape")
-                    .and_then(|v| v.as_str())
-                    .map(|s| s.to_string())
-                    .or_else(|| self.request_shape.clone());
-                self.model = diagnostic
-                    .get("model")
-                    .and_then(|v| v.as_str())
-                    .map(|s| s.to_string())
-                    .or_else(|| self.model.clone());
-                self.is_known_slow_path = diagnostic
-                    .get("is_known_slow_path")
-                    .and_then(|v| v.as_bool())
-                    .or_else(|| {
-                        diagnostic
-                            .get("nonstreaming_tool_request")
-                            .and_then(|v| v.as_bool())
-                    })
-                    .unwrap_or(self.is_known_slow_path);
-                self.slow_warning_emitted = true;
-                self.message = diagnostic
-                    .get("message")
-                    .and_then(|v| v.as_str())
-                    .map(|s| s.to_string());
-            }
-            ("provider_request.v1", "provider_request_retrying") => {
-                self.phase = ProviderRequestPhase::Retrying;
-                self.elapsed_ms = diagnostic
-                    .get("elapsed_ms")
-                    .and_then(|v| v.as_u64())
-                    .unwrap_or(self.elapsed_ms);
-            }
-            ("provider_request.v1", "provider_request_completed") => {
-                self.phase = ProviderRequestPhase::Completed;
-                self.elapsed_ms = diagnostic
-                    .get("elapsed_ms")
-                    .and_then(|v| v.as_u64())
-                    .unwrap_or(self.elapsed_ms);
-                self.started_at = None;
-            }
-            ("provider_request.v1", "provider_request_timeout") => {
-                self.phase = ProviderRequestPhase::TimedOut;
-                self.elapsed_ms = diagnostic
-                    .get("elapsed_ms")
-                    .and_then(|v| v.as_u64())
-                    .unwrap_or(self.elapsed_ms);
-                self.timeout_ms = diagnostic
-                    .get("timeout_ms")
-                    .and_then(|v| v.as_u64())
-                    .unwrap_or(self.timeout_ms);
-                self.started_at = None;
-            }
-            ("provider_request.v1", "provider_request_cancelled") => {
-                self.phase = ProviderRequestPhase::Cancelled;
-                self.elapsed_ms = diagnostic
-                    .get("elapsed_ms")
-                    .and_then(|v| v.as_u64())
-                    .unwrap_or(self.elapsed_ms);
-                self.started_at = None;
-            }
-            _ => {
-                if let Some(started) = self.started_at {
-                    self.elapsed_ms = started.elapsed().as_millis() as u64;
-                }
-            }
+        if is_start {
+            self.started_at = Some(std::time::Instant::now());
+        } else if let Some(started) = self.started_at {
+            self.lifecycle.elapsed_ms = started.elapsed().as_millis() as u64;
+        }
+
+        self.lifecycle.update_from_diagnostic(diagnostic);
+
+        if !self.lifecycle.phase.is_active() {
+            self.started_at = None;
         }
     }
 
     pub fn mark_cancelled(&mut self) {
         if self.is_active() {
             if let Some(started) = self.started_at {
-                self.elapsed_ms = started.elapsed().as_millis() as u64;
+                self.lifecycle.elapsed_ms = started.elapsed().as_millis() as u64;
             }
-            self.phase = ProviderRequestPhase::Cancelled;
+            self.lifecycle.phase = ProviderPhase::Cancelled;
             self.started_at = None;
         }
     }
 
     pub fn check_slow_warning(&mut self) -> bool {
-        if self.phase != ProviderRequestPhase::Started || self.slow_warning_emitted {
+        if self.lifecycle.phase != ProviderPhase::Started || self.lifecycle.slow_warning_emitted {
             return false;
         }
-        if self.elapsed_ms >= self.slow_warning_threshold_ms && self.slow_warning_threshold_ms > 0 {
-            self.phase = ProviderRequestPhase::SlowWarning;
-            self.slow_warning_emitted = true;
-            return true;
+        if let Some(started) = self.started_at {
+            self.lifecycle.elapsed_ms = started.elapsed().as_millis() as u64;
         }
-        false
+        self.lifecycle.check_slow_warning()
     }
 
     pub fn reset(&mut self) {
@@ -437,6 +256,8 @@ pub struct TuiApp {
     pub tool_runs_snapshot: Vec<ToolRunView>,
     /// Shared runtime-state snapshot used by status/tool selectors.
     pub runtime_state_snapshot: RuntimeAppState,
+    /// Shared product runtime facade snapshot for cross-frontend migration.
+    pub runtime_facade_state: RuntimeFacadeState,
     /// 历史工具运行视图，按触发该轮的用户消息 id 锚定
     pub tool_runs_by_message_id: HashMap<String, Vec<ToolRunView>>,
     current_tool_anchor_id: Option<String>,
@@ -661,6 +482,7 @@ impl TuiApp {
             tool_runs: Arc::new(Mutex::new(Vec::new())),
             tool_runs_snapshot: Vec::new(),
             runtime_state_snapshot: RuntimeAppState::default(),
+            runtime_facade_state: RuntimeFacadeState::default(),
             tool_runs_by_message_id: HashMap::new(),
             current_tool_anchor_id: None,
             transcript_expanded: false,
@@ -902,6 +724,9 @@ impl TuiApp {
                 prs.reset();
             }
             self.provider_request_state.reset();
+            self.runtime_facade_state.reset_provider_request().await;
+            self.runtime_facade_state.set_querying(true).await;
+            self.runtime_facade_state.set_stream_usage(None).await;
             self.tool_runs_snapshot.clear();
             self.current_tool_anchor_id = Some(user_msg_id);
             self.stream_usage_snapshot = None;
@@ -927,6 +752,7 @@ impl TuiApp {
             let tool_runs_clone = self.tool_runs.clone();
             let usage_clone = self.stream_usage.clone();
             let provider_request_clone = self.provider_request.clone();
+            let runtime_facade_state_clone = self.runtime_facade_state.clone();
             let done_flag = self.stream_done.clone();
             let user_msg = content.clone();
             let agent_mode = self.agent_mode;
@@ -976,6 +802,7 @@ impl TuiApp {
                             });
                         }
                         StreamEvent::Complete => {
+                            runtime_facade_state_clone.set_querying(false).await;
                             done_flag.store(true, Ordering::SeqCst);
                             break;
                         }
@@ -1004,21 +831,37 @@ impl TuiApp {
                                 reasoning_tokens,
                                 cached_tokens,
                             });
+                            runtime_facade_state_clone
+                                .set_stream_usage(Some(RuntimeFacadeStreamUsageSnapshot {
+                                    prompt_tokens,
+                                    completion_tokens,
+                                    reasoning_tokens,
+                                    cached_tokens,
+                                }))
+                                .await;
                         }
                         StreamEvent::Error(e) => {
                             let mut resp = response_clone.lock().await;
                             resp.push_str(&format!("\n[Error: {}]", e));
+                            runtime_facade_state_clone.set_querying(false).await;
                             done_flag.store(true, Ordering::SeqCst);
                             break;
                         }
                         StreamEvent::RuntimeDiagnostic { diagnostic } => {
-                            let mut state = provider_request_clone.lock().await;
-                            state.update_from_diagnostic(&diagnostic);
+                            let lifecycle = {
+                                let mut state = provider_request_clone.lock().await;
+                                state.update_from_diagnostic(&diagnostic);
+                                state.lifecycle.clone()
+                            };
+                            runtime_facade_state_clone
+                                .update_provider_request(|provider| *provider = lifecycle)
+                                .await;
                         }
                         _ => {}
                     }
                 }
                 // 确保即使流结束也标记完成
+                runtime_facade_state_clone.set_querying(false).await;
                 done_flag.store(true, Ordering::SeqCst);
             });
             self.stream_handle = Some(handle);
@@ -1081,11 +924,15 @@ impl TuiApp {
             let mut prs = self.provider_request.lock().await;
             if prs.is_active() {
                 if let Some(started) = prs.started_at {
-                    prs.elapsed_ms = started.elapsed().as_millis() as u64;
+                    prs.lifecycle.elapsed_ms = started.elapsed().as_millis() as u64;
                 }
                 prs.check_slow_warning();
             }
             self.provider_request_state = prs.clone();
+            let lifecycle = prs.lifecycle.clone();
+            self.runtime_facade_state
+                .update_provider_request(|provider| *provider = lifecycle)
+                .await;
         }
         self.runtime_state_snapshot = self.build_runtime_state_snapshot();
         self.sync_context_runtime_state().await;
@@ -1149,6 +996,7 @@ impl TuiApp {
                 // 流式响应完成，发送终端通知
                 crate::tui::notify::send_notification("Priority Agent", "Response ready");
                 self.is_querying = false;
+                self.runtime_facade_state.set_querying(false).await;
                 self.stream_started_at = None;
                 self.current_tool_anchor_id = None;
             }
@@ -1595,6 +1443,7 @@ impl TuiApp {
     /// 添加助手响应
     pub async fn add_assistant_response(&mut self, content: String) {
         self.is_querying = false;
+        self.runtime_facade_state.set_querying(false).await;
         self.stream_started_at = None;
 
         // 保存助手消息到数据库。流式引擎绑定同一会话时由引擎负责持久化。

@@ -1173,3 +1173,28 @@ fn skill_outcome_blocks_on_unresolved_acceptance() {
     assert_eq!(outcome.tests_passed, Some(true));
     assert!(outcome.risk_penalty >= 0.45);
 }
+
+#[test]
+fn provider_request_state_clears_timer_on_terminal_diagnostic() {
+    let mut state = ProviderRequestState::default();
+
+    state.update_from_diagnostic(&serde_json::json!({
+        "schema": "api_request_stage.v1",
+        "stage": "api_request_started",
+        "provider_family": "openai",
+        "slow_warning_threshold_ms": 10
+    }));
+    assert!(state.is_active());
+    assert!(state.started_at.is_some());
+
+    state.update_from_diagnostic(&serde_json::json!({
+        "schema": "provider_request.v1",
+        "stage": "provider_request_completed",
+        "elapsed_ms": 12
+    }));
+
+    assert!(!state.is_active());
+    assert!(state.started_at.is_none());
+    assert_eq!(state.lifecycle.phase, ProviderPhase::Completed);
+    assert_eq!(state.lifecycle.elapsed_ms, 12);
+}

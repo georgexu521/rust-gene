@@ -360,6 +360,57 @@ fn short_hash(hash: &str) -> String {
     hash.chars().take(12).collect()
 }
 
+fn format_provider_status_summary() -> String {
+    let mut parts = Vec::new();
+
+    // Provider timeout
+    let timeout = std::env::var("PRIORITY_AGENT_LLM_REQUEST_TIMEOUT_SECS")
+        .unwrap_or_else(|_| "180".to_string());
+    parts.push(format!("timeout={}s", timeout));
+
+    // Reconnect attempts
+    let reconnect = std::env::var("PRIORITY_AGENT_PROVIDER_RECONNECT_ATTEMPTS")
+        .unwrap_or_else(|_| "5".to_string());
+    parts.push(format!("reconnect={}", reconnect));
+
+    // Fallback model
+    let fallback =
+        std::env::var("PRIORITY_AGENT_FALLBACK_MODEL").unwrap_or_else(|_| "none".to_string());
+    parts.push(format!("fallback={}", fallback));
+
+    // Tool profile
+    let tool_profile =
+        std::env::var("PRIORITY_AGENT_TOOL_PROFILE").unwrap_or_else(|_| "core".to_string());
+    parts.push(format!("tool_profile={}", tool_profile));
+
+    parts.join(" | ")
+}
+
+fn format_effective_config_summary() -> String {
+    let mut parts = Vec::new();
+
+    // Memory settings
+    let write_policy = std::env::var("PRIORITY_AGENT_AUTO_MEMORY_WRITE")
+        .unwrap_or_else(|_| "review_only".to_string());
+    parts.push(format!("memory_write={}", write_policy));
+
+    let active_memory =
+        std::env::var("PRIORITY_AGENT_ACTIVE_MEMORY").unwrap_or_else(|_| "0".to_string());
+    parts.push(format!("active_memory={}", active_memory));
+
+    // Route scoped tools
+    let route_scoped =
+        std::env::var("PRIORITY_AGENT_ROUTE_SCOPED_TOOLS").unwrap_or_else(|_| "true".to_string());
+    parts.push(format!("route_scoped={}", route_scoped));
+
+    // Stream idle timeout
+    let stream_idle = std::env::var("PRIORITY_AGENT_STREAM_IDLE_TIMEOUT_SECS")
+        .unwrap_or_else(|_| "120".to_string());
+    parts.push(format!("stream_idle={}s", stream_idle));
+
+    parts.join(" | ")
+}
+
 fn exposure_label(report: &crate::engine::tool_exposure::ToolExposureReport) -> &'static str {
     if report.model_exposed {
         "exposed"
@@ -1026,6 +1077,18 @@ pub async fn handle_doctor(app: &TuiApp, args: &str) -> String {
             "Restart the application or check bootstrap logs",
         ));
     }
+
+    // Provider status summary
+    report.checks.push(crate::diagnostics::CheckResult::info(
+        "provider_status",
+        format_provider_status_summary(),
+    ));
+
+    // Effective config summary
+    report.checks.push(crate::diagnostics::CheckResult::info(
+        "effective_config",
+        format_effective_config_summary(),
+    ));
 
     let runtime = app.runtime_status_snapshot().await;
     let readiness = evaluate_product_readiness(&report, &runtime);

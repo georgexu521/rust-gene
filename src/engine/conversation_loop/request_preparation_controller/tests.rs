@@ -749,6 +749,145 @@ async fn prepare_places_dynamic_task_zones_at_tail_after_history() {
 }
 
 #[tokio::test]
+async fn prepare_keeps_stable_prefix_fingerprint_when_dynamic_task_context_changes() {
+    let route_a = crate::engine::intent_router::IntentRouter::new().route("修改 src/lib.rs");
+    let mut task_a =
+        crate::engine::task_context::TaskContextBundle::new("修改 src/lib.rs", ".", route_a, None);
+    task_a.add_file("src/lib.rs");
+    task_a.add_acceptance_check("cargo test -q lib");
+    let contract_a = task_a.task_contract(&["cargo test -q lib".to_string()]);
+    let context_pack_a = task_a.context_pack(&contract_a);
+
+    let trace_a = TraceCollector::new(TurnTrace::new("session-cache-a".to_string(), 1, "next"));
+    let mut runtime_diet_a = RuntimeDietSnapshot::new(true);
+    let prepared_a = RequestPreparationController::prepare(RequestPreparationContext {
+        messages: &[
+            Message::system("base system prompt"),
+            Message::user("previous request"),
+            Message::assistant("previous answer"),
+            Message::user("next"),
+        ],
+        working_dir: std::path::Path::new("."),
+        focused_repair_prompt: None,
+        agent_task_state: Some(&task_a.agent_state),
+        task_contract: Some(&contract_a),
+        context_pack: Some(&context_pack_a),
+        turn_retrieval_context: None,
+        retrieval_policy: RetrievalPolicy::None,
+        memory_manager: None,
+        provider: None,
+        session_store: None,
+        session_id: "session-cache-a",
+        model: "test-model",
+        temperature: 0.2,
+        tools: &[],
+        trace: &trace_a,
+        runtime_diet: &mut runtime_diet_a,
+        inject_dynamic_context: true,
+    })
+    .await;
+
+    let route_b = crate::engine::intent_router::IntentRouter::new().route("修改 src/main.rs");
+    let mut task_b =
+        crate::engine::task_context::TaskContextBundle::new("修改 src/main.rs", ".", route_b, None);
+    task_b.add_file("src/main.rs");
+    task_b.add_acceptance_check("cargo test -q main");
+    let contract_b = task_b.task_contract(&["cargo test -q main".to_string()]);
+    let context_pack_b = task_b.context_pack(&contract_b);
+
+    let trace_b = TraceCollector::new(TurnTrace::new("session-cache-b".to_string(), 1, "next"));
+    let mut runtime_diet_b = RuntimeDietSnapshot::new(true);
+    let prepared_b = RequestPreparationController::prepare(RequestPreparationContext {
+        messages: &[
+            Message::system("base system prompt"),
+            Message::user("previous request"),
+            Message::assistant("previous answer"),
+            Message::user("next"),
+        ],
+        working_dir: std::path::Path::new("."),
+        focused_repair_prompt: None,
+        agent_task_state: Some(&task_b.agent_state),
+        task_contract: Some(&contract_b),
+        context_pack: Some(&context_pack_b),
+        turn_retrieval_context: None,
+        retrieval_policy: RetrievalPolicy::None,
+        memory_manager: None,
+        provider: None,
+        session_store: None,
+        session_id: "session-cache-b",
+        model: "test-model",
+        temperature: 0.2,
+        tools: &[],
+        trace: &trace_b,
+        runtime_diet: &mut runtime_diet_b,
+        inject_dynamic_context: true,
+    })
+    .await;
+
+    assert!(matches!(
+        &prepared_a.request.messages[0],
+        Message::System { content } if content == "base system prompt"
+    ));
+    assert!(matches!(
+        &prepared_b.request.messages[0],
+        Message::System { content } if content == "base system prompt"
+    ));
+    assert!(matches!(
+        prepared_a.request.messages.last(),
+        Some(Message::User { content })
+            if content.contains("src/lib.rs") && content.ends_with("next")
+    ));
+    assert!(matches!(
+        prepared_b.request.messages.last(),
+        Some(Message::User { content })
+            if content.contains("src/main.rs") && content.ends_with("next")
+    ));
+
+    let trace_a = trace_a.finish(crate::engine::trace::TurnStatus::Completed);
+    let trace_b = trace_b.finish(crate::engine::trace::TurnStatus::Completed);
+    let snapshot_a = trace_a
+        .events
+        .iter()
+        .find_map(|event| match event {
+            TraceEvent::CacheStabilitySnapshot {
+                stable_prefix_fingerprint,
+                dynamic_zone_messages,
+                dynamic_zones_before_last_user,
+                ..
+            } => Some((
+                stable_prefix_fingerprint.clone(),
+                *dynamic_zone_messages,
+                *dynamic_zones_before_last_user,
+            )),
+            _ => None,
+        })
+        .expect("first cache snapshot should be recorded");
+    let snapshot_b = trace_b
+        .events
+        .iter()
+        .find_map(|event| match event {
+            TraceEvent::CacheStabilitySnapshot {
+                stable_prefix_fingerprint,
+                dynamic_zone_messages,
+                dynamic_zones_before_last_user,
+                ..
+            } => Some((
+                stable_prefix_fingerprint.clone(),
+                *dynamic_zone_messages,
+                *dynamic_zones_before_last_user,
+            )),
+            _ => None,
+        })
+        .expect("second cache snapshot should be recorded");
+
+    assert_eq!(snapshot_a.0, snapshot_b.0);
+    assert_eq!(snapshot_a.1, 1);
+    assert_eq!(snapshot_b.1, 1);
+    assert_eq!(snapshot_a.2, 0);
+    assert_eq!(snapshot_b.2, 0);
+}
+
+#[tokio::test]
 async fn prepare_sorts_provider_tools_for_schema_cache_stability() {
     let trace = TraceCollector::new(TurnTrace::new("session-tools".to_string(), 1, "use tools"));
     let mut runtime_diet = RuntimeDietSnapshot::new(true);

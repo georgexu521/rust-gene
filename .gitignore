@@ -26,5 +26,10 @@ docs/benchmarks/live-*/**/diff.patch
 docs/benchmarks/live-*/**/diff-stat.txt
 docs/benchmarks/live-*/**/git-status.txt
 docs/benchmarks/live-*/**/required-commands.log
+
+# Daily gate generated run bundles (use --clean to remove)
+eval-benchmarks/
+eval-summaries/
+docs/benchmarks/live-product-daily*/
 .priority-agent/
 .reasonix/

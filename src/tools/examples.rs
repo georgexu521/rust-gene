@@ -98,7 +98,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_default_registry() {
-        let registry = ToolRegistry::default_registry();
+        let registry = ToolRegistry::with_profile(ToolRegistryProfile::Core);
 
         assert!(registry.has("file_read"));
         assert!(registry.has("file_write"));
@@ -107,7 +107,10 @@ mod tests {
         assert!(registry.has("glob"));
         assert!(registry.has("grep"));
         assert!(registry.has("todo_write"));
-        assert!(registry.has("agent"));
+        assert!(!registry.has("agent"));
+
+        let full = ToolRegistry::full_registry();
+        assert!(full.has("agent"));
     }
 
     #[tokio::test]

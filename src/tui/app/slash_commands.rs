@@ -133,7 +133,11 @@ impl TuiApp {
                          - /memory control recall off|strict|balanced|preference-only\n\
                          - /memory status (this view)\n\
                          - /memory status --json (machine-readable)\n\
-                         - /memory doctor (detailed diagnostics)"
+                         - /memory doctor (detailed diagnostics)\n\n\
+                         Memory Model:\n\
+                         - Stable prefix: project/user memory docs + accepted durable facts\n\
+                         - Turn-tail updates: notes about memory changes this session\n\
+                         - On-demand reads: agent reads source files when index says relevant"
                     ));
                 }
                 if memory_action == "control" {

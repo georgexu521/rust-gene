@@ -1636,80 +1636,109 @@ impl ToolRegistry {
     pub fn with_profile(profile: ToolRegistryProfile) -> Self {
         let mut registry = Self::new();
 
-        // 注册文件工具
+        // Core file tools (always available)
         registry.register(FileReadTool);
         registry.register(FileWriteTool);
         registry.register(FileEditTool);
         registry.register(FilePatchTool);
 
-        // 注册搜索工具
+        // Core search tools (always available)
         registry.register(GlobTool);
         registry.register(GrepTool);
 
-        // 注册系统工具
+        // Core system tools (always available)
         registry.register(BashTool);
         registry.register(BashOutputTool);
         registry.register(BashCancelTool);
         registry.register(BashTasksTool);
         registry.register(RunTestsTool);
         registry.register(StartDevServerTool);
-        registry.register(InstallDependenciesTool);
 
-        // 注册高级工具（task_* 已退役，由 todo_write 替代）
-        registry.register(AgentTool);
-
-        // 注册新增工具
-        registry.register(WebFetchTool);
-        registry.register(WebSearchTool);
+        // Core memory tools (always available when memory is enabled)
         registry.register(MemorySaveTool);
         registry.register(MemoryLoadTool);
         registry.register(MemoryClearTool);
+
+        // Core task management
         registry.register(TodoWriteTool);
 
-        // 注册核心辅助工具（cost/clear/config 改为 slash command only）
-        registry.register(ContextTool);
-        registry.register(ContextVisTool);
-        registry.register(CopyTool);
-        registry.register(ResumeTool);
-        registry.register(RewindTool);
-        registry.register(CalculateTool);
-        registry.register(DatetimeTool);
-        registry.register(JsonQueryTool);
-        registry.register(EncodeTool);
-        registry.register(DiffTool);
-        registry.register(FormatTool);
-        registry.register(GitHubTool);
-        registry.register(GitTool);
+        // Core git tools (always available)
         registry.register(GitStatusTool);
         registry.register(GitDiffTool);
-        registry.register(NotebookTool);
-        registry.register(REPLTool);
-        registry.register(PowerShellTool);
-        registry.register(SendMessageTool);
-        registry.register(ShareTool);
-        registry.register(ToolSearchTool);
-        registry.register(SleepTool);
+
+        // Core context tools
+        registry.register(ContextTool);
+        registry.register(ContextVisTool);
+
+        // Core utility tools
+        registry.register(CalculateTool);
+        registry.register(DatetimeTool);
+
+        // Plan mode tools
         let plan_manager = crate::engine::plan_mode::GLOBAL_PLAN_MANAGER.clone();
         registry.register(EnterPlanModeTool::new(plan_manager.clone()));
         registry.register(ExitPlanModeTool::new(plan_manager.clone()));
 
-        // 注册核心引擎工具
-        registry.register(crate::engine::socratic::SocraticTool);
-        registry.register(crate::engine::cron::CronTool);
-        registry.register(crate::engine::swarm::SwarmTool);
-        registry.register(crate::engine::mcp::McpManageTool);
-        registry.register(MCPTool);
-        registry.register(McpAuthTool);
-        registry.register(ListMcpResourcesTool);
-        registry.register(ReadMcpResourceTool);
-        registry.register(LSPTool);
-        registry.register(SymbolQueryTool);
-        registry.register(WorktreeTool);
-        registry.register(WorkbenchTool);
-        registry.register(RefactorTool);
-        registry.register(project_tool::ProjectListTool);
-
         if matches!(profile, ToolRegistryProfile::Full) {
+            // Extended file/system tools
+            registry.register(InstallDependenciesTool);
+            registry.register(AgentTool);
+
+            // Web tools
+            registry.register(WebFetchTool);
+            registry.register(WebSearchTool);
+
+            // Extended utility tools
+            registry.register(CopyTool);
+            registry.register(ResumeTool);
+            registry.register(RewindTool);
+            registry.register(JsonQueryTool);
+            registry.register(EncodeTool);
+            registry.register(DiffTool);
+            registry.register(FormatTool);
+
+            // Git/GitHub tools
+            registry.register(GitHubTool);
+            registry.register(GitTool);
+
+            // Notebook/REPL tools
+            registry.register(NotebookTool);
+            registry.register(REPLTool);
+            registry.register(PowerShellTool);
+
+            // Communication tools
+            registry.register(SendMessageTool);
+            registry.register(ShareTool);
+            registry.register(SleepTool);
+
+            // Search/management tools
+            registry.register(ToolSearchTool);
+
+            // Engine tools
+            registry.register(crate::engine::socratic::SocraticTool);
+            registry.register(crate::engine::cron::CronTool);
+            registry.register(crate::engine::swarm::SwarmTool);
+
+            // MCP tools
+            registry.register(crate::engine::mcp::McpManageTool);
+            registry.register(MCPTool);
+            registry.register(McpAuthTool);
+            registry.register(ListMcpResourcesTool);
+            registry.register(ReadMcpResourceTool);
+
+            // LSP/Symbol tools
+            registry.register(LSPTool);
+            registry.register(SymbolQueryTool);
+
+            // Worktree/Workbench tools
+            registry.register(WorktreeTool);
+            registry.register(WorkbenchTool);
+            registry.register(RefactorTool);
+
+            // Project tools
+            registry.register(project_tool::ProjectListTool);
+
+            // Platform-specific tools
             registry.register(DesktopTool);
             registry.register(RemoteTriggerTool);
             registry.register(RemoteDevTool);
