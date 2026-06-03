@@ -146,6 +146,70 @@ impl ConversationLoop {
         }
     }
 
+    /// Fallback to non-streaming request when streaming fails.
+    /// Tries with tools first, then without tools if that fails.
+    async fn fallback_to_nonstreaming(
+        &self,
+        fallback_messages: &[crate::services::api::Message],
+        fallback_tools: &Option<Vec<crate::services::api::Tool>>,
+        reason: &str,
+        tx: &mpsc::Sender<StreamEvent>,
+    ) -> Result<SessionStepResult> {
+        let base_request = ChatRequest::new(&self.model)
+            .with_messages(fallback_messages.to_vec())
+            .with_temperature(0.2);
+        let default_timeout = llm_request_timeout();
+        let response = if let Some(tools) = fallback_tools.clone() {
+            match self
+                .provider_chat_with_tracking(
+                    base_request.clone().with_tools(tools),
+                    "non-streaming fallback with tools",
+                    default_timeout,
+                )
+                .await
+            {
+                Ok(r) => r,
+                Err(with_tools_err) => {
+                    warn!(
+                        "Non-streaming fallback with tools failed: {}. Retrying without tools.",
+                        with_tools_err
+                    );
+                    self.provider_chat_with_tracking(
+                        base_request,
+                        "non-streaming fallback without tools",
+                        default_timeout,
+                    )
+                    .await?
+                }
+            }
+        } else {
+            self.provider_chat_with_tracking(
+                base_request,
+                "non-streaming fallback",
+                default_timeout,
+            )
+            .await?
+        };
+        emit_usage_event(&response, tx).await;
+
+        let content = strip_hidden_blocks(&response.content);
+        if !content.is_empty() {
+            emit_text_progressively(tx, content.clone()).await;
+        }
+        let tool_calls = response.tool_calls.unwrap_or_default();
+        Ok(SessionStepResult::new(
+            content,
+            tool_calls,
+            std::collections::HashMap::new(),
+            response.usage.clone(),
+            response.tool_call_repair.clone(),
+            None,
+            SessionStepSource::StreamingFallback {
+                reason: reason.to_string(),
+            },
+        ))
+    }
+
     /// 流式 API 调用
     pub(super) async fn call_api_streaming(
         &self,
@@ -525,59 +589,14 @@ impl ConversationLoop {
                         collected_tool_call_count,
                         stream_err
                     );
-                    let base_request = ChatRequest::new(&self.model)
-                        .with_messages(fallback_messages.clone())
-                        .with_temperature(0.2);
-                    let default_timeout = llm_request_timeout();
-                    let response = if let Some(tools) = fallback_tools.clone() {
-                        match self
-                            .provider_chat_with_tracking(
-                                base_request.clone().with_tools(tools),
-                                "non-streaming fallback with tools",
-                                default_timeout,
-                            )
-                            .await
-                        {
-                            Ok(r) => r,
-                            Err(with_tools_err) => {
-                                warn!(
-                                    "Non-streaming fallback with tools failed: {}. Retrying without tools.",
-                                    with_tools_err
-                                );
-                                self.provider_chat_with_tracking(
-                                    base_request,
-                                    "non-streaming fallback without tools",
-                                    default_timeout,
-                                )
-                                .await?
-                            }
-                        }
-                    } else {
-                        self.provider_chat_with_tracking(
-                            base_request,
-                            "non-streaming fallback",
-                            default_timeout,
+                    return self
+                        .fallback_to_nonstreaming(
+                            &fallback_messages,
+                            &fallback_tools,
+                            "stream_interrupted",
+                            tx,
                         )
-                        .await?
-                    };
-                    emit_usage_event(&response, tx).await;
-
-                    let content = strip_hidden_blocks(&response.content);
-                    if !content.is_empty() {
-                        emit_text_progressively(tx, content.clone()).await;
-                    }
-                    let tool_calls = response.tool_calls.unwrap_or_default();
-                    return Ok(SessionStepResult::new(
-                        content,
-                        tool_calls,
-                        std::collections::HashMap::new(),
-                        response.usage.clone(),
-                        response.tool_call_repair.clone(),
-                        None,
-                        SessionStepSource::StreamingFallback {
-                            reason: "stream_interrupted".to_string(),
-                        },
-                    ));
+                        .await;
                 }
 
                 if let Some(usage) = &stream_usage {
@@ -602,59 +621,13 @@ impl ConversationLoop {
                 record_recovery_plan(trace, &plan);
                 warn!("{}", plan.user_note);
                 warn!("Streaming failed, falling back to non-streaming: {}", e);
-                let base_request = ChatRequest::new(&self.model)
-                    .with_messages(fallback_messages.clone())
-                    .with_temperature(0.2);
-                let default_timeout = llm_request_timeout();
-                let response = if let Some(tools) = fallback_tools.clone() {
-                    match self
-                        .provider_chat_with_tracking(
-                            base_request.clone().with_tools(tools),
-                            "non-streaming fallback with tools",
-                            default_timeout,
-                        )
-                        .await
-                    {
-                        Ok(r) => r,
-                        Err(with_tools_err) => {
-                            warn!(
-                                "Non-streaming fallback with tools failed: {}. Retrying without tools.",
-                                with_tools_err
-                            );
-                            self.provider_chat_with_tracking(
-                                base_request,
-                                "non-streaming fallback without tools",
-                                default_timeout,
-                            )
-                            .await?
-                        }
-                    }
-                } else {
-                    self.provider_chat_with_tracking(
-                        base_request,
-                        "non-streaming fallback",
-                        default_timeout,
-                    )
-                    .await?
-                };
-                emit_usage_event(&response, tx).await;
-
-                let content = strip_hidden_blocks(&response.content);
-                if !content.is_empty() {
-                    emit_text_progressively(tx, content.clone()).await;
-                }
-                let tool_calls = response.tool_calls.unwrap_or_default();
-                Ok(SessionStepResult::new(
-                    content,
-                    tool_calls,
-                    std::collections::HashMap::new(),
-                    response.usage.clone(),
-                    response.tool_call_repair.clone(),
-                    None,
-                    SessionStepSource::StreamingFallback {
-                        reason: "stream_open".to_string(),
-                    },
-                ))
+                self.fallback_to_nonstreaming(
+                    &fallback_messages,
+                    &fallback_tools,
+                    "stream_open",
+                    tx,
+                )
+                .await
             }
             Err(_) => {
                 let timeout_msg = format!(
@@ -668,59 +641,13 @@ impl ConversationLoop {
                 record_recovery_plan(trace, &plan);
                 warn!("{}", plan.user_note);
                 warn!("Streaming open timed out, falling back to non-streaming");
-                let base_request = ChatRequest::new(&self.model)
-                    .with_messages(fallback_messages.clone())
-                    .with_temperature(0.2);
-                let default_timeout = llm_request_timeout();
-                let response = if let Some(tools) = fallback_tools.clone() {
-                    match self
-                        .provider_chat_with_tracking(
-                            base_request.clone().with_tools(tools),
-                            "non-streaming fallback with tools",
-                            default_timeout,
-                        )
-                        .await
-                    {
-                        Ok(r) => r,
-                        Err(with_tools_err) => {
-                            warn!(
-                                "Non-streaming fallback with tools failed: {}. Retrying without tools.",
-                                with_tools_err
-                            );
-                            self.provider_chat_with_tracking(
-                                base_request,
-                                "non-streaming fallback without tools",
-                                default_timeout,
-                            )
-                            .await?
-                        }
-                    }
-                } else {
-                    self.provider_chat_with_tracking(
-                        base_request,
-                        "non-streaming fallback",
-                        default_timeout,
-                    )
-                    .await?
-                };
-                emit_usage_event(&response, tx).await;
-
-                let content = strip_hidden_blocks(&response.content);
-                if !content.is_empty() {
-                    emit_text_progressively(tx, content.clone()).await;
-                }
-                let tool_calls = response.tool_calls.unwrap_or_default();
-                Ok(SessionStepResult::new(
-                    content,
-                    tool_calls,
-                    std::collections::HashMap::new(),
-                    response.usage.clone(),
-                    response.tool_call_repair.clone(),
-                    None,
-                    SessionStepSource::StreamingFallback {
-                        reason: "stream_open_timeout".to_string(),
-                    },
-                ))
+                self.fallback_to_nonstreaming(
+                    &fallback_messages,
+                    &fallback_tools,
+                    "stream_open_timeout",
+                    tx,
+                )
+                .await
             }
         }
     }

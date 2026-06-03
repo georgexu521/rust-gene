@@ -30,6 +30,51 @@ pub struct BashTool;
 
 const DEFAULT_OUTPUT_ARTIFACT_MIN_BYTES: usize = 10_000;
 
+/// Dangerous command patterns that should be blocked regardless of permissions.
+/// These are patterns that could cause irreversible damage to the system.
+const DANGEROUS_COMMAND_PATTERNS: &[&str] = &[
+    "rm -rf /",
+    "rm -rf /*",
+    "mkfs.",
+    "dd if=",
+    "dd of=/dev/",
+    "> /dev/sd",
+    "chmod -R 777 /",
+    "chmod 777 /",
+    ":(){ :|:& };:", // fork bomb
+    "wget -O- | sh",
+    "curl -s | sh",
+    "curl -s | bash",
+    "wget -qO- | sh",
+    "wget -qO- | bash",
+];
+
+/// Validate that a command doesn't match dangerous patterns.
+/// Returns None if safe, or Some(reason) if blocked.
+fn validate_command_safety(command: &str) -> Option<&'static str> {
+    let cmd_lower = command.trim().to_ascii_lowercase();
+
+    // Check against dangerous patterns
+    for pattern in DANGEROUS_COMMAND_PATTERNS {
+        if cmd_lower.contains(&pattern.to_ascii_lowercase()) {
+            return Some("command matches dangerous pattern");
+        }
+    }
+
+    // Block commands that modify system directories
+    let dangerous_paths = ["/etc/", "/usr/", "/var/", "/boot/", "/sys/", "/proc/"];
+    for path in dangerous_paths {
+        if cmd_lower.contains(&format!("rm -rf {}", path))
+            || cmd_lower.contains(&format!("rm -r {}", path))
+            || cmd_lower.starts_with(&format!("rm {}", path))
+        {
+            return Some("command targets system directory");
+        }
+    }
+
+    None
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum BashExecutionBackend {
     Local,
@@ -1195,6 +1240,11 @@ impl Tool for BashTool {
         let command = params["command"].as_str().unwrap_or("");
         if command.is_empty() {
             return ToolResult::error("Command cannot be empty");
+        }
+
+        // Validate command against dangerous patterns
+        if let Some(reason) = validate_command_safety(command) {
+            return ToolResult::error(&format!("Command blocked: {}", reason));
         }
 
         let description = params["description"].as_str().unwrap_or(command);
