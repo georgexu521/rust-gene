@@ -7,8 +7,8 @@ Scope: current working tree under `src/` and `apps/desktop/src-tauri/src/`
 ## Executive Summary
 
 Priority Agent is still too large in several core modules. The current working
-tree contains roughly 249k Rust lines across 498 Rust files. Excluding test
-files and `_old.rs` backup files, the active production surface is roughly 471
+tree contains roughly 249k Rust lines across 499 Rust files. Excluding test
+files and `_old.rs` backup files, the active production surface is roughly 472
 Rust files:
 
 | Budget | Active production files |
@@ -17,7 +17,7 @@ Rust files:
 | `> 800` lines | 76 |
 | `> 1000` lines | 59 |
 | `> 1200` lines | 39 |
-| `> 1500` lines | 22 |
+| `> 1500` lines | 21 |
 
 The goal is not to chase a mechanical line-count rule. The practical goal is
 reviewable, testable, single-responsibility modules. A 500-line file budget is a
@@ -87,7 +87,7 @@ Excluding tests and `_old.rs` backup files:
 | `src/tools/bash_tool/mod.rs` | 1618 | P1 | Split execution surface, env handling, and output policy |
 | `src/memory/eval.rs` | 1598 | P2 | Split eval case loading, runner, and report formatting |
 | `src/engine/workflow_contract.rs` | 1594 | P1 | Split workflow contract types, validation, and report formatting |
-| `src/engine/retrieval_context.rs` | 1572 | P1 | Split retrieval collection, prompt rendering, and cache metadata |
+| `src/engine/conversation_loop/patch_repair_rules.rs` | 1551 | P2 | Split repair rule fixtures, matchers, and suggestion formatting |
 
 ## Phase 0: Finish In-Progress Memory Manager Cleanup
 
@@ -537,6 +537,43 @@ Acceptance:
 cargo check -q
 cargo test -q desktop_runtime
 cargo check --features experimental-api-server -q
+```
+
+### 2.7 Split `src/engine/retrieval_context.rs`
+
+Status: started. Retrieval item operations now live in
+`src/engine/retrieval_context/item_ops.rs`: token estimation, preview/XML
+escaping, item ID generation, dedupe key construction, ordering, and duplicate
+merge formatting. The public
+`crate::engine::retrieval_context::estimate_tokens` path is preserved by
+re-export. `src/engine/retrieval_context.rs` is down from 1572 lines to 1385
+lines and has exited the `>1500` active queue.
+
+Current structure:
+
+```text
+src/engine/
+├── retrieval_context.rs             # public retrieval context contract
+└── retrieval_context/
+    └── item_ops.rs                  # item identity, ordering, merge helpers
+```
+
+Current next cuts:
+
+- Split memory scoring and scope/cap helpers if memory retrieval behavior needs
+  another correctness pass.
+- Split prompt rendering only if dynamic retrieval prompt work changes the XML
+  block shape.
+- Keep constructors and public DTOs in the entry file until call sites are
+  stable enough for a directory-module migration.
+
+Acceptance:
+
+```bash
+cargo fmt --check
+cargo check -q
+cargo test -q retrieval_context -- --test-threads=1
+cargo test -q memory_retrieval -- --test-threads=1
 ```
 
 ## Phase 3: Lower-Risk Large Module Cleanup
