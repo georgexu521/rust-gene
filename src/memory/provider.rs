@@ -17,10 +17,12 @@ const LOCAL_PROVIDER_MEMORY_DIR: &str = "memory";
 const LOCAL_PROVIDER_RECORDS_FILE: &str = "records.jsonl";
 const LOCAL_PROVIDER_OPERATION_JOURNAL_FILE: &str = "operations.jsonl";
 const LOCAL_PROVIDER_SEARCH_INDEX_FILE: &str = "search.sqlite";
+mod no_network_provider;
 mod registry;
 mod traits;
 mod types;
 
+pub use no_network_provider::*;
 pub use registry::*;
 pub use traits::*;
 pub use types::*;
@@ -37,66 +39,6 @@ pub const MEMORY_PROVIDER_LIFECYCLE_HOOKS: &[&str] = &[
     "on_memory_write",
     "shutdown",
 ];
-
-#[derive(Debug, Clone)]
-pub struct NoNetworkMemoryProvider {
-    name: String,
-    records: Vec<MemoryRecord>,
-    available: bool,
-    capabilities: MemoryProviderCapabilities,
-}
-
-impl NoNetworkMemoryProvider {
-    pub fn new(name: impl Into<String>, records: Vec<MemoryRecord>) -> Self {
-        Self {
-            name: name.into(),
-            records,
-            available: true,
-            capabilities: MemoryProviderCapabilities::read_only(),
-        }
-    }
-
-    pub fn with_capabilities(
-        name: impl Into<String>,
-        records: Vec<MemoryRecord>,
-        capabilities: MemoryProviderCapabilities,
-    ) -> Self {
-        Self {
-            name: name.into(),
-            records,
-            available: true,
-            capabilities,
-        }
-    }
-
-    pub fn from_jsonl_file(
-        name: impl Into<String>,
-        path: impl AsRef<Path>,
-    ) -> anyhow::Result<Self> {
-        Ok(Self::new(name, read_local_memory_records(path.as_ref())?))
-    }
-
-    pub fn from_jsonl_file_with_capabilities(
-        name: impl Into<String>,
-        path: impl AsRef<Path>,
-        capabilities: MemoryProviderCapabilities,
-    ) -> anyhow::Result<Self> {
-        Ok(Self::with_capabilities(
-            name,
-            read_local_memory_records(path.as_ref())?,
-            capabilities,
-        ))
-    }
-
-    pub fn unavailable(name: impl Into<String>) -> Self {
-        Self {
-            name: name.into(),
-            records: Vec::new(),
-            available: false,
-            capabilities: MemoryProviderCapabilities::read_only(),
-        }
-    }
-}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MemoryOperationJournalEntry {
@@ -162,47 +104,6 @@ impl MemoryOperationJournalEntry {
             reason: reason.into(),
             record_count,
         }
-    }
-}
-
-#[async_trait]
-impl MemoryProvider for NoNetworkMemoryProvider {
-    fn name(&self) -> &str {
-        &self.name
-    }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
-    fn is_available(&self) -> bool {
-        self.available
-    }
-
-    fn capabilities(&self) -> MemoryProviderCapabilities {
-        self.capabilities
-    }
-
-    async fn prefetch(
-        &self,
-        query: &str,
-        scope: &MemoryScope,
-    ) -> anyhow::Result<Vec<MemoryRecord>> {
-        Ok(filter_provider_records(&self.records, query, scope, 8))
-    }
-
-    async fn search(
-        &self,
-        query: &str,
-        scope: &MemoryScope,
-        max_results: usize,
-    ) -> anyhow::Result<Vec<MemoryRecord>> {
-        Ok(filter_provider_records(
-            &self.records,
-            query,
-            scope,
-            max_results,
-        ))
     }
 }
 
@@ -891,7 +792,7 @@ fn read_safe_local_memory_file_index(memory_dir: &Path, char_limit: usize) -> Op
     }
 }
 
-fn read_local_memory_records(path: &Path) -> anyhow::Result<Vec<MemoryRecord>> {
+pub(super) fn read_local_memory_records(path: &Path) -> anyhow::Result<Vec<MemoryRecord>> {
     let content = match std::fs::read_to_string(path) {
         Ok(content) => content,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
@@ -930,7 +831,7 @@ fn local_provider_search_records(
     ))
 }
 
-fn filter_provider_records(
+pub(super) fn filter_provider_records(
     records: &[MemoryRecord],
     query: &str,
     scope: &MemoryScope,

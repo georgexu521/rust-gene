@@ -7,8 +7,8 @@ Scope: current working tree under `src/` and `apps/desktop/src-tauri/src/`
 ## Executive Summary
 
 Priority Agent is still too large in several core modules. The current working
-tree contains roughly 248k Rust lines across 488 Rust files. Excluding test
-files and `_old.rs` backup files, the active production surface is roughly 457
+tree contains roughly 248k Rust lines across 489 Rust files. Excluding test
+files and `_old.rs` backup files, the active production surface is roughly 458
 Rust files:
 
 | Budget | Active production files |
@@ -16,7 +16,7 @@ Rust files:
 | `> 500` lines | 168 |
 | `> 800` lines | 76 |
 | `> 1000` lines | 59 |
-| `> 1200` lines | 42 |
+| `> 1200` lines | 41 |
 | `> 1500` lines | 27 |
 
 The goal is not to chase a mechanical line-count rule. The practical goal is
@@ -340,13 +340,15 @@ cargo test -q session_store
 
 ### 2.2 Split `src/memory/provider.rs`
 
-Status: started. Provider contract types now live in
+Status: complete enough for the current refactor queue. Provider contract types now live in
 `src/memory/provider/types.rs`, and the `MemoryProvider` trait now lives in
 `src/memory/provider/traits.rs`. `src/memory/provider.rs` remains the module
 entrypoint and re-exports those items, so existing `crate::memory::provider::*`
 paths stay stable. Registry orchestration now lives in
-`src/memory/provider/registry.rs`. The entry file is down to 1210 lines. The
-next useful cuts are no-network provider, then local-provider helper families.
+`src/memory/provider/registry.rs`, and the read-only fixture provider now lives
+in `src/memory/provider/no_network_provider.rs`. The entry file is down to 1113
+lines. Future optional cuts can split local-provider helper families if this
+file grows again.
 
 Proposed structure:
 
@@ -355,8 +357,8 @@ src/memory/provider/
 ├── provider.rs             # current module entry; can move to mod.rs later
 ├── traits.rs
 ├── registry.rs
-├── local_provider.rs
 ├── no_network_provider.rs
+├── local_provider.rs
 ├── migration.rs
 ├── projection.rs
 └── types.rs
