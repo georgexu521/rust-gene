@@ -7,17 +7,17 @@ Scope: current working tree under `src/` and `apps/desktop/src-tauri/src/`
 ## Executive Summary
 
 Priority Agent is still too large in several core modules. The current working
-tree contains roughly 248k Rust lines across 471 Rust files. Excluding test
-files and `_old.rs` backup files, the active production surface is roughly 440
+tree contains roughly 248k Rust lines across 472 Rust files. Excluding test
+files and `_old.rs` backup files, the active production surface is roughly 441
 Rust files:
 
 | Budget | Active production files |
 |--------|--------------------------|
-| `> 500` lines | 166 |
+| `> 500` lines | 167 |
 | `> 800` lines | 78 |
 | `> 1000` lines | 61 |
 | `> 1200` lines | 45 |
-| `> 1500` lines | 30 |
+| `> 1500` lines | 29 |
 
 The goal is not to chase a mechanical line-count rule. The practical goal is
 reviewable, testable, single-responsibility modules. A 500-line file budget is a
@@ -75,7 +75,6 @@ Excluding tests and `_old.rs` backup files:
 | `src/tools/memory_tool/mod.rs` | 1952 | P1 | Split commands, rendering, validation, execution |
 | `src/engine/mcp.rs` | 1908 | P2 | Split protocol/client/tool surface |
 | `src/tui/app.rs` | 1893 | P1 | Continue moving runtime state and handlers out |
-| `src/engine/conversation_loop/tool_execution_controller.rs` | 1891 | P0 | Continue splitting gate/context/action decision |
 | `src/engine/scenario_matrix.rs` | 1885 | P2 | Split types, matrix construction, evaluation, reporting |
 | `src/tui/slash_handler/agents.rs` | 1881 | P1 | Split doctor/status/cache/provider sections |
 | `src/tui/commands.rs` | 1876 | P1 | Split registry, command metadata, execution adapters |
@@ -86,6 +85,7 @@ Excluding tests and `_old.rs` backup files:
 | `src/tui/screens/main_screen.rs` | 1706 | P1 | Split status bar, transcript, panels |
 | `src/engine/conversation_loop/tool_result_controller.rs` | 1695 | P1 | Split result parsing, proof extraction, ledger updates |
 | `src/engine/evalset.rs` | 1693 | P1 | Split suite loading, execution, and reporting |
+| `src/engine/skill_evolution.rs` | 1675 | P1 | Split analysis, proposal, and persistence lanes |
 
 ## Phase 0: Finish In-Progress Memory Manager Cleanup
 
@@ -249,11 +249,13 @@ cargo test -q trace
 
 ### 1.4 Split `src/engine/conversation_loop/tool_execution_controller.rs`
 
-Status: started. Batch/result aggregation now lives in
+Status: materially split but not done. Batch/result aggregation now lives in
 `tool_execution_controller/batch.rs`, with the public conversation-loop surface
-kept through `tool_execution_controller::ToolExecutionBatch`. The entry file is
-down to 1891 lines. Remaining high-value cuts are the gate, runtime context,
-observer/memory action signals, and action review trace/metadata helpers.
+kept through `tool_execution_controller::ToolExecutionBatch`. Per-round runtime
+context, runtime metadata attachment, observer action signals, and memory action
+signals now live in `tool_execution_controller/runtime_context.rs`. The entry
+file is down to 1357 lines. Remaining high-value cuts are the gate and action
+review trace/metadata helpers.
 
 Current responsibilities:
 
@@ -274,8 +276,8 @@ src/engine/conversation_loop/
 └── tool_execution_controller/
     ├── batch.rs                          # batch/result aggregation
     ├── gate.rs                           # permission/risk gate
-    ├── runtime_context.rs                # per-round runtime context
-    └── action_signals.rs                 # observer/memory/action review helpers
+    ├── runtime_context.rs                # per-round context and action signals
+    └── action_review.rs                  # action review trace/metadata helpers
 ```
 
 Acceptance:
