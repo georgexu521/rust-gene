@@ -7,18 +7,18 @@ Scope: current working tree under `src/` and `apps/desktop/src-tauri/src/`
 ## Executive Summary
 
 Priority Agent is still too large in several core modules. The current working
-tree contains roughly 249k Rust lines across 521 Rust files. Excluding test
+tree contains roughly 249k Rust lines across 522 Rust files. Excluding test
 files, `_old.rs` backup files, and Rust modules mounted only behind
-`#[cfg(test)]`, the active production surface is roughly 219k lines across 479
+`#[cfg(test)]`, the active production surface is roughly 219k lines across 480
 Rust files:
 
 | Budget | Active production files |
 |--------|--------------------------|
-| `> 500` lines | 169 |
+| `> 500` lines | 170 |
 | `> 800` lines | 73 |
 | `> 1000` lines | 56 |
 | `> 1200` lines | 33 |
-| `> 1500` lines | 2 |
+| `> 1500` lines | 1 |
 
 The goal is not to chase a mechanical line-count rule. The practical goal is
 reviewable, testable, single-responsibility modules. A 500-line file budget is a
@@ -69,7 +69,6 @@ Excluding tests and `_old.rs` backup files:
 
 | File | Lines | Priority | Recommended action |
 |------|-------|----------|--------------------|
-| `src/tools/agent_tool/mod.rs` | 1995 | P2 | Split after runtime/tool-core work stabilizes |
 | `src/engine/mcp.rs` | 1908 | P2 | Split protocol/client/tool surface |
 
 ## Phase 0: Finish In-Progress Memory Manager Cleanup
@@ -1209,8 +1208,9 @@ in `src/tools/bash_tool/command_classifier/tests.rs`. The entry file keeps the
 public classification types, classification entrypoint, validation-family
 recognition, category assignment, command plan assembly, network checks, and
 permission-rule suggestions. `src/tools/bash_tool/command_classifier.rs` is
-down from 1974 lines to 1289 lines and has exited both the `>1500` and `>1200`
-active queues.
+down from 1974 lines to 1289 lines and has exited the `>1500` active queue. It
+still remains in the `>1200` queue and should be split further only with golden
+coverage for safety-sensitive command categories.
 
 Current structure:
 
@@ -1237,6 +1237,44 @@ cargo fmt --check
 cargo check -q
 cargo test -q command_classifier -- --test-threads=1
 cargo test -q bash_tool -- --test-threads=1
+```
+
+### 2.27 Split `src/tools/agent_tool/mod.rs`
+
+Status: started. Sub-agent spawn/result helpers, proof metadata, result
+synthesis, durable task-state persistence, and artifact persistence now live in
+`src/tools/agent_tool/result_state.rs`. The entry file keeps the public tool
+implementation, template prompts, worktree setup helpers, allowed-tool
+resolution, durable read/progress/cancel commands, fork-branch handling, and
+request parameter assembly. `src/tools/agent_tool/mod.rs` is down from 1995
+lines to 1472 lines and has exited the `>1500` active queue. It remains in the
+`>1200` queue. The extracted result-state module is 527 lines, just above the
+preferred steady-state budget.
+
+Current structure:
+
+```text
+src/tools/agent_tool/
+├── mod.rs                           # public tool API and request handling
+├── result_state.rs                  # spawn/result metadata and persistence
+└── tests.rs                         # agent tool unit tests
+```
+
+Current next cuts:
+
+- Move agent template prompt construction only after adding snapshot tests for
+  the generated system prompts.
+- Keep request execution and Tool trait implementation together until sub-agent
+  behavior has broader integration coverage.
+- Avoid changing proof-kind or parent-verification semantics during size-only
+  refactors.
+
+Acceptance:
+
+```bash
+cargo fmt --check
+cargo check -q
+cargo test -q agent_tool -- --test-threads=1
 ```
 
 ## Phase 3: Lower-Risk Large Module Cleanup
