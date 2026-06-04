@@ -7,9 +7,9 @@ Scope: current working tree under `src/` and `apps/desktop/src-tauri/src/`
 ## Executive Summary
 
 Priority Agent is still too large in several core modules. The current working
-tree contains roughly 249k Rust lines across 519 Rust files. Excluding test
+tree contains roughly 249k Rust lines across 521 Rust files. Excluding test
 files, `_old.rs` backup files, and Rust modules mounted only behind
-`#[cfg(test)]`, the active production surface is roughly 219k lines across 478
+`#[cfg(test)]`, the active production surface is roughly 219k lines across 479
 Rust files:
 
 | Budget | Active production files |
@@ -18,7 +18,7 @@ Rust files:
 | `> 800` lines | 73 |
 | `> 1000` lines | 56 |
 | `> 1200` lines | 33 |
-| `> 1500` lines | 3 |
+| `> 1500` lines | 2 |
 
 The goal is not to chase a mechanical line-count rule. The practical goal is
 reviewable, testable, single-responsibility modules. A 500-line file budget is a
@@ -70,7 +70,6 @@ Excluding tests and `_old.rs` backup files:
 | File | Lines | Priority | Recommended action |
 |------|-------|----------|--------------------|
 | `src/tools/agent_tool/mod.rs` | 1995 | P2 | Split after runtime/tool-core work stabilizes |
-| `src/tools/bash_tool/command_classifier.rs` | 1974 | P2 | Split classifier tables and shell analysis helpers |
 | `src/engine/mcp.rs` | 1908 | P2 | Split protocol/client/tool surface |
 
 ## Phase 0: Finish In-Progress Memory Manager Cleanup
@@ -1199,6 +1198,45 @@ cargo fmt --check
 cargo check -q
 cargo test -q app -- --test-threads=1
 cargo test -q tool_viewer -- --test-threads=1
+```
+
+### 2.26 Split `src/tools/bash_tool/command_classifier.rs`
+
+Status: started. Shell tokenization, path extraction, subcommand analysis,
+redirection analysis, and mutation-indicator helpers now live in
+`src/tools/bash_tool/command_classifier/shell_analysis.rs`; unit tests now live
+in `src/tools/bash_tool/command_classifier/tests.rs`. The entry file keeps the
+public classification types, classification entrypoint, validation-family
+recognition, category assignment, command plan assembly, network checks, and
+permission-rule suggestions. `src/tools/bash_tool/command_classifier.rs` is
+down from 1974 lines to 1289 lines and has exited both the `>1500` and `>1200`
+active queues.
+
+Current structure:
+
+```text
+src/tools/bash_tool/
+├── command_classifier.rs            # public classifier API and rule assembly
+└── command_classifier/
+    ├── shell_analysis.rs            # shell tokens, paths, subcommands, redirects
+    └── tests.rs                     # command classifier unit tests
+```
+
+Current next cuts:
+
+- Split validation-family recognition from category assignment after adding
+  golden fixtures for common closeout commands.
+- Keep safety-sensitive command-kind mapping in the entry file until category
+  behavior has fixture coverage.
+- Do not change fail-closed rules during size-only refactors.
+
+Acceptance:
+
+```bash
+cargo fmt --check
+cargo check -q
+cargo test -q command_classifier -- --test-threads=1
+cargo test -q bash_tool -- --test-threads=1
 ```
 
 ## Phase 3: Lower-Risk Large Module Cleanup
