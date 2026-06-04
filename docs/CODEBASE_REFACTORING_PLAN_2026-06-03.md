@@ -7,9 +7,9 @@ Scope: current working tree under `src/` and `apps/desktop/src-tauri/src/`
 ## Executive Summary
 
 Priority Agent is still too large in several core modules. The current working
-tree contains roughly 249k Rust lines across 504 Rust files. Excluding test
+tree contains roughly 249k Rust lines across 506 Rust files. Excluding test
 files, `_old.rs` backup files, and Rust modules mounted only behind
-`#[cfg(test)]`, the active production surface is roughly 219k lines across 466
+`#[cfg(test)]`, the active production surface is roughly 219k lines across 468
 Rust files:
 
 | Budget | Active production files |
@@ -18,7 +18,7 @@ Rust files:
 | `> 800` lines | 73 |
 | `> 1000` lines | 56 |
 | `> 1200` lines | 37 |
-| `> 1500` lines | 15 |
+| `> 1500` lines | 14 |
 
 The goal is not to chase a mechanical line-count rule. The practical goal is
 reviewable, testable, single-responsibility modules. A 500-line file budget is a
@@ -83,7 +83,6 @@ Excluding tests and `_old.rs` backup files:
 | `src/engine/evalset.rs` | 1693 | P1 | Split suite loading, execution, and reporting |
 | `src/engine/skill_evolution.rs` | 1675 | P1 | Split analysis, proposal, and persistence lanes |
 | `src/engine/intent_router.rs` | 1672 | P1 | Split intent scoring, route construction, and labels |
-| `src/engine/streaming.rs` | 1644 | P1 | Split provider stream handling, event conversion, and repair hooks |
 
 ## Phase 0: Finish In-Progress Memory Manager Cleanup
 
@@ -751,6 +750,41 @@ Acceptance:
 cargo fmt --check
 cargo check -q
 cargo test -q code_change_workflow -- --test-threads=1
+```
+
+### 2.13 Split `src/engine/streaming.rs`
+
+Status: started. Turn message construction and reactive context retry helpers
+now live in `src/engine/streaming/turn_messages.rs`. Provider fallback error
+classification and bounded fallback state now live in
+`src/engine/streaming/fallback.rs`. `src/engine/streaming.rs` is down from 1644
+lines to 1449 lines and has exited the `>1500` active queue.
+
+Current structure:
+
+```text
+src/engine/
+├── streaming.rs                    # streaming turn orchestration
+└── streaming/
+    ├── fallback.rs                 # error classification and fallback state
+    └── turn_messages.rs            # per-turn message/context construction
+```
+
+Current next cuts:
+
+- Split provider event conversion only after the fallback and retry path stays
+  stable under live provider tests.
+- Split stream lifecycle metrics if slow-tail/provider productization adds more
+  telemetry fields.
+- Keep the main streaming turn loop in the entry file until provider behavior is
+  covered by a daily baseline.
+
+Acceptance:
+
+```bash
+cargo fmt --check
+cargo check -q
+cargo test -q streaming -- --test-threads=1
 ```
 
 ## Phase 3: Lower-Risk Large Module Cleanup

@@ -9,11 +9,20 @@ use crate::tools::ToolRegistry;
 use anyhow::Result;
 use futures::Stream;
 use parking_lot::RwLock;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tracing::{debug, warn};
+
+mod fallback;
+mod turn_messages;
+
+use fallback::{ErrorType, FallbackState};
+use turn_messages::{
+    build_messages_for_turn, estimate_registry_tool_schema_tokens, reactive_context_retry_messages,
+    route_wants_agent_manager, session_title_from_user_message,
+};
 
 fn turn_execution_timeout() -> std::time::Duration {
     let secs = std::env::var("PRIORITY_AGENT_TURN_TIMEOUT_SECS")
@@ -1347,115 +1356,6 @@ impl StreamingQueryEngine {
     }
 }
 
-fn session_title_from_user_message(message: &str) -> String {
-    let title = message.split_whitespace().collect::<Vec<_>>().join(" ");
-    if title.is_empty() {
-        return "New Session".to_string();
-    }
-    let mut out: String = title.chars().take(60).collect();
-    if out.chars().count() < title.chars().count() {
-        out.push('…');
-    }
-    out
-}
-
-fn build_messages_for_turn(
-    system_prompt: &str,
-    user_msg: &str,
-    history: &[Message],
-    agent_mode: crate::engine::agent_mode::AgentMode,
-    working_dir: Option<&Path>,
-) -> Vec<Message> {
-    let assembler = if let Some(working_dir) = working_dir {
-        crate::engine::prompt_context::PromptContextAssembler::new(system_prompt, working_dir)
-    } else {
-        crate::engine::prompt_context::PromptContextAssembler::from_current_dir(system_prompt)
-    };
-    // Use assembly plan to keep task-focus out of the stable prefix (Phase 0 Risk 1)
-    let plan = assembler.assembly_plan_for_turn(user_msg, history);
-    let mut system_prompt = plan.stable_prefix.content.clone();
-    if let Some(mode_context) = agent_mode.runtime_context() {
-        system_prompt.push_str("\n\n");
-        system_prompt.push_str(mode_context);
-    }
-    let mut msgs = vec![Message::system(system_prompt)];
-    msgs.extend(history.to_vec());
-    // Prepend task-focus to the last user message in history (dynamic tail)
-    if !plan.task_state.content.is_empty() {
-        if let Some(Message::User { content }) =
-            msgs.iter_mut().rfind(|m| matches!(m, Message::User { .. }))
-        {
-            *content = format!(
-                "<task-focus>\n{}\n</task-focus>\n\n{}",
-                plan.task_state.content.trim(),
-                content
-            );
-        }
-    }
-    msgs
-}
-
-async fn reactive_context_retry_messages(
-    history: Arc<tokio::sync::Mutex<Vec<Message>>>,
-    compressor: Arc<tokio::sync::Mutex<crate::engine::context_compressor::ContextCompressor>>,
-    system_prompt: &str,
-    user_msg: &str,
-    agent_mode: crate::engine::agent_mode::AgentMode,
-    working_dir: Option<&Path>,
-    session_id: Option<&str>,
-) -> Option<Vec<Message>> {
-    let compressed = {
-        let hist = history.lock().await;
-        if hist.is_empty() {
-            return None;
-        }
-        let mut comp = compressor.lock().await;
-        comp.set_llm_summary_stable_prefix(system_prompt.to_string());
-        comp.compress_async_with_strategy(
-            &hist,
-            crate::engine::context_collapse::ContextCompactionStrategy::ReactiveCompact,
-        )
-        .await
-    };
-
-    {
-        let mut hist = history.lock().await;
-        if compressed.len() >= hist.len()
-            && crate::engine::context_compressor::estimate_messages_tokens(&compressed)
-                >= crate::engine::context_compressor::estimate_messages_tokens(&hist)
-        {
-            return None;
-        }
-        *hist = compressed;
-        if let Some(session_id) = session_id {
-            crate::tools::file_tool::clear_read_files(session_id);
-        }
-        Some(build_messages_for_turn(
-            system_prompt,
-            user_msg,
-            &hist,
-            agent_mode,
-            working_dir,
-        ))
-    }
-}
-
-fn estimate_registry_tool_schema_tokens(registry: &ToolRegistry) -> (usize, u64, String) {
-    let manifest = crate::engine::cache_stability::registry_tool_schema_manifest(registry);
-    (
-        manifest.tool_count,
-        manifest.estimated_tokens,
-        manifest.fingerprint,
-    )
-}
-
-fn route_wants_agent_manager(route: &crate::engine::intent_router::IntentRoute) -> bool {
-    route
-        .recommended_tools
-        .iter()
-        .any(|tool| matches!(tool.as_str(), "agent" | "swarm" | "send_message"))
-}
-
 /// 内部执行引擎
 struct StreamingEngineInner {
     provider: Arc<dyn LlmProvider>,
@@ -1486,101 +1386,6 @@ struct StreamingEngineInner {
     fallback_model: Option<String>,
     /// Fallback 状态追踪（连续错误计数）
     fallback_state: Option<FallbackState>,
-}
-
-/// Fallback 状态追踪
-#[derive(Debug, Clone)]
-struct FallbackState {
-    /// 连续 529 (Model Overloaded) 错误计数
-    pub consecutive_529_count: u32,
-    /// 上次错误类型
-    pub last_error_type: ErrorType,
-    /// 是否已触发 fallback
-    pub fallback_triggered: bool,
-    /// fallback 尝试次数
-    pub fallback_attempts: u32,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ErrorType {
-    RateLimit,       // 429
-    ModelOverloaded, // 529
-    ContextTooLong,  // 413
-    Timeout,
-    AuthError,   // 401/403
-    ServerError, // 500
-    Unknown,
-}
-
-impl ErrorType {
-    fn from_error_str(err_str: &str) -> Self {
-        if err_str.contains("rate limit") || err_str.contains("429") {
-            ErrorType::RateLimit
-        } else if err_str.contains("overloaded")
-            || err_str.contains("529")
-            || err_str.contains("model overloaded")
-        {
-            ErrorType::ModelOverloaded
-        } else if err_str.contains("context")
-            || err_str.contains("413")
-            || err_str.contains("too long")
-        {
-            ErrorType::ContextTooLong
-        } else if err_str.contains("timeout") || err_str.contains("timed out") {
-            ErrorType::Timeout
-        } else if err_str.contains("401")
-            || err_str.contains("403")
-            || err_str.contains("unauthorized")
-            || err_str.contains("forbidden")
-        {
-            ErrorType::AuthError
-        } else if err_str.contains("500") || err_str.contains("internal server error") {
-            ErrorType::ServerError
-        } else if err_str.contains("model") {
-            ErrorType::ModelOverloaded
-        } else {
-            ErrorType::Unknown
-        }
-    }
-}
-
-impl FallbackState {
-    fn new() -> Self {
-        Self {
-            consecutive_529_count: 0,
-            last_error_type: ErrorType::Unknown,
-            fallback_triggered: false,
-            fallback_attempts: 0,
-        }
-    }
-
-    /// 记录错误并更新状态
-    fn record_error(&mut self, error_type: ErrorType) {
-        self.last_error_type = error_type;
-        if error_type == ErrorType::ModelOverloaded {
-            self.consecutive_529_count += 1;
-        } else {
-            self.consecutive_529_count = 0;
-        }
-    }
-
-    /// 检查是否应该触发 fallback（连续 3 次 529 后触发）
-    fn should_trigger_fallback(&self) -> bool {
-        self.consecutive_529_count >= 3
-    }
-
-    /// 获取最大 fallback 尝试次数
-    fn max_fallback_attempts() -> u32 {
-        std::env::var("PRIORITY_AGENT_FALLBACK_MAX_ATTEMPTS")
-            .ok()
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(3)
-    }
-
-    /// 检查是否达到最大尝试次数
-    fn max_attempts_reached(&self) -> bool {
-        self.fallback_attempts >= Self::max_fallback_attempts()
-    }
 }
 
 impl StreamingEngineInner {
