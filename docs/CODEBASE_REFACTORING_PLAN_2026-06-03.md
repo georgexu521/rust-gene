@@ -7,13 +7,13 @@ Scope: current working tree under `src/` and `apps/desktop/src-tauri/src/`
 ## Executive Summary
 
 Priority Agent is still too large in several core modules. The current working
-tree contains roughly 248k Rust lines across 462 Rust files. Excluding test
-files and `_old.rs` backup files, the active production surface is roughly 435
+tree contains roughly 248k Rust lines across 463 Rust files. Excluding test
+files and `_old.rs` backup files, the active production surface is roughly 436
 Rust files:
 
 | Budget | Active production files |
 |--------|--------------------------|
-| `> 500` lines | 164 |
+| `> 500` lines | 165 |
 | `> 800` lines | 78 |
 | `> 1000` lines | 62 |
 | `> 1200` lines | 46 |
@@ -69,7 +69,6 @@ Excluding tests and `_old.rs` backup files:
 | File | Lines | Priority | Recommended action |
 |------|-------|----------|--------------------|
 | `src/engine/trace/mod.rs` | 2805 | P0 | Split event types, summaries, collectors, formatting |
-| `src/engine/task_contract/mod.rs` | 2479 | P0 | Continue splitting proposal store/gates/conflicts/background review |
 | `src/tools/agent_tool/mod.rs` | 1995 | P2 | Split after runtime/tool-core work stabilizes |
 | `src/engine/conversation_loop/tool_execution_controller.rs` | 1995 | P0 | Split gate/context/batch/action decision |
 | `src/tools/bash_tool/command_classifier.rs` | 1974 | P2 | Split classifier tables and shell analysis helpers |
@@ -83,6 +82,7 @@ Excluding tests and `_old.rs` backup files:
 | `src/tui/commands.rs` | 1876 | P1 | Split registry, command metadata, execution adapters |
 | `src/engine/auto_verify.rs` | 1823 | P1 | Split verifier orchestration, command policy, summaries |
 | `apps/desktop/src-tauri/src/lib.rs` | 1803 | P1 | Split desktop commands/state/session bridge |
+| `src/engine/task_contract/mod.rs` | 1787 | P0 | Continue splitting proposal gates/conflicts/background review |
 | `src/engine/task_context.rs` | 1787 | P1 | Split task bundle, context pack, serialization |
 | `src/engine/action_review.rs` | 1736 | P1 | Split types, review policy, formatting |
 | `src/tui/screens/main_screen.rs` | 1706 | P1 | Split status bar, transcript, panels |
@@ -165,10 +165,10 @@ Current follow-up:
 
 Status: partially complete. The file has moved to
 `src/engine/task_contract/mod.rs`; base task/context/report types now live in
-`types.rs`, and memory proposal construction now lives in
-`memory_proposal.rs`. The `mod.rs` file is still 2479 lines because proposal
-review store, gates, conflict grouping, and background review logic are still in
-the module root.
+`types.rs`; memory proposal construction now lives in `memory_proposal.rs`; and
+proposal review persistence/batch operations now live in `proposal_store.rs`.
+The `mod.rs` file is still 1787 lines because proposal gates, conflict grouping,
+and background review logic are still in the module root.
 
 Remaining responsibilities:
 
