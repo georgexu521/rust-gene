@@ -7,9 +7,9 @@ Scope: current working tree under `src/` and `apps/desktop/src-tauri/src/`
 ## Executive Summary
 
 Priority Agent is still too large in several core modules. The current working
-tree contains roughly 249k Rust lines across 508 Rust files. Excluding test
+tree contains roughly 249k Rust lines across 509 Rust files. Excluding test
 files, `_old.rs` backup files, and Rust modules mounted only behind
-`#[cfg(test)]`, the active production surface is roughly 219k lines across 470
+`#[cfg(test)]`, the active production surface is roughly 219k lines across 471
 Rust files:
 
 | Budget | Active production files |
@@ -18,7 +18,7 @@ Rust files:
 | `> 800` lines | 73 |
 | `> 1000` lines | 56 |
 | `> 1200` lines | 36 |
-| `> 1500` lines | 12 |
+| `> 1500` lines | 11 |
 
 The goal is not to chase a mechanical line-count rule. The practical goal is
 reviewable, testable, single-responsibility modules. A 500-line file budget is a
@@ -79,7 +79,6 @@ Excluding tests and `_old.rs` backup files:
 | `src/engine/task_context.rs` | 1787 | P1 | Split task bundle, context pack, serialization |
 | `src/engine/action_review.rs` | 1736 | P1 | Split types, review policy, formatting |
 | `src/tui/screens/main_screen.rs` | 1706 | P1 | Split status bar, transcript, panels |
-| `src/engine/conversation_loop/tool_result_controller.rs` | 1695 | P1 | Split result parsing, proof extraction, ledger updates |
 | `src/engine/skill_evolution.rs` | 1675 | P1 | Split analysis, proposal, and persistence lanes |
 
 ## Phase 0: Finish In-Progress Memory Manager Cleanup
@@ -859,6 +858,42 @@ Acceptance:
 cargo fmt --check
 cargo check -q
 cargo test -q evalset -- --test-threads=1
+```
+
+### 2.16 Split `src/engine/conversation_loop/tool_result_controller.rs`
+
+Status: started. Provider-visible observation rendering and text utility
+helpers now live in
+`src/engine/conversation_loop/tool_result_controller/observation_render.rs`:
+model visibility selection, raw/observation excerpt rendering, diagnostic line
+extraction, failed-test extraction, diff-command detection, string field
+collection, de-duplication, and safe truncation. The entry file keeps
+normalization orchestration, observation construction, evidence facts, and
+ledger recording. It is down from 1695 lines to 1407 lines and has exited the
+`>1500` active queue.
+
+Current structure:
+
+```text
+src/engine/conversation_loop/
+├── tool_result_controller.rs          # normalization and evidence recording
+└── tool_result_controller/
+    └── observation_render.rs          # provider-visible observation text
+```
+
+Current next cuts:
+
+- Split evidence fact classification if validation/proof policy changes again.
+- Split observation field construction only with golden tests for normalized
+  observation JSON.
+- Keep ledger recording in the entry file until evidence boundaries stabilize.
+
+Acceptance:
+
+```bash
+cargo fmt --check
+cargo check -q
+cargo test -q tool_result_controller -- --test-threads=1
 ```
 
 ## Phase 3: Lower-Risk Large Module Cleanup
