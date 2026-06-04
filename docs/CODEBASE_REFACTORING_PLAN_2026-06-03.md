@@ -7,9 +7,9 @@ Scope: current working tree under `src/` and `apps/desktop/src-tauri/src/`
 ## Executive Summary
 
 Priority Agent is still too large in several core modules. The current working
-tree contains roughly 249k Rust lines across 516 Rust files. Excluding test
+tree contains roughly 249k Rust lines across 517 Rust files. Excluding test
 files, `_old.rs` backup files, and Rust modules mounted only behind
-`#[cfg(test)]`, the active production surface is roughly 219k lines across 475
+`#[cfg(test)]`, the active production surface is roughly 219k lines across 476
 Rust files:
 
 | Budget | Active production files |
@@ -1092,6 +1092,41 @@ Acceptance:
 cargo fmt --check
 cargo check -q
 cargo test -q task_context -- --test-threads=1
+```
+
+### 2.23 Split `src/engine/conversation_loop/patch_repair_rules.rs`
+
+Status: started. Deterministic patch repair action builders now live in
+`src/engine/conversation_loop/patch_repair_rules/action_builders.rs`. The entry
+file keeps the repair-rule registry, owner/review metadata, rule dispatch, and
+tool-call validation. `src/engine/conversation_loop/patch_repair_rules.rs` is
+down from 1551 lines to 291 lines and has exited the `>1500` active queue. The
+new action-builder module is 1263 lines, so it remains in the `>1200` queue but
+below the high-priority `>1500` budget.
+
+Current structure:
+
+```text
+src/engine/conversation_loop/
+├── patch_repair_rules.rs            # rule registry and dispatch
+└── patch_repair_rules/
+    └── action_builders.rs           # deterministic repair action builders
+```
+
+Current next cuts:
+
+- Split action builders by behavior family once golden coverage is added for
+  deterministic patch synthesis.
+- Keep the rule registry in the entry file so owner/review metadata remains
+  scan-friendly.
+- Avoid changing generated patch payloads during size-only splits.
+
+Acceptance:
+
+```bash
+cargo fmt --check
+cargo check -q
+cargo test -q patch_repair -- --test-threads=1
 ```
 
 ## Phase 3: Lower-Risk Large Module Cleanup
