@@ -7,9 +7,9 @@ Scope: current working tree under `src/` and `apps/desktop/src-tauri/src/`
 ## Executive Summary
 
 Priority Agent is still too large in several core modules. The current working
-tree contains roughly 249k Rust lines across 510 Rust files. Excluding test
+tree contains roughly 249k Rust lines across 511 Rust files. Excluding test
 files, `_old.rs` backup files, and Rust modules mounted only behind
-`#[cfg(test)]`, the active production surface is roughly 219k lines across 471
+`#[cfg(test)]`, the active production surface is roughly 219k lines across 472
 Rust files:
 
 | Budget | Active production files |
@@ -18,7 +18,7 @@ Rust files:
 | `> 800` lines | 73 |
 | `> 1000` lines | 56 |
 | `> 1200` lines | 36 |
-| `> 1500` lines | 10 |
+| `> 1500` lines | 9 |
 
 The goal is not to chase a mechanical line-count rule. The practical goal is
 reviewable, testable, single-responsibility modules. A 500-line file budget is a
@@ -78,7 +78,6 @@ Excluding tests and `_old.rs` backup files:
 | `apps/desktop/src-tauri/src/lib.rs` | 1803 | P1 | Split desktop commands/state/session bridge |
 | `src/engine/task_context.rs` | 1787 | P1 | Split task bundle, context pack, serialization |
 | `src/engine/action_review.rs` | 1736 | P1 | Split types, review policy, formatting |
-| `src/tui/screens/main_screen.rs` | 1706 | P1 | Split status bar, transcript, panels |
 
 ## Phase 0: Finish In-Progress Memory Manager Cleanup
 
@@ -925,6 +924,41 @@ Acceptance:
 cargo fmt --check
 cargo check -q
 cargo test -q skill_evolution -- --test-threads=1
+```
+
+### 2.18 Split `src/tui/screens/main_screen.rs`
+
+Status: started. Status bar rendering now lives in
+`src/tui/screens/main_screen/status_bar.rs`, while the entry file keeps chat,
+input, transcript, popup, sidebar, command-palette, model/provider picker, and
+layout helpers. The public `render_status_bar` path is preserved by re-export.
+`src/tui/screens/main_screen.rs` is down from 1706 lines to 1486 lines and has
+exited the `>1500` active queue.
+
+Current structure:
+
+```text
+src/tui/screens/
+├── main_screen.rs                   # main screen layout and transcript UI
+└── main_screen/
+    ├── approvals.rs                 # permission approval popup
+    ├── status_bar.rs                # status bar rendering
+    └── tests.rs
+```
+
+Current next cuts:
+
+- Split transcript windowing/render helpers if the chat area changes again.
+- Split command/model/provider popups only with focused TUI snapshot tests.
+- Keep top-level screen composition in the entry file until the layout is
+  stable.
+
+Acceptance:
+
+```bash
+cargo fmt --check
+cargo check -q
+cargo test -q main_screen -- --test-threads=1
 ```
 
 ## Phase 3: Lower-Risk Large Module Cleanup
