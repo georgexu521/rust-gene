@@ -7,8 +7,8 @@ Scope: current working tree under `src/` and `apps/desktop/src-tauri/src/`
 ## Executive Summary
 
 Priority Agent is still too large in several core modules. The current working
-tree contains roughly 249k Rust lines across 499 Rust files. Excluding test
-files and `_old.rs` backup files, the active production surface is roughly 472
+tree contains roughly 249k Rust lines across 500 Rust files. Excluding test
+files and `_old.rs` backup files, the active production surface is roughly 473
 Rust files:
 
 | Budget | Active production files |
@@ -17,7 +17,7 @@ Rust files:
 | `> 800` lines | 76 |
 | `> 1000` lines | 59 |
 | `> 1200` lines | 39 |
-| `> 1500` lines | 21 |
+| `> 1500` lines | 20 |
 
 The goal is not to chase a mechanical line-count rule. The practical goal is
 reviewable, testable, single-responsibility modules. A 500-line file budget is a
@@ -574,6 +574,42 @@ cargo fmt --check
 cargo check -q
 cargo test -q retrieval_context -- --test-threads=1
 cargo test -q memory_retrieval -- --test-threads=1
+```
+
+### 2.8 Split `src/engine/conversation_loop/permission_controller.rs`
+
+Status: started. Permission denial counters, denial-state JSON, recovery
+feedback, and denied-message formatting now live in
+`src/engine/conversation_loop/permission_recovery.rs`. The controller keeps the
+approval evaluation flow, metadata construction, prompt construction, and
+evidence pipeline. `src/engine/conversation_loop/permission_controller.rs` is
+down from 1539 lines to 1414 lines and has exited the `>1500` active queue.
+Moving the cleanup helper also removed the stale production dead-code warning
+from this file while keeping it available inside the recovery module.
+
+Current structure:
+
+```text
+src/engine/conversation_loop/
+├── permission_controller.rs        # approval evaluation and evidence assembly
+└── permission_recovery.rs          # denial counters and recovery feedback
+```
+
+Current next cuts:
+
+- Split command/remote classification helpers if permission metadata grows
+  again.
+- Split prompt rendering only if the approval UI copy changes.
+- Keep hard approval gates in the controller; do not move policy decisions into
+  formatting-only helpers.
+
+Acceptance:
+
+```bash
+cargo fmt --check
+cargo check -q
+cargo test -q permission_controller -- --test-threads=1
+cargo test -q permission -- --test-threads=1
 ```
 
 ## Phase 3: Lower-Risk Large Module Cleanup

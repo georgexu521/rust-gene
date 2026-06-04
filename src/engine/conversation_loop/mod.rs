@@ -35,6 +35,7 @@ mod patch_synthesis_executor;
 #[cfg(test)]
 mod patch_synthesis_flow_controller;
 mod permission_controller;
+mod permission_recovery;
 mod post_change_workflow_controller;
 mod post_edit_repair_controller;
 mod post_edit_verification_controller;
