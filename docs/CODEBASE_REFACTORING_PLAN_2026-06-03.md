@@ -7,18 +7,18 @@ Scope: current working tree under `src/` and `apps/desktop/src-tauri/src/`
 ## Executive Summary
 
 Priority Agent is still too large in several core modules. The current working
-tree contains roughly 249k Rust lines across 512 Rust files. Excluding test
+tree contains roughly 249k Rust lines across 513 Rust files. Excluding test
 files, `_old.rs` backup files, and Rust modules mounted only behind
-`#[cfg(test)]`, the active production surface is roughly 219k lines across 472
+`#[cfg(test)]`, the active production surface is roughly 219k lines across 473
 Rust files:
 
 | Budget | Active production files |
 |--------|--------------------------|
-| `> 500` lines | 167 |
+| `> 500` lines | 168 |
 | `> 800` lines | 73 |
 | `> 1000` lines | 56 |
-| `> 1200` lines | 35 |
-| `> 1500` lines | 8 |
+| `> 1200` lines | 34 |
+| `> 1500` lines | 7 |
 
 The goal is not to chase a mechanical line-count rule. The practical goal is
 reviewable, testable, single-responsibility modules. A 500-line file budget is a
@@ -74,7 +74,6 @@ Excluding tests and `_old.rs` backup files:
 | `src/engine/mcp.rs` | 1908 | P2 | Split protocol/client/tool surface |
 | `src/tui/app.rs` | 1893 | P1 | Continue moving runtime state and handlers out |
 | `src/engine/scenario_matrix.rs` | 1885 | P2 | Split types, matrix construction, evaluation, reporting |
-| `src/engine/auto_verify.rs` | 1823 | P1 | Split verifier orchestration, command policy, summaries |
 | `apps/desktop/src-tauri/src/lib.rs` | 1803 | P1 | Split desktop commands/state/session bridge |
 | `src/engine/task_context.rs` | 1787 | P1 | Split task bundle, context pack, serialization |
 
@@ -993,6 +992,40 @@ cargo check -q
 cargo test -q action_review -- --test-threads=1
 ```
 
+### 2.20 Split `src/engine/auto_verify.rs`
+
+Status: started. Verification output parsers and Python verification helpers
+now live in `src/engine/auto_verify/parsers.rs`: cargo check/test parsing,
+Python mypy/pyright/pytest/py_compile parsing and changed-file verification,
+TypeScript tsc/jest parsing, and Go build/test parsing. The entry file keeps
+verification orchestration, command execution, workspace target resolution, and
+language dispatch. `src/engine/auto_verify.rs` is down from 1823 lines to 1053
+lines and has exited both the `>1500` and `>1200` active queues.
+
+Current structure:
+
+```text
+src/engine/
+├── auto_verify.rs                   # verification orchestration and dispatch
+└── auto_verify/
+    └── parsers.rs                   # language verification output parsing
+```
+
+Current next cuts:
+
+- Split command execution/timeouts only if verifier process handling changes.
+- Split workspace target resolution if Cargo workspace behavior grows again.
+- Keep language dispatch in the entry file until daily baseline coverage is
+  stable.
+
+Acceptance:
+
+```bash
+cargo fmt --check
+cargo check -q
+cargo test -q auto_verify -- --test-threads=1
+```
+
 ## Phase 3: Lower-Risk Large Module Cleanup
 
 These files are large, but they should wait until Phase 1 and Phase 2 reduce
@@ -1004,7 +1037,6 @@ the central runtime blast radius.
 | `src/tools/bash_tool/command_classifier.rs` | command safety classifier needs careful golden tests first |
 | `src/engine/mcp.rs` | MCP behavior spans external integrations |
 | `src/engine/scenario_matrix.rs` | eval/reporting shape should stay stable during daily baseline work |
-| `src/engine/auto_verify.rs` | verification behavior is a correctness boundary |
 
 ## Per-Slice Checklist
 
