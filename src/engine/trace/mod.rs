@@ -12,6 +12,7 @@ mod diagnostic;
 mod event;
 mod event_label;
 mod event_summary;
+mod event_summary_workflow;
 mod formatting;
 
 pub use collector::{TraceCollector, TraceStore};

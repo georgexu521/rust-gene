@@ -7,16 +7,16 @@ Scope: current working tree under `src/` and `apps/desktop/src-tauri/src/`
 ## Executive Summary
 
 Priority Agent is still too large in several core modules. The current working
-tree contains roughly 248k Rust lines across 484 Rust files. Excluding test
-files and `_old.rs` backup files, the active production surface is roughly 453
+tree contains roughly 248k Rust lines across 485 Rust files. Excluding test
+files and `_old.rs` backup files, the active production surface is roughly 454
 Rust files:
 
 | Budget | Active production files |
 |--------|--------------------------|
 | `> 500` lines | 167 |
-| `> 800` lines | 77 |
+| `> 800` lines | 76 |
 | `> 1000` lines | 59 |
-| `> 1200` lines | 43 |
+| `> 1200` lines | 42 |
 | `> 1500` lines | 28 |
 
 The goal is not to chase a mechanical line-count rule. The practical goal is
@@ -203,15 +203,16 @@ cargo test -q memory_proposals
 
 ### 1.3 Split `src/engine/trace/`
 
-Status: entry split complete; one follow-up remains. The path moved to
+Status: complete enough for the current refactor queue. The path moved to
 `src/engine/trace/mod.rs`; collector/store logic now lives in `collector.rs`,
 user-facing trace summary/recent-line rendering now lives in `formatting.rs`,
 diagnostics and latest-summary queries now live in `diagnostic.rs`, and
 `TraceEvent` variants now live in `event.rs`. `TraceEvent::label` now lives in
-`event_label.rs`. `TraceEvent::summary` remains in `event_summary.rs`. The entry
-module is down to 124 lines, while `event.rs` is 801 lines and
-`event_summary.rs` is 1374 lines. `event_summary.rs` should be the next
-trace-specific follow-up if we want this subsystem fully under 1200.
+`event_label.rs`. Workflow/task trace summaries now live in
+`event_summary_workflow.rs`; the remaining summaries stay in
+`event_summary.rs`. The entry module is down to 124 lines, while `event.rs` is
+800 lines and `event_summary.rs` is 1019 lines. No trace production file now
+exceeds 1200 lines.
 
 Current responsibilities:
 
@@ -220,7 +221,8 @@ Current responsibilities:
 - turn trace container;
 - trace diagnostics and helper queries live in `diagnostic.rs`;
 - event labels live in `event_label.rs`;
-- event presentation lives in `event_summary.rs`.
+- workflow/task event summaries live in `event_summary_workflow.rs`;
+- remaining event presentation lives in `event_summary.rs`.
 
 Proposed structure:
 
@@ -230,6 +232,7 @@ src/engine/trace/
 ├── event.rs
 ├── event_label.rs
 ├── event_summary.rs
+├── event_summary_workflow.rs
 ├── collector.rs
 ├── diagnostic.rs
 └── formatting.rs
@@ -237,8 +240,9 @@ src/engine/trace/
 
 Current next cuts:
 
-- Split `event_summary.rs` by summary helper families; it is now the only trace
-  file above 1200 lines.
+- None required for the active queue. Future optional cleanup can split
+  `event_summary.rs` further by memory/provider/tool families if that file grows
+  again.
 
 Acceptance:
 
