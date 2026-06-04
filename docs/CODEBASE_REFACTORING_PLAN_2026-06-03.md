@@ -7,8 +7,8 @@ Scope: current working tree under `src/` and `apps/desktop/src-tauri/src/`
 ## Executive Summary
 
 Priority Agent is still too large in several core modules. The current working
-tree contains roughly 248k Rust lines across 489 Rust files. Excluding test
-files and `_old.rs` backup files, the active production surface is roughly 458
+tree contains roughly 248k Rust lines across 490 Rust files. Excluding test
+files and `_old.rs` backup files, the active production surface is roughly 459
 Rust files:
 
 | Budget | Active production files |
@@ -375,11 +375,17 @@ cargo test -q memory
 
 ### 2.3 Split `src/tools/memory_tool/mod.rs`
 
+Status: started. Memory store path helpers and store-path rendering now live in
+`src/tools/memory_tool/paths.rs`. The entry file is down to 1878 lines. The next
+useful cuts are doctor JSON/report DTOs and doctor rendering helpers, then the
+individual save/load/clear command implementations.
+
 Proposed structure:
 
 ```text
 src/tools/memory_tool/
 ├── mod.rs
+├── paths.rs
 ├── commands.rs
 ├── render.rs
 ├── validation.rs

@@ -3,42 +3,11 @@ use async_trait::async_trait;
 use serde::Deserialize;
 use serde_json::json;
 use std::collections::{HashMap, HashSet};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
-fn memory_root() -> PathBuf {
-    dirs::home_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join(".priority-agent")
-}
+mod paths;
 
-/// MEMORY.md 文件路径
-fn memory_path() -> PathBuf {
-    memory_root().join("MEMORY.md")
-}
-
-fn user_path() -> PathBuf {
-    memory_root().join("USER.md")
-}
-
-fn memory_dir() -> PathBuf {
-    memory_root().join("memory")
-}
-
-fn legacy_agent_memory_dir() -> PathBuf {
-    memory_root().join("agent_memories")
-}
-
-fn memory_decision_log_path() -> PathBuf {
-    memory_dir().join("decisions.jsonl")
-}
-
-fn memory_flush_log_path() -> PathBuf {
-    memory_dir().join("flush_queue.jsonl")
-}
-
-fn memory_retrieval_trace_path() -> PathBuf {
-    memory_dir().join("retrieval_trace.json")
-}
+use paths::*;
 
 #[derive(Debug, Clone)]
 struct MemoryDocument {
@@ -358,19 +327,6 @@ struct MemoryDoctorDocumentsJson {
     topic: usize,
     agent: usize,
     chars: usize,
-}
-
-#[derive(Debug, Clone, serde::Serialize)]
-struct MemoryStorePathsJson {
-    memory_md: String,
-    user_md: String,
-    memory_dir: String,
-    records_jsonl: String,
-    operations_jsonl: String,
-    proposals_jsonl: String,
-    retrieval_trace_json: String,
-    decisions_jsonl: String,
-    flush_queue_jsonl: String,
 }
 
 #[derive(Debug, serde::Serialize)]
@@ -814,36 +770,6 @@ fn current_external_memory_provider_mode() -> String {
 
 fn memory_scope_label_for_tool(scope: &crate::memory::MemoryScope) -> String {
     scope.identity_label()
-}
-
-fn memory_store_paths() -> MemoryStorePathsJson {
-    MemoryStorePathsJson {
-        memory_md: memory_path().display().to_string(),
-        user_md: user_path().display().to_string(),
-        memory_dir: memory_dir().display().to_string(),
-        records_jsonl: memory_dir().join("records.jsonl").display().to_string(),
-        operations_jsonl: memory_dir().join("operations.jsonl").display().to_string(),
-        proposals_jsonl: crate::engine::task_contract::MemoryProposalReviewStore::default_path()
-            .display()
-            .to_string(),
-        retrieval_trace_json: memory_retrieval_trace_path().display().to_string(),
-        decisions_jsonl: memory_decision_log_path().display().to_string(),
-        flush_queue_jsonl: memory_flush_log_path().display().to_string(),
-    }
-}
-
-fn format_memory_store_paths(paths: &MemoryStorePathsJson) -> String {
-    format!(
-        "  Store paths:\n    MEMORY.md: {}\n    USER.md: {}\n    records: {}\n    operations: {}\n    proposals: {}\n    retrieval_trace: {}\n    decisions: {}\n    flush_queue: {}\n",
-        paths.memory_md,
-        paths.user_md,
-        paths.records_jsonl,
-        paths.operations_jsonl,
-        paths.proposals_jsonl,
-        paths.retrieval_trace_json,
-        paths.decisions_jsonl,
-        paths.flush_queue_jsonl
-    )
 }
 
 fn format_memory_snapshot(snapshot: &crate::memory::MemorySnapshotReport) -> String {
