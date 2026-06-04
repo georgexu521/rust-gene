@@ -7,9 +7,9 @@ Scope: current working tree under `src/` and `apps/desktop/src-tauri/src/`
 ## Executive Summary
 
 Priority Agent is still too large in several core modules. The current working
-tree contains roughly 249k Rust lines across 507 Rust files. Excluding test
+tree contains roughly 249k Rust lines across 508 Rust files. Excluding test
 files, `_old.rs` backup files, and Rust modules mounted only behind
-`#[cfg(test)]`, the active production surface is roughly 219k lines across 469
+`#[cfg(test)]`, the active production surface is roughly 219k lines across 470
 Rust files:
 
 | Budget | Active production files |
@@ -18,7 +18,7 @@ Rust files:
 | `> 800` lines | 73 |
 | `> 1000` lines | 56 |
 | `> 1200` lines | 36 |
-| `> 1500` lines | 13 |
+| `> 1500` lines | 12 |
 
 The goal is not to chase a mechanical line-count rule. The practical goal is
 reviewable, testable, single-responsibility modules. A 500-line file budget is a
@@ -80,7 +80,6 @@ Excluding tests and `_old.rs` backup files:
 | `src/engine/action_review.rs` | 1736 | P1 | Split types, review policy, formatting |
 | `src/tui/screens/main_screen.rs` | 1706 | P1 | Split status bar, transcript, panels |
 | `src/engine/conversation_loop/tool_result_controller.rs` | 1695 | P1 | Split result parsing, proof extraction, ledger updates |
-| `src/engine/evalset.rs` | 1693 | P1 | Split suite loading, execution, and reporting |
 | `src/engine/skill_evolution.rs` | 1675 | P1 | Split analysis, proposal, and persistence lanes |
 
 ## Phase 0: Finish In-Progress Memory Manager Cleanup
@@ -820,6 +819,48 @@ cargo check -q
 cargo test -q intent_router -- --test-threads=1
 ```
 
+### 2.15 Split `src/engine/evalset.rs`
+
+Status: started. Trace/replay expectation matcher helpers now live in
+`src/engine/evalset/replay_matchers.rs`: tool sequence checks, terminal task
+matching, run-context matching, checkpoint/rewind matching, context compaction
+matching, runtime diet matching, subagent/worktree matching, MCP resource
+matching, and MCP repair matching. `src/engine/evalset.rs` keeps suite loading,
+report formatting, trace construction, and runner assertions. It is down from
+1693 lines to 1230 lines and has exited the `>1500` active queue.
+
+This slice also aligned `evalsets/feature_reality.yaml` with the current Core
+tool profile: `project_list` and `tool_search` are no longer default Core tools.
+For `unavailable_tools`, an absent registration now counts as unavailable, which
+matches the "hidden when unwired" product contract.
+
+Current structure:
+
+```text
+src/engine/
+├── evalset.rs                       # loading, reporting, runner assertions
+└── evalset/
+    ├── external_baseline.rs
+    ├── model.rs
+    ├── replay_matchers.rs           # trace/replay expectation matching
+    └── tests.rs
+```
+
+Current next cuts:
+
+- Split report formatting if trend/baseline rendering grows again.
+- Keep trace construction in the entry file until replay fixture shape
+  stabilizes.
+- Add golden tests before changing feature-reality tool profile expectations.
+
+Acceptance:
+
+```bash
+cargo fmt --check
+cargo check -q
+cargo test -q evalset -- --test-threads=1
+```
+
 ## Phase 3: Lower-Risk Large Module Cleanup
 
 These files are large, but they should wait until Phase 1 and Phase 2 reduce
@@ -833,7 +874,6 @@ the central runtime blast radius.
 | `src/engine/scenario_matrix.rs` | eval/reporting shape should stay stable during daily baseline work |
 | `src/engine/auto_verify.rs` | verification behavior is a correctness boundary |
 | `src/engine/action_review.rs` | action review policy is safety-sensitive |
-| `src/engine/evalset.rs` | eval workflows need stable baselines before reshaping |
 
 ## Per-Slice Checklist
 

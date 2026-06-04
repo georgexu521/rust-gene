@@ -5,10 +5,10 @@ scenarios:
     prompt: "检查当前项目文件"
     expect:
       available_tools:
+        - bash
         - file_read
+        - glob
         - grep
-        - project_list
-        - tool_search
 
   - id: optional-manager-tools-hidden-when-unwired
     prompt: "列出当前 session 可用工具"
