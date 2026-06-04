@@ -7,9 +7,9 @@ Scope: current working tree under `src/` and `apps/desktop/src-tauri/src/`
 ## Executive Summary
 
 Priority Agent is still too large in several core modules. The current working
-tree contains roughly 249k Rust lines across 502 Rust files. Excluding test
+tree contains roughly 249k Rust lines across 503 Rust files. Excluding test
 files, `_old.rs` backup files, and Rust modules mounted only behind
-`#[cfg(test)]`, the active production surface is roughly 219k lines across 464
+`#[cfg(test)]`, the active production surface is roughly 219k lines across 465
 Rust files:
 
 | Budget | Active production files |
@@ -18,7 +18,7 @@ Rust files:
 | `> 800` lines | 73 |
 | `> 1000` lines | 56 |
 | `> 1200` lines | 37 |
-| `> 1500` lines | 17 |
+| `> 1500` lines | 16 |
 
 The goal is not to chase a mechanical line-count rule. The practical goal is
 reviewable, testable, single-responsibility modules. A 500-line file budget is a
@@ -85,7 +85,6 @@ Excluding tests and `_old.rs` backup files:
 | `src/engine/intent_router.rs` | 1672 | P1 | Split intent scoring, route construction, and labels |
 | `src/engine/streaming.rs` | 1644 | P1 | Split provider stream handling, event conversion, and repair hooks |
 | `src/engine/code_change_workflow.rs` | 1630 | P1 | Split workflow state, patch planning, and validation reporting |
-| `src/tools/bash_tool/mod.rs` | 1618 | P1 | Split execution surface, env handling, and output policy |
 
 ## Phase 0: Finish In-Progress Memory Manager Cleanup
 
@@ -678,6 +677,44 @@ Acceptance:
 cargo fmt --check
 cargo check -q
 cargo test -q memory_eval -- --test-threads=1
+```
+
+### 2.11 Split `src/tools/bash_tool/mod.rs`
+
+Status: started. Bash execution backend helpers now live in
+`src/tools/bash_tool/execution_backend.rs`: backend parsing/defaults, timeout
+floor handling, runtime environment cleanup, restricted-command wrapping,
+external wrapper configuration, fallback backend parsing, and shell quoting
+helpers used by wrapper construction. The entry file keeps command safety,
+auto-background decisions, audit/result construction, PTY/background dispatch,
+and the `Tool` implementation. `src/tools/bash_tool/mod.rs` is down from 1618
+lines to 1440 lines and has exited the `>1500` active queue.
+
+Current structure:
+
+```text
+src/tools/bash_tool/
+├── mod.rs                    # bash tool execution flow and result assembly
+├── execution_backend.rs      # backend/env/wrapper helpers
+├── background.rs
+├── command_classifier.rs
+└── pty.rs
+```
+
+Current next cuts:
+
+- Split result/audit data construction if shell output policy changes again.
+- Split auto-background decision helpers if background task UX gets another
+  product pass.
+- Keep process execution and timeout handling in the entry file until PTY and
+  foreground execution are split deliberately.
+
+Acceptance:
+
+```bash
+cargo fmt --check
+cargo check -q
+cargo test -q bash_tool -- --test-threads=1
 ```
 
 ## Phase 3: Lower-Risk Large Module Cleanup
