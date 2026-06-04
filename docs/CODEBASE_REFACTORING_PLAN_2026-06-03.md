@@ -7,18 +7,18 @@ Scope: current working tree under `src/` and `apps/desktop/src-tauri/src/`
 ## Executive Summary
 
 Priority Agent is still too large in several core modules. The current working
-tree contains roughly 249k Rust lines across 515 Rust files. Excluding test
+tree contains roughly 249k Rust lines across 516 Rust files. Excluding test
 files, `_old.rs` backup files, and Rust modules mounted only behind
-`#[cfg(test)]`, the active production surface is roughly 219k lines across 474
+`#[cfg(test)]`, the active production surface is roughly 219k lines across 475
 Rust files:
 
 | Budget | Active production files |
 |--------|--------------------------|
-| `> 500` lines | 168 |
+| `> 500` lines | 169 |
 | `> 800` lines | 73 |
 | `> 1000` lines | 56 |
-| `> 1200` lines | 34 |
-| `> 1500` lines | 6 |
+| `> 1200` lines | 33 |
+| `> 1500` lines | 5 |
 
 The goal is not to chase a mechanical line-count rule. The practical goal is
 reviewable, testable, single-responsibility modules. A 500-line file budget is a
@@ -74,7 +74,6 @@ Excluding tests and `_old.rs` backup files:
 | `src/engine/mcp.rs` | 1908 | P2 | Split protocol/client/tool surface |
 | `src/tui/app.rs` | 1893 | P1 | Continue moving runtime state and handlers out |
 | `apps/desktop/src-tauri/src/lib.rs` | 1803 | P1 | Split desktop commands/state/session bridge |
-| `src/engine/task_context.rs` | 1787 | P1 | Split task bundle, context pack, serialization |
 
 ## Phase 0: Finish In-Progress Memory Manager Cleanup
 
@@ -1058,6 +1057,41 @@ Acceptance:
 cargo fmt --check
 cargo check -q
 cargo test -q scenario_matrix -- --test-threads=1
+```
+
+### 2.22 Split `src/engine/task_context.rs`
+
+Status: started. `AgentTaskState` methods now live in
+`src/engine/task_context/state.rs`. The entry file keeps task context types,
+stage/status implementations, `TaskContextBundle` construction, and helper
+functions. `src/engine/task_context.rs` is down from 1787 lines to 689 lines
+and has exited both the `>1500` and `>1200` active queues. The new state module
+is 1101 lines and remains below the `>1200` active queue.
+
+Current structure:
+
+```text
+src/engine/
+├── task_context.rs                  # task context types and bundle assembly
+└── task_context/
+    ├── state.rs                     # AgentTaskState transitions and helpers
+    └── tests.rs                     # task context unit tests
+```
+
+Current next cuts:
+
+- Split state transition policy only after the task-state contract stops
+  changing.
+- Keep persistence helpers with `AgentTaskState` until a storage boundary is
+  introduced.
+- Add fixture-based tests before changing serialized task-state fields.
+
+Acceptance:
+
+```bash
+cargo fmt --check
+cargo check -q
+cargo test -q task_context -- --test-threads=1
 ```
 
 ## Phase 3: Lower-Risk Large Module Cleanup
