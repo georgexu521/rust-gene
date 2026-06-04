@@ -7,9 +7,9 @@ Scope: current working tree under `src/` and `apps/desktop/src-tauri/src/`
 ## Executive Summary
 
 Priority Agent is still too large in several core modules. The current working
-tree contains roughly 249k Rust lines across 503 Rust files. Excluding test
+tree contains roughly 249k Rust lines across 504 Rust files. Excluding test
 files, `_old.rs` backup files, and Rust modules mounted only behind
-`#[cfg(test)]`, the active production surface is roughly 219k lines across 465
+`#[cfg(test)]`, the active production surface is roughly 219k lines across 466
 Rust files:
 
 | Budget | Active production files |
@@ -18,7 +18,7 @@ Rust files:
 | `> 800` lines | 73 |
 | `> 1000` lines | 56 |
 | `> 1200` lines | 37 |
-| `> 1500` lines | 16 |
+| `> 1500` lines | 15 |
 
 The goal is not to chase a mechanical line-count rule. The practical goal is
 reviewable, testable, single-responsibility modules. A 500-line file budget is a
@@ -84,7 +84,6 @@ Excluding tests and `_old.rs` backup files:
 | `src/engine/skill_evolution.rs` | 1675 | P1 | Split analysis, proposal, and persistence lanes |
 | `src/engine/intent_router.rs` | 1672 | P1 | Split intent scoring, route construction, and labels |
 | `src/engine/streaming.rs` | 1644 | P1 | Split provider stream handling, event conversion, and repair hooks |
-| `src/engine/code_change_workflow.rs` | 1630 | P1 | Split workflow state, patch planning, and validation reporting |
 
 ## Phase 0: Finish In-Progress Memory Manager Cleanup
 
@@ -715,6 +714,43 @@ Acceptance:
 cargo fmt --check
 cargo check -q
 cargo test -q bash_tool -- --test-threads=1
+```
+
+### 2.12 Split `src/engine/code_change_workflow.rs`
+
+Status: started. Workflow helper functions now live in
+`src/engine/code_change_workflow/helpers.rs`: programming-workflow
+classification, no-diff closeout reason matching, runtime validation label
+checks, bullet formatting, plan-step runtime state construction, uniqueness and
+reason merging helpers, preview/validation evidence summarization, selected
+validation evidence lookup, and path labeling. The public
+`crate::engine::code_change_workflow::is_programming_workflow` path is
+preserved by re-export. `src/engine/code_change_workflow.rs` is down from 1630
+lines to 1499 lines and has exited the `>1500` active queue.
+
+Current structure:
+
+```text
+src/engine/
+├── code_change_workflow.rs             # workflow state and runner
+└── code_change_workflow/
+    └── helpers.rs                      # formatting and runtime helper funcs
+```
+
+Current next cuts:
+
+- Split closeout rendering if final-response workflow copy changes.
+- Split validation record construction only if stage validation behavior gets
+  another product pass.
+- Keep runner state transitions in the entry file until the workflow state
+  machine has a dedicated module boundary.
+
+Acceptance:
+
+```bash
+cargo fmt --check
+cargo check -q
+cargo test -q code_change_workflow -- --test-threads=1
 ```
 
 ## Phase 3: Lower-Risk Large Module Cleanup
