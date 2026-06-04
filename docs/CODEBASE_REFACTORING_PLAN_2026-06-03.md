@@ -7,8 +7,8 @@ Scope: current working tree under `src/` and `apps/desktop/src-tauri/src/`
 ## Executive Summary
 
 Priority Agent is still too large in several core modules. The current working
-tree contains roughly 249k Rust lines across 496 Rust files. Excluding test
-files and `_old.rs` backup files, the active production surface is roughly 469
+tree contains roughly 249k Rust lines across 497 Rust files. Excluding test
+files and `_old.rs` backup files, the active production surface is roughly 470
 Rust files:
 
 | Budget | Active production files |
@@ -17,7 +17,7 @@ Rust files:
 | `> 800` lines | 76 |
 | `> 1000` lines | 59 |
 | `> 1200` lines | 39 |
-| `> 1500` lines | 24 |
+| `> 1500` lines | 23 |
 
 The goal is not to chase a mechanical line-count rule. The practical goal is
 reviewable, testable, single-responsibility modules. A 500-line file budget is a
@@ -85,9 +85,9 @@ Excluding tests and `_old.rs` backup files:
 | `src/engine/streaming.rs` | 1644 | P1 | Split provider stream handling, event conversion, and repair hooks |
 | `src/engine/code_change_workflow.rs` | 1630 | P1 | Split workflow state, patch planning, and validation reporting |
 | `src/tools/bash_tool/mod.rs` | 1618 | P1 | Split execution surface, env handling, and output policy |
-| `src/tui/slash_handler/session.rs` | 1607 | P1 | Split session list/resume/cleanup command handlers |
 | `src/memory/eval.rs` | 1598 | P2 | Split eval case loading, runner, and report formatting |
 | `src/engine/workflow_contract.rs` | 1594 | P1 | Split workflow contract types, validation, and report formatting |
+| `src/tools/file_tool/mod.rs` | 1592 | P1 | Split file read/write/search operation families |
 
 ## Phase 0: Finish In-Progress Memory Manager Cleanup
 
@@ -423,7 +423,10 @@ worktree subcommands now live in `src/tui/slash_handler/agents/agent_listing.rs`
 doctor/product-readiness formatting helpers now live in
 `src/tui/slash_handler/agents/doctor_formatting.rs`. The main
 `src/tui/slash_handler/agents.rs` file is down from 1881 lines to 1437 lines and
-has exited the `>1500` active queue.
+has exited the `>1500` active queue. Related TUI slash-handler cleanup also
+moved `/rewind`, `/diff`, and checkpoint diff/restore formatting helpers into
+`src/tui/slash_handler/session/rewind.rs`; `src/tui/slash_handler/session.rs` is
+down from 1607 lines to 1209 lines and has also exited the `>1500` queue.
 
 Targets:
 
@@ -449,10 +452,13 @@ src/tui/
 │   ├── catalog.rs              # command constants, maturity lists, ALL_COMMANDS
 │   └── tests.rs
 └── slash_handler/
-    └── agents/
-        ├── agent_listing.rs    # /agents listing and worktree subcommands
-        ├── doctor_formatting.rs # doctor cache/provider/readiness formatting
-        └── tests.rs
+    ├── agents/
+    │   ├── agent_listing.rs    # /agents listing and worktree subcommands
+    │   ├── doctor_formatting.rs # doctor cache/provider/readiness formatting
+    │   └── tests.rs
+    └── session/
+        ├── actions.rs
+        └── rewind.rs           # /rewind, /diff, checkpoint diff/restore helpers
 ```
 
 Current next cuts:
