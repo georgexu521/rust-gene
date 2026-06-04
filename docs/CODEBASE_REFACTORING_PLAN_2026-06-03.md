@@ -7,8 +7,8 @@ Scope: current working tree under `src/` and `apps/desktop/src-tauri/src/`
 ## Executive Summary
 
 Priority Agent is still too large in several core modules. The current working
-tree contains roughly 248k Rust lines across 478 Rust files. Excluding test
-files and `_old.rs` backup files, the active production surface is roughly 447
+tree contains roughly 248k Rust lines across 479 Rust files. Excluding test
+files and `_old.rs` backup files, the active production surface is roughly 448
 Rust files:
 
 | Budget | Active production files |
@@ -300,9 +300,10 @@ Status: started. Durable record/insert/upsert structs now live in
 existing public paths stable. Session CRUD methods now live in
 `src/session_store/session_ops.rs`, and message add/get/delete/rewrite/restore
 methods now live in `src/session_store/message_ops.rs`. Search/list methods now
-live in `src/session_store/search.rs`.
-`src/session_store/mod.rs` is down to 1469 lines. The next useful cuts are
-compact state and agent persistence.
+live in `src/session_store/search.rs`. Compact boundary persistence now lives in
+`src/session_store/compact_store.rs`.
+`src/session_store/mod.rs` is down to 1326 lines. The next useful cut is agent
+artifact/task persistence.
 
 Proposed structure:
 
@@ -313,10 +314,10 @@ src/session_store/
 ├── session_ops.rs
 ├── message_ops.rs
 ├── search.rs
-├── trace_store.rs
-├── learning_store.rs
 ├── compact_store.rs
 ├── agent_store.rs
+├── trace_store.rs
+├── learning_store.rs
 └── migrations.rs
 ```
 
