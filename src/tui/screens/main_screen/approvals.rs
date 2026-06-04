@@ -1,4 +1,5 @@
 use super::*;
+use ratatui::style::Color;
 
 /// 渲染权限审批弹窗
 pub fn render_permission_approval(

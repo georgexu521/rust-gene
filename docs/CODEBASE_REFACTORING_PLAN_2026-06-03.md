@@ -7,17 +7,17 @@ Scope: current working tree under `src/` and `apps/desktop/src-tauri/src/`
 ## Executive Summary
 
 Priority Agent is still too large in several core modules. The current working
-tree contains roughly 249k Rust lines across 524 Rust files. Excluding test
+tree contains roughly 249k Rust lines across 525 Rust files. Excluding test
 files, `_old.rs` backup files, and Rust modules mounted only behind
-`#[cfg(test)]`, the active production surface is roughly 218k lines across 481
+`#[cfg(test)]`, the active production surface is roughly 218k lines across 482
 Rust files:
 
 | Budget | Active production files |
 |--------|--------------------------|
-| `> 500` lines | 172 |
+| `> 500` lines | 173 |
 | `> 800` lines | 74 |
-| `> 1000` lines | 56 |
-| `> 1200` lines | 32 |
+| `> 1000` lines | 55 |
+| `> 1200` lines | 31 |
 | `> 1500` lines | 0 |
 
 The goal is not to chase a mechanical line-count rule. The practical goal is
@@ -69,8 +69,9 @@ Excluding tests and `_old.rs` backup files:
 
 No active production file currently exceeds 1500 lines. The next cleanup queue
 is the `>1200` group, led by files such as `src/tui/app.rs`,
-`src/tui/screens/main_screen.rs`, `src/engine/evidence_ledger.rs`,
-`src/tools/agent_tool/mod.rs`, and `src/tui/slash_handler/learning.rs`.
+`src/engine/evidence_ledger.rs`, `src/tools/agent_tool/mod.rs`,
+`src/tui/slash_handler/learning.rs`, and
+`apps/desktop/src-tauri/src/lib.rs`.
 
 ## Phase 0: Finish In-Progress Memory Manager Cleanup
 
@@ -1349,6 +1350,44 @@ Acceptance:
 cargo fmt --check
 cargo check -q
 cargo test -q code_change_workflow -- --test-threads=1
+```
+
+### 2.30 Split `src/tui/screens/main_screen.rs`
+
+Status: started. Help, command palette, shortcut, model, and provider popup
+rendering now live in `src/tui/screens/main_screen/popups.rs`. The entry file
+keeps the chat area, transcript windowing, input area, live activity row, toast,
+tool viewer, sidebar, and message search rendering. `src/tui/screens/main_screen.rs`
+is down from 1486 lines to 932 lines and has exited the `>1200` active queue.
+The new popup module is 564 lines.
+
+Current structure:
+
+```text
+src/tui/screens/
+├── main_screen.rs                   # chat, transcript, input, tool viewer
+└── main_screen/
+    ├── approvals.rs                 # approval and question popups
+    ├── popups.rs                    # help, palette, model/provider popups
+    ├── status_bar.rs                # status bar renderer
+    └── tests.rs                     # main-screen render tests
+```
+
+Current next cuts:
+
+- Keep transcript windowing in the entry file until scroll/height behavior has
+  narrower golden tests.
+- Consider extracting tool-viewer rendering only with tests around long output,
+  truncation, and syntax-style lines.
+- Keep approval/question popups separate from general popups because they are
+  tied to runtime permission flow.
+
+Acceptance:
+
+```bash
+cargo fmt --check
+cargo check -q
+cargo test -q main_screen -- --test-threads=1
 ```
 
 ## Phase 3: Lower-Risk Large Module Cleanup
