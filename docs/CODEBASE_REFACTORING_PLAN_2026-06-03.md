@@ -7,8 +7,8 @@ Scope: current working tree under `src/` and `apps/desktop/src-tauri/src/`
 ## Executive Summary
 
 Priority Agent is still too large in several core modules. The current working
-tree contains roughly 248k Rust lines across 482 Rust files. Excluding test
-files and `_old.rs` backup files, the active production surface is roughly 451
+tree contains roughly 248k Rust lines across 483 Rust files. Excluding test
+files and `_old.rs` backup files, the active production surface is roughly 452
 Rust files:
 
 | Budget | Active production files |
@@ -207,17 +207,18 @@ Status: entry split complete; one follow-up remains. The path moved to
 `src/engine/trace/mod.rs`; collector/store logic now lives in `collector.rs`,
 user-facing trace summary/recent-line rendering now lives in `formatting.rs`,
 diagnostics and latest-summary queries now live in `diagnostic.rs`, and
-`TraceEvent::label` / `TraceEvent::summary` now live in `event_summary.rs`. The
-entry module is down to 919 lines, below the active queue threshold, while
-`event_summary.rs` is 1450 lines and should be the next trace-specific follow-up
-if we want this subsystem fully under 1200.
+`TraceEvent::label` now lives in `event_label.rs`. `TraceEvent::summary` remains
+in `event_summary.rs`. The entry module is down to 920 lines, below the active
+queue threshold, while `event_summary.rs` is 1374 lines and should be the next
+trace-specific follow-up if we want this subsystem fully under 1200.
 
 Current responsibilities:
 
 - `TraceEvent` definition;
-- event labels and summaries;
+- event summaries;
 - turn trace container;
 - trace diagnostics and helper queries live in `diagnostic.rs`;
+- event labels live in `event_label.rs`;
 - event presentation lives in `event_summary.rs`.
 
 Proposed structure:
@@ -226,6 +227,7 @@ Proposed structure:
 src/engine/trace/
 ├── mod.rs
 ├── event.rs
+├── event_label.rs
 ├── event_summary.rs
 ├── collector.rs
 ├── diagnostic.rs
@@ -236,8 +238,8 @@ Current next cuts:
 
 - Extract `TraceEvent` variants to `event.rs` only if the re-export surface stays
   mechanical and testable.
-- Split `event_summary.rs` by label/summary helper families if it stays above
-  1200 lines after the event type move.
+- Split `event_summary.rs` by summary helper families if it stays above 1200
+  lines after the event type move.
 
 Acceptance:
 

@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 
 mod collector;
 mod diagnostic;
+mod event_label;
 mod event_summary;
 mod formatting;
 
