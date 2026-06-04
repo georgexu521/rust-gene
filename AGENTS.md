@@ -35,6 +35,9 @@ gex's machine, projects, habits, validation loops, and local coding workflow.
 - Preserve user or prior-agent work in the dirty tree; do not revert unrelated
   changes.
 - Prefer `rg` / `rg --files` for search and local targeted tests for feedback.
+- Keep code files reviewable: avoid growing any single source file beyond 1500
+  lines; when a touched file approaches that size, prefer a focused submodule
+  split with local tests instead of adding more mixed responsibility.
 - Keep docs aligned only when a change affects startup, validation, or current
   project status.
 - Do not force heavyweight planning into simple tasks. Runtime checks, tool

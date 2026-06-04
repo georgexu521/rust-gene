@@ -14,6 +14,10 @@ personalize and diverge. Use
 `docs/CLAUDE_CODE_PARITY_IMPLEMENTATION_PLAN_2026-05-20.md` as the active
 near-term implementation roadmap.
 
+Keep code files reviewable. Avoid growing any single source file beyond 1500
+lines; when a touched file approaches that size, prefer a focused submodule
+split with local tests instead of adding more mixed responsibility.
+
 ## Build and Development Commands
 
 ```bash
