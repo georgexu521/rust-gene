@@ -7,9 +7,9 @@ Scope: current working tree under `src/` and `apps/desktop/src-tauri/src/`
 ## Executive Summary
 
 Priority Agent is still too large in several core modules. The current working
-tree contains roughly 249k Rust lines across 525 Rust files. Excluding test
+tree contains roughly 249k Rust lines across 527 Rust files. Excluding test
 files, `_old.rs` backup files, and Rust modules mounted only behind
-`#[cfg(test)]`, the active production surface is roughly 218k lines across 482
+`#[cfg(test)]`, the active production surface is roughly 218k lines across 484
 Rust files:
 
 | Budget | Active production files |
@@ -17,7 +17,7 @@ Rust files:
 | `> 500` lines | 173 |
 | `> 800` lines | 74 |
 | `> 1000` lines | 55 |
-| `> 1200` lines | 31 |
+| `> 1200` lines | 30 |
 | `> 1500` lines | 0 |
 
 The goal is not to chase a mechanical line-count rule. The practical goal is
@@ -68,10 +68,9 @@ source split.
 Excluding tests and `_old.rs` backup files:
 
 No active production file currently exceeds 1500 lines. The next cleanup queue
-is the `>1200` group, led by files such as `src/tui/app.rs`,
-`src/engine/evidence_ledger.rs`, `src/tools/agent_tool/mod.rs`,
-`src/tui/slash_handler/learning.rs`, and
-`apps/desktop/src-tauri/src/lib.rs`.
+is the `>1200` group, led by files such as `src/engine/evidence_ledger.rs`,
+`src/tools/agent_tool/mod.rs`, `src/tui/slash_handler/learning.rs`,
+`apps/desktop/src-tauri/src/lib.rs`, and `src/engine/improvement.rs`.
 
 ## Phase 0: Finish In-Progress Memory Manager Cleanup
 
@@ -1167,12 +1166,13 @@ cargo check -q
 ### 2.25 Split `src/tui/app.rs`
 
 Status: started. Runtime status labels, runtime-state snapshot construction,
-stream usage labels, transcript expansion, and tool-viewer selection helpers
-now live in `src/tui/app/status_tools.rs`. The entry file keeps TUI state,
-message submission, slash-command integration, streaming refresh, approvals,
-question handling, history, and message mutation. `src/tui/app.rs` is down from
-1893 lines to 1486 lines and has exited the `>1500` active queue. It remains in
-the `>1200` queue and should continue to shed cohesive UI state groups.
+stream usage labels, transcript expansion, tool-viewer selection helpers,
+permission diff preview, question/tool-context helpers, settings/history,
+message mutation, and scroll/error helpers now live under `src/tui/app/`. The
+entry file keeps TUI state, constructor/setup, paste/skill policy, message
+submission, streaming refresh, and approval response wiring.
+`src/tui/app.rs` is down from 1893 lines to 1101 lines and has exited both the
+`>1500` and `>1200` active queues.
 
 Current structure:
 
@@ -1180,12 +1180,19 @@ Current structure:
 src/tui/
 ├── app.rs                           # core TUI state and message/runtime loop
 └── app/
-    └── status_tools.rs              # status labels and tool-viewer helpers
+    ├── actions.rs                   # question, context, history, message actions
+    ├── memory.rs                    # memory slash helpers
+    ├── palette.rs                   # command palette state
+    ├── permission_diff.rs           # pending permission preview diffs
+    ├── runtime.rs                   # runtime snapshots and permission rules
+    ├── slash_commands.rs            # slash-command dispatch
+    ├── status_tools.rs              # status labels and tool-viewer helpers
+    └── tests.rs                     # app unit tests
 ```
 
 Current next cuts:
 
-- Move paste handling and history navigation after preserving focused app
+- Move paste handling and active-skill policy after preserving focused app
   tests.
 - Move approval/question state helpers only if their runtime channels remain
   compile-gated.
@@ -1197,8 +1204,7 @@ Acceptance:
 ```bash
 cargo fmt --check
 cargo check -q
-cargo test -q app -- --test-threads=1
-cargo test -q tool_viewer -- --test-threads=1
+cargo test -q tui::app -- --test-threads=1
 ```
 
 ### 2.26 Split `src/tools/bash_tool/command_classifier.rs`
