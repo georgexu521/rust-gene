@@ -7,9 +7,9 @@ Scope: current working tree under `src/` and `apps/desktop/src-tauri/src/`
 ## Executive Summary
 
 Priority Agent is still too large in several core modules. The current working
-tree contains roughly 249k Rust lines across 500 Rust files. Excluding test
+tree contains roughly 249k Rust lines across 501 Rust files. Excluding test
 files, `_old.rs` backup files, and Rust modules mounted only behind
-`#[cfg(test)]`, the active production surface is roughly 219k lines across 462
+`#[cfg(test)]`, the active production surface is roughly 219k lines across 463
 Rust files:
 
 | Budget | Active production files |
@@ -18,7 +18,7 @@ Rust files:
 | `> 800` lines | 73 |
 | `> 1000` lines | 56 |
 | `> 1200` lines | 37 |
-| `> 1500` lines | 19 |
+| `> 1500` lines | 18 |
 
 The goal is not to chase a mechanical line-count rule. The practical goal is
 reviewable, testable, single-responsibility modules. A 500-line file budget is a
@@ -87,7 +87,6 @@ Excluding tests and `_old.rs` backup files:
 | `src/engine/code_change_workflow.rs` | 1630 | P1 | Split workflow state, patch planning, and validation reporting |
 | `src/tools/bash_tool/mod.rs` | 1618 | P1 | Split execution surface, env handling, and output policy |
 | `src/memory/eval.rs` | 1598 | P2 | Split eval case loading, runner, and report formatting |
-| `src/engine/workflow_contract.rs` | 1594 | P1 | Split workflow contract types, validation, and report formatting |
 
 ## Phase 0: Finish In-Progress Memory Manager Cleanup
 
@@ -610,6 +609,41 @@ cargo fmt --check
 cargo check -q
 cargo test -q permission_controller -- --test-threads=1
 cargo test -q permission -- --test-threads=1
+```
+
+### 2.9 Split `src/engine/workflow_contract.rs`
+
+Status: started. JSON sanitizer helpers now live in
+`src/engine/workflow_contract/sanitize.rs`: guided-reasoning trigger
+normalization, acceptance-review defaulting, criteria normalization, string
+array normalization, and JSON value-to-text conversion. The entry file keeps
+the public contract types, prompt builders, analyzer orchestration, parse
+entrypoints, and JSON extraction. `src/engine/workflow_contract.rs` is down from
+1594 lines to 1336 lines and has exited the `>1500` active queue.
+
+Current structure:
+
+```text
+src/engine/
+├── workflow_contract.rs              # public contract and analyzer entrypoint
+└── workflow_contract/
+    └── sanitize.rs                   # tolerant JSON cleanup helpers
+```
+
+Current next cuts:
+
+- Split prompt builders if workflow prompt copy changes.
+- Split weighting types and reweight helpers only if priority weighting gets
+  another product pass.
+- Keep parse entrypoints in the public file until callers no longer depend on
+  the flat module path.
+
+Acceptance:
+
+```bash
+cargo fmt --check
+cargo check -q
+cargo test -q workflow_contract -- --test-threads=1
 ```
 
 ## Phase 3: Lower-Risk Large Module Cleanup
