@@ -1,6 +1,23 @@
 # Project Status
 
-Last updated: 2026-06-02
+Last updated: 2026-06-04
+
+2026-06-04 Reasonix alignment Phases 0-7 complete:
+- Phase 0: Runtime boundary audit documented in PROJECT_MAP.md
+- Phase 1: RuntimeController (src/engine/runtime_controller.rs) + DesktopRuntime/TUI full-agent paths wired
+- Phase 2: Cache-stability tests 15→27 (all Phase 2 scenarios covered)
+- Phase 3: Route-scoped tool tests 14→18 + snapshot regression guards
+- Phase 4: Memory diagnostics in /doctor panel (standing/saved/recall)
+- Phase 5: Permission/checkpoint tests 44→51 + 7→9
+- Phase 6: Event parity includes runtime diagnostic, usage, permission, and closeout events across StreamEvent/TurnEvent/DesktopRunEvent
+- Phase 7: scripts/daily-baseline.sh created (17 gate deterministic baseline)
+- No normal production file exceeds 1500 lines without documented exception.
+  Full lib test gate: 2244 passed, 0 failed, 1 ignored.
+- Release gate spot-check after findings fixes:
+  `cargo check --all-features -q`, `cargo clippy --all-features -- -D warnings`,
+  and `cargo test -q --all-features -- --test-threads=1` passed.
+- Phase 8 (code size stewardship) remains active; watch-list files tracked
+  in daily-baseline file-size-report gate.
 
 ## Summary
 
@@ -11,6 +28,13 @@ The active runtime work is keeping the shared CLI/TUI/desktop runtime simple:
 hard limits, permissions, tool contracts, evidence, validation proof, and
 closeout gates stay deterministic, while the LLM owns semantic and engineering
 judgment.
+
+2026-06-04: Completed Phase 0 runtime boundary audit (Reasonix alignment).
+Documented the frontend-to-engine command/event map in `docs/PROJECT_MAP.md#runtime-boundary`.
+Full-agent desktop and TUI paths now enter through `RuntimeController`, while
+desktop lightweight turn remains explicitly non-agent; `classify_turn_ingress()`
+is runtime-owned. Closeout status is now a first-class stream/desktop event
+instead of only trace-derived state.
 
 Product direction: Priority Agent should stay narrow, deep, personal, and
 verifiable rather than chasing broad generic-agent parity. The durable goal is

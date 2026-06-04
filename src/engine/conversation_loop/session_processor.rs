@@ -669,7 +669,8 @@ impl ConversationLoop {
         cache_shape: Option<crate::engine::cache_stability::CacheDiagnosticShape>,
     ) {
         let mut tracker = self.cost_tracker.lock().await;
-        tracker.record_api_call_with_cache_shape(
+        tracker.record_api_call_with_session_and_cache_shape(
+            Some(&self.session_id),
             &self.model,
             usage.prompt_tokens as u64,
             usage.completion_tokens as u64,

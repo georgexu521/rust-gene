@@ -928,6 +928,7 @@ mod tests {
                     reasoning_tokens: None,
                     cached_tokens: None,
                 }),
+                tool_call_repair: None,
             })
         }
 

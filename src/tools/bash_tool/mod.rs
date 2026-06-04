@@ -1066,7 +1066,7 @@ impl Tool for BashTool {
 
         // Validate command against dangerous patterns
         if let Some(reason) = validate_command_safety(command) {
-            return ToolResult::error(&format!("Command blocked: {}", reason));
+            return ToolResult::error(format!("Command blocked: {}", reason));
         }
 
         let description = params["description"].as_str().unwrap_or(command);

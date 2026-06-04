@@ -62,6 +62,7 @@ pub mod repair_spec;
 pub mod resource_policy;
 pub mod retrieval_context;
 pub mod route_recovery;
+pub mod runtime_controller;
 pub mod runtime_facade;
 #[cfg(test)]
 mod runtime_spine_behavior_tests;

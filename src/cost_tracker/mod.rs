@@ -3,6 +3,7 @@
 //! 追踪 API 调用成本和 token 使用情况
 
 mod prompt_cache;
+pub mod usage_ledger;
 
 pub use prompt_cache::PromptCacheDiagnosticEntry;
 use prompt_cache::{
@@ -12,6 +13,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::HashMap;
 use std::time::{Duration, SystemTime};
+pub use usage_ledger::{UsageLedgerEntry, UsageLedgerSummary};
 
 /// 成本追踪器
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -215,6 +217,25 @@ impl CostTracker {
         cached_tokens: Option<u64>,
         cache_shape: Option<crate::engine::cache_stability::CacheDiagnosticShape>,
     ) {
+        self.record_api_call_with_session_and_cache_shape(
+            None,
+            model,
+            prompt_tokens,
+            completion_tokens,
+            cached_tokens,
+            cache_shape,
+        );
+    }
+
+    pub fn record_api_call_with_session_and_cache_shape(
+        &mut self,
+        session_id: Option<&str>,
+        model: &str,
+        prompt_tokens: u64,
+        completion_tokens: u64,
+        cached_tokens: Option<u64>,
+        cache_shape: Option<crate::engine::cache_stability::CacheDiagnosticShape>,
+    ) {
         self.total_requests += 1;
         let cache_usage =
             crate::engine::cache_stability::prompt_cache_usage(prompt_tokens, cached_tokens);
@@ -242,8 +263,38 @@ impl CostTracker {
         stats.tokens.cache_miss += cache_usage.cache_miss_tokens;
         stats.estimated_cost += cost;
 
-        if let Some(cache_shape) = cache_shape {
-            self.record_prompt_cache_diagnostic(model, cache_usage, cost, cache_shape);
+        let diagnostic = cache_shape.map(|cache_shape| {
+            self.record_prompt_cache_diagnostic(model, cache_usage, cost, cache_shape)
+        });
+        let ledger_entry = usage_ledger::UsageLedgerEntry {
+            ts: usage_ledger::now_epoch_ms(),
+            session: session_id.unwrap_or("unknown").to_string(),
+            model: model.to_string(),
+            prompt_tokens,
+            completion_tokens,
+            total_tokens: prompt_tokens.saturating_add(completion_tokens),
+            cache_hit_tokens: cache_usage.cached_tokens,
+            cache_miss_tokens: cache_usage.cache_miss_tokens,
+            cost_usd: cost,
+            stable_prefix_hash: diagnostic
+                .as_ref()
+                .map(|entry| entry.prefix_fingerprint.clone()),
+            system_hash: diagnostic
+                .as_ref()
+                .map(|entry| entry.system_fingerprint.clone()),
+            tool_schema_hash: diagnostic
+                .as_ref()
+                .map(|entry| entry.tool_schema_fingerprint.clone()),
+            dynamic_tail_hash: diagnostic
+                .as_ref()
+                .map(|entry| entry.dynamic_tail_fingerprint.clone()),
+            miss_reason: diagnostic.as_ref().map(|entry| entry.miss_reason.clone()),
+            miss_reason_detail: diagnostic
+                .as_ref()
+                .map(|entry| entry.miss_reason_detail.clone()),
+        };
+        if let Err(err) = usage_ledger::append_usage_ledger_entry(&ledger_entry) {
+            tracing::warn!("failed to append usage ledger entry: {}", err);
         }
     }
 
@@ -723,7 +774,7 @@ Tool Usage:
         cache_usage: crate::engine::cache_stability::PromptCacheUsage,
         estimated_cost_usd: f64,
         cache_shape: crate::engine::cache_stability::CacheDiagnosticShape,
-    ) {
+    ) -> PromptCacheDiagnosticEntry {
         let entry = build_prompt_cache_diagnostic(
             model,
             self.total_requests,
@@ -732,8 +783,9 @@ Tool Usage:
             cache_shape,
             self.prompt_cache_diagnostics.last(),
         );
-        self.prompt_cache_diagnostics.push(entry);
+        self.prompt_cache_diagnostics.push(entry.clone());
         trim_prompt_cache_diagnostics(&mut self.prompt_cache_diagnostics);
+        entry
     }
 
     fn format_model_usage(&self) -> String {

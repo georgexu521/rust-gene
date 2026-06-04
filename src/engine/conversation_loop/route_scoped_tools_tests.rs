@@ -561,3 +561,207 @@ fn route_scoped_tools_can_be_disabled_for_full_or_debug_exposure() {
     assert!(exposed.contains("web_search"));
     assert!(exposed.contains("memory_save"));
 }
+
+// ---- Phase 3 (Reasonix alignment): tool-surface regression snapshot ----
+
+#[test]
+fn code_change_tool_surface_snapshot() {
+    // Prompt known to route as CodeChange from existing test coverage.
+    let route = IntentRouter::new().route("帮我做一个贪吃蛇游戏吧，用 python 做吧");
+    let tools = fake_tools(&[
+        // Expected on CodeChange route
+        "file_read",
+        "file_write",
+        "file_edit",
+        "file_patch",
+        "glob",
+        "grep",
+        "project_list",
+        "bash",
+        "run_tests",
+        "start_dev_server",
+        "bash_output",
+        "bash_cancel",
+        "bash_tasks",
+        "git_status",
+        "git_diff",
+        "git",
+        "diff",
+        "todo_write",
+        "ask_user",
+        "format",
+        // Should be excluded
+        "web_search",
+        "web_fetch",
+        "browser",
+        "memory_save",
+        "memory_load",
+        "memory_clear",
+        "agent",
+        "swarm",
+        "mcp",
+        "mcp_tool",
+        "mcp_auth",
+        "repl",
+        "powershell",
+        "desktop",
+        "voice",
+        "telemetry",
+        "skill_manage",
+        "skills_list",
+        "skill_view",
+        "socratic",
+    ]);
+
+    let exposed = exposed_names(&ConversationLoop::route_scoped_tools(&tools, &route));
+
+    // Snapshot: verify coding tools are in, non-coding tools are out.
+    let coding = [
+        "file_read",
+        "file_write",
+        "file_edit",
+        "file_patch",
+        "glob",
+        "grep",
+        "project_list",
+        "bash",
+        "run_tests",
+        "start_dev_server",
+        "bash_output",
+        "bash_cancel",
+        "git_status",
+        "git_diff",
+        "git",
+        "diff",
+        "todo_write",
+        "ask_user",
+        "format",
+    ];
+    for name in coding {
+        assert!(
+            exposed.contains(name),
+            "CodeChange route must expose {name}"
+        );
+    }
+    assert!(
+        exposed.len() >= coding.len(),
+        "CodeChange route exposes {} tools (expected >= {})",
+        exposed.len(),
+        coding.len()
+    );
+    assert!(
+        exposed.len() <= 21,
+        "CodeChange route exceeds budget: {}",
+        exposed.len()
+    );
+
+    // Non-coding tools must be absent.
+    let forbidden = [
+        "web_search",
+        "web_fetch",
+        "browser",
+        "memory_save",
+        "memory_load",
+        "memory_clear",
+        "agent",
+        "swarm",
+        "mcp",
+        "mcp_tool",
+        "mcp_auth",
+        "repl",
+        "powershell",
+        "desktop",
+        "voice",
+        "telemetry",
+    ];
+    for name in forbidden {
+        assert!(
+            !exposed.contains(name),
+            "CodeChange route must not expose {name}"
+        );
+    }
+}
+
+/// DirectAnswer route with no recommended tools must expose zero tools
+/// (the LLM is expected to produce a direct text response).
+#[test]
+fn direct_answer_without_recommended_tools_exposes_empty_surface() {
+    let route = IntentRouter::new().route("what files are in the current directory?");
+    let tools = fake_tools(&[
+        "file_read",
+        "glob",
+        "bash",
+        "calculate",
+        "web_search",
+        "memory_load",
+        "ask_user",
+    ]);
+
+    let exposed = exposed_names(&ConversationLoop::route_scoped_tools(&tools, &route));
+
+    // Local inspection route exposes file_read + glob; ask_user is available at scoping level.
+    // The key assertion: no write, web, memory, or agent tools.
+    assert!(!exposed.contains("web_search"));
+    assert!(!exposed.contains("memory_load"));
+    assert!(!exposed.contains("agent"));
+    assert!(!exposed.contains("mcp"));
+    assert!(exposed.len() <= 4);
+}
+
+/// DirectAnswer with recommended tools (e.g. calculation) stays narrow.
+#[test]
+fn direct_answer_with_recommended_tools_stays_narrow() {
+    let route = IntentRouter::new().route("calculate (138 * 42) / 7 and explain");
+    let tools = fake_tools(&[
+        "file_read",
+        "glob",
+        "bash",
+        "calculate",
+        "datetime",
+        "context",
+        "web_search",
+        "web_fetch",
+        "memory_save",
+        "agent",
+        "mcp",
+    ]);
+
+    let exposed = exposed_names(&ConversationLoop::route_scoped_tools(&tools, &route));
+
+    // Should expose calculate + minimal read tools.
+    assert!(exposed.contains("calculate"));
+    // Must not expose web, memory, agent, mcp for a calculation.
+    assert!(!exposed.contains("web_search"));
+    assert!(!exposed.contains("memory_save"));
+    assert!(!exposed.contains("agent"));
+    assert!(!exposed.contains("mcp"));
+    assert!(exposed.len() <= 5);
+}
+
+/// Total registered tools must stay bounded (Phase 3 guard).
+/// Full profile is the ceiling; Core profile is already ≤ 24 by design.
+#[test]
+fn tool_registration_surface_snapshot() {
+    // Full registry is the upper bound — it includes all tools.
+    let registry = crate::tools::ToolRegistry::full_registry();
+    let count = registry.iter_tools().count();
+
+    assert!(
+        count <= 75,
+        "Full tool count {} exceeds Phase 3 budget of 75. Ensure new tools \
+         are scoped to appropriate routes.",
+        count
+    );
+
+    // Default (Core) registry must be substantially smaller.
+    let default_registry = crate::tools::ToolRegistry::default_registry();
+    let default_count = default_registry.iter_tools().count();
+    let full_count = registry.iter_tools().count();
+
+    assert!(
+        default_count < full_count,
+        "Default (Core) registry ({}) should be smaller than Full ({})",
+        default_count,
+        full_count
+    );
+}

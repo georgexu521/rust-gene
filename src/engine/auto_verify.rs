@@ -580,15 +580,15 @@ async fn run_cargo_test(working_dir: &Path, manifest: Option<&Path>) -> Option<V
 // 输出解析器
 // ────────────────────────────────────────────────
 
-/// 解析 cargo check --message-format=short 输出
-/// 格式示例：
-/// ```text
-/// error[E0308]: mismatched types
-///   --> src/main.rs:42:10
-///    |
-/// 42 |     let x: u32 = "hello";
-///    |                  ^^^^^^^ expected u32, found &str
-/// ```
+// 解析 cargo check --message-format=short 输出
+// 格式示例：
+// ```text
+// error[E0308]: mismatched types
+//   --> src/main.rs:42:10
+//    |
+// 42 |     let x: u32 = "hello";
+//    |                  ^^^^^^^ expected u32, found &str
+// ```
 // ────────────────────────────────────────────────
 // TypeScript 验证与测试
 // ────────────────────────────────────────────────

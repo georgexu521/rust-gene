@@ -146,6 +146,7 @@ pub async fn run_full_diagnostics(working_dir: &Path) -> DiagnosticReport {
     checks.push(check_plugin_runtime(working_dir));
     checks.push(check_bridge_runtime());
     checks.push(check_remote_runtime());
+    checks.push(check_memory(working_dir));
 
     DiagnosticReport::new(checks)
         .with_metadata("working_dir", working_dir.display().to_string())
@@ -698,6 +699,96 @@ fn first_non_empty(values: Vec<String>) -> String {
         .unwrap_or_default()
 }
 
+/// Check the Priority Agent memory store (Phase 4: Reasonix-aligned product surface).
+///
+/// Reports on three-layer model: standing docs (MEMORY.md, USER.md), saved
+/// index (typed records), and dynamic recall policy.
+pub fn check_memory(_working_dir: &Path) -> CheckResult {
+    let priority_dir = dirs::home_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join(".priority-agent");
+    check_memory_store(&priority_dir)
+}
+
+fn check_memory_store(priority_dir: &Path) -> CheckResult {
+    let memory_md = priority_dir.join("MEMORY.md");
+    let user_md = priority_dir.join("USER.md");
+    let memory_dir = priority_dir.join("memory");
+    let records_path = memory_dir.join("records.jsonl");
+    let decisions_path = memory_dir.join("decisions.jsonl");
+
+    let has_memory_md = memory_md.exists();
+    let has_user_md = user_md.exists();
+    let has_records = records_path.exists();
+    let _has_decisions = decisions_path.exists();
+
+    let topic_count = if memory_dir.exists() {
+        std::fs::read_dir(&memory_dir)
+            .map(|entries| {
+                entries
+                    .filter_map(|e| e.ok())
+                    .filter(|e| e.path().extension().is_some_and(|ext| ext == "md"))
+                    .count()
+            })
+            .unwrap_or(0)
+    } else {
+        0
+    };
+
+    let write_policy = std::env::var("PRIORITY_AGENT_AUTO_MEMORY_WRITE")
+        .unwrap_or_else(|_| "review_only".to_string());
+    let active_memory = std::env::var("PRIORITY_AGENT_ACTIVE_MEMORY")
+        .map(|v| v == "1")
+        .unwrap_or(false);
+
+    let standing = if has_memory_md || has_user_md {
+        format!(
+            "standing: {}/{} files",
+            if has_memory_md { "MEMORY.md" } else { "" },
+            if has_user_md { "USER.md" } else { "" },
+        )
+    } else {
+        "standing: none".to_string()
+    };
+
+    let saved = if has_records {
+        let count = std::fs::read_to_string(&records_path)
+            .map(|content| content.lines().count())
+            .unwrap_or(0);
+        let decisions_count = std::fs::read_to_string(&decisions_path)
+            .map(|content| content.lines().count())
+            .unwrap_or(0);
+        format!(
+            "saved: {} typed records, {} decisions, {} topics",
+            count, decisions_count, topic_count
+        )
+    } else {
+        "saved: none".to_string()
+    };
+
+    let recall = format!(
+        "recall: write-policy={}, active-memory={}",
+        write_policy, active_memory
+    );
+
+    let message = format!("memory: {} | {} | {}", standing, saved, recall);
+
+    if !has_memory_md && !has_user_md && !has_records {
+        CheckResult::info(
+            "memory",
+            "No memory initialized yet. The agent will save facts and preferences as you work.",
+        )
+    } else if write_policy == "review_only" {
+        CheckResult::ok("memory", message)
+    } else {
+        CheckResult::warn(
+            "memory",
+            message,
+            "Auto-write is enabled. Consider review_only policy to keep memory changes explicit and reviewable.",
+        )
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -761,6 +852,26 @@ mod tests {
             result.status == CheckStatus::Ok || result.status == CheckStatus::Info,
             "session_store check should return ok or info"
         );
+    }
+
+    #[test]
+    fn test_check_memory_store_reports_home_style_memory() {
+        let root = std::env::temp_dir().join(format!(
+            "priority-agent-doctor-memory-test-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let memory_dir = root.join("memory");
+        std::fs::create_dir_all(&memory_dir).expect("create memory dir");
+        std::fs::write(root.join("MEMORY.md"), "# Memory\nproject fact").expect("write memory");
+        std::fs::write(memory_dir.join("records.jsonl"), "{}\n").expect("write records");
+
+        let result = check_memory_store(&root);
+
+        assert_eq!(result.status, CheckStatus::Ok);
+        assert!(result.message.contains("MEMORY.md"));
+        assert!(result.message.contains("typed records"));
+
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]

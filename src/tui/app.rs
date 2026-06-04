@@ -4,6 +4,7 @@
 
 use crate::engine::agent_mode::AgentMode;
 use crate::engine::conversation_loop::ToolApprovalResponse;
+use crate::engine::runtime_controller::RuntimeController;
 use crate::engine::runtime_facade::{RuntimeFacadeState, RuntimeStateSnapshot};
 use crate::engine::streaming::{StreamEvent, StreamingQueryEngine};
 use crate::permissions::RuleSource;
@@ -668,7 +669,10 @@ impl TuiApp {
             self.scroll_to_bottom();
 
             // 启动流式查询（在后台任务中）
-            let engine_clone = engine.clone();
+            let controller = RuntimeController::with_runtime_state(
+                engine.clone(),
+                Arc::new(self.runtime_facade_state.clone()),
+            );
             let response_clone = self.current_response.clone();
             let tool_runs_clone = self.tool_runs.clone();
             let usage_clone = self.stream_usage.clone();
@@ -677,16 +681,15 @@ impl TuiApp {
             let user_msg = content.clone();
             let agent_mode = self.agent_mode;
 
-            // Phase 1: sync session memory controls to engine
-            if let Some(ref engine) = self.streaming_engine {
-                engine.set_memory_use(self.memory_use);
-                engine.set_memory_generate(self.memory_generate);
-                engine.set_memory_recall_mode(self.memory_recall_mode.clone());
-            }
+            controller.set_memory_policy(
+                self.memory_use,
+                self.memory_generate,
+                self.memory_recall_mode.clone(),
+            );
 
             let handle = tokio::spawn(async move {
-                let mut stream = engine_clone
-                    .query_stream_with_agent_mode(user_msg, agent_mode)
+                let mut stream = controller
+                    .submit_stream_turn_with_agent_mode(user_msg, agent_mode)
                     .await;
 
                 while let Some(event) = stream.next().await {
@@ -774,6 +777,7 @@ impl TuiApp {
                                 .process_diagnostic(&diagnostic)
                                 .await;
                         }
+                        StreamEvent::Closeout { .. } => {}
                         _ => {}
                     }
                 }

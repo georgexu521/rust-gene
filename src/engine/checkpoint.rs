@@ -1280,4 +1280,72 @@ mod tests {
         assert_eq!(diffs.len(), 1);
         assert_eq!(diffs[0].status, DiffStatus::Modified);
     }
+
+    // ---- Phase 5 (Reasonix alignment): checkpoint safety contracts ----
+
+    /// Checkpoint survives a simulated write failure. After create_checkpoint,
+    /// if the write never happens (e.g., disk I/O error), the checkpoint must
+    /// remain intact for manual restore via rewind.
+    #[tokio::test]
+    async fn checkpoint_persists_after_simulated_write_failure() {
+        let temp = TempDir::new().unwrap();
+        let test_dir = temp.path().join("checkpoints").join("test_session_cp_fail");
+        let test_file = temp.path().join("target_file.txt");
+        std::fs::write(&test_file, "original content\n").unwrap();
+
+        let mut mgr = CheckpointManager::new("test_session_cp_fail").await;
+        mgr.checkpoints_dir = test_dir.clone();
+
+        let cp = mgr
+            .create_checkpoint("file_write", None, None, &[test_file.clone()])
+            .await
+            .unwrap();
+        assert!(cp.id.starts_with("cp_"));
+
+        // Simulate: write would fail, file stays unchanged.
+        // The checkpoint must still be usable for restore.
+        let result = mgr.restore_checkpoint(&cp.id).await.unwrap();
+        assert!(!result.restored_files.is_empty());
+        assert!(result.failed_files.is_empty());
+
+        // After restore, original content is intact.
+        let content = std::fs::read_to_string(&test_file).unwrap();
+        assert_eq!(content, "original content\n");
+    }
+
+    /// Restoring a checkpoint after a new file was created removes that file.
+    #[tokio::test]
+    async fn restore_checkpoint_removes_file_created_after_checkpoint() {
+        let temp = TempDir::new().unwrap();
+        let test_dir = temp
+            .path()
+            .join("checkpoints")
+            .join("test_session_remove_new");
+        let existing_file = temp.path().join("existing.txt");
+        let new_file = temp.path().join("new.txt");
+
+        std::fs::write(&existing_file, "existing\n").unwrap();
+
+        let mut mgr = CheckpointManager::new("test_session_remove_new").await;
+        mgr.checkpoints_dir = test_dir;
+
+        // Capture state before new_file exists.
+        let cp = mgr
+            .create_checkpoint(
+                "file_write",
+                None,
+                None,
+                &[existing_file.clone(), new_file.clone()],
+            )
+            .await
+            .unwrap();
+
+        // Create new_file after checkpoint.
+        std::fs::write(&new_file, "new content\n").unwrap();
+        assert!(new_file.exists());
+
+        // Restore — new_file should be removed.
+        let result = mgr.restore_checkpoint(&cp.id).await.unwrap();
+        assert!(!result.removed_files.is_empty());
+    }
 }

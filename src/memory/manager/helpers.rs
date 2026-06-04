@@ -160,7 +160,7 @@ pub fn infer_memory_importance(content: &str, category: &str) -> u8 {
         _ => 2,
     };
     let length_bonus = (content.len() / 80).min(1) as u8;
-    base.saturating_add(length_bonus).min(5).max(1)
+    base.saturating_add(length_bonus).clamp(1, 5)
 }
 
 pub fn memory_scope_label(scope: &MemoryScope) -> String {

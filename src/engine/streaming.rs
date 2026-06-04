@@ -75,6 +75,11 @@ pub enum StreamEvent {
     },
     /// Runtime diagnostic snapshot for clients that render run state.
     RuntimeDiagnostic { diagnostic: serde_json::Value },
+    /// Final verification/closeout status for frontend rendering.
+    Closeout {
+        status: String,
+        evidence_summary: Option<String>,
+    },
     /// 完成
     Complete,
     /// 输出被截断（达到 max_tokens 限制）

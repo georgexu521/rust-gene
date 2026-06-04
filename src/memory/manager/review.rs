@@ -20,12 +20,6 @@ fn memory_evidence_label(record: &crate::memory::types::MemoryRecord) -> &'stati
         "missing"
     } else if record.evidence.iter().any(|e| e.confidence >= 0.85) {
         "verified"
-    } else if record
-        .evidence
-        .iter()
-        .any(|e| matches!(e.kind, crate::memory::types::MemoryEvidenceKind::Inference))
-    {
-        "inferred"
     } else {
         "inferred"
     }

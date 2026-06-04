@@ -283,6 +283,7 @@ export type DesktopRunEvent =
       cached_tokens?: number | null;
     }
   | { type: "runtime_diagnostic"; diagnostic: DesktopRuntimeDiagnostic }
+  | { type: "closeout"; status: string; evidence_summary?: string | null }
   | { type: "run_completed" }
   | { type: "output_truncated" }
   | { type: "run_error"; message: string };

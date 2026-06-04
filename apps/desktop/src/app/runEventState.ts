@@ -3,8 +3,18 @@ import {
   DesktopMessage,
   DesktopRunContext,
   DesktopRunEvent,
-  DesktopRuntimeDiagnostic,
 } from "../runtime/desktopApi";
+import {
+  runtimeDiagnosticDetail,
+  runtimeDiagnosticFacts,
+  runtimeDiagnosticRunStage,
+} from "./runtimeDiagnosticPresentation";
+import {
+  runtimeStatsFromRunSummary,
+  timelineTools,
+  toolExecutionCount,
+  toolUsageStats,
+} from "./toolTimelinePresentation";
 import {
   PermissionRequest,
   TimelineStatus,
@@ -309,6 +319,34 @@ export function applyRunEvent(
         },
         shouldRefreshSessions: false,
       };
+    case "closeout": {
+      const traceId = createId();
+      const verified = event.status === "verified" || event.status === "not_applicable";
+      const partial = event.status === "partial";
+      const failed = !verified && !partial;
+      return appendTimelineAndTrace(
+        updateLatestOpenRunSummary(state, {
+          stage: failed ? "failed" : "completed",
+          headline: `Closeout ${event.status}`,
+          detail: event.evidence_summary || "Final verification status recorded",
+          stats: runStats(state.items),
+        }),
+        timelineEvent({
+          id: traceId,
+          kind: "run",
+          title: `Closeout ${event.status}`,
+          detail: event.evidence_summary || undefined,
+          status: failed ? "failed" : "info",
+          traceId,
+        }),
+        {
+          id: traceId,
+          kind: "runtime",
+          title: `Closeout ${event.status}`,
+          detail: event.evidence_summary || undefined,
+        },
+      );
+    }
     case "output_truncated": {
       const traceId = createId();
       return appendTimelineAndTrace(state, timelineEvent({
@@ -783,6 +821,14 @@ function completeLatestRun(items: TranscriptItem[]): TranscriptItem[] {
   const nextItems = [...markLatestAssistantAsFinal(items)];
   const item = nextItems[index];
   if (item.role === "timeline") {
+    if (item.summary?.kind === "run" && item.summary.headline.startsWith("Closeout ")) {
+      nextItems[index] = {
+        ...item,
+        detail: item.detail || item.summary.detail || "Completed",
+        status: item.summary.stage === "failed" ? "failed" : "completed",
+      };
+      return nextItems;
+    }
     nextItems[index] = {
       ...item,
       detail: item.detail || "Completed",
@@ -893,100 +939,6 @@ function runStats(items: TranscriptItem[]): string[] {
     fileChanges > 0 ? `${fileChanges} file${fileChanges === 1 ? "" : "s"} changed` : null,
     validations > 0 ? `${validations} validation${validations === 1 ? "" : "s"}` : null,
   ]);
-}
-
-function toolUsageStats(tools: Array<Extract<TranscriptItem, { role: "timeline" }>>): string[] {
-  const counts = new Map<string, number>();
-  for (const item of tools) {
-    const name = toolNameFromTimeline(item);
-    if (!name) {
-      continue;
-    }
-    counts.set(name, (counts.get(name) || 0) + toolExecutionCount(item));
-  }
-
-  const labels = Array.from(counts.entries())
-    .sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]))
-    .slice(0, 4)
-    .map(([name, count]) => (count > 1 ? `${name} x${count}` : name));
-  const hidden = counts.size - labels.length;
-  return hidden > 0 ? [...labels, `+${hidden} tools`] : labels;
-}
-
-function toolNameFromTimeline(item: Extract<TranscriptItem, { role: "timeline" }>): string | null {
-  const factName = item.facts
-    ?.find((fact) => fact.startsWith("tool "))
-    ?.replace(/^tool\s+/, "")
-    .trim();
-  if (factName) {
-    return factName;
-  }
-  return item.title || null;
-}
-
-function runtimeStatsFromRunSummary(summary: TimelineSummary | undefined): string[] {
-  if (summary?.kind !== "run") {
-    return [];
-  }
-  return (summary.stats || []).filter(
-    (stat) =>
-      stat.startsWith("stage ") ||
-      stat.startsWith("verification ") ||
-      stat.startsWith("proof ") ||
-      stat.startsWith("spine "),
-  );
-}
-
-function runtimeDiagnosticFacts(diagnostic: DesktopRuntimeDiagnostic): string[] {
-  const taskState = recordField(diagnostic, "task_state");
-  const verification = recordField(taskState, "verification");
-  const proof = recordField(diagnostic, "verification_proof");
-  const controlLoop = recordField(diagnostic, "control_loop");
-  const activeFiles = arrayField(taskState, "active_files");
-
-  return compactFacts([
-    stringField(taskState, "stage") ? `stage ${stringField(taskState, "stage")}` : null,
-    stringField(verification, "status")
-      ? `verification ${stringField(verification, "status")}`
-      : null,
-    stringField(proof, "status") ? `proof ${stringField(proof, "status")}` : null,
-    stringField(controlLoop, "coverage") ? `spine ${stringField(controlLoop, "coverage")}` : null,
-    activeFiles.length > 0 ? `files ${activeFiles.length}` : null,
-  ]).slice(0, 5);
-}
-
-function runtimeDiagnosticDetail(diagnostic: DesktopRuntimeDiagnostic): string {
-  return (
-    runtimeDiagnosticFacts(diagnostic).join(" · ") ||
-    stringField(diagnostic, "schema") ||
-    "runtime diagnostic"
-  );
-}
-
-function runtimeDiagnosticRunStage(
-  diagnostic: DesktopRuntimeDiagnostic,
-): Extract<TimelineSummary, { kind: "run" }>["stage"] {
-  const proof = recordField(diagnostic, "verification_proof");
-  const proofStatus = stringField(proof, "status");
-  if (proofStatus === "failed" || proofStatus === "blocked") {
-    return "failed";
-  }
-  return "running";
-}
-
-function timelineTools(items: TranscriptItem[]): Array<Extract<TranscriptItem, { role: "timeline" }>> {
-  return items.filter(
-    (item): item is Extract<TranscriptItem, { role: "timeline" }> =>
-      item.role === "timeline" && item.kind === "tool",
-  );
-}
-
-function toolExecutionCount(item: Extract<TranscriptItem, { role: "timeline" }>): number {
-  const repeatCount =
-    item.summary?.kind === "file" && item.summary.action === "read"
-      ? item.summary.repeatCount
-      : undefined;
-  return Math.max(1, repeatCount || 1);
 }
 
 function coalesceRepeatedReadToolItems(items: TranscriptItem[]): TranscriptItem[] {

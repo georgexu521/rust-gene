@@ -57,6 +57,10 @@ impl Tool for CostTool {
             .collect();
 
         let report = tracker.generate_report();
+        let ledger_session =
+            crate::cost_tracker::usage_ledger::summarize_usage_ledger(Some(&context.session_id))
+                .ok();
+        let ledger_all = crate::cost_tracker::usage_ledger::summarize_usage_ledger(None).ok();
 
         let result_json = json!({
             "api_usage": {
@@ -73,6 +77,11 @@ impl Tool for CostTool {
             "session": {
                 "duration_seconds": tracker.session_duration().as_secs(),
                 "report": report
+            },
+            "usage_ledger": {
+                "path": crate::cost_tracker::usage_ledger::default_usage_ledger_path(),
+                "current_session": ledger_session,
+                "all_sessions": ledger_all
             }
         });
 

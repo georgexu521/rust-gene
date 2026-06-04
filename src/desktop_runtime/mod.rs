@@ -2,7 +2,11 @@
 //!
 //! The Tauri app should depend on this boundary instead of reaching into
 //! conversation-loop internals directly.
+//!
+//! Full-agent turns are routed through `RuntimeController` (Phase 1 Reasonix
+//! alignment). Lightweight turns remain a separate direct-provider lane.
 
+use crate::engine::runtime_controller::RuntimeController;
 use crate::engine::streaming::{StreamEvent, StreamingQueryEngine};
 use crate::engine::turn_ingress::{lightweight_user_text, TurnIngressLane};
 use crate::services::api::{sanitize_assistant_content, ChatRequest, Message, Usage};
@@ -15,6 +19,7 @@ use std::sync::Arc;
 
 #[derive(Clone)]
 pub struct DesktopRuntime {
+    controller: RuntimeController,
     streaming_engine: Arc<StreamingQueryEngine>,
     working_dir: PathBuf,
 }
@@ -55,10 +60,17 @@ impl DesktopRuntime {
         streaming_engine: Arc<StreamingQueryEngine>,
         working_dir: impl Into<PathBuf>,
     ) -> Self {
+        let controller = RuntimeController::new(streaming_engine.clone());
         Self {
+            controller,
             streaming_engine,
             working_dir: working_dir.into(),
         }
+    }
+
+    /// The frontend-neutral runtime controller for full-agent turns.
+    pub fn controller(&self) -> &RuntimeController {
+        &self.controller
     }
 
     pub async fn initialize(working_dir: impl AsRef<Path>) -> anyhow::Result<Self> {
@@ -115,11 +127,17 @@ impl DesktopRuntime {
         self.streaming_engine.current_session_id()
     }
 
+    /// Full agent turn through the frontend-neutral `RuntimeController`.
+    ///
+    /// This is the canonical full-agent lane. TUI and desktop should both
+    /// route full-agent turns through `RuntimeController::submit_turn()`.
+    /// For now, the stream returns `StreamEvent` for backward compatibility
+    /// with the Tauri event loop; Phase 6 can migrate to `TurnEvent`.
     pub async fn run_full_turn(
         &self,
         user_message: impl Into<String>,
     ) -> Pin<Box<dyn Stream<Item = StreamEvent> + Send>> {
-        self.streaming_engine.query_stream(user_message).await
+        self.controller.submit_stream_turn(user_message).await
     }
 
     pub async fn run_lightweight_turn(
@@ -147,113 +165,14 @@ impl DesktopRuntime {
     pub async fn compact_context(
         &self,
     ) -> Option<crate::engine::context_compressor::CompactionAttemptRecord> {
-        self.streaming_engine.compact_context_manually().await
+        self.controller.compact().await
     }
 
+    /// Context snapshot for frontend rendering.
+    ///
+    /// Delegates to `RuntimeController::context_snapshot()` (Phase 1 boundary).
     pub async fn context_snapshot(&self) -> DesktopContextSnapshot {
-        let usage = self.streaming_engine.context_usage_report().await;
-        let (stats, circuit_open, latest_record, latest_attempt) = {
-            let compressor = self.streaming_engine.compressor().expect("compressor");
-            let compressor = compressor.lock().await;
-            (
-                compressor.stats(),
-                compressor.compaction_circuit_open(),
-                compressor.latest_compaction_record().cloned(),
-                compressor.compaction_attempt_records().last().cloned(),
-            )
-        };
-        let restored_boundary = if latest_record.is_none() {
-            self.streaming_engine
-                .session_binding()
-                .and_then(|(store, session_id)| {
-                    store.latest_compact_boundary(&session_id).ok().flatten()
-                })
-        } else {
-            None
-        };
-        let usage_percent = if usage.max_context_tokens > 0 {
-            usage
-                .total_estimated_tokens
-                .saturating_mul(100)
-                .saturating_div(usage.max_context_tokens)
-        } else {
-            0
-        };
-        let (
-            prompt_cache_cached_tokens,
-            prompt_cache_miss_tokens,
-            prompt_cache_hit_rate_percent,
-            prompt_cache_diagnostic_count,
-            prompt_cache_last_reason,
-        ) = {
-            let tracker = self.streaming_engine.cost_tracker().lock().await;
-            let prompt_tokens = tracker.total_tokens.prompt;
-            let cached_tokens = tracker.total_tokens.cached;
-            let hit_rate = if prompt_tokens == 0 {
-                0.0
-            } else {
-                cached_tokens.min(prompt_tokens) as f64 / prompt_tokens as f64 * 100.0
-            };
-            (
-                cached_tokens,
-                tracker.total_tokens.cache_miss,
-                hit_rate,
-                tracker.prompt_cache_diagnostics.len(),
-                tracker
-                    .prompt_cache_diagnostics
-                    .last()
-                    .map(|entry| entry.miss_reason.clone()),
-            )
-        };
-
-        DesktopContextSnapshot {
-            history_messages: usage.history_messages,
-            history_tokens: usage.history_tokens,
-            tool_schema_tokens: usage.tool_schema_tokens,
-            memory_snapshot_tokens: usage.memory_snapshot_tokens,
-            total_estimated_tokens: usage.total_estimated_tokens,
-            max_context_tokens: usage.max_context_tokens,
-            usage_percent,
-            stable_prefix_fingerprint: usage.stable_prefix_fingerprint,
-            prompt_cache_cached_tokens,
-            prompt_cache_miss_tokens,
-            prompt_cache_hit_rate_percent,
-            prompt_cache_diagnostic_count,
-            prompt_cache_last_reason,
-            compact: DesktopCompactState {
-                compression_count: stats.compression_count,
-                circuit_open,
-                latest_strategy: latest_record
-                    .as_ref()
-                    .map(|record| record.strategy.label().to_string())
-                    .or_else(|| {
-                        restored_boundary
-                            .as_ref()
-                            .map(|boundary| boundary.strategy.clone())
-                    }),
-                latest_boundary_id: latest_record.and_then(|record| record.boundary_id).or_else(
-                    || {
-                        restored_boundary
-                            .as_ref()
-                            .map(|boundary| boundary.boundary_id.clone())
-                    },
-                ),
-                latest_attempt_decision: latest_attempt
-                    .as_ref()
-                    .map(|attempt| attempt.decision.label().to_string()),
-                latest_attempt_reason: latest_attempt
-                    .as_ref()
-                    .map(|attempt| attempt.reason.clone()),
-                latest_attempt_trigger: latest_attempt
-                    .as_ref()
-                    .map(|attempt| attempt.trigger.clone()),
-                latest_attempt_tokens_before: latest_attempt
-                    .as_ref()
-                    .map(|attempt| attempt.before_tokens),
-                latest_attempt_tokens_after: latest_attempt
-                    .and_then(|attempt| attempt.after_tokens),
-            },
-        }
+        self.controller.context_snapshot().await
     }
 
     pub fn working_dir(&self) -> &Path {
@@ -396,6 +315,10 @@ pub enum DesktopRunEvent {
     RuntimeDiagnostic {
         diagnostic: serde_json::Value,
     },
+    Closeout {
+        status: String,
+        evidence_summary: Option<String>,
+    },
     RunCompleted,
     OutputTruncated,
     RunError {
@@ -445,6 +368,13 @@ impl DesktopRunEvent {
                 cached_tokens,
             },
             StreamEvent::RuntimeDiagnostic { diagnostic } => Self::RuntimeDiagnostic { diagnostic },
+            StreamEvent::Closeout {
+                status,
+                evidence_summary,
+            } => Self::Closeout {
+                status,
+                evidence_summary,
+            },
             StreamEvent::Complete => Self::RunCompleted,
             StreamEvent::OutputTruncated => Self::OutputTruncated,
             StreamEvent::Error(message) => Self::RunError { message },
@@ -596,6 +526,22 @@ mod tests {
         });
 
         assert_eq!(event, DesktopRunEvent::RuntimeDiagnostic { diagnostic });
+    }
+
+    #[test]
+    fn maps_closeout_stream_event() {
+        let event = DesktopRunEvent::from_stream_event(StreamEvent::Closeout {
+            status: "verified".to_string(),
+            evidence_summary: Some("tests passed".to_string()),
+        });
+
+        assert_eq!(
+            event,
+            DesktopRunEvent::Closeout {
+                status: "verified".to_string(),
+                evidence_summary: Some("tests passed".to_string()),
+            }
+        );
     }
 
     #[test]

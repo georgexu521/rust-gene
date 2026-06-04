@@ -41,8 +41,6 @@ pub fn render_status_bar(f: &mut Frame, app: &TuiApp, area: Rect) {
         };
         let spinner_color = if app.facade_snapshot.provider_request.is_known_slow_path {
             app.theme.tokens.tone.err
-        } else if app.facade_snapshot.provider_request.phase.is_active() {
-            app.theme.tokens.tone.warn
         } else {
             app.theme.tokens.tone.warn
         };

@@ -31,17 +31,14 @@ gex's machine, projects, habits, validation loops, and local coding workflow.
 
 ### Work Style
 
-- Read current code before changing behavior; follow existing module boundaries.
-- Preserve user or prior-agent work in the dirty tree; do not revert unrelated
-  changes.
-- Prefer `rg` / `rg --files` for search and local targeted tests for feedback.
-- Keep code files reviewable: avoid growing any single source file beyond 1500
-  lines; when a touched file approaches that size, prefer a focused submodule
-  split with local tests instead of adding more mixed responsibility.
-- Keep docs aligned only when a change affects startup, validation, or current
-  project status.
-- Do not force heavyweight planning into simple tasks. Runtime checks, tool
-  contracts, and tests carry hard constraints.
+- Read code before changing behavior; follow existing module boundaries.
+- Preserve user/prior-agent work in the dirty tree; don't revert unrelated changes.
+- Prefer `rg` / `rg --files` for search and targeted tests for feedback.
+- Keep source files under 1500 lines; split into submodules with local tests
+  rather than adding mixed responsibility.
+- Align docs only when changes affect startup, validation, or project status.
+- Don't force heavyweight planning. Runtime checks, tool contracts, and tests
+  carry hard constraints.
 
 ### Testing And Failure Triage
 

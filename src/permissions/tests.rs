@@ -764,3 +764,92 @@ fn test_security_replay_kill_critical_process() {
         );
     }
 }
+
+// ---- Phase 5 (Reasonix alignment): policy-as-pure-logic verification ----
+
+#[test]
+fn permission_rules_evaluate_purely_without_ui() {
+    // deny on the bare tool name.
+    let rules = crate::permissions::PermissionRules::new()
+        .deny("file_write")
+        .allow("grep");
+    assert_eq!(
+        rules.check("file_write"),
+        crate::permissions::PermissionDecision::Deny
+    );
+    assert_eq!(
+        rules.check("grep"),
+        crate::permissions::PermissionDecision::Allow
+    );
+    assert_eq!(
+        rules.check("glob"),
+        crate::permissions::PermissionDecision::Ask
+    );
+}
+
+#[test]
+fn deny_blocks_tool_exposure() {
+    let context = crate::permissions::PermissionContext::new(".");
+    assert!(context.should_expose_tool("file_read"));
+    assert!(context.should_expose_tool("file_write"));
+}
+
+#[test]
+fn memory_clear_requires_confirmation() {
+    let context = crate::permissions::PermissionContext::new(".");
+    assert!(
+        context.requires_confirmation("memory_clear", &serde_json::json!({"confirm": true})),
+        "memory_clear must require confirmation"
+    );
+}
+
+#[test]
+fn mcp_tool_execution_requires_confirmation() {
+    let context = crate::permissions::PermissionContext::new(".");
+    assert!(
+        context.requires_confirmation("mcp_tool", &serde_json::json!({})),
+        "mcp_tool must require confirmation"
+    );
+}
+
+#[test]
+fn file_write_outside_workspace_requires_confirmation() {
+    let context = crate::permissions::PermissionContext::new(".");
+    // file_write with external path is always high-risk.
+    assert!(
+        context.requires_confirmation("file_write", &serde_json::json!({"path": "/etc/hosts"})),
+        "file_write to /etc/hosts must require confirmation"
+    );
+}
+
+#[test]
+fn read_only_bash_does_not_require_confirmation_in_auto_all() {
+    let context = crate::permissions::PermissionContext::new(".");
+    let read_commands = [
+        serde_json::json!({"command": "ls -la"}),
+        serde_json::json!({"command": "cat README.md"}),
+        serde_json::json!({"command": "git status"}),
+    ];
+
+    for cmd in &read_commands {
+        let needs = context.requires_confirmation("bash", cmd);
+        assert!(
+            !needs,
+            "read command {cmd:?} should not require confirmation"
+        );
+    }
+}
+
+#[test]
+fn bash_redirect_commands_require_confirmation() {
+    let context = crate::permissions::PermissionContext::new(".");
+    let redirect_commands = [
+        serde_json::json!({"command": "echo hello > /tmp/out.txt"}),
+        serde_json::json!({"command": "sed -i 's/old/new/' file.txt"}),
+    ];
+
+    for cmd in &redirect_commands {
+        let needs = context.requires_confirmation("bash", cmd);
+        assert!(needs, "redirect command {cmd:?} must require confirmation");
+    }
+}

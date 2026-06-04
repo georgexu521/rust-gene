@@ -302,19 +302,10 @@ pub struct RuntimeFacadeState {
     inner: Arc<Mutex<FacadeInner>>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 struct FacadeInner {
     state: RuntimeStateSnapshot,
     started_at: Option<std::time::Instant>,
-}
-
-impl Default for FacadeInner {
-    fn default() -> Self {
-        Self {
-            state: RuntimeStateSnapshot::default(),
-            started_at: None,
-        }
-    }
 }
 
 impl RuntimeFacadeState {

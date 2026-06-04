@@ -247,6 +247,17 @@ async fn run_eval_task(
                     "diagnostic": diagnostic,
                 }),
             )?,
+            StreamEvent::Closeout {
+                status,
+                evidence_summary,
+            } => write_eval_event(
+                &mut event_writer,
+                json!({
+                    "event": "closeout",
+                    "status": status,
+                    "evidence_summary": evidence_summary,
+                }),
+            )?,
             StreamEvent::Complete => {
                 write_eval_event(&mut event_writer, json!({"event": "complete"}))?;
                 break;

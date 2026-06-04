@@ -911,6 +911,17 @@ fn desktop_stream_event_log(event: &StreamEvent) -> Option<String> {
                 sanitize_log_value(stage)
             ))
         }
+        StreamEvent::Closeout {
+            status,
+            evidence_summary,
+        } => Some(format!(
+            "stream_event closeout status={} evidence_chars={}",
+            sanitize_log_value(status),
+            evidence_summary
+                .as_deref()
+                .map(|summary| summary.chars().count())
+                .unwrap_or(0)
+        )),
         StreamEvent::Complete => Some("stream_event complete".to_string()),
         StreamEvent::OutputTruncated => Some("stream_event output_truncated".to_string()),
         StreamEvent::Error(message) => Some(format!(
@@ -1035,20 +1046,7 @@ async fn answer_permission(
     let Some(runtime) = runtime else {
         return Ok(false);
     };
-    let Some(channel) = runtime.streaming_engine().approval_channel() else {
-        return Ok(false);
-    };
-
-    if let Some((_request, tx)) = channel.take_pending().await {
-        let response = if approved {
-            priority_agent::engine::conversation_loop::ToolApprovalResponse::approved_once()
-        } else {
-            priority_agent::engine::conversation_loop::ToolApprovalResponse::rejected_once()
-        };
-        if tx.send(response).is_err() {
-            let _ = append_desktop_log(&diagnostic_logs_path, "permission_answer stale=true");
-            return Ok(false);
-        }
+    if runtime.controller().approve_pending(approved).await {
         let _ = append_desktop_log(
             &diagnostic_logs_path,
             if approved {

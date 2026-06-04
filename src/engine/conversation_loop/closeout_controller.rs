@@ -315,6 +315,14 @@ impl FinalCloseoutController {
                 acceptance_items: closeout.acceptance.len(),
                 residual_risks: closeout.residual_risks.len(),
             });
+            if let Some(tx) = context.tx {
+                let _ = tx
+                    .send(super::super::streaming::StreamEvent::Closeout {
+                        status: verification_proof.status_label().to_string(),
+                        evidence_summary: Some(verification_proof.summary.clone()),
+                    })
+                    .await;
+            }
             let contract = context
                 .task_bundle
                 .task_contract(context.required_validation_commands);

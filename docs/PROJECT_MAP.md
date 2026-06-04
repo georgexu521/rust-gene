@@ -35,6 +35,74 @@ not proof of current code. Read exact files before editing.
 - `docs/`: current status, design notes, archived plans, eval reports, and project map.
 - `tests/`: integration and behavior tests outside module-local unit tests.
 
+## Runtime Boundary: Frontend-to-Engine Command/Event Map
+
+This section records every path by which user input reaches the runtime engine,
+classified by lane. Reasonix alignment target: TUI and desktop should share one
+full-agent command/event boundary; lightweight turns are explicitly non-agent.
+
+### Full Agent Lane (same `StreamingQueryEngine::query_stream` path)
+
+| Frontend | Entry File | Call Chain | Classification |
+|----------|-----------|-----------|----------------|
+| CLI interactive | `src/shell.rs:620` | `run_shell()` → `run_turn()` → `engine.query_stream(message)` | Full agent |
+| TUI interactive | `src/tui/app.rs:688` | `submit_message()` → `send_message()` → `engine.query_stream_with_agent_mode(user_msg, agent_mode)` | Full agent |
+| Desktop full turn | `src/desktop_runtime/mod.rs:118` | `DesktopRuntime::run_full_turn()` → `engine.query_stream(user_message)` | Full agent |
+| Tauri full turn | `apps/desktop/src-tauri/src/lib.rs:785` | `run_submit()` → `runtime.run_full_turn(message)` | Full agent (via DesktopRuntime) |
+| Eval/headless | `src/main.rs:167` | `run_eval_task()` → `engine.query_stream(prompt)` | Full agent, auto-approve, headless |
+
+> All five paths converge on `StreamingQueryEngine::query_stream()`. The
+> converged path runs the full conversation loop with tool execution,
+> permission gates, validation, and closeout.
+
+### Lightweight Non-Agent Lane
+
+| Frontend | Entry File | Call Chain | Classification |
+|----------|-----------|-----------|----------------|
+| Desktop side question | `src/desktop_runtime/mod.rs:125` | `DesktopRuntime::run_lightweight_turn()` → direct provider `chat()` | Non-agent: no tools, 512 max_tokens, dedicated system prompt |
+| Tauri side question | `apps/desktop/src-tauri/src/lib.rs:706` | `classify_turn_ingress()` → `runtime.run_lightweight_turn()` | Non-agent (via DesktopRuntime) |
+
+> `classify_turn_ingress()` lives in `src/engine/turn_ingress.rs` (runtime-owned).
+> Lightweight turns bypass agent history, tool execution, permission, validation,
+> and closeout entirely. The dedicated system prompt instructs the model not to
+> claim tool usage.
+
+### Diagnostics-Only Lanes
+
+| Frontend | Entry File | Call Chain | Classification |
+|----------|-----------|-----------|----------------|
+| Provider health | `src/main.rs:346` | `run_provider_health_command()` → `diagnostics::provider_health::run_provider_health()` | Diagnostics: probes chat/tool-call/tool-result |
+| Context snapshot | `src/desktop_runtime/mod.rs:153` | `DesktopRuntime::context_snapshot()` | Diagnostics: read-only context stats |
+
+### Test-Only Lanes
+
+| Entry | Classification |
+|-------|---------------|
+| Direct `StreamingQueryEngine` or `ConversationLoop` unit tests | Test-only: contract verification, not product path |
+
+### Runtime State Shared Across Frontends
+
+`src/engine/runtime_facade.rs` is the shared-state facade used by both TUI and
+desktop for `ProviderRequestLifecycle`, `RuntimeStateSnapshot`, querying flag,
+tool label, stream usage, turn counter, and checkpoint boundaries.
+`src/engine/runtime_controller.rs` is now the command/event boundary for
+full-agent turns, approval answers, compaction, session binding, memory policy,
+context snapshots, and closeout events.
+
+### Current Assessment
+
+- All full-agent paths converge through `RuntimeController` or the underlying
+  `StreamingQueryEngine::query_stream()` execution path. No frontend re-implements
+  the agent turn lifecycle.
+- Desktop's lightweight lane is explicitly labelled non-agent and bypasses all
+  agent machinery.
+- `classify_turn_ingress()` is runtime-owned (in `src/engine/`), not a frontend
+  policy decision.
+- `RuntimeFacade` provides shared state; `RuntimeController` exposes the
+  command/event API.
+- TUI memory controls now flow through `RuntimeController::set_memory_policy()`
+  before the full-agent turn starts.
+
 ## Main Runtime Entry Points
 
 - `src/engine/mod.rs`: engine module registry plus `default_system_prompt()`.

@@ -774,4 +774,348 @@ mod tests {
             two_tools.tool_schema_fingerprint
         );
     }
+
+    // ---- Phase 2 (Reasonix alignment): scenario-specific stable-prefix tests ----
+
+    #[test]
+    fn tool_failure_notice_does_not_bust_stable_prefix() {
+        let tool = provider_tool("bash", serde_json::json!({"type": "object"}));
+        let without_failure = vec![
+            Message::system("stable system"),
+            Message::system("<recent_observation>\nno failures\n</recent_observation>"),
+            Message::user("re-run tests"),
+        ];
+        let with_failure = vec![
+            Message::system("stable system"),
+            Message::system("<recent_observation>\ntool failure: cargo test exited code 1\n</recent_observation>"),
+            Message::user("re-run tests"),
+        ];
+
+        let without = request_cache_diagnostic_shape(&without_failure, std::slice::from_ref(&tool));
+        let with = request_cache_diagnostic_shape(&with_failure, std::slice::from_ref(&tool));
+
+        assert_eq!(without.prefix_fingerprint, with.prefix_fingerprint);
+        assert_ne!(
+            without.dynamic_tail_fingerprint,
+            with.dynamic_tail_fingerprint
+        );
+        assert_eq!(with.dynamic_zone_messages, 1);
+    }
+
+    #[test]
+    fn repair_hint_does_not_bust_stable_prefix() {
+        let tool = provider_tool("bash", serde_json::json!({"type": "object"}));
+        let base = vec![
+            Message::system("stable system"),
+            Message::system(
+                "<recent_observation>\nrepair hint: check file encoding\n</recent_observation>",
+            ),
+            Message::user("fix the import"),
+        ];
+        let without_hint = vec![
+            Message::system("stable system"),
+            Message::user("fix the import"),
+        ];
+
+        let shape_base = request_cache_diagnostic_shape(&base, std::slice::from_ref(&tool));
+        let shape_no_hint =
+            request_cache_diagnostic_shape(&without_hint, std::slice::from_ref(&tool));
+
+        assert_eq!(
+            shape_base.prefix_fingerprint,
+            shape_no_hint.prefix_fingerprint
+        );
+    }
+
+    #[test]
+    fn provider_slow_warning_does_not_bust_stable_prefix() {
+        let tool = provider_tool("bash", serde_json::json!({"type": "object"}));
+        let normal = vec![
+            Message::system("stable system"),
+            Message::system("<recent_observation>\nprovider latency normal\n</recent_observation>"),
+            Message::user("next step"),
+        ];
+        let with_warning = vec![
+            Message::system("stable system"),
+            Message::system(
+                "<recent_observation>\nprovider slow warning: 45s elapsed\n</recent_observation>",
+            ),
+            Message::user("next step"),
+        ];
+
+        let shape_normal = request_cache_diagnostic_shape(&normal, std::slice::from_ref(&tool));
+        let shape_warning =
+            request_cache_diagnostic_shape(&with_warning, std::slice::from_ref(&tool));
+
+        assert_eq!(
+            shape_normal.prefix_fingerprint,
+            shape_warning.prefix_fingerprint
+        );
+        assert_ne!(
+            shape_normal.dynamic_tail_fingerprint,
+            shape_warning.dynamic_tail_fingerprint
+        );
+    }
+
+    #[test]
+    fn background_job_notice_does_not_bust_stable_prefix() {
+        let tool = provider_tool("bash", serde_json::json!({"type": "object"}));
+        let before = vec![
+            Message::system("stable system"),
+            Message::system(
+                "<recent_observation>\nbackground job: cargo build started\n</recent_observation>",
+            ),
+            Message::user("check progress"),
+        ];
+        let after = vec![
+            Message::system("stable system"),
+            Message::system("<recent_observation>\nbackground job: cargo build completed\n</recent_observation>"),
+            Message::user("check progress"),
+        ];
+
+        let shape_before = request_cache_diagnostic_shape(&before, std::slice::from_ref(&tool));
+        let shape_after = request_cache_diagnostic_shape(&after, std::slice::from_ref(&tool));
+
+        assert_eq!(
+            shape_before.prefix_fingerprint,
+            shape_after.prefix_fingerprint
+        );
+        assert_ne!(
+            shape_before.dynamic_tail_fingerprint,
+            shape_after.dynamic_tail_fingerprint
+        );
+    }
+
+    #[test]
+    fn closeout_repair_feedback_does_not_bust_stable_prefix() {
+        let tool = provider_tool("bash", serde_json::json!({"type": "object"}));
+        let without_feedback = vec![
+            Message::system("stable system"),
+            Message::system("<recent_observation>\ncloseout: passed\n</recent_observation>"),
+            Message::user("done"),
+        ];
+        let with_feedback = vec![
+            Message::system("stable system"),
+            Message::system("<recent_observation>\ncloseout: failed, suggest running clippy\n</recent_observation>"),
+            Message::user("done"),
+        ];
+
+        let shape_clean =
+            request_cache_diagnostic_shape(&without_feedback, std::slice::from_ref(&tool));
+        let shape_feedback =
+            request_cache_diagnostic_shape(&with_feedback, std::slice::from_ref(&tool));
+
+        assert_eq!(
+            shape_clean.prefix_fingerprint,
+            shape_feedback.prefix_fingerprint
+        );
+        assert_ne!(
+            shape_clean.dynamic_tail_fingerprint,
+            shape_feedback.dynamic_tail_fingerprint
+        );
+    }
+
+    #[test]
+    fn unexpected_system_message_mid_session_changes_prefix_fingerprint() {
+        // An untagged system message that is NOT recognized as a dynamic zone
+        // becomes part of the stable prefix and therefore busts the cache.
+        let tool = provider_tool("bash", serde_json::json!({"type": "object"}));
+        let before = vec![
+            Message::system("stable system"),
+            Message::user("do something"),
+        ];
+        let after = vec![
+            Message::system("stable system"),
+            Message::system("unexpected mid-session advisory message without zone tags"),
+            Message::user("do something"),
+        ];
+
+        let shape_before = request_cache_diagnostic_shape(&before, std::slice::from_ref(&tool));
+        let shape_after = request_cache_diagnostic_shape(&after, std::slice::from_ref(&tool));
+
+        // The unexpected system message IS part of the prefix → fingerprint differs.
+        assert_ne!(
+            shape_before.prefix_fingerprint,
+            shape_after.prefix_fingerprint
+        );
+        // It should NOT be counted as a dynamic zone message.
+        assert_eq!(shape_after.dynamic_zone_messages, 0);
+        // Verify it was classified as stable system material.
+        assert_ne!(
+            shape_before.system_fingerprint,
+            shape_after.system_fingerprint
+        );
+    }
+
+    #[test]
+    fn cache_shape_end_to_end_baseline_snapshot() {
+        // Baseline regression test: a representative full prompt shape
+        // (system + tools + dynamic zones + user message) produces a stable
+        // non-empty fingerprint.
+        let tool_a = provider_tool(
+            "file_read",
+            serde_json::json!({"type": "object", "properties": {"path": {"type": "string"}}}),
+        );
+        let tool_b = provider_tool(
+            "bash",
+            serde_json::json!({"type": "object", "properties": {"command": {"type": "string"}}}),
+        );
+        let tool_c = provider_tool("glob", serde_json::json!({"type": "object"}));
+
+        let messages = vec![
+            Message::system("You are a coding assistant."),
+            Message::system("<task-state>\nfix bug #42 in src/parser.rs\n</task-state>"),
+            Message::system("<context-pack>\nproject: rust-agent, language: Rust\n</context-pack>"),
+            Message::system(
+                "<relevant_material>\nparser.rs:239 handles edge cases\n</relevant_material>",
+            ),
+            Message::system(
+                "<recent_observation>\nprevious edit failed at line 240\n</recent_observation>",
+            ),
+            Message::user("apply the fix"),
+        ];
+
+        let shape = request_cache_diagnostic_shape(
+            &messages,
+            &[tool_a.clone(), tool_b.clone(), tool_c.clone()],
+        );
+
+        assert!(!shape.prefix_fingerprint.is_empty());
+        assert!(!shape.system_fingerprint.is_empty());
+        assert!(!shape.tool_schema_fingerprint.is_empty());
+        assert_eq!(shape.tool_count, 3);
+        assert_eq!(shape.tool_names, vec!["bash", "file_read", "glob"]);
+        assert_eq!(shape.dynamic_zone_messages, 4);
+        assert_eq!(shape.message_count, 6);
+
+        // Re-compute with same inputs — fingerprint must be identical.
+        let shape_again = request_cache_diagnostic_shape(&messages, &[tool_a, tool_b, tool_c]);
+        assert_eq!(shape.prefix_fingerprint, shape_again.prefix_fingerprint);
+        assert_eq!(
+            shape.tool_schema_fingerprint,
+            shape_again.tool_schema_fingerprint
+        );
+        assert_eq!(
+            shape.dynamic_tail_fingerprint,
+            shape_again.dynamic_tail_fingerprint
+        );
+    }
+
+    #[test]
+    fn mid_session_memory_save_does_not_bust_stable_prefix() {
+        let tool = provider_tool("bash", serde_json::json!({"type": "object"}));
+        let before_save = vec![
+            Message::system("stable system"),
+            Message::system("<context-pack>\nmemory-records=2\n</context-pack>"),
+            Message::user("save preference"),
+        ];
+        let after_save = vec![
+            Message::system("stable system"),
+            Message::system(
+                "<context-pack>\nmemory-records=3: user prefers tabs over spaces\n</context-pack>",
+            ),
+            Message::user("save preference"),
+        ];
+
+        let shape_before =
+            request_cache_diagnostic_shape(&before_save, std::slice::from_ref(&tool));
+        let shape_after = request_cache_diagnostic_shape(&after_save, std::slice::from_ref(&tool));
+
+        assert_eq!(
+            shape_before.prefix_fingerprint,
+            shape_after.prefix_fingerprint
+        );
+        assert_ne!(
+            shape_before.dynamic_tail_fingerprint,
+            shape_after.dynamic_tail_fingerprint
+        );
+    }
+
+    #[test]
+    fn plan_mode_toggle_does_not_bust_stable_prefix() {
+        let tool = provider_tool("bash", serde_json::json!({"type": "object"}));
+        let normal_mode = vec![
+            Message::system("stable system"),
+            Message::system(
+                "<task-state>\nmode: standard, task: refactor auth module\n</task-state>",
+            ),
+            Message::user("refactor"),
+        ];
+        let plan_mode = vec![
+            Message::system("stable system"),
+            Message::system(
+                "<task-state>\nmode: plan-only, task: refactor auth module\n</task-state>",
+            ),
+            Message::user("refactor"),
+        ];
+
+        let shape_normal =
+            request_cache_diagnostic_shape(&normal_mode, std::slice::from_ref(&tool));
+        let shape_plan = request_cache_diagnostic_shape(&plan_mode, std::slice::from_ref(&tool));
+
+        assert_eq!(
+            shape_normal.prefix_fingerprint,
+            shape_plan.prefix_fingerprint
+        );
+        assert_ne!(
+            shape_normal.dynamic_tail_fingerprint,
+            shape_plan.dynamic_tail_fingerprint
+        );
+    }
+
+    #[test]
+    fn task_focus_change_does_not_bust_stable_prefix() {
+        let tool = provider_tool("bash", serde_json::json!({"type": "object"}));
+        let focus_a = vec![
+            Message::system("stable system"),
+            Message::system("<task-state>\nfocus: implement login endpoint\n</task-state>"),
+            Message::user("next"),
+        ];
+        let focus_b = vec![
+            Message::system("stable system"),
+            Message::system("<task-state>\nfocus: implement logout endpoint\n</task-state>"),
+            Message::user("next"),
+        ];
+
+        let shape_a = request_cache_diagnostic_shape(&focus_a, std::slice::from_ref(&tool));
+        let shape_b = request_cache_diagnostic_shape(&focus_b, std::slice::from_ref(&tool));
+
+        assert_eq!(shape_a.prefix_fingerprint, shape_b.prefix_fingerprint);
+        assert_ne!(
+            shape_a.dynamic_tail_fingerprint,
+            shape_b.dynamic_tail_fingerprint
+        );
+    }
+
+    #[test]
+    fn cache_shape_fingerprint_is_deterministic() {
+        // Prove that for the same inputs, all fingerprints are identical
+        // across multiple calls (no randomness, no timestamp influence).
+        let tool = provider_tool("file_read", serde_json::json!({"type": "object"}));
+        let messages = vec![
+            Message::system("You are a coding agent."),
+            Message::system("<task-state>\ntask: add unit tests\n</task-state>"),
+            Message::user("add tests"),
+        ];
+
+        let mut shapes = Vec::new();
+        for _ in 0..5 {
+            shapes.push(request_cache_diagnostic_shape(
+                &messages,
+                std::slice::from_ref(&tool),
+            ));
+        }
+
+        let first = &shapes[0];
+        for shape in &shapes[1..] {
+            assert_eq!(first.prefix_fingerprint, shape.prefix_fingerprint);
+            assert_eq!(first.system_fingerprint, shape.system_fingerprint);
+            assert_eq!(first.tool_schema_fingerprint, shape.tool_schema_fingerprint);
+            assert_eq!(first.few_shots_fingerprint, shape.few_shots_fingerprint);
+            assert_eq!(
+                first.dynamic_tail_fingerprint,
+                shape.dynamic_tail_fingerprint
+            );
+        }
+    }
 }
