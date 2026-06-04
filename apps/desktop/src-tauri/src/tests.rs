@@ -1,4 +1,6 @@
 use super::*;
+use std::path::Path;
+use std::process::Command;
 
 #[test]
 fn desktop_smoke_health_reports_ready_and_cwd() {

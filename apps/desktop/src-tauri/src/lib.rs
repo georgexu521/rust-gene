@@ -6,15 +6,16 @@ use priority_agent::permissions::PermissionMode;
 use priority_agent::session_store::SessionStore;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
-use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter, Manager, State, WebviewWindow};
 use tokio::sync::Mutex;
 
 mod desktop_state;
 mod diagnostics;
+mod desktop_context;
 use desktop_state::*;
+pub(crate) use desktop_context::*;
 use diagnostics::*;
 
 struct DesktopAppState {
@@ -79,37 +80,6 @@ struct DesktopCompactBoundary {
     messages_after: i64,
     summary: String,
     created_at: String,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-struct DesktopRunContext {
-    #[serde(rename = "type")]
-    context_type: String,
-    label: Option<String>,
-    path: Option<String>,
-}
-
-#[derive(Debug, Serialize)]
-struct ResolvedDesktopRunContext {
-    #[serde(rename = "type")]
-    context_type: String,
-    label: String,
-    shortstat: String,
-    files: Vec<String>,
-    stat: String,
-    #[serde(rename = "patch_preview")]
-    patch_preview: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    path: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    relative_path: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    size_bytes: Option<u64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    line_count: Option<usize>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    preview: Option<String>,
-    truncated: bool,
 }
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
@@ -187,32 +157,6 @@ struct ProviderModelStatus {
     configured_count: usize,
     providers: Vec<DesktopProviderOption>,
     models: Vec<DesktopModelOption>,
-}
-
-#[derive(Debug, Serialize)]
-struct DesktopWorkbenchSnapshot {
-    selected_project: String,
-    project_map: DesktopProjectMapSnapshot,
-    symbol_index: DesktopSymbolIndexSnapshot,
-    runtime_context: Option<DesktopContextSnapshot>,
-}
-
-#[derive(Debug, Serialize)]
-struct DesktopProjectMapSnapshot {
-    available: bool,
-    source: Option<String>,
-    freshness: String,
-    chars: usize,
-    truncated: bool,
-    content_preview: String,
-}
-
-#[derive(Debug, Serialize)]
-struct DesktopSymbolIndexSnapshot {
-    schema_version: u8,
-    total_symbols: usize,
-    files: Vec<priority_agent::engine::project_map::ProjectIndexedFile>,
-    truncated: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1057,285 +1001,6 @@ async fn desktop_workbench_snapshot(
         },
         runtime_context,
     })
-}
-
-fn enrich_message_with_desktop_contexts(
-    message: String,
-    contexts: &[DesktopRunContext],
-    project: &Path,
-) -> Result<String, String> {
-    if contexts.is_empty() {
-        return Ok(message);
-    }
-
-    let mut blocks = Vec::new();
-    for context in contexts {
-        match context.context_type.as_str() {
-            "current_diff" => {
-                let resolved = resolve_current_diff_context(context, project)?;
-                blocks.push(format_desktop_context_block(&resolved));
-            }
-            "file" => {
-                let resolved = resolve_file_context(context, project)?;
-                blocks.push(format_desktop_context_block(&resolved));
-            }
-            other => {
-                return Err(format!("Unsupported desktop run context: {}", other));
-            }
-        }
-    }
-
-    Ok(format!("{}\n\n{}", message.trim_end(), blocks.join("\n\n")))
-}
-
-fn resolve_current_diff_context(
-    context: &DesktopRunContext,
-    project: &Path,
-) -> Result<ResolvedDesktopRunContext, String> {
-    let unstaged_shortstat = run_git(project, &["diff", "--shortstat"])?;
-    let staged_shortstat = run_git(project, &["diff", "--cached", "--shortstat"])?;
-    let unstaged_stat = run_git(project, &["diff", "--stat", "--find-renames"])?;
-    let staged_stat = run_git(project, &["diff", "--cached", "--stat", "--find-renames"])?;
-    let unstaged_files = run_git(project, &["diff", "--name-only"])?;
-    let staged_files = run_git(project, &["diff", "--cached", "--name-only"])?;
-    let unstaged_patch = run_git(project, &["diff", "--no-ext-diff", "--find-renames"])?;
-    let staged_patch = run_git(
-        project,
-        &["diff", "--cached", "--no-ext-diff", "--find-renames"],
-    )?;
-
-    let shortstat = join_non_empty(&[
-        label_section("unstaged", unstaged_shortstat.trim()),
-        label_section("staged", staged_shortstat.trim()),
-    ])
-    .unwrap_or_else(|| "No staged or unstaged git diff detected.".to_string());
-    let stat = join_non_empty(&[
-        label_section("unstaged", unstaged_stat.trim()),
-        label_section("staged", staged_stat.trim()),
-    ])
-    .unwrap_or_else(|| "No changed files detected.".to_string());
-    let files = collect_diff_files(&unstaged_files, &staged_files);
-    let patch = join_non_empty(&[
-        label_section("unstaged", unstaged_patch.trim()),
-        label_section("staged", staged_patch.trim()),
-    ])
-    .unwrap_or_default();
-    let (patch_preview, truncated) = truncate_chars(&patch, 12_000);
-
-    Ok(ResolvedDesktopRunContext {
-        context_type: context.context_type.clone(),
-        label: context
-            .label
-            .clone()
-            .unwrap_or_else(|| "Current diff".to_string()),
-        shortstat,
-        files,
-        stat,
-        patch_preview,
-        path: None,
-        relative_path: None,
-        size_bytes: None,
-        line_count: None,
-        preview: None,
-        truncated,
-    })
-}
-
-fn resolve_file_context(
-    context: &DesktopRunContext,
-    project: &Path,
-) -> Result<ResolvedDesktopRunContext, String> {
-    let raw_path = context
-        .path
-        .as_ref()
-        .ok_or_else(|| "File context requires a path.".to_string())?;
-    let requested_path = PathBuf::from(raw_path);
-    let file_path = if requested_path.is_absolute() {
-        requested_path
-    } else {
-        project.join(requested_path)
-    };
-    let project_root = project
-        .canonicalize()
-        .map_err(|err| format!("Failed to resolve selected project: {}", err))?;
-    let file_path = file_path
-        .canonicalize()
-        .map_err(|err| format!("Failed to resolve file context path: {}", err))?;
-
-    if !file_path.starts_with(&project_root) {
-        return Err("File context must be inside the selected project.".to_string());
-    }
-    if !file_path.is_file() {
-        return Err("File context path is not a file.".to_string());
-    }
-
-    let bytes =
-        std::fs::read(&file_path).map_err(|err| format!("Failed to read file context: {}", err))?;
-    let text = String::from_utf8_lossy(&bytes).to_string();
-    let line_count = text.lines().count();
-    let (preview, truncated) = truncate_chars(&text, 12_000);
-    let relative_path = file_path
-        .strip_prefix(&project_root)
-        .unwrap_or(&file_path)
-        .to_string_lossy()
-        .to_string();
-    let label = context.label.clone().unwrap_or_else(|| {
-        file_path
-            .file_name()
-            .and_then(|name| name.to_str())
-            .unwrap_or("File")
-            .to_string()
-    });
-
-    Ok(ResolvedDesktopRunContext {
-        context_type: context.context_type.clone(),
-        label,
-        shortstat: format!(
-            "{} ({} bytes, {} lines)",
-            relative_path,
-            bytes.len(),
-            line_count
-        ),
-        files: vec![relative_path.clone()],
-        stat: format!(
-            "{} | {} bytes | {} lines",
-            relative_path,
-            bytes.len(),
-            line_count
-        ),
-        patch_preview: String::new(),
-        path: Some(file_path.to_string_lossy().to_string()),
-        relative_path: Some(relative_path),
-        size_bytes: Some(bytes.len() as u64),
-        line_count: Some(line_count),
-        preview: Some(preview),
-        truncated,
-    })
-}
-
-fn format_desktop_context_block(context: &ResolvedDesktopRunContext) -> String {
-    if context.context_type == "file" {
-        let relative_path = context.relative_path.as_deref().unwrap_or(&context.label);
-        let preview = context
-            .preview
-            .as_deref()
-            .filter(|preview| !preview.is_empty())
-            .unwrap_or("No file preview available.");
-        let truncated = if context.truncated { "true" } else { "false" };
-
-        return format!(
-            "<desktop_context type=\"{}\" label=\"{}\">\nPath: {}\nSize bytes: {}\nLines: {}\nPreview truncated: {}\n```text\n{}\n```\n</desktop_context>",
-            escape_context_attr(&context.context_type),
-            escape_context_attr(&context.label),
-            relative_path,
-            context.size_bytes.unwrap_or_default(),
-            context.line_count.unwrap_or_default(),
-            truncated,
-            preview
-        );
-    }
-
-    let files = if context.files.is_empty() {
-        "- No changed files detected.".to_string()
-    } else {
-        context
-            .files
-            .iter()
-            .map(|file| format!("- {}", file))
-            .collect::<Vec<_>>()
-            .join("\n")
-    };
-    let patch_preview = if context.patch_preview.is_empty() {
-        "No diff preview available.".to_string()
-    } else {
-        context.patch_preview.clone()
-    };
-    let truncated = if context.truncated { "true" } else { "false" };
-
-    format!(
-        "<desktop_context type=\"{}\" label=\"{}\">\nSummary:\n{}\n\nFiles:\n{}\n\nStat:\n{}\n\nPatch preview truncated: {}\n```diff\n{}\n```\n</desktop_context>",
-        escape_context_attr(&context.context_type),
-        escape_context_attr(&context.label),
-        context.shortstat,
-        files,
-        context.stat,
-        truncated,
-        patch_preview
-    )
-}
-
-fn run_git(project: &Path, args: &[&str]) -> Result<String, String> {
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(project)
-        .args(args)
-        .output()
-        .map_err(|err| format!("Failed to run git {}: {}", args.join(" "), err))?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        return Err(format!(
-            "git {} failed{}",
-            args.join(" "),
-            if stderr.is_empty() {
-                String::new()
-            } else {
-                format!(": {}", stderr)
-            }
-        ));
-    }
-
-    Ok(String::from_utf8_lossy(&output.stdout).to_string())
-}
-
-fn collect_diff_files(unstaged: &str, staged: &str) -> Vec<String> {
-    let mut files = unstaged
-        .lines()
-        .chain(staged.lines())
-        .map(str::trim)
-        .filter(|line| !line.is_empty())
-        .map(ToString::to_string)
-        .collect::<Vec<_>>();
-    files.sort();
-    files.dedup();
-    files
-}
-
-fn join_non_empty(parts: &[Option<String>]) -> Option<String> {
-    let joined = parts
-        .iter()
-        .filter_map(|part| part.as_ref())
-        .filter(|part| !part.trim().is_empty())
-        .cloned()
-        .collect::<Vec<_>>()
-        .join("\n\n");
-    if joined.trim().is_empty() {
-        None
-    } else {
-        Some(joined)
-    }
-}
-
-fn label_section(label: &str, text: &str) -> Option<String> {
-    if text.trim().is_empty() {
-        None
-    } else {
-        Some(format!("{}:\n{}", label, text.trim()))
-    }
-}
-
-fn truncate_chars(text: &str, max_chars: usize) -> (String, bool) {
-    let mut iter = text.chars();
-    let preview = iter.by_ref().take(max_chars).collect::<String>();
-    let truncated = iter.next().is_some();
-    (preview, truncated)
-}
-
-fn escape_context_attr(value: &str) -> String {
-    value
-        .replace('&', "&amp;")
-        .replace('"', "&quot;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
 }
 
 #[tauri::command]

@@ -1,4 +1,5 @@
 use super::*;
+use std::path::{Path, PathBuf};
 
 pub(super) fn open_session_store() -> Result<SessionStore, String> {
     SessionStore::open(SessionStore::default_path()).map_err(|err| err.to_string())

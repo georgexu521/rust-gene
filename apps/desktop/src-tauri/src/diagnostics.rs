@@ -1,4 +1,6 @@
 use super::*;
+use std::path::{Path, PathBuf};
+use std::process::Command;
 
 pub(super) fn collect_desktop_diagnostics(
     selected_project: &Path,

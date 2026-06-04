@@ -7,9 +7,9 @@ Scope: current working tree under `src/` and `apps/desktop/src-tauri/src/`
 ## Executive Summary
 
 Priority Agent is still too large in several core modules. The current working
-tree contains roughly 249k Rust lines across 517 Rust files. Excluding test
+tree contains roughly 249k Rust lines across 518 Rust files. Excluding test
 files, `_old.rs` backup files, and Rust modules mounted only behind
-`#[cfg(test)]`, the active production surface is roughly 219k lines across 476
+`#[cfg(test)]`, the active production surface is roughly 219k lines across 477
 Rust files:
 
 | Budget | Active production files |
@@ -18,7 +18,7 @@ Rust files:
 | `> 800` lines | 73 |
 | `> 1000` lines | 56 |
 | `> 1200` lines | 33 |
-| `> 1500` lines | 5 |
+| `> 1500` lines | 4 |
 
 The goal is not to chase a mechanical line-count rule. The practical goal is
 reviewable, testable, single-responsibility modules. A 500-line file budget is a
@@ -73,7 +73,6 @@ Excluding tests and `_old.rs` backup files:
 | `src/tools/bash_tool/command_classifier.rs` | 1974 | P2 | Split classifier tables and shell analysis helpers |
 | `src/engine/mcp.rs` | 1908 | P2 | Split protocol/client/tool surface |
 | `src/tui/app.rs` | 1893 | P1 | Continue moving runtime state and handlers out |
-| `apps/desktop/src-tauri/src/lib.rs` | 1803 | P1 | Split desktop commands/state/session bridge |
 
 ## Phase 0: Finish In-Progress Memory Manager Cleanup
 
@@ -1127,6 +1126,43 @@ Acceptance:
 cargo fmt --check
 cargo check -q
 cargo test -q patch_repair -- --test-threads=1
+```
+
+### 2.24 Split `apps/desktop/src-tauri/src/lib.rs`
+
+Status: started. Desktop run-context DTOs and context enrichment helpers now
+live in `apps/desktop/src-tauri/src/desktop_context.rs`. The Tauri command
+entrypoints remain in `lib.rs`, which keeps the `generate_handler!` registration
+stable. `apps/desktop/src-tauri/src/lib.rs` is down from 1803 lines to 1468
+lines and has exited the `>1500` active queue. It remains in the `>1200` queue
+and should continue to shed command/state groups in later slices.
+
+Current structure:
+
+```text
+apps/desktop/src-tauri/src/
+├── lib.rs                           # Tauri commands and app setup
+├── desktop_context.rs               # run-context DTOs and enrichment helpers
+├── desktop_state.rs                 # settings, projects, sessions, logging
+└── diagnostics.rs                   # desktop diagnostics and folder opening
+```
+
+Current next cuts:
+
+- Move provider/settings commands into a focused module once command handler
+  registration is ready for path-qualified functions.
+- Move native-smoke fixture emission out of `lib.rs` after preserving the
+  existing smoke tests.
+- Keep desktop context command registration in `lib.rs` until Tauri handler
+  path changes are covered by a compile gate.
+
+Acceptance:
+
+```bash
+cargo fmt --check
+cargo check -q
+(cd apps/desktop/src-tauri && cargo check -q)
+(cd apps/desktop/src-tauri && cargo test -q desktop_run_context -- --test-threads=1)
 ```
 
 ## Phase 3: Lower-Risk Large Module Cleanup
