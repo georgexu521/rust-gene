@@ -7,8 +7,8 @@ Scope: current working tree under `src/` and `apps/desktop/src-tauri/src/`
 ## Executive Summary
 
 Priority Agent is still too large in several core modules. The current working
-tree contains roughly 248k Rust lines across 483 Rust files. Excluding test
-files and `_old.rs` backup files, the active production surface is roughly 452
+tree contains roughly 248k Rust lines across 484 Rust files. Excluding test
+files and `_old.rs` backup files, the active production surface is roughly 453
 Rust files:
 
 | Budget | Active production files |
@@ -207,14 +207,15 @@ Status: entry split complete; one follow-up remains. The path moved to
 `src/engine/trace/mod.rs`; collector/store logic now lives in `collector.rs`,
 user-facing trace summary/recent-line rendering now lives in `formatting.rs`,
 diagnostics and latest-summary queries now live in `diagnostic.rs`, and
-`TraceEvent::label` now lives in `event_label.rs`. `TraceEvent::summary` remains
-in `event_summary.rs`. The entry module is down to 920 lines, below the active
-queue threshold, while `event_summary.rs` is 1374 lines and should be the next
+`TraceEvent` variants now live in `event.rs`. `TraceEvent::label` now lives in
+`event_label.rs`. `TraceEvent::summary` remains in `event_summary.rs`. The entry
+module is down to 124 lines, while `event.rs` is 801 lines and
+`event_summary.rs` is 1374 lines. `event_summary.rs` should be the next
 trace-specific follow-up if we want this subsystem fully under 1200.
 
 Current responsibilities:
 
-- `TraceEvent` definition;
+- `TraceEvent` definition lives in `event.rs`;
 - event summaries;
 - turn trace container;
 - trace diagnostics and helper queries live in `diagnostic.rs`;
@@ -236,10 +237,8 @@ src/engine/trace/
 
 Current next cuts:
 
-- Extract `TraceEvent` variants to `event.rs` only if the re-export surface stays
-  mechanical and testable.
-- Split `event_summary.rs` by summary helper families if it stays above 1200
-  lines after the event type move.
+- Split `event_summary.rs` by summary helper families; it is now the only trace
+  file above 1200 lines.
 
 Acceptance:
 
