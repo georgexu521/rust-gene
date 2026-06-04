@@ -7,8 +7,8 @@ Scope: current working tree under `src/` and `apps/desktop/src-tauri/src/`
 ## Executive Summary
 
 Priority Agent is still too large in several core modules. The current working
-tree contains roughly 249k Rust lines across 495 Rust files. Excluding test
-files and `_old.rs` backup files, the active production surface is roughly 468
+tree contains roughly 249k Rust lines across 496 Rust files. Excluding test
+files and `_old.rs` backup files, the active production surface is roughly 469
 Rust files:
 
 | Budget | Active production files |
@@ -17,7 +17,7 @@ Rust files:
 | `> 800` lines | 76 |
 | `> 1000` lines | 59 |
 | `> 1200` lines | 39 |
-| `> 1500` lines | 25 |
+| `> 1500` lines | 24 |
 
 The goal is not to chase a mechanical line-count rule. The practical goal is
 reviewable, testable, single-responsibility modules. A 500-line file budget is a
@@ -82,12 +82,12 @@ Excluding tests and `_old.rs` backup files:
 | `src/engine/evalset.rs` | 1693 | P1 | Split suite loading, execution, and reporting |
 | `src/engine/skill_evolution.rs` | 1675 | P1 | Split analysis, proposal, and persistence lanes |
 | `src/engine/intent_router.rs` | 1672 | P1 | Split intent scoring, route construction, and labels |
-| `src/tui/slash_handler/agents.rs` | 1666 | P1 | Continue splitting doctor/status/cache/provider sections |
 | `src/engine/streaming.rs` | 1644 | P1 | Split provider stream handling, event conversion, and repair hooks |
 | `src/engine/code_change_workflow.rs` | 1630 | P1 | Split workflow state, patch planning, and validation reporting |
 | `src/tools/bash_tool/mod.rs` | 1618 | P1 | Split execution surface, env handling, and output policy |
 | `src/tui/slash_handler/session.rs` | 1607 | P1 | Split session list/resume/cleanup command handlers |
 | `src/memory/eval.rs` | 1598 | P2 | Split eval case loading, runner, and report formatting |
+| `src/engine/workflow_contract.rs` | 1594 | P1 | Split workflow contract types, validation, and report formatting |
 
 ## Phase 0: Finish In-Progress Memory Manager Cleanup
 
@@ -420,7 +420,10 @@ is down from 1876 lines to 692 lines. The extracted catalog is 1188 lines; it is
 mostly static command declarations and can be split again later by command
 family if the table becomes difficult to review. Agent listing and agent
 worktree subcommands now live in `src/tui/slash_handler/agents/agent_listing.rs`;
-`src/tui/slash_handler/agents.rs` is down from 1881 lines to 1666 lines.
+doctor/product-readiness formatting helpers now live in
+`src/tui/slash_handler/agents/doctor_formatting.rs`. The main
+`src/tui/slash_handler/agents.rs` file is down from 1881 lines to 1437 lines and
+has exited the `>1500` active queue.
 
 Targets:
 
@@ -448,13 +451,14 @@ src/tui/
 └── slash_handler/
     └── agents/
         ├── agent_listing.rs    # /agents listing and worktree subcommands
+        ├── doctor_formatting.rs # doctor cache/provider/readiness formatting
         └── tests.rs
 ```
 
 Current next cuts:
 
-- Split `/doctor`, provider status, and cache status out of
-  `src/tui/slash_handler/agents.rs`.
+- Split the remaining `/doctor` diagnostic assembly and gap snapshot out of
+  `src/tui/slash_handler/agents.rs` if future edits touch that flow.
 - Move provider/runtime facade synchronization out of `src/tui/app.rs`.
 - Split status bar/transcript/panels out of
   `src/tui/screens/main_screen.rs`.
