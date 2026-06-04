@@ -7,9 +7,9 @@ Scope: current working tree under `src/` and `apps/desktop/src-tauri/src/`
 ## Executive Summary
 
 Priority Agent is still too large in several core modules. The current working
-tree contains roughly 249k Rust lines across 513 Rust files. Excluding test
+tree contains roughly 249k Rust lines across 515 Rust files. Excluding test
 files, `_old.rs` backup files, and Rust modules mounted only behind
-`#[cfg(test)]`, the active production surface is roughly 219k lines across 473
+`#[cfg(test)]`, the active production surface is roughly 219k lines across 474
 Rust files:
 
 | Budget | Active production files |
@@ -18,7 +18,7 @@ Rust files:
 | `> 800` lines | 73 |
 | `> 1000` lines | 56 |
 | `> 1200` lines | 34 |
-| `> 1500` lines | 7 |
+| `> 1500` lines | 6 |
 
 The goal is not to chase a mechanical line-count rule. The practical goal is
 reviewable, testable, single-responsibility modules. A 500-line file budget is a
@@ -73,7 +73,6 @@ Excluding tests and `_old.rs` backup files:
 | `src/tools/bash_tool/command_classifier.rs` | 1974 | P2 | Split classifier tables and shell analysis helpers |
 | `src/engine/mcp.rs` | 1908 | P2 | Split protocol/client/tool surface |
 | `src/tui/app.rs` | 1893 | P1 | Continue moving runtime state and handlers out |
-| `src/engine/scenario_matrix.rs` | 1885 | P2 | Split types, matrix construction, evaluation, reporting |
 | `apps/desktop/src-tauri/src/lib.rs` | 1803 | P1 | Split desktop commands/state/session bridge |
 | `src/engine/task_context.rs` | 1787 | P1 | Split task bundle, context pack, serialization |
 
@@ -1026,6 +1025,41 @@ cargo check -q
 cargo test -q auto_verify -- --test-threads=1
 ```
 
+### 2.21 Split `src/engine/scenario_matrix.rs`
+
+Status: started. Matrix report formatting and required-kind gap reporting now
+live in `src/engine/scenario_matrix/report.rs`; the inline test module now
+lives in `src/engine/scenario_matrix/tests.rs`. The entry file keeps scenario
+types, required kind lists, deterministic scenario data, runtime-spine case
+data, and summary counters. Public format/report functions are preserved by
+re-export. `src/engine/scenario_matrix.rs` is down from 1885 lines to 1453
+lines and has exited the `>1500` active queue.
+
+Current structure:
+
+```text
+src/engine/
+├── scenario_matrix.rs               # scenario and runtime-spine matrix data
+└── scenario_matrix/
+    ├── report.rs                    # matrix formatting and missing-kind checks
+    └── tests.rs                     # scenario matrix unit tests
+```
+
+Current next cuts:
+
+- Split runtime-spine data tables only if matrix data grows again.
+- Keep scenario type definitions in the entry file until the matrix schema
+  stabilizes.
+- Add fixture-based report tests before changing rendered matrix format.
+
+Acceptance:
+
+```bash
+cargo fmt --check
+cargo check -q
+cargo test -q scenario_matrix -- --test-threads=1
+```
+
 ## Phase 3: Lower-Risk Large Module Cleanup
 
 These files are large, but they should wait until Phase 1 and Phase 2 reduce
@@ -1036,7 +1070,6 @@ the central runtime blast radius.
 | `src/tools/agent_tool/mod.rs` | subagent behavior is product-sensitive |
 | `src/tools/bash_tool/command_classifier.rs` | command safety classifier needs careful golden tests first |
 | `src/engine/mcp.rs` | MCP behavior spans external integrations |
-| `src/engine/scenario_matrix.rs` | eval/reporting shape should stay stable during daily baseline work |
 
 ## Per-Slice Checklist
 
