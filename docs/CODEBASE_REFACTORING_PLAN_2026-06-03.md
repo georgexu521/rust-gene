@@ -8,16 +8,17 @@ Scope: current working tree under `src/` and `apps/desktop/src-tauri/src/`
 
 Priority Agent is still too large in several core modules. The current working
 tree contains roughly 249k Rust lines across 500 Rust files. Excluding test
-files and `_old.rs` backup files, the active production surface is roughly 473
+files, `_old.rs` backup files, and Rust modules mounted only behind
+`#[cfg(test)]`, the active production surface is roughly 219k lines across 462
 Rust files:
 
 | Budget | Active production files |
 |--------|--------------------------|
-| `> 500` lines | 170 |
-| `> 800` lines | 76 |
-| `> 1000` lines | 59 |
-| `> 1200` lines | 39 |
-| `> 1500` lines | 20 |
+| `> 500` lines | 166 |
+| `> 800` lines | 73 |
+| `> 1000` lines | 56 |
+| `> 1200` lines | 37 |
+| `> 1500` lines | 19 |
 
 The goal is not to chase a mechanical line-count rule. The practical goal is
 reviewable, testable, single-responsibility modules. A 500-line file budget is a
@@ -87,7 +88,6 @@ Excluding tests and `_old.rs` backup files:
 | `src/tools/bash_tool/mod.rs` | 1618 | P1 | Split execution surface, env handling, and output policy |
 | `src/memory/eval.rs` | 1598 | P2 | Split eval case loading, runner, and report formatting |
 | `src/engine/workflow_contract.rs` | 1594 | P1 | Split workflow contract types, validation, and report formatting |
-| `src/engine/conversation_loop/patch_repair_rules.rs` | 1551 | P2 | Split repair rule fixtures, matchers, and suggestion formatting |
 
 ## Phase 0: Finish In-Progress Memory Manager Cleanup
 
@@ -644,19 +644,22 @@ For every refactor slice:
 
 ## Line Budget Gate
 
-Add a lightweight script before enforcing this in CI:
+Use the existing lightweight report script before enforcing this in CI:
 
 ```bash
-scripts/report-rust-file-sizes.sh
+scripts/file-size-report.sh --threshold 1500 --top 30
 ```
 
 Recommended output:
 
-- total Rust files;
-- active production files;
-- test files;
-- top 50 production files by line count;
-- counts above 500, 800, 1000, 1200, and 1500 lines.
+Current script behavior:
+
+- reports large runtime, TUI, tool, desktop, script, and test files;
+- classifies ordinary Rust test files and `#[cfg(test)]` module files as
+  `rust_test`;
+- tags large test-only files as `test_exception`;
+- supports JSON output for future CI checks;
+- supports `--fail-over` for staged enforcement.
 
 Recommended staged enforcement:
 

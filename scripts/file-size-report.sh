@@ -89,24 +89,53 @@ def area_for(path: str) -> str:
     return "other"
 
 
-def category_for(path: str) -> str:
-    if path.endswith("/tests.rs") or "/tests/" in path or path.startswith("tests/"):
+def is_cfg_test_module(path: pathlib.Path) -> bool:
+    if path.suffix != ".rs" or path.name in {"mod.rs", "lib.rs", "main.rs"}:
+        return False
+    parent_mod = path.parent / "mod.rs"
+    if not parent_mod.exists():
+        return False
+    module_name = path.stem
+    try:
+        lines = parent_mod.read_text(encoding="utf-8", errors="ignore").splitlines()
+    except OSError:
+        return False
+    for idx, line in enumerate(lines):
+        stripped = line.strip()
+        if stripped not in {f"mod {module_name};", f"pub mod {module_name};"}:
+            continue
+        prev_idx = idx - 1
+        while prev_idx >= 0 and not lines[prev_idx].strip():
+            prev_idx -= 1
+        return prev_idx >= 0 and lines[prev_idx].strip() == "#[cfg(test)]"
+    return False
+
+
+def category_for(path: pathlib.Path, normalized: str) -> str:
+    if (
+        normalized.endswith("/tests.rs")
+        or "/tests/" in normalized
+        or normalized.startswith("tests/")
+        or is_cfg_test_module(path)
+    ):
         return "rust_test"
-    if path.startswith("scripts/"):
+    if normalized.startswith("scripts/"):
         return "script"
-    if path.startswith("apps/desktop/src/") and path.endswith((".ts", ".tsx", ".js", ".jsx")):
+    if normalized.startswith("apps/desktop/src/") and normalized.endswith(
+        (".ts", ".tsx", ".js", ".jsx")
+    ):
         return "desktop_frontend"
-    if path.startswith("apps/desktop/src-tauri/src/"):
+    if normalized.startswith("apps/desktop/src-tauri/src/"):
         return "desktop_tauri"
-    if path.startswith("src/tools/"):
+    if normalized.startswith("src/tools/"):
         return "tool_runtime"
-    if path.startswith("src/tui/"):
+    if normalized.startswith("src/tui/"):
         return "tui_runtime"
-    if path.startswith("src/memory/"):
+    if normalized.startswith("src/memory/"):
         return "memory_runtime"
-    if path.startswith("src/engine/"):
+    if normalized.startswith("src/engine/"):
         return "engine_runtime"
-    if path.startswith("src/"):
+    if normalized.startswith("src/"):
         return "runtime"
     return "other"
 
@@ -137,7 +166,7 @@ for path in pathlib.Path(".").rglob("*"):
         continue
     if line_count >= threshold:
         normalized = path.as_posix()
-        category = category_for(normalized)
+        category = category_for(path, normalized)
         rows.append(
             {
                 "lines": line_count,
