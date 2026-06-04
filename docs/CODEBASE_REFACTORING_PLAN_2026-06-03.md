@@ -7,8 +7,8 @@ Scope: current working tree under `src/` and `apps/desktop/src-tauri/src/`
 ## Executive Summary
 
 Priority Agent is still too large in several core modules. The current working
-tree contains roughly 248k Rust lines across 491 Rust files. Excluding test
-files and `_old.rs` backup files, the active production surface is roughly 460
+tree contains roughly 248k Rust lines across 492 Rust files. Excluding test
+files and `_old.rs` backup files, the active production surface is roughly 461
 Rust files:
 
 | Budget | Active production files |
@@ -17,7 +17,7 @@ Rust files:
 | `> 800` lines | 76 |
 | `> 1000` lines | 59 |
 | `> 1200` lines | 41 |
-| `> 1500` lines | 27 |
+| `> 1500` lines | 26 |
 
 The goal is not to chase a mechanical line-count rule. The practical goal is
 reviewable, testable, single-responsibility modules. A 500-line file budget is a
@@ -377,9 +377,10 @@ cargo test -q memory
 
 Status: started. Memory store path helpers and store-path rendering now live in
 `src/tools/memory_tool/paths.rs`. Doctor JSON/report DTOs now live in
-`src/tools/memory_tool/doctor_types.rs`. The entry file is down to 1670 lines.
-The next useful cut is doctor rendering helpers, then the individual
-save/load/clear command implementations.
+`src/tools/memory_tool/doctor_types.rs`. Doctor text rendering helpers now live
+in `src/tools/memory_tool/render.rs`. The entry file is down to 1298 lines. The
+next useful cuts are doctor JSON construction and the individual save/load/clear
+command implementations.
 
 Proposed structure:
 
@@ -388,6 +389,7 @@ src/tools/memory_tool/
 ├── mod.rs
 ├── paths.rs
 ├── doctor_types.rs
+├── render.rs
 ├── commands.rs
 ├── render.rs
 ├── validation.rs
