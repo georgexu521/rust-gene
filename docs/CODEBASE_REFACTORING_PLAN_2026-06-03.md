@@ -7,17 +7,17 @@ Scope: current working tree under `src/` and `apps/desktop/src-tauri/src/`
 ## Executive Summary
 
 Priority Agent is still too large in several core modules. The current working
-tree contains roughly 248k Rust lines across 487 Rust files. Excluding test
-files and `_old.rs` backup files, the active production surface is roughly 456
+tree contains roughly 248k Rust lines across 488 Rust files. Excluding test
+files and `_old.rs` backup files, the active production surface is roughly 457
 Rust files:
 
 | Budget | Active production files |
 |--------|--------------------------|
-| `> 500` lines | 167 |
+| `> 500` lines | 168 |
 | `> 800` lines | 76 |
 | `> 1000` lines | 59 |
 | `> 1200` lines | 42 |
-| `> 1500` lines | 28 |
+| `> 1500` lines | 27 |
 
 The goal is not to chase a mechanical line-count rule. The practical goal is
 reviewable, testable, single-responsibility modules. A 500-line file budget is a
@@ -344,9 +344,9 @@ Status: started. Provider contract types now live in
 `src/memory/provider/types.rs`, and the `MemoryProvider` trait now lives in
 `src/memory/provider/traits.rs`. `src/memory/provider.rs` remains the module
 entrypoint and re-exports those items, so existing `crate::memory::provider::*`
-paths stay stable. The entry file is down to 1725 lines. The next useful cuts
-are registry orchestration, then no-network provider and local-provider helper
-families.
+paths stay stable. Registry orchestration now lives in
+`src/memory/provider/registry.rs`. The entry file is down to 1210 lines. The
+next useful cuts are no-network provider, then local-provider helper families.
 
 Proposed structure:
 
