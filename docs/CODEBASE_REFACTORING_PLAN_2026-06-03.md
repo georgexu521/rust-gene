@@ -7,8 +7,8 @@ Scope: current working tree under `src/` and `apps/desktop/src-tauri/src/`
 ## Executive Summary
 
 Priority Agent is still too large in several core modules. The current working
-tree contains roughly 248k Rust lines across 475 Rust files. Excluding test
-files and `_old.rs` backup files, the active production surface is roughly 444
+tree contains roughly 248k Rust lines across 476 Rust files. Excluding test
+files and `_old.rs` backup files, the active production surface is roughly 445
 Rust files:
 
 | Budget | Active production files |
@@ -77,12 +77,12 @@ Excluding tests and `_old.rs` backup files:
 | `src/engine/scenario_matrix.rs` | 1885 | P2 | Split types, matrix construction, evaluation, reporting |
 | `src/tui/slash_handler/agents.rs` | 1881 | P1 | Split doctor/status/cache/provider sections |
 | `src/tui/commands.rs` | 1876 | P1 | Split registry, command metadata, execution adapters |
-| `src/session_store/mod.rs` | 1837 | P1 | Continue splitting session/message/search/compact operations |
 | `src/engine/auto_verify.rs` | 1823 | P1 | Split verifier orchestration, command policy, summaries |
 | `apps/desktop/src-tauri/src/lib.rs` | 1803 | P1 | Split desktop commands/state/session bridge |
 | `src/engine/task_context.rs` | 1787 | P1 | Split task bundle, context pack, serialization |
 | `src/engine/action_review.rs` | 1736 | P1 | Split types, review policy, formatting |
 | `src/tui/screens/main_screen.rs` | 1706 | P1 | Split status bar, transcript, panels |
+| `src/session_store/mod.rs` | 1698 | P1 | Continue splitting message/search/compact/agent operations |
 | `src/engine/conversation_loop/tool_result_controller.rs` | 1695 | P1 | Split result parsing, proof extraction, ledger updates |
 | `src/engine/evalset.rs` | 1693 | P1 | Split suite loading, execution, and reporting |
 | `src/engine/skill_evolution.rs` | 1675 | P1 | Split analysis, proposal, and persistence lanes |
@@ -297,8 +297,9 @@ cargo test -q conversation_loop
 
 Status: started. Durable record/insert/upsert structs now live in
 `src/session_store/records.rs` and are re-exported from `session_store`, keeping
-existing public paths stable. `src/session_store/mod.rs` is down to 1837 lines.
-The next useful cuts are session/message/search operations, then compact and
+existing public paths stable. Session CRUD methods now live in
+`src/session_store/session_ops.rs`. `src/session_store/mod.rs` is down to 1698
+lines. The next useful cuts are message/search operations, then compact and
 agent persistence.
 
 Proposed structure:
