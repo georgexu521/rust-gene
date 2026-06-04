@@ -1,6 +1,6 @@
 use super::*;
 use async_trait::async_trait;
-use serde_json::json;
+use serde_json::{json, Value};
 
 struct IntegerParamTool;
 
@@ -277,9 +277,14 @@ fn test_all_core_tools_registered() {
         "tool_search",
         "mcp",
         "mcp_tool",
+        "mcp_auth",
+        "list_mcp_resources",
+        "read_mcp_resource",
         "lsp",
+        "symbol_query",
         "worktree",
         "workbench",
+        "project_list",
         "refactor",
     ] {
         assert!(

@@ -534,11 +534,14 @@ mod tests {
         .expect_err("provider error");
 
         assert_eq!(error.to_string(), "provider down");
-        assert_eq!(turn_state.runtime_diet.validation_evidence, "api_error");
+        assert_eq!(
+            turn_state.runtime_diet.validation_evidence,
+            "api_error:transient_transport"
+        );
         let finished = trace.finish(TurnStatus::Failed);
         assert!(finished.events.iter().any(|event| matches!(
             event,
-            TraceEvent::Error { message } if message == "provider down"
+            TraceEvent::Error { message } if message == "[transient_transport] provider down"
         )));
     }
 }

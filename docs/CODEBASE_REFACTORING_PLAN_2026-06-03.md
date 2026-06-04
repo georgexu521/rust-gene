@@ -1,78 +1,109 @@
 # Codebase Refactoring Plan
 
 Date: 2026-06-03
+Updated: 2026-06-04
+Scope: current working tree under `src/` and `apps/desktop/src-tauri/src/`
 
 ## Executive Summary
 
-Priority Agent has grown to ~249k Rust lines across ~464 files. While the
-architecture is generally sound, several files have grown beyond comfortable
-review size and accumulate multiple responsibilities. This plan identifies the
-worst offenders and proposes concrete splitting strategies.
+Priority Agent is still too large in several core modules. The current working
+tree contains roughly 248k Rust lines across 461 Rust files. Excluding test
+files and `_old.rs` backup files, the active production surface is roughly 434
+Rust files:
 
-## Files Requiring Refactoring
+| Budget | Active production files |
+|--------|--------------------------|
+| `> 500` lines | 164 |
+| `> 800` lines | 78 |
+| `> 1000` lines | 62 |
+| `> 1200` lines | 46 |
+| `> 1500` lines | 32 |
 
-| File | Lines | Priority | Proposed Split |
-|------|-------|----------|----------------|
-| `engine/task_contract.rs` | 2897 | High | 7 files |
-| `engine/trace.rs` | 2805 | Medium | 5 files |
-| `memory/manager.rs` | 2011 | High | 7 files |
-| `conversation_loop/tool_execution_controller.rs` | 1995 | Medium | 5 files |
-| `tools/agent_tool/mod.rs` | 1995 | Low | 6 files |
-| `tools/bash_tool/command_classifier.rs` | 1974 | Low | 6 files |
-| `session_store/mod.rs` | 1974 | Medium | 6 files |
-| `memory/provider.rs` | 1968 | Medium | 6 files |
+The goal is not to chase a mechanical line-count rule. The practical goal is
+reviewable, testable, single-responsibility modules. A 500-line file budget is a
+good target for this project, but it should be enforced progressively:
+
+- `<= 500` lines: preferred steady state.
+- `501-800` lines: acceptable when the file has one cohesive responsibility.
+- `801-1200` lines: needs a local split plan or an explicit exception.
+- `> 1200` lines: enters the active refactoring queue.
+- `> 1500` lines: high-priority unless it is generated, test-only, or already
+  being split.
+
+Tests can exceed these budgets more often than production code, but large test
+files should still be split when they hide distinct behavior lanes.
+
+## Current Snapshot Notes
+
+This snapshot was taken from a dirty working tree. In particular, the memory
+manager refactor is now mostly closed:
+
+- `src/memory/manager.rs` is deleted.
+- `src/memory/manager/` exists with focused files.
+- `docs/MEMORY_MANAGER_REFACTORING_PROGRESS_2026-06-03.md` exists but is
+  untracked.
+- `src/memory/manager/mod.rs` is 688 lines after the helper cleanup; the
+  largest remaining memory-manager file is `tests.rs`, which is intentionally
+  test-only.
+
+Therefore, Phase 0 should be treated as cleanup verification rather than a new
+source split.
 
 ## Refactoring Principles
 
-1. **One concern per file** — each file should have a single clear responsibility
-2. **Preserve public API** — re-export from `mod.rs` to maintain backward compatibility
-3. **Move tests with code** — tests should live next to the code they test
-4. **Minimize cross-module imports** — prefer passing data over reaching into internals
-5. **Keep `mod.rs` thin** — `mod.rs` should only contain re-exports and module declarations
+1. One concern per file.
+2. Preserve public API with `pub use` re-exports during migration.
+3. Move tests only when it clarifies behavior; do not bury test-only churn in a
+   source split.
+4. Prefer extracting cohesive submodules over thin wrapper files that only move
+   complexity around.
+5. Keep `mod.rs` as an ownership boundary: small public surface, declarations,
+   and re-exports.
+6. Each split must be independently buildable and test-gated.
+7. Avoid broad runtime behavior changes during file splits.
 
----
+## Current Top Production Offenders
 
-## Phase 1: High Priority (Next Sprint)
+Excluding tests and `_old.rs` backup files:
 
-### 1.1 Split `memory/manager.rs` (2011 lines → 7 files)
+| File | Lines | Priority | Recommended action |
+|------|-------|----------|--------------------|
+| `src/engine/trace/mod.rs` | 2805 | P0 | Split event types, summaries, collectors, formatting |
+| `src/engine/task_contract/mod.rs` | 2627 | P0 | Continue splitting proposal store/gates/conflicts/background review |
+| `src/tools/agent_tool/mod.rs` | 1995 | P2 | Split after runtime/tool-core work stabilizes |
+| `src/engine/conversation_loop/tool_execution_controller.rs` | 1995 | P0 | Split gate/context/batch/action decision |
+| `src/tools/bash_tool/command_classifier.rs` | 1974 | P2 | Split classifier tables and shell analysis helpers |
+| `src/session_store/mod.rs` | 1974 | P1 | Split records, trace, learning, compact, agent persistence |
+| `src/memory/provider.rs` | 1968 | P1 | Split provider traits, registry, local provider, migration |
+| `src/tools/memory_tool/mod.rs` | 1952 | P1 | Split commands, rendering, validation, execution |
+| `src/engine/mcp.rs` | 1908 | P2 | Split protocol/client/tool surface |
+| `src/tui/app.rs` | 1893 | P1 | Continue moving runtime state and handlers out |
+| `src/engine/scenario_matrix.rs` | 1885 | P2 | Split types, matrix construction, evaluation, reporting |
+| `src/tui/slash_handler/agents.rs` | 1881 | P1 | Split doctor/status/cache/provider sections |
+| `src/tui/commands.rs` | 1876 | P1 | Split registry, command metadata, execution adapters |
+| `src/engine/auto_verify.rs` | 1823 | P1 | Split verifier orchestration, command policy, summaries |
+| `apps/desktop/src-tauri/src/lib.rs` | 1803 | P1 | Split desktop commands/state/session bridge |
+| `src/engine/task_context.rs` | 1787 | P1 | Split task bundle, context pack, serialization |
+| `src/engine/action_review.rs` | 1736 | P1 | Split types, review policy, formatting |
+| `src/tui/screens/main_screen.rs` | 1706 | P1 | Split status bar, transcript, panels |
+| `src/engine/conversation_loop/tool_result_controller.rs` | 1695 | P1 | Split result parsing, proof extraction, ledger updates |
 
-**Current responsibilities:**
-- Memory manager core (construction, configuration)
-- Snapshot management (freeze, get, report)
-- Candidate submission (quality gates, provider notification)
-- Learning management (add_learning, topic_learning, auto_learning)
-- Migration/backup (dry_run, backup, rollback, import_legacy)
-- Review/reporting (review_report, record_summary, projection_repair)
-- Lifecycle management (apply_record_lifecycle, record_needs_revalidation)
-- Helper functions (log_preview, normalized_contains, kind_label)
+## Phase 0: Finish In-Progress Memory Manager Cleanup
 
-**Proposed structure:**
+The memory manager split is now structurally complete enough to stop blocking
+Phase 1. Keep it under observation, but do not restart this refactor unless a
+behavioral bug or a new size regression appears.
 
-```
-src/memory/
-├── manager.rs                  # MemoryManager struct, new(), with_base_dir(), core config
-├── manager_snapshot.rs         # freeze_snapshot, get_snapshot, memory_snapshot_report
-├── manager_submit.rs           # submit_candidate, submit_candidate_with_provider_notifications
-├── manager_learning.rs         # add_learning, add_topic_learning, add_auto_learning_async
-├── manager_migration.rs        # memory_migration_dry_run, backup, rollback, import_legacy
-├── manager_review.rs           # memory_review_report, memory_record_summary, projection_repair
-├── manager_lifecycle.rs        # apply_record_lifecycle_before_append, record_needs_revalidation
-└── manager_helpers.rs          # log_preview, normalized_contains, kind_label, etc.
-```
+### Tasks
 
-**Files to move:**
+1. Verify `src/memory/manager/mod.rs` is the active manager entrypoint. Done.
+2. Confirm `src/memory/manager_old.rs` is not referenced by any module. Done;
+   the file is no longer present in `src/`.
+3. Review `docs/MEMORY_MANAGER_REFACTORING_PROGRESS_2026-06-03.md` and either
+   commit it with the split or fold its status into this plan.
+4. Run the memory lane before starting the next memory-adjacent split.
 
-| Function/Type | From | To |
-|---------------|------|-----|
-| `freeze_snapshot*`, `get_snapshot`, `memory_snapshot_report` | manager.rs | manager_snapshot.rs |
-| `submit_candidate*` | manager.rs | manager_submit.rs |
-| `add_learning*`, `add_topic_learning*`, `add_auto_learning*` | manager.rs | manager_learning.rs |
-| `memory_migration_*`, `import_legacy_markdown_records` | manager.rs | manager_migration.rs |
-| `memory_review_report`, `memory_record_summary`, `projection_repair_*` | manager.rs | manager_review.rs |
-| `apply_record_lifecycle_before_append` | manager.rs | manager_lifecycle.rs |
-| All `pub(super)` helper functions | manager.rs | manager_helpers.rs |
-
-**Acceptance criteria:**
+### Acceptance Criteria
 
 ```bash
 cargo fmt --check
@@ -81,45 +112,88 @@ cargo test -q memory
 cargo test -q memory_manager
 ```
 
-### 1.2 Split `engine/task_contract.rs` (2897 lines → 7 files)
+### Done State
 
-**Current responsibilities:**
-- Type definitions (TaskContractType, AssumptionSource, ConfidenceLevel, etc.)
-- Task contract (TaskContract, ContextPack, ExecutionReport)
-- Memory proposal (MemoryProposal, MemoryProposalCandidate, MemoryProposalStatus)
-- Proposal store (MemoryProposalReviewStore — CRUD, conflict resolution, batch ops)
-- Proposal gates (sensitivity, evidence, scope_identity validation)
-- Conflict detection (memory_proposal_conflict_groups)
-- Background review (BackgroundReviewPacket, BackgroundMemoryReviewWorker)
+- No stale `_old.rs` file remains under `src/`.
+- `src/memory/manager/mod.rs` stays below 1000 lines in the near term; it is
+  currently 688 lines.
+- The memory split has its own commit before broader refactors begin.
 
-**Proposed structure:**
+## Phase 1: Highest Impact Refactors
 
+Phase 1 should focus on files that are both large and central to runtime
+correctness. Each item should be a separate small commit.
+
+### 1.1 Split `src/tools/mod.rs`
+
+Status: mostly complete. `src/tools/mod.rs` is now a 145-line module surface,
+with registry/result/schema/tool trait code extracted. The remaining follow-up
+is `src/tools/tool_trait.rs` at 1093 lines, which should be split only after the
+public tool contract stabilizes.
+
+Proposed structure:
+
+```text
+src/tools/
+├── mod.rs                  # public module declarations and re-exports
+├── registry.rs             # ToolRegistry and registry construction
+├── registry_profile.rs     # ToolRegistryProfile and env parsing
+├── result.rs               # ToolResult, ToolErrorCode
+├── schema.rs               # ToolSchema and metadata types
+└── tool_trait.rs           # Tool trait and ToolContext
 ```
-src/engine/
-├── task_contract/
-│   ├── mod.rs                  # re-exports
-│   ├── types.rs                # TaskContractType, AssumptionSource, ConfidenceLevel, etc.
-│   ├── contract.rs             # TaskContract, ContextPack, ExecutionReport
-│   ├── memory_proposal.rs      # MemoryProposal, MemoryProposalCandidate, MemoryProposalStatus
-│   ├── proposal_store.rs       # MemoryProposalReviewStore (CRUD)
-│   ├── proposal_gates.rs       # Gate logic: sensitivity, evidence, scope_identity
-│   ├── proposal_conflict.rs    # memory_proposal_conflict_groups, conflict resolution
-│   └── background_review.rs    # BackgroundReviewPacket, BackgroundMemoryReviewWorker
+
+Acceptance:
+
+```bash
+cargo fmt --check
+cargo check -q
+cargo test -q tools
+cargo test -q route_scoped_tools
 ```
 
-**Files to move:**
+Current follow-up:
 
-| Function/Type | From | To |
-|---------------|------|-----|
-| 6 enums + `TaskAssumption`, `TaskContractScope`, etc. | task_contract.rs | types.rs |
-| `TaskContract`, `ContextPack`, `ExecutionReport` + methods | task_contract.rs | contract.rs |
-| `MemoryProposal*` types + `from_execution_report` | task_contract.rs | memory_proposal.rs |
-| `MemoryProposalReviewStore` all methods | task_contract.rs | proposal_store.rs |
-| `proposal_gate_report`, `proposal_sensitivity_findings` | task_contract.rs | proposal_gates.rs |
-| `memory_proposal_conflict_groups` | task_contract.rs | proposal_conflict.rs |
-| `BackgroundReviewPacket`, `BackgroundMemoryReviewWorker` | task_contract.rs | background_review.rs |
+- Keep the default Core profile narrow. Low-frequency tools such as agent,
+  MCP, LSP, worktree, workbench, tool search, and project listing belong in the
+  Full profile unless route-specific product work deliberately promotes them.
+- Split `tool_trait.rs` into context, metadata, validation, and execution
+  contract helpers if it remains above 1000 lines after the next tool-contract
+  pass.
 
-**Acceptance criteria:**
+### 1.2 Split `src/engine/task_contract/`
+
+Status: partially complete. The file has moved to
+`src/engine/task_contract/mod.rs`; base task/context/report types now live in
+`types.rs`. The `mod.rs` file is still 2627 lines because memory proposal
+review, gates, conflict grouping, and background review logic are still in the
+module root.
+
+Remaining responsibilities:
+
+- task contract types;
+- assumptions, scope, confidence, execution reports;
+- memory proposal types;
+- proposal review store;
+- proposal gates;
+- conflict grouping;
+- background review worker.
+
+Proposed structure:
+
+```text
+src/engine/task_contract/
+├── mod.rs
+├── types.rs
+├── contract.rs
+├── memory_proposal.rs
+├── proposal_store.rs
+├── proposal_gates.rs
+├── proposal_conflict.rs
+└── background_review.rs
+```
+
+Acceptance:
 
 ```bash
 cargo fmt --check
@@ -128,35 +202,36 @@ cargo test -q task_contract
 cargo test -q memory_proposals
 ```
 
----
+### 1.3 Split `src/engine/trace/`
 
-## Phase 2: Medium Priority
+Status: not materially split yet. The path moved to
+`src/engine/trace/mod.rs`, but the module is still 2805 lines and still owns the
+main trace event, collector, store, formatting, diagnostics, and tests entry.
+Treat this as an open P0 item, not as completed work.
 
-### 2.1 Split `engine/trace.rs` (2805 lines → 5 files)
+Current responsibilities:
 
-**Current responsibilities:**
-- TraceEvent definition (60+ variants)
-- TraceEvent::label() and summary() implementations
-- TurnTrace container
-- TraceCollector (thread-safe event collector)
-- TraceStore (in-memory recent traces)
-- Formatting/diagnostics (format_trace_summary, control_loop_diagnostic)
-- Helper queries (latest_runtime_diet_summary, latest_memory_proposal_summary)
+- `TraceEvent` definition;
+- event labels and summaries;
+- turn trace container;
+- trace collector/store;
+- formatting and diagnostics;
+- helper queries.
 
-**Proposed structure:**
+Proposed structure:
 
+```text
+src/engine/trace/
+├── mod.rs
+├── event.rs
+├── event_summary.rs
+├── collector.rs
+├── store.rs
+├── diagnostic.rs
+└── format.rs
 ```
-src/engine/
-├── trace/
-│   ├── mod.rs              # re-exports
-│   ├── types.rs            # TurnStatus, TurnTrace, TraceEvent definition
-│   ├── event_summary.rs    # TraceEvent::label() and summary() implementation
-│   ├── collector.rs        # TraceCollector, TraceStore
-│   ├── diagnostic.rs       # ControlLoopDiagnostic, ActionReviewTraceSummary
-│   └── format.rs           # format_trace_summary, format_trace_recent_line
-```
 
-**Acceptance criteria:**
+Acceptance:
 
 ```bash
 cargo fmt --check
@@ -164,40 +239,32 @@ cargo check -q
 cargo test -q trace
 ```
 
-### 2.2 Split `conversation_loop/tool_execution_controller.rs` (1995 lines → 5 files)
+### 1.4 Split `src/engine/conversation_loop/tool_execution_controller.rs`
 
-**Current responsibilities:**
-- Tool execution orchestration (execute_tools_parallel)
-- Execution gate (ToolExecutionGate — permissions, scope, budget, destructive checks)
-- Read-only tool parallelization
-- Read-write tool serial execution
-- Runtime context (ToolRuntimeContext — route, policy, stage info)
-- Action decision (ActionDecision evaluation, Observer/Memory signals)
-- Action review (ActionReview construction and recording)
-- Lifecycle tracking (ToolCallLifecycle state management)
-- Storm circuit breaker (repeated call suppression)
+Current responsibilities:
 
-**Proposed structure:**
+- tool execution orchestration;
+- permission and risk gate;
+- read-only parallelization;
+- read-write serial execution;
+- runtime context;
+- observer/memory action signals;
+- action review recording;
+- lifecycle and storm suppression.
 
-```
+Proposed structure:
+
+```text
 src/engine/conversation_loop/
-├── tool_execution_controller.rs    # ToolExecutionController main logic
-├── tool_execution_gate.rs          # ToolExecutionGate, ToolExecutionGateOutcome
-├── tool_runtime_context.rs         # ToolRuntimeContext, ObserverActionSignal, MemoryActionSignal
-├── tool_action_decision.rs         # apply_observer_action_signal, apply_memory_action_signal
-└── tool_execution_batch.rs         # ToolExecutionBatch, ToolExecutionRequest
+├── tool_execution_controller.rs
+├── tool_execution_gate.rs
+├── tool_runtime_context.rs
+├── tool_action_decision.rs
+├── tool_execution_batch.rs
+└── tool_call_lifecycle.rs
 ```
 
-**Files to move:**
-
-| Function/Type | From | To |
-|---------------|------|-----|
-| `ToolExecutionGate` + `evaluate` + `deny_with_trace` | tool_execution_controller.rs | tool_execution_gate.rs |
-| `ToolRuntimeContext` + `ObserverActionSignal` + `MemoryActionSignal` | tool_execution_controller.rs | tool_runtime_context.rs |
-| `apply_observer_action_signal`, `apply_memory_action_signal` | tool_execution_controller.rs | tool_action_decision.rs |
-| `ToolExecutionBatch`, `ToolExecutionRequest` | tool_execution_controller.rs | tool_execution_batch.rs |
-
-**Acceptance criteria:**
+Acceptance:
 
 ```bash
 cargo fmt --check
@@ -206,45 +273,27 @@ cargo test -q tool_execution
 cargo test -q conversation_loop
 ```
 
-### 2.3 Split `session_store/mod.rs` (1974 lines → 6 files)
+## Phase 2: Runtime, Storage, And Product UI Slices
 
-**Current responsibilities:**
-- Session CRUD (create, get, list, delete sessions)
-- Message CRUD (add, get, delete, rewrite messages)
-- Full-text search (FTS5 search messages and sessions)
-- Statistics (stats() for database stats)
-- Trace persistence (add_turn_trace, latest_turn_trace)
-- Learning event persistence (add_learning_event, recent_learning_events)
-- Compact boundary persistence (add_compact_boundary, list_compact_boundaries)
-- Agent artifact persistence (add_agent_artifact, recent_agent_artifacts)
-- Agent task state persistence (upsert_agent_task_state, recent_agent_task_states)
-- Database migrations (open() registers and runs migrations)
+### 2.1 Split `src/session_store/mod.rs`
 
-**Proposed structure:**
+Proposed structure:
 
-```
+```text
 src/session_store/
-├── mod.rs              # SessionStore struct, session/message CRUD, search, stats
-├── records.rs          # MessageRecord, SessionRecord, LearningEventRecord, etc.
-├── trace_store.rs      # add_turn_trace, latest_turn_trace, recent_turn_traces
-├── learning_store.rs   # add_learning_event, recent_learning_events
-├── compact_store.rs    # add_compact_boundary, list_compact_boundaries
-├── agent_store.rs      # add_agent_artifact, upsert_agent_task_state
-└── helpers.rs          # session_from_row, learning_event_from_row, fts_phrase_terms
+├── mod.rs
+├── records.rs
+├── session_ops.rs
+├── message_ops.rs
+├── search.rs
+├── trace_store.rs
+├── learning_store.rs
+├── compact_store.rs
+├── agent_store.rs
+└── migrations.rs
 ```
 
-**Files to move:**
-
-| Function/Type | From | To |
-|---------------|------|-----|
-| All Record/Upsert structs | mod.rs | records.rs |
-| Trace-related methods | mod.rs | trace_store.rs |
-| Learning Event methods | mod.rs | learning_store.rs |
-| Compact Boundary methods | mod.rs | compact_store.rs |
-| Agent Artifact/TaskState methods | mod.rs | agent_store.rs |
-| Row mapping functions | mod.rs | helpers.rs |
-
-**Acceptance criteria:**
+Acceptance:
 
 ```bash
 cargo fmt --check
@@ -252,187 +301,188 @@ cargo check -q
 cargo test -q session_store
 ```
 
-### 2.4 Split `memory/provider.rs` (1968 lines → 6 files)
+### 2.2 Split `src/memory/provider.rs`
 
-**Current responsibilities:**
-- Provider trait (MemoryProvider — lifecycle hooks)
-- Provider registry (MemoryProviderRegistry — local + external provider management)
-- Local provider (LocalMemoryProvider — local filesystem implementation)
-- No-network provider (NoNetworkMemoryProvider — for testing)
-- Operation journal (MemoryOperationJournalEntry)
-- Migration/backup (migration_file_reports, backup, rollback)
-- Search index (rebuild_search_index, search_index)
-- Projection repair (projection_contains_record, append_record_to_projection_with_backup)
+There is already a `src/memory/provider/` directory, so first inspect the
+current split before moving code.
 
-**Proposed structure:**
+Proposed structure:
 
-```
-src/memory/
-├── provider/
-│   ├── mod.rs                  # re-exports
-│   ├── traits.rs               # MemoryProvider trait, MemoryProviderCapabilities
-│   ├── registry.rs             # MemoryProviderRegistry, fanout logic
-│   ├── local_provider.rs       # LocalMemoryProvider all implementations
-│   ├── no_network_provider.rs  # NoNetworkMemoryProvider
-│   ├── migration.rs            # migration_file_reports, backup, rollback
-│   └── types.rs                # MemoryTurn, MemoryProviderCallStatus, MemoryOperationJournalEntry, etc.
+```text
+src/memory/provider/
+├── mod.rs
+├── traits.rs
+├── registry.rs
+├── local_provider.rs
+├── no_network_provider.rs
+├── migration.rs
+├── projection.rs
+└── types.rs
 ```
 
-**Files to move:**
-
-| Function/Type | From | To |
-|---------------|------|-----|
-| `MemoryProvider` trait + `MemoryProviderCapabilities` | provider.rs | traits.rs |
-| `MemoryProviderRegistry` all methods | provider.rs | registry.rs |
-| `LocalMemoryProvider` all methods | provider.rs | local_provider.rs |
-| `NoNetworkMemoryProvider` all methods | provider.rs | no_network_provider.rs |
-| `migration_*` functions | provider.rs | migration.rs |
-| `MemoryTurn`, `MemoryProviderCallStatus`, `MemoryOperationJournalEntry`, etc. | provider.rs | types.rs |
-
-**Acceptance criteria:**
+Acceptance:
 
 ```bash
 cargo fmt --check
 cargo check -q
 cargo test -q memory_provider
+cargo test -q memory
 ```
 
----
+### 2.3 Split `src/tools/memory_tool/mod.rs`
 
-## Phase 3: Low Priority
+Proposed structure:
 
-### 3.1 Split `tools/agent_tool/mod.rs` (1995 lines → 6 files)
-
-**Proposed structure:**
-
-```
-src/tools/agent_tool/
-├── mod.rs              # AgentTool, Tool trait impl, main entry
-├── templates.rs        # AgentTemplate and system prompt construction
-├── spawn.rs            # spawn_single_agent, create_isolated_agent_worktree
-├── synthesize.rs       # synthesize_results, attach_subagent_proof_metadata
-├── persistence.rs      # persist_agent_task_state, persist_agent_artifact
-└── handlers.rs         # handle_resume, handle_cancel, handle_fork_branches, handle_subtasks
+```text
+src/tools/memory_tool/
+├── mod.rs
+├── commands.rs
+├── render.rs
+├── validation.rs
+├── execute.rs
+└── tests.rs
 ```
 
-**Acceptance criteria:**
+Acceptance:
 
 ```bash
 cargo fmt --check
 cargo check -q
-cargo test -q agent_tool
+cargo test -q memory_tool
+cargo test -q memory
 ```
 
-### 3.2 Split `tools/bash_tool/command_classifier.rs` (1974 lines → 6 files)
+### 2.4 Split TUI Runtime Surfaces
 
-**Proposed structure:**
+Targets:
 
-```
-src/tools/bash_tool/
-├── command_classifier.rs       # classify_command main entry + CommandClassification
-├── classification_types.rs     # CommandKind, ShellCommandCategory, ValidationFamily, etc.
-├── validation_family.rs        # validation_family, is_safe_rg_assertion, is_safe_shell_assertion
-├── shell_category.rs           # shell_command_category, is_git_mutation_command, etc.
-├── bash_plan.rs                # bash_command_plan, BashCommandPlan
-└── shell_tokens.rs             # shell_tokens, extract_path_patterns, shell_redirection_facts
-```
+- `src/tui/app.rs`
+- `src/tui/slash_handler/agents.rs`
+- `src/tui/commands.rs`
+- `src/tui/screens/main_screen.rs`
 
-**Acceptance criteria:**
+Recommended order:
+
+1. Move provider/runtime facade synchronization out of `app.rs`.
+2. Split `/doctor`, provider status, cache status, and agent listings out of
+   `slash_handler/agents.rs`.
+3. Split command metadata and execution handling out of `commands.rs`.
+4. Split status bar/transcript/panels out of `main_screen.rs`.
+
+Acceptance:
 
 ```bash
 cargo fmt --check
 cargo check -q
-cargo test -q command_classifier
+cargo test -q tui
+cargo test -q prompt_context
 ```
 
----
+### 2.5 Split Desktop Tauri Entry
 
-## Implementation Order
+Target: `apps/desktop/src-tauri/src/lib.rs`.
 
-### Sprint 1 (High Priority)
-1. `memory/manager.rs` → 7 files
-2. `engine/task_contract.rs` → 7 files
+Proposed structure:
 
-### Sprint 2 (Medium Priority)
-3. `engine/trace.rs` → 5 files
-4. `session_store/mod.rs` → 6 files
-5. `memory/provider.rs` → 6 files
-
-### Sprint 3 (Medium-Low Priority)
-6. `conversation_loop/tool_execution_controller.rs` → 5 files
-7. `tools/agent_tool/mod.rs` → 6 files
-8. `tools/bash_tool/command_classifier.rs` → 6 files
-
----
-
-## Migration Checklist
-
-For each file split:
-
-- [ ] Create new module directory (if needed)
-- [ ] Move types/functions to new files
-- [ ] Add `mod` declarations to parent `mod.rs`
-- [ ] Add `pub use` re-exports to maintain public API
-- [ ] Update imports in dependent files
-- [ ] Run `cargo fmt --check`
-- [ ] Run `cargo check -q`
-- [ ] Run relevant tests
-- [ ] Verify no new warnings
-- [ ] Commit with descriptive message
-
----
-
-## Risk Mitigation
-
-### 1. Breaking Public API
-
-**Risk:** Moving types/functions breaks downstream imports.
-
-**Mitigation:** Always re-export from the original `mod.rs`:
-```rust
-// memory/mod.rs
-pub use manager::MemoryManager;
-pub use manager_snapshot::*;
-pub use manager_submit::*;
-// etc.
+```text
+apps/desktop/src-tauri/src/
+├── lib.rs
+├── commands.rs
+├── session_commands.rs
+├── runtime_commands.rs
+├── app_state.rs
+└── bridge.rs
 ```
 
-### 2. Merge Conflicts
+Acceptance:
 
-**Risk:** Large refactoring causes merge conflicts with parallel work.
+```bash
+cargo check -q
+cargo test -q desktop_runtime
+cargo check --features experimental-api-server -q
+```
 
-**Mitigation:**
-- Coordinate with team before starting
-- Do refactoring in dedicated branches
-- Merge to main quickly after completion
+## Phase 3: Lower-Risk Large Module Cleanup
 
-### 3. Test Breakage
+These files are large, but they should wait until Phase 1 and Phase 2 reduce
+the central runtime blast radius.
 
-**Risk:** Moving code breaks test imports.
+| File | Reason to defer |
+|------|-----------------|
+| `src/tools/agent_tool/mod.rs` | subagent behavior is product-sensitive |
+| `src/tools/bash_tool/command_classifier.rs` | command safety classifier needs careful golden tests first |
+| `src/engine/mcp.rs` | MCP behavior spans external integrations |
+| `src/engine/scenario_matrix.rs` | eval/reporting shape should stay stable during daily baseline work |
+| `src/engine/auto_verify.rs` | verification behavior is a correctness boundary |
+| `src/engine/action_review.rs` | action review policy is safety-sensitive |
+| `src/engine/evalset.rs` | eval workflows need stable baselines before reshaping |
 
-**Mitigation:**
-- Move tests with the code they test
-- Update test imports in the same commit
-- Run full test suite after each file split
+## Per-Slice Checklist
 
-### 4. Circular Dependencies
+For every refactor slice:
 
-**Risk:** Splitting creates circular module dependencies.
+- [ ] Start from a clean or clearly understood dirty tree.
+- [ ] Record pre-split line count for the target file.
+- [ ] Extract one responsibility group only.
+- [ ] Preserve public imports with re-exports.
+- [ ] Avoid behavior changes unless explicitly called out.
+- [ ] Move or add focused tests for the extracted responsibility.
+- [ ] Run `cargo fmt --check`.
+- [ ] Run `cargo check -q`.
+- [ ] Run the narrow module tests.
+- [ ] Commit the slice before moving to another target.
 
-**Mitigation:**
-- Analyze dependencies before splitting
-- Use trait objects or dependency injection if needed
-- Keep related code together to minimize cross-module calls
+## Line Budget Gate
 
----
+Add a lightweight script before enforcing this in CI:
+
+```bash
+scripts/report-rust-file-sizes.sh
+```
+
+Recommended output:
+
+- total Rust files;
+- active production files;
+- test files;
+- top 50 production files by line count;
+- counts above 500, 800, 1000, 1200, and 1500 lines.
+
+Recommended staged enforcement:
+
+1. Report only.
+2. Fail new production files above 1200 lines.
+3. Fail modified production files above 1500 lines unless listed as an
+   exception.
+4. Later, lower the modified-file threshold to 1200 lines.
+
+Do not immediately fail all files above 500 lines. That would make the current
+tree noisy and reduce momentum.
+
+## Exceptions
+
+Allowed exceptions must be documented in this file or in the size-report script:
+
+- generated code;
+- large test fixtures;
+- stable generated enum/table-like declarations;
+- files actively being split in the current sprint;
+- platform glue that cannot be split without making the API harder to follow.
+
+Exceptions expire after one sprint unless renewed.
 
 ## Done Definition
 
-This refactoring is complete when:
+This plan is complete when:
 
-- No source file exceeds 1500 lines (excluding tests)
-- Each module has a single clear responsibility
-- All tests pass after each split
-- No new compiler warnings introduced
-- Public API remains backward compatible
-- Documentation updated to reflect new structure
+- no active production file exceeds 1500 lines;
+- no stale `_old.rs` backup remains under `src/`;
+- all files above 1200 lines have either been split or have an explicit
+  exception;
+- the top runtime/tool/TUI files are below 800-1200 lines;
+- new production files target `<= 500` lines;
+- the file-size report exists and is part of the regular engineering workflow;
+- all touched slices pass their narrow gates and `cargo check -q`.
+
+The long-term quality target is that ordinary production modules settle around
+300-700 lines, with 500 lines as the preferred reviewable size.

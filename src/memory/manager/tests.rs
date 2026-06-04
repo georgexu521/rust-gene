@@ -1,9 +1,11 @@
 use super::*;
+use crate::engine::task_contract::MemoryProposalStatus;
 use crate::memory::extraction::{extract_learnings_from_turn, parse_llm_memory_candidates};
-use crate::memory::files::parse_rerank_ids;
+use crate::memory::files::{collect_memory_file_paths, parse_rerank_ids};
 use crate::memory::provider::MemoryProvider;
 use crate::memory::retrieval::rerank_memory_matches_with_llm;
-use crate::services::api::{ChatRequest, LlmProvider};
+use crate::memory::types::{MemoryProvenance, MemoryRecord};
+use crate::services::api::{ChatRequest, LlmProvider, Message};
 use async_openai::types::ChatCompletionResponseStream;
 use std::sync::Mutex;
 
@@ -1580,9 +1582,9 @@ fn test_background_memory_candidate_applies_safety_gate() {
         write_background_memory_candidate(&path, sensitive, "background_heuristic", &scope);
 
     assert!(!decision.wrote);
-    assert_eq!(decision.status, MemoryStatus::Rejected);
+    assert_eq!(decision.status, MemoryWriteOutcomeStatus::Blocked);
     assert!(decision.quality_score.is_none());
-    assert!(decision.reason.contains("blocked_by_safety"));
+    assert!(decision.reason.contains("secret_like_content"));
     assert!(!std::fs::read_to_string(&path)
         .unwrap_or_default()
         .contains("sk-123456789012345678901234"));
@@ -1606,7 +1608,7 @@ fn test_background_memory_candidate_skips_duplicate_after_quality_gate() {
     assert!(first.wrote);
     assert!(!second.wrote);
     assert!(second.duplicate);
-    assert_eq!(second.reason, "duplicate_memory");
+    assert!(second.reason.contains("duplicate memory"));
     assert_eq!(before, after);
     let records = LocalMemoryProvider::with_base_dir(base.clone())
         .memory_records()
