@@ -7,7 +7,7 @@ Scope: current working tree under `src/` and `apps/desktop/src-tauri/src/`
 ## Executive Summary
 
 Priority Agent is still too large in several core modules. The current working
-tree contains roughly 249k Rust lines across 509 Rust files. Excluding test
+tree contains roughly 249k Rust lines across 510 Rust files. Excluding test
 files, `_old.rs` backup files, and Rust modules mounted only behind
 `#[cfg(test)]`, the active production surface is roughly 219k lines across 471
 Rust files:
@@ -18,7 +18,7 @@ Rust files:
 | `> 800` lines | 73 |
 | `> 1000` lines | 56 |
 | `> 1200` lines | 36 |
-| `> 1500` lines | 11 |
+| `> 1500` lines | 10 |
 
 The goal is not to chase a mechanical line-count rule. The practical goal is
 reviewable, testable, single-responsibility modules. A 500-line file budget is a
@@ -79,7 +79,6 @@ Excluding tests and `_old.rs` backup files:
 | `src/engine/task_context.rs` | 1787 | P1 | Split task bundle, context pack, serialization |
 | `src/engine/action_review.rs` | 1736 | P1 | Split types, review policy, formatting |
 | `src/tui/screens/main_screen.rs` | 1706 | P1 | Split status bar, transcript, panels |
-| `src/engine/skill_evolution.rs` | 1675 | P1 | Split analysis, proposal, and persistence lanes |
 
 ## Phase 0: Finish In-Progress Memory Manager Cleanup
 
@@ -894,6 +893,38 @@ Acceptance:
 cargo fmt --check
 cargo check -q
 cargo test -q tool_result_controller -- --test-threads=1
+```
+
+### 2.17 Split `src/engine/skill_evolution.rs`
+
+Status: started. The inline `#[cfg(test)]` module now lives in
+`src/engine/skill_evolution/tests.rs`. This is intentionally a test-layout
+split: production logic remains in the entry file, while behavioral coverage is
+kept adjacent but out of the main production source. `src/engine/skill_evolution.rs`
+is down from 1675 lines to 1367 lines and has exited the `>1500` active queue.
+
+Current structure:
+
+```text
+src/engine/
+├── skill_evolution.rs               # proposal, scoring, persistence helpers
+└── skill_evolution/
+    └── tests.rs                     # skill evolution unit tests
+```
+
+Current next cuts:
+
+- Split fitness scoring if more promotion metrics are added.
+- Split proposal persistence only if store format or migration behavior changes.
+- Keep proposal generation in the entry file until skill-evolution product
+  semantics stabilize.
+
+Acceptance:
+
+```bash
+cargo fmt --check
+cargo check -q
+cargo test -q skill_evolution -- --test-threads=1
 ```
 
 ## Phase 3: Lower-Risk Large Module Cleanup
