@@ -7,15 +7,15 @@ Scope: current working tree under `src/` and `apps/desktop/src-tauri/src/`
 ## Executive Summary
 
 Priority Agent is still too large in several core modules. The current working
-tree contains roughly 248k Rust lines across 473 Rust files. Excluding test
-files and `_old.rs` backup files, the active production surface is roughly 442
+tree contains roughly 248k Rust lines across 474 Rust files. Excluding test
+files and `_old.rs` backup files, the active production surface is roughly 443
 Rust files:
 
 | Budget | Active production files |
 |--------|--------------------------|
 | `> 500` lines | 167 |
 | `> 800` lines | 78 |
-| `> 1000` lines | 61 |
+| `> 1000` lines | 60 |
 | `> 1200` lines | 44 |
 | `> 1500` lines | 29 |
 
@@ -249,15 +249,15 @@ cargo test -q trace
 
 ### 1.4 Split `src/engine/conversation_loop/tool_execution_controller.rs`
 
-Status: entry split complete; one follow-up remains. Batch/result aggregation now lives in
+Status: entry split complete. Batch/result aggregation now lives in
 `tool_execution_controller/batch.rs`, with the public conversation-loop surface
 kept through `tool_execution_controller::ToolExecutionBatch`. Per-round runtime
 context, runtime metadata attachment, observer action signals, and memory action
 signals now live in `tool_execution_controller/runtime_context.rs`. Action
 decision tracing, action review metadata, and tool-observation trace helpers now
 live in `tool_execution_controller/action_review.rs`. The entry file is down to
-1145 lines, below the active queue threshold. The remaining follow-up is to move
-the permission/risk gate to `gate.rs` if we want the entry file under 1000.
+907 lines, below the active queue threshold and below 1000. Permission/risk gate
+logic now lives in `tool_execution_controller/gate.rs`.
 
 Current responsibilities:
 
