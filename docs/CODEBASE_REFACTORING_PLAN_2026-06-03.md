@@ -7,8 +7,8 @@ Scope: current working tree under `src/` and `apps/desktop/src-tauri/src/`
 ## Executive Summary
 
 Priority Agent is still too large in several core modules. The current working
-tree contains roughly 248k Rust lines across 492 Rust files. Excluding test
-files and `_old.rs` backup files, the active production surface is roughly 461
+tree contains roughly 248k Rust lines across 493 Rust files. Excluding test
+files and `_old.rs` backup files, the active production surface is roughly 462
 Rust files:
 
 | Budget | Active production files |
@@ -16,7 +16,7 @@ Rust files:
 | `> 500` lines | 168 |
 | `> 800` lines | 76 |
 | `> 1000` lines | 59 |
-| `> 1200` lines | 41 |
+| `> 1200` lines | 40 |
 | `> 1500` lines | 26 |
 
 The goal is not to chase a mechanical line-count rule. The practical goal is
@@ -375,12 +375,14 @@ cargo test -q memory
 
 ### 2.3 Split `src/tools/memory_tool/mod.rs`
 
-Status: started. Memory store path helpers and store-path rendering now live in
-`src/tools/memory_tool/paths.rs`. Doctor JSON/report DTOs now live in
+Status: complete enough for the current refactor queue. Memory store path
+helpers and store-path rendering now live in `src/tools/memory_tool/paths.rs`.
+Doctor JSON/report DTOs now live in
 `src/tools/memory_tool/doctor_types.rs`. Doctor text rendering helpers now live
-in `src/tools/memory_tool/render.rs`. The entry file is down to 1298 lines. The
-next useful cuts are doctor JSON construction and the individual save/load/clear
-command implementations.
+in `src/tools/memory_tool/render.rs`, and doctor JSON construction now lives in
+`src/tools/memory_tool/doctor_json.rs`. The entry file is down to 1187 lines.
+Future optional cuts can split the individual save/load/clear command
+implementations if this file grows again.
 
 Proposed structure:
 
@@ -389,6 +391,7 @@ src/tools/memory_tool/
 ├── mod.rs
 ├── paths.rs
 ├── doctor_types.rs
+├── doctor_json.rs
 ├── render.rs
 ├── commands.rs
 ├── render.rs
