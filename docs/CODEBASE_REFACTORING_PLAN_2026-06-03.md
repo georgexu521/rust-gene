@@ -7,18 +7,18 @@ Scope: current working tree under `src/` and `apps/desktop/src-tauri/src/`
 ## Executive Summary
 
 Priority Agent is still too large in several core modules. The current working
-tree contains roughly 249k Rust lines across 506 Rust files. Excluding test
+tree contains roughly 249k Rust lines across 507 Rust files. Excluding test
 files, `_old.rs` backup files, and Rust modules mounted only behind
-`#[cfg(test)]`, the active production surface is roughly 219k lines across 468
+`#[cfg(test)]`, the active production surface is roughly 219k lines across 469
 Rust files:
 
 | Budget | Active production files |
 |--------|--------------------------|
-| `> 500` lines | 166 |
+| `> 500` lines | 167 |
 | `> 800` lines | 73 |
 | `> 1000` lines | 56 |
-| `> 1200` lines | 37 |
-| `> 1500` lines | 14 |
+| `> 1200` lines | 36 |
+| `> 1500` lines | 13 |
 
 The goal is not to chase a mechanical line-count rule. The practical goal is
 reviewable, testable, single-responsibility modules. A 500-line file budget is a
@@ -82,7 +82,6 @@ Excluding tests and `_old.rs` backup files:
 | `src/engine/conversation_loop/tool_result_controller.rs` | 1695 | P1 | Split result parsing, proof extraction, ledger updates |
 | `src/engine/evalset.rs` | 1693 | P1 | Split suite loading, execution, and reporting |
 | `src/engine/skill_evolution.rs` | 1675 | P1 | Split analysis, proposal, and persistence lanes |
-| `src/engine/intent_router.rs` | 1672 | P1 | Split intent scoring, route construction, and labels |
 
 ## Phase 0: Finish In-Progress Memory Manager Cleanup
 
@@ -785,6 +784,40 @@ Acceptance:
 cargo fmt --check
 cargo check -q
 cargo test -q streaming -- --test-threads=1
+```
+
+### 2.14 Split `src/engine/intent_router.rs`
+
+Status: started. Intent keyword heuristics, route signal predicates, and route
+tool recommendation helpers now live in `src/engine/intent_router/heuristics.rs`.
+The entry file keeps the public route types, the `IntentRouter` decision order,
+learning-feedback application, and existing route tests. `src/engine/intent_router.rs`
+is down from 1672 lines to 1069 lines and has exited the `>1500` active queue.
+
+Current structure:
+
+```text
+src/engine/
+├── intent_router.rs                 # route types, route ordering, tests
+└── intent_router/
+    └── heuristics.rs                # signal predicates and tool recommendations
+```
+
+Current next cuts:
+
+- Split learning-feedback adjustment only if route learning grows beyond a small
+  confidence/tool modifier.
+- Keep the route decision order in the entry file so intent precedence remains
+  easy to audit.
+- Add golden route fixtures before changing any keyword table or scoring
+  heuristic.
+
+Acceptance:
+
+```bash
+cargo fmt --check
+cargo check -q
+cargo test -q intent_router -- --test-threads=1
 ```
 
 ## Phase 3: Lower-Risk Large Module Cleanup
