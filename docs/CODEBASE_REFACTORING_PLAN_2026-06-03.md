@@ -7,18 +7,18 @@ Scope: current working tree under `src/` and `apps/desktop/src-tauri/src/`
 ## Executive Summary
 
 Priority Agent is still too large in several core modules. The current working
-tree contains roughly 249k Rust lines across 522 Rust files. Excluding test
+tree contains roughly 249k Rust lines across 523 Rust files. Excluding test
 files, `_old.rs` backup files, and Rust modules mounted only behind
-`#[cfg(test)]`, the active production surface is roughly 219k lines across 480
+`#[cfg(test)]`, the active production surface is roughly 219k lines across 481
 Rust files:
 
 | Budget | Active production files |
 |--------|--------------------------|
-| `> 500` lines | 170 |
+| `> 500` lines | 171 |
 | `> 800` lines | 73 |
 | `> 1000` lines | 56 |
-| `> 1200` lines | 33 |
-| `> 1500` lines | 1 |
+| `> 1200` lines | 32 |
+| `> 1500` lines | 0 |
 
 The goal is not to chase a mechanical line-count rule. The practical goal is
 reviewable, testable, single-responsibility modules. A 500-line file budget is a
@@ -67,9 +67,10 @@ source split.
 
 Excluding tests and `_old.rs` backup files:
 
-| File | Lines | Priority | Recommended action |
-|------|-------|----------|--------------------|
-| `src/engine/mcp.rs` | 1908 | P2 | Split protocol/client/tool surface |
+No active production file currently exceeds 1500 lines. The next cleanup queue
+is the `>1200` group, led by files such as `src/engine/code_change_workflow.rs`,
+`src/tui/screens/main_screen.rs`, `src/tui/app.rs`, `src/engine/evidence_ledger.rs`,
+and `src/tui/slash_handler/learning.rs`.
 
 ## Phase 0: Finish In-Progress Memory Manager Cleanup
 
@@ -1275,6 +1276,44 @@ Acceptance:
 cargo fmt --check
 cargo check -q
 cargo test -q agent_tool -- --test-threads=1
+```
+
+### 2.28 Split `src/engine/mcp.rs`
+
+Status: started. OAuth token persistence, transport connection state,
+`CircuitBreaker`, and the `McpClient` implementation now live in
+`src/engine/mcp/client.rs`. The entry file keeps protocol DTOs, manager
+orchestration, health/runtime fact DTOs, tests, and tool re-exports. `McpClient`
+and `CircuitBreaker` remain publicly re-exported from `src/engine/mcp.rs`.
+`src/engine/mcp.rs` is down from 1908 lines to 729 lines and has exited both
+the `>1500` and `>1200` active queues. The new client module is 1184 lines,
+below the `>1200` queue.
+
+Current structure:
+
+```text
+src/engine/
+├── mcp.rs                           # protocol DTOs, manager, health facts
+└── mcp/
+    ├── client.rs                    # OAuth, transports, client, circuit breaker
+    ├── tests.rs                     # MCP unit tests
+    └── tool.rs                      # MCP management and adapter tools
+```
+
+Current next cuts:
+
+- Split client transport implementations only after adding transport-specific
+  fixtures for stdio, websocket, and HTTP paths.
+- Keep manager orchestration in the entry file until server approval and health
+  facts have broader tests.
+- Preserve `McpClient` and `CircuitBreaker` re-exports when moving client code.
+
+Acceptance:
+
+```bash
+cargo fmt --check
+cargo check -q
+cargo test -q mcp -- --test-threads=1
 ```
 
 ## Phase 3: Lower-Risk Large Module Cleanup
