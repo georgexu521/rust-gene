@@ -7,16 +7,16 @@ Scope: current working tree under `src/` and `apps/desktop/src-tauri/src/`
 ## Executive Summary
 
 Priority Agent is still too large in several core modules. The current working
-tree contains roughly 248k Rust lines across 464 Rust files. Excluding test
-files and `_old.rs` backup files, the active production surface is roughly 437
+tree contains roughly 248k Rust lines across 465 Rust files. Excluding test
+files and `_old.rs` backup files, the active production surface is roughly 438
 Rust files:
 
 | Budget | Active production files |
 |--------|--------------------------|
 | `> 500` lines | 166 |
 | `> 800` lines | 78 |
-| `> 1000` lines | 62 |
-| `> 1200` lines | 46 |
+| `> 1000` lines | 61 |
+| `> 1200` lines | 45 |
 | `> 1500` lines | 31 |
 
 The goal is not to chase a mechanical line-count rule. The practical goal is
@@ -167,13 +167,14 @@ Status: partially complete. The file has moved to
 `types.rs`; memory proposal construction now lives in `memory_proposal.rs`;
 proposal review persistence/batch operations now live in `proposal_store.rs`;
 and proposal gates/evidence/scope checks now live in `proposal_gates.rs`. The
-`mod.rs` file is now 1223 lines, just above the active queue threshold, because
-conflict grouping and background review logic are still in the module root.
+conflict grouping logic now lives in `proposal_conflict.rs`. The `mod.rs` file
+is now 959 lines, below the active queue threshold but still above the preferred
+500-line target because background review and task contract derivation helpers
+are still in the module root.
 
 Remaining responsibilities:
 
 - task contract derivation/formatting helpers;
-- conflict grouping;
 - background review worker.
 
 Proposed structure:
