@@ -7,7 +7,7 @@ Scope: current working tree under `src/` and `apps/desktop/src-tauri/src/`
 ## Executive Summary
 
 Priority Agent is still too large in several core modules. The current working
-tree contains roughly 249k Rust lines across 511 Rust files. Excluding test
+tree contains roughly 249k Rust lines across 512 Rust files. Excluding test
 files, `_old.rs` backup files, and Rust modules mounted only behind
 `#[cfg(test)]`, the active production surface is roughly 219k lines across 472
 Rust files:
@@ -17,8 +17,8 @@ Rust files:
 | `> 500` lines | 167 |
 | `> 800` lines | 73 |
 | `> 1000` lines | 56 |
-| `> 1200` lines | 36 |
-| `> 1500` lines | 9 |
+| `> 1200` lines | 35 |
+| `> 1500` lines | 8 |
 
 The goal is not to chase a mechanical line-count rule. The practical goal is
 reviewable, testable, single-responsibility modules. A 500-line file budget is a
@@ -77,7 +77,6 @@ Excluding tests and `_old.rs` backup files:
 | `src/engine/auto_verify.rs` | 1823 | P1 | Split verifier orchestration, command policy, summaries |
 | `apps/desktop/src-tauri/src/lib.rs` | 1803 | P1 | Split desktop commands/state/session bridge |
 | `src/engine/task_context.rs` | 1787 | P1 | Split task bundle, context pack, serialization |
-| `src/engine/action_review.rs` | 1736 | P1 | Split types, review policy, formatting |
 
 ## Phase 0: Finish In-Progress Memory Manager Cleanup
 
@@ -961,6 +960,39 @@ cargo check -q
 cargo test -q main_screen -- --test-threads=1
 ```
 
+### 2.19 Split `src/engine/action_review.rs`
+
+Status: started. The inline `#[cfg(test)]` module now lives in
+`src/engine/action_review/tests.rs`. This keeps safety-sensitive production
+policy in the entry file while moving the large regression surface into an
+adjacent test module. `src/engine/action_review.rs` is down from 1736 lines to
+1162 lines and has exited both the `>1500` and `>1200` active queues.
+
+Current structure:
+
+```text
+src/engine/
+├── action_review.rs                 # action review policy and verdicts
+└── action_review/
+    └── tests.rs                     # action review unit tests
+```
+
+Current next cuts:
+
+- Split permission/scope formatting only if policy copy grows again.
+- Split checkpoint review helpers only with focused tests around rollback
+  semantics.
+- Keep final decision construction in the entry file until action-review policy
+  stabilizes.
+
+Acceptance:
+
+```bash
+cargo fmt --check
+cargo check -q
+cargo test -q action_review -- --test-threads=1
+```
+
 ## Phase 3: Lower-Risk Large Module Cleanup
 
 These files are large, but they should wait until Phase 1 and Phase 2 reduce
@@ -973,7 +1005,6 @@ the central runtime blast radius.
 | `src/engine/mcp.rs` | MCP behavior spans external integrations |
 | `src/engine/scenario_matrix.rs` | eval/reporting shape should stay stable during daily baseline work |
 | `src/engine/auto_verify.rs` | verification behavior is a correctness boundary |
-| `src/engine/action_review.rs` | action review policy is safety-sensitive |
 
 ## Per-Slice Checklist
 
