@@ -7,16 +7,16 @@ Scope: current working tree under `src/` and `apps/desktop/src-tauri/src/`
 ## Executive Summary
 
 Priority Agent is still too large in several core modules. The current working
-tree contains roughly 248k Rust lines across 468 Rust files. Excluding test
-files and `_old.rs` backup files, the active production surface is roughly 438
+tree contains roughly 248k Rust lines across 469 Rust files. Excluding test
+files and `_old.rs` backup files, the active production surface is roughly 439
 Rust files:
 
 | Budget | Active production files |
 |--------|--------------------------|
 | `> 500` lines | 166 |
 | `> 800` lines | 78 |
-| `> 1000` lines | 62 |
-| `> 1200` lines | 46 |
+| `> 1000` lines | 61 |
+| `> 1200` lines | 45 |
 | `> 1500` lines | 30 |
 
 The goal is not to chase a mechanical line-count rule. The practical goal is
@@ -203,21 +203,22 @@ cargo test -q memory_proposals
 
 ### 1.3 Split `src/engine/trace/`
 
-Status: materially split but not done. The path moved to
+Status: entry split complete; one follow-up remains. The path moved to
 `src/engine/trace/mod.rs`; collector/store logic now lives in `collector.rs`,
 user-facing trace summary/recent-line rendering now lives in `formatting.rs`,
-and `TraceEvent::label` / `TraceEvent::summary` now live in
-`event_summary.rs`. The module is down to 1213 lines, while
-`event_summary.rs` is 1450 lines. Treat this as an open item until the entry
-module is below 1000 lines and the summary module has a follow-up plan.
+diagnostics and latest-summary queries now live in `diagnostic.rs`, and
+`TraceEvent::label` / `TraceEvent::summary` now live in `event_summary.rs`. The
+entry module is down to 919 lines, below the active queue threshold, while
+`event_summary.rs` is 1450 lines and should be the next trace-specific follow-up
+if we want this subsystem fully under 1200.
 
 Current responsibilities:
 
 - `TraceEvent` definition;
 - event labels and summaries;
 - turn trace container;
-- diagnostics;
-- helper queries.
+- trace diagnostics and helper queries live in `diagnostic.rs`;
+- event presentation lives in `event_summary.rs`.
 
 Proposed structure:
 
@@ -233,13 +234,10 @@ src/engine/trace/
 
 Current next cuts:
 
-- Extract `TraceEvent` variants to `event.rs` only if the re-export surface
-  stays mechanical and testable.
-- Extract `ControlLoopDiagnostic`, action-review summaries, runtime-diet
-  summaries, and tool-record evidence helpers to `diagnostic.rs` once the event
-  summary cut is stable.
-- Consider splitting `event_summary.rs` by label/summary helper families after
-  the event type move if it stays above 1200 lines.
+- Extract `TraceEvent` variants to `event.rs` only if the re-export surface stays
+  mechanical and testable.
+- Split `event_summary.rs` by label/summary helper families if it stays above
+  1200 lines after the event type move.
 
 Acceptance:
 
