@@ -7,15 +7,15 @@ Scope: current working tree under `src/` and `apps/desktop/src-tauri/src/`
 ## Executive Summary
 
 Priority Agent is still too large in several core modules. The current working
-tree contains roughly 249k Rust lines across 523 Rust files. Excluding test
+tree contains roughly 249k Rust lines across 524 Rust files. Excluding test
 files, `_old.rs` backup files, and Rust modules mounted only behind
-`#[cfg(test)]`, the active production surface is roughly 219k lines across 481
+`#[cfg(test)]`, the active production surface is roughly 218k lines across 481
 Rust files:
 
 | Budget | Active production files |
 |--------|--------------------------|
-| `> 500` lines | 171 |
-| `> 800` lines | 73 |
+| `> 500` lines | 172 |
+| `> 800` lines | 74 |
 | `> 1000` lines | 56 |
 | `> 1200` lines | 32 |
 | `> 1500` lines | 0 |
@@ -68,9 +68,9 @@ source split.
 Excluding tests and `_old.rs` backup files:
 
 No active production file currently exceeds 1500 lines. The next cleanup queue
-is the `>1200` group, led by files such as `src/engine/code_change_workflow.rs`,
-`src/tui/screens/main_screen.rs`, `src/tui/app.rs`, `src/engine/evidence_ledger.rs`,
-and `src/tui/slash_handler/learning.rs`.
+is the `>1200` group, led by files such as `src/tui/app.rs`,
+`src/tui/screens/main_screen.rs`, `src/engine/evidence_ledger.rs`,
+`src/tools/agent_tool/mod.rs`, and `src/tui/slash_handler/learning.rs`.
 
 ## Phase 0: Finish In-Progress Memory Manager Cleanup
 
@@ -1314,6 +1314,41 @@ Acceptance:
 cargo fmt --check
 cargo check -q
 cargo test -q mcp -- --test-threads=1
+```
+
+### 2.29 Split `src/engine/code_change_workflow.rs`
+
+Status: started. The code-change workflow unit tests now live in
+`src/engine/code_change_workflow/tests.rs`. The entry file keeps workflow DTOs,
+risk-sensitive policy, closeout formatting, and `CodeChangeWorkflowRunner`
+runtime logic. `src/engine/code_change_workflow.rs` is down from 1499 lines to
+941 lines and has exited the `>1200` active queue. The new test module is 558
+lines and is test-only.
+
+Current structure:
+
+```text
+src/engine/
+├── code_change_workflow.rs          # workflow policy, closeout, runner
+└── code_change_workflow/
+    ├── helpers.rs                   # formatting and evidence helpers
+    └── tests.rs                     # code-change workflow unit tests
+```
+
+Current next cuts:
+
+- Keep workflow DTOs and closeout formatting together until a broader workflow
+  contract split is ready.
+- Split `CodeChangeWorkflowRunner` only if the runner state and closeout
+  assembly can be covered by focused tests first.
+- Avoid changing closeout semantics during size-only refactors.
+
+Acceptance:
+
+```bash
+cargo fmt --check
+cargo check -q
+cargo test -q code_change_workflow -- --test-threads=1
 ```
 
 ## Phase 3: Lower-Risk Large Module Cleanup
