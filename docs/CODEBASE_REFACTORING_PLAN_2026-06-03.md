@@ -7,17 +7,17 @@ Scope: current working tree under `src/` and `apps/desktop/src-tauri/src/`
 ## Executive Summary
 
 Priority Agent is still too large in several core modules. The current working
-tree contains roughly 248k Rust lines across 463 Rust files. Excluding test
-files and `_old.rs` backup files, the active production surface is roughly 436
+tree contains roughly 248k Rust lines across 464 Rust files. Excluding test
+files and `_old.rs` backup files, the active production surface is roughly 437
 Rust files:
 
 | Budget | Active production files |
 |--------|--------------------------|
-| `> 500` lines | 165 |
+| `> 500` lines | 166 |
 | `> 800` lines | 78 |
 | `> 1000` lines | 62 |
 | `> 1200` lines | 46 |
-| `> 1500` lines | 32 |
+| `> 1500` lines | 31 |
 
 The goal is not to chase a mechanical line-count rule. The practical goal is
 reviewable, testable, single-responsibility modules. A 500-line file budget is a
@@ -82,7 +82,6 @@ Excluding tests and `_old.rs` backup files:
 | `src/tui/commands.rs` | 1876 | P1 | Split registry, command metadata, execution adapters |
 | `src/engine/auto_verify.rs` | 1823 | P1 | Split verifier orchestration, command policy, summaries |
 | `apps/desktop/src-tauri/src/lib.rs` | 1803 | P1 | Split desktop commands/state/session bridge |
-| `src/engine/task_contract/mod.rs` | 1787 | P0 | Continue splitting proposal gates/conflicts/background review |
 | `src/engine/task_context.rs` | 1787 | P1 | Split task bundle, context pack, serialization |
 | `src/engine/action_review.rs` | 1736 | P1 | Split types, review policy, formatting |
 | `src/tui/screens/main_screen.rs` | 1706 | P1 | Split status bar, transcript, panels |
@@ -165,18 +164,15 @@ Current follow-up:
 
 Status: partially complete. The file has moved to
 `src/engine/task_contract/mod.rs`; base task/context/report types now live in
-`types.rs`; memory proposal construction now lives in `memory_proposal.rs`; and
-proposal review persistence/batch operations now live in `proposal_store.rs`.
-The `mod.rs` file is still 1787 lines because proposal gates, conflict grouping,
-and background review logic are still in the module root.
+`types.rs`; memory proposal construction now lives in `memory_proposal.rs`;
+proposal review persistence/batch operations now live in `proposal_store.rs`;
+and proposal gates/evidence/scope checks now live in `proposal_gates.rs`. The
+`mod.rs` file is now 1223 lines, just above the active queue threshold, because
+conflict grouping and background review logic are still in the module root.
 
 Remaining responsibilities:
 
-- task contract types;
-- assumptions, scope, confidence, execution reports;
-- memory proposal types;
-- proposal review store;
-- proposal gates;
+- task contract derivation/formatting helpers;
 - conflict grouping;
 - background review worker.
 
