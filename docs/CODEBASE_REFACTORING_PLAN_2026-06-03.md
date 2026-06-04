@@ -7,9 +7,9 @@ Scope: current working tree under `src/` and `apps/desktop/src-tauri/src/`
 ## Executive Summary
 
 Priority Agent is still too large in several core modules. The current working
-tree contains roughly 249k Rust lines across 518 Rust files. Excluding test
+tree contains roughly 249k Rust lines across 519 Rust files. Excluding test
 files, `_old.rs` backup files, and Rust modules mounted only behind
-`#[cfg(test)]`, the active production surface is roughly 219k lines across 477
+`#[cfg(test)]`, the active production surface is roughly 219k lines across 478
 Rust files:
 
 | Budget | Active production files |
@@ -18,7 +18,7 @@ Rust files:
 | `> 800` lines | 73 |
 | `> 1000` lines | 56 |
 | `> 1200` lines | 33 |
-| `> 1500` lines | 4 |
+| `> 1500` lines | 3 |
 
 The goal is not to chase a mechanical line-count rule. The practical goal is
 reviewable, testable, single-responsibility modules. A 500-line file budget is a
@@ -72,7 +72,6 @@ Excluding tests and `_old.rs` backup files:
 | `src/tools/agent_tool/mod.rs` | 1995 | P2 | Split after runtime/tool-core work stabilizes |
 | `src/tools/bash_tool/command_classifier.rs` | 1974 | P2 | Split classifier tables and shell analysis helpers |
 | `src/engine/mcp.rs` | 1908 | P2 | Split protocol/client/tool surface |
-| `src/tui/app.rs` | 1893 | P1 | Continue moving runtime state and handlers out |
 
 ## Phase 0: Finish In-Progress Memory Manager Cleanup
 
@@ -1163,6 +1162,43 @@ cargo fmt --check
 cargo check -q
 (cd apps/desktop/src-tauri && cargo check -q)
 (cd apps/desktop/src-tauri && cargo test -q desktop_run_context -- --test-threads=1)
+```
+
+### 2.25 Split `src/tui/app.rs`
+
+Status: started. Runtime status labels, runtime-state snapshot construction,
+stream usage labels, transcript expansion, and tool-viewer selection helpers
+now live in `src/tui/app/status_tools.rs`. The entry file keeps TUI state,
+message submission, slash-command integration, streaming refresh, approvals,
+question handling, history, and message mutation. `src/tui/app.rs` is down from
+1893 lines to 1486 lines and has exited the `>1500` active queue. It remains in
+the `>1200` queue and should continue to shed cohesive UI state groups.
+
+Current structure:
+
+```text
+src/tui/
+├── app.rs                           # core TUI state and message/runtime loop
+└── app/
+    └── status_tools.rs              # status labels and tool-viewer helpers
+```
+
+Current next cuts:
+
+- Move paste handling and history navigation after preserving focused app
+  tests.
+- Move approval/question state helpers only if their runtime channels remain
+  compile-gated.
+- Keep submit/streaming flow in the entry file until the TUI runtime boundary
+  is stable.
+
+Acceptance:
+
+```bash
+cargo fmt --check
+cargo check -q
+cargo test -q app -- --test-threads=1
+cargo test -q tool_viewer -- --test-threads=1
 ```
 
 ## Phase 3: Lower-Risk Large Module Cleanup
