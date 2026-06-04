@@ -7,8 +7,8 @@ Scope: current working tree under `src/` and `apps/desktop/src-tauri/src/`
 ## Executive Summary
 
 Priority Agent is still too large in several core modules. The current working
-tree contains roughly 248k Rust lines across 469 Rust files. Excluding test
-files and `_old.rs` backup files, the active production surface is roughly 439
+tree contains roughly 248k Rust lines across 471 Rust files. Excluding test
+files and `_old.rs` backup files, the active production surface is roughly 440
 Rust files:
 
 | Budget | Active production files |
@@ -69,13 +69,13 @@ Excluding tests and `_old.rs` backup files:
 | File | Lines | Priority | Recommended action |
 |------|-------|----------|--------------------|
 | `src/tools/agent_tool/mod.rs` | 1995 | P2 | Split after runtime/tool-core work stabilizes |
-| `src/engine/conversation_loop/tool_execution_controller.rs` | 1995 | P0 | Split gate/context/batch/action decision |
 | `src/tools/bash_tool/command_classifier.rs` | 1974 | P2 | Split classifier tables and shell analysis helpers |
 | `src/session_store/mod.rs` | 1974 | P1 | Split records, trace, learning, compact, agent persistence |
 | `src/memory/provider.rs` | 1968 | P1 | Split provider traits, registry, local provider, migration |
 | `src/tools/memory_tool/mod.rs` | 1952 | P1 | Split commands, rendering, validation, execution |
 | `src/engine/mcp.rs` | 1908 | P2 | Split protocol/client/tool surface |
 | `src/tui/app.rs` | 1893 | P1 | Continue moving runtime state and handlers out |
+| `src/engine/conversation_loop/tool_execution_controller.rs` | 1891 | P0 | Continue splitting gate/context/action decision |
 | `src/engine/scenario_matrix.rs` | 1885 | P2 | Split types, matrix construction, evaluation, reporting |
 | `src/tui/slash_handler/agents.rs` | 1881 | P1 | Split doctor/status/cache/provider sections |
 | `src/tui/commands.rs` | 1876 | P1 | Split registry, command metadata, execution adapters |
@@ -249,6 +249,12 @@ cargo test -q trace
 
 ### 1.4 Split `src/engine/conversation_loop/tool_execution_controller.rs`
 
+Status: started. Batch/result aggregation now lives in
+`tool_execution_controller/batch.rs`, with the public conversation-loop surface
+kept through `tool_execution_controller::ToolExecutionBatch`. The entry file is
+down to 1891 lines. Remaining high-value cuts are the gate, runtime context,
+observer/memory action signals, and action review trace/metadata helpers.
+
 Current responsibilities:
 
 - tool execution orchestration;
@@ -264,12 +270,12 @@ Proposed structure:
 
 ```text
 src/engine/conversation_loop/
-├── tool_execution_controller.rs
-├── tool_execution_gate.rs
-├── tool_runtime_context.rs
-├── tool_action_decision.rs
-├── tool_execution_batch.rs
-└── tool_call_lifecycle.rs
+├── tool_execution_controller.rs          # controller entry and orchestration
+└── tool_execution_controller/
+    ├── batch.rs                          # batch/result aggregation
+    ├── gate.rs                           # permission/risk gate
+    ├── runtime_context.rs                # per-round runtime context
+    └── action_signals.rs                 # observer/memory/action review helpers
 ```
 
 Acceptance:

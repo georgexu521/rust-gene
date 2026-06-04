@@ -1,5 +1,5 @@
 use super::permission_controller::{PermissionController, PermissionRequestRuntime};
-use super::tool_call_lifecycle::{ToolCallLifecycle, ToolCallLifecycleRecord, ToolCallStatus};
+use super::tool_call_lifecycle::ToolCallLifecycle;
 use super::tool_context_helpers::{tool_allowed_by_context, tool_not_allowed_result};
 use super::tool_execution::{
     force_serial_tool_dispatch, read_only_tool_concurrency, tool_call_is_concurrency_safe,
@@ -42,113 +42,9 @@ use tokio::sync::mpsc;
 use tokio::sync::Mutex;
 use tracing::debug;
 
-type ToolExecutionResults = Vec<(ToolCall, ToolResult)>;
-type ToolLifecycleRecords = Vec<(String, ToolCallLifecycleRecord)>;
+mod batch;
 
-#[derive(Debug, Clone, Default)]
-pub(super) struct ToolExecutionBatch {
-    results: ToolExecutionResults,
-    lifecycle: ToolLifecycleRecords,
-}
-
-impl ToolExecutionBatch {
-    pub(super) fn new(results: ToolExecutionResults, lifecycle: ToolLifecycleRecords) -> Self {
-        let (results, lifecycle) = complete_provider_result_pairs(results, lifecycle);
-        Self { results, lifecycle }
-    }
-
-    #[cfg(test)]
-    pub(super) fn results(&self) -> &[(ToolCall, ToolResult)] {
-        &self.results
-    }
-
-    pub(super) fn results_mut(&mut self) -> &mut [(ToolCall, ToolResult)] {
-        &mut self.results
-    }
-
-    pub(super) fn any_success(&self) -> bool {
-        self.results.iter().any(|(_, result)| result.success)
-    }
-
-    pub(super) fn unsuccessful_count(&self) -> usize {
-        self.results
-            .iter()
-            .filter(|(_, result)| !result.success)
-            .count()
-    }
-
-    pub(super) fn result_successes(&self) -> impl Iterator<Item = (&ToolCall, bool)> {
-        self.results
-            .iter()
-            .map(|(tool_call, result)| (tool_call, result.success))
-    }
-
-    pub(super) fn denied_count(&self) -> usize {
-        self.lifecycle
-            .iter()
-            .filter(|(_, record)| record.status == ToolCallStatus::Denied)
-            .count()
-    }
-
-    pub(super) fn failed_count(&self) -> usize {
-        self.lifecycle
-            .iter()
-            .filter(|(_, record)| record.status == ToolCallStatus::Failed)
-            .count()
-    }
-
-    pub(super) fn pre_executed_count(&self) -> usize {
-        self.lifecycle
-            .iter()
-            .filter(|(_, record)| record.pre_executed)
-            .count()
-    }
-}
-
-fn complete_provider_result_pairs(
-    mut results: ToolExecutionResults,
-    mut lifecycle: ToolLifecycleRecords,
-) -> (ToolExecutionResults, ToolLifecycleRecords) {
-    let result_ids = results
-        .iter()
-        .map(|(tool_call, _)| tool_call.id.clone())
-        .collect::<HashSet<_>>();
-
-    for (call_id, record) in &mut lifecycle {
-        if result_ids.contains(call_id) {
-            continue;
-        }
-
-        let status = record.status;
-        let mut result = ToolResult::error(format!(
-            "Tool '{}' ended with lifecycle status {:?} but no terminal result was recorded. Treating it as interrupted.",
-            record.tool_name, status
-        ));
-        merge_tool_result_metadata(
-            &mut result,
-            "tool_lifecycle_recovery",
-            serde_json::json!({
-                "schema": "tool_lifecycle_recovery.v1",
-                "call_id": call_id,
-                "tool": record.tool_name.clone(),
-                "previous_status": format!("{:?}", status),
-                "terminal_result": "interrupted",
-                "synthesized": true,
-            }),
-        );
-        results.push((
-            ToolCall {
-                id: call_id.clone(),
-                name: record.tool_name.clone(),
-                arguments: serde_json::json!({}),
-            },
-            result,
-        ));
-        record.status = ToolCallStatus::Failed;
-    }
-
-    (results, lifecycle)
-}
+pub(super) use batch::ToolExecutionBatch;
 
 pub(super) struct ToolExecutionRequest<'a> {
     pub(super) tool_calls: &'a [ToolCall],
