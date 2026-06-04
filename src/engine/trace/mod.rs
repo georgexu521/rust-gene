@@ -6,10 +6,14 @@
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use std::collections::VecDeque;
-use std::sync::{Arc, Mutex, RwLock};
 
-const DEFAULT_MAX_TRACES: usize = 100;
+mod collector;
+mod formatting;
+
+pub use collector::{TraceCollector, TraceStore};
+pub use formatting::{format_trace_recent_line, format_trace_summary};
+
+pub(super) const DEFAULT_MAX_TRACES: usize = 100;
 const PREVIEW_CHARS: usize = 120;
 pub const RUNTIME_DIET_PROMPT_TOKEN_BUDGET: u64 = 4_000;
 pub const RUNTIME_DIET_TOOL_COUNT_BUDGET: usize = 24;
@@ -2301,156 +2305,6 @@ impl TraceEvent {
             TraceEvent::Error { message } => format!("error: {}", preview(message)),
         }
     }
-}
-
-#[derive(Clone)]
-pub struct TraceCollector {
-    inner: Arc<Mutex<TurnTrace>>,
-}
-
-impl TraceCollector {
-    pub fn new(trace: TurnTrace) -> Self {
-        Self {
-            inner: Arc::new(Mutex::new(trace)),
-        }
-    }
-
-    pub fn record(&self, event: TraceEvent) {
-        let mut trace = self.inner.lock().unwrap_or_else(|e| e.into_inner());
-        trace.events.push(event);
-    }
-
-    pub fn snapshot(&self) -> TurnTrace {
-        self.inner.lock().unwrap_or_else(|e| e.into_inner()).clone()
-    }
-
-    pub fn finish(&self, status: TurnStatus) -> TurnTrace {
-        let mut trace = self.inner.lock().unwrap_or_else(|e| e.into_inner());
-        trace.finish(status);
-        trace.clone()
-    }
-}
-
-#[derive(Debug)]
-pub struct TraceStore {
-    max_traces: usize,
-    traces: RwLock<VecDeque<TurnTrace>>,
-}
-
-impl Default for TraceStore {
-    fn default() -> Self {
-        Self::new(DEFAULT_MAX_TRACES)
-    }
-}
-
-impl TraceStore {
-    pub fn new(max_traces: usize) -> Self {
-        Self {
-            max_traces: max_traces.max(1),
-            traces: RwLock::new(VecDeque::new()),
-        }
-    }
-
-    pub fn push(&self, trace: TurnTrace) {
-        let mut traces = self.traces.write().unwrap_or_else(|e| e.into_inner());
-        traces.push_back(trace);
-        while traces.len() > self.max_traces {
-            traces.pop_front();
-        }
-    }
-
-    pub fn latest(&self) -> Option<TurnTrace> {
-        self.traces
-            .read()
-            .unwrap_or_else(|e| e.into_inner())
-            .back()
-            .cloned()
-    }
-
-    pub fn recent(&self, limit: usize) -> Vec<TurnTrace> {
-        self.traces
-            .read()
-            .unwrap_or_else(|e| e.into_inner())
-            .iter()
-            .rev()
-            .take(limit)
-            .cloned()
-            .collect()
-    }
-
-    pub fn len(&self) -> usize {
-        self.traces.read().unwrap_or_else(|e| e.into_inner()).len()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.len() == 0
-    }
-}
-
-pub fn format_trace_summary(trace: &TurnTrace, max_events: usize) -> String {
-    let duration = trace
-        .duration_ms()
-        .map(|ms| format!("{}ms", ms))
-        .unwrap_or_else(|| "running".to_string());
-    let mut lines = vec![format!(
-        "Trace {}\nSession: {}\nTurn: {}\nStatus: {:?}\nDuration: {}\nPrompt: {}",
-        short_id(&trace.trace_id),
-        trace.session_id,
-        trace.turn_index,
-        trace.status,
-        duration,
-        trace.user_message_preview
-    )];
-    if let Some(diet) = latest_runtime_diet_summary(trace) {
-        lines.push(format!("\nRuntime Diet: {}", diet));
-    }
-    if let Some(tool_record_evidence) = latest_tool_record_evidence_summary(trace) {
-        lines.push(format!("\nTool Record Evidence: {}", tool_record_evidence));
-    }
-    lines.push(format!(
-        "\nControl Loop: {}",
-        control_loop_diagnostic(trace).compact_summary()
-    ));
-    if let Some(action_reviews) = action_review_trace_summary(trace) {
-        lines.push(format!(
-            "\nAction Reviews: {}",
-            action_reviews.compact_summary()
-        ));
-    }
-
-    lines.push("\nEvents:".to_string());
-    for (idx, event) in trace.events.iter().take(max_events).enumerate() {
-        lines.push(format!(
-            "{:>2}. {:<20} {}",
-            idx + 1,
-            event.label(),
-            event.summary()
-        ));
-    }
-    if trace.events.len() > max_events {
-        lines.push(format!(
-            "... {} more events",
-            trace.events.len().saturating_sub(max_events)
-        ));
-    }
-
-    lines.join("\n")
-}
-
-pub fn format_trace_recent_line(trace: &TurnTrace) -> String {
-    let action_review_summary = action_review_trace_summary(trace)
-        .map(|summary| format!(" action_reviews={}", summary.compact_summary()))
-        .unwrap_or_default();
-    format!(
-        "- {} turn {} {:?} events={} tool_records={}{} prompt={}",
-        short_id(&trace.trace_id),
-        trace.turn_index,
-        trace.status,
-        trace.events.len(),
-        latest_tool_record_count(trace).unwrap_or(0),
-        action_review_summary,
-        trace.user_message_preview
-    )
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

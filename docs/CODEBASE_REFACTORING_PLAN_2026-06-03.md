@@ -68,7 +68,7 @@ Excluding tests and `_old.rs` backup files:
 
 | File | Lines | Priority | Recommended action |
 |------|-------|----------|--------------------|
-| `src/engine/trace/mod.rs` | 2805 | P0 | Split event types, summaries, collectors, formatting |
+| `src/engine/trace/mod.rs` | 2659 | P0 | Continue splitting event types, summaries, diagnostics |
 | `src/tools/agent_tool/mod.rs` | 1995 | P2 | Split after runtime/tool-core work stabilizes |
 | `src/engine/conversation_loop/tool_execution_controller.rs` | 1995 | P0 | Split gate/context/batch/action decision |
 | `src/tools/bash_tool/command_classifier.rs` | 1974 | P2 | Split classifier tables and shell analysis helpers |
@@ -203,18 +203,18 @@ cargo test -q memory_proposals
 
 ### 1.3 Split `src/engine/trace/`
 
-Status: not materially split yet. The path moved to
-`src/engine/trace/mod.rs`, but the module is still 2805 lines and still owns the
-main trace event, collector, store, formatting, diagnostics, and tests entry.
-Treat this as an open P0 item, not as completed work.
+Status: started. The path moved to `src/engine/trace/mod.rs`; collector/store
+logic now lives in `collector.rs`, and user-facing trace summary/recent-line
+rendering now lives in `formatting.rs`. The module is still 2659 lines and
+still owns the main trace event, event labels/summaries, diagnostics, helper
+queries, and tests entry. Treat this as an open P0 item, not as completed work.
 
 Current responsibilities:
 
 - `TraceEvent` definition;
 - event labels and summaries;
 - turn trace container;
-- trace collector/store;
-- formatting and diagnostics;
+- diagnostics;
 - helper queries.
 
 Proposed structure:
@@ -225,10 +225,20 @@ src/engine/trace/
 ├── event.rs
 ├── event_summary.rs
 ├── collector.rs
-├── store.rs
 ├── diagnostic.rs
-└── format.rs
+└── formatting.rs
 ```
+
+Current next cuts:
+
+- Extract `TraceEvent` variants to `event.rs` only if the re-export surface stays
+  mechanical and testable.
+- Extract `TraceEvent::label` and `TraceEvent::summary` to `event_summary.rs`
+  after the event type move, because this is the largest remaining pure
+  presentation block.
+- Extract `ControlLoopDiagnostic`, action-review summaries, runtime-diet
+  summaries, and tool-record evidence helpers to `diagnostic.rs` once the event
+  summary cut is stable.
 
 Acceptance:
 
