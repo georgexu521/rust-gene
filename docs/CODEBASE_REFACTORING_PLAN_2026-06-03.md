@@ -7,8 +7,8 @@ Scope: current working tree under `src/` and `apps/desktop/src-tauri/src/`
 ## Executive Summary
 
 Priority Agent is still too large in several core modules. The current working
-tree contains roughly 249k Rust lines across 494 Rust files. Excluding test
-files and `_old.rs` backup files, the active production surface is roughly 467
+tree contains roughly 249k Rust lines across 495 Rust files. Excluding test
+files and `_old.rs` backup files, the active production surface is roughly 468
 Rust files:
 
 | Budget | Active production files |
@@ -73,7 +73,6 @@ Excluding tests and `_old.rs` backup files:
 | `src/engine/mcp.rs` | 1908 | P2 | Split protocol/client/tool surface |
 | `src/tui/app.rs` | 1893 | P1 | Continue moving runtime state and handlers out |
 | `src/engine/scenario_matrix.rs` | 1885 | P2 | Split types, matrix construction, evaluation, reporting |
-| `src/tui/slash_handler/agents.rs` | 1881 | P1 | Split doctor/status/cache/provider sections |
 | `src/engine/auto_verify.rs` | 1823 | P1 | Split verifier orchestration, command policy, summaries |
 | `apps/desktop/src-tauri/src/lib.rs` | 1803 | P1 | Split desktop commands/state/session bridge |
 | `src/engine/task_context.rs` | 1787 | P1 | Split task bundle, context pack, serialization |
@@ -83,6 +82,7 @@ Excluding tests and `_old.rs` backup files:
 | `src/engine/evalset.rs` | 1693 | P1 | Split suite loading, execution, and reporting |
 | `src/engine/skill_evolution.rs` | 1675 | P1 | Split analysis, proposal, and persistence lanes |
 | `src/engine/intent_router.rs` | 1672 | P1 | Split intent scoring, route construction, and labels |
+| `src/tui/slash_handler/agents.rs` | 1666 | P1 | Continue splitting doctor/status/cache/provider sections |
 | `src/engine/streaming.rs` | 1644 | P1 | Split provider stream handling, event conversion, and repair hooks |
 | `src/engine/code_change_workflow.rs` | 1630 | P1 | Split workflow state, patch planning, and validation reporting |
 | `src/tools/bash_tool/mod.rs` | 1618 | P1 | Split execution surface, env handling, and output policy |
@@ -418,7 +418,9 @@ command constants and `ALL_COMMANDS` continue to be re-exported from
 `crate::tui::commands::*`, so callers keep the same import paths. The entry file
 is down from 1876 lines to 692 lines. The extracted catalog is 1188 lines; it is
 mostly static command declarations and can be split again later by command
-family if the table becomes difficult to review.
+family if the table becomes difficult to review. Agent listing and agent
+worktree subcommands now live in `src/tui/slash_handler/agents/agent_listing.rs`;
+`src/tui/slash_handler/agents.rs` is down from 1881 lines to 1666 lines.
 
 Targets:
 
@@ -440,14 +442,18 @@ Current structure:
 ```text
 src/tui/
 ├── commands.rs                 # registry, help/search, registration logic
-└── commands/
-    ├── catalog.rs              # command constants, maturity lists, ALL_COMMANDS
-    └── tests.rs
+├── commands/
+│   ├── catalog.rs              # command constants, maturity lists, ALL_COMMANDS
+│   └── tests.rs
+└── slash_handler/
+    └── agents/
+        ├── agent_listing.rs    # /agents listing and worktree subcommands
+        └── tests.rs
 ```
 
 Current next cuts:
 
-- Split `/doctor`, provider status, cache status, and agent listings out of
+- Split `/doctor`, provider status, and cache status out of
   `src/tui/slash_handler/agents.rs`.
 - Move provider/runtime facade synchronization out of `src/tui/app.rs`.
 - Split status bar/transcript/panels out of
