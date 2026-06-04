@@ -7,14 +7,14 @@ Scope: current working tree under `src/` and `apps/desktop/src-tauri/src/`
 ## Executive Summary
 
 Priority Agent is still too large in several core modules. The current working
-tree contains roughly 248k Rust lines across 465 Rust files. Excluding test
-files and `_old.rs` backup files, the active production surface is roughly 438
+tree contains roughly 248k Rust lines across 466 Rust files. Excluding test
+files and `_old.rs` backup files, the active production surface is roughly 439
 Rust files:
 
 | Budget | Active production files |
 |--------|--------------------------|
 | `> 500` lines | 166 |
-| `> 800` lines | 78 |
+| `> 800` lines | 77 |
 | `> 1000` lines | 61 |
 | `> 1200` lines | 45 |
 | `> 1500` lines | 31 |
@@ -162,26 +162,27 @@ Current follow-up:
 
 ### 1.2 Split `src/engine/task_contract/`
 
-Status: partially complete. The file has moved to
+Status: mostly complete. The file has moved to
 `src/engine/task_contract/mod.rs`; base task/context/report types now live in
 `types.rs`; memory proposal construction now lives in `memory_proposal.rs`;
 proposal review persistence/batch operations now live in `proposal_store.rs`;
 and proposal gates/evidence/scope checks now live in `proposal_gates.rs`. The
-conflict grouping logic now lives in `proposal_conflict.rs`. The `mod.rs` file
-is now 959 lines, below the active queue threshold but still above the preferred
-500-line target because background review and task contract derivation helpers
-are still in the module root.
+conflict grouping logic now lives in `proposal_conflict.rs`; background review
+packet/worker logic now lives in `background_review.rs`. The `mod.rs` file is
+now 728 lines, below the active queue threshold and inside the 501-800
+acceptable band.
 
 Remaining responsibilities:
 
-- task contract derivation/formatting helpers;
-- background review worker.
+- task contract derivation/formatting helpers. A future optional cleanup can
+  extract these to `contract.rs` if we want to push below 500 lines.
 
 Proposed structure:
 
 ```text
 src/engine/task_contract/
 ├── mod.rs
+├── background_review.rs
 ├── types.rs
 ├── contract.rs
 ├── memory_proposal.rs
