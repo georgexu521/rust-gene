@@ -7,8 +7,8 @@ Scope: current working tree under `src/` and `apps/desktop/src-tauri/src/`
 ## Executive Summary
 
 Priority Agent is still too large in several core modules. The current working
-tree contains roughly 249k Rust lines across 497 Rust files. Excluding test
-files and `_old.rs` backup files, the active production surface is roughly 470
+tree contains roughly 249k Rust lines across 498 Rust files. Excluding test
+files and `_old.rs` backup files, the active production surface is roughly 471
 Rust files:
 
 | Budget | Active production files |
@@ -17,7 +17,7 @@ Rust files:
 | `> 800` lines | 76 |
 | `> 1000` lines | 59 |
 | `> 1200` lines | 39 |
-| `> 1500` lines | 23 |
+| `> 1500` lines | 22 |
 
 The goal is not to chase a mechanical line-count rule. The practical goal is
 reviewable, testable, single-responsibility modules. A 500-line file budget is a
@@ -87,7 +87,7 @@ Excluding tests and `_old.rs` backup files:
 | `src/tools/bash_tool/mod.rs` | 1618 | P1 | Split execution surface, env handling, and output policy |
 | `src/memory/eval.rs` | 1598 | P2 | Split eval case loading, runner, and report formatting |
 | `src/engine/workflow_contract.rs` | 1594 | P1 | Split workflow contract types, validation, and report formatting |
-| `src/tools/file_tool/mod.rs` | 1592 | P1 | Split file read/write/search operation families |
+| `src/engine/retrieval_context.rs` | 1572 | P1 | Split retrieval collection, prompt rendering, and cache metadata |
 
 ## Phase 0: Finish In-Progress Memory Manager Cleanup
 
@@ -480,7 +480,42 @@ cargo test -q tui
 cargo test -q prompt_context
 ```
 
-### 2.5 Split Desktop Tauri Entry
+### 2.5 Split `src/tools/file_tool/mod.rs`
+
+Status: started. Edit matching helpers now live in
+`src/tools/file_tool/edit_match.rs`: exact/fuzzy/normalized occurrence
+matching, match-context formatting, file-read line-prefix guidance, and
+occurrence line-number extraction. `src/tools/file_tool/mod.rs` is down from
+1592 lines to 1443 lines and has exited the `>1500` active queue.
+
+Current structure:
+
+```text
+src/tools/file_tool/
+├── mod.rs                  # file operation entrypoint and execution flow
+├── edit_match.rs           # edit target matching and diagnostic context
+├── state.rs
+└── tests.rs
+```
+
+Current next cuts:
+
+- Split read/list/search result rendering if future file-read work touches that
+  flow.
+- Split write/edit/stale-conflict orchestration if edit behavior needs another
+  correctness pass.
+- Keep `edit_match.rs` pure and side-effect free so edit matching remains easy
+  to unit-test.
+
+Acceptance:
+
+```bash
+cargo fmt --check
+cargo check -q
+cargo test -q file_tool -- --test-threads=1
+```
+
+### 2.6 Split Desktop Tauri Entry
 
 Target: `apps/desktop/src-tauri/src/lib.rs`.
 
