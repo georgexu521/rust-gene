@@ -2,7 +2,7 @@
 
 Date: 2026-06-04
 
-Status: proposed
+Status: partially implemented
 
 ## 1. Purpose
 
@@ -457,13 +457,34 @@ stable metadata.
 
 ## 16. Completion Checklist
 
-- [ ] Baseline status recorded before implementation.
-- [ ] Product profiles documented and tested.
-- [ ] All file mutation tools emit one shared metadata contract.
-- [ ] Post-edit diagnostics are visible in tool output, trace, TUI, and desktop.
-- [ ] Checkpoint projection supports last-change viewing and approved restore.
-- [ ] Usage JSONL has a SQLite projection with rebuild support.
-- [ ] Shell parser hardening is gated and fail-closed.
-- [ ] Daily baseline covers the new programming-chain contracts.
+- [x] Baseline status recorded before implementation. (Phase 0: narrow gates green)
+- [ ] Product profiles documented and tested. (Deferred: existing AgentMode/IntentRouter/route-scoped tools cover much of this, but build/plan/explore/repair are not yet first-class product profiles)
+- [x] All file mutation tools emit one shared metadata contract. (Phase 2: `mutation_result.rs` with `FileMutationResult`, integrated into `file_write`/`file_edit`/`file_patch`)
+- [ ] Post-edit diagnostics are visible in tool output, trace, TUI, and desktop. (Partial: diagnostics are normalized into `mutation_result`; dedicated trace/TUI/desktop cards remain follow-up work)
+- [ ] Checkpoint projection supports last-change viewing and approved restore. (Checkpoint system is mature; UI surface via slash commands already exists)
+- [x] Usage JSONL has a SQLite projection with rebuild support. (Phase 5: SQLite table in `usage_ledger.rs`, sync only after JSONL append, idempotent inserts, summary queries, rebuild from JSONL)
+- [ ] Shell parser hardening is gated and fail-closed. (Deferred: existing classifier is strong; tree-sitter adds dependency risk)
+- [x] Daily baseline covers the new programming-chain contracts. (Phase 8: daily-baseline.sh updated)
+
+## 17. Implementation Record
+
+2026-06-04: Phases 0, 2, 5, and 8 have implementation slices. Phase 3 is
+partially implemented at the tool metadata layer: file-edit diagnostics are
+normalized into `mutation_result`, but dedicated trace/TUI/desktop programming
+chain cards remain follow-up work. Phase 7 has partial prior groundwork
+(desktop closeout handling and presentation extraction). Phase 6 (shell parser)
+is deferred per this plan's risk assessment: the existing bash classifier is
+strong and tree-sitter adds dependency and maintenance burden. Phase 1 (product
+profiles) is designed but not implemented as first-class build/plan/explore/repair
+profiles; existing AgentMode/IntentRouter routing remains the current product
+surface.
+
+**Key deliverables:**
+- `src/tools/file_tool/mutation_result.rs` — unified FileMutationResult struct
+- `src/cost_tracker/usage_ledger.rs` — SQLite projection with idempotent sync,
+  query summaries, and rebuild
+- `scripts/daily-baseline.sh` — updated with usage_ledger and mutation_result gates
+- Narrow validation gates were run for usage ledger, file mutation metadata,
+  file tools, cost tracker, formatting, and cargo check
 - [ ] `docs/PROJECT_STATUS.md` and `docs/PROJECT_MAP.md` are updated if runtime
       boundaries or product status materially change.

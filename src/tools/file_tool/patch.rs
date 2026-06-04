@@ -9,8 +9,8 @@ use super::{
     acquire_file_mutation_lock, check_file_size_limit, edit_diff_summary, edit_diff_summary_json,
     edit_preview_json, file_path_identity, file_read_state_guidance, high_risk_file_target_result,
     is_file_modified_since_read, is_unc_or_network_path, mark_file_read_with_state,
-    path_identity_json, read_before_edit_status, resolve_path, FileEditTool, FilePathIdentity,
-    ReadBeforeEditStatus, MAX_EDITABLE_FILE_SIZE_BYTES,
+    mutation_result, path_identity_json, read_before_edit_status, resolve_path, FileEditTool,
+    FilePathIdentity, ReadBeforeEditStatus, MAX_EDITABLE_FILE_SIZE_BYTES,
 };
 use crate::engine::checkpoint::RestoreResult;
 use crate::tools::{Tool, ToolContext, ToolOperationKind, ToolPermissionLevel, ToolResult};
@@ -325,7 +325,39 @@ impl Tool for FilePatchTool {
                 "diff": {
                     "unified_diff": combined_diff,
                     "file_count": prepared.len(),
-                }
+                },
+                "mutation_result": serde_json::to_value(
+                    mutation_result::file_patch_result(
+                        files.iter().map(|f| mutation_result::FileResult {
+                            path: f.get("path").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                            resolved_path: f.get("resolved_path").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                            display_path: f.get("path").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                            existed_before: f.get("existed_before").and_then(|v| v.as_bool()).unwrap_or(true),
+                            replacements: f.get("replacements").and_then(|v| v.as_u64()).unwrap_or(0) as usize,
+                            bytes_written: f.get("bytes_written").and_then(|v| v.as_u64()).unwrap_or(0),
+                            additions: f.get("diff").and_then(|d| d.get("additions").and_then(|v| v.as_u64())).unwrap_or(0) as usize,
+                            deletions: f.get("diff").and_then(|d| d.get("deletions").and_then(|v| v.as_u64())).unwrap_or(0) as usize,
+                            changed_line_start: f.get("diff").and_then(|d| d.get("changed_line_start").and_then(|v| v.as_u64())),
+                            changed_line_end: f.get("diff").and_then(|d| d.get("changed_line_end").and_then(|v| v.as_u64())),
+                            text_format: mutation_result::TextFormatInfo {
+                                encoding: f.get("text_format").and_then(|tf| tf.get("encoding").and_then(|v| v.as_str())).unwrap_or("utf-8").to_string(),
+                                has_bom: f.get("text_format").and_then(|tf| tf.get("bom").and_then(|v| v.as_bool())).unwrap_or(false),
+                                line_ending: f.get("text_format").and_then(|tf| tf.get("line_ending").and_then(|v| v.as_str())).unwrap_or("LF").to_string(),
+                            },
+                            file_change_id: f.get("edit_preview").and_then(|ep| ep.get("file_change_id").and_then(|v| v.as_str())).map(|s| s.to_string()),
+                            before_hash: f.get("edit_preview").and_then(|ep| ep.get("before_hash").and_then(|v| v.as_str())).map(|s| s.to_string()),
+                            after_hash: f.get("edit_preview").and_then(|ep| ep.get("after_hash").and_then(|v| v.as_str())).map(|s| s.to_string()),
+                        }).collect(),
+                        prepared.iter().map(|p| p.diff.additions).sum(),
+                        prepared.iter().map(|p| p.diff.deletions).sum(),
+                        &combined_diff,
+                        prepared.iter().any(|p| p.diff.preview_truncated),
+                        file_changes.iter().filter_map(|v| v.get("id").and_then(|v| v.as_str()).map(|s| s.to_string())).collect(),
+                        Some(checkpoint.id.as_str()),
+                        Some(checkpoint.sequence),
+                        Some(context.session_id.as_str()),
+                    )
+                ).unwrap_or(serde_json::Value::Null),
             }),
         )
     }
@@ -403,6 +435,26 @@ fn patch_write_failure_result(
             .unwrap_or(false),
         "rollback_error": rollback_error,
         "rollback": rollback,
+        "mutation_result": serde_json::to_value(
+            mutation_result::file_patch_partial_failure_result(
+                &patch.path_arg,
+                vec![],
+                0,
+                0,
+                "",
+                false,
+                vec![],
+                Some(checkpoint.id.as_str()),
+                Some(checkpoint.sequence),
+                None,
+                rollback.get("attempted").and_then(Value::as_bool).unwrap_or(false),
+                rollback.get("success").and_then(Value::as_bool).unwrap_or(false),
+                rollback.get("restored_files").and_then(|v| v.as_array()).map(|arr| arr.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect()).unwrap_or_default(),
+                rollback.get("removed_files").and_then(|v| v.as_array()).map(|arr| arr.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect()).unwrap_or_default(),
+                rollback.get("failed_files").and_then(|v| v.as_array()).map(|arr| arr.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect()).unwrap_or_default(),
+                rollback.get("error").and_then(|v| v.as_str()).map(|s| s.to_string()),
+            )
+        ).unwrap_or(serde_json::Value::Null),
     });
     let mut result = ToolResult::error(format!(
         "file_patch failed while writing {}: {}",

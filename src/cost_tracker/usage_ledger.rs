@@ -160,9 +160,374 @@ fn prompt_cache_hit_rate(prompt_tokens: u64, cached_tokens: u64) -> f64 {
     }
 }
 
+// ---- SQLite projection (Phase 5: opencode alignment) ----
+
+const USAGE_SQLITE_TABLE: &str = "usage_ledger";
+
+fn usage_sqlite_path() -> PathBuf {
+    if let Ok(path) = std::env::var(USAGE_LEDGER_ENV) {
+        let mut p = PathBuf::from(path);
+        p.set_extension("sqlite");
+        return p;
+    }
+    dirs::data_dir()
+        .map(|dir| dir.join("priority-agent").join("usage.sqlite"))
+        .unwrap_or_else(|| PathBuf::from(".priority-agent/usage.sqlite"))
+}
+
+fn ensure_usage_sqlite(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
+    conn.execute_batch(&format!(
+        "CREATE TABLE IF NOT EXISTS {table} (
+            ts INTEGER NOT NULL,
+            session TEXT NOT NULL,
+            model TEXT NOT NULL,
+            prompt_tokens INTEGER NOT NULL DEFAULT 0,
+            completion_tokens INTEGER NOT NULL DEFAULT 0,
+            total_tokens INTEGER NOT NULL DEFAULT 0,
+            cache_hit_tokens INTEGER NOT NULL DEFAULT 0,
+            cache_miss_tokens INTEGER NOT NULL DEFAULT 0,
+            cost_usd REAL NOT NULL DEFAULT 0.0,
+            stable_prefix_hash TEXT,
+            system_hash TEXT,
+            tool_schema_hash TEXT,
+            dynamic_tail_hash TEXT,
+            miss_reason TEXT,
+            miss_reason_detail TEXT,
+            day TEXT GENERATED ALWAYS AS (date(ts / 1000, 'unixepoch')) STORED
+        );
+        CREATE INDEX IF NOT EXISTS idx_{table}_session ON {table}(session);
+        CREATE INDEX IF NOT EXISTS idx_{table}_model ON {table}(model);
+        CREATE INDEX IF NOT EXISTS idx_{table}_day ON {table}(day);
+        CREATE INDEX IF NOT EXISTS idx_{table}_ts ON {table}(ts);",
+        table = USAGE_SQLITE_TABLE
+    ))?;
+    for column in [
+        "system_hash",
+        "tool_schema_hash",
+        "dynamic_tail_hash",
+        "miss_reason_detail",
+    ] {
+        ensure_usage_sqlite_text_column(conn, column)?;
+    }
+    Ok(())
+}
+
+fn ensure_usage_sqlite_text_column(
+    conn: &rusqlite::Connection,
+    column: &str,
+) -> rusqlite::Result<()> {
+    let mut stmt = conn.prepare(&format!("PRAGMA table_info({USAGE_SQLITE_TABLE})"))?;
+    let mut rows = stmt.query([])?;
+    while let Some(row) = rows.next()? {
+        let name: String = row.get(1)?;
+        if name == column {
+            return Ok(());
+        }
+    }
+    conn.execute(
+        &format!("ALTER TABLE {USAGE_SQLITE_TABLE} ADD COLUMN {column} TEXT"),
+        [],
+    )?;
+    Ok(())
+}
+
+/// Sync one entry into the SQLite projection.
+///
+/// Called after a successful JSONL append. Insert is idempotent by matching the
+/// complete usage payload so rebuilding or retrying the same entry cannot double
+/// count costs.
+pub fn sync_usage_to_sqlite(entry: &UsageLedgerEntry) {
+    let path = usage_sqlite_path();
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let conn = match rusqlite::Connection::open(&path) {
+        Ok(conn) => conn,
+        Err(_) => return,
+    };
+    if ensure_usage_sqlite(&conn).is_err() {
+        return;
+    }
+    let _ = conn.execute(
+        &format!(
+            "INSERT INTO {table} (ts, session, model, prompt_tokens, completion_tokens,
+             total_tokens, cache_hit_tokens, cache_miss_tokens, cost_usd,
+             stable_prefix_hash, system_hash, tool_schema_hash, dynamic_tail_hash,
+             miss_reason, miss_reason_detail)
+             SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15
+             WHERE NOT EXISTS (
+                SELECT 1 FROM {table}
+                WHERE ts = ?1
+                  AND session = ?2
+                  AND model = ?3
+                  AND prompt_tokens = ?4
+                  AND completion_tokens = ?5
+                  AND total_tokens = ?6
+                  AND cache_hit_tokens = ?7
+                  AND cache_miss_tokens = ?8
+                  AND cost_usd = ?9
+                  AND COALESCE(stable_prefix_hash, '') = COALESCE(?10, '')
+                  AND COALESCE(system_hash, '') = COALESCE(?11, '')
+                  AND COALESCE(tool_schema_hash, '') = COALESCE(?12, '')
+                  AND COALESCE(dynamic_tail_hash, '') = COALESCE(?13, '')
+                  AND COALESCE(miss_reason, '') = COALESCE(?14, '')
+                  AND COALESCE(miss_reason_detail, '') = COALESCE(?15, '')
+             )",
+            table = USAGE_SQLITE_TABLE
+        ),
+        rusqlite::params![
+            entry.ts as i64,
+            entry.session,
+            entry.model,
+            entry.prompt_tokens as i64,
+            entry.completion_tokens as i64,
+            entry.total_tokens as i64,
+            entry.cache_hit_tokens as i64,
+            entry.cache_miss_tokens as i64,
+            entry.cost_usd,
+            entry.stable_prefix_hash,
+            entry.system_hash,
+            entry.tool_schema_hash,
+            entry.dynamic_tail_hash,
+            entry.miss_reason,
+            entry.miss_reason_detail,
+        ],
+    );
+}
+
+/// Rebuild SQLite projection from JSONL. Useful after corruption or schema changes.
+pub fn rebuild_usage_sqlite_from_jsonl() -> io::Result<usize> {
+    let path = usage_sqlite_path();
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let conn = rusqlite::Connection::open(&path)
+        .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("sqlite open: {e}")))?;
+    ensure_usage_sqlite(&conn)
+        .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("sqlite schema: {e}")))?;
+    // Truncate before rebuild.
+    conn.execute(
+        &format!("DELETE FROM {table}", table = USAGE_SQLITE_TABLE),
+        [],
+    )
+    .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("sqlite delete: {e}")))?;
+
+    let jsonl_path = default_usage_ledger_path();
+    let mut count = 0;
+    let file = match File::open(&jsonl_path) {
+        Ok(f) => f,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(0),
+        Err(e) => return Err(e),
+    };
+    for line in io::BufReader::new(file).lines() {
+        let line = line?;
+        if line.trim().is_empty() {
+            continue;
+        }
+        if let Ok(entry) = serde_json::from_str::<UsageLedgerEntry>(&line) {
+            sync_usage_to_sqlite(&entry);
+            count += 1;
+        }
+    }
+    Ok(count)
+}
+
+/// Query SQLite-projected usage summary by session.
+pub fn query_usage_by_session(session: &str) -> io::Result<UsageLedgerSummary> {
+    query_usage_sqlite(Some(session), None)
+}
+
+/// Query SQLite-projected usage summary overall.
+pub fn query_usage_overall() -> io::Result<UsageLedgerSummary> {
+    query_usage_sqlite(None, None)
+}
+
+fn query_usage_sqlite(
+    session_filter: Option<&str>,
+    model_filter: Option<&str>,
+) -> io::Result<UsageLedgerSummary> {
+    let path = usage_sqlite_path();
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let conn = match rusqlite::Connection::open(&path) {
+        Ok(conn) => conn,
+        Err(_) => return Ok(UsageLedgerSummary::default()),
+    };
+    ensure_usage_sqlite(&conn)
+        .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("sqlite schema: {e}")))?;
+    let mut sql = format!(
+        "SELECT COUNT(*), COALESCE(SUM(prompt_tokens),0), COALESCE(SUM(completion_tokens),0),
+         COALESCE(SUM(total_tokens),0), COALESCE(SUM(cache_hit_tokens),0),
+         COALESCE(SUM(cache_miss_tokens),0), COALESCE(SUM(cost_usd),0.0)
+         FROM {table}",
+        table = USAGE_SQLITE_TABLE
+    );
+    let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
+
+    let mut conditions = Vec::new();
+    if let Some(s) = session_filter {
+        conditions.push(format!("session = ?{}", params.len() + 1));
+        params.push(Box::new(s.to_string()));
+    }
+    if let Some(m) = model_filter {
+        conditions.push(format!("model = ?{}", params.len() + 1));
+        params.push(Box::new(m.to_string()));
+    }
+    if !conditions.is_empty() {
+        sql.push_str(" WHERE ");
+        sql.push_str(&conditions.join(" AND "));
+    }
+
+    let param_refs: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(|p| p.as_ref()).collect();
+    let mut stmt = conn
+        .prepare(&sql)
+        .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("sqlite: {e}")))?;
+    let mut summary = UsageLedgerSummary {
+        path,
+        ..UsageLedgerSummary::default()
+    };
+    if let Ok(row) = stmt.query_row(param_refs.as_slice(), |row| {
+        Ok((
+            row.get::<_, i64>(0)?,
+            row.get::<_, i64>(1)?,
+            row.get::<_, i64>(2)?,
+            row.get::<_, i64>(3)?,
+            row.get::<_, i64>(4)?,
+            row.get::<_, i64>(5)?,
+            row.get::<_, f64>(6)?,
+        ))
+    }) {
+        summary.entries = row.0 as u64;
+        summary.prompt_tokens = row.1 as u64;
+        summary.completion_tokens = row.2 as u64;
+        summary.total_tokens = row.3 as u64;
+        summary.cache_hit_tokens = row.4 as u64;
+        summary.cache_miss_tokens = row.5 as u64;
+        summary.cost_usd = row.6;
+        summary.hit_rate = prompt_cache_hit_rate(summary.prompt_tokens, summary.cache_hit_tokens);
+    }
+    populate_usage_sqlite_model_summaries(&conn, &mut summary, session_filter, model_filter)?;
+    summary.last_miss_reason =
+        query_usage_sqlite_last_miss_reason(&conn, session_filter, model_filter)?;
+    Ok(summary)
+}
+
+fn append_usage_sqlite_conditions(
+    sql: &mut String,
+    session_filter: Option<&str>,
+    model_filter: Option<&str>,
+    params: &mut Vec<Box<dyn rusqlite::types::ToSql>>,
+) {
+    let mut conditions = Vec::new();
+    if let Some(s) = session_filter {
+        conditions.push(format!("session = ?{}", params.len() + 1));
+        params.push(Box::new(s.to_string()));
+    }
+    if let Some(m) = model_filter {
+        conditions.push(format!("model = ?{}", params.len() + 1));
+        params.push(Box::new(m.to_string()));
+    }
+    if !conditions.is_empty() {
+        sql.push_str(" WHERE ");
+        sql.push_str(&conditions.join(" AND "));
+    }
+}
+
+fn populate_usage_sqlite_model_summaries(
+    conn: &rusqlite::Connection,
+    summary: &mut UsageLedgerSummary,
+    session_filter: Option<&str>,
+    model_filter: Option<&str>,
+) -> io::Result<()> {
+    let mut sql = format!(
+        "SELECT model, COUNT(*), COALESCE(SUM(prompt_tokens),0), COALESCE(SUM(completion_tokens),0),
+         COALESCE(SUM(total_tokens),0), COALESCE(SUM(cache_hit_tokens),0),
+         COALESCE(SUM(cache_miss_tokens),0), COALESCE(SUM(cost_usd),0.0)
+         FROM {table}",
+        table = USAGE_SQLITE_TABLE
+    );
+    let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
+    append_usage_sqlite_conditions(&mut sql, session_filter, model_filter, &mut params);
+    sql.push_str(" GROUP BY model ORDER BY model");
+    let param_refs: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(|p| p.as_ref()).collect();
+    let mut stmt = conn
+        .prepare(&sql)
+        .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("sqlite: {e}")))?;
+    let mut rows = stmt
+        .query(param_refs.as_slice())
+        .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("sqlite query: {e}")))?;
+    while let Some(row) = rows
+        .next()
+        .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("sqlite row: {e}")))?
+    {
+        let model: String = row
+            .get(0)
+            .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("sqlite model: {e}")))?;
+        summary.by_model.insert(
+            model,
+            UsageLedgerModelSummary {
+                requests: row.get::<_, i64>(1).unwrap_or_default() as u64,
+                prompt_tokens: row.get::<_, i64>(2).unwrap_or_default() as u64,
+                completion_tokens: row.get::<_, i64>(3).unwrap_or_default() as u64,
+                total_tokens: row.get::<_, i64>(4).unwrap_or_default() as u64,
+                cache_hit_tokens: row.get::<_, i64>(5).unwrap_or_default() as u64,
+                cache_miss_tokens: row.get::<_, i64>(6).unwrap_or_default() as u64,
+                cost_usd: row.get::<_, f64>(7).unwrap_or_default(),
+            },
+        );
+    }
+    Ok(())
+}
+
+fn query_usage_sqlite_last_miss_reason(
+    conn: &rusqlite::Connection,
+    session_filter: Option<&str>,
+    model_filter: Option<&str>,
+) -> io::Result<Option<String>> {
+    let mut sql = format!(
+        "SELECT miss_reason FROM {table}",
+        table = USAGE_SQLITE_TABLE
+    );
+    let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
+    let mut conditions = vec![
+        "miss_reason IS NOT NULL".to_string(),
+        "miss_reason != ''".to_string(),
+    ];
+    if let Some(s) = session_filter {
+        conditions.push(format!("session = ?{}", params.len() + 1));
+        params.push(Box::new(s.to_string()));
+    }
+    if let Some(m) = model_filter {
+        conditions.push(format!("model = ?{}", params.len() + 1));
+        params.push(Box::new(m.to_string()));
+    }
+    sql.push_str(" WHERE ");
+    sql.push_str(&conditions.join(" AND "));
+    sql.push_str(" ORDER BY ts DESC LIMIT 1");
+    let param_refs: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(|p| p.as_ref()).collect();
+    let mut stmt = conn
+        .prepare(&sql)
+        .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("sqlite: {e}")))?;
+    match stmt.query_row(param_refs.as_slice(), |row| row.get::<_, String>(0)) {
+        Ok(reason) => Ok(Some(reason)),
+        Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+        Err(err) => Err(io::Error::new(
+            io::ErrorKind::Other,
+            format!("sqlite last miss reason: {err}"),
+        )),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{Mutex, OnceLock};
+
+    fn env_test_lock() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(())).lock().unwrap()
+    }
 
     #[test]
     fn appends_and_summarizes_jsonl_usage() {
@@ -205,6 +570,88 @@ mod tests {
         assert_eq!(summary.cache_miss_tokens, 200);
         assert!((summary.hit_rate - 0.8).abs() < f64::EPSILON);
 
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn sqlite_projection_syncs_and_queries() {
+        let _guard = env_test_lock();
+        let dir = std::env::temp_dir().join(format!(
+            "priority-agent-usage-sqlite-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let jsonl_path = dir.join("usage.jsonl");
+        let entry = UsageLedgerEntry {
+            ts: 1000,
+            session: "session-sql".to_string(),
+            model: "test-model".to_string(),
+            prompt_tokens: 500,
+            completion_tokens: 100,
+            total_tokens: 600,
+            cache_hit_tokens: 400,
+            cache_miss_tokens: 100,
+            cost_usd: 0.002,
+            stable_prefix_hash: Some("abc".to_string()),
+            system_hash: None,
+            tool_schema_hash: None,
+            dynamic_tail_hash: None,
+            miss_reason: Some("cold-start".to_string()),
+            miss_reason_detail: None,
+        };
+        append_usage_ledger_entry_at(&jsonl_path, &entry).unwrap();
+
+        // Sync to SQLite via JSONL path env override.
+        std::env::set_var(USAGE_LEDGER_ENV, jsonl_path.to_str().unwrap());
+        sync_usage_to_sqlite(&entry);
+        sync_usage_to_sqlite(&entry);
+
+        let summary = query_usage_by_session("session-sql").unwrap();
+        assert_eq!(summary.entries, 1);
+        assert_eq!(summary.prompt_tokens, 500);
+        assert_eq!(summary.cache_hit_tokens, 400);
+        assert!((summary.hit_rate - 0.8).abs() < f64::EPSILON);
+        assert_eq!(summary.cost_usd, 0.002);
+        assert_eq!(summary.last_miss_reason.as_deref(), Some("cold-start"));
+        assert_eq!(
+            summary
+                .by_model
+                .get("test-model")
+                .map(|model| model.requests),
+            Some(1)
+        );
+
+        // Rebuild from JSONL should not duplicate.
+        let count = rebuild_usage_sqlite_from_jsonl().unwrap();
+        assert_eq!(count, 1);
+        let rebuilt = query_usage_by_session("session-sql").unwrap();
+        assert_eq!(rebuilt.entries, 1);
+        assert_eq!(rebuilt.prompt_tokens, 500);
+
+        // Non-existent session returns empty.
+        let empty = query_usage_by_session("nonexistent").unwrap();
+        assert_eq!(empty.entries, 0);
+
+        std::env::remove_var(USAGE_LEDGER_ENV);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn sqlite_projection_query_on_empty_db_returns_empty_summary() {
+        let _guard = env_test_lock();
+        let dir = std::env::temp_dir().join(format!(
+            "priority-agent-usage-empty-sqlite-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let jsonl_path = dir.join("usage.jsonl");
+        std::env::set_var(USAGE_LEDGER_ENV, jsonl_path.to_str().unwrap());
+
+        let summary = query_usage_by_session("missing-session").unwrap();
+        assert_eq!(summary.entries, 0);
+        assert_eq!(summary.hit_rate, 0.0);
+        assert!(summary.by_model.is_empty());
+        assert!(summary.last_miss_reason.is_none());
+
+        std::env::remove_var(USAGE_LEDGER_ENV);
         let _ = std::fs::remove_dir_all(dir);
     }
 }

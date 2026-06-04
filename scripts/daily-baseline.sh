@@ -41,7 +41,6 @@ gate "cargo-fmt"         cargo fmt --check
 # ---- Runtime-spine tests ----
 gate "instructions"      cargo test --lib -q instructions -- --test-threads=1
 gate "cache-stability"   cargo test --lib -q cache_stability -- --test-threads=1
-gate "usage-ledger"      cargo test --lib -q usage_ledger -- --test-threads=1
 gate "controller"        cargo test --lib -q runtime_controller -- --test-threads=1
 gate "route-tools"       cargo test --lib -q route_scoped_tools -- --test-threads=1
 gate "closeout"          cargo test --lib -q closeout -- --test-threads=1
@@ -49,6 +48,8 @@ gate "permissions"       cargo test --lib -q permissions -- --test-threads=1
 gate "checkpoint"        cargo test --lib -q checkpoint -- --test-threads=1
 gate "file-tool"         cargo test --lib -q file_tool -- --test-threads=1
 gate "desktop-runtime"   cargo test --lib -q desktop_runtime -- --test-threads=1
+gate "usage-ledger"      cargo test --lib -q usage_ledger -- --test-threads=1
+gate "cost-tracker"      cargo test --lib -q cost_tracker -- --test-threads=1
 
 # ---- Broad test ----
 gate "full-test"         cargo test --lib -q -- --test-threads=1

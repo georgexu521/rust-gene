@@ -256,6 +256,30 @@ impl Tool for FileWriteTool {
                         "diff": edit_diff_summary_json(&diff_summary),
                         "text_format": text_format,
                         "edit_preview": edit_preview,
+                        "mutation_result": serde_json::to_value(
+                            mutation_result::file_write_result(
+                                path_str,
+                                &identity.resolved_path,
+                                &identity.display_path,
+                                existed_before,
+                                bytes_written as u64,
+                                diff_summary.additions,
+                                diff_summary.deletions,
+                                if diff_summary.changed_line_start > 0 { Some(diff_summary.changed_line_start as u64) } else { None },
+                                if diff_summary.changed_line_end > 0 { Some(diff_summary.changed_line_end as u64) } else { None },
+                                text_format.get("encoding").and_then(|v| v.as_str()).unwrap_or("utf-8"),
+                                text_format.get("bom").and_then(|v| v.as_bool()).unwrap_or(false),
+                                text_format.get("line_ending").and_then(|v| v.as_str()).unwrap_or("LF"),
+                                None,
+                                None,
+                                &diff_summary.unified_diff,
+                                diff_summary.preview_truncated,
+                                file_change_json.get("id").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                                Some(checkpoint.id.as_str()),
+                                Some(checkpoint.sequence),
+                                Some(context.session_id.as_str()),
+                            )
+                        ).unwrap_or(serde_json::Value::Null),
                         "guidance": if existed_before {
                             "file_write replaced the entire file; use file_edit for targeted existing-file changes"
                         } else {

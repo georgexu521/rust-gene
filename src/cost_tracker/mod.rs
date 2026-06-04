@@ -293,8 +293,9 @@ impl CostTracker {
                 .as_ref()
                 .map(|entry| entry.miss_reason_detail.clone()),
         };
-        if let Err(err) = usage_ledger::append_usage_ledger_entry(&ledger_entry) {
-            tracing::warn!("failed to append usage ledger entry: {}", err);
+        match usage_ledger::append_usage_ledger_entry(&ledger_entry) {
+            Ok(()) => usage_ledger::sync_usage_to_sqlite(&ledger_entry),
+            Err(err) => tracing::warn!("failed to append usage ledger entry: {}", err),
         }
     }
 

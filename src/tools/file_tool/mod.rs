@@ -16,6 +16,7 @@ use tracing::{debug, error, info, warn};
 mod diagnostics;
 mod edit_match;
 pub(crate) mod history;
+pub mod mutation_result;
 mod patch;
 mod path_policy;
 mod read;
@@ -1157,13 +1158,17 @@ impl Tool for FileEditTool {
                             },
                         )
                         .await;
+                        let file_change_id = file_change
+                            .as_ref()
+                            .and_then(|v| v.get("id").and_then(|id| id.as_str()));
                         let diagnostics =
                             collect_file_edit_diagnostics(&context, &path, &new_content).await;
                         let diagnostics_delta =
                             file_edit_diagnostics_delta(&diagnostics_before, &diagnostics);
                         let diagnostics_line = file_edit_diagnostics_content_line(&diagnostics);
                         let checkpoint_json = checkpoint_metadata_json(Some(&checkpoint));
-                        let file_change_json = file_change.unwrap_or(serde_json::Value::Null);
+                        let file_change_json =
+                            file_change.clone().unwrap_or(serde_json::Value::Null);
                         let text_format = text_write_format_json(
                             snapshot.encoding,
                             snapshot.has_bom,
@@ -1197,6 +1202,28 @@ impl Tool for FileEditTool {
                             "diagnostics": diagnostics.clone(),
                             "diagnostics_after": diagnostics,
                             "diagnostics_delta": diagnostics_delta,
+                            "mutation_result": mutation_result::from_file_edit_json(
+                                path_str,
+                                &identity.resolved_path,
+                                &identity.display_path,
+                                replacements,
+                                bytes_written as u64,
+                                diff_summary.additions,
+                                diff_summary.deletions,
+                                diff_summary.changed_line_start as u64,
+                                diff_summary.changed_line_end as u64,
+                                &diff_summary.unified_diff,
+                                diff_summary.preview_truncated,
+                                text_format.get("encoding").and_then(|v| v.as_str()).unwrap_or("utf-8"),
+                                text_format.get("bom").and_then(|v| v.as_bool()).unwrap_or(false),
+                                text_format.get("line_ending").and_then(|v| v.as_str()).unwrap_or("LF"),
+                                Some(checkpoint.id.as_str()),
+                                checkpoint.sequence,
+                                Some(context.session_id.as_str()),
+                                file_change_id,
+                                &Some(diagnostics),
+                                Some(diagnostics_delta.clone()),
+                            ),
                         });
                         let mut content = format!(
                             "File edited successfully: {} ({} replacement(s))",
