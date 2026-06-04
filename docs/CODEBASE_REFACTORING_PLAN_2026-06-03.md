@@ -7,9 +7,9 @@ Scope: current working tree under `src/` and `apps/desktop/src-tauri/src/`
 ## Executive Summary
 
 Priority Agent is still too large in several core modules. The current working
-tree contains roughly 249k Rust lines across 527 Rust files. Excluding test
+tree contains roughly 249k Rust lines across 528 Rust files. Excluding test
 files, `_old.rs` backup files, and Rust modules mounted only behind
-`#[cfg(test)]`, the active production surface is roughly 218k lines across 484
+`#[cfg(test)]`, the active production surface is roughly 218k lines across 485
 Rust files:
 
 | Budget | Active production files |
@@ -17,7 +17,7 @@ Rust files:
 | `> 500` lines | 173 |
 | `> 800` lines | 74 |
 | `> 1000` lines | 55 |
-| `> 1200` lines | 30 |
+| `> 1200` lines | 29 |
 | `> 1500` lines | 0 |
 
 The goal is not to chase a mechanical line-count rule. The practical goal is
@@ -68,9 +68,9 @@ source split.
 Excluding tests and `_old.rs` backup files:
 
 No active production file currently exceeds 1500 lines. The next cleanup queue
-is the `>1200` group, led by files such as `src/engine/evidence_ledger.rs`,
-`src/tools/agent_tool/mod.rs`, `src/tui/slash_handler/learning.rs`,
-`apps/desktop/src-tauri/src/lib.rs`, and `src/engine/improvement.rs`.
+is the `>1200` group, led by files such as `src/tools/agent_tool/mod.rs`,
+`src/tui/slash_handler/learning.rs`, `apps/desktop/src-tauri/src/lib.rs`,
+`src/engine/improvement.rs`, and `src/engine/scenario_matrix.rs`.
 
 ## Phase 0: Finish In-Progress Memory Manager Cleanup
 
@@ -1394,6 +1394,44 @@ Acceptance:
 cargo fmt --check
 cargo check -q
 cargo test -q main_screen -- --test-threads=1
+```
+
+### 2.31 Split `src/engine/evidence_ledger.rs`
+
+Status: started. Public evidence record DTOs now live in
+`src/engine/evidence_ledger/records.rs` and remain re-exported from the
+`evidence_ledger` module. The entry file keeps `EvidenceLedger`, changed-file
+diff evidence, validation rollups, closeout/repair summaries, and runtime
+recording methods. `src/engine/evidence_ledger.rs` is down from 1476 lines to
+1171 lines and has exited the `>1200` active queue. The new records module is
+309 lines.
+
+Current structure:
+
+```text
+src/engine/
+├── evidence_ledger.rs               # ledger state and evidence recording
+└── evidence_ledger/
+    ├── records.rs                   # public evidence DTOs
+    ├── tests.rs                     # ledger unit tests
+    └── tool_records.rs              # tool-result metadata extraction
+```
+
+Current next cuts:
+
+- Keep `EvidenceLedger` private state in the entry file until the ledger API is
+  stable enough to avoid widening field visibility.
+- Split validation rollup/summary logic only with focused tests for recovered
+  failures and required command reporting.
+- Keep tool-result metadata extraction in `tool_records.rs`; it is still large
+  but already separated from ledger orchestration.
+
+Acceptance:
+
+```bash
+cargo fmt --check
+cargo check -q
+cargo test -q evidence_ledger -- --test-threads=1
 ```
 
 ## Phase 3: Lower-Risk Large Module Cleanup
