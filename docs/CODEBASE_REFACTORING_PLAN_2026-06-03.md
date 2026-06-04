@@ -7,8 +7,8 @@ Scope: current working tree under `src/` and `apps/desktop/src-tauri/src/`
 ## Executive Summary
 
 Priority Agent is still too large in several core modules. The current working
-tree contains roughly 248k Rust lines across 472 Rust files. Excluding test
-files and `_old.rs` backup files, the active production surface is roughly 441
+tree contains roughly 248k Rust lines across 473 Rust files. Excluding test
+files and `_old.rs` backup files, the active production surface is roughly 442
 Rust files:
 
 | Budget | Active production files |
@@ -16,7 +16,7 @@ Rust files:
 | `> 500` lines | 167 |
 | `> 800` lines | 78 |
 | `> 1000` lines | 61 |
-| `> 1200` lines | 45 |
+| `> 1200` lines | 44 |
 | `> 1500` lines | 29 |
 
 The goal is not to chase a mechanical line-count rule. The practical goal is
@@ -249,13 +249,15 @@ cargo test -q trace
 
 ### 1.4 Split `src/engine/conversation_loop/tool_execution_controller.rs`
 
-Status: materially split but not done. Batch/result aggregation now lives in
+Status: entry split complete; one follow-up remains. Batch/result aggregation now lives in
 `tool_execution_controller/batch.rs`, with the public conversation-loop surface
 kept through `tool_execution_controller::ToolExecutionBatch`. Per-round runtime
 context, runtime metadata attachment, observer action signals, and memory action
-signals now live in `tool_execution_controller/runtime_context.rs`. The entry
-file is down to 1357 lines. Remaining high-value cuts are the gate and action
-review trace/metadata helpers.
+signals now live in `tool_execution_controller/runtime_context.rs`. Action
+decision tracing, action review metadata, and tool-observation trace helpers now
+live in `tool_execution_controller/action_review.rs`. The entry file is down to
+1145 lines, below the active queue threshold. The remaining follow-up is to move
+the permission/risk gate to `gate.rs` if we want the entry file under 1000.
 
 Current responsibilities:
 
