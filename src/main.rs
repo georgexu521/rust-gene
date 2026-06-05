@@ -136,6 +136,10 @@ async fn run_eval_task(
     // Eval-run optimizations: auto-approve ask_user, disable file cache
     // short-circuit so the model always sees full file content, and skip
     // storm breaker for read-only tools by default.
+    //
+    // NOTE: PRIORITY_AGENT_AUTO_APPROVE only affects the `ask_user` tool.
+    // For tool permission auto-approval (bash, file_write, file_edit, etc.),
+    // use PRIORITY_AGENT_EVAL_ALLOW_MUTATIONS (see permission handler below).
     if std::env::var("PRIORITY_AGENT_AUTO_APPROVE").is_err() {
         std::env::set_var("PRIORITY_AGENT_AUTO_APPROVE", "1");
     }
@@ -281,7 +285,15 @@ async fn run_eval_task(
                 prompt,
                 ..
             } => {
-                let answered = answer_pending_approval(&components.streaming_engine, false).await;
+                // Eval-run is read-only by default; set PRIORITY_AGENT_EVAL_ALLOW_MUTATIONS=1
+                // to auto-approve tool permissions for seeded code-change tasks.
+                let should_auto_approve = std::env::var("PRIORITY_AGENT_EVAL_ALLOW_MUTATIONS")
+                    .unwrap_or_else(|_| "0".to_string())
+                    .trim()
+                    == "1";
+                let answered =
+                    answer_pending_approval(&components.streaming_engine, should_auto_approve)
+                        .await;
                 write_eval_event(
                     &mut event_writer,
                     json!({
@@ -290,7 +302,7 @@ async fn run_eval_task(
                         "tool_name": tool_name,
                         "arguments": arguments,
                         "prompt": prompt,
-                        "auto_response": "deny",
+                        "auto_response": if should_auto_approve { "approve" } else { "deny" },
                         "answered": answered,
                     }),
                 )?;
