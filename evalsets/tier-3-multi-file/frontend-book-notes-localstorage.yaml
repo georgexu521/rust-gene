@@ -1,0 +1,160 @@
+id: frontend-book-notes-localstorage
+title: build a small book notes frontend with search, tags, and persistence
+type: feature
+eval_intent: seeded_code_change
+complexity: medium
+risk: medium
+repo:
+  fixture: priority-agent
+  base_ref: HEAD
+  prepare_commands:
+  - "mkdir -p fixtures/live_frontend/book_notes\ncat > fixtures/live_frontend/book_notes/index.html\
+    \ <<'HTML'\n<!doctype html>\n<html lang=\"en\">\n<head>\n  <meta charset=\"utf-8\"\
+    \ />\n  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"\
+    \ />\n  <title>Book Notes</title>\n  <link rel=\"stylesheet\" href=\"./styles.css\"\
+    \ />\n</head>\n<body>\n  <main class=\"app-shell\">\n    <header>\n      <h1>Book\
+    \ Notes</h1>\n      <p>Capture useful notes and find them again quickly.</p>\n\
+    \    </header>\n    <section class=\"composer\" aria-label=\"Add note\">\n   \
+    \   <input id=\"title\" placeholder=\"Title\" />\n      <textarea id=\"body\"\
+    \ placeholder=\"Note\"></textarea>\n      <input id=\"tags\" placeholder=\"tags,\
+    \ comma separated\" />\n      <button id=\"add-note\" type=\"button\">Add note</button>\n\
+    \    </section>\n    <section class=\"filters\" aria-label=\"Filters\">\n    \
+    \  <input id=\"search\" placeholder=\"Search notes\" />\n      <input id=\"tag-filter\"\
+    \ placeholder=\"Filter by tag\" />\n    </section>\n    <section id=\"notes\"\
+    \ class=\"notes\" aria-live=\"polite\"></section>\n  </main>\n  <script src=\"\
+    ./app.js\"></script>\n</body>\n</html>\nHTML\ncat > fixtures/live_frontend/book_notes/styles.css\
+    \ <<'CSS'\n:root {\n  color: #171717;\n  background: #fafafa;\n  font-family:\
+    \ ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, \"Segoe UI\", sans-serif;\n\
+    }\nbody {\n  margin: 0;\n}\n.app-shell {\n  max-width: 860px;\n  margin: 0 auto;\n\
+    \  padding: 32px 20px;\n}\nheader {\n  margin-bottom: 24px;\n}\nh1 {\n  margin:\
+    \ 0 0 6px;\n  font-size: 32px;\n}\np {\n  color: #6b7280;\n  margin: 0;\n}\n.composer,\n\
+    .filters {\n  display: grid;\n  gap: 10px;\n  margin-bottom: 16px;\n}\ninput,\n\
+    textarea,\nbutton {\n  border: 1px solid #d4d4d4;\n  border-radius: 6px;\n  font:\
+    \ inherit;\n  padding: 10px 12px;\n}\ntextarea {\n  min-height: 96px;\n}\nbutton\
+    \ {\n  background: #111827;\n  color: white;\n  cursor: pointer;\n}\n.notes {\n\
+    \  display: grid;\n  gap: 12px;\n}\nCSS\ncat > fixtures/live_frontend/book_notes/app.js\
+    \ <<'JS'\nconst STORAGE_KEY = \"priority-agent.book-notes\";\n\nfunction normalizeTags(input)\
+    \ {\n  return String(input || \"\")\n    .split(\",\")\n    .map((tag) => tag.trim().toLowerCase())\n\
+    \    .filter(Boolean);\n}\n\nfunction createStore(storage = window.localStorage)\
+    \ {\n  let notes = [];\n\n  function load() {\n    // TODO: restore notes from\
+    \ storage, tolerate malformed JSON.\n    notes = [];\n    return notes;\n  }\n\
+    \n  function save() {\n    // TODO: persist notes to storage.\n  }\n\n  function\
+    \ addNote({ title, body, tags }) {\n    // TODO: create a note with id, title,\
+    \ body, tags, createdAt.\n    return null;\n  }\n\n  function deleteNote(id) {\n\
+    \    // TODO: remove a note by id and persist.\n    return false;\n  }\n\n  function\
+    \ listNotes({ search = \"\", tag = \"\" } = {}) {\n    // TODO: return newest-first\
+    \ notes filtered by title/body search and tag.\n    return notes;\n  }\n\n  return\
+    \ { load, save, addNote, deleteNote, listNotes, _all: () => notes };\n}\n\nfunction\
+    \ renderNotes(store, root, filters = {}) {\n  const notes = store.listNotes(filters);\n\
+    \  root.innerHTML = \"\";\n  if (notes.length === 0) {\n    root.innerHTML = '<p\
+    \ class=\"empty\">No notes yet.</p>';\n    return;\n  }\n  for (const note of\
+    \ notes) {\n    const article = document.createElement(\"article\");\n    article.className\
+    \ = \"note-card\";\n    article.innerHTML = `\n      <h2></h2>\n      <p class=\"\
+    note-body\"></p>\n      <p class=\"note-tags\"></p>\n      <button type=\"button\"\
+    \ data-delete=\"${note.id}\">Delete</button>\n    `;\n    article.querySelector(\"\
+    h2\").textContent = note.title;\n    article.querySelector(\".note-body\").textContent\
+    \ = note.body;\n    article.querySelector(\".note-tags\").textContent = note.tags.map((tag)\
+    \ => `#${tag}`).join(\" \");\n    root.appendChild(article);\n  }\n}\n\nfunction\
+    \ init() {\n  if (typeof document === \"undefined\") return;\n  const store =\
+    \ createStore(window.localStorage);\n  const root = document.getElementById(\"\
+    notes\");\n  const title = document.getElementById(\"title\");\n  const body =\
+    \ document.getElementById(\"body\");\n  const tags = document.getElementById(\"\
+    tags\");\n  const search = document.getElementById(\"search\");\n  const tagFilter\
+    \ = document.getElementById(\"tag-filter\");\n  store.load();\n  const refresh\
+    \ = () => renderNotes(store, root, { search: search.value, tag: tagFilter.value\
+    \ });\n  document.getElementById(\"add-note\").addEventListener(\"click\", ()\
+    \ => {\n    store.addNote({ title: title.value, body: body.value, tags: tags.value\
+    \ });\n    title.value = \"\";\n    body.value = \"\";\n    tags.value = \"\"\
+    ;\n    refresh();\n  });\n  root.addEventListener(\"click\", (event) => {\n  \
+    \  const id = event.target && event.target.dataset ? event.target.dataset.delete\
+    \ : \"\";\n    if (id) {\n      store.deleteNote(id);\n      refresh();\n    }\n\
+    \  });\n  search.addEventListener(\"input\", refresh);\n  tagFilter.addEventListener(\"\
+    input\", refresh);\n  refresh();\n}\n\nif (typeof module !== \"undefined\") {\n\
+    \  module.exports = { STORAGE_KEY, normalizeTags, createStore };\n}\ninit();\n\
+    JS\ncat > fixtures/live_frontend/book_notes/test-book-notes.cjs <<'JS'\nconst\
+    \ assert = require(\"assert\");\nconst { STORAGE_KEY, normalizeTags, createStore\
+    \ } = require(\"./app.js\");\n\nfunction fakeStorage(seed = {}) {\n  const data\
+    \ = { ...seed };\n  return {\n    getItem(key) {\n      return Object.prototype.hasOwnProperty.call(data,\
+    \ key) ? data[key] : null;\n    },\n    setItem(key, value) {\n      data[key]\
+    \ = String(value);\n    },\n    removeItem(key) {\n      delete data[key];\n \
+    \   },\n    _data: data,\n  };\n}\n\nassert.deepStrictEqual(normalizeTags(\" Rust,\
+    \ UI ,, rust \"), [\"rust\", \"ui\", \"rust\"]);\n\nconst storage = fakeStorage();\n\
+    const store = createStore(storage);\nassert.deepStrictEqual(store.load(), []);\n\
+    \nconst originalNow = Date.now;\nDate.now = () => 1700000000000;\nconst first\
+    \ = store.addNote({\n  title: \"Rust ownership\",\n  body: \"Borrowing prevents\
+    \ data races\",\n  tags: \"rust, systems\",\n});\nconst second = store.addNote({\n\
+    \  title: \"Design notes\",\n  body: \"Keep the interface calm and searchable\"\
+    ,\n  tags: [\"ui\", \"product\"],\n});\nDate.now = originalNow;\n\nassert.ok(first.id\
+    \ && second.id && first.id !== second.id, \"notes need stable unique ids\");\n\
+    assert.deepStrictEqual(first.tags, [\"rust\", \"systems\"]);\nassert.deepStrictEqual(second.tags,\
+    \ [\"ui\", \"product\"]);\nassert.strictEqual(store.listNotes().length, 2);\n\
+    assert.strictEqual(store.listNotes()[0].id, second.id, \"newest note should be\
+    \ first even when two notes share the same timestamp\");\nassert.strictEqual(store.listNotes({\
+    \ search: \"borrow\" }).length, 1);\nassert.strictEqual(store.listNotes({ search:\
+    \ \"DESIGN\" })[0].id, second.id);\nassert.strictEqual(store.listNotes({ tag:\
+    \ \"Rust\" })[0].id, first.id);\nassert.strictEqual(store.listNotes({ tag: \"\
+    missing\" }).length, 0);\n\nconst saved = JSON.parse(storage.getItem(STORAGE_KEY));\n\
+    assert.strictEqual(saved.length, 2, \"notes should persist to localStorage\");\n\
+    \nconst restored = createStore(fakeStorage({ [STORAGE_KEY]: storage.getItem(STORAGE_KEY)\
+    \ }));\nassert.strictEqual(restored.load().length, 2, \"load should restore persisted\
+    \ notes\");\n\nassert.strictEqual(restored.deleteNote(first.id), true);\nassert.strictEqual(restored.deleteNote(\"\
+    not-found\"), false);\nassert.strictEqual(restored.listNotes().length, 1);\n\n\
+    const malformed = createStore(fakeStorage({ [STORAGE_KEY]: \"{bad json\" }));\n\
+    assert.deepStrictEqual(malformed.load(), [], \"malformed storage should not crash\"\
+    );\nconsole.log(\"book notes behavior ok\");\nJS\n"
+prompt: '请完成 `fixtures/live_frontend/book_notes` 里的本地书摘记录网站。
+
+
+  目标：
+
+  - 支持新增笔记，字段包括 title、body、tags。
+
+  - 支持删除笔记。
+
+  - 支持按标题/正文搜索，大小写不敏感。
+
+  - 支持按 tag 过滤，tag 大小写不敏感。
+
+  - 使用 localStorage 持久化，刷新后能恢复。
+
+  - 新增列表必须稳定 newest-first；即使两条笔记在同一毫秒创建，后新增的也应排在前面。
+
+  - 保持实现简单，不引入 npm 依赖。
+
+
+  重点不是做大范围重构，而是让现有 `index.html`、`styles.css`、`app.js` 变成一个可用的小前端。
+
+  '
+allowed_tools:
+- grep
+- file_read
+- file_edit
+- bash
+forbidden_tools:
+- git_push
+- memory_clear
+expected_behavior:
+- agent 应先检查 fixture 文件和测试，再做小范围实现。
+- 失败测试应阻止成功 closeout。
+- 最终 closeout 应列出真实运行过的命令。
+acceptance:
+  required_commands:
+  - node fixtures/live_frontend/book_notes/test-book-notes.cjs
+  - '! rg ''TODO'' fixtures/live_frontend/book_notes/app.js'
+  diff_constraints:
+    max_files_changed: 5
+    forbidden_paths:
+    - target/
+    - .git/
+  human_review:
+  - 是否真的实现了搜索、tag 过滤和 localStorage？
+  - 是否避免引入不必要依赖？
+  - closeout 是否准确说明验证结果？
+scoring:
+  success: 0.35
+  test_pass: 0.25
+  first_edit_efficiency: 0.1
+  frontend_completeness: 0.15
+  diff_discipline: 0.1
+  closeout_quality: 0.05
+tier: tier-3-multi-file

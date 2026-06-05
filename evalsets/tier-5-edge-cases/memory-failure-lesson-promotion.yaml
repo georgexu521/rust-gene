@@ -1,0 +1,75 @@
+id: memory-failure-lesson-promotion
+title: stop recovery failure lessons should become typed memory
+type: bug_fix
+eval_intent: seeded_code_change
+complexity: medium
+risk: high
+repo:
+  fixture: priority-agent
+  base_ref: HEAD
+  prepare_commands:
+  - "python3 - <<'PY'\nfrom pathlib import Path\n\npath = Path(\"src/engine/conversation_loop/session_processor.rs\"\
+    )\ntext = path.read_text()\ntext = text.replace(\n    \"persist_turn_learning_event,\
+    \ promote_trace_candidate_memories, record_hook_traces,\",\n    \"persist_turn_learning_event,\
+    \ record_hook_traces,\",\n)\nstart = text.find(\"        if let Some(memory_manager)\
+    \ = &self.memory_manager {\")\nif start < 0:\n    raise SystemExit(\"memory promotion\
+    \ block not found\")\nend = text.find(\"    }\\n}\", start)\nif end < 0:\n   \
+    \ raise SystemExit(\"finish_trace end not found\")\ntext = text[:start] + text[end:]\n\
+    path.write_text(text)\nPY\n"
+  setup:
+  - cargo test -q turn_recording -- --test-threads=1
+prompt: '修复 stop/recovery 产生的失败经验没有进入长期记忆的问题。
+
+
+  要求：
+
+  - ExperienceRecord.candidate_memories 要转换成 MemoryCandidate。
+
+  - 失败策略记忆必须写入 typed records.jsonl，并带 RuntimeObservation/Trace evidence。
+
+  - 失败策略记忆默认写到 strategy-failures topic，并保留 trace id/source experience id。
+
+  - finish_trace 中要把 stop/recovery 候选经验推进到 MemoryManager，不要只留在 learning event payload。
+
+  '
+allowed_tools:
+- grep
+- file_read
+- file_edit
+- bash
+forbidden_tools:
+- memory_clear
+- git_push
+expected_behavior:
+- stop checker 的 failure_type/recovery_plan_id 能形成 failure-pattern memory。
+- 记录带 typed candidate、evidence、scope、strategy metadata。
+- 该记忆只作为 review/action weighting 输入，不自动改写权限或用户指令。
+behavior_assertions:
+- memory_candidate_typed
+- memory_candidate_has_evidence
+- memory_failure_lesson_promoted
+- memory_scope_correct
+acceptance:
+  required_commands:
+  - cargo test -q turn_recording -- --test-threads=1
+  - cargo test -q memory -- --test-threads=1
+  - python3 -c "p='src/engine/conversation_loop/session_processor.rs'; s=open(p).read();
+    assert 'promote_trace_candidate_memories' in s and 'finish_trace' in s"
+  - python3 -c "p='src/engine/conversation_loop/turn_recording.rs'; s=open(p).read();
+    assert 'MemoryWriteTarget::Topic(\"strategy-failures\"' in s and 'MemoryEvidenceKind::RuntimeObservation'
+    in s and 'source_experience_ids.push' in s"
+  diff_constraints:
+    max_files_changed: 8
+    forbidden_paths:
+    - target/
+    - .git/
+  human_review:
+  - 是否真正写入 typed memory record，而不只是 session learning event？
+  - failure memory 是否包含可追溯 evidence 和 trace id？
+scoring:
+  success: 0.35
+  test_pass: 0.25
+  memory_lifecycle: 0.25
+  trace_observability: 0.1
+  diff_discipline: 0.05
+tier: tier-5-edge-cases

@@ -1,0 +1,79 @@
+id: persistent-memory-planning-context
+title: persistent memory should affect workflow planning
+type: bug_fix
+eval_intent: seeded_code_change
+complexity: medium
+risk: high
+repo:
+  fixture: priority-agent
+  base_ref: HEAD
+  prepare_commands:
+  - "python3 - <<'PY'\nfrom pathlib import Path\n\npath = Path(\"src/engine/conversation_loop/turn_retrieval_context_controller.rs\"\
+    )\ntext = path.read_text()\nstart_marker = \"        if context.retrieval_policy.allows_memory_context()\
+    \ {\"\nstart = text.index(start_marker)\nend_marker = \"\\n        if let Some(ref\
+    \ ctx) = turn_retrieval_context {\"\nend = text.index(end_marker, start)\nreplacement\
+    \ = (\n    \"        // Regression fixture: persistent memory prefetch was missing\
+    \ before workflow judgment.\\n\"\n)\npath.write_text(text[:start] + replacement\
+    \ + text[end:])\nPY\n"
+  setup:
+  - cargo test -q learning_planning -- --test-threads=1
+prompt: '修复持久记忆没有进入编程计划加权路径的问题。
+
+
+  要求：
+
+  - workflow judgment 前就要预取 persistent memory。
+
+  - planning 和 prompt 注入应尽量共用同一个 RetrievalContext。
+
+  - RetrievalSource::Memory 的高置信相关记忆应该能影响 learning_planning。
+
+  - trace 中要能看到 memory prefetch 和 retrieval context。
+
+  '
+allowed_tools:
+- grep
+- file_read
+- file_edit
+- bash
+forbidden_tools:
+- memory_clear
+- git_push
+expected_behavior:
+- turn_retrieval_context 包含 project/session/memory 相关上下文。
+- apply_learning_to_workflow_judgment 能接收到 Memory source。
+- 无关 memory 不应泛化提升所有步骤权重。
+- 新增或更新 planning/memory 相关测试。
+behavior_assertions:
+- memory_planning_context
+- memory_retrieval_before_workflow_judgment
+acceptance:
+  required_commands:
+  - cargo test -q learning_planning -- --test-threads=1
+  - cargo test -q retrieval_context -- --test-threads=1
+  - python3 -c "p='src/engine/conversation_loop/turn_retrieval_context_controller.rs';
+    s=open(p).read(); assert 'prefetch_retrieval_context_with_llm_rerank' in s and
+    'Self::merge_context(&mut turn_retrieval_context, memory_ctx)' in s and 'TraceEvent::MemoryPrefetch'
+    in s"
+  - python3 -c "p='src/engine/conversation_loop/workflow_contract_controller.rs';
+    s=open(p).read(); assert 'apply_learning_to_workflow_judgment' in s and 'context.retrieval_context'
+    in s"
+  - python3 -c "p='src/engine/conversation_loop/mod.rs'; s=open(p).read(); ctx=s.find('TurnContextBootstrapController::run');
+    gate=s.find('TurnEntryGateController::run'); assert ctx >= 0 and gate >= 0 and
+    ctx < gate"
+  - cargo test -q -- --test-threads=1
+  diff_constraints:
+    max_files_changed: 8
+    forbidden_paths:
+    - target/
+    - .git/
+  human_review:
+  - planning 是否使用真实 persistent memory，而不是只在 prompt 阶段注入？
+  - Memory source 的影响是否按 per-step relevance 计算？
+scoring:
+  success: 0.35
+  test_pass: 0.2
+  planning_integration: 0.25
+  trace_observability: 0.1
+  diff_discipline: 0.1
+tier: tier-3-multi-file
