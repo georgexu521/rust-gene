@@ -590,7 +590,7 @@ File.write(metadata_path, JSON.pretty_generate(sample) + "\n")
     if [[ -n "$runtime_profile" ]]; then
       echo "- Runtime profile: $runtime_profile"
     fi
-    echo "- MiniMax model: ${MINIMAX_MODEL:-MiniMax-M2.7}"
+    echo "- MiniMax model: ${MINIMAX_MODEL:-MiniMax-M3}"
     if [[ -s "$prepare_log" ]]; then
       echo "- Prepare log: $prepare_log"
     fi
@@ -637,7 +637,7 @@ File.write(metadata_path, JSON.pretty_generate(sample) + "\n")
     fi
     echo "MINIMAX_API_KEY=\"\${MINIMAX_API_KEY:?}\" \\"
     echo "MINIMAX_BASE_URL=\"\${MINIMAX_BASE_URL:-}\" \\"
-    echo "MINIMAX_MODEL=\"\${MINIMAX_MODEL:-MiniMax-M2.7}\" \\"
+    echo "MINIMAX_MODEL=\"\${MINIMAX_MODEL:-MiniMax-M3}\" \\"
     echo "OPENAI_API_KEY=\"\" \\"
     echo "MOONSHOT_API_KEY=\"\" \\"
     echo "\"$ROOT_DIR/target/release/priority-agent\""
@@ -722,7 +722,7 @@ EOF
       PRIORITY_AGENT_A2A_TRANSCRIPT_PATH="$env_base/a2a-transcript.jsonl" \
       MINIMAX_API_KEY="$MINIMAX_API_KEY" \
       MINIMAX_BASE_URL="${MINIMAX_BASE_URL:-}" \
-      MINIMAX_MODEL="${MINIMAX_MODEL:-MiniMax-M2.7}" \
+      MINIMAX_MODEL="${MINIMAX_MODEL:-MiniMax-M3}" \
       OPENAI_API_KEY="" \
       MOONSHOT_API_KEY="" \
       "$ROOT_DIR/target/release/priority-agent" --api --port "$port"
@@ -837,7 +837,7 @@ provider_health_preflight() {
       XDG_STATE_HOME="$env_base/xdg-state" \
       MINIMAX_API_KEY="${MINIMAX_API_KEY:-}" \
       MINIMAX_BASE_URL="${MINIMAX_BASE_URL:-}" \
-      MINIMAX_MODEL="${MINIMAX_MODEL:-MiniMax-M2.7}" \
+      MINIMAX_MODEL="${MINIMAX_MODEL:-MiniMax-M3}" \
       OPENAI_API_KEY="" \
       MOONSHOT_API_KEY="" \
       "$ROOT_DIR/target/release/priority-agent" \
@@ -1014,7 +1014,7 @@ env.update({
     "PRIORITY_AGENT_LLM_MEMORY_EXTRACTION": os.environ.get("PRIORITY_AGENT_LLM_MEMORY_EXTRACTION", "0"),
     "MINIMAX_API_KEY": os.environ.get("MINIMAX_API_KEY", ""),
     "MINIMAX_BASE_URL": os.environ.get("MINIMAX_BASE_URL", ""),
-    "MINIMAX_MODEL": os.environ.get("MINIMAX_MODEL", "MiniMax-M2.7"),
+    "MINIMAX_MODEL": os.environ.get("MINIMAX_MODEL", "MiniMax-M3"),
 })
 if runtime_profile:
     env["PRIORITY_AGENT_RUNTIME_PROFILE"] = runtime_profile

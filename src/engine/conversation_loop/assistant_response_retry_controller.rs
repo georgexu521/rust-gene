@@ -532,7 +532,7 @@ mod tests {
         let trace = trace();
         let provider = MockProvider {
             base_url: "https://api.minimaxi.com/v1",
-            model: "MiniMax-M2.7",
+            model: "MiniMax-M3",
         };
         let tools = vec![Tool::new("bash", "run shell command")];
         let exposed_tools = exposed(&["bash"]);

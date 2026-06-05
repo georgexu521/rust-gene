@@ -725,7 +725,7 @@ mod tests {
         }));
 
         let tools =
-            prepare_tools_for_provider(vec![tool], ProviderProtocolFamily::MiniMax, "MiniMax-M2.7");
+            prepare_tools_for_provider(vec![tool], ProviderProtocolFamily::MiniMax, "MiniMax-M3");
         let properties = tools[0].parameters["properties"].as_object().unwrap();
 
         assert!(properties.contains_key("path"));

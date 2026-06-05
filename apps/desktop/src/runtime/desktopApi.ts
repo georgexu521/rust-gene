@@ -631,7 +631,7 @@ export function providerModelStatus(): Promise<ProviderModelStatus> {
           id: "minimax",
           label: "MiniMax",
           provider_type: "Minimax",
-          model: "MiniMax-M2.7",
+  model: "MiniMax-M3",
           base_url: "https://api.minimax.io/v1",
           configured: true,
           active: true,

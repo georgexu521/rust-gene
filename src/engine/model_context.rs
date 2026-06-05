@@ -194,7 +194,7 @@ mod tests {
 
     #[test]
     fn detects_minimax_large_context_profile() {
-        let profile = ModelContextProfile::detect("https://api.minimaxi.com/v1", "MiniMax-M2.7");
+        let profile = ModelContextProfile::detect("https://api.minimaxi.com/v1", "MiniMax-M3");
         assert_eq!(profile.provider_family, ProviderProtocolFamily::MiniMax);
         assert_eq!(profile.context_window_tokens, 1_000_000);
         assert_eq!(profile.reserved_output_tokens, 20_000);

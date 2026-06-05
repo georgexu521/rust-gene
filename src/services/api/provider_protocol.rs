@@ -501,7 +501,7 @@ mod tests {
     #[test]
     fn provider_capabilities_capture_minimax_streaming_constraints() {
         let capabilities =
-            ProviderCapabilities::detect("https://api.minimaxi.com/v1", "MiniMax-M2.7");
+            ProviderCapabilities::detect("https://api.minimaxi.com/v1", "MiniMax-M3");
 
         assert_eq!(
             capabilities.protocol_family,
@@ -515,7 +515,7 @@ mod tests {
 
     #[test]
     fn provider_runtime_facts_explain_minimax_constraints() {
-        let facts = ProviderRuntimeFacts::detect("https://api.minimaxi.com/v1", "MiniMax-M2.7");
+        let facts = ProviderRuntimeFacts::detect("https://api.minimaxi.com/v1", "MiniMax-M3");
 
         assert_eq!(facts.protocol_family, ProviderProtocolFamily::MiniMax);
         assert!(facts.requires_nonstreaming_tool_calls);

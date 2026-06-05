@@ -88,7 +88,7 @@ impl OnboardingStep {
                  [api]\n\
                  api_key = \"your-key\"\n\
                  base_url = \"https://api.minimax.io/v1\"\n\
-                 model = \"MiniMax-M2.7\"\n\n\
+                 model = \"MiniMax-M3\"\n\n\
                  The app will still work without a key in legacy mode (--legacy)."
             }
             Self::Commands => {

@@ -50,7 +50,7 @@ Priority Agent chooses providers in this order when configured:
 
 ```bash
 export MINIMAX_API_KEY="..."
-export MINIMAX_MODEL="MiniMax-M2.7"   # optional
+export MINIMAX_MODEL="MiniMax-M3"     # optional, default is M3
 
 export KIMI_CODE_API_KEY="..."
 export KIMI_CODE_MODEL="kimi-for-coding" # optional
