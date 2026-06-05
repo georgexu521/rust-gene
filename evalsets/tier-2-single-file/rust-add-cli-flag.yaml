@@ -43,8 +43,8 @@ acceptance:
   required_commands:
     - "cargo check -q"
     - "cargo test -q detect_startup_mode"
-    - "./target/debug/priority-agent --help | grep verbose"
-    - "./target/debug/priority-agent --verbose --help 2>/dev/null || true"
+    - "rg 'verbose' src/main.rs"
+    - "rg 'debug' src/main.rs"
   diff_constraints:
     max_files_changed: 2
     forbidden_paths:

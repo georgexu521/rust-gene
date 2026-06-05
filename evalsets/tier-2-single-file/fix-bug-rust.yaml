@@ -17,6 +17,8 @@ repo:
       name = "test_fix_bug"
       version = "0.1.0"
       edition = "2021"
+
+      [workspace]
       EOF
       cat > fixtures/test_fix_bug/src/main.rs <<'EOF'
       fn main() {
@@ -35,12 +37,19 @@ repo:
 prompt: |
   Please fix the compilation errors in `fixtures/test_fix_bug/src/main.rs`.
   
+  IMPORTANT: Only modify the file at `fixtures/test_fix_bug/src/main.rs`. 
+  Do NOT modify the project's own `src/main.rs` in the root directory.
+  
   The code has two simple Rust syntax errors:
   1. A missing `()` after `.unwrap`
   2. A missing `()` after `.sum`
   
-  Use file_read to inspect the code, then file_edit to fix the errors.
-  Finally, run `cargo check` in the `fixtures/test_fix_bug/` directory to verify.
+  Steps:
+  1. Use file_read to read `fixtures/test_fix_bug/src/main.rs`
+  2. Use file_edit to fix both errors in that file
+  3. Run `cargo check` in the `fixtures/test_fix_bug/` directory to verify
+  
+  Use separate file_edit calls for each fix if needed.
 
 allowed_tools:
   - file_read

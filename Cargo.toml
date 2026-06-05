@@ -3,7 +3,7 @@ resolver = "2"
 members = [
     "priority-core",
 ]
-exclude = [".rc-fixture"]
+exclude = [".rc-fixture", "fixtures"]
 
 [workspace.dependencies]
 # 序列化

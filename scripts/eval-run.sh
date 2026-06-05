@@ -224,7 +224,7 @@ run_task_file() {
     # Step 3: Check if eval-run mode is available
     if [ ! -f "./target/debug/priority-agent" ]; then
         print_info "Building priority-agent..."
-        if ! cargo build -q 2>/dev/null; then
+        if ! cargo build -q; then
             print_error "Failed to build priority-agent"
             return 1
         fi
@@ -247,19 +247,30 @@ run_task_file() {
     # Step 6: Set eval environment
     export PRIORITY_AGENT_EVAL_ALLOW_MUTATIONS=1
     export PRIORITY_AGENT_AUTO_APPROVE=1
+    # Disable route-scoped tool filtering so all tools are available for eval tasks
+    export PRIORITY_AGENT_ROUTE_SCOPED_TOOLS=0
+    # Increase iteration limit for eval tasks (default 50 may not be enough for complex changes)
+    export PRIORITY_AGENT_ENGINE_MAX_ITERATIONS=150
     
     # Step 7: Run the eval task
     local exit_code=0
-    if ./target/debug/priority-agent \
+    local stderr_file="$ROOT_DIR/target/eval-reports/${task_name}-${timestamp}.stderr.log"
+    ./target/debug/priority-agent \
         --eval-run \
         --prompt-file "$prompt_file" \
         --output "$output_file" \
         --events "$events_file" \
-        2>/dev/null; then
+        2>"$stderr_file"
+    exit_code=$?
+    
+    if [ $exit_code -eq 0 ]; then
         print_success "Task completed: $task_name"
     else
-        print_error "Task failed or hit limit: $task_name"
-        exit_code=1
+        print_error "Task failed or hit limit: $task_name (exit: $exit_code)"
+        if [ -s "$stderr_file" ]; then
+            echo "  Stderr preview:"
+            head -5 "$stderr_file" | sed 's/^/    /'
+        fi
     fi
     
     rm -f "$prompt_file"
@@ -294,7 +305,8 @@ check_acceptance() {
     while IFS= read -r cmd; do
         [ -z "$cmd" ] && continue
         total=$((total + 1))
-        if eval "$cmd" >/dev/null 2>&1; then
+        # Run each command in a subshell so `cd` doesn't affect the parent shell
+        if (eval "$cmd") >/dev/null 2>&1; then
             print_result "Required: $cmd" "PASS"
             passed=$((passed + 1))
         else
