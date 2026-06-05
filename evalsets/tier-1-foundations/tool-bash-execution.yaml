@@ -1,0 +1,51 @@
+id: tool-bash-execution
+title: Verify bash tool executes commands correctly
+type: capability_test
+eval_intent: tool_verification
+complexity: low
+risk: low
+tier: tier-1-foundations
+
+repo:
+  fixture: priority-agent
+  base_ref: "HEAD"
+  prepare_commands:
+    - |
+      mkdir -p fixtures/test_bash
+      echo "42" > fixtures/test_bash/answer.txt
+
+prompt: |
+  Please use the bash tool to:
+  1. Count how many files are in the `fixtures/test_bash/` directory
+  2. Read the contents of `fixtures/test_bash/answer.txt`
+  3. Create a new file `fixtures/test_bash/result.txt` containing the text "success"
+
+  Use bash commands to complete these tasks.
+
+allowed_tools:
+  - bash
+
+forbidden_tools:
+  - file_read
+  - file_edit
+  - file_write
+
+expected_behavior:
+  - agent should use bash tool for all operations.
+  - should correctly count files and read contents.
+  - should create the new file with correct content.
+
+acceptance:
+  required_commands:
+    - "test $(ls fixtures/test_bash/ | wc -l) -eq 2"
+    - "grep -q 'success' fixtures/test_bash/result.txt"
+    - "grep -q '42' fixtures/test_bash/answer.txt"
+  human_review:
+    - Did the agent use bash tool appropriately?
+    - Were all tasks completed correctly?
+    - Did it avoid unnecessary file tools?
+
+scoring:
+  success: 0.50
+  tool_correctness: 0.30
+  command_accuracy: 0.20

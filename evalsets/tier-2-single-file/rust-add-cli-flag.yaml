@@ -1,0 +1,64 @@
+id: rust-add-cli-flag
+title: Add --verbose flag to CLI
+type: feature
+eval_intent: seeded_code_change
+complexity: low
+risk: low
+tier: tier-2-single-file
+
+repo:
+  fixture: priority-agent
+  base_ref: "HEAD"
+  # No prepare_commands needed; we modify the existing codebase directly.
+
+prompt: |
+  Please add a `--verbose` command-line flag to `src/main.rs`.
+
+  Requirements:
+  1. When the user passes `--verbose`, the default tracing log level should be "debug" 
+     instead of the current mode-dependent default ("info" for API, "warn" for everything else).
+  2. Update `print_help()` to document the new flag.
+  3. Keep all existing startup modes and behavior intact when `--verbose` is absent.
+  4. The flag should work in any mode (`--cli`, `--tui`, `--api`, `--eval-run`, `--provider-health`).
+
+  This is a real code change in the project's own CLI argument parsing.
+  Please read the current `src/main.rs` first, then make the minimal change.
+
+allowed_tools:
+  - grep
+  - file_read
+  - file_edit
+  - bash
+
+forbidden_tools:
+  - git_push
+  - memory_clear
+
+expected_behavior:
+  - agent should read the existing main.rs to understand current argument parsing.
+  - should make a minimal, targeted change.
+  - should run tests to verify nothing is broken.
+
+acceptance:
+  required_commands:
+    - "cargo check -q"
+    - "cargo test -q detect_startup_mode"
+    - "./target/debug/priority-agent --help | grep verbose"
+    - "./target/debug/priority-agent --verbose --help 2>/dev/null || true"
+  diff_constraints:
+    max_files_changed: 2
+    forbidden_paths:
+      - target/
+      - .git/
+  human_review:
+    - Does `--help` show the new flag?
+    - Does `--verbose` increase log verbosity?
+    - Are existing modes unaffected?
+    - Is the change minimal and idiomatic?
+
+scoring:
+  success: 0.40
+  test_pass: 0.25
+  diff_discipline: 0.15
+  closeout_quality: 0.10
+  first_edit_efficiency: 0.10

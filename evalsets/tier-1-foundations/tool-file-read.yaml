@@ -1,0 +1,54 @@
+id: tool-file-read
+title: Verify file_read tool works correctly
+type: capability_test
+eval_intent: tool_verification
+complexity: low
+risk: low
+tier: tier-1-foundations
+
+repo:
+  fixture: priority-agent
+  base_ref: "HEAD"
+  prepare_commands:
+    - |
+      mkdir -p fixtures/test_file_read
+      cat > fixtures/test_file_read/sample.txt <<'EOF'
+      Line 1: Hello World
+      Line 2: This is a test file
+      Line 3: For agent file_read verification
+      Line 4: End of file
+      EOF
+
+prompt: |
+  Please read the file `fixtures/test_file_read/sample.txt` and tell me:
+  1. How many lines does it contain?
+  2. What is on line 3?
+  3. Does the file contain the word "agent"?
+
+  Use the file_read tool to answer these questions.
+
+allowed_tools:
+  - file_read
+
+forbidden_tools:
+  - bash
+  - file_edit
+  - grep
+
+expected_behavior:
+  - agent should use file_read tool to read the file.
+  - should answer all three questions accurately.
+  - should not use bash or grep since they are not needed.
+
+acceptance:
+  required_commands:
+    - "test -f fixtures/test_file_read/sample.txt"
+  human_review:
+    - Did the agent use file_read tool?
+    - Are the answers accurate?
+    - Did it avoid unnecessary tools?
+
+scoring:
+  success: 0.50
+  tool_correctness: 0.30
+  answer_accuracy: 0.20

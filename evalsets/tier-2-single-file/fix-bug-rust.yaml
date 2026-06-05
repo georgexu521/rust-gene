@@ -1,0 +1,76 @@
+id: fix-bug-rust
+title: Fix a simple Rust compilation error
+type: bug_fix
+eval_intent: seeded_code_change
+complexity: low
+risk: low
+tier: tier-2-single-file
+
+repo:
+  fixture: priority-agent
+  base_ref: "HEAD"
+  prepare_commands:
+    - |
+      mkdir -p fixtures/test_fix_bug/src
+      cat > fixtures/test_fix_bug/Cargo.toml <<'EOF'
+      [package]
+      name = "test_fix_bug"
+      version = "0.1.0"
+      edition = "2021"
+      EOF
+      cat > fixtures/test_fix_bug/src/main.rs <<'EOF'
+      fn main() {
+          let name = "world";
+          println!("Hello, {}!", name);
+          
+          let numbers = vec![1, 2, 3];
+          let first = numbers.get(0).unwrap;
+          println!("First number: {}", first);
+          
+          let sum: i32 = numbers.iter().sum;
+          println!("Sum: {}", sum);
+      }
+      EOF
+
+prompt: |
+  Please fix the compilation errors in `fixtures/test_fix_bug/src/main.rs`.
+  
+  The code has two simple Rust syntax errors:
+  1. A missing `()` after `.unwrap`
+  2. A missing `()` after `.sum`
+  
+  Use file_read to inspect the code, then file_edit to fix the errors.
+  Finally, run `cargo check` in the `fixtures/test_fix_bug/` directory to verify.
+
+allowed_tools:
+  - file_read
+  - file_edit
+  - bash
+
+forbidden_tools:
+  - git_push
+  - memory_clear
+
+expected_behavior:
+  - agent should read the file to understand the errors.
+  - should make minimal fixes (add missing parentheses).
+  - should verify with cargo check.
+
+acceptance:
+  required_commands:
+    - "cd fixtures/test_fix_bug && cargo check 2>&1"
+  diff_constraints:
+    max_files_changed: 1
+    forbidden_paths:
+      - target/
+      - .git/
+  human_review:
+    - Were the fixes minimal and correct?
+    - Did cargo check pass?
+    - Were only the two intended errors fixed?
+
+scoring:
+  success: 0.40
+  test_pass: 0.30
+  diff_discipline: 0.15
+  first_edit_efficiency: 0.15
