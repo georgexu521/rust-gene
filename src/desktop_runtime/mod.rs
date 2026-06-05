@@ -348,6 +348,7 @@ impl DesktopRunEvent {
                 id,
                 result,
                 metadata,
+                ..
             } => Self::ToolCompleted {
                 id,
                 result_preview: truncate_preview(&result, 2000),
@@ -503,6 +504,7 @@ mod tests {
             id: "tool-1".to_string(),
             result: "done".to_string(),
             metadata: Some(serde_json::json!({ "ok": true })),
+            result_data: None,
         });
 
         assert_eq!(
@@ -550,6 +552,7 @@ mod tests {
             id: "tool-1".to_string(),
             result: "好".repeat(2100),
             metadata: None,
+            result_data: None,
         });
 
         let DesktopRunEvent::ToolCompleted { result_preview, .. } = event else {

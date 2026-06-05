@@ -26,6 +26,8 @@ pub struct ToolRunView {
     pub metadata: Option<Value>,
     pub started_at: Instant,
     pub completed_at: Option<Instant>,
+    /// Structured JSON data from the tool result (e.g. mutation_result).
+    pub result_data: Option<Value>,
 }
 
 impl ToolRunView {
@@ -40,6 +42,7 @@ impl ToolRunView {
             result_body: None,
             result_preview: None,
             metadata: None,
+            result_data: None,
             started_at: Instant::now(),
             completed_at: None,
         }
@@ -141,6 +144,7 @@ impl ToolRunView {
             "file_read" => summarize_file("Reading", "Read", args, "path", self),
             "file_write" => summarize_file("Writing", "Wrote", args, "path", self),
             "file_edit" => summarize_file("Editing", "Edited", args, "path", self),
+            "file_patch" => summarize_file("Patching", "Patched", args, "path", self),
             "format" => summarize_file("Formatting", "Formatted", args, "file_path", self),
             "diff" => summarize_diff(args, self),
             "grep" => summarize_grep(args, self),
@@ -496,6 +500,14 @@ fn summarize_file(
     key: &str,
     run: &ToolRunView,
 ) -> String {
+    // Phase 1 (opencode alignment): prefer mutation_result.ui_summary when available.
+    if run.status == ToolRunStatus::Completed {
+        if let Some(ref data) = run.result_data {
+            if let Some(mr) = crate::tools::file_tool::mutation_result::from_tool_data(data) {
+                return mr.ui_summary;
+            }
+        }
+    }
     let Some(path) = args.and_then(|args| string_arg(args, key)) else {
         let fallback = args.and_then(|args| first_string_arg(args, &["path", "file_path"]));
         if let Some(path) = fallback {

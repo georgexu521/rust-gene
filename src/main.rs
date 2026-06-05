@@ -205,6 +205,7 @@ async fn run_eval_task(
                 id,
                 result,
                 metadata,
+                ..
             } => write_eval_event(
                 &mut event_writer,
                 json!({

@@ -120,6 +120,21 @@ pub struct FileChangeRoundSummary {
     pub combined_diff: Option<String>,
 }
 
+/// User-facing revert projection (Phase 2: opencode alignment).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RoundRevertSummary {
+    pub tool_round_id: String,
+    pub tool_names: Vec<String>,
+    pub paths: Vec<String>,
+    pub file_change_ids: Vec<String>,
+    pub checkpoint_id: String,
+    pub checkpoint_sequence: u64,
+    pub change_count: usize,
+    pub total_bytes_written: u64,
+    pub combined_diff_hash: Option<String>,
+    pub rewind_command: String,
+}
+
 /// Input for recording a successful file mutation after the write has landed.
 #[derive(Debug, Clone)]
 pub struct FileChangeInput {
@@ -833,6 +848,35 @@ impl CheckpointManager {
     /// Return the newest file-change round summary.
     pub fn latest_file_change_round(&self) -> Option<FileChangeRoundSummary> {
         self.list_file_change_rounds().pop()
+    }
+
+    /// User-facing revert projection for the latest mutation round (Phase 2).
+    ///
+    /// Returns summary data that TUI, slash commands, trace, and desktop
+    /// can render without knowing checkpoint internals.
+    pub fn last_round_revert_summary(&self) -> Option<RoundRevertSummary> {
+        let round = self.latest_file_change_round()?;
+        let checkpoint_id = round.checkpoint_ids.last().cloned().unwrap_or_default();
+        let checkpoint = self.checkpoints.iter().find(|cp| cp.id == checkpoint_id);
+
+        Some(RoundRevertSummary {
+            tool_round_id: round.tool_round_id.clone().unwrap_or_default(),
+            tool_names: round.tool_names.clone(),
+            paths: round.paths.clone(),
+            file_change_ids: round.file_change_ids.clone(),
+            checkpoint_id,
+            checkpoint_sequence: checkpoint.map(|cp| cp.sequence).unwrap_or(0),
+            change_count: round.change_count,
+            total_bytes_written: round.total_bytes_written,
+            combined_diff_hash: round.combined_diff.as_ref().map(|d| {
+                let digest = md5::compute(d.as_bytes());
+                format!("{:x}", digest)
+            }),
+            rewind_command: format!(
+                "rewind tool_round_id=\"{}\"",
+                round.tool_round_id.clone().unwrap_or_default()
+            ),
+        })
     }
 
     /// Return a file-change round summary by ID.

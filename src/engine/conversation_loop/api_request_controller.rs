@@ -552,7 +552,8 @@ impl ApiRequestController {
                             request = ChatRequest::new(&context.conversation.model)
                                 .with_messages(compressed)
                                 .with_tools(context.tools.to_vec())
-                                .with_temperature(0.2);
+                                .with_temperature(0.2)
+                                .with_output_cap(Some(8192));
                             crate::tools::file_tool::clear_read_files(
                                 &context.conversation.session_id,
                             );

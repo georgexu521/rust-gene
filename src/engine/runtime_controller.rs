@@ -397,6 +397,7 @@ impl From<StreamEvent> for TurnEvent {
                 id,
                 result,
                 metadata,
+                ..
             } => TurnEvent::ToolCompleted {
                 id,
                 result_preview: truncate_preview(&result, 2000),
@@ -556,6 +557,7 @@ mod tests {
                 id: "t1".to_string(),
                 result: "README.md\n".to_string(),
                 metadata: Some(serde_json::json!({"exit_code": 0})),
+                result_data: None,
             },
             StreamEvent::Usage {
                 prompt_tokens: 100,

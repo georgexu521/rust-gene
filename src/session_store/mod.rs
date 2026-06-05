@@ -18,9 +18,11 @@ mod message_ops;
 mod records;
 mod search;
 mod session_ops;
+mod todo_store;
 mod trace_store;
 
 pub use records::*;
+pub use todo_store::{PersistedTodoItem, TodoItem};
 
 /// 会话存储
 #[derive(Clone)]
@@ -82,6 +84,9 @@ impl SessionStore {
         runner.register(std::sync::Arc::new(
             crate::migrations::v7_add_compact_boundaries::V7AddCompactBoundaries,
         ));
+        runner.register(std::sync::Arc::new(
+            crate::migrations::v8_add_todos::V8AddTodos,
+        ));
         runner.run(&conn)?;
 
         info!("SessionStore opened at {:?}", path);
@@ -120,6 +125,9 @@ impl SessionStore {
         runner.register(std::sync::Arc::new(
             crate::migrations::v7_add_compact_boundaries::V7AddCompactBoundaries,
         ));
+        runner.register(std::sync::Arc::new(
+            crate::migrations::v8_add_todos::V8AddTodos,
+        ));
         runner.run(&conn)?;
 
         Ok(Self {
@@ -157,6 +165,38 @@ impl SessionStore {
             total_input_tokens: total_input,
             total_output_tokens: total_output,
         })
+    }
+
+    // ==================== Coding Todos (Phase 5: opencode alignment) ====================
+
+    /// Replace all coding todos for this session atomically.
+    pub fn replace_todos(&self, session_id: &str, todos: &[TodoItem]) -> SqlResult<()> {
+        let conn = self.conn();
+        todo_store::replace_todos(&conn, session_id, todos)
+    }
+
+    /// Load current coding todos for a session.
+    pub fn load_todos(&self, session_id: &str) -> SqlResult<Vec<TodoItem>> {
+        let conn = self.conn();
+        todo_store::load_todos(&conn, session_id)
+    }
+
+    /// Load current coding todos with display position/timestamp metadata.
+    pub fn load_persisted_todos(&self, session_id: &str) -> SqlResult<Vec<PersistedTodoItem>> {
+        let conn = self.conn();
+        todo_store::load_persisted_todos(&conn, session_id)
+    }
+
+    /// Compact status-line summary for the current coding todos.
+    pub fn todo_status_summary(&self, session_id: &str) -> SqlResult<String> {
+        let todos = self.load_todos(session_id)?;
+        Ok(todo_store::format_todo_status(&todos))
+    }
+
+    /// Clear all todos for a session.
+    pub fn clear_todos(&self, session_id: &str) -> SqlResult<()> {
+        let conn = self.conn();
+        todo_store::clear_todos(&conn, session_id)
     }
 }
 

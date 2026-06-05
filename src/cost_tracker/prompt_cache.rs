@@ -45,10 +45,15 @@ pub(super) fn build_prompt_cache_diagnostic(
                 few_shots_fingerprint: entry.few_shots_fingerprint.clone(),
                 dynamic_tail_fingerprint: entry.dynamic_tail_fingerprint.clone(),
                 tool_count: entry.tool_count,
+                tool_schema_tokens: 0,
                 tool_names: entry.tool_names.clone(),
                 message_count: 0,
                 dynamic_zone_messages: entry.dynamic_zone_messages,
                 dynamic_zones_before_last_user: entry.dynamic_zones_before_last_user,
+                request_phase: None,
+                effective_output_cap: None,
+                tool_round_count: None,
+                compaction_decision: None,
             },
         );
     let inference = crate::engine::cache_stability::infer_cache_miss_reason(

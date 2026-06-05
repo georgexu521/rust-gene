@@ -162,10 +162,15 @@ impl QueryEngine {
         let user_message = user_message.into();
         let system_prompt = self.composed_system_prompt_for_user(None, &user_message, None);
         let messages = vec![Message::system(system_prompt), Message::user(user_message)];
-        let cache_shape =
+        let mut cache_shape =
             crate::engine::cache_stability::request_cache_diagnostic_shape(&messages, &[]);
+        cache_shape.request_phase = Some("simple".to_string());
+        cache_shape.effective_output_cap = Some(4096);
+        cache_shape.tool_schema_tokens = 0;
 
-        let request = ChatRequest::new(&self.model).with_messages(messages);
+        let request = ChatRequest::new(&self.model)
+            .with_messages(messages)
+            .with_output_cap(Some(4096));
 
         let response = self
             .provider

@@ -718,11 +718,18 @@ impl TuiApp {
                             id,
                             result,
                             metadata,
+                            result_data,
                         } => {
                             let mut runs = tool_runs_clone.lock().await;
                             with_tool_run(&mut runs, &id, |run| {
                                 run.mark_complete_with_metadata(result, metadata)
                             });
+                            if let Some(data) = result_data {
+                                let mut runs = tool_runs_clone.lock().await;
+                                with_tool_run(&mut runs, &id, |run| {
+                                    run.result_data = Some(data);
+                                });
+                            }
                         }
                         StreamEvent::Complete => {
                             runtime_facade_state_clone.set_querying(false).await;

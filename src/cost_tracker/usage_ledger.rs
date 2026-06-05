@@ -31,6 +31,16 @@ pub struct UsageLedgerEntry {
     pub miss_reason: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub miss_reason_detail: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub request_phase: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub effective_output_cap: Option<u32>,
+    #[serde(default)]
+    pub tool_schema_tokens: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_round_count: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub compaction_decision: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
@@ -43,6 +53,8 @@ pub struct UsageLedgerModelSummary {
     pub cache_hit_tokens: u64,
     pub cache_miss_tokens: u64,
     pub cost_usd: f64,
+    pub tool_schema_tokens: u64,
+    pub capped_requests: u64,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
@@ -57,6 +69,8 @@ pub struct UsageLedgerSummary {
     pub cache_miss_tokens: u64,
     pub cost_usd: f64,
     pub hit_rate: f64,
+    pub tool_schema_tokens: u64,
+    pub capped_requests: u64,
     pub by_model: HashMap<String, UsageLedgerModelSummary>,
     pub last_miss_reason: Option<String>,
 }
@@ -70,6 +84,10 @@ impl UsageLedgerSummary {
         self.cache_hit_tokens += entry.cache_hit_tokens;
         self.cache_miss_tokens += entry.cache_miss_tokens;
         self.cost_usd += entry.cost_usd;
+        self.tool_schema_tokens += entry.tool_schema_tokens;
+        if entry.effective_output_cap.is_some() {
+            self.capped_requests += 1;
+        }
         self.hit_rate = prompt_cache_hit_rate(self.prompt_tokens, self.cache_hit_tokens);
         if let Some(reason) = &entry.miss_reason {
             self.last_miss_reason = Some(reason.clone());
@@ -83,6 +101,10 @@ impl UsageLedgerSummary {
         model.cache_hit_tokens += entry.cache_hit_tokens;
         model.cache_miss_tokens += entry.cache_miss_tokens;
         model.cost_usd += entry.cost_usd;
+        model.tool_schema_tokens += entry.tool_schema_tokens;
+        if entry.effective_output_cap.is_some() {
+            model.capped_requests += 1;
+        }
     }
 }
 
@@ -193,6 +215,11 @@ fn ensure_usage_sqlite(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
             dynamic_tail_hash TEXT,
             miss_reason TEXT,
             miss_reason_detail TEXT,
+            request_phase TEXT,
+            effective_output_cap INTEGER,
+            tool_schema_tokens INTEGER NOT NULL DEFAULT 0,
+            tool_round_count INTEGER,
+            compaction_decision TEXT,
             day TEXT GENERATED ALWAYS AS (date(ts / 1000, 'unixepoch')) STORED
         );
         CREATE INDEX IF NOT EXISTS idx_{table}_session ON {table}(session);
@@ -206,8 +233,17 @@ fn ensure_usage_sqlite(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
         "tool_schema_hash",
         "dynamic_tail_hash",
         "miss_reason_detail",
+        "request_phase",
+        "compaction_decision",
     ] {
         ensure_usage_sqlite_text_column(conn, column)?;
+    }
+    for column in [
+        ("effective_output_cap", "INTEGER"),
+        ("tool_schema_tokens", "INTEGER NOT NULL DEFAULT 0"),
+        ("tool_round_count", "INTEGER"),
+    ] {
+        ensure_usage_sqlite_column(conn, column.0, column.1)?;
     }
     Ok(())
 }
@@ -224,8 +260,24 @@ fn ensure_usage_sqlite_text_column(
             return Ok(());
         }
     }
+    ensure_usage_sqlite_column(conn, column, "TEXT")
+}
+
+fn ensure_usage_sqlite_column(
+    conn: &rusqlite::Connection,
+    column: &str,
+    kind: &str,
+) -> rusqlite::Result<()> {
+    let mut stmt = conn.prepare(&format!("PRAGMA table_info({USAGE_SQLITE_TABLE})"))?;
+    let mut rows = stmt.query([])?;
+    while let Some(row) = rows.next()? {
+        let name: String = row.get(1)?;
+        if name == column {
+            return Ok(());
+        }
+    }
     conn.execute(
-        &format!("ALTER TABLE {USAGE_SQLITE_TABLE} ADD COLUMN {column} TEXT"),
+        &format!("ALTER TABLE {USAGE_SQLITE_TABLE} ADD COLUMN {column} {kind}"),
         [],
     )?;
     Ok(())
@@ -253,8 +305,9 @@ pub fn sync_usage_to_sqlite(entry: &UsageLedgerEntry) {
             "INSERT INTO {table} (ts, session, model, prompt_tokens, completion_tokens,
              total_tokens, cache_hit_tokens, cache_miss_tokens, cost_usd,
              stable_prefix_hash, system_hash, tool_schema_hash, dynamic_tail_hash,
-             miss_reason, miss_reason_detail)
-             SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15
+             miss_reason, miss_reason_detail, request_phase, effective_output_cap,
+             tool_schema_tokens, tool_round_count, compaction_decision)
+             SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20
              WHERE NOT EXISTS (
                 SELECT 1 FROM {table}
                 WHERE ts = ?1
@@ -272,6 +325,11 @@ pub fn sync_usage_to_sqlite(entry: &UsageLedgerEntry) {
                   AND COALESCE(dynamic_tail_hash, '') = COALESCE(?13, '')
                   AND COALESCE(miss_reason, '') = COALESCE(?14, '')
                   AND COALESCE(miss_reason_detail, '') = COALESCE(?15, '')
+                  AND COALESCE(request_phase, '') = COALESCE(?16, '')
+                  AND COALESCE(effective_output_cap, -1) = COALESCE(?17, -1)
+                  AND tool_schema_tokens = ?18
+                  AND COALESCE(tool_round_count, -1) = COALESCE(?19, -1)
+                  AND COALESCE(compaction_decision, '') = COALESCE(?20, '')
              )",
             table = USAGE_SQLITE_TABLE
         ),
@@ -291,6 +349,11 @@ pub fn sync_usage_to_sqlite(entry: &UsageLedgerEntry) {
             entry.dynamic_tail_hash,
             entry.miss_reason,
             entry.miss_reason_detail,
+            entry.request_phase,
+            entry.effective_output_cap.map(i64::from),
+            entry.tool_schema_tokens as i64,
+            entry.tool_round_count.map(|v| v as i64),
+            entry.compaction_decision,
         ],
     );
 }
@@ -302,15 +365,14 @@ pub fn rebuild_usage_sqlite_from_jsonl() -> io::Result<usize> {
         std::fs::create_dir_all(parent)?;
     }
     let conn = rusqlite::Connection::open(&path)
-        .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("sqlite open: {e}")))?;
-    ensure_usage_sqlite(&conn)
-        .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("sqlite schema: {e}")))?;
+        .map_err(|e| io::Error::other(format!("sqlite open: {e}")))?;
+    ensure_usage_sqlite(&conn).map_err(|e| io::Error::other(format!("sqlite schema: {e}")))?;
     // Truncate before rebuild.
     conn.execute(
         &format!("DELETE FROM {table}", table = USAGE_SQLITE_TABLE),
         [],
     )
-    .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("sqlite delete: {e}")))?;
+    .map_err(|e| io::Error::other(format!("sqlite delete: {e}")))?;
 
     let jsonl_path = default_usage_ledger_path();
     let mut count = 0;
@@ -354,12 +416,13 @@ fn query_usage_sqlite(
         Ok(conn) => conn,
         Err(_) => return Ok(UsageLedgerSummary::default()),
     };
-    ensure_usage_sqlite(&conn)
-        .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("sqlite schema: {e}")))?;
+    ensure_usage_sqlite(&conn).map_err(|e| io::Error::other(format!("sqlite schema: {e}")))?;
     let mut sql = format!(
         "SELECT COUNT(*), COALESCE(SUM(prompt_tokens),0), COALESCE(SUM(completion_tokens),0),
          COALESCE(SUM(total_tokens),0), COALESCE(SUM(cache_hit_tokens),0),
-         COALESCE(SUM(cache_miss_tokens),0), COALESCE(SUM(cost_usd),0.0)
+         COALESCE(SUM(cache_miss_tokens),0), COALESCE(SUM(cost_usd),0.0),
+         COALESCE(SUM(tool_schema_tokens),0),
+         COALESCE(SUM(CASE WHEN effective_output_cap IS NOT NULL THEN 1 ELSE 0 END),0)
          FROM {table}",
         table = USAGE_SQLITE_TABLE
     );
@@ -382,7 +445,7 @@ fn query_usage_sqlite(
     let param_refs: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(|p| p.as_ref()).collect();
     let mut stmt = conn
         .prepare(&sql)
-        .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("sqlite: {e}")))?;
+        .map_err(|e| io::Error::other(format!("sqlite: {e}")))?;
     let mut summary = UsageLedgerSummary {
         path,
         ..UsageLedgerSummary::default()
@@ -396,6 +459,8 @@ fn query_usage_sqlite(
             row.get::<_, i64>(4)?,
             row.get::<_, i64>(5)?,
             row.get::<_, f64>(6)?,
+            row.get::<_, i64>(7)?,
+            row.get::<_, i64>(8)?,
         ))
     }) {
         summary.entries = row.0 as u64;
@@ -405,6 +470,8 @@ fn query_usage_sqlite(
         summary.cache_hit_tokens = row.4 as u64;
         summary.cache_miss_tokens = row.5 as u64;
         summary.cost_usd = row.6;
+        summary.tool_schema_tokens = row.7 as u64;
+        summary.capped_requests = row.8 as u64;
         summary.hit_rate = prompt_cache_hit_rate(summary.prompt_tokens, summary.cache_hit_tokens);
     }
     populate_usage_sqlite_model_summaries(&conn, &mut summary, session_filter, model_filter)?;
@@ -443,7 +510,9 @@ fn populate_usage_sqlite_model_summaries(
     let mut sql = format!(
         "SELECT model, COUNT(*), COALESCE(SUM(prompt_tokens),0), COALESCE(SUM(completion_tokens),0),
          COALESCE(SUM(total_tokens),0), COALESCE(SUM(cache_hit_tokens),0),
-         COALESCE(SUM(cache_miss_tokens),0), COALESCE(SUM(cost_usd),0.0)
+         COALESCE(SUM(cache_miss_tokens),0), COALESCE(SUM(cost_usd),0.0),
+         COALESCE(SUM(tool_schema_tokens),0),
+         COALESCE(SUM(CASE WHEN effective_output_cap IS NOT NULL THEN 1 ELSE 0 END),0)
          FROM {table}",
         table = USAGE_SQLITE_TABLE
     );
@@ -453,17 +522,17 @@ fn populate_usage_sqlite_model_summaries(
     let param_refs: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(|p| p.as_ref()).collect();
     let mut stmt = conn
         .prepare(&sql)
-        .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("sqlite: {e}")))?;
+        .map_err(|e| io::Error::other(format!("sqlite: {e}")))?;
     let mut rows = stmt
         .query(param_refs.as_slice())
-        .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("sqlite query: {e}")))?;
+        .map_err(|e| io::Error::other(format!("sqlite query: {e}")))?;
     while let Some(row) = rows
         .next()
-        .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("sqlite row: {e}")))?
+        .map_err(|e| io::Error::other(format!("sqlite row: {e}")))?
     {
         let model: String = row
             .get(0)
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("sqlite model: {e}")))?;
+            .map_err(|e| io::Error::other(format!("sqlite model: {e}")))?;
         summary.by_model.insert(
             model,
             UsageLedgerModelSummary {
@@ -474,6 +543,8 @@ fn populate_usage_sqlite_model_summaries(
                 cache_hit_tokens: row.get::<_, i64>(5).unwrap_or_default() as u64,
                 cache_miss_tokens: row.get::<_, i64>(6).unwrap_or_default() as u64,
                 cost_usd: row.get::<_, f64>(7).unwrap_or_default(),
+                tool_schema_tokens: row.get::<_, i64>(8).unwrap_or_default() as u64,
+                capped_requests: row.get::<_, i64>(9).unwrap_or_default() as u64,
             },
         );
     }
@@ -508,14 +579,11 @@ fn query_usage_sqlite_last_miss_reason(
     let param_refs: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(|p| p.as_ref()).collect();
     let mut stmt = conn
         .prepare(&sql)
-        .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("sqlite: {e}")))?;
+        .map_err(|e| io::Error::other(format!("sqlite: {e}")))?;
     match stmt.query_row(param_refs.as_slice(), |row| row.get::<_, String>(0)) {
         Ok(reason) => Ok(Some(reason)),
         Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
-        Err(err) => Err(io::Error::new(
-            io::ErrorKind::Other,
-            format!("sqlite last miss reason: {err}"),
-        )),
+        Err(err) => Err(io::Error::other(format!("sqlite last miss reason: {err}"))),
     }
 }
 
@@ -552,6 +620,11 @@ mod tests {
             dynamic_tail_hash: Some("tail".to_string()),
             miss_reason: Some("dynamic-tail-changed".to_string()),
             miss_reason_detail: Some("tail changed".to_string()),
+            request_phase: Some("coding".to_string()),
+            effective_output_cap: Some(8192),
+            tool_schema_tokens: 320,
+            tool_round_count: Some(2),
+            compaction_decision: Some("skipped".to_string()),
         };
         append_usage_ledger_entry_at(&path, &entry).unwrap();
         append_usage_ledger_entry_at(
@@ -568,6 +641,8 @@ mod tests {
         assert_eq!(summary.prompt_tokens, 1000);
         assert_eq!(summary.cache_hit_tokens, 800);
         assert_eq!(summary.cache_miss_tokens, 200);
+        assert_eq!(summary.tool_schema_tokens, 320);
+        assert_eq!(summary.capped_requests, 1);
         assert!((summary.hit_rate - 0.8).abs() < f64::EPSILON);
 
         let _ = std::fs::remove_dir_all(dir);
@@ -597,6 +672,11 @@ mod tests {
             dynamic_tail_hash: None,
             miss_reason: Some("cold-start".to_string()),
             miss_reason_detail: None,
+            request_phase: Some("coding".to_string()),
+            effective_output_cap: Some(8192),
+            tool_schema_tokens: 123,
+            tool_round_count: Some(1),
+            compaction_decision: Some("skipped".to_string()),
         };
         append_usage_ledger_entry_at(&jsonl_path, &entry).unwrap();
 
@@ -609,6 +689,8 @@ mod tests {
         assert_eq!(summary.entries, 1);
         assert_eq!(summary.prompt_tokens, 500);
         assert_eq!(summary.cache_hit_tokens, 400);
+        assert_eq!(summary.tool_schema_tokens, 123);
+        assert_eq!(summary.capped_requests, 1);
         assert!((summary.hit_rate - 0.8).abs() < f64::EPSILON);
         assert_eq!(summary.cost_usd, 0.002);
         assert_eq!(summary.last_miss_reason.as_deref(), Some("cold-start"));

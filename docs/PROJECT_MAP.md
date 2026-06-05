@@ -28,6 +28,7 @@ not proof of current code. Read exact files before editing.
 - `src/tools/`: tool contracts and implementations exposed to the model.
 - `src/services/api/`: provider adapters, request/response normalization, response content sanitizing, weak-model tool-call repair.
 - `src/memory/`: memory providers, manager, persistence, retrieval, extraction, ranking, reports.
+- `src/session_store/`: SQLite-backed session artifacts including durable todos and per-session state projections.
 - `src/tui/`: terminal UI screens, commands, slash handlers, event wiring.
 - `src/api/`: optional API server routes and tool allowlist behavior.
 - `apps/desktop/`: React/Tauri frontend app for the local workbench experience.
@@ -113,7 +114,7 @@ context snapshots, and closeout events.
 - `src/engine/conversation_loop/turn_iteration_controller.rs`: per-iteration
   loop contract; no valid tool calls finish the turn, while empty responses get
   bounded retry and tool loops are left to the iteration budget/storm guard.
-- `src/engine/conversation_loop/request_preparation_controller.rs`: request message preparation, dynamic context zones, model-led weighting hints, memory prefetch, cache-stability snapshot.
+- `src/engine/conversation_loop/request_preparation_controller.rs`: request message preparation, dynamic context zones, model-led weighting hints, memory prefetch, cache-stability snapshot, and main-turn output-cap policy.
 - `src/engine/conversation_loop/tool_execution_controller.rs`: tool execution, observations, checkpoints, action review, permission integration.
 - `src/engine/conversation_loop/tool_batch_result_processor.rs`: tool result
   aggregation and success/failure accounting; duplicate read-only calls are
@@ -133,6 +134,7 @@ context snapshots, and closeout events.
 - `src/engine/retrieval_context.rs`: retrieval items and prompt formatting.
 - `src/engine/project_map.rs`: bounded `docs/PROJECT_MAP.md` runtime snippet, env budget controls, watched-path freshness detection, and machine-readable symbol/file index building.
 - `src/cost_tracker/prompt_cache.rs`: Reasonix-style per-turn prompt-cache diagnostics, inferred miss reasons, and `/cache miss-report` rendering.
+- `src/cost_tracker/usage_ledger.rs`: durable request usage ledger with prompt/cache/completion/schema tokens, output caps, request phase, tool rounds, and compaction metadata for `/cost` analysis.
 
 ## Routing, Workflow, And Safety
 
@@ -151,13 +153,14 @@ context snapshots, and closeout events.
 ## Tool Navigation
 
 - `src/tools/mod.rs`: tool trait, registry, default tool registration.
-- `src/tools/file_tool/`: file read/write/edit/patch and path resolution.
+- `src/tools/file_tool/`: file read/write/edit/patch, path resolution, mutation results, and deterministic edit-candidate recovery.
 - `src/tools/grep_tool/`: text search; prefer after map/symbol narrowing.
 - `src/tools/glob_tool/`: file globbing.
 - `src/tools/project_tool/`: cached project file index, `project_list` summary/search/dir/map/index.
 - `src/tools/symbol_tool/`: `symbol_query` using tree-sitter symbol indexing.
 - `src/engine/symbol_index.rs`: project-level AST symbol index for Rust/TS/JS/Python, including Rust type identifiers.
 - `src/tools/bash_tool/`: shell execution and background task handling.
+- `src/tools/todo_tool/`: session-backed todo state with transactional persistence through `SessionStore`.
 - `src/tools/git_read_tool.rs` and `src/tools/diff_tool/`: git status/diff/read-only inspection.
 
 ## Frontend Workbench

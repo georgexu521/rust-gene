@@ -59,6 +59,8 @@ pub enum StreamEvent {
         id: String,
         result: String,
         metadata: Option<serde_json::Value>,
+        /// Structured JSON data from the tool result (e.g. mutation_result).
+        result_data: Option<serde_json::Value>,
     },
     /// 思考开始（extended thinking 模型）
     ThinkingStart,

@@ -289,6 +289,7 @@ impl ToolExecutionController {
                         id: tc.id.clone(),
                         result: result_content,
                         metadata: tool_completion_metadata(&result),
+                        result_data: result.data.clone(),
                     })
                     .await;
             }
@@ -562,6 +563,7 @@ impl ToolExecutionController {
                         id: tool_id.clone(),
                         result: result_content,
                         metadata: tool_completion_metadata(&result),
+                        result_data: result.data.clone(),
                     })
                     .await;
             }
@@ -769,6 +771,7 @@ impl ToolExecutionController {
                                 id: tc.id.clone(),
                                 result: result_content,
                                 metadata: tool_completion_metadata(&pre_result),
+                                result_data: pre_result.data.clone(),
                             })
                             .await;
                     }

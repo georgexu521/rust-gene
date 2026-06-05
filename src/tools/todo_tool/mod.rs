@@ -7,7 +7,8 @@ use serde_json::json;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TodoItem {
     pub content: String,
-    pub status: String,   // pending, in_progress, completed
+    pub status: String, // pending, in_progress, completed
+    #[serde(default)]
     pub priority: String, // high, medium, low
 }
 
@@ -62,10 +63,35 @@ impl Tool for TodoWriteTool {
         ToolOperationKind::Task
     }
 
-    async fn execute(&self, params: serde_json::Value, _context: ToolContext) -> ToolResult {
+    async fn execute(&self, params: serde_json::Value, context: ToolContext) -> ToolResult {
         let todos: Vec<TodoItem> = match serde_json::from_value(params["todos"].clone()) {
             Ok(t) => t,
             Err(e) => return ToolResult::error(format!("Invalid todo format: {}", e)),
+        };
+
+        let in_progress = todos.iter().filter(|t| t.status == "in_progress").count();
+        if in_progress > 1 {
+            return ToolResult::error("At most one todo may be in_progress at a time.");
+        }
+
+        // Persist to session store (Phase 5: opencode alignment).
+        let persist_result = if let Some(ref store) = context.session_store {
+            let store_items: Vec<crate::session_store::TodoItem> = todos
+                .iter()
+                .map(|t| crate::session_store::TodoItem {
+                    content: t.content.clone(),
+                    status: t.status.clone(),
+                    priority: t.priority.clone(),
+                })
+                .collect();
+            match store.replace_todos(&context.session_id, &store_items) {
+                Ok(()) => Some("persisted".to_string()),
+                Err(e) => {
+                    return ToolResult::error(format!("Failed to persist todos: {e}"));
+                }
+            }
+        } else {
+            None
         };
 
         // 格式化显示
@@ -105,7 +131,26 @@ impl Tool for TodoWriteTool {
             "\nProgress: {} done, {} in progress, {} pending",
             stats.2, stats.1, stats.0
         ));
+        if let Some(ref status) = persist_result {
+            output.push_str(&format!("\n[{}]", status));
+        }
 
         ToolResult::success_with_data(output, serde_json::to_value(&todos).unwrap_or(json!([])))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn todo_item_allows_missing_priority() {
+        let item: TodoItem = serde_json::from_value(json!({
+            "content": "write focused test",
+            "status": "pending"
+        }))
+        .unwrap();
+
+        assert_eq!(item.priority, "");
     }
 }

@@ -149,3 +149,419 @@ pub(super) fn occurrence_line_numbers(content: &str, occurrences: &[(usize, usiz
         .map(|(start, _)| content[..*start].matches('\n').count() + 1)
         .collect()
 }
+
+// ---- Phase 3 (opencode alignment): edit recovery candidates ----
+
+/// Outcome of deterministic edit candidate generation.
+pub(super) enum EditCandidateOutcome {
+    /// An unambiguous candidate was found and can be applied automatically.
+    AutoApplied {
+        replacements: usize,
+        strategy: String,
+        occurrence: (usize, usize),
+    },
+    /// One or more candidates were generated; model should review.
+    Candidates {
+        candidates: Vec<EditCandidate>,
+        count: usize,
+    },
+    /// No matches found even with lenient strategies.
+    Mismatch { detail: String },
+}
+
+/// A single candidate match for a failed exact edit.
+pub(super) struct EditCandidate {
+    pub strategy: String,
+    pub occurrence: (usize, usize),
+    pub confidence: &'static str,
+    pub guidance: String,
+}
+
+impl EditCandidate {
+    pub(super) fn to_json(&self) -> serde_json::Value {
+        serde_json::json!({
+            "strategy": self.strategy,
+            "start_byte": self.occurrence.0,
+            "end_byte": self.occurrence.1,
+            "confidence": self.confidence,
+            "guidance": self.guidance,
+        })
+    }
+}
+
+/// Generate recovery candidates when exact match fails.
+///
+/// Safety: never auto-applies unless exactly one high-confidence candidate
+/// is found within known content. Returns `AutoApplied` only for deterministic
+/// single-match recoveries; ambiguous matches return `Candidates` for review.
+pub(super) fn generate_edit_candidates(
+    content: &str,
+    old_string: &str,
+    occurrences: &[(usize, usize)],
+) -> EditCandidateOutcome {
+    if occurrences.len() == 1 {
+        return EditCandidateOutcome::AutoApplied {
+            replacements: 1,
+            strategy: "exact".to_string(),
+            occurrence: occurrences[0],
+        };
+    }
+
+    let mut candidates: Vec<EditCandidate> = Vec::new();
+
+    // Strategy 1: line-trimmed block matching.
+    let trimmed = find_occurrences_line_trimmed(content, old_string);
+    if !trimmed.is_empty() && trimmed.len() != occurrences.len() {
+        for occ in &trimmed {
+            candidates.push(EditCandidate {
+                strategy: "line-trimmed".to_string(),
+                occurrence: *occ,
+                confidence: if trimmed.len() == 1 { "high" } else { "low" },
+                guidance: "Each line was trimmed of leading/trailing whitespace.".to_string(),
+            });
+        }
+        if trimmed.len() == 1 && old_string.lines().count() > 1 {
+            return EditCandidateOutcome::AutoApplied {
+                replacements: 1,
+                strategy: "line-trimmed".to_string(),
+                occurrence: trimmed[0],
+            };
+        }
+    }
+
+    // Strategy 2: indentation-normalized block matching.
+    let indent_norm = find_occurrences_indent_normalized(content, old_string);
+    if !indent_norm.is_empty() && indent_norm != *occurrences && indent_norm != trimmed {
+        for occ in &indent_norm {
+            candidates.push(EditCandidate {
+                strategy: "indent-normalized".to_string(),
+                occurrence: *occ,
+                confidence: if indent_norm.len() == 1 {
+                    "high"
+                } else {
+                    "low"
+                },
+                guidance: "Common leading whitespace was removed from each line.".to_string(),
+            });
+        }
+        if indent_norm.len() == 1 && candidates.is_empty() {
+            return EditCandidateOutcome::AutoApplied {
+                replacements: 1,
+                strategy: "indent-normalized".to_string(),
+                occurrence: indent_norm[0],
+            };
+        }
+    }
+
+    // Strategy 3: block-anchor matching for 3+ line old strings.
+    if old_string.lines().count() >= 3 {
+        let anchor = find_occurrences_block_anchor(content, old_string);
+        if !anchor.is_empty() && !indent_norm.contains(&anchor[0]) {
+            for occ in &anchor {
+                candidates.push(EditCandidate {
+                    strategy: "block-anchor".to_string(),
+                    occurrence: *occ,
+                    confidence: if anchor.len() == 1 { "medium" } else { "low" },
+                    guidance: "The first and last lines matched exactly; middle lines differ."
+                        .to_string(),
+                });
+            }
+        }
+    }
+
+    if candidates.is_empty() {
+        // Strategy 4: whitespace-normalized snippets for short strings.
+        let normalized = find_occurrences_whitespace_normalized(content, old_string);
+        if !normalized.is_empty() && normalized != *occurrences {
+            for occ in &normalized {
+                candidates.push(EditCandidate {
+                    strategy: "whitespace-normalized".to_string(),
+                    occurrence: *occ,
+                    confidence: if normalized.len() == 1 {
+                        "medium"
+                    } else {
+                        "low"
+                    },
+                    guidance: "Consecutive whitespace was collapsed to single spaces.".to_string(),
+                });
+            }
+        }
+    }
+
+    if candidates.is_empty() {
+        EditCandidateOutcome::Mismatch {
+            detail: format!(
+                "No match found for old_string ({} bytes) in file content ({} bytes). \
+                 Try file_read the target file to verify the exact content, \
+                 or use line_start/line_end for precise replacement.",
+                old_string.len(),
+                content.len()
+            ),
+        }
+    } else {
+        EditCandidateOutcome::Candidates {
+            count: candidates.len(),
+            candidates,
+        }
+    }
+}
+
+fn find_occurrences_line_trimmed(content: &str, target: &str) -> Vec<(usize, usize)> {
+    let target_lines: Vec<&str> = target.lines().map(|l| l.trim()).collect();
+    if target_lines.iter().all(|l| l.is_empty()) {
+        return Vec::new();
+    }
+    let content_lines: Vec<&str> = content.lines().collect();
+    let content_trimmed: Vec<&str> = content_lines.iter().map(|l| l.trim()).collect();
+
+    let mut result = Vec::new();
+    for start in 0..content_lines.len().saturating_sub(target_lines.len() - 1) {
+        let matches = content_trimmed[start..]
+            .iter()
+            .zip(&target_lines)
+            .all(|(a, b)| a == b);
+        if matches {
+            result.push(line_window_byte_range(
+                content,
+                start,
+                target_lines.len(),
+                target.ends_with('\n'),
+            ));
+        }
+    }
+    result
+}
+
+fn find_occurrences_indent_normalized(content: &str, target: &str) -> Vec<(usize, usize)> {
+    let target_lines: Vec<&str> = target.lines().map(strip_common_indent).collect();
+    if target_lines.iter().all(|l| l.is_empty()) {
+        return Vec::new();
+    }
+    let content_lines: Vec<&str> = content.lines().collect();
+    let content_norm: Vec<&str> = content_lines
+        .iter()
+        .map(|l| strip_common_indent(l))
+        .collect();
+
+    let mut result = Vec::new();
+    for start in 0..content_lines.len().saturating_sub(target_lines.len() - 1) {
+        let matches = content_norm[start..]
+            .iter()
+            .zip(&target_lines)
+            .all(|(a, b)| a == b);
+        if matches {
+            result.push(line_window_byte_range(
+                content,
+                start,
+                target_lines.len(),
+                target.ends_with('\n'),
+            ));
+        }
+    }
+    result
+}
+
+fn strip_common_indent(line: &str) -> &str {
+    let trimmed = line.trim_start();
+    if trimmed.len() < line.len() {
+        trimmed
+    } else {
+        line
+    }
+}
+
+fn find_occurrences_block_anchor(content: &str, target: &str) -> Vec<(usize, usize)> {
+    let target_lines: Vec<&str> = target.lines().collect();
+    if target_lines.len() < 3 {
+        return Vec::new();
+    }
+    let first = target_lines[0];
+    let last = target_lines[target_lines.len() - 1];
+    let content_lines: Vec<&str> = content.lines().collect();
+
+    let mut result = Vec::new();
+    for start in 0..content_lines.len().saturating_sub(target_lines.len() - 1) {
+        let end = start + target_lines.len() - 1;
+        if content_lines[start].trim() == first.trim() && content_lines[end].trim() == last.trim() {
+            result.push(line_window_byte_range(
+                content,
+                start,
+                target_lines.len(),
+                target.ends_with('\n'),
+            ));
+        }
+    }
+    result
+}
+
+fn line_window_byte_range(
+    content: &str,
+    start_line: usize,
+    line_count: usize,
+    include_trailing_newline: bool,
+) -> (usize, usize) {
+    let mut pos = 0;
+    for _ in 0..start_line {
+        pos = content[pos..]
+            .find('\n')
+            .map(|p| pos + p + 1)
+            .unwrap_or(pos);
+    }
+    let occ_start = pos;
+    let mut occ_end = pos;
+    for idx in 0..line_count {
+        match content[occ_end..].find('\n') {
+            Some(p) => {
+                let line_end = occ_end + p;
+                if idx + 1 == line_count && !include_trailing_newline {
+                    occ_end = line_end;
+                } else {
+                    occ_end = line_end + 1;
+                }
+            }
+            None => {
+                occ_end = content.len();
+                break;
+            }
+        }
+    }
+    (occ_start, occ_end)
+}
+
+fn find_occurrences_whitespace_normalized(content: &str, target: &str) -> Vec<(usize, usize)> {
+    let normalized_target = collapse_whitespace(target);
+    if normalized_target.is_empty() {
+        return Vec::new();
+    }
+    let content_lines: Vec<&str> = content.lines().collect();
+    let normalized_lines: Vec<String> = content_lines
+        .iter()
+        .map(|l| collapse_whitespace(l))
+        .collect();
+
+    // For single-line targets, search line by line.
+    if !target.contains('\n') {
+        let mut result = Vec::new();
+        for (i, line) in normalized_lines.iter().enumerate() {
+            if line == &normalized_target {
+                let mut pos = 0;
+                for _ in 0..i {
+                    pos = content[pos..]
+                        .find('\n')
+                        .map(|p| pos + p + 1)
+                        .unwrap_or(pos);
+                }
+                result.push((pos, pos + content_lines[i].len()));
+            }
+        }
+        return result;
+    }
+
+    // Multi-line whitespace-normalized matching is intentionally not
+    // auto-applied; block-anchor matching above gives safer guidance.
+    Vec::new()
+}
+
+fn collapse_whitespace(s: &str) -> String {
+    let mut result = String::with_capacity(s.len());
+    let mut in_whitespace = false;
+    for ch in s.chars() {
+        if ch.is_whitespace() {
+            if !in_whitespace {
+                result.push(' ');
+                in_whitespace = true;
+            }
+        } else {
+            result.push(ch);
+            in_whitespace = false;
+        }
+    }
+    result.trim().to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn line_trimmed_matches_despite_leading_whitespace() {
+        let content = "fn main() {\n    let x = 1;\n    println!(\"{x}\");\n}\n";
+        let target = "let x = 1;\nprintln!(\"{x}\");";
+        let result = find_occurrences_line_trimmed(content, target);
+        assert_eq!(result.len(), 1);
+    }
+
+    #[test]
+    fn indent_normalized_matches_despite_indent_diff() {
+        let content = "    fn foo() {\n        bar();\n    }\n";
+        let target = "fn foo() {\n    bar();\n}";
+        let result = find_occurrences_indent_normalized(content, target);
+        assert_eq!(result.len(), 1);
+    }
+
+    #[test]
+    fn block_anchor_matches_when_first_last_match() {
+        let content = "fn old_name() {\n    let x = calc();\n    return x;\n}\n";
+        let target = "fn old_name() {\n    let y = calc();\n    return x;\n}";
+        let result = find_occurrences_block_anchor(content, target);
+        assert_eq!(result.len(), 1);
+    }
+
+    #[test]
+    fn whitespace_normalized_single_line() {
+        let content = "use  std::collections::HashMap;\n";
+        let target = "use std::collections::HashMap;";
+        let result = find_occurrences_whitespace_normalized(content, target);
+        assert_eq!(result.len(), 1);
+    }
+
+    #[test]
+    fn generate_candidates_finds_line_trimmed_recovery() {
+        let content = "fn main() {\n  \t let value = 1;\n  \t println!(\"hello\");\n}\n";
+        // old_string has tab-difference: \t vs spaces
+        let target = "    let value = 1;\n    println!(\"hello\");";
+        let occurrences = find_occurrences(content, target);
+        assert_eq!(occurrences.len(), 0);
+
+        match generate_edit_candidates(content, target, &occurrences) {
+            EditCandidateOutcome::AutoApplied { strategy, .. } => {
+                assert_eq!(strategy, "line-trimmed");
+            }
+            _other => panic!("expected AutoApplied"),
+        }
+    }
+
+    #[test]
+    fn line_trimmed_range_does_not_swallow_newline_when_target_has_none() {
+        let content = "fn main() {\n    let x = 1;\n    println!(\"{x}\");\n}\n";
+        let target = "let x = 1;\nprintln!(\"{x}\");";
+        let result = find_occurrences_line_trimmed(content, target);
+        assert_eq!(result.len(), 1);
+        assert_eq!(
+            &content[result[0].0..result[0].1],
+            "    let x = 1;\n    println!(\"{x}\");"
+        );
+    }
+
+    #[test]
+    fn generate_candidates_refuses_ambiguous_matches() {
+        let content = "line one\ndata: a\nline three\n\ndata: b\n";
+        let target = "data:";
+        let occurrences = find_occurrences(content, target);
+        // 2 exact occurrences.
+
+        match generate_edit_candidates(content, target, &occurrences) {
+            EditCandidateOutcome::Candidates { candidates, .. } => {
+                assert!(!candidates.is_empty());
+                // No candidate should be auto-applied (all low confidence).
+                for c in &candidates {
+                    assert_ne!(c.confidence, "high");
+                }
+            }
+            EditCandidateOutcome::AutoApplied { .. } => {
+                panic!("ambiguous match must not auto-apply");
+            }
+            _ => { /* mismatch is acceptable */ }
+        }
+    }
+}

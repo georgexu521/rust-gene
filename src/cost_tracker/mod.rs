@@ -263,9 +263,25 @@ impl CostTracker {
         stats.tokens.cache_miss += cache_usage.cache_miss_tokens;
         stats.estimated_cost += cost;
 
+        let usage_meta = cache_shape.as_ref().map(|shape| {
+            (
+                shape.request_phase.clone(),
+                shape.effective_output_cap,
+                shape.tool_schema_tokens,
+                shape.tool_round_count,
+                shape.compaction_decision.clone(),
+            )
+        });
         let diagnostic = cache_shape.map(|cache_shape| {
             self.record_prompt_cache_diagnostic(model, cache_usage, cost, cache_shape)
         });
+        let (
+            request_phase,
+            effective_output_cap,
+            tool_schema_tokens,
+            tool_round_count,
+            compaction_decision,
+        ) = usage_meta.unwrap_or((None, None, 0, None, None));
         let ledger_entry = usage_ledger::UsageLedgerEntry {
             ts: usage_ledger::now_epoch_ms(),
             session: session_id.unwrap_or("unknown").to_string(),
@@ -292,6 +308,11 @@ impl CostTracker {
             miss_reason_detail: diagnostic
                 .as_ref()
                 .map(|entry| entry.miss_reason_detail.clone()),
+            request_phase,
+            effective_output_cap,
+            tool_schema_tokens,
+            tool_round_count,
+            compaction_decision,
         };
         match usage_ledger::append_usage_ledger_entry(&ledger_entry) {
             Ok(()) => usage_ledger::sync_usage_to_sqlite(&ledger_entry),

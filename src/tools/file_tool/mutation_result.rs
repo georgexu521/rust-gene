@@ -184,6 +184,7 @@ impl FileMutationResult {
 }
 
 /// Build a `FileMutationResult` from the typical data produced by file_write.
+#[allow(clippy::too_many_arguments)]
 pub fn file_write_result(
     path: &str,
     resolved_path: &str,
@@ -257,6 +258,7 @@ pub fn file_write_result(
 }
 
 /// Build a `FileMutationResult` from the typical data produced by file_edit.
+#[allow(clippy::too_many_arguments)]
 pub fn file_edit_result(
     path: &str,
     resolved_path: &str,
@@ -351,6 +353,7 @@ pub fn file_edit_result(
 }
 
 /// Build a `FileMutationResult` from the typical data produced by file_patch success.
+#[allow(clippy::too_many_arguments)]
 pub fn file_patch_result(
     file_results: Vec<FileResult>,
     total_additions: usize,
@@ -394,6 +397,7 @@ pub fn file_patch_result(
 }
 
 /// Build a `FileMutationResult` for a patch partial failure with rollback.
+#[allow(clippy::too_many_arguments)]
 pub fn file_patch_partial_failure_result(
     failed_path: &str,
     written_file_results: Vec<FileResult>,
@@ -472,6 +476,7 @@ pub fn display_path_from_resolved(resolved: &Path, working_dir: &Path) -> String
 ///
 /// This keeps the existing JSON rendering intact while adding a typed
 /// `mutation_result` field that TUI, desktop, trace, and repair can consume.
+#[allow(clippy::too_many_arguments)]
 pub fn from_file_edit_json(
     path: &str,
     resolved_path: &str,
@@ -645,6 +650,65 @@ fn extract_str(v: &serde_json::Value, key: &str) -> String {
         .and_then(|v| v.as_str())
         .unwrap_or("")
         .to_string()
+}
+
+/// Try to extract a `FileMutationResult` from a tool result data payload.
+///
+/// Returns `None` if the `mutation_result` field is absent or malformed.
+/// This is the canonical product-facing accessor for TUI, desktop, trace,
+/// repair helpers, and closeout — they should use this instead of parsing
+/// per-tool ad hoc fields.
+pub fn from_tool_data(data: &serde_json::Value) -> Option<FileMutationResult> {
+    data.get("mutation_result")
+        .and_then(|v| serde_json::from_value(v.clone()).ok())
+}
+
+/// A compact one-line summary suitable for TUI tool cards and trace lines.
+///
+/// Returns the pre-built `ui_summary` if present, otherwise synthesizes
+/// a basic summary from the operation, file count, and diff.
+pub fn compact_summary(data: &serde_json::Value) -> String {
+    if let Some(mr) = from_tool_data(data) {
+        return mr.ui_summary;
+    }
+    // Fallback for tool results without mutation_result.
+    let op = data
+        .get("operation")
+        .and_then(|v| v.as_str())
+        .unwrap_or("unknown");
+    let file_count = data
+        .get("files")
+        .and_then(|v| v.as_array())
+        .map(|a| a.len())
+        .unwrap_or(1);
+    let path = data
+        .get("path")
+        .and_then(|v| v.as_str())
+        .or_else(|| data.get("resolved_path").and_then(|v| v.as_str()))
+        .unwrap_or("?");
+    let bytes = data
+        .get("bytes_written")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
+    let additions = data
+        .get("diff")
+        .and_then(|d| d.get("additions"))
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
+    let deletions = data
+        .get("diff")
+        .and_then(|d| d.get("deletions"))
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
+
+    if file_count > 1 {
+        format!(
+            "{} {} files: +{}/-{}, {}B",
+            op, file_count, additions, deletions, bytes
+        )
+    } else {
+        format!("{} {}: +{}/-{}, {}B", op, path, additions, deletions, bytes)
+    }
 }
 
 #[cfg(test)]
@@ -931,5 +995,87 @@ mod tests {
         assert!(diagnostics.first_error.is_none());
         assert!(diagnostics.first_warning.is_none());
         assert!(diagnostics.affected_line_range.is_none());
+    }
+
+    #[test]
+    fn from_tool_data_extracts_mutation_result() {
+        let result = file_write_result(
+            "src/main.rs",
+            "/proj/src/main.rs",
+            "src/main.rs",
+            true,
+            100,
+            3,
+            1,
+            Some(5),
+            Some(7),
+            "utf-8",
+            false,
+            "LF",
+            None,
+            None,
+            "@@ diff",
+            false,
+            Some("fc_1".to_string()),
+            Some("cp_1"),
+            Some(1),
+            Some("sess"),
+        );
+        let json = serde_json::to_value(&result).unwrap();
+        let data = serde_json::json!({"mutation_result": json});
+
+        let extracted = from_tool_data(&data).unwrap();
+        assert_eq!(extracted.operation, "file_write");
+        assert_eq!(extracted.files[0].path, "src/main.rs");
+        assert_eq!(extracted.diff.additions, 3);
+    }
+
+    #[test]
+    fn from_tool_data_returns_none_when_absent() {
+        let data = serde_json::json!({"path": "src/main.rs", "bytes_written": 100});
+        assert!(from_tool_data(&data).is_none());
+    }
+
+    #[test]
+    fn compact_summary_uses_ui_summary_when_present() {
+        let result = file_write_result(
+            "src/main.rs",
+            "/proj/src/main.rs",
+            "src/main.rs",
+            true,
+            42,
+            2,
+            1,
+            Some(3),
+            Some(4),
+            "utf-8",
+            false,
+            "LF",
+            None,
+            None,
+            "diff",
+            false,
+            None,
+            Some("cp"),
+            Some(1),
+            Some("s"),
+        );
+        let json = serde_json::to_value(&result).unwrap();
+        let data = serde_json::json!({"mutation_result": json});
+        let summary = compact_summary(&data);
+        assert!(summary.contains("file_write"));
+        assert!(summary.contains("42B"));
+    }
+
+    #[test]
+    fn compact_summary_falls_back_without_mutation_result() {
+        let data = serde_json::json!({
+            "path": "src/lib.rs",
+            "bytes_written": 25,
+            "diff": {"additions": 2, "deletions": 0}
+        });
+        let summary = compact_summary(&data);
+        assert!(summary.contains("src/lib.rs"));
+        assert!(summary.contains("+2"));
     }
 }

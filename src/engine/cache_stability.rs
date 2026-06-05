@@ -37,10 +37,15 @@ pub struct CacheDiagnosticShape {
     pub few_shots_fingerprint: String,
     pub dynamic_tail_fingerprint: String,
     pub tool_count: usize,
+    pub tool_schema_tokens: u64,
     pub tool_names: Vec<String>,
     pub message_count: usize,
     pub dynamic_zone_messages: usize,
     pub dynamic_zones_before_last_user: usize,
+    pub request_phase: Option<String>,
+    pub effective_output_cap: Option<u32>,
+    pub tool_round_count: Option<u64>,
+    pub compaction_decision: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -206,10 +211,15 @@ pub fn request_cache_diagnostic_shape(
         few_shots_fingerprint: stable_fingerprint(&few_shots),
         dynamic_tail_fingerprint: stable_fingerprint(&dynamic_tail),
         tool_count: tool_manifest.tool_count,
+        tool_schema_tokens: tool_manifest.estimated_tokens,
         tool_names,
         message_count: messages.len(),
         dynamic_zone_messages,
         dynamic_zones_before_last_user,
+        request_phase: None,
+        effective_output_cap: None,
+        tool_round_count: None,
+        compaction_decision: None,
     }
 }
 

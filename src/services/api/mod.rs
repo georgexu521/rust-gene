@@ -173,6 +173,14 @@ impl ChatRequest {
         self.temperature = Some(temp);
         self
     }
+
+    /// Set an output token cap. None means unlimited.
+    /// Phase 6 (opencode alignment): coding turns default to 8192,
+    /// repair turns to 1024, and inspection-only turns to no cap.
+    pub fn with_output_cap(mut self, cap: Option<u32>) -> Self {
+        self.max_tokens = cap;
+        self
+    }
 }
 
 #[derive(Debug, Clone)]

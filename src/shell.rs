@@ -669,6 +669,7 @@ async fn run_turn(engine: Arc<StreamingQueryEngine>, message: String) -> anyhow:
                 id,
                 result,
                 metadata,
+                ..
             } => {
                 clear_status_if_visible(&mut status_visible)?;
                 assistant_printer.finish_line_if_needed()?;

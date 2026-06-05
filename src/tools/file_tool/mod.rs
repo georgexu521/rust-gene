@@ -607,6 +607,12 @@ fn exact_replace_preflight_error(
     if occurrences.is_empty() {
         let fuzzy = fuzzy_find_occurrences(content, old_string);
         let mut data = base_data("old_string_not_found");
+        let candidate_outcome = generate_edit_candidates(content, old_string, &occurrences);
+        if let EditCandidateOutcome::AutoApplied { replacements, .. } = &candidate_outcome {
+            if *replacements == expected_count {
+                return None;
+            }
+        }
         data["match_diagnostics"] = json!({
             "expected_occurrences": expected_count,
             "exact_occurrences": 0,
@@ -618,6 +624,29 @@ fn exact_replace_preflight_error(
                 json!(build_match_context(content, &fuzzy, 2))
             },
         });
+        match candidate_outcome {
+            EditCandidateOutcome::AutoApplied {
+                replacements,
+                strategy,
+                ..
+            } => {
+                data["match_diagnostics"]["recovery"] = json!({
+                    "status": "auto_candidate_available_but_rejected",
+                    "strategy": strategy,
+                    "replacements": replacements,
+                    "expected_replacements": expected_count,
+                });
+            }
+            EditCandidateOutcome::Candidates { candidates, count } => {
+                data["match_diagnostics"]["candidates"] = json!({
+                    "count": count,
+                    "items": candidates.iter().map(EditCandidate::to_json).collect::<Vec<_>>(),
+                });
+            }
+            EditCandidateOutcome::Mismatch { detail } => {
+                data["match_diagnostics"]["candidate_detail"] = json!(detail);
+            }
+        }
         data["recovery"]["recommended_action"] = if fuzzy.is_empty() {
             json!("re_read_once_then_line_range_edit")
         } else {
@@ -1314,7 +1343,7 @@ impl FileEditTool {
         expected: Option<usize>,
         normalize_whitespace: bool,
     ) -> Result<(String, usize), String> {
-        let occurrences = if normalize_whitespace {
+        let mut occurrences = if normalize_whitespace {
             find_occurrences_normalized(&content, old_string)
         } else {
             find_occurrences(&content, old_string)
@@ -1336,6 +1365,44 @@ impl FileEditTool {
             if contains_file_read_line_prefix(old_string) {
                 return Err(file_read_line_prefix_guidance("old_string"));
             }
+            match generate_edit_candidates(&content, old_string, &occurrences) {
+                EditCandidateOutcome::AutoApplied {
+                    replacements,
+                    strategy,
+                    occurrence,
+                } if replacements == expected.unwrap_or(1) => {
+                    occurrences = vec![occurrence];
+                    tracing::debug!(
+                        "file_edit using deterministic recovery candidate strategy={}",
+                        strategy
+                    );
+                }
+                EditCandidateOutcome::Candidates { candidates, .. } => {
+                    let details = candidates
+                        .iter()
+                        .map(|candidate| {
+                            format!(
+                                "- {} ({}) bytes {}..{}: {}",
+                                candidate.strategy,
+                                candidate.confidence,
+                                candidate.occurrence.0,
+                                candidate.occurrence.1,
+                                candidate.guidance
+                            )
+                        })
+                        .collect::<Vec<_>>()
+                        .join("\n");
+                    return Err(format!(
+                        "Could not find old_string exactly, but deterministic edit candidates were found:\n{}\n\nUse a more specific old_string or line_start/line_end if the candidate is intended.",
+                        details
+                    ));
+                }
+                EditCandidateOutcome::Mismatch { .. }
+                | EditCandidateOutcome::AutoApplied { .. } => {}
+            }
+        }
+
+        if occurrences.is_empty() {
             // 尝试模糊匹配
             let fuzzy = fuzzy_find_occurrences(&content, old_string);
             if fuzzy.is_empty() {

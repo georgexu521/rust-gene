@@ -1067,8 +1067,9 @@ impl ContextCompressor {
         }
         summary_messages.push(crate::services::api::Message::user(&prompt));
 
-        let request =
-            crate::services::api::ChatRequest::new(&self.llm_model).with_messages(summary_messages);
+        let request = crate::services::api::ChatRequest::new(&self.llm_model)
+            .with_messages(summary_messages)
+            .with_output_cap(Some(2048));
 
         match provider.chat(request).await {
             Ok(response) => {

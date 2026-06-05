@@ -1,6 +1,32 @@
 # Project Status
 
-Last updated: 2026-06-04
+Last updated: 2026-06-05
+
+2026-06-05 opencode programming-chain gap fixes landed:
+- File-edit deterministic recovery is now product-wired, not test-only. Exact
+  replace failures can surface structured candidates, unique multi-line
+  stale-safe candidates can auto-apply when replacement count matches, and
+  ambiguous or single-line whitespace matches remain diagnostics instead of
+  silent fuzzy edits.
+- Provider cost control now applies explicit output caps across main coding,
+  non-streaming fallback, reactive compaction retry, query-simple, and LLM
+  compaction summary paths. Usage ledger entries record request phase,
+  effective output cap, tool schema tokens, tool round count, and compaction
+  decision metadata so `/cost` can distinguish prompt/cache/completion/schema
+  and capped-request behavior.
+- Session todos are durable and transactional through `SessionStore`; failed
+  todo persistence now returns a tool error instead of a successful response
+  with hidden persistence failure text.
+- Phase 4 structural shell parser remains intentionally deferred after risk
+  review; the existing classifier/checkpoint contract stays authoritative until
+  an opt-in parser enrichment has a command corpus and fail-closed tests.
+- Targeted gates passed: `cargo fmt --check`, `cargo check -q`,
+  `cargo check --features experimental-api-server -q`,
+  `cargo clippy --all-features -- -D warnings`,
+  `cargo test -q edit_match`, `cargo test -q file_tool`,
+  `cargo test -q todo_store`, `cargo test -q usage_ledger`,
+  `cargo test -q route_scoped_tools`, and
+  `cargo test -q context_compressor`.
 
 2026-06-04 Reasonix alignment Phases 0-7 complete:
 - Phase 0: Runtime boundary audit documented in PROJECT_MAP.md

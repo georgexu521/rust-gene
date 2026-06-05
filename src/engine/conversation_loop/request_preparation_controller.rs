@@ -80,6 +80,7 @@ impl RequestPreparationController {
             inject_dynamic_context,
         } = context;
 
+        let is_repair_turn = focused_repair_prompt.is_some();
         let mut request_messages = messages.to_vec();
         if inject_dynamic_context {
             Self::inject_task_state_zone(&mut request_messages, agent_task_state);
@@ -131,7 +132,8 @@ impl RequestPreparationController {
             request: ChatRequest::new(model)
                 .with_messages(request_messages)
                 .with_tools(canonical_tools)
-                .with_temperature(temperature),
+                .with_temperature(temperature)
+                .with_output_cap(output_cap_for_turn(is_repair_turn, inject_dynamic_context)),
         }
     }
 
@@ -1142,6 +1144,22 @@ fn compact_text(value: &str, max_chars: usize) -> String {
         text.push_str("...");
     }
     text
+}
+
+/// Phase 6 (opencode alignment): output token cap policy.
+///
+/// - Repair/focused fix turns: 1024
+/// - Normal coding turns with dynamic context: 8192
+/// - Inspection-only turns (no dynamic context): None (no cap)
+fn output_cap_for_turn(is_repair: bool, has_dynamic_context: bool) -> Option<u32> {
+    if !has_dynamic_context {
+        return None;
+    }
+    if is_repair {
+        Some(1024)
+    } else {
+        Some(8192)
+    }
 }
 
 #[cfg(test)]

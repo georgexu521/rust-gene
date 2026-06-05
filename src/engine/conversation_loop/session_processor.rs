@@ -74,7 +74,20 @@ async fn emit_usage_event(response: &ChatResponse, tx: &mpsc::Sender<StreamEvent
 fn cache_shape_for_request(
     request: &ChatRequest,
 ) -> crate::engine::cache_stability::CacheDiagnosticShape {
-    cache_shape_for_messages_and_tools(&request.messages, request.tools.as_deref().unwrap_or(&[]))
+    let mut shape = cache_shape_for_messages_and_tools(
+        &request.messages,
+        request.tools.as_deref().unwrap_or(&[]),
+    );
+    shape.effective_output_cap = request.max_tokens;
+    shape.request_phase = Some(request_phase_for_output_cap(request.max_tokens).to_string());
+    shape.tool_round_count = Some(
+        request
+            .messages
+            .iter()
+            .filter(|message| matches!(message, crate::services::api::Message::Tool { .. }))
+            .count() as u64,
+    );
+    shape
 }
 
 fn cache_shape_for_messages_and_tools(
@@ -82,6 +95,16 @@ fn cache_shape_for_messages_and_tools(
     tools: &[crate::services::api::Tool],
 ) -> crate::engine::cache_stability::CacheDiagnosticShape {
     crate::engine::cache_stability::request_cache_diagnostic_shape(messages, tools)
+}
+
+fn request_phase_for_output_cap(cap: Option<u32>) -> &'static str {
+    match cap {
+        Some(1024) => "repair",
+        Some(2048) => "compact",
+        Some(8192) => "coding",
+        Some(_) => "capped",
+        None => "uncapped",
+    }
 }
 
 impl ConversationLoop {
@@ -157,7 +180,8 @@ impl ConversationLoop {
     ) -> Result<SessionStepResult> {
         let base_request = ChatRequest::new(&self.model)
             .with_messages(fallback_messages.to_vec())
-            .with_temperature(0.2);
+            .with_temperature(0.2)
+            .with_output_cap(Some(8192));
         let default_timeout = llm_request_timeout();
         let response = if let Some(tools) = fallback_tools.clone() {
             match self
@@ -222,10 +246,7 @@ impl ConversationLoop {
         let fallback_tools = request.tools.clone();
         let provider_family =
             ProviderCapabilities::detect(self.provider.base_url(), &request.model).protocol_family;
-        let streaming_cache_shape = cache_shape_for_messages_and_tools(
-            &fallback_messages,
-            fallback_tools.as_deref().unwrap_or(&[]),
-        );
+        let streaming_cache_shape = cache_shape_for_request(&request);
 
         let stream_open =
             tokio::time::timeout(llm_request_timeout(), self.provider.chat_stream(request)).await;
@@ -702,5 +723,28 @@ impl ConversationLoop {
                 );
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::services::api::Message;
+
+    #[test]
+    fn cache_shape_for_request_captures_output_cap_and_tool_rounds() {
+        let request = ChatRequest::new("test-model")
+            .with_messages(vec![
+                Message::system("system"),
+                Message::user("run test"),
+                Message::tool("tool-1", "ok"),
+            ])
+            .with_output_cap(Some(8192));
+
+        let shape = cache_shape_for_request(&request);
+
+        assert_eq!(shape.effective_output_cap, Some(8192));
+        assert_eq!(shape.request_phase.as_deref(), Some("coding"));
+        assert_eq!(shape.tool_round_count, Some(1));
     }
 }
