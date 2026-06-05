@@ -280,8 +280,13 @@ run_task_file() {
     
     # Step 9: Check acceptance criteria
     check_acceptance "$task_file"
+    local acceptance_exit=$?
     
-    return $exit_code
+    # Task passes only if both agent succeeded AND acceptance criteria passed
+    if [ $exit_code -ne 0 ] || [ $acceptance_exit -ne 0 ]; then
+        return 1
+    fi
+    return 0
 }
 
 # Check acceptance criteria from task definition

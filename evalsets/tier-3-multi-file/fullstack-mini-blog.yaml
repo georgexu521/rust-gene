@@ -1,0 +1,269 @@
+id: fullstack-mini-blog
+title: Build a mini fullstack blog app with Python backend and vanilla JS frontend
+type: feature
+eval_intent: seeded_code_change
+complexity: medium
+risk: medium
+tier: tier-3-multi-file
+
+repo:
+  fixture: priority-agent
+  base_ref: "HEAD"
+  prepare_commands:
+    - |
+      mkdir -p fixtures/fullstack_blog/backend fixtures/fullstack_blog/frontend
+      
+      # Create backend skeleton
+      cat > fixtures/fullstack_blog/backend/blog_api.py <<'PY'
+      from http.server import BaseHTTPRequestHandler, HTTPServer
+      import json
+      import uuid
+      from datetime import datetime
+
+      posts = []
+
+      class BlogHandler(BaseHTTPRequestHandler):
+          def log_message(self, format, *args):
+              pass
+
+          def do_GET(self):
+              if self.path == '/posts':
+                  # TODO: return all posts sorted by date desc
+                  self.send_response(200)
+                  self.send_header('Content-Type', 'application/json')
+                  self.send_header('Access-Control-Allow-Origin', '*')
+                  self.end_headers()
+                  self.wfile.write(json.dumps([]).encode())
+              else:
+                  self.send_response(404)
+                  self.end_headers()
+
+          def do_POST(self):
+              if self.path == '/posts':
+                  # TODO: create new post from JSON body
+                  self.send_response(201)
+                  self.send_header('Content-Type', 'application/json')
+                  self.send_header('Access-Control-Allow-Origin', '*')
+                  self.end_headers()
+                  self.wfile.write(json.dumps({"error": "not implemented"}).encode())
+              else:
+                  self.send_response(404)
+                  self.end_headers()
+
+          def do_DELETE(self):
+              # TODO: delete post by id from path /posts/<id>
+              self.send_response(404)
+              self.end_headers()
+
+      if __name__ == '__main__':
+          server = HTTPServer(('127.0.0.1', 8080), BlogHandler)
+          print('Blog API server running on http://127.0.0.1:8080')
+          server.serve_forever()
+      PY
+      
+      # Create frontend skeleton
+      cat > fixtures/fullstack_blog/frontend/index.html <<'HTML'
+      <!DOCTYPE html>
+      <html>
+      <head>
+          <meta charset="utf-8">
+          <title>Mini Blog</title>
+          <style>
+              body { font-family: sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; }
+              .post { border: 1px solid #ddd; padding: 15px; margin: 10px 0; border-radius: 5px; }
+              .post h2 { margin-top: 0; }
+              form { margin: 20px 0; }
+              input, textarea { display: block; width: 100%; margin: 5px 0; padding: 8px; }
+              button { padding: 10px 20px; background: #007bff; color: white; border: none; cursor: pointer; }
+              button:hover { background: #0056b3; }
+          </style>
+      </head>
+      <body>
+          <h1>Mini Blog</h1>
+          
+          <form id="post-form">
+              <input type="text" id="title" placeholder="Title" required>
+              <textarea id="content" placeholder="Content" rows="4" required></textarea>
+              <button type="submit">Add Post</button>
+          </form>
+          
+          <div id="posts"></div>
+          
+          <script src="app.js"></script>
+      </body>
+      </html>
+      HTML
+      
+      # Create frontend JS skeleton
+      cat > fixtures/fullstack_blog/frontend/app.js <<'JS'
+      const API_URL = 'http://127.0.0.1:8080';
+
+      async function loadPosts() {
+          // TODO: fetch posts from /posts and render them
+          document.getElementById('posts').innerHTML = '<p>Loading posts...</p>';
+      }
+
+      async function createPost(title, content) {
+          // TODO: POST new post to /posts
+          console.log('Creating post:', title, content);
+      }
+
+      async function deletePost(id) {
+          // TODO: DELETE post by id
+          console.log('Deleting post:', id);
+      }
+
+      document.getElementById('post-form').addEventListener('submit', async (e) => {
+          e.preventDefault();
+          const title = document.getElementById('title').value;
+          const content = document.getElementById('content').value;
+          await createPost(title, content);
+          await loadPosts();
+          e.target.reset();
+      });
+
+      // Load posts on startup
+      loadPosts();
+      JS
+      
+      # Create backend test
+      cat > fixtures/fullstack_blog/backend/test_blog.py <<'PY'
+      import unittest
+      import json
+      import threading
+      import urllib.request
+      import time
+      import sys
+      import os
+      sys.path.insert(0, os.path.join(os.path.dirname(__file__)))
+      import blog_api
+
+      class BlogApiTest(unittest.TestCase):
+          @classmethod
+          def setUpClass(cls):
+              cls.server = blog_api.HTTPServer(('127.0.0.1', 8081), blog_api.BlogHandler)
+              cls.base = 'http://127.0.0.1:8081'
+              cls.thread = threading.Thread(target=cls.server.serve_forever, daemon=True)
+              cls.thread.start()
+              time.sleep(0.5)
+
+          @classmethod
+          def tearDownClass(cls):
+              cls.server.shutdown()
+          
+          def setUp(self):
+              blog_api.posts.clear()
+
+          def test_create_and_list_posts(self):
+              req = urllib.request.Request(
+                  self.base + '/posts',
+                  data=json.dumps({"title": "Hello", "content": "World"}).encode(),
+                  headers={'Content-Type': 'application/json'},
+                  method='POST'
+              )
+              resp = urllib.request.urlopen(req)
+              self.assertEqual(resp.status, 201)
+              data = json.loads(resp.read())
+              self.assertIn('id', data)
+              self.assertEqual(data['title'], 'Hello')
+              
+              # List should include the post
+              resp = urllib.request.urlopen(self.base + '/posts')
+              self.assertEqual(resp.status, 200)
+              posts = json.loads(resp.read())
+              self.assertEqual(len(posts), 1)
+              self.assertEqual(posts[0]['title'], 'Hello')
+
+          def test_delete_post(self):
+              # Create a post
+              req = urllib.request.Request(
+                  self.base + '/posts',
+                  data=json.dumps({"title": "To Delete", "content": "Bye"}).encode(),
+                  headers={'Content-Type': 'application/json'},
+                  method='POST'
+              )
+              resp = urllib.request.urlopen(req)
+              post = json.loads(resp.read())
+              
+              # Delete it
+              req = urllib.request.Request(self.base + '/posts/' + post['id'], method='DELETE')
+              resp = urllib.request.urlopen(req)
+              self.assertEqual(resp.status, 200)
+              
+              # Should be empty now
+              resp = urllib.request.urlopen(self.base + '/posts')
+              posts = json.loads(resp.read())
+              self.assertEqual(len(posts), 0)
+
+      if __name__ == '__main__':
+          unittest.main()
+      PY
+
+prompt: |
+  Build a mini fullstack blog application in `fixtures/fullstack_blog/`.
+
+  The project has skeleton files:
+  - `fixtures/fullstack_blog/backend/blog_api.py` — Python HTTP API
+  - `fixtures/fullstack_blog/frontend/index.html` — HTML page
+  - `fixtures/fullstack_blog/frontend/app.js` — Frontend JavaScript
+  - `fixtures/fullstack_blog/backend/test_blog.py` — Tests
+
+  Your task:
+  1. Complete the backend API (`blog_api.py`):
+     - `GET /posts` — Return all posts sorted by date descending
+     - `POST /posts` — Create a new post with {title, content}, auto-generate id and date
+     - `DELETE /posts/<id>` — Delete a post by id
+     - Add CORS headers (`Access-Control-Allow-Origin: *`)
+  
+  2. Complete the frontend (`app.js`):
+     - `loadPosts()` — Fetch posts from API and render them in #posts div
+     - `createPost(title, content)` — POST new post to API
+     - `deletePost(id)` — DELETE post by id, then reload posts
+     - Each post should show: title, content, date, and a delete button
+  
+  3. Verify:
+     - Run `python3 -m unittest fixtures/fullstack_blog/backend/test_blog.py`
+     - All tests should pass
+
+  Start by reading the existing files, then implement the TODO sections.
+  Use file_read to inspect files, file_edit to make changes, and bash to run tests.
+
+allowed_tools:
+  - grep
+  - file_read
+  - file_edit
+  - bash
+
+forbidden_tools:
+  - git_push
+  - memory_clear
+
+expected_behavior:
+  - agent should read existing files first
+  - implement backend API with proper JSON handling
+  - implement frontend with fetch API calls
+  - run tests to verify
+
+acceptance:
+  required_commands:
+    - "python3 -m unittest fixtures/fullstack_blog/backend/test_blog.py"
+    - "python3 -m py_compile fixtures/fullstack_blog/backend/blog_api.py"
+  diff_constraints:
+    max_files_changed: 4
+    forbidden_paths:
+      - target/
+      - .git/
+  human_review:
+    - Does GET /posts return posts sorted by date?
+    - Does POST /posts create posts with auto-generated id?
+    - Does DELETE /posts/<id> remove the post?
+    - Do the frontend functions call the API correctly?
+    - Do all tests pass?
+
+scoring:
+  success: 0.35
+  test_pass: 0.30
+  backend_completeness: 0.15
+  frontend_completeness: 0.10
+  diff_discipline: 0.05
+  closeout_quality: 0.05

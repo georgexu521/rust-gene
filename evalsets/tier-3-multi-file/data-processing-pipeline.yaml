@@ -1,0 +1,263 @@
+id: data-processing-pipeline
+title: Build a multi-stage data processing pipeline in Python with unit tests
+type: feature
+eval_intent: seeded_code_change
+complexity: medium
+risk: low
+tier: tier-3-multi-file
+
+repo:
+  fixture: priority-agent
+  base_ref: "HEAD"
+  prepare_commands:
+    - |
+      mkdir -p fixtures/data_pipeline/src fixtures/data_pipeline/tests fixtures/data_pipeline/data
+      
+      # Stage 1: CSV reader (skeleton)
+      cat > fixtures/data_pipeline/src/csv_reader.py <<'PY'
+      import csv
+
+      def read_csv(filepath):
+          """Read CSV and return list of dicts with basic type conversion."""
+          # TODO: implement CSV reading with type conversion
+          # - age: int
+          # - salary: float  
+          # - active: bool (convert "true"/"false" strings)
+          # Skip empty rows
+          return []
+      PY
+      
+      # Stage 2: Filter and transform (skeleton)
+      cat > fixtures/data_pipeline/src/transform.py <<'PY'
+      def filter_active(records):
+          """Filter to only active users."""
+          # TODO: filter records where active == True
+          return records
+
+      def compute_tax(records, rate=0.2):
+          """Compute tax for each record based on salary."""
+          # TODO: add 'tax' field = salary * rate
+          # Return new records without modifying originals
+          return records
+      PY
+      
+      # Stage 3: Aggregator (skeleton)
+      cat > fixtures/data_pipeline/src/aggregator.py <<'PY'
+      def group_by_department(records):
+          """Group records by department and compute averages."""
+          # TODO: group by 'department' field
+          # Return dict: {dept_name: {'count': N, 'avg_salary': X, 'avg_age': Y}}
+          return {}
+      PY
+      
+      # Main pipeline orchestrator (skeleton)
+      cat > fixtures/data_pipeline/src/pipeline.py <<'PY'
+      from csv_reader import read_csv
+      from transform import filter_active, compute_tax
+      from aggregator import group_by_department
+
+      def run_pipeline(csv_path, tax_rate=0.2):
+          """Run full pipeline: read -> filter -> tax -> aggregate."""
+          # TODO: implement pipeline orchestration
+          # 1. Read CSV
+          # 2. Filter active users
+          # 3. Compute tax
+          # 4. Group by department
+          return {}
+      PY
+      
+      # Test data
+      cat > fixtures/data_pipeline/data/employees.csv <<'CSV'
+      name,age,department,salary,active
+      Alice,30,Engineering,80000,true
+      Bob,25,Engineering,60000,false
+      Carol,35,Marketing,70000,true
+      Dave,40,Marketing,90000,true
+      Eve,28,Sales,50000,true
+      Frank,45,Sales,75000,false
+      Grace,33,Engineering,85000,true
+      CSV
+      
+      # Expected output helper
+      cat > fixtures/data_pipeline/src/__init__.py <<'PY'
+      # data_pipeline package
+      PY
+      
+      cat > fixtures/data_pipeline/tests/__init__.py <<'PY'
+      # tests package
+      PY
+      
+      # Unit tests
+      cat > fixtures/data_pipeline/tests/test_pipeline.py <<'PY'
+      import unittest
+      import sys
+      import os
+      sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
+
+      from csv_reader import read_csv
+      from transform import filter_active, compute_tax
+      from aggregator import group_by_department
+      from pipeline import run_pipeline
+
+      class TestCsvReader(unittest.TestCase):
+          def test_read_csv(self):
+              records = read_csv('fixtures/data_pipeline/data/employees.csv')
+              self.assertEqual(len(records), 7)
+              # Check first record
+              self.assertEqual(records[0]['name'], 'Alice')
+              self.assertEqual(records[0]['age'], 30)
+              self.assertEqual(records[0]['salary'], 80000.0)
+              self.assertTrue(records[0]['active'])
+              # Check type conversion for Bob (inactive)
+              self.assertEqual(records[1]['name'], 'Bob')
+              self.assertFalse(records[1]['active'])
+
+          def test_skip_empty_rows(self):
+              # Test with a file that has empty rows
+              import tempfile
+              with tempfile.NamedTemporaryFile(mode='w', suffix='.csv', delete=False) as f:
+                  f.write("name,age,department,salary,active\n")
+                  f.write("Alice,30,Eng,80000,true\n")
+                  f.write("\n")
+                  f.write("Bob,25,Eng,60000,false\n")
+                  f.flush()
+                  records = read_csv(f.name)
+                  self.assertEqual(len(records), 2)
+                  os.unlink(f.name)
+
+      class TestTransform(unittest.TestCase):
+          def test_filter_active(self):
+              records = [
+                  {'name': 'Alice', 'active': True},
+                  {'name': 'Bob', 'active': False},
+                  {'name': 'Carol', 'active': True},
+              ]
+              result = filter_active(records)
+              self.assertEqual(len(result), 2)
+              self.assertEqual([r['name'] for r in result], ['Alice', 'Carol'])
+
+          def test_compute_tax(self):
+              records = [
+                  {'name': 'Alice', 'salary': 100000},
+                  {'name': 'Bob', 'salary': 50000},
+              ]
+              result = compute_tax(records, rate=0.2)
+              self.assertEqual(result[0]['tax'], 20000.0)
+              self.assertEqual(result[1]['tax'], 10000.0)
+              # Original records should not be modified
+              self.assertNotIn('tax', records[0])
+
+      class TestAggregator(unittest.TestCase):
+          def test_group_by_department(self):
+              records = [
+                  {'name': 'Alice', 'department': 'Engineering', 'salary': 80000, 'age': 30, 'tax': 16000},
+                  {'name': 'Carol', 'department': 'Marketing', 'salary': 70000, 'age': 35, 'tax': 14000},
+                  {'name': 'Dave', 'department': 'Marketing', 'salary': 90000, 'age': 40, 'tax': 18000},
+              ]
+              result = group_by_department(records)
+              self.assertEqual(result['Engineering']['count'], 1)
+              self.assertEqual(result['Engineering']['avg_salary'], 80000.0)
+              self.assertEqual(result['Marketing']['count'], 2)
+              self.assertEqual(result['Marketing']['avg_salary'], 80000.0)
+
+      class TestPipeline(unittest.TestCase):
+          def test_run_pipeline(self):
+              result = run_pipeline('fixtures/data_pipeline/data/employees.csv')
+              # Engineering: Alice(80000), Grace(85000) = 2 active
+              # Marketing: Carol(70000), Dave(90000) = 2 active  
+              # Sales: Eve(50000) = 1 active
+              # Bob and Frank are inactive
+              self.assertEqual(result['Engineering']['count'], 2)
+              self.assertEqual(result['Marketing']['count'], 2)
+              self.assertEqual(result['Sales']['count'], 1)
+              
+              # Check avg salary (after filtering inactive)
+              self.assertEqual(result['Engineering']['avg_salary'], 82500.0)
+              self.assertEqual(result['Marketing']['avg_salary'], 80000.0)
+              self.assertEqual(result['Sales']['avg_salary'], 50000.0)
+
+          def test_run_pipeline_with_tax(self):
+              result = run_pipeline('fixtures/data_pipeline/data/employees.csv', tax_rate=0.25)
+              # With 25% tax, each record should have tax computed but aggregation
+              # is still on salary (not tax)
+              self.assertEqual(result['Engineering']['count'], 2)
+
+      if __name__ == '__main__':
+          unittest.main()
+      PY
+
+prompt: |
+  Build a multi-stage data processing pipeline in Python in `fixtures/data_pipeline/`.
+
+  The project has skeleton files:
+  - `fixtures/data_pipeline/src/csv_reader.py` — CSV reading with type conversion
+  - `fixtures/data_pipeline/src/transform.py` — Filter and compute tax
+  - `fixtures/data_pipeline/src/aggregator.py` — Group by department
+  - `fixtures/data_pipeline/src/pipeline.py` — Pipeline orchestrator
+  - `fixtures/data_pipeline/tests/test_pipeline.py` — Unit tests
+  - `fixtures/data_pipeline/data/employees.csv` — Test data
+
+  Your task:
+  1. Complete `csv_reader.py`:
+     - Read CSV file into list of dicts
+     - Type conversion: age→int, salary→float, active→bool (from "true"/"false")
+     - Skip empty/blank rows
+  
+  2. Complete `transform.py`:
+     - `filter_active()`: Return only records where active == True
+     - `compute_tax()`: Add 'tax' field = salary * rate, return new records (don't mutate input)
+  
+  3. Complete `aggregator.py`:
+     - `group_by_department()`: Group by 'department' field
+     - Return dict with: {dept: {'count': N, 'avg_salary': avg, 'avg_age': avg}}
+  
+  4. Complete `pipeline.py`:
+     - `run_pipeline()`: Orchestrate read → filter → tax → aggregate
+     - Return the aggregation result
+  
+  5. Verify:
+     - Run `python3 -m unittest fixtures/data_pipeline/tests/test_pipeline.py`
+     - All 7 tests should pass
+
+  Use file_read to inspect files, file_edit to make changes, and bash to run tests.
+
+allowed_tools:
+  - grep
+  - file_read
+  - file_edit
+  - bash
+
+forbidden_tools:
+  - git_push
+  - memory_clear
+
+expected_behavior:
+  - agent should read existing files first
+  - implement each stage correctly
+  - run tests to verify all stages
+
+acceptance:
+  required_commands:
+    - "python3 -m unittest fixtures/data_pipeline/tests/test_pipeline.py"
+  forbidden_commands: []
+  diff_constraints:
+    max_files_changed: 5
+    forbidden_paths:
+      - target/
+      - .git/
+      - __pycache__/
+  human_review:
+    - Does csv_reader convert types correctly?
+    - Does filter_active only keep active users?
+    - Does compute_tax create new records without mutating input?
+    - Does group_by_department compute averages correctly?
+    - Does run_pipeline orchestrate all stages?
+    - Do all 7 tests pass?
+
+scoring:
+  success: 0.35
+  test_pass: 0.30
+  pipeline_completeness: 0.15
+  data_quality: 0.10
+  diff_discipline: 0.05
+  closeout_quality: 0.05
