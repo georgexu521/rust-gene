@@ -233,7 +233,7 @@ pub enum PermissionDecision {
     Ask,
 }
 
-fn permission_match_keys(tool_name: &str, params: &serde_json::Value) -> Vec<String> {
+pub(crate) fn permission_match_keys(tool_name: &str, params: &serde_json::Value) -> Vec<String> {
     let mut keys = Vec::new();
     if is_edit_family_tool(tool_name, params) {
         keys.push("edit".to_string());
@@ -1135,6 +1135,15 @@ impl ExplainableDecision {
             lines.push("\n⚠️  Warnings:".to_string());
             for warning in &self.warnings {
                 lines.push(format!("  - {}", warning));
+            }
+        }
+        if !self.matched_rules.is_empty() {
+            lines.push("\nMatched Rules:".to_string());
+            for (decision, rule) in &self.matched_rules {
+                lines.push(format!(
+                    "  {:?} | pattern=\"{}\" | source={:?}",
+                    decision, rule.pattern, rule.source
+                ));
             }
         }
         lines.join("\n")

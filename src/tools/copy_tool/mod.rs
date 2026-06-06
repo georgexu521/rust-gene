@@ -2,9 +2,7 @@
 //!
 //! Copies text to clipboard.
 
-use crate::tools::Tool;
-use crate::tools::ToolContext;
-use crate::tools::ToolResult;
+use crate::tools::{Tool, ToolContext, ToolOperationKind, ToolResult};
 use async_trait::async_trait;
 use serde_json::{json, Value};
 
@@ -14,6 +12,10 @@ pub struct CopyTool;
 impl Tool for CopyTool {
     fn name(&self) -> &str {
         "copy"
+    }
+
+    fn operation_kind(&self, _params: &Value) -> ToolOperationKind {
+        ToolOperationKind::Write
     }
 
     fn description(&self) -> &str {

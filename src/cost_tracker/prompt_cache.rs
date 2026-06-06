@@ -25,6 +25,9 @@ pub struct PromptCacheDiagnosticEntry {
     pub tool_names: Vec<String>,
     pub dynamic_zone_messages: usize,
     pub dynamic_zones_before_last_user: usize,
+    pub dynamic_zones_stable_prefix: usize,
+    pub dynamic_zones_last_user: usize,
+    pub dynamic_zones_repair_only: usize,
     pub inferred: bool,
 }
 
@@ -50,6 +53,9 @@ pub(super) fn build_prompt_cache_diagnostic(
                 message_count: 0,
                 dynamic_zone_messages: entry.dynamic_zone_messages,
                 dynamic_zones_before_last_user: entry.dynamic_zones_before_last_user,
+                dynamic_zones_stable_prefix: entry.dynamic_zones_stable_prefix,
+                dynamic_zones_last_user: entry.dynamic_zones_last_user,
+                dynamic_zones_repair_only: entry.dynamic_zones_repair_only,
                 request_phase: None,
                 effective_output_cap: None,
                 tool_round_count: None,
@@ -82,6 +88,9 @@ pub(super) fn build_prompt_cache_diagnostic(
         tool_names: cache_shape.tool_names,
         dynamic_zone_messages: cache_shape.dynamic_zone_messages,
         dynamic_zones_before_last_user: cache_shape.dynamic_zones_before_last_user,
+        dynamic_zones_stable_prefix: cache_shape.dynamic_zones_stable_prefix,
+        dynamic_zones_last_user: cache_shape.dynamic_zones_last_user,
+        dynamic_zones_repair_only: cache_shape.dynamic_zones_repair_only,
         inferred: true,
     }
 }
@@ -141,7 +150,7 @@ pub(super) fn render_prompt_cache_miss_report(entries: &[PromptCacheDiagnosticEn
         ));
         lines.push(format!("    detail: {}", entry.miss_reason_detail));
         lines.push(format!(
-            "    prefix={} system={} tools={} few_shots={} dynamic_tail={} tool_count={} dynamic_zones={} before_last_user={}",
+            "    prefix={} system={} tools={} few_shots={} dynamic_tail={} tool_count={} zones(total={} stable={} last_user={} repair={} before_user={})",
             preview_hash(&entry.prefix_fingerprint),
             preview_hash(&entry.system_fingerprint),
             preview_hash(&entry.tool_schema_fingerprint),
@@ -149,6 +158,9 @@ pub(super) fn render_prompt_cache_miss_report(entries: &[PromptCacheDiagnosticEn
             preview_hash(&entry.dynamic_tail_fingerprint),
             entry.tool_count,
             entry.dynamic_zone_messages,
+            entry.dynamic_zones_stable_prefix,
+            entry.dynamic_zones_last_user,
+            entry.dynamic_zones_repair_only,
             entry.dynamic_zones_before_last_user,
         ));
     }

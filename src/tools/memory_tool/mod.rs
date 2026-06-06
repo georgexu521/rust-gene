@@ -1,7 +1,7 @@
-use crate::tools::{Tool, ToolContext, ToolResult};
+use crate::tools::{Tool, ToolContext, ToolOperationKind, ToolResult};
 use async_trait::async_trait;
 use serde::Deserialize;
-use serde_json::json;
+use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
@@ -731,6 +731,10 @@ impl Tool for MemorySaveTool {
         "memory_save"
     }
 
+    fn operation_kind(&self, _params: &Value) -> ToolOperationKind {
+        ToolOperationKind::Write
+    }
+
     fn description(&self) -> &str {
         "Save durable facts, preferences, decisions, and stable quirks to persistent memory. Do not save task progress, command history, or repeatable procedures; procedures belong in skills. By default it auto-routes to USER.md or memory/<topic>.md; use target=index to force MEMORY.md."
     }
@@ -877,6 +881,10 @@ pub struct MemoryLoadTool;
 impl Tool for MemoryLoadTool {
     fn name(&self) -> &str {
         "memory_load"
+    }
+
+    fn operation_kind(&self, _params: &Value) -> ToolOperationKind {
+        ToolOperationKind::Read
     }
 
     fn description(&self) -> &str {
@@ -1136,6 +1144,10 @@ pub struct MemoryClearTool;
 impl Tool for MemoryClearTool {
     fn name(&self) -> &str {
         "memory_clear"
+    }
+
+    fn operation_kind(&self, _params: &Value) -> ToolOperationKind {
+        ToolOperationKind::Edit
     }
 
     fn description(&self) -> &str {

@@ -444,6 +444,144 @@ fn count_files_with_ext(dir: &std::path::Path, ext: &str) -> usize {
         .count()
 }
 
+/// /memory review - 展示记忆审查报告 (proposed/rejected/accepted)
+pub async fn memory_review_report(app: &crate::tui::app::TuiApp) -> String {
+    let memory_manager = if let Some(ref engine) = app.streaming_engine {
+        engine.memory_manager_or_init()
+    } else {
+        None
+    };
+    let Some(memory_manager) = memory_manager else {
+        return "Memory manager not available.".to_string();
+    };
+    let mem = memory_manager.lock().await;
+    let decisions = mem.memory_decision_counts();
+    let flushes = mem.memory_flush_summary();
+    let conflicts = mem.memory_conflicts(8);
+    let summary = mem.memory_summary();
+
+    let mut lines = vec![
+        "Memory Review".to_string(),
+        "=============".to_string(),
+        String::new(),
+        format!(
+            "Summary: {} project chars, {} user chars, {} session items, {} frozen",
+            summary.project_memory_chars,
+            summary.user_memory_chars,
+            summary.session_memory_items,
+            if summary.has_frozen_snapshot {
+                "yes"
+            } else {
+                "no"
+            },
+        ),
+        String::new(),
+        format!(
+            "Decisions: {} total (proposed={}, accepted={}, rejected={}, blocked={})",
+            decisions.proposed + decisions.accepted + decisions.rejected + decisions.blocked,
+            decisions.proposed,
+            decisions.accepted,
+            decisions.rejected,
+            decisions.blocked,
+        ),
+        String::new(),
+        format!(
+            "Flushes: {} total (completed={}, pending={}, failed={})",
+            flushes.total, flushes.completed, flushes.pending, flushes.failed,
+        ),
+        String::new(),
+        "Conflicts:".to_string(),
+    ];
+    if conflicts.is_empty() {
+        lines.push("  (none)".to_string());
+    } else {
+        for c in conflicts {
+            lines.push(format!("  - {}", c));
+        }
+    }
+    lines.push(String::new());
+    lines.push("Accept proposals: /memory-proposals accept <index>".to_string());
+    lines.push("Reject proposals: /memory-proposals reject <index>".to_string());
+    lines.join("\n")
+}
+
+/// /memory files - 列出活跃的记忆文件及其大小
+pub fn memory_files_report() -> String {
+    let root = dirs::home_dir()
+        .unwrap_or_else(|| std::path::PathBuf::from("."))
+        .join(".priority-agent");
+    let project_path = root.join("MEMORY.md");
+    let user_path = root.join("USER.md");
+    let mem_dir = root.join("memory");
+    let records_path = mem_dir.join("records.jsonl");
+
+    let mut lines = vec![
+        "Memory Files".to_string(),
+        "============".to_string(),
+        String::new(),
+    ];
+
+    // Project memory
+    lines.push("Project:".to_string());
+    if project_path.exists() {
+        let size = std::fs::metadata(&project_path)
+            .map(|m| m.len())
+            .unwrap_or(0);
+        lines.push(format!("  {} ({} bytes)", project_path.display(), size));
+    } else {
+        lines.push("  (no MEMORY.md)".to_string());
+    }
+
+    // User memory
+    lines.push("User:".to_string());
+    if user_path.exists() {
+        let size = std::fs::metadata(&user_path).map(|m| m.len()).unwrap_or(0);
+        lines.push(format!("  {} ({} bytes)", user_path.display(), size));
+    } else {
+        lines.push("  (no USER.md)".to_string());
+    }
+
+    // Topic files
+    lines.push("Topic files:".to_string());
+    if mem_dir.exists() {
+        let mut files: Vec<_> = std::fs::read_dir(&mem_dir)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .filter(|e| e.path().extension().and_then(|v| v.to_str()) == Some("md"))
+            .collect();
+        files.sort_by_key(|e| e.file_name());
+        if files.is_empty() {
+            lines.push("  (no topic files)".to_string());
+        } else {
+            for entry in files {
+                let size = entry.metadata().map(|m| m.len()).unwrap_or(0);
+                lines.push(format!(
+                    "  {} ({} bytes)",
+                    entry.file_name().to_string_lossy(),
+                    size
+                ));
+            }
+        }
+    } else {
+        lines.push("  (no memory/ directory)".to_string());
+    }
+
+    // Records
+    if records_path.exists() {
+        let size = std::fs::metadata(&records_path)
+            .map(|m| m.len())
+            .unwrap_or(0);
+        lines.push(format!(
+            "\nRecords: {} ({} bytes)",
+            records_path.display(),
+            size
+        ));
+    }
+
+    lines.join("\n")
+}
+
 /// /skills - List available skills
 pub fn handle_skills(app: &TuiApp) -> String {
     let names = app

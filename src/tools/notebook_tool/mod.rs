@@ -108,7 +108,7 @@ impl Tool for NotebookTool {
         match notebook_action(params) {
             "read" | "read_cell" => ToolOperationKind::Read,
             "edit_cell" | "insert_cell" | "delete_cell" => ToolOperationKind::Edit,
-            _ => ToolOperationKind::Other,
+            _ => ToolOperationKind::Read,
         }
     }
 

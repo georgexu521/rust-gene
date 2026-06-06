@@ -123,22 +123,29 @@ impl ConversationLoop {
             ],
             _ => match route.workflow {
                 WorkflowKind::CodeChange => &[
+                    // Read/search tools — always available.
                     "project_list",
                     "glob",
                     "grep",
                     "file_read",
+                    // Primary edit tools — prefer these over bash for file mutation.
                     "file_write",
                     "file_edit",
                     "file_patch",
+                    // Bash for read-only commands, running tests, starting services.
+                    // File mutation via shell heredocs/redirects is blocked by permission
+                    // and tool_batch processor; the route already deprioritizes bash.
                     "bash",
                     "run_tests",
                     "start_dev_server",
                     "bash_output",
                     "bash_cancel",
+                    // Git and diff for version control and change review.
                     "diff",
                     "git",
                     "git_status",
                     "git_diff",
+                    // Formatting, planning, and task tracking.
                     "format",
                     "todo_write",
                     "ask_user",

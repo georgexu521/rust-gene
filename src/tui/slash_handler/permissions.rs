@@ -61,7 +61,11 @@ pub fn handle_permissions(app: &mut TuiApp, args: &str) -> String {
             let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
             let ctx = permission_context_for_app(app, &cwd);
             let explainable = ctx.explain_decision(&tool_name, &params);
-            let mut output = explainable.format();
+
+            // Show the actual match keys used for rule lookup
+            let match_keys = crate::permissions::permission_match_keys(&tool_name, &params);
+            let mut output = format!("Match keys: [{}]\n\n", match_keys.join(", "));
+            output.push_str(&explainable.format());
 
             let mode = app
                 .streaming_engine

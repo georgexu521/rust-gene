@@ -2,9 +2,9 @@
 //!
 //! 支持获取诊断、悬停信息、定义、引用、符号等。
 
-use crate::tools::{Tool, ToolContext, ToolResult};
+use crate::tools::{Tool, ToolContext, ToolOperationKind, ToolResult};
 use async_trait::async_trait;
-use serde_json::json;
+use serde_json::{json, Value};
 
 /// LSP 工具
 pub struct LSPTool;
@@ -13,6 +13,10 @@ pub struct LSPTool;
 impl Tool for LSPTool {
     fn name(&self) -> &str {
         "lsp"
+    }
+
+    fn operation_kind(&self, _params: &Value) -> ToolOperationKind {
+        ToolOperationKind::Read
     }
 
     fn description(&self) -> &str {

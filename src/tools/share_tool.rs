@@ -2,9 +2,9 @@
 //!
 //! 将对话导出为可分享的 Markdown 或 JSON 格式。
 
-use crate::tools::{Tool, ToolContext, ToolResult};
+use crate::tools::{Tool, ToolContext, ToolOperationKind, ToolResult};
 use async_trait::async_trait;
-use serde_json::json;
+use serde_json::{json, Value};
 
 /// 会话分享工具
 pub struct ShareTool;
@@ -13,6 +13,10 @@ pub struct ShareTool;
 impl Tool for ShareTool {
     fn name(&self) -> &str {
         "share"
+    }
+
+    fn operation_kind(&self, _params: &Value) -> ToolOperationKind {
+        ToolOperationKind::Task
     }
 
     fn description(&self) -> &str {

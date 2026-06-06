@@ -41,6 +41,23 @@ pub struct UsageLedgerEntry {
     pub tool_round_count: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub compaction_decision: Option<String>,
+    // Phase C: provider runtime metadata (opencode alignment)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub request_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub provider: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub latency_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub time_to_first_token_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub finish_reason: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error_kind: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub timeout_kind: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub retry_count: Option<u32>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
@@ -220,6 +237,14 @@ fn ensure_usage_sqlite(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
             tool_schema_tokens INTEGER NOT NULL DEFAULT 0,
             tool_round_count INTEGER,
             compaction_decision TEXT,
+            request_id TEXT,
+            provider TEXT,
+            latency_ms INTEGER,
+            time_to_first_token_ms INTEGER,
+            finish_reason TEXT,
+            error_kind TEXT,
+            timeout_kind TEXT,
+            retry_count INTEGER,
             day TEXT GENERATED ALWAYS AS (date(ts / 1000, 'unixepoch')) STORED
         );
         CREATE INDEX IF NOT EXISTS idx_{table}_session ON {table}(session);
@@ -242,6 +267,14 @@ fn ensure_usage_sqlite(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
         ("effective_output_cap", "INTEGER"),
         ("tool_schema_tokens", "INTEGER NOT NULL DEFAULT 0"),
         ("tool_round_count", "INTEGER"),
+        ("request_id", "TEXT"),
+        ("provider", "TEXT"),
+        ("latency_ms", "INTEGER"),
+        ("time_to_first_token_ms", "INTEGER"),
+        ("finish_reason", "TEXT"),
+        ("error_kind", "TEXT"),
+        ("timeout_kind", "TEXT"),
+        ("retry_count", "INTEGER"),
     ] {
         ensure_usage_sqlite_column(conn, column.0, column.1)?;
     }
@@ -306,8 +339,11 @@ pub fn sync_usage_to_sqlite(entry: &UsageLedgerEntry) {
              total_tokens, cache_hit_tokens, cache_miss_tokens, cost_usd,
              stable_prefix_hash, system_hash, tool_schema_hash, dynamic_tail_hash,
              miss_reason, miss_reason_detail, request_phase, effective_output_cap,
-             tool_schema_tokens, tool_round_count, compaction_decision)
-             SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20
+             tool_schema_tokens, tool_round_count, compaction_decision,
+             request_id, provider, latency_ms, time_to_first_token_ms,
+             finish_reason, error_kind, timeout_kind, retry_count)
+             SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20,
+                    ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28
              WHERE NOT EXISTS (
                 SELECT 1 FROM {table}
                 WHERE ts = ?1
@@ -354,6 +390,14 @@ pub fn sync_usage_to_sqlite(entry: &UsageLedgerEntry) {
             entry.tool_schema_tokens as i64,
             entry.tool_round_count.map(|v| v as i64),
             entry.compaction_decision,
+            entry.request_id,
+            entry.provider,
+            entry.latency_ms.map(|v| v as i64),
+            entry.time_to_first_token_ms.map(|v| v as i64),
+            entry.finish_reason,
+            entry.error_kind,
+            entry.timeout_kind,
+            entry.retry_count.map(|v| v as i32),
         ],
     );
 }
@@ -625,6 +669,14 @@ mod tests {
             tool_schema_tokens: 320,
             tool_round_count: Some(2),
             compaction_decision: Some("skipped".to_string()),
+            request_id: None,
+            provider: None,
+            latency_ms: None,
+            time_to_first_token_ms: None,
+            finish_reason: None,
+            error_kind: None,
+            timeout_kind: None,
+            retry_count: None,
         };
         append_usage_ledger_entry_at(&path, &entry).unwrap();
         append_usage_ledger_entry_at(
@@ -677,6 +729,14 @@ mod tests {
             tool_schema_tokens: 123,
             tool_round_count: Some(1),
             compaction_decision: Some("skipped".to_string()),
+            request_id: None,
+            provider: None,
+            latency_ms: None,
+            time_to_first_token_ms: None,
+            finish_reason: None,
+            error_kind: None,
+            timeout_kind: None,
+            retry_count: None,
         };
         append_usage_ledger_entry_at(&jsonl_path, &entry).unwrap();
 

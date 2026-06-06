@@ -2,9 +2,7 @@
 //!
 //! Resume a paused or stopped session.
 
-use crate::tools::Tool;
-use crate::tools::ToolContext;
-use crate::tools::ToolResult;
+use crate::tools::{Tool, ToolContext, ToolOperationKind, ToolResult};
 use async_trait::async_trait;
 use serde_json::{json, Value};
 
@@ -14,6 +12,10 @@ pub struct ResumeTool;
 impl Tool for ResumeTool {
     fn name(&self) -> &str {
         "resume"
+    }
+
+    fn operation_kind(&self, _params: &Value) -> ToolOperationKind {
+        ToolOperationKind::Task
     }
 
     fn description(&self) -> &str {

@@ -2,9 +2,9 @@
 //!
 //! 支持在 VS Code / Cursor 中打开文件、显示文件、运行终端命令等
 
-use crate::tools::{Tool, ToolContext, ToolResult};
+use crate::tools::{Tool, ToolContext, ToolOperationKind, ToolResult};
 use async_trait::async_trait;
-use serde_json::json;
+use serde_json::{json, Value};
 
 /// Workbench 工具
 pub struct WorkbenchTool;
@@ -13,6 +13,10 @@ pub struct WorkbenchTool;
 impl Tool for WorkbenchTool {
     fn name(&self) -> &str {
         "workbench"
+    }
+
+    fn operation_kind(&self, _params: &Value) -> ToolOperationKind {
+        ToolOperationKind::Task
     }
 
     fn description(&self) -> &str {

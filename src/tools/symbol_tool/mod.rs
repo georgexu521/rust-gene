@@ -3,9 +3,9 @@
 //! 利用项目级 AST 符号索引，查询代码库中的函数、结构体、枚举等定义。
 
 use crate::engine::symbol_index::{SymbolIndex, SymbolKind};
-use crate::tools::{Tool, ToolContext, ToolResult};
+use crate::tools::{Tool, ToolContext, ToolOperationKind, ToolResult};
 use async_trait::async_trait;
-use serde_json::json;
+use serde_json::{json, Value};
 
 pub struct SymbolQueryTool;
 
@@ -13,6 +13,10 @@ pub struct SymbolQueryTool;
 impl Tool for SymbolQueryTool {
     fn name(&self) -> &str {
         "symbol_query"
+    }
+
+    fn operation_kind(&self, _params: &Value) -> ToolOperationKind {
+        ToolOperationKind::Search
     }
 
     fn description(&self) -> &str {

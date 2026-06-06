@@ -2,9 +2,7 @@
 //!
 //! Provides cost breakdown information.
 
-use crate::tools::Tool;
-use crate::tools::ToolContext;
-use crate::tools::ToolResult;
+use crate::tools::{Tool, ToolContext, ToolOperationKind, ToolResult};
 use async_trait::async_trait;
 use serde_json::{json, Value};
 
@@ -14,6 +12,10 @@ pub struct CostTool;
 impl Tool for CostTool {
     fn name(&self) -> &str {
         "cost"
+    }
+
+    fn operation_kind(&self, _params: &Value) -> ToolOperationKind {
+        ToolOperationKind::Read
     }
 
     fn description(&self) -> &str {

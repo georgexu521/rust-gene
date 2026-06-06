@@ -1,8 +1,8 @@
 //! REPL 工具 - 在支持的解释器中执行代码片段
 
-use crate::tools::{Tool, ToolContext, ToolResult};
+use crate::tools::{Tool, ToolContext, ToolOperationKind, ToolResult};
 use async_trait::async_trait;
-use serde_json::json;
+use serde_json::{json, Value};
 use tokio::process::Command;
 
 /// REPL 工具
@@ -12,6 +12,10 @@ pub struct REPLTool;
 impl Tool for REPLTool {
     fn name(&self) -> &str {
         "repl"
+    }
+
+    fn operation_kind(&self, _params: &Value) -> ToolOperationKind {
+        ToolOperationKind::Shell
     }
 
     fn description(&self) -> &str {

@@ -198,6 +198,30 @@ pub const CMD_PERMISSIONS: CommandDef = CommandDef::new(
 pub const CMD_DIFF: CommandDef =
     CommandDef::new("/diff", &[], "Info", "/diff", "Show recent git changes");
 
+pub const CMD_CHANGES: CommandDef = CommandDef::new(
+    "/changes",
+    &[],
+    "Info",
+    "/changes",
+    "Show recent turn file changes with additions/deletions",
+);
+
+pub const CMD_DIAGNOSTIC: CommandDef = CommandDef::new(
+    "/diagnostic",
+    &["/diagnostics"],
+    "Info",
+    "/diagnostic",
+    "Export a diagnostic run_report.json snapshot for daily baseline",
+);
+
+pub const CMD_VALIDATE: CommandDef = CommandDef::new(
+    "/validate",
+    &[],
+    "Info",
+    "/validate",
+    "Show validation summary with changed files and tool rounds",
+);
+
 pub const CMD_RESUME: CommandDef = CommandDef::new(
     "/resume",
     &[],
@@ -1074,6 +1098,9 @@ pub const ALL_COMMANDS: &[&CommandDef] = &[
     &CMD_AUDIT,
     &CMD_PERMISSIONS,
     &CMD_DIFF,
+    &CMD_CHANGES,
+    &CMD_DIAGNOSTIC,
+    &CMD_VALIDATE,
     &CMD_RESUME,
     &CMD_REWIND,
     &CMD_COMMIT,

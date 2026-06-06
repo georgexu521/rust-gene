@@ -2,7 +2,7 @@
 //!
 //! JSON 查询、格式化、验证
 
-use crate::tools::{Tool, ToolContext, ToolResult};
+use crate::tools::{Tool, ToolContext, ToolOperationKind, ToolResult};
 use async_trait::async_trait;
 use serde_json::{json, Value};
 
@@ -13,6 +13,10 @@ pub struct JsonQueryTool;
 impl Tool for JsonQueryTool {
     fn name(&self) -> &str {
         "json_query"
+    }
+
+    fn operation_kind(&self, _params: &Value) -> ToolOperationKind {
+        ToolOperationKind::Search
     }
 
     fn description(&self) -> &str {

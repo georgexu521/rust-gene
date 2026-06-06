@@ -67,9 +67,9 @@ impl Tool for FormatTool {
 
     fn operation_kind(&self, params: &serde_json::Value) -> ToolOperationKind {
         match params["action"].as_str() {
-            Some("check") => ToolOperationKind::Read,
+            Some("check") | Some("review") => ToolOperationKind::Read,
             Some("format") => ToolOperationKind::Edit,
-            _ => ToolOperationKind::Other,
+            _ => ToolOperationKind::Edit,
         }
     }
 

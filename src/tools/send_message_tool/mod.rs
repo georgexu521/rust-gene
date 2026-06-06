@@ -1,9 +1,9 @@
 //! SendMessage 工具 - 向其他 Agent 发送消息
 
 use crate::agent::types::{AgentId, AgentMessage, AgentMessageType};
-use crate::tools::{Tool, ToolContext, ToolResult};
+use crate::tools::{Tool, ToolContext, ToolOperationKind, ToolResult};
 use async_trait::async_trait;
-use serde_json::json;
+use serde_json::{json, Value};
 
 /// 发送消息工具
 pub struct SendMessageTool;
@@ -12,6 +12,10 @@ pub struct SendMessageTool;
 impl Tool for SendMessageTool {
     fn name(&self) -> &str {
         "send_message"
+    }
+
+    fn operation_kind(&self, _params: &Value) -> ToolOperationKind {
+        ToolOperationKind::Task
     }
 
     fn description(&self) -> &str {

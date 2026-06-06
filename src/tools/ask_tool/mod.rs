@@ -1,6 +1,6 @@
-use crate::tools::{Tool, ToolContext, ToolResult};
+use crate::tools::{Tool, ToolContext, ToolOperationKind, ToolResult};
 use async_trait::async_trait;
-use serde_json::json;
+use serde_json::{json, Value};
 use std::sync::Arc;
 use tokio::sync::{oneshot, Mutex};
 
@@ -66,6 +66,10 @@ impl AskUserQuestionTool {
 impl Tool for AskUserQuestionTool {
     fn name(&self) -> &str {
         "ask_user"
+    }
+
+    fn operation_kind(&self, _params: &Value) -> ToolOperationKind {
+        ToolOperationKind::Task
     }
 
     fn description(&self) -> &str {

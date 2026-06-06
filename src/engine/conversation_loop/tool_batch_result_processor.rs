@@ -193,6 +193,17 @@ impl ToolBatchResultProcessor {
                 &mut outcome.changed_files,
                 baseline_git_status_files,
             );
+            // Bash write risk gate: if files changed but no file_write/file_edit/file_patch
+            // was used successfully, bash is the sole mutation path — record a framework risk.
+            if !outcome.changed_files.is_empty() && !outcome.successful_write_tool {
+                trace.record(TraceEvent::WorkflowFallback {
+                    error: format!(
+                        "bash_only_mutation: {} file(s) changed without file_write/file_edit/file_patch. \
+                         Prefer file tools for code changes.",
+                        outcome.changed_files.len()
+                    ),
+                });
+            }
         }
 
         outcome

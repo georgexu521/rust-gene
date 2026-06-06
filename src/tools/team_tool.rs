@@ -3,9 +3,9 @@
 //! 让 agent 可以通过 TeammateMailbox 与其他 agent 发送/接收消息。
 
 use crate::team::{MessageKind, MessagePriority, TeammateMailbox};
-use crate::tools::{Tool, ToolContext, ToolResult};
+use crate::tools::{Tool, ToolContext, ToolOperationKind, ToolResult};
 use async_trait::async_trait;
-use serde_json::json;
+use serde_json::{json, Value};
 
 /// 团队协作工具
 pub struct TeamTool;
@@ -14,6 +14,10 @@ pub struct TeamTool;
 impl Tool for TeamTool {
     fn name(&self) -> &str {
         "team"
+    }
+
+    fn operation_kind(&self, _params: &Value) -> ToolOperationKind {
+        ToolOperationKind::Task
     }
 
     fn description(&self) -> &str {

@@ -1,9 +1,9 @@
 //! Plan Mode 工具 - 进入和退出计划模式
 
 use crate::engine::plan_mode::PlanModeManager;
-use crate::tools::{Tool, ToolContext, ToolResult};
+use crate::tools::{Tool, ToolContext, ToolOperationKind, ToolResult};
 use async_trait::async_trait;
-use serde_json::json;
+use serde_json::{json, Value};
 use std::sync::Arc;
 
 /// 进入计划模式工具
@@ -21,6 +21,10 @@ impl EnterPlanModeTool {
 impl Tool for EnterPlanModeTool {
     fn name(&self) -> &str {
         "enter_plan_mode"
+    }
+
+    fn operation_kind(&self, _params: &Value) -> ToolOperationKind {
+        ToolOperationKind::Task
     }
 
     fn description(&self) -> &str {
@@ -72,6 +76,10 @@ impl ExitPlanModeTool {
 impl Tool for ExitPlanModeTool {
     fn name(&self) -> &str {
         "exit_plan_mode"
+    }
+
+    fn operation_kind(&self, _params: &Value) -> ToolOperationKind {
+        ToolOperationKind::Task
     }
 
     fn description(&self) -> &str {

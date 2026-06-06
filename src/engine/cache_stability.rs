@@ -46,6 +46,59 @@ pub struct CacheDiagnosticShape {
     pub effective_output_cap: Option<u32>,
     pub tool_round_count: Option<u64>,
     pub compaction_decision: Option<String>,
+    /// Dynamic zone counts by tier (Phase C/D: opencode alignment).
+    /// stable-prefix: count of zones eligible for stable prefix inclusion.
+    /// last-user: count of zones injected after the last user message.
+    /// repair-only: count of zones injected only during repair turns.
+    #[serde(default)]
+    pub dynamic_zones_stable_prefix: usize,
+    #[serde(default)]
+    pub dynamic_zones_last_user: usize,
+    #[serde(default)]
+    pub dynamic_zones_repair_only: usize,
+}
+
+/// Dynamic context zone tier classification.
+/// Phase C: maps each injected system-message zone to one of three
+/// stability tiers so the runtime can record zone composition in traces
+/// and usage ledger.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DynamicZoneTier {
+    /// Stable enough to live in the prefix (task contract, context pack).
+    StablePrefix,
+    /// Changes per-turn but sits after the last user message.
+    LastUserDynamic,
+    /// Only injected during repair / failure recovery turns.
+    RepairOnly,
+}
+
+impl DynamicZoneTier {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::StablePrefix => "stable-prefix",
+            Self::LastUserDynamic => "last-user",
+            Self::RepairOnly => "repair-only",
+        }
+    }
+}
+
+/// Classify a dynamic context system message into one of three tiers.
+pub fn classify_dynamic_zone(content: &str) -> DynamicZoneTier {
+    let trimmed = content.trim_start();
+    // Stable enough for the prefix (rarely changes during a task)
+    if trimmed.starts_with("<task-contract>") || trimmed.starts_with("<context-pack>") {
+        return DynamicZoneTier::StablePrefix;
+    }
+    // Only present during repair/failure turns
+    if trimmed.starts_with("<recent_observation>")
+        || trimmed.starts_with("<focused-repair>")
+        || trimmed.starts_with("<self-evolution-guidance>")
+        || trimmed.starts_with("MVA profile:")
+    {
+        return DynamicZoneTier::RepairOnly;
+    }
+    // Default: per-turn dynamic, sits with the user message
+    DynamicZoneTier::LastUserDynamic
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -199,6 +252,22 @@ pub fn request_cache_diagnostic_shape(
         })
         .count();
 
+    // Count dynamic zones by tier for trace / usage ledger.
+    let mut dynamic_zones_stable_prefix: usize = 0;
+    let mut dynamic_zones_last_user: usize = 0;
+    let mut dynamic_zones_repair_only: usize = 0;
+    for message in messages {
+        if let Message::System { content } = message {
+            if is_dynamic_context_system_message(content) {
+                match classify_dynamic_zone(content) {
+                    DynamicZoneTier::StablePrefix => dynamic_zones_stable_prefix += 1,
+                    DynamicZoneTier::LastUserDynamic => dynamic_zones_last_user += 1,
+                    DynamicZoneTier::RepairOnly => dynamic_zones_repair_only += 1,
+                }
+            }
+        }
+    }
+
     let prefix_fingerprint = stable_fingerprint(&format!(
         "system={}\ntools={}\nfew_shots={}",
         system_prefix, tool_manifest.fingerprint, few_shots
@@ -216,6 +285,9 @@ pub fn request_cache_diagnostic_shape(
         message_count: messages.len(),
         dynamic_zone_messages,
         dynamic_zones_before_last_user,
+        dynamic_zones_stable_prefix,
+        dynamic_zones_last_user,
+        dynamic_zones_repair_only,
         request_phase: None,
         effective_output_cap: None,
         tool_round_count: None,
@@ -284,9 +356,21 @@ pub fn infer_cache_miss_reason(
         return CacheMissInference {
             reason: CacheMissReason::MemoryOrSkillChanged,
             detail: format!(
-                "few-shot/memory {} -> {}",
+                "few-shot/memory/skill {} -> {} (dynamic zones: prev {} {}, now {} {})",
                 short_hash(&previous.few_shots_fingerprint),
-                short_hash(&current.few_shots_fingerprint)
+                short_hash(&current.few_shots_fingerprint),
+                previous.dynamic_zone_messages,
+                if previous.dynamic_zone_messages == 1 {
+                    "zone"
+                } else {
+                    "zones"
+                },
+                current.dynamic_zone_messages,
+                if current.dynamic_zone_messages == 1 {
+                    "zone"
+                } else {
+                    "zones"
+                },
             ),
         };
     }

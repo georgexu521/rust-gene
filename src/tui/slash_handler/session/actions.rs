@@ -50,6 +50,139 @@ pub fn handle_redo(app: &mut TuiApp, args: &str) -> String {
     results.join("\n")
 }
 
+/// /changes - 展示最近 turn 的文件变更（含增删行数）
+pub async fn handle_changes(app: &TuiApp) -> String {
+    let session_id = match app.session_manager.current_session_id() {
+        Some(id) => id.to_string(),
+        None => return "No active session.".to_string(),
+    };
+
+    let mgr = crate::engine::checkpoint::get_checkpoint_manager(&session_id).await;
+    let cp = mgr.lock().await;
+    let file_changes = cp.list_file_changes();
+    let rounds = cp.list_file_change_rounds();
+
+    if file_changes.is_empty() && rounds.is_empty() {
+        return "No file changes tracked yet. Changes are recorded when the agent uses file_write, file_edit, or file_patch."
+            .to_string();
+    }
+
+    let mut lines = vec![
+        format!(
+            "Recent changes ({} files in {} tool rounds):",
+            file_changes.len(),
+            rounds.len()
+        ),
+        String::new(),
+    ];
+
+    if !rounds.is_empty() {
+        lines.push("By tool round:".to_string());
+        for summary in rounds.iter().rev().take(10) {
+            let round = summary.tool_round_id.as_deref().unwrap_or("<single>");
+            lines.push(format!(
+                "  {} | {} file(s) | {}B | {}",
+                round,
+                summary.change_count,
+                summary.total_bytes_written,
+                summary
+                    .paths
+                    .iter()
+                    .take(3)
+                    .map(|p| p.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", "),
+            ));
+            if summary.paths.len() > 3 {
+                lines.push(format!(
+                    "    ... and {} more file(s)",
+                    summary.paths.len() - 3
+                ));
+            }
+        }
+    }
+
+    if !file_changes.is_empty() {
+        lines.push(String::new());
+        lines.push("Most recent file changes:".to_string());
+        for change in file_changes.iter().rev().take(10) {
+            let round = change
+                .tool_round_id
+                .as_deref()
+                .map(|r| format!(" [{}]", r))
+                .unwrap_or_default();
+            lines.push(format!(
+                "  {} | {} | {}B{}",
+                change.tool_name, change.path, change.bytes_written, round,
+            ));
+        }
+    }
+
+    lines.push(String::new());
+    lines.push("Use /undo to revert the last edit, /rewind for specific files/rounds.".to_string());
+    lines.join("\n")
+}
+
+/// /diagnostic - 一键导出诊断包 (run_report.json)
+pub async fn handle_diagnostic(app: &TuiApp) -> String {
+    let session_id = app
+        .session_manager
+        .current_session_id()
+        .unwrap_or("unknown");
+
+    let model = app.current_model_label();
+    let provider = Some(app.current_provider_label());
+
+    let usage = app.stream_usage_snapshot;
+    let changed_files: Vec<String> = Vec::new();
+
+    let report = crate::engine::evalset::RunReport {
+        schema: crate::engine::evalset::RunReport::CURRENT_SCHEMA.to_string(),
+        session_id: session_id.to_string(),
+        model,
+        provider,
+        timestamp_ms: std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64,
+        status: "running".to_string(),
+        turns: 0,
+        tool_rounds: 0,
+        changed_files,
+        verification_proof_status: None,
+        evidence_category: None,
+        evidence_items: 0,
+        prompt_tokens: usage.map(|u| u.prompt_tokens as u64).unwrap_or(0),
+        completion_tokens: usage.map(|u| u.completion_tokens as u64).unwrap_or(0),
+        cost_usd: 0.0,
+        latency_ms: None,
+        time_to_first_token_ms: None,
+        cache_miss_reason: None,
+        failure_owner: None,
+        failed_tool_names: Vec::new(),
+    };
+
+    let json = report.to_json_string();
+    let path = dirs::home_dir()
+        .unwrap_or_else(|| std::path::PathBuf::from("."))
+        .join(".priority-agent")
+        .join(format!(
+            "diagnostic_{}.json",
+            &session_id[..8.min(session_id.len())]
+        ));
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).ok();
+    }
+    match std::fs::write(&path, &json) {
+        Ok(_) => format!(
+            "Diagnostic report exported to: {}\n\nRun status: this is a point-in-time snapshot. \
+             Use after closeout for complete data.",
+            path.display()
+        ),
+        Err(e) => format!("Failed to write diagnostic report: {}", e),
+    }
+}
+
 /// /retry - 重试上一次 LLM 调用
 pub async fn handle_retry(app: &mut TuiApp, args: &str) -> String {
     if !args.trim().is_empty() {

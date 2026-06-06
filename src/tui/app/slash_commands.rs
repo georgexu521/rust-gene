@@ -227,6 +227,15 @@ impl TuiApp {
                         write_policy
                     ));
                 }
+                if memory_action == "review" {
+                    let report = slash::memory_review_report(self).await;
+                    self.add_system_message(report);
+                    return;
+                }
+                if memory_action == "files" {
+                    self.add_system_message(slash::memory_files_report());
+                    return;
+                }
                 let latest_user_message = self
                     .messages
                     .iter()
@@ -762,6 +771,44 @@ impl TuiApp {
             // Phase 10 Batch 1: Session & Control Commands
             "/session" => slash::handle_session_cmd(self, args).await,
             "/undo" => slash::handle_undo(self, args),
+            "/changes" => slash::handle_changes(self).await,
+            "/validate" => {
+                if let Some(sid) = self.session_manager.current_session_id() {
+                    let sid = sid.to_string();
+                    let mgr = crate::engine::checkpoint::get_checkpoint_manager(&sid).await;
+                    let cp = mgr.lock().await;
+                    let changes = cp.list_file_changes();
+                    let rounds = cp.list_file_change_rounds();
+                    let mut lines = vec![
+                        "Validation Summary".to_string(),
+                        "==================".to_string(),
+                        String::new(),
+                        format!("File changes: {}", changes.len()),
+                        format!("Tool rounds: {}", rounds.len()),
+                        String::new(),
+                    ];
+                    if changes.is_empty() {
+                        lines.push("No file changes to validate.".to_string());
+                    } else {
+                        lines.push("Changed files:".to_string());
+                        for c in changes.iter().rev().take(10) {
+                            lines.push(format!(
+                                "  {} ({}, {}B)",
+                                c.path, c.tool_name, c.bytes_written
+                            ));
+                        }
+                        lines.push(String::new());
+                        lines.push(
+                            "Run 'cargo test' or 'npm test' to execute the test suite.".to_string(),
+                        );
+                        lines.push("Use /changes for a turn-by-turn breakdown.".to_string());
+                    }
+                    lines.join("\n")
+                } else {
+                    "No active session.".to_string()
+                }
+            }
+            "/diagnostic" | "/diagnostics" => slash::handle_diagnostic(self).await,
             "/redo" => slash::handle_redo(self, args),
             "/retry" => slash::handle_retry(self, args).await,
             "/stop" => slash::handle_stop(self, args),

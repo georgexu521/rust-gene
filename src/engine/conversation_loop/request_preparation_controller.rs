@@ -16,6 +16,7 @@ use crate::memory::MemoryManager;
 use crate::services::api::{ChatRequest, LlmProvider, Message, Tool};
 use crate::session_store::SessionStore;
 use std::collections::HashSet;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tracing::debug;
@@ -1146,18 +1147,28 @@ fn compact_text(value: &str, max_chars: usize) -> String {
     text
 }
 
-/// Phase 6 (opencode alignment): output token cap policy.
+/// Phase C (opencode alignment): progressive output token cap policy.
 ///
-/// - Repair/focused fix turns: 1024
-/// - Normal coding turns with dynamic context: 8192
-/// - Inspection-only turns (no dynamic context): None (no cap)
+/// No dynamic context → None (provider default)
+/// Normal turn → 8192
+/// 1st repair → 4096
+/// 2nd repair → 2048
+/// 3rd+ repair → 1024
 fn output_cap_for_turn(is_repair: bool, has_dynamic_context: bool) -> Option<u32> {
+    static CONSECUTIVE_REPAIRS: AtomicU32 = AtomicU32::new(0);
+
     if !has_dynamic_context {
         return None;
     }
     if is_repair {
-        Some(1024)
+        let count = CONSECUTIVE_REPAIRS.fetch_add(1, Ordering::Relaxed) + 1;
+        match count {
+            1 => Some(4096),
+            2 => Some(2048),
+            _ => Some(1024),
+        }
     } else {
+        CONSECUTIVE_REPAIRS.store(0, Ordering::Relaxed);
         Some(8192)
     }
 }

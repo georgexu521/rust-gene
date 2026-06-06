@@ -2,9 +2,9 @@
 //!
 //! 依赖 `gh` CLI 工具，会自动检测其可用性。
 
-use crate::tools::{Tool, ToolContext, ToolResult};
+use crate::tools::{Tool, ToolContext, ToolOperationKind, ToolResult};
 use async_trait::async_trait;
-use serde_json::json;
+use serde_json::{json, Value};
 use tokio::process::Command;
 
 /// GitHub 工具
@@ -14,6 +14,10 @@ pub struct GitHubTool;
 impl Tool for GitHubTool {
     fn name(&self) -> &str {
         "github"
+    }
+
+    fn operation_kind(&self, _params: &Value) -> ToolOperationKind {
+        ToolOperationKind::Network
     }
 
     fn description(&self) -> &str {

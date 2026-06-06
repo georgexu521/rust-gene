@@ -194,6 +194,10 @@ impl crate::tools::Tool for CronTool {
         "cron"
     }
 
+    fn operation_kind(&self, _params: &serde_json::Value) -> crate::tools::ToolOperationKind {
+        crate::tools::ToolOperationKind::Task
+    }
+
     fn description(&self) -> &str {
         "Schedule and manage cron jobs. The agent can set timers, recurring tasks, \
          or schedule future actions. Jobs are self-contained prompts that run later."

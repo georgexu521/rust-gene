@@ -4,6 +4,7 @@
 
 use crate::tools::Tool;
 use crate::tools::ToolContext;
+use crate::tools::ToolOperationKind;
 use crate::tools::ToolResult;
 use async_trait::async_trait;
 use serde_json::{json, Value};
@@ -14,6 +15,10 @@ pub struct ContextVisTool;
 impl Tool for ContextVisTool {
     fn name(&self) -> &str {
         "context_visualization"
+    }
+
+    fn operation_kind(&self, _params: &Value) -> ToolOperationKind {
+        ToolOperationKind::Read
     }
 
     fn description(&self) -> &str {

@@ -2,9 +2,9 @@
 //!
 //! 查看和管理性能追踪数据。需要用户显式同意（PRIORITY_AGENT_TELEMETRY=enabled）。
 
-use crate::tools::{Tool, ToolContext, ToolResult};
+use crate::tools::{Tool, ToolContext, ToolOperationKind, ToolResult};
 use async_trait::async_trait;
-use serde_json::json;
+use serde_json::{json, Value};
 
 /// Telemetry 工具
 pub struct TelemetryTool;
@@ -13,6 +13,10 @@ pub struct TelemetryTool;
 impl Tool for TelemetryTool {
     fn name(&self) -> &str {
         "telemetry"
+    }
+
+    fn operation_kind(&self, _params: &Value) -> ToolOperationKind {
+        ToolOperationKind::Read
     }
 
     fn description(&self) -> &str {

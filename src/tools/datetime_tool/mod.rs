@@ -2,10 +2,10 @@
 //!
 //! 获取当前时间、格式化日期、计算时间差
 
-use crate::tools::{Tool, ToolContext, ToolResult};
+use crate::tools::{Tool, ToolContext, ToolOperationKind, ToolResult};
 use async_trait::async_trait;
 use chrono::{Local, LocalResult, TimeZone, Utc};
-use serde_json::json;
+use serde_json::{json, Value};
 
 /// 日期时间工具
 pub struct DatetimeTool;
@@ -14,6 +14,10 @@ pub struct DatetimeTool;
 impl Tool for DatetimeTool {
     fn name(&self) -> &str {
         "datetime"
+    }
+
+    fn operation_kind(&self, _params: &Value) -> ToolOperationKind {
+        ToolOperationKind::Read
     }
 
     fn description(&self) -> &str {

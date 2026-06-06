@@ -367,6 +367,10 @@ impl crate::tools::Tool for SwarmTool {
         "swarm"
     }
 
+    fn operation_kind(&self, _params: &serde_json::Value) -> crate::tools::ToolOperationKind {
+        crate::tools::ToolOperationKind::Task
+    }
+
     fn description(&self) -> &str {
         "Spawn and manage a swarm of parallel agents. Use this to divide a complex task \
          into independent subtasks that can be executed concurrently by multiple agents. \

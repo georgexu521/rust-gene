@@ -3,9 +3,60 @@
 //! Closeout should not infer "verified" from a friendly final answer. This
 //! module gives the runtime a typed proof status that can be derived from task
 //! state and evidence ledger records.
+//!
+//! Phase C (opencode alignment): evidence falls into three categories:
+//! - ToolEvidence: file_write/edit/patch actual edits with diffs
+//! - ValidationEvidence: run_tests/bash test commands
+//! - DiagnosticEvidence: LSP diagnostics, static checks, compiler output
 
 use crate::engine::task_context::VerificationStatus;
 use serde::{Deserialize, Serialize};
+
+/// Top-level evidence category for closeout reporting.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EvidenceCategory {
+    /// File mutations: file_write, file_edit, file_patch.
+    ToolEvidence,
+    /// Test / validation commands: run_tests, bash validation.
+    ValidationEvidence,
+    /// LSP diagnostics, compiler checks, static analysis.
+    DiagnosticEvidence,
+    /// Human review or deferred judgment.
+    UserEvidence,
+}
+
+impl EvidenceCategory {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::ToolEvidence => "tool",
+            Self::ValidationEvidence => "validation",
+            Self::DiagnosticEvidence => "diagnostic",
+            Self::UserEvidence => "user",
+        }
+    }
+}
+
+impl VerificationProofKind {
+    /// Map to the top-level evidence category.
+    pub fn evidence_category(self) -> EvidenceCategory {
+        match self {
+            Self::CommandPassed | Self::RequiredValidationPassed | Self::NoDiffAudit => {
+                EvidenceCategory::ValidationEvidence
+            }
+            Self::DiffReviewed | Self::ParentVerifiedSubagentResult | Self::SubagentClaimOnly => {
+                EvidenceCategory::ToolEvidence
+            }
+            Self::StaticCheckPassed | Self::KnownUnrelatedFailure => {
+                EvidenceCategory::DiagnosticEvidence
+            }
+            Self::UserDeferred
+            | Self::PermissionDenied
+            | Self::ToolUnavailable
+            | Self::ManualInspectionOnly => EvidenceCategory::UserEvidence,
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -332,6 +383,18 @@ impl VerificationProof {
 
     pub fn proof_kind_summary(&self) -> String {
         proof_kind_labels(&self.proof_kinds)
+    }
+
+    pub fn evidence_category_label(&self) -> String {
+        let mut categories = std::collections::BTreeSet::new();
+        for kind in &self.proof_kinds {
+            categories.insert(kind.evidence_category().label());
+        }
+        if categories.is_empty() {
+            "none".to_string()
+        } else {
+            categories.into_iter().collect::<Vec<_>>().join("+")
+        }
     }
 
     pub fn support_line(&self) -> String {

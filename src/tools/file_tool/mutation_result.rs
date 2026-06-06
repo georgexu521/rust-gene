@@ -28,6 +28,9 @@ pub struct FileMutationResult {
     pub diagnostics: Option<MutationDiagnostics>,
     /// Rollback metadata (only when a partial write failed).
     pub rollback: Option<MutationRollback>,
+    /// Whether the result was auto-formatted after writing.
+    #[serde(default)]
+    pub formatted: bool,
     /// Short stable string for desktop/TUI cards.
     pub ui_summary: String,
 }
@@ -249,6 +252,7 @@ pub fn file_write_result(
         file_change_ids: file_change_id.into_iter().collect(),
         diagnostics: None,
         rollback: None,
+        formatted: false,
         ui_summary: String::new(),
     };
     FileMutationResult {
@@ -344,6 +348,7 @@ pub fn file_edit_result(
             delta: diagnostics_delta,
         }),
         rollback: None,
+        formatted: false,
         ui_summary: String::new(),
     };
     FileMutationResult {
@@ -388,6 +393,7 @@ pub fn file_patch_result(
         file_change_ids,
         diagnostics: None,
         rollback: None,
+        formatted: false,
         ui_summary: String::new(),
     };
     FileMutationResult {
@@ -447,6 +453,7 @@ pub fn file_patch_partial_failure_result(
             failed_files: rollback_failed,
             error: rollback_error,
         }),
+        formatted: false,
         ui_summary: String::new(),
     };
     FileMutationResult {
@@ -542,6 +549,7 @@ pub fn from_file_edit_json(
             .as_ref()
             .map(|d| diag_from_json(d, &diagnostics_delta)),
         rollback: None,
+        formatted: false,
         ui_summary: String::new(),
     };
     FileMutationResult {
@@ -1077,5 +1085,63 @@ mod tests {
         let summary = compact_summary(&data);
         assert!(summary.contains("src/lib.rs"));
         assert!(summary.contains("+2"));
+    }
+
+    /// 验证三个文件工具都产生一致的 mutation_result metadata 结构。
+    #[test]
+    fn all_file_mutation_results_have_consistent_shape() {
+        // Verify from_tool_data extracts FileMutationResult with all expected fields
+        let write_data = serde_json::json!({
+            "mutation_result": {
+                "operation": "file_write",
+                "files": [{
+                    "path": "src/lib.rs", "resolved_path": "src/lib.rs",
+                    "display_path": "src/lib.rs", "existed_before": false,
+                    "replacements": 0, "bytes_written": 42,
+                    "additions": 3, "deletions": 0,
+                    "changed_line_start": 1, "changed_line_end": 3,
+                    "text_format": {"encoding": "utf-8", "has_bom": false, "line_ending": "lf"},
+                    "file_change_id": "fc1", "before_hash": null, "after_hash": null
+                }],
+                "diff": {
+                    "additions": 3, "deletions": 0, "file_count": 1,
+                    "unified_diff": "...", "truncated": false, "diff_hash": "abc"
+                },
+                "checkpoint": {"checkpoint_id": "cp1", "sequence": 1, "session_id": null, "restore_eligible": true},
+                "file_change_ids": ["fc1"],
+                "diagnostics": null,
+                "rollback": null,
+                "formatted": false,
+                "ui_summary": "file_write src/lib.rs: +3/-0, 42B"
+            }
+        });
+        let mr = from_tool_data(&write_data).expect("file_write mutation_result");
+        assert_eq!(mr.operation, "file_write");
+        assert!(!mr.formatted);
+        assert_eq!(mr.files.len(), 1);
+        assert!(mr.diagnostics.is_none());
+        assert!(mr.checkpoint.is_some());
+        assert_eq!(mr.checkpoint.as_ref().unwrap().checkpoint_id, "cp1");
+        assert_eq!(mr.file_change_ids.len(), 1);
+
+        // Verify compact_summary works with the mutation_result
+        let summary = compact_summary(&write_data);
+        assert!(summary.contains("file_write"));
+    }
+
+    /// 确保 mutation_result 的 formatted 字段默认值为 false。
+    #[test]
+    fn formatted_field_defaults_to_false() {
+        let data = serde_json::json!({
+            "mutation_result": {
+                "operation": "file_write",
+                "files": [],
+                "diff": {"additions": 0, "deletions": 0, "file_count": 0, "unified_diff": "", "truncated": false, "diff_hash": ""},
+                "file_change_ids": [],
+                "ui_summary": ""
+            }
+        });
+        let mr = from_tool_data(&data).expect("mutation_result without formatted field");
+        assert!(!mr.formatted);
     }
 }

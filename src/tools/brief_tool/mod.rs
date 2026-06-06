@@ -2,9 +2,7 @@
 //!
 //! Provides a summary of the current task and work progress.
 
-use crate::tools::Tool;
-use crate::tools::ToolContext;
-use crate::tools::ToolResult;
+use crate::tools::{Tool, ToolContext, ToolOperationKind, ToolResult};
 use async_trait::async_trait;
 use serde_json::{json, Value};
 
@@ -14,6 +12,10 @@ pub struct BriefTool;
 impl Tool for BriefTool {
     fn name(&self) -> &str {
         "brief"
+    }
+
+    fn operation_kind(&self, _params: &Value) -> ToolOperationKind {
+        ToolOperationKind::Read
     }
 
     fn description(&self) -> &str {

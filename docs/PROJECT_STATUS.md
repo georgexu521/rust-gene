@@ -1,6 +1,44 @@
 # Project Status
 
-Last updated: 2026-06-05
+Last updated: 2026-06-06
+
+## Opencode Alignment — Complete Summary
+
+### Round 1 (Phases A-E)
+- ToolKind/ToolFamily hardening (26 tools + consistency test)
+- FileMutationResult `formatted` field
+- TUI permission diff (5 edit tools + bash mutation warnings)
+- `/permissions explain` match keys + matched rules
+- `/cost` cache diagnostic with zone tiers
+- `/changes` per-round file changes
+- Usage ledger 8 new fields + SQLite migration
+- DynamicZoneTier 3-level (stable/last-user/repair-only)
+- EvidenceCategory 4-category (tool/validation/diagnostic/user)
+- Route tool allowlists reorganized
+- FailureOwner::category() (Framework/ProviderModel/Harness/Environment)
+- RunReport schema + /diagnostic export
+- fixtures/TASK_MATRIX.md
+
+### Round 2
+- Bash write risk gate (WorkflowFallback trace when bash is sole mutation path)
+
+### Round 3
+- Progressive output cap: 8192→4096→2048→1024 for consecutive repair turns
+- `/memory status/review/files` productized (review shows decisions/flushes/conflicts)
+- `/validate` command (validation summary with file changes and tool rounds)
+
+### Deferred
+- TUI tool cards ToolKind/ToolFamily rendering
+- TUI permission panel zoned display
+- Changed files + validation in status bar (needs state plumbing)
+- Diagnostics → TUI panel
+- Full diagnostic export package (trace+session+db+log)
+- /cost fully from ledger
+- Turn-level additions/deletions from diffs
+
+### Gates
+2288 passed, 2 pre-existing failures, 0 new regressions.
+`cargo fmt`, `cargo clippy --all-features -- -D warnings` clean.
 
 2026-06-05 opencode programming-chain gap fixes landed:
 - File-edit deterministic recovery is now product-wired, not test-only. Exact

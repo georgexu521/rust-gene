@@ -1,4 +1,5 @@
 use super::*;
+use crate::tools::bash_tool::command_classifier::{classify_command, ShellCommandCategory};
 
 impl TuiApp {
     /// 计算待审批工具的 Diff 预览
@@ -69,6 +70,45 @@ impl TuiApp {
                 }
                 Some((format!("Preview: {}", path), lines.join("\n")))
             }
+            "file_patch" => {
+                let ops = args["operations"].as_array().map_or(0, |a| a.len());
+                let mut lines = vec![format!("Patch operations: {}", ops), "".to_string()];
+                if let Some(ops) = args["operations"].as_array() {
+                    for (i, op) in ops.iter().enumerate() {
+                        let path = op["path"].as_str().unwrap_or("?");
+                        let rep = op["replacements"].as_array().map_or(0, |a| a.len());
+                        lines.push(format!(
+                            "[{}] {} ({} replacement{})",
+                            i + 1,
+                            path,
+                            rep,
+                            if rep == 1 { "" } else { "s" }
+                        ));
+                        if let Some(reps) = op["replacements"].as_array() {
+                            for (j, r) in reps.iter().enumerate() {
+                                let old = r["old_string"].as_str().unwrap_or("");
+                                let new = r["new_string"].as_str().unwrap_or("");
+                                lines.push(format!(
+                                    "  {}.{}: -{} → +{}",
+                                    i + 1,
+                                    j + 1,
+                                    old.chars().take(60).collect::<String>(),
+                                    new.chars().take(60).collect::<String>()
+                                ));
+                            }
+                        }
+                    }
+                }
+                Some((format!("Patch: {} file(s)", ops), lines.join("\n")))
+            }
+            "format" => {
+                let path = args["file_path"].as_str().unwrap_or("unknown");
+                let formatter = args["formatter"].as_str().unwrap_or("default");
+                Some((
+                    format!("Format: {}", path),
+                    format!("Formatter: {}\nFile: {}", formatter, path),
+                ))
+            }
             "bash" => {
                 let command = args["command"].as_str().unwrap_or("");
                 let working_dir = args["working_dir"].as_str().unwrap_or("current directory");
@@ -79,6 +119,23 @@ impl TuiApp {
                 if let Some(timeout) = args["timeout"].as_u64() {
                     lines.push(format!("Timeout: {}s", timeout));
                 }
+
+                // 检测 bash 命令是否包含文件修改操作，给出替代工具建议
+                let classification = classify_command(command);
+                if classification.category == ShellCommandCategory::FileMutation
+                    || classification.category == ShellCommandCategory::GitMutation
+                {
+                    lines.push("".to_string());
+                    lines.push("--- File mutation detected ---".to_string());
+                    lines.push(
+                        "Prefer file_write, file_edit, or file_patch for file changes.".to_string(),
+                    );
+                    lines.push(
+                        "bash should be used for: running tests, starting services, reading state."
+                            .to_string(),
+                    );
+                }
+
                 Some(("Preview: bash command".to_string(), lines.join("\n")))
             }
             _ => None,

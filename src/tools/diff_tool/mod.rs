@@ -1,9 +1,9 @@
 //! Diff 工具 - 生成和查看代码差异
 
 use crate::engine::checkpoint::{FileChangeRecord, FileChangeRoundSummary};
-use crate::tools::{Tool, ToolContext, ToolResult};
+use crate::tools::{Tool, ToolContext, ToolOperationKind, ToolResult};
 use async_trait::async_trait;
-use serde_json::json;
+use serde_json::{json, Value};
 use std::process::Command;
 
 /// Diff 工具
@@ -13,6 +13,10 @@ pub struct DiffTool;
 impl Tool for DiffTool {
     fn name(&self) -> &str {
         "diff"
+    }
+
+    fn operation_kind(&self, _params: &Value) -> ToolOperationKind {
+        ToolOperationKind::Read
     }
 
     fn description(&self) -> &str {

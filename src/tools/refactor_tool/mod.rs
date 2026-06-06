@@ -6,9 +6,9 @@
 //! - add_impl_method: 给结构体 impl 块添加方法
 
 use crate::engine::symbol_index::SymbolIndex;
-use crate::tools::{Tool, ToolContext, ToolResult};
+use crate::tools::{Tool, ToolContext, ToolOperationKind, ToolResult};
 use async_trait::async_trait;
-use serde_json::json;
+use serde_json::{json, Value};
 
 pub struct RefactorTool;
 
@@ -16,6 +16,10 @@ pub struct RefactorTool;
 impl Tool for RefactorTool {
     fn name(&self) -> &str {
         "refactor"
+    }
+
+    fn operation_kind(&self, _params: &Value) -> ToolOperationKind {
+        ToolOperationKind::Edit
     }
 
     fn description(&self) -> &str {

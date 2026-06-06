@@ -290,8 +290,43 @@ impl FailureOwner {
     }
 }
 
+/// High-level failure owner categories for daily baseline reporting.
+/// Maps to the opencode alignment target: framework, provider_model, harness, environment.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
+pub enum FailureOwnerCategory {
+    /// Caused by the agent framework (tool exposure, permissions, closeout, routing, etc.)
+    Framework,
+    /// Caused by the LLM provider or model (planning errors, weak output, context issues)
+    ProviderModel,
+    /// Caused by test harness / eval infrastructure
+    Harness,
+    /// Caused by external environment (network, filesystem, user intervention)
+    Environment,
+}
+
+impl FailureOwner {
+    pub fn category(self) -> FailureOwnerCategory {
+        match self {
+            Self::None => FailureOwnerCategory::Framework,
+            Self::IntentRouter
+            | Self::ToolExposure
+            | Self::ActionReview
+            | Self::Permission
+            | Self::ToolRuntime
+            | Self::ValidationCommand
+            | Self::EvidenceLedger
+            | Self::Closeout
+            | Self::ContextAssembly
+            | Self::Subagent => FailureOwnerCategory::Framework,
+            Self::ModelPlanning => FailureOwnerCategory::ProviderModel,
+            Self::Harness => FailureOwnerCategory::Harness,
+            Self::UserBlocked | Self::ExternalEnvironment => FailureOwnerCategory::Environment,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub enum GoldenTraceSurface {
     RouteDecision,
     ToolExposurePlan,

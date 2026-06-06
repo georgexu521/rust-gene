@@ -441,6 +441,10 @@ impl Tool for PlanTool {
         "plan"
     }
 
+    fn operation_kind(&self, _params: &serde_json::Value) -> crate::tools::ToolOperationKind {
+        crate::tools::ToolOperationKind::Task
+    }
+
     fn description(&self) -> &str {
         concat!(
             "Create an execution plan for the current task. Use this when the task is complex and needs step-by-step planning before execution. The plan will be shown to the user for approval.\n\n",

@@ -313,6 +313,14 @@ impl CostTracker {
             tool_schema_tokens,
             tool_round_count,
             compaction_decision,
+            request_id: None,
+            provider: None,
+            latency_ms: None,
+            time_to_first_token_ms: None,
+            finish_reason: None,
+            error_kind: None,
+            timeout_kind: None,
+            retry_count: None,
         };
         match usage_ledger::append_usage_ledger_entry(&ledger_entry) {
             Ok(()) => usage_ledger::sync_usage_to_sqlite(&ledger_entry),
@@ -719,20 +727,20 @@ impl CostTracker {
         let duration = self.session_duration();
         let minutes = duration.as_secs() / 60;
 
-        format!(
-            r#"Cost Report
-============
-Session Duration: {}m {}s
-Total Requests: {}
-Total Tokens: {} (prompt: {}, completion: {})
-Prompt Cache: cached {} / miss {} / hit_rate {:.1}%
-Estimated Cost: ${:.4}
-
-Model Usage:
-{}
-
-Tool Usage:
-{}"#,
+        let mut report = format!(
+            "Cost Report\n\
+             ============\n\
+             Session Duration: {}m {}s\n\
+             Total Requests: {}\n\
+             Total Tokens: {} (prompt: {}, completion: {})\n\
+             Prompt Cache: cached {} / miss {} / hit_rate {:.1}%\n\
+             Estimated Cost: ${:.4}\n\
+             \n\
+             Model Usage:\n\
+             {}\n\
+             \n\
+             Tool Usage:\n\
+             {}",
             minutes,
             duration.as_secs() % 60,
             self.total_requests,
@@ -745,7 +753,40 @@ Tool Usage:
             self.estimated_cost_usd,
             self.format_model_usage(),
             self.format_tool_usage()
-        )
+        );
+
+        // Append latest cache miss diagnostic if available
+        if let Some(last_diag) = self.prompt_cache_diagnostics.last() {
+            report.push_str("\n\n--- Latest Cache Diagnostic ---\n");
+            report.push_str(&format!("Model: {}\n", last_diag.model));
+            report.push_str(&format!(
+                "Miss Reason: {} ({})\n",
+                last_diag.miss_reason, last_diag.miss_reason_detail
+            ));
+            report.push_str(&format!(
+                "Hit Rate: {:.1}% (cached: {}, miss: {})\n",
+                last_diag.hit_rate, last_diag.cached_tokens, last_diag.cache_miss_tokens
+            ));
+            report.push_str(&format!("Tools Exposed: {}\n", last_diag.tool_count));
+            report.push_str(&format!(
+                "Prefix Fingerprint: {}\n",
+                last_diag.prefix_fingerprint
+            ));
+            report.push_str(&format!(
+                "Dynamic Tail Fingerprint: {}\n",
+                last_diag.dynamic_tail_fingerprint
+            ));
+            report.push_str(&format!(
+                "Dynamic Zones: {} (stable={}, last-user={}, repair={}, before-user={})\n",
+                last_diag.dynamic_zone_messages,
+                last_diag.dynamic_zones_stable_prefix,
+                last_diag.dynamic_zones_last_user,
+                last_diag.dynamic_zones_repair_only,
+                last_diag.dynamic_zones_before_last_user,
+            ));
+        }
+
+        report
     }
 
     pub fn prompt_cache_report(&self) -> String {

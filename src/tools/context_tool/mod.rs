@@ -4,6 +4,7 @@
 
 use crate::tools::Tool;
 use crate::tools::ToolContext;
+use crate::tools::ToolOperationKind;
 use crate::tools::ToolResult;
 use async_trait::async_trait;
 use serde_json::{json, Value};
@@ -76,6 +77,10 @@ fn format_retained_context_explain(context: &ToolContext) -> String {
 impl Tool for ContextTool {
     fn name(&self) -> &str {
         "context"
+    }
+
+    fn operation_kind(&self, _params: &Value) -> ToolOperationKind {
+        ToolOperationKind::Read
     }
 
     fn description(&self) -> &str {

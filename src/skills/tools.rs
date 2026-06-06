@@ -3,6 +3,7 @@
 //! SkillManageTool, SkillListTool, SkillViewTool
 
 use crate::tools::{ToolOperationKind, ToolPermissionLevel};
+use serde_json::Value;
 use std::path::PathBuf;
 
 /// Skill 管理工具 - 让 agent 管理 skills
@@ -413,6 +414,10 @@ pub struct SkillViewTool;
 impl crate::tools::Tool for SkillViewTool {
     fn name(&self) -> &str {
         "skill_view"
+    }
+
+    fn operation_kind(&self, _params: &Value) -> ToolOperationKind {
+        ToolOperationKind::Read
     }
 
     fn description(&self) -> &str {

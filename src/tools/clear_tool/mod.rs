@@ -2,9 +2,7 @@
 //!
 //! Clears conversation history and context.
 
-use crate::tools::Tool;
-use crate::tools::ToolContext;
-use crate::tools::ToolResult;
+use crate::tools::{Tool, ToolContext, ToolOperationKind, ToolResult};
 use async_trait::async_trait;
 use serde_json::{json, Value};
 
@@ -14,6 +12,10 @@ pub struct ClearTool;
 impl Tool for ClearTool {
     fn name(&self) -> &str {
         "clear"
+    }
+
+    fn operation_kind(&self, _params: &Value) -> ToolOperationKind {
+        ToolOperationKind::Edit
     }
 
     fn description(&self) -> &str {

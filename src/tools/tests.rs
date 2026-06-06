@@ -412,6 +412,157 @@ fn core_tool_schema_exposes_protocol_kind_and_family() {
     assert_eq!(schema.tool_family, ToolFamily::Edit);
 }
 
+/// 工具语义一致性：遍历 registry，断言编辑 / shell / MCP / plugin / 只读分类正确。
+/// 此测试确保新增工具不会因漏填 ToolKind/ToolFamily 而被错误分类。
+#[test]
+fn test_all_tools_have_correct_tool_family() {
+    let registry = ToolRegistry::full_registry();
+    let all_names = registry.tool_names();
+
+    // Tools where ToolFamily::Other is acceptable (pure computation, timing, audio etc.)
+    let acceptable_other: &[&str] = &["calculate", "sleep", "desktop", "voice", "encode"];
+
+    for tool_name in &all_names {
+        let tool = registry
+            .get(tool_name)
+            .unwrap_or_else(|| panic!("tool '{}' should be in full registry", tool_name));
+        let params = json!({});
+        let family = tool.tool_family(&params);
+        let kind = tool.tool_kind(&params);
+        let tn: &str = tool_name;
+
+        // Edit family: file_write, file_edit, file_patch, format, rewind, memory_save, memory_clear
+        match tn {
+            "file_write" | "file_edit" | "file_patch" | "rewind" | "memory_save"
+            | "memory_clear" | "copy" | "clear" | "refactor" => {
+                assert_eq!(
+                    family,
+                    ToolFamily::Edit,
+                    "'{tn}' must be Edit family, got {family:?}"
+                );
+                assert_eq!(
+                    kind,
+                    ToolKind::Edit,
+                    "'{tn}' must be Edit kind, got {kind:?}"
+                );
+            }
+            // Shell family: bash, powershell, repl
+            "bash" | "powershell" | "repl" => {
+                assert_eq!(
+                    family,
+                    ToolFamily::Shell,
+                    "'{tn}' must be Shell family, got {family:?}"
+                );
+            }
+            "bash_output" => {
+                assert_eq!(
+                    family,
+                    ToolFamily::Read,
+                    "'{tn}' must be Read family, got {family:?}"
+                );
+            }
+            "bash_cancel" | "bash_tasks" => {
+                assert_ne!(
+                    family,
+                    ToolFamily::Other,
+                    "'{tn}' should not be Other family, got {family:?}"
+                );
+            }
+            // MCP family
+            "mcp" | "mcp_tool" | "mcp_auth" | "list_mcp_resources" | "read_mcp_resource" => {
+                assert_eq!(
+                    family,
+                    ToolFamily::Mcp,
+                    "'{tn}' must be Mcp family, got {family:?}"
+                );
+                assert_ne!(family, ToolFamily::Edit, "'{tn}' must NOT be Edit family");
+            }
+            // Plugin family
+            "plugin_list" | "plugin_manage" => {
+                assert_eq!(
+                    family,
+                    ToolFamily::Plugin,
+                    "'{tn}' must be Plugin family, got {family:?}"
+                );
+                assert_ne!(family, ToolFamily::Edit, "'{tn}' must NOT be Edit family");
+            }
+            // Read family
+            "file_read"
+            | "git_status"
+            | "git_diff"
+            | "memory_load"
+            | "skill_view"
+            | "context"
+            | "context_visualization"
+            | "datetime"
+            | "cost"
+            | "telemetry"
+            | "diff"
+            | "lsp"
+            | "brief" => {
+                assert_eq!(
+                    family,
+                    ToolFamily::Read,
+                    "'{tn}' must be Read family, got {family:?}"
+                );
+            }
+            // Search family
+            "glob" | "grep" | "web_search" | "json_query" | "tool_search" | "symbol_query" => {
+                assert_eq!(
+                    family,
+                    ToolFamily::Search,
+                    "'{tn}' must be Search family, got {family:?}"
+                );
+            }
+            // Task family
+            "agent" | "todo_write" | "enter_plan_mode" | "exit_plan_mode" | "plan" | "ask_user"
+            | "socratic_analyze" | "cron" | "swarm" | "task_create" | "task_get" | "task_list"
+            | "task_update" | "task_stop" | "task_output" | "resume" | "run_tests"
+            | "start_dev_server" | "send_message" | "share" | "team" | "workbench" => {
+                assert_eq!(
+                    family,
+                    ToolFamily::Task,
+                    "'{tn}' must be Task family, got {family:?}"
+                );
+            }
+            // Network family
+            "web_fetch" | "install_dependencies" | "browser" | "github" => {
+                assert_eq!(
+                    family,
+                    ToolFamily::Network,
+                    "'{tn}' must be Network family, got {family:?}"
+                );
+            }
+            // Action-based tools: correct families depend on action; any non-Other is fine for default params
+            "format" | "skill_manage" | "notebook" | "git" | "worktree" | "config"
+            | "remote_dev" | "remote_trigger" | "project_list" | "skills_list" => {
+                assert_ne!(
+                    family,
+                    ToolFamily::Other,
+                    "'{tn}' should not be Other family with default params, got {family:?}"
+                );
+            }
+            // Acceptable Other: pure computation, timing, specialized UI
+            _ if acceptable_other.contains(&tn) => {}
+            // Any unclassified tool should be fixed
+            _ => {
+                assert_ne!(
+                    family, ToolFamily::Other,
+                    "'{tn}' falls through to ToolFamily::Other — add explicit operation_kind to its Tool impl"
+                );
+            }
+        }
+    }
+
+    // Assert MCP/Plugin tools don't slip into Edit
+    let bash = registry.get("bash").unwrap();
+    assert_eq!(bash.tool_family(&json!({})), ToolFamily::Shell);
+    let mcp = registry.get("mcp_tool").unwrap();
+    assert_eq!(mcp.tool_family(&json!({})), ToolFamily::Mcp);
+    let plugin = registry.get("plugin_manage").unwrap();
+    assert_eq!(plugin.tool_family(&json!({})), ToolFamily::Plugin);
+}
+
 /// 工具数量不能回退
 #[test]
 fn test_tool_count_not_regressed() {

@@ -485,6 +485,10 @@ impl crate::tools::Tool for SocraticTool {
         "socratic_analyze"
     }
 
+    fn operation_kind(&self, _params: &serde_json::Value) -> crate::tools::ToolOperationKind {
+        crate::tools::ToolOperationKind::Task
+    }
+
     fn description(&self) -> &str {
         "Analyze a task using the Socratic method - generate deep questions and answer them \
          with the LLM to create a thorough reasoning chain. Use this for complex tasks that \

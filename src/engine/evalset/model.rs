@@ -529,3 +529,38 @@ fn default_mcp_resource_action() -> String {
 fn default_mcp_panel_command() -> String {
     "/panel mcp".to_string()
 }
+
+// ── Phase E: Stable run report schema (opencode alignment) ──
+
+/// Stable run report for daily baselines and diagnostic export.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RunReport {
+    pub schema: String,
+    pub session_id: String,
+    pub model: String,
+    pub provider: Option<String>,
+    pub timestamp_ms: u64,
+    pub status: String,
+    pub turns: usize,
+    pub tool_rounds: usize,
+    pub changed_files: Vec<String>,
+    pub verification_proof_status: Option<String>,
+    pub evidence_category: Option<String>,
+    pub evidence_items: usize,
+    pub prompt_tokens: u64,
+    pub completion_tokens: u64,
+    pub cost_usd: f64,
+    pub latency_ms: Option<u64>,
+    pub time_to_first_token_ms: Option<u64>,
+    pub cache_miss_reason: Option<String>,
+    pub failure_owner: Option<String>,
+    pub failed_tool_names: Vec<String>,
+}
+
+impl RunReport {
+    pub const CURRENT_SCHEMA: &str = "run_report.v1";
+
+    pub fn to_json_string(&self) -> String {
+        serde_json::to_string(self).unwrap_or_default()
+    }
+}
