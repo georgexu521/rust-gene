@@ -692,7 +692,16 @@ impl TuiApp {
                     .submit_stream_turn_with_agent_mode(user_msg, agent_mode)
                     .await;
 
+                // Create event mirror for durable replay (Phase 2 wire-up)
+                let event_mirror = engine.session_binding().and_then(|(store, sid)| {
+                    crate::session_store::event_mirror::StreamEventMirror::shared(&store, &sid)
+                });
+
                 while let Some(event) = stream.next().await {
+                    // Mirror every event to session_events for replay
+                    if let Some(ref mirror) = event_mirror {
+                        mirror.lock().unwrap().mirror(&event);
+                    }
                     match event {
                         StreamEvent::TextChunk(text) => {
                             let mut resp = response_clone.lock().await;

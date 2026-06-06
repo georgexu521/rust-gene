@@ -665,6 +665,34 @@ pub async fn handle_merge(app: &mut TuiApp, args: &str) -> String {
     )
 }
 
+/// /compact-status — 显示当前压缩状态
+pub async fn handle_compact_status(app: &TuiApp) -> String {
+    let Some(ref engine) = app.streaming_engine else {
+        return "Engine not initialized.".to_string();
+    };
+    let history = engine.get_history().await;
+    let msg_count = history.len();
+
+    if msg_count == 0 {
+        return "No active conversation. Compaction applies when context grows.".to_string();
+    }
+
+    let session_id = app
+        .session_manager
+        .current_session_id()
+        .unwrap_or("unknown");
+
+    format!(
+        "Compact Status\n\
+         Session: {}\n\
+         Messages: {}\n\
+         Use /compact to trigger manual compaction.\n\
+         Use /cost for token and cache diagnostics.",
+        &session_id[..8.min(session_id.len())],
+        msg_count,
+    )
+}
+
 /// /compact - Compact context
 pub async fn handle_compact(app: &mut TuiApp) -> String {
     let Some(ref engine) = app.streaming_engine else {

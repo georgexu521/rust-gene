@@ -980,6 +980,7 @@ impl TuiApp {
             "/merge" => slash::handle_merge(self, args).await,
             "/cleanup" => slash::handle_cleanup(self, args),
             "/compact" => slash::handle_compact(self).await,
+            "/compact-status" => slash::handle_compact_status(self).await,
             "/snippet" => slash::handle_snippet(self, args),
             "/bookmark" => slash::handle_bookmark(self, args).await,
             "/tag" => slash::handle_tag(self, args),

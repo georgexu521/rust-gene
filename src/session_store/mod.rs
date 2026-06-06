@@ -13,6 +13,7 @@ use tracing::info;
 
 mod agent_store;
 mod compact_store;
+pub mod event_mirror;
 mod event_store;
 mod learning_store;
 mod message_ops;
@@ -38,6 +39,11 @@ impl SessionStore {
     /// 安全获取连接（处理 Mutex poison）
     fn conn(&self) -> std::sync::MutexGuard<'_, Connection> {
         self.conn.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// 获取共享连接（用于创建 SessionEventWriter 等）
+    pub fn shared_conn(&self) -> Arc<Mutex<Connection>> {
+        self.conn.clone()
     }
 
     /// 默认会话数据库路径。
