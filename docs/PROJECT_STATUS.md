@@ -7,7 +7,9 @@ Last updated: 2026-06-06
 The implementation from `docs/OPENCODE_AGENT_ENGINE_ALIGNMENT_PLAN_2026-06-06.md`
 has landed. Follow-up hardening on 2026-06-06 fixed usage-ledger rebuild
 idempotency, checkpoint test isolation, `/diagnostic` session snapshots, and
-dynamic-zone counting for user-message injected context.
+dynamic-zone counting for user-message injected context. Provider runtime
+metadata now flows from the request controller into usage ledger entries for
+successful requests with usage.
 
 ### Tool & Permission Hardening (Phase A)
 - 26 tools: explicit ToolOperationKind overrides
@@ -23,6 +25,8 @@ dynamic-zone counting for user-message injected context.
 
 ### Provider & Usage (Phase C)
 - UsageLedgerEntry: 8 runtime fields + SQLite migration
+- Provider family, latency, finish reason, and retry count are populated on
+  successful main-loop provider requests when usage is available
 - Progressive output cap: 8192→4096→2048→1024 for consecutive repairs
 - `/diagnostic`: session snapshot export (run_report.v1) with usage totals,
   changed files, tool rounds, failed tools, provider latency, and validation

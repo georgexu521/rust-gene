@@ -653,12 +653,6 @@ fn query_usage_sqlite_last_miss_reason(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::{Mutex, OnceLock};
-
-    fn env_test_lock() -> std::sync::MutexGuard<'static, ()> {
-        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-        LOCK.get_or_init(|| Mutex::new(())).lock().unwrap()
-    }
 
     #[test]
     fn appends_and_summarizes_jsonl_usage() {
@@ -721,7 +715,7 @@ mod tests {
 
     #[test]
     fn sqlite_projection_syncs_and_queries() {
-        let _guard = env_test_lock();
+        let mut env = crate::test_utils::env_guard::EnvVarGuard::acquire_blocking();
         let dir = std::env::temp_dir().join(format!(
             "priority-agent-usage-sqlite-{}",
             uuid::Uuid::new_v4()
@@ -760,7 +754,7 @@ mod tests {
         append_usage_ledger_entry_at(&jsonl_path, &entry).unwrap();
 
         // Sync to SQLite via JSONL path env override.
-        std::env::set_var(USAGE_LEDGER_ENV, jsonl_path.to_str().unwrap());
+        env.set(USAGE_LEDGER_ENV, jsonl_path.to_str().unwrap());
         sync_usage_to_sqlite(&entry);
         sync_usage_to_sqlite(&entry);
 
@@ -792,19 +786,18 @@ mod tests {
         let empty = query_usage_by_session("nonexistent").unwrap();
         assert_eq!(empty.entries, 0);
 
-        std::env::remove_var(USAGE_LEDGER_ENV);
         let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]
     fn sqlite_projection_query_on_empty_db_returns_empty_summary() {
-        let _guard = env_test_lock();
+        let mut env = crate::test_utils::env_guard::EnvVarGuard::acquire_blocking();
         let dir = std::env::temp_dir().join(format!(
             "priority-agent-usage-empty-sqlite-{}",
             uuid::Uuid::new_v4()
         ));
         let jsonl_path = dir.join("usage.jsonl");
-        std::env::set_var(USAGE_LEDGER_ENV, jsonl_path.to_str().unwrap());
+        env.set(USAGE_LEDGER_ENV, jsonl_path.to_str().unwrap());
 
         let summary = query_usage_by_session("missing-session").unwrap();
         assert_eq!(summary.entries, 0);
@@ -812,7 +805,6 @@ mod tests {
         assert!(summary.by_model.is_empty());
         assert!(summary.last_miss_reason.is_none());
 
-        std::env::remove_var(USAGE_LEDGER_ENV);
         let _ = std::fs::remove_dir_all(dir);
     }
 }

@@ -15,6 +15,18 @@ use std::collections::HashMap;
 use std::time::{Duration, SystemTime};
 pub use usage_ledger::{UsageLedgerEntry, UsageLedgerSummary};
 
+#[derive(Debug, Clone, Default)]
+pub struct ApiUsageMetadata {
+    pub request_id: Option<String>,
+    pub provider: Option<String>,
+    pub latency_ms: Option<u64>,
+    pub time_to_first_token_ms: Option<u64>,
+    pub finish_reason: Option<String>,
+    pub error_kind: Option<String>,
+    pub timeout_kind: Option<String>,
+    pub retry_count: Option<u32>,
+}
+
 /// 成本追踪器
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CostTracker {
@@ -236,6 +248,27 @@ impl CostTracker {
         cached_tokens: Option<u64>,
         cache_shape: Option<crate::engine::cache_stability::CacheDiagnosticShape>,
     ) {
+        self.record_api_call_with_session_cache_shape_and_metadata(
+            session_id,
+            model,
+            prompt_tokens,
+            completion_tokens,
+            cached_tokens,
+            cache_shape,
+            None,
+        );
+    }
+
+    pub fn record_api_call_with_session_cache_shape_and_metadata(
+        &mut self,
+        session_id: Option<&str>,
+        model: &str,
+        prompt_tokens: u64,
+        completion_tokens: u64,
+        cached_tokens: Option<u64>,
+        cache_shape: Option<crate::engine::cache_stability::CacheDiagnosticShape>,
+        metadata: Option<ApiUsageMetadata>,
+    ) {
         self.total_requests += 1;
         let cache_usage =
             crate::engine::cache_stability::prompt_cache_usage(prompt_tokens, cached_tokens);
@@ -313,14 +346,14 @@ impl CostTracker {
             tool_schema_tokens,
             tool_round_count,
             compaction_decision,
-            request_id: None,
-            provider: None,
-            latency_ms: None,
-            time_to_first_token_ms: None,
-            finish_reason: None,
-            error_kind: None,
-            timeout_kind: None,
-            retry_count: None,
+            request_id: metadata.as_ref().and_then(|m| m.request_id.clone()),
+            provider: metadata.as_ref().and_then(|m| m.provider.clone()),
+            latency_ms: metadata.as_ref().and_then(|m| m.latency_ms),
+            time_to_first_token_ms: metadata.as_ref().and_then(|m| m.time_to_first_token_ms),
+            finish_reason: metadata.as_ref().and_then(|m| m.finish_reason.clone()),
+            error_kind: metadata.as_ref().and_then(|m| m.error_kind.clone()),
+            timeout_kind: metadata.as_ref().and_then(|m| m.timeout_kind.clone()),
+            retry_count: metadata.as_ref().and_then(|m| m.retry_count),
         };
         match usage_ledger::append_usage_ledger_entry(&ledger_entry) {
             Ok(()) => usage_ledger::sync_usage_to_sqlite(&ledger_entry),
@@ -1098,6 +1131,53 @@ mod tests {
         assert!(summary.contains("total=1500"));
         assert!(summary.contains("prompt=1000"));
         assert!(summary.contains("completion=500"));
+    }
+
+    #[test]
+    fn api_usage_metadata_is_written_to_usage_ledger() {
+        let mut env = crate::test_utils::env_guard::EnvVarGuard::acquire_blocking();
+        let dir = std::env::temp_dir().join(format!(
+            "priority-agent-cost-metadata-ledger-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let path = dir.join("usage.jsonl");
+        env.set(
+            "PRIORITY_AGENT_USAGE_LEDGER_PATH",
+            path.to_str().unwrap_or_default(),
+        );
+        env.set("PRIORITY_AGENT_TEST_ENABLE_USAGE_LEDGER_WRITES", "1");
+
+        let mut tracker = CostTracker::new();
+        tracker.record_api_call_with_session_cache_shape_and_metadata(
+            Some("session-meta"),
+            "kimi-k2.5",
+            100,
+            25,
+            Some(80),
+            None,
+            Some(ApiUsageMetadata {
+                provider: Some("kimi".to_string()),
+                latency_ms: Some(1234),
+                finish_reason: Some("Stop".to_string()),
+                retry_count: Some(2),
+                ..Default::default()
+            }),
+        );
+
+        let line = std::fs::read_to_string(&path)
+            .unwrap()
+            .lines()
+            .next()
+            .unwrap()
+            .to_string();
+        let entry: usage_ledger::UsageLedgerEntry = serde_json::from_str(&line).unwrap();
+        assert_eq!(entry.session, "session-meta");
+        assert_eq!(entry.provider.as_deref(), Some("kimi"));
+        assert_eq!(entry.latency_ms, Some(1234));
+        assert_eq!(entry.finish_reason.as_deref(), Some("Stop"));
+        assert_eq!(entry.retry_count, Some(2));
+
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]

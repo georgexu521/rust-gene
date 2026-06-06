@@ -16,6 +16,10 @@ use crate::services::api::{ChatRequest, Message, ProviderRetryObserver, Tool, To
 use crate::tools::{ToolRegistry, ToolResult};
 use anyhow::Result;
 use std::collections::{HashMap, HashSet};
+use std::sync::{
+    atomic::{AtomicU32, Ordering},
+    Arc,
+};
 use std::time::Instant;
 use tokio::sync::mpsc;
 use tracing::{debug, warn};
@@ -167,15 +171,18 @@ impl ApiRequestController {
                     .await;
             }
             let request_started_at = Instant::now();
+            let provider_retry_count = Arc::new(AtomicU32::new(0));
             let retry_observer: ProviderRetryObserver = {
                 let trace = context.trace.clone();
                 let tx = context.tx.cloned();
                 let provider_family = provider_family_label.clone();
                 let model = request.model.clone();
                 let request_shape = request_shape_label.clone();
+                let retry_count = provider_retry_count.clone();
                 std::sync::Arc::new(move |notice| {
                     let elapsed_ms = request_started_at.elapsed().as_millis() as u64;
                     let delay_ms = notice.delay.as_millis() as u64;
+                    retry_count.fetch_max(notice.attempt as u32, Ordering::Relaxed);
                     trace.record(TraceEvent::ProviderRequestRetrying {
                         provider_family: provider_family.clone(),
                         model: model.clone(),
@@ -310,6 +317,22 @@ impl ApiRequestController {
                             })
                             .await;
                     }
+                    let retry_count = provider_retry_count.load(Ordering::Relaxed);
+                    context
+                        .conversation
+                        .record_session_step_usage(
+                            step,
+                            Some(crate::cost_tracker::ApiUsageMetadata {
+                                provider: Some(
+                                    provider_capabilities.protocol_family.label().to_string(),
+                                ),
+                                latency_ms: Some(elapsed_ms),
+                                finish_reason: step.finish_reason.clone(),
+                                retry_count: (retry_count > 0).then_some(retry_count),
+                                ..Default::default()
+                            }),
+                        )
+                        .await;
                     Self::record_streaming_tool_shadow(
                         context.trace,
                         context.conversation.tool_registry.as_ref(),
@@ -916,6 +939,7 @@ mod tests {
                 tool_call_repair: None,
                 finish_reason: None,
                 source: super::super::session_processor::SessionStepSource::NonStreaming,
+                cache_shape: None,
             },
             compressed_this_turn: true,
             model: "mock-model".to_string(),

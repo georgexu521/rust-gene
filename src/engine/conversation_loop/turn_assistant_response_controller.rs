@@ -139,6 +139,7 @@ mod tests {
                 tool_call_repair: None,
                 finish_reason: None,
                 source: SessionStepSource::NonStreaming,
+                cache_shape: None,
             },
             compressed_this_turn: false,
             model: "mock-model".to_string(),

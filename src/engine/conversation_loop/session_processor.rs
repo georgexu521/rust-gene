@@ -27,6 +27,7 @@ pub(super) struct SessionStepResult {
     pub(super) tool_call_repair: Option<ToolCallRepairReport>,
     pub(super) finish_reason: Option<String>,
     pub(super) source: SessionStepSource,
+    pub(super) cache_shape: Option<crate::engine::cache_stability::CacheDiagnosticShape>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -45,6 +46,7 @@ impl SessionStepResult {
         tool_call_repair: Option<ToolCallRepairReport>,
         finish_reason: Option<String>,
         source: SessionStepSource,
+        cache_shape: Option<crate::engine::cache_stability::CacheDiagnosticShape>,
     ) -> Self {
         Self {
             assistant_text,
@@ -54,6 +56,7 @@ impl SessionStepResult {
             tool_call_repair,
             finish_reason,
             source,
+            cache_shape,
         }
     }
 }
@@ -110,8 +113,11 @@ fn request_phase_for_output_cap(cap: Option<u32>) -> &'static str {
 impl ConversationLoop {
     #[cfg(test)]
     pub(super) async fn call_api(&self, request: ChatRequest) -> Result<SessionStepResult> {
-        self.call_api_with_timeout(request, llm_request_timeout())
-            .await
+        let step = self
+            .call_api_with_timeout(request, llm_request_timeout())
+            .await?;
+        self.record_session_step_usage(&step, None).await;
+        Ok(step)
     }
 
     pub(super) async fn call_api_with_timeout(
@@ -119,8 +125,9 @@ impl ConversationLoop {
         request: ChatRequest,
         timeout: std::time::Duration,
     ) -> Result<SessionStepResult> {
+        let cache_shape = cache_shape_for_request(&request);
         let response = self
-            .provider_chat_with_tracking(request, "non-streaming chat", timeout)
+            .provider_chat_with_timeout(request, "non-streaming chat", timeout)
             .await?;
 
         let content = strip_hidden_blocks(&response.content);
@@ -136,21 +143,8 @@ impl ConversationLoop {
             tool_call_repair,
             None,
             SessionStepSource::NonStreaming,
+            Some(cache_shape),
         ))
-    }
-
-    async fn provider_chat_with_tracking(
-        &self,
-        request: ChatRequest,
-        purpose: &str,
-        timeout: std::time::Duration,
-    ) -> Result<ChatResponse> {
-        let cache_shape = cache_shape_for_request(&request);
-        let response = self
-            .provider_chat_with_timeout(request, purpose, timeout)
-            .await?;
-        self.record_cost(&response, Some(cache_shape)).await;
-        Ok(response)
     }
 
     async fn provider_chat_with_timeout(
@@ -183,36 +177,41 @@ impl ConversationLoop {
             .with_temperature(0.2)
             .with_output_cap(Some(8192));
         let default_timeout = llm_request_timeout();
-        let response = if let Some(tools) = fallback_tools.clone() {
+        let (response, cache_shape) = if let Some(tools) = fallback_tools.clone() {
+            let request_with_tools = base_request.clone().with_tools(tools);
             match self
-                .provider_chat_with_tracking(
-                    base_request.clone().with_tools(tools),
+                .provider_chat_with_timeout(
+                    request_with_tools.clone(),
                     "non-streaming fallback with tools",
                     default_timeout,
                 )
                 .await
             {
-                Ok(r) => r,
+                Ok(r) => (r, cache_shape_for_request(&request_with_tools)),
                 Err(with_tools_err) => {
                     warn!(
                         "Non-streaming fallback with tools failed: {}. Retrying without tools.",
                         with_tools_err
                     );
-                    self.provider_chat_with_tracking(
-                        base_request,
-                        "non-streaming fallback without tools",
-                        default_timeout,
-                    )
-                    .await?
+                    let response = self
+                        .provider_chat_with_timeout(
+                            base_request.clone(),
+                            "non-streaming fallback without tools",
+                            default_timeout,
+                        )
+                        .await?;
+                    (response, cache_shape_for_request(&base_request))
                 }
             }
         } else {
-            self.provider_chat_with_tracking(
-                base_request,
-                "non-streaming fallback",
-                default_timeout,
-            )
-            .await?
+            let response = self
+                .provider_chat_with_timeout(
+                    base_request.clone(),
+                    "non-streaming fallback",
+                    default_timeout,
+                )
+                .await?;
+            (response, cache_shape_for_request(&base_request))
         };
         emit_usage_event(&response, tx).await;
 
@@ -231,6 +230,7 @@ impl ConversationLoop {
             SessionStepSource::StreamingFallback {
                 reason: reason.to_string(),
             },
+            Some(cache_shape),
         ))
     }
 
@@ -620,10 +620,6 @@ impl ConversationLoop {
                         .await;
                 }
 
-                if let Some(usage) = &stream_usage {
-                    self.record_usage(usage, Some(streaming_cache_shape)).await;
-                }
-
                 Ok(SessionStepResult::new(
                     repaired_content,
                     repaired_tool_calls,
@@ -632,6 +628,7 @@ impl ConversationLoop {
                     repaired_report,
                     finish_reason,
                     SessionStepSource::Streaming,
+                    Some(streaming_cache_shape),
                 ))
             }
             Ok(Err(e)) => {
@@ -673,14 +670,14 @@ impl ConversationLoop {
         }
     }
 
-    /// 记录 API 调用成本
-    async fn record_cost(
+    pub(super) async fn record_session_step_usage(
         &self,
-        response: &ChatResponse,
-        cache_shape: Option<crate::engine::cache_stability::CacheDiagnosticShape>,
+        step: &SessionStepResult,
+        metadata: Option<crate::cost_tracker::ApiUsageMetadata>,
     ) {
-        if let Some(ref usage) = response.usage {
-            self.record_usage(usage, cache_shape).await;
+        if let Some(ref usage) = step.usage {
+            self.record_usage(usage, step.cache_shape.clone(), metadata)
+                .await;
         }
     }
 
@@ -688,15 +685,17 @@ impl ConversationLoop {
         &self,
         usage: &Usage,
         cache_shape: Option<crate::engine::cache_stability::CacheDiagnosticShape>,
+        metadata: Option<crate::cost_tracker::ApiUsageMetadata>,
     ) {
         let mut tracker = self.cost_tracker.lock().await;
-        tracker.record_api_call_with_session_and_cache_shape(
+        tracker.record_api_call_with_session_cache_shape_and_metadata(
             Some(&self.session_id),
             &self.model,
             usage.prompt_tokens as u64,
             usage.completion_tokens as u64,
             usage.cached_tokens.map(|t| t as u64),
             cache_shape,
+            metadata,
         );
     }
 

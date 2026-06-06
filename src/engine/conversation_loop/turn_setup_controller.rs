@@ -194,7 +194,7 @@ mod tests {
         });
 
         assert_eq!(setup.last_user_preview, "运行 cargo test -q");
-        assert!(setup.required_validation_commands.is_empty());
+        assert_eq!(setup.required_validation_commands, vec!["cargo test -q"]);
         assert!(setup.working_dir.is_absolute() || setup.working_dir == PathBuf::from("."));
         let finished = setup.trace.finish(TurnStatus::Completed);
         assert!(finished
