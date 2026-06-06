@@ -80,10 +80,16 @@ pub async fn handle_changes(app: &TuiApp) -> String {
         lines.push("By tool round:".to_string());
         for summary in rounds.iter().rev().take(10) {
             let round = summary.tool_round_id.as_deref().unwrap_or("<single>");
+            let diff_info = if summary.additions > 0 || summary.deletions > 0 {
+                format!(" (+{}/-{})", summary.additions, summary.deletions)
+            } else {
+                String::new()
+            };
             lines.push(format!(
-                "  {} | {} file(s) | {}B | {}",
+                "  {} | {} file(s){} | {}B | {}",
                 round,
                 summary.change_count,
+                diff_info,
                 summary.total_bytes_written,
                 summary
                     .paths
@@ -123,7 +129,7 @@ pub async fn handle_changes(app: &TuiApp) -> String {
     lines.join("\n")
 }
 
-/// /diagnostic - 一键导出诊断包 (run_report.json)
+/// /diagnostic - 一键导出诊断包 (run_report.json + ledger summary)
 pub async fn handle_diagnostic(app: &TuiApp) -> String {
     let session_id = app
         .session_manager
@@ -132,9 +138,24 @@ pub async fn handle_diagnostic(app: &TuiApp) -> String {
 
     let model = app.current_model_label();
     let provider = Some(app.current_provider_label());
-
     let usage = app.stream_usage_snapshot;
-    let changed_files: Vec<String> = Vec::new();
+
+    // Query usage ledger for session totals
+    let ledger_summary =
+        crate::cost_tracker::usage_ledger::summarize_usage_ledger(Some(session_id)).ok();
+
+    let prompt_tokens = ledger_summary
+        .as_ref()
+        .map(|s| s.prompt_tokens)
+        .unwrap_or(usage.map(|u| u.prompt_tokens as u64).unwrap_or(0));
+    let completion_tokens = ledger_summary
+        .as_ref()
+        .map(|s| s.completion_tokens)
+        .unwrap_or(usage.map(|u| u.completion_tokens as u64).unwrap_or(0));
+    let cost_usd = ledger_summary.as_ref().map(|s| s.cost_usd).unwrap_or(0.0);
+    let cache_miss_reason = ledger_summary
+        .as_ref()
+        .and_then(|s| s.last_miss_reason.clone());
 
     let report = crate::engine::evalset::RunReport {
         schema: crate::engine::evalset::RunReport::CURRENT_SCHEMA.to_string(),
@@ -145,19 +166,19 @@ pub async fn handle_diagnostic(app: &TuiApp) -> String {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_millis() as u64,
-        status: "running".to_string(),
+        status: "snapshot".to_string(),
         turns: 0,
         tool_rounds: 0,
-        changed_files,
+        changed_files: Vec::new(),
         verification_proof_status: None,
         evidence_category: None,
         evidence_items: 0,
-        prompt_tokens: usage.map(|u| u.prompt_tokens as u64).unwrap_or(0),
-        completion_tokens: usage.map(|u| u.completion_tokens as u64).unwrap_or(0),
-        cost_usd: 0.0,
+        prompt_tokens,
+        completion_tokens,
+        cost_usd,
         latency_ms: None,
         time_to_first_token_ms: None,
-        cache_miss_reason: None,
+        cache_miss_reason: cache_miss_reason.clone(),
         failure_owner: None,
         failed_tool_names: Vec::new(),
     };
@@ -175,9 +196,21 @@ pub async fn handle_diagnostic(app: &TuiApp) -> String {
     }
     match std::fs::write(&path, &json) {
         Ok(_) => format!(
-            "Diagnostic report exported to: {}\n\nRun status: this is a point-in-time snapshot. \
-             Use after closeout for complete data.",
-            path.display()
+            "Diagnostic report exported to: {}\n\
+             Schema: run_report.v1\n\
+             Session: {}\n\
+             Prompt tokens: {}\n\
+             Completion tokens: {}\n\
+             Cost: ${:.4}\n\
+             Cache miss: {}\n\n\
+             Based on usage ledger data ({} entries).",
+            path.display(),
+            session_id,
+            prompt_tokens,
+            completion_tokens,
+            cost_usd,
+            cache_miss_reason.as_deref().unwrap_or("none"),
+            ledger_summary.map(|s| s.entries).unwrap_or(0),
         ),
         Err(e) => format!("Failed to write diagnostic report: {}", e),
     }

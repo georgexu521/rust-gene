@@ -112,6 +112,12 @@ pub struct FileChangeRoundSummary {
     pub change_count: usize,
     /// Total bytes written across all changes.
     pub total_bytes_written: u64,
+    /// Total lines added across all changes in the round.
+    #[serde(default)]
+    pub additions: usize,
+    /// Total lines deleted across all changes in the round.
+    #[serde(default)]
+    pub deletions: usize,
     /// First mutation timestamp in the round.
     pub first_timestamp: Option<DateTime<Local>>,
     /// Last mutation timestamp in the round.
@@ -799,6 +805,8 @@ impl CheckpointManager {
                         paths: Vec::new(),
                         change_count: 0,
                         total_bytes_written: 0,
+                        additions: 0,
+                        deletions: 0,
                         first_timestamp: None,
                         last_timestamp: None,
                         combined_diff: None,
@@ -815,6 +823,11 @@ impl CheckpointManager {
             push_unique(&mut summary.paths, record.path.clone());
             summary.change_count += 1;
             summary.total_bytes_written += record.bytes_written;
+            if let Some(diff_text) = record.diff.as_deref() {
+                let (a, d) = count_diff_lines(diff_text);
+                summary.additions += a;
+                summary.deletions += d;
+            }
             summary.first_timestamp = Some(
                 summary
                     .first_timestamp
@@ -931,6 +944,25 @@ fn push_unique(values: &mut Vec<String>, value: String) {
     if !values.iter().any(|existing| existing == &value) {
         values.push(value);
     }
+}
+
+/// Count additions and deletions from a unified diff.
+/// Lines starting with '+' (but not '+++') count as additions.
+/// Lines starting with '-' (but not '---') count as deletions.
+fn count_diff_lines(diff: &str) -> (usize, usize) {
+    let mut additions = 0usize;
+    let mut deletions = 0usize;
+    for line in diff.lines() {
+        if line.starts_with("+++") || line.starts_with("---") {
+            continue;
+        }
+        if line.starts_with('+') {
+            additions += 1;
+        } else if line.starts_with('-') {
+            deletions += 1;
+        }
+    }
+    (additions, deletions)
 }
 
 /// 恢复结果
