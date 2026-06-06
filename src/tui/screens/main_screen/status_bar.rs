@@ -1,4 +1,5 @@
 use crate::tui::app::{StatusBarDensity, TuiApp};
+use crate::tui::tool_view::ToolRunStatus;
 use ratatui::{
     layout::{Alignment, Rect},
     style::Style,
@@ -150,6 +151,31 @@ pub fn render_status_bar(f: &mut Frame, app: &TuiApp, area: Rect) {
         }
     }
 
+    // Changed files (from tool runs snapshot)
+    let changed = changed_file_count(app);
+    if changed > 0 {
+        parts.push(Span::styled(
+            format!("changed:{}", changed),
+            Style::default().fg(app.theme.tokens.tone.accent),
+        ));
+    }
+
+    // Validation status (from last completed Write/Edit tool)
+    let validation = last_validation_label(app);
+    if !validation.is_empty() {
+        let color = if validation == "verified" {
+            app.theme.tokens.tone.ok
+        } else if validation == "failed" {
+            app.theme.tokens.tone.err
+        } else {
+            app.theme.tokens.tone.warn
+        };
+        parts.push(Span::styled(
+            format!("validation:{}", validation),
+            Style::default().fg(color),
+        ));
+    }
+
     if runtime.mcp_server_count > 0 {
         parts.push(Span::styled(
             format!(
@@ -225,4 +251,39 @@ pub fn render_status_bar(f: &mut Frame, app: &TuiApp, area: Rect) {
         Paragraph::new(Line::from(spans)).alignment(Alignment::Left),
         area,
     );
+}
+
+/// Count completed file mutation tools from the tool runs snapshot.
+fn changed_file_count(app: &TuiApp) -> usize {
+    app.tool_runs_snapshot
+        .iter()
+        .filter(|run| matches!(run.name.as_str(), "file_write" | "file_edit" | "file_patch"))
+        .count()
+}
+
+/// Derive a validation label from completed tool runs.
+fn last_validation_label(app: &TuiApp) -> String {
+    // Check if any run_tests or bash test commands completed
+    let has_tests = app.tool_runs_snapshot.iter().any(|run| {
+        (run.name == "run_tests" || run.name == "bash")
+            && matches!(run.status, ToolRunStatus::Completed)
+    });
+    let has_edits = app.tool_runs_snapshot.iter().any(|run| {
+        matches!(run.name.as_str(), "file_write" | "file_edit" | "file_patch")
+            && matches!(run.status, ToolRunStatus::Completed)
+    });
+    let has_failures = app
+        .tool_runs_snapshot
+        .iter()
+        .any(|run| matches!(run.status, ToolRunStatus::Failed | ToolRunStatus::TimedOut));
+
+    if has_edits && !has_tests && !has_failures {
+        "pending".to_string()
+    } else if has_tests && !has_failures {
+        "tested".to_string()
+    } else if has_failures {
+        "failed".to_string()
+    } else {
+        String::new()
+    }
 }
