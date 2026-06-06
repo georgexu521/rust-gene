@@ -583,6 +583,19 @@ show_task_summary() {
     echo "  Events: $events_file"
 }
 
+# ── Cleanup stale processes from previous runs ──
+cleanup_stale_processes() {
+    local task_name="$1"
+    # Kill any lingering cargo test/build/run processes that might hold locks
+    if pgrep -f "cargo test" > /dev/null 2>&1; then
+        print_warning "Killing stale cargo processes from previous runs…"
+        pkill -9 -f "cargo test" 2>/dev/null || true
+        pkill -9 -f "cargo run" 2>/dev/null || true
+        pkill -9 -f "cargo build" 2>/dev/null || true
+        sleep 1
+    fi
+}
+
 # Run a single eval task YAML file
 run_task_file() {
     local task_file="$1"
@@ -591,6 +604,9 @@ run_task_file() {
 
     echo ""
     echo -e "${BLUE}═══ Task: $task_name ═══${NC}"
+
+    # Step 0: Cleanup stale processes
+    cleanup_stale_processes "$task_name"
 
     # Step 1: Prepare fixtures
     if ! prepare_task "$task_file"; then

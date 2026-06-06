@@ -1,0 +1,211 @@
+id: rust-cli-scaffold
+title: Scaffold a complete Rust CLI tool with clap, config, and tests
+type: feature
+eval_intent: seeded_code_change
+complexity: high
+risk: medium
+tier: tier-4-integration
+
+repo:
+  fixture: priority-agent
+  base_ref: "HEAD"
+  prepare_commands:
+    - |
+      mkdir -p fixtures/cli_tool/src fixtures/cli_tool/tests
+      
+      # Minimal Cargo.toml skeleton
+      cat > fixtures/cli_tool/Cargo.toml <<'TOML'
+      [package]
+      name = "cli_tool"
+      version = "0.1.0"
+      edition = "2021"
+
+      [dependencies]
+      TOML
+      
+      # Skeleton main.rs
+      cat > fixtures/cli_tool/src/main.rs <<'RUST'
+      fn main() {
+          println!("Hello, cli_tool!");
+      }
+      RUST
+      
+      # Create test fixture
+      cat > fixtures/cli_tool/tests/integration.rs <<'RUST'
+      use std::process::Command;
+
+      fn binary_path() -> String {
+          // Build the binary first (only once per test run)
+          let output = Command::new("cargo")
+              .args(&["build", "--quiet"])
+              .output()
+              .expect("cargo build failed");
+          assert!(output.status.success(), "cargo build failed: {}", String::from_utf8_lossy(&output.stderr));
+          
+          // Binary is in target/debug/cli_tool relative to project root
+          let manifest_dir = std::env!("CARGO_MANIFEST_DIR");
+          format!("{}/target/debug/cli_tool", manifest_dir)
+      }
+
+      fn run_with_env(args: &[&str], home_dir: Option<&std::path::Path>) -> (String, i32) {
+          static BINARY: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+          let bin = BINARY.get_or_init(binary_path);
+          
+          let mut cmd = Command::new(bin);
+          cmd.args(args);
+          if let Some(home) = home_dir {
+              cmd.env("HOME", home);
+          }
+          let output = cmd.output().expect("failed to run cli_tool");
+          let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+          let code = if output.status.success() { 0 } else { 1 };
+          (stdout, code)
+      }
+
+      fn run(args: &[&str]) -> (String, i32) {
+          run_with_env(args, None)
+      }
+
+      #[test]
+      fn test_help_shows_commands() {
+          let (out, code) = run(&["--help"]);
+          assert_eq!(code, 0);
+          assert!(out.contains("init"), "help should mention init command: {}", out);
+          assert!(out.contains("run"), "help should mention run command: {}", out);
+          assert!(out.contains("status"), "help should mention status command: {}", out);
+      }
+
+      #[test]
+      fn test_init_creates_config() {
+          let tmp_dir = std::env::temp_dir().join("cli_tool_test_init");
+          let _ = std::fs::remove_dir_all(&tmp_dir);
+          
+          let (stdout, code) = run_with_env(&["init"], Some(&tmp_dir));
+          assert_eq!(code, 0, "init should succeed: {}", stdout);
+          assert!(stdout.contains("created") || stdout.contains("Created"), "init should report creation: {}", stdout);
+          
+          let config_path = tmp_dir.join(".cli_tool").join("config.toml");
+          assert!(config_path.exists(), "config file should be created at {:?}", config_path);
+      }
+
+      #[test]
+      fn test_run_reads_config() {
+          let tmp_dir = std::env::temp_dir().join("cli_tool_test_run");
+          let _ = std::fs::remove_dir_all(&tmp_dir);
+          
+          // Init first
+          let _ = run_with_env(&["init"], Some(&tmp_dir));
+          
+          // Now run
+          let (stdout, code) = run_with_env(&["run"], Some(&tmp_dir));
+          assert_eq!(code, 0, "run should succeed: {}", stdout);
+          assert!(stdout.contains("running") || stdout.contains("Running"), "run should report: {}", stdout);
+      }
+
+      #[test]
+      fn test_verbose_flag() {
+          let (out, code) = run(&["--verbose", "status"]);
+          assert_eq!(code, 0);
+          assert!(
+              out.contains("debug") || out.contains("verbose") || out.contains("INFO"),
+              "verbose mode should show extra info: {}", out
+          );
+      }
+
+      #[test]
+      fn test_config_path_flag() {
+          let tmp_dir = std::env::temp_dir().join("cli_tool_test_config");
+          let _ = std::fs::remove_dir_all(&tmp_dir);
+          
+          let config_path = tmp_dir.join("myconfig.toml");
+          std::fs::create_dir_all(&tmp_dir).unwrap();
+          std::fs::write(&config_path, "name = \"test\"\n").unwrap();
+          
+          let (stdout, code) = run_with_env(
+              &["--config", config_path.to_str().unwrap(), "status"],
+              None
+          );
+          assert_eq!(code, 0, "status with custom config should succeed: {}", stdout);
+      }
+      RUST
+
+prompt: |
+  Build a complete Rust CLI tool in `fixtures/cli_tool/`.
+
+  The project has a skeleton:
+  - `fixtures/cli_tool/Cargo.toml` — empty dependencies
+  - `fixtures/cli_tool/src/main.rs` — prints "Hello, cli_tool!"
+  - `fixtures/cli_tool/tests/integration.rs` — integration tests
+
+  Your task:
+  1. Update `Cargo.toml`:
+     - Add `clap = { version = "4", features = ["derive"] }` for CLI parsing
+     - Add `serde = { version = "1", features = ["derive"] }` and `toml = "0.8"` for config
+  
+  2. Implement `src/main.rs` with clap derive macros:
+     - Global flags: `--verbose` (-v) for verbose output, `--config <PATH>` for custom config file
+     - Subcommands:
+       - `init` — Create default config at `~/.cli_tool/config.toml`
+       - `run` — Read config and print "Running <name>..." (name from config, default "cli_tool")
+       - `status` — Print config path and name
+     - Use proper error handling (don't unwrap on user input / file operations)
+     - Print helpful error messages (e.g., "Config not found. Run `cli_tool init` first.")
+  
+  3. Config file format (TOML):
+     ```toml
+     name = "my-project"
+     ```
+  
+  4. Verify:
+     - Run `cargo test --test integration` in `fixtures/cli_tool/`
+     - All 5 integration tests should pass
+
+  Start by reading the existing files and tests to understand the expected behavior.
+  Use file_read to inspect, file_edit to change, and bash to run tests.
+
+allowed_tools:
+  - grep
+  - file_read
+  - file_edit
+  - file_write
+  - bash
+  - todo_write
+
+forbidden_tools:
+  - git_push
+  - memory_clear
+
+expected_behavior:
+  - agent should read test file first to understand requirements
+  - add clap derive dependencies and implement CLI
+  - handle errors gracefully (no unwrap on file ops)
+  - run tests to verify
+
+acceptance:
+  required_commands:
+    - "(cd fixtures/cli_tool && cargo test --test integration -q)"
+    - "(cd fixtures/cli_tool && cargo run -q -- --help)"
+  forbidden_commands: []
+  diff_constraints:
+    max_files_changed: 4
+    forbidden_paths:
+      - target/
+      - .git/
+      - Cargo.lock
+  human_review:
+    - Does `--help` show init, run, status subcommands?
+    - Does `init` create config file?
+    - Does `run` read name from config?
+    - Does `--verbose` show extra info?
+    - Does `--config` allow custom config path?
+    - Is error handling graceful (no unwrap on user input)?
+    - Do all 5 integration tests pass?
+
+scoring:
+  success: 0.30
+  test_pass: 0.30
+  cli_completeness: 0.15
+  error_handling: 0.10
+  diff_discipline: 0.05
+  closeout_quality: 0.05
+  config_handling: 0.05
