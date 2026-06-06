@@ -57,25 +57,83 @@ print_progress() {
 
 # ─── Real-time Progress Monitor ───────────────────────────────
 # Watches events.jsonl and prints human-readable progress lines.
-# Runs as a background process; the caller must kill it when done.
+# Usage: monitor_progress <events_file> <task_name> [verbose]
+#   verbose: if non-empty, shows full tool args/results and thinking
 
 monitor_progress() {
     local events_file="$1"
     local task_name="$2"
+    local verbose="${3:-}"
 
-    python3 - "$events_file" "$task_name" <<'PY' &
+    python3 - "$events_file" "$task_name" "$verbose" <<'PY' &
 import json
 import sys
 import time
 import os
+import textwrap
 
-events_file, task_name = sys.argv[1], sys.argv[2]
+events_file, task_name, verbose = sys.argv[1], sys.argv[2], sys.argv[3]
+verbose_mode = bool(verbose and verbose.strip())
 
-# Wait for file to appear
+# ── state ──
+last_pos = 0
+iteration = 0
+max_iterations = 150  # updated from runtime_diagnostic if present
+tool_args_buffer = {}   # id -> accumulated args
+tool_name_map = {}      # id -> name
+current_tool = None
+last_tool_result = None
+total_prompt = 0
+total_completion = 0
+start_time = time.time()
+
+GREEN = '\033[0;32m'
+YELLOW = '\033[1;33m'
+CYAN = '\033[0;36m'
+GRAY = '\033[0;90m'
+RED = '\033[0;31m'
+RESET = '\033[0m'
+
+def fmt(msg, color=""):
+    return f"{color}{msg}{RESET}"
+
+def print_tool_call(name, args_summary):
+    prefix = fmt("  →", CYAN)
+    print(f"{prefix} {fmt(name, YELLOW)} {args_summary}", flush=True)
+
+def print_tool_result(success, preview):
+    icon = fmt("✓", GREEN) if success else fmt("✗", RED)
+    # Truncate preview to ~200 chars for normal, 500 for verbose
+    limit = 500 if verbose_mode else 200
+    if len(preview) > limit:
+        preview = preview[:limit] + " …"
+    lines = preview.split('\n')
+    if len(lines) > 3 and not verbose_mode:
+        preview = '\n'.join(lines[:3]) + "\n…"
+    print(f"    {icon} {preview}", flush=True)
+
+def print_iteration(it, max_it):
+    pct = int(100 * it / max_it) if max_it else 0
+    bar_len = 20
+    filled = int(bar_len * it / max_it) if max_it else 0
+    bar = '█' * filled + '░' * (bar_len - filled)
+    print(f"  {fmt('[' + bar + ']', GRAY)} {fmt(str(it) + '/' + str(max_it), CYAN)} ({pct}%)  iteration", flush=True)
+
+def print_thinking(text):
+    # Show a compact indicator that LLM is thinking
+    text = text.strip()
+    if not text:
+        return
+    # Only show first line, truncated
+    first_line = text.split('\n')[0][:80]
+    print(f"  {fmt('💭', GRAY)} {fmt(first_line, GRAY)}", flush=True)
+
+def print_usage():
+    print(f"  {fmt('Tokens:', GRAY)} prompt={total_prompt} completion={total_completion} total={total_prompt+total_completion}", flush=True)
+
+# Wait for file
 while not os.path.exists(events_file):
     time.sleep(0.5)
-
-last_pos = 0
 
 while True:
     try:
@@ -98,38 +156,176 @@ while True:
 
                 ev = event.get("event", "")
 
+                # ── lifecycle ──
                 if ev == "start":
-                    print(f"\n  [monitor] Agent started: {task_name}", flush=True)
+                    print(f"\n{fmt('═' * 50, CYAN)}")
+                    print(f"  {fmt('▶ Agent started:', CYAN)} {task_name}")
+                    print(f"{fmt('═' * 50, CYAN)}")
 
+                elif ev == "complete":
+                    elapsed = int(time.time() - start_time)
+                    print(f"\n  {fmt('■ Agent complete', GREEN)}  ({elapsed}s elapsed)")
+                    print(f"{fmt('═' * 50, CYAN)}\n")
+
+                elif ev == "error":
+                    msg = event.get("message", "unknown error")
+                    print(f"\n  {fmt('✗ Error:', RED)} {msg}\n")
+
+                # ── iteration / model roundtrip ──
+                elif ev == "runtime_diagnostic":
+                    diag = event.get("diagnostic", {})
+                    stage = diag.get("stage", "")
+
+                    if stage == "conversation_loop_starting":
+                        timeout = diag.get("timeout_secs", "?")
+                        print(f"\n  {fmt('⏱  Timeout:', YELLOW)} {timeout}s")
+
+                    elif stage == "api_request_started":
+                        it = diag.get("iteration", 0)
+                        if it and it != iteration:
+                            iteration = it
+                            print_iteration(iteration, max_iterations)
+                        model = diag.get("model", "")
+                        tools = diag.get("tools", "")
+                        streaming = "stream" if diag.get("streaming") else "batch"
+                        shape = diag.get("request_shape", "")
+                        print(f"    {fmt('⟳', CYAN)} LLM request  model={model}  tools={tools}  {streaming}  {shape}")
+
+                    elif stage == "provider_request_completed":
+                        ms = diag.get("elapsed_ms", "?")
+                        success = "ok" if diag.get("success") else "FAIL"
+                        print(f"    {fmt('↳', CYAN)} Response     {ms}ms  [{success}]")
+
+                    elif stage == "messages_built":
+                        count = diag.get("messages", "?")
+                        print(f"    {fmt('📨', GRAY)} Messages built: {count}")
+
+                    elif stage == "preflight_compression_checked":
+                        print(f"    {fmt('🗜', GRAY)} Compression checked")
+
+                    elif verbose_mode:
+                        # In verbose, show all other diagnostics
+                        print(f"    {fmt('🔧', GRAY)} diag: {stage}")
+
+                # ── tool calls (arguments streaming in) ──
+                elif ev == "tool_call_start":
+                    tid = event.get("id", "")
+                    name = event.get("name", "unknown")
+                    tool_name_map[tid] = name
+                    tool_args_buffer[tid] = ""
+                    current_tool = name
+
+                elif ev == "tool_call_args":
+                    tid = event.get("id", "")
+                    delta = event.get("args_delta", "")
+                    if tid in tool_args_buffer:
+                        tool_args_buffer[tid] += delta
+
+                elif ev == "tool_call_complete":
+                    tid = event.get("id", "")
+                    name = tool_name_map.get(tid, current_tool or "unknown")
+                    args = tool_args_buffer.get(tid, "")
+                    # Pretty-print args if valid JSON
+                    args_summary = ""
+                    if args:
+                        try:
+                            a = json.loads(args)
+                            if isinstance(a, dict):
+                                # Show key=value pairs, compact
+                                pairs = []
+                                for k, v in a.items():
+                                    sv = str(v)
+                                    if len(sv) > 60:
+                                        sv = sv[:57] + "…"
+                                    pairs.append(f"{k}={sv}")
+                                args_summary = "  ".join(pairs)
+                            else:
+                                args_summary = str(a)[:80]
+                        except json.JSONDecodeError:
+                            args_summary = args[:80]
+                    if args_summary:
+                        print_tool_call(name, args_summary)
+                    else:
+                        print_tool_call(name, "")
+                    # Clean up
+                    tool_args_buffer.pop(tid, None)
+                    tool_name_map.pop(tid, None)
+
+                # ── tool execution ──
                 elif ev == "tool_execution_start":
                     meta = event.get("metadata", {})
                     tool = meta.get("tool", event.get("name", "unknown"))
                     path = meta.get("path", "")
-                    desc = meta.get("activity_description", "")
                     if path:
-                        print(f"  [monitor] → {tool}: {path}", flush=True)
-                    elif desc:
-                        print(f"  [monitor] → {tool}: {desc}", flush=True)
+                        print(f"    {fmt('▸', GRAY)} exec: {tool}  path={path}")
+
+                elif ev == "tool_execution_progress":
+                    prog = event.get("progress", "")
+                    if prog and verbose_mode:
+                        print(f"    {fmt('…', GRAY)} {prog}")
+
+                elif ev == "tool_execution_complete":
+                    meta = event.get("metadata", {})
+                    success = meta.get("success", True)
+                    preview = event.get("result_preview", "")
+                    chars = event.get("result_chars", 0)
+                    if preview:
+                        print_tool_result(success, preview)
+                    elif chars:
+                        print(f"    {fmt('✓', GREEN) if success else fmt('✗', RED)}  ({chars} chars)")
                     else:
-                        print(f"  [monitor] → {tool}", flush=True)
+                        print(f"    {fmt('✓', GREEN) if success else fmt('✗', RED)}")
 
-                elif ev == "runtime_diagnostic":
-                    diag = event.get("diagnostic", {})
-                    stage = diag.get("stage", "")
-                    if stage == "api_request_started":
-                        it = diag.get("iteration", "?")
-                        model = diag.get("model", "")
-                        print(f"  [monitor] [{it}] LLM request → {model}", flush=True)
-                    elif stage == "provider_request_completed":
-                        ms = diag.get("elapsed_ms", "?")
-                        print(f"  [monitor]     Response ← ({ms}ms)", flush=True)
+                # ── thinking ──
+                elif ev == "thinking_start":
+                    if verbose_mode:
+                        print(f"  {fmt('🧠', GRAY)} Thinking…")
 
-                elif ev == "end":
-                    print(f"  [monitor] Agent finished\n", flush=True)
+                elif ev == "thinking_chunk":
+                    # Actual thinking text is not in the event (only char count)
+                    # In verbose mode we at least acknowledge it
+                    if verbose_mode:
+                        chars = event.get("chars", 0)
+                        print(f"    {fmt('·', GRAY)} {chars} chars of reasoning")
+
+                elif ev == "thinking_complete":
+                    if verbose_mode:
+                        print(f"  {fmt('✓', GRAY)} Thinking complete")
+
+                # ── usage ──
+                elif ev == "usage":
+                    pt = event.get("prompt_tokens", 0) or 0
+                    ct = event.get("completion_tokens", 0) or 0
+                    rt = event.get("reasoning_tokens", 0) or 0
+                    if pt:
+                        total_prompt += pt
+                    if ct:
+                        total_completion += ct
+                    if verbose_mode and (pt or ct):
+                        print(f"    {fmt('📊', GRAY)} usage  prompt={pt}  completion={ct}  reasoning={rt}")
+
+                # ── closeout ──
+                elif ev == "closeout":
+                    status = event.get("status", "?")
+                    ev_sum = event.get("evidence_summary", "")
+                    color = GREEN if status == "completed" else (RED if status == "failed" else YELLOW)
+                    print(f"\n  {fmt('📝 Closeout:', color)} {status}")
+                    if ev_sum and verbose_mode:
+                        for line in textwrap.wrap(ev_sum, width=70):
+                            print(f"      {fmt(line, GRAY)}")
+
+                # ── text output ──
+                elif ev == "text_chunk":
+                    if verbose_mode:
+                        chars = event.get("chars", 0)
+                        print(f"    {fmt('📝', GRAY)} text +{chars} chars")
+
+                elif ev == "output_truncated":
+                    print(f"  {fmt('⚠ Output truncated', YELLOW)}")
 
             last_pos = f.tell()
 
-    time.sleep(1)
+    time.sleep(0.5)
 PY
 }
 
@@ -450,7 +646,7 @@ run_task_file() {
     # Step 7: Start real-time progress monitor
     local monitor_pid=""
     if [ "${EVAL_RUN_MONITOR:-1}" != "0" ]; then
-        monitor_progress "$events_file" "$task_name" &
+        monitor_progress "$events_file" "$task_name" "${VERBOSE:-}" &
         monitor_pid=$!
     fi
 
@@ -762,7 +958,7 @@ show_help() {
 Priority Agent Eval Runner
 
 Usage:
-  ./scripts/eval-run.sh [COMMAND] [OPTIONS]
+  ./scripts/eval-run.sh [OPTIONS] [COMMAND]
 
 Commands:
   tier-1      Run tier-1 foundation tasks (alias: tier-1-foundations)
@@ -774,24 +970,53 @@ Commands:
   list        List all available tasks
   help        Show this help
 
+Options:
+  -v, --verbose    Show detailed tool arguments, results, and reasoning
+
 Examples:
-  ./scripts/eval-run.sh tier-1          # Quick sanity check (~5 min)
-  ./scripts/eval-run.sh tier-2          # Single-file changes (~10 min)
-  ./scripts/eval-run.sh all             # Full suite (~1 hour)
+  ./scripts/eval-run.sh tier-1              # Quick sanity check (~5 min)
+  ./scripts/eval-run.sh -v tier-4           # Verbose monitoring for tier-4
+  ./scripts/eval-run.sh --verbose all       # Full suite with full detail
 
 Environment:
   PRIORITY_AGENT_EVAL_ALLOW_MUTATIONS=1  Auto-approve mutating tools.
                                          Defaults to 1 only for seeded_code_change tasks.
   PRIORITY_AGENT_AUTO_APPROVE=1          Auto-approve ask_user tool.
   PRIORITY_AGENT_ROUTE_SCOPED_TOOLS=0    Optional override; not set by this runner.
+  EVAL_RUN_MONITOR=0                     Disable real-time progress monitor.
 
 EOF
 }
 
+# ── Argument parsing ──
+VERBOSE=""
+COMMAND=""
+
+for arg in "$@"; do
+    case "$arg" in
+        -v|--verbose)
+            VERBOSE=1
+            ;;
+        -h|--help|help)
+            show_help
+            exit 0
+            ;;
+        tier-*|all|list)
+            COMMAND="$arg"
+            ;;
+    esac
+done
+
+# Default to help if no command given
+if [ -z "$COMMAND" ]; then
+    show_help
+    exit 0
+fi
+
 # Main
 print_header
 
-case "${1:-help}" in
+case "$COMMAND" in
     tier-1|tier-1-foundations)
         run_tier "tier-1-foundations"
         ;;
