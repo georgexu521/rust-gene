@@ -156,7 +156,7 @@ impl ToolResultNormalizer {
         tool_call: &ToolCall,
         result: &mut ToolResult,
     ) -> NormalizedToolResult {
-        truncate_tool_result(result, &tool_call.name, &tool_call.id).await;
+        truncate_tool_result(result, &tool_call.name, &tool_call.id, None).await;
         Self::attach_observation_metadata(tool_call, result);
         Self::normalize(tool_call, result)
     }

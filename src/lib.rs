@@ -43,6 +43,7 @@ pub mod team;
 pub mod telemetry;
 #[cfg(test)]
 pub mod test_utils;
+pub mod tool_output_store;
 pub mod tools;
 pub mod tui;
 pub mod version;

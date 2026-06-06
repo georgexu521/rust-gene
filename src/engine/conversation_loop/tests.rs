@@ -82,7 +82,7 @@ fn recall_off_keeps_static_memory_snapshot_available() {
 #[tokio::test]
 async fn test_truncate_tool_result_handles_utf8_boundaries() {
     let mut result = ToolResult::success("中".repeat(20_000));
-    truncate_tool_result(&mut result, "grep", "call_utf8").await;
+    truncate_tool_result(&mut result, "grep", "call_utf8", None).await;
     assert!(result.content.contains("Output truncated"));
 }
 
@@ -332,7 +332,7 @@ fn test_visible_text_sanitizer_preserves_utf8_chunks_without_panicking() {
 async fn test_truncate_tool_result_keeps_small_output_unchanged() {
     let original = "short output".to_string();
     let mut result = ToolResult::success(original.clone());
-    truncate_tool_result(&mut result, "grep", "call_small").await;
+    truncate_tool_result(&mut result, "grep", "call_small", None).await;
     assert_eq!(result.content, original);
 }
 
@@ -344,7 +344,7 @@ async fn test_truncate_tool_result_includes_head_and_tail_markers() {
         "中".repeat(8_000),
         "Z".repeat(40_000)
     ));
-    truncate_tool_result(&mut result, "grep", "call_markers").await;
+    truncate_tool_result(&mut result, "grep", "call_markers", None).await;
     assert!(result.content.contains("--- First"));
     assert!(result.content.contains("--- Last"));
     assert!(result.content.contains("Output truncated"));

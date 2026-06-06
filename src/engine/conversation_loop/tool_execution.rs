@@ -36,6 +36,7 @@ pub(crate) fn force_serial_tool_dispatch() -> bool {
 pub(crate) const TOOL_RESULT_TRUNCATE_THRESHOLD: usize = 32 * 1024; // 32 KiB
 
 /// 工具结果磁盘缓存目录
+#[allow(dead_code)]
 pub(crate) fn tool_result_cache_dir() -> std::path::PathBuf {
     dirs::data_local_dir()
         .unwrap_or_else(|| std::path::PathBuf::from("."))
@@ -103,6 +104,7 @@ pub(crate) fn shrink_tool_result_by_tokens(content: &str, max_tokens: usize) -> 
     format!("{head}\n\n... [truncated ~{skipped} chars, ~{max_tokens} token budget] ...\n\n{tail}")
 }
 
+#[allow(dead_code)]
 const HIGH_SIGNAL_TOOL_RESULT_TERMS: &[&str] = &[
     "assess_memory_candidate",
     "memorywriteoutcome",
@@ -122,6 +124,7 @@ const HIGH_SIGNAL_TOOL_RESULT_TERMS: &[&str] = &[
     "error:",
 ];
 
+#[allow(dead_code)]
 fn high_signal_tool_result_snippets(content: &str, max_bytes: usize) -> String {
     let lines: Vec<&str> = content.lines().collect();
     if lines.is_empty() || max_bytes == 0 {
@@ -159,6 +162,7 @@ fn high_signal_tool_result_snippets(content: &str, max_bytes: usize) -> String {
     out
 }
 
+#[allow(dead_code)]
 fn high_signal_term_match(line: &str) -> Option<(&'static str, usize)> {
     let lower = line.to_lowercase();
     HIGH_SIGNAL_TOOL_RESULT_TERMS
@@ -166,6 +170,7 @@ fn high_signal_term_match(line: &str) -> Option<(&'static str, usize)> {
         .find_map(|term| lower.find(term).map(|idx| (*term, idx)))
 }
 
+#[allow(dead_code)]
 fn format_high_signal_context_line(line: &str) -> String {
     const CONTEXT_LINE_LIMIT: usize = 320;
     const SIGNAL_LINE_LIMIT: usize = 900;
@@ -193,69 +198,52 @@ fn format_high_signal_context_line(line: &str) -> String {
     format!("{}...", safe_prefix_by_bytes(line, CONTEXT_LINE_LIMIT))
 }
 
-/// 截断工具结果，如果超过阈值则写入磁盘
+/// 截断工具结果，如果超过阈值则写入 ToolOutputStore
 pub(crate) async fn truncate_tool_result(
     result: &mut ToolResult,
     tool_name: &str,
     tool_call_id: &str,
+    session_id: Option<&str>,
 ) {
     if result.content.len() > TOOL_RESULT_TRUNCATE_THRESHOLD {
-        let cache_dir = tool_result_cache_dir();
-        let _ = tokio::fs::create_dir_all(&cache_dir).await;
+        let store = crate::tool_output_store::ToolOutputStore::new();
+        let _ = tokio::fs::create_dir_all(store.base_dir()).await;
 
-        // Sanitize filename to prevent path traversal
-        let safe_tool_name: String = tool_name
-            .chars()
-            .filter(|c| c.is_alphanumeric() || *c == '_' || *c == '-')
-            .collect();
-        let safe_call_id: String = tool_call_id
-            .chars()
-            .filter(|c| c.is_alphanumeric() || *c == '_' || *c == '-')
-            .take(32)
-            .collect();
-
-        let filename = format!(
-            "{}_{}_{}.txt",
-            safe_tool_name,
-            safe_call_id,
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_millis()
-        );
-        let file_path = cache_dir.join(&filename);
-
-        if tokio::fs::write(&file_path, &result.content).await.is_ok() {
-            let original = result.content.clone();
-            let original_len = original.len();
-            let target_half_bytes = 2048.min(original_len / 2);
-            let first = safe_prefix_by_bytes(&original, target_half_bytes);
-            let last = safe_suffix_by_bytes(&original, target_half_bytes);
-            let relevant = high_signal_tool_result_snippets(&original, 4096);
-            let relevant_section = if relevant.trim().is_empty() {
-                String::new()
-            } else {
-                format!("\n\n--- Relevant snippets ---\n{}", relevant)
-            };
-            result.content = format!(
-                "[Output truncated: {} bytes; full result stored in runtime metadata]\n\n--- First {} bytes ---\n{}\n\n--- Last {} bytes ---\n{}{}",
-                original_len,
-                first.len(),
-                first,
-                last.len(),
-                last,
-                relevant_section
-            );
-            merge_tool_result_data(
-                result,
-                "output_truncation",
-                serde_json::json!({
-                    "original_bytes": original_len,
-                    "preview_bytes": result.content.len(),
-                    "threshold_bytes": TOOL_RESULT_TRUNCATE_THRESHOLD,
-                    "stored_path": file_path.display().to_string(),
-                }),
-            );
+        let sid = session_id.unwrap_or("unknown");
+        match store
+            .truncate_or_store(sid, tool_call_id, tool_name, &result.content, "text/plain")
+            .await
+        {
+            Ok(Some(meta)) => {
+                let original_len = result.content.len();
+                let preview =
+                    crate::tool_output_store::build_result_preview(&result.content, &meta);
+                result.content = preview;
+                merge_tool_result_data(
+                    result,
+                    "output_truncation",
+                    serde_json::json!({
+                        "original_bytes": original_len,
+                        "preview_bytes": result.content.len(),
+                        "threshold_bytes": TOOL_RESULT_TRUNCATE_THRESHOLD,
+                        "output_uri": meta.uri(),
+                        "tool_output_id": meta.id,
+                    }),
+                );
+            }
+            Ok(None) => {} // output was within threshold, already cleared by check above
+            Err(e) => {
+                tracing::warn!("failed to store tool output: {e}");
+                // Fall back to simple truncation without URI
+                let original = result.content.clone();
+                let original_len = original.len();
+                let half = 2048.min(original_len / 2);
+                let first = safe_prefix_by_bytes(&original, half);
+                let last = safe_suffix_by_bytes(&original, half);
+                result.content = format!(
+                    "[Output truncated: {original_len} bytes]\n--- First {half} bytes ---\n{first}\n\n--- Last {half} bytes ---\n{last}"
+                );
+            }
         }
     }
 }
@@ -408,14 +396,14 @@ mod tests {
     #[tokio::test]
     async fn test_truncate_tool_result_small_output() {
         let mut result = ToolResult::success("short output");
-        truncate_tool_result(&mut result, "grep", "call_small").await;
+        truncate_tool_result(&mut result, "grep", "call_small", None).await;
         assert_eq!(result.content, "short output");
     }
 
     #[tokio::test]
     async fn test_truncate_tool_result_large_output() {
         let mut result = ToolResult::success("A".repeat(40_000));
-        truncate_tool_result(&mut result, "grep", "call_large").await;
+        truncate_tool_result(&mut result, "grep", "call_large", None).await;
         assert!(result.content.contains("Output truncated"));
         assert!(!result.content.contains("tool-results"));
         assert!(result.content.contains("--- First"));
@@ -430,7 +418,7 @@ mod tests {
             "B".repeat(20_000)
         );
         let mut result = ToolResult::success(content);
-        truncate_tool_result(&mut result, "file_read", "call_signal").await;
+        truncate_tool_result(&mut result, "file_read", "call_signal", None).await;
         assert!(result.content.contains("--- Relevant snippets ---"));
         assert!(result.content.contains("assess_memory_candidate"));
     }
@@ -438,7 +426,7 @@ mod tests {
     #[tokio::test]
     async fn test_truncate_tool_result_utf8_boundaries() {
         let mut result = ToolResult::success("中".repeat(20_000));
-        truncate_tool_result(&mut result, "grep", "call_utf8").await;
+        truncate_tool_result(&mut result, "grep", "call_utf8", None).await;
         assert!(result.content.contains("Output truncated"));
     }
 }
