@@ -162,6 +162,8 @@ pub struct TuiApp {
     pub focus_mode: bool,
     /// 状态栏信息密度
     pub status_bar_density: StatusBarDensity,
+    /// Session run coordinator (Phase 4)
+    pub run_coordinator: crate::engine::run_coordinator::SessionRunCoordinator,
     /// 命令注册表
     command_registry: CommandRegistry,
     /// 滚动位置
@@ -399,6 +401,7 @@ impl TuiApp {
             paused: false,
             focus_mode: false,
             status_bar_density: StatusBarDensity::Normal,
+            run_coordinator: crate::engine::run_coordinator::SessionRunCoordinator::new(),
             command_registry: default_command_registry(),
             scroll_offset: 0,
             pinned_to_bottom: true,
@@ -623,6 +626,13 @@ impl TuiApp {
         }
 
         // 标记正在查询
+        if !self.run_coordinator.start_run() {
+            self.add_system_message(
+                "A run is already active. Wait for it to complete or press Esc to cancel."
+                    .to_string(),
+            );
+            return;
+        }
         self.is_querying = true;
         self.stream_started_at = Some(std::time::Instant::now());
 
@@ -921,6 +931,7 @@ impl TuiApp {
                 // 流式响应完成，发送终端通知
                 crate::tui::notify::send_notification("Priority Agent", "Response ready");
                 self.is_querying = false;
+                self.run_coordinator.finish_run();
                 self.runtime_facade_state.set_querying(false).await;
                 self.stream_started_at = None;
                 self.current_tool_anchor_id = None;

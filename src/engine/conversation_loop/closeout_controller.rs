@@ -414,7 +414,7 @@ impl FinalCloseoutController {
             ));
         }
 
-        if let Some(closeout) = closeout {
+        if let Some(mut closeout) = closeout {
             let evidence_snapshot = context.evidence_ledger.snapshot();
             let stop_record = context.task_bundle.agent_state.stop_checks.last();
             let terminal_status = context
@@ -465,6 +465,34 @@ impl FinalCloseoutController {
                 acceptance_items: closeout.acceptance.len(),
                 residual_risks: closeout.residual_risks.len(),
             });
+
+            // Settlement gap check: if tools were invoked in a programming workflow
+            // but verification is incomplete, surface the settlement risk.
+            if closeout.changed_files.is_empty()
+                && evidence_snapshot.tool_execution_records > 1
+                && !context.required_validation_commands.is_empty()
+                && closeout.status != StageValidationStatus::Failed
+            {
+                closeout.status = StageValidationStatus::NotVerified;
+                let gap_msg = format!(
+                    "settlement_gap: {} tool record(s) without file changes or validation proof",
+                    evidence_snapshot.tool_execution_records
+                );
+                if !closeout
+                    .residual_risks
+                    .iter()
+                    .any(|r| r.contains("settlement_gap"))
+                {
+                    closeout.residual_risks.push(gap_msg);
+                }
+                context
+                    .trace
+                    .record(TraceEvent::WorkflowFallback {
+                        error: "settlement_gap: tools executed but no file changes or validation proof produced"
+                            .to_string(),
+                    });
+            }
+
             if let Some(tx) = context.tx {
                 let _ = tx
                     .send(super::super::streaming::StreamEvent::Closeout {

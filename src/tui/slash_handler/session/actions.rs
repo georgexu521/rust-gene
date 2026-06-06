@@ -682,15 +682,57 @@ pub async fn handle_compact_status(app: &TuiApp) -> String {
         .current_session_id()
         .unwrap_or("unknown");
 
-    format!(
-        "Compact Status\n\
-         Session: {}\n\
-         Messages: {}\n\
-         Use /compact to trigger manual compaction.\n\
-         Use /cost for token and cache diagnostics.",
-        &session_id[..8.min(session_id.len())],
-        msg_count,
-    )
+    // Check compact boundaries from session store (v7 migration)
+    let boundary_info = engine.session_binding().and_then(|(store, _)| {
+        let conn = store.shared_conn();
+        let conn = conn.lock().unwrap();
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM compact_boundaries WHERE session_id = ?1",
+                [&session_id],
+                |row| row.get(0),
+            )
+            .unwrap_or(0);
+        let last_strategy: Option<String> = conn
+            .query_row(
+                "SELECT strategy FROM compact_boundaries WHERE session_id = ?1 ORDER BY id DESC LIMIT 1",
+                [&session_id],
+                |row| row.get(0),
+            )
+            .ok();
+        let last_trigger: Option<String> = conn
+            .query_row(
+                "SELECT trigger FROM compact_boundaries WHERE session_id = ?1 ORDER BY id DESC LIMIT 1",
+                [&session_id],
+                |row| row.get(0),
+            )
+            .ok();
+        Some((count, last_strategy, last_trigger))
+    });
+
+    let mut lines = vec![
+        "Compact Status".to_string(),
+        format!("Session: {}", &session_id[..8.min(session_id.len())]),
+        format!("Messages: {}", msg_count),
+    ];
+
+    if let Some((count, strategy, trigger)) = boundary_info {
+        lines.push(format!("Compact boundaries: {}", count));
+        if count > 0 {
+            lines.push(format!(
+                "Last compaction: strategy={}, trigger={}",
+                strategy.as_deref().unwrap_or("unknown"),
+                trigger.as_deref().unwrap_or("unknown"),
+            ));
+        }
+    } else {
+        lines.push("Compact boundaries: unavailable".to_string());
+    }
+
+    lines.push(String::new());
+    lines.push("Use /compact to trigger manual compaction.".to_string());
+    lines.push("Use /cost for token and cache diagnostics.".to_string());
+    lines.join("\n")
 }
 
 /// /compact - Compact context
