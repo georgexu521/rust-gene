@@ -2,39 +2,43 @@
 
 Last updated: 2026-06-06
 
-## Opencode Alignment — Complete Summary
+## Opencode Alignment — Complete
 
-### Round 1 (Phases A-E)
-- ToolKind/ToolFamily hardening (26 tools + consistency test)
-- FileMutationResult `formatted` field
-- TUI permission diff (5 edit tools + bash mutation warnings)
-- `/permissions explain` match keys + matched rules
-- `/cost` cache diagnostic with zone tiers
-- `/changes` per-round file changes
-- Usage ledger 8 new fields + SQLite migration
-- DynamicZoneTier 3-level (stable/last-user/repair-only)
-- EvidenceCategory 4-category (tool/validation/diagnostic/user)
-- Route tool allowlists reorganized
-- FailureOwner::category() (Framework/ProviderModel/Harness/Environment)
-- RunReport schema + /diagnostic export
-- fixtures/TASK_MATRIX.md
+All phases from `docs/OPENCODE_AGENT_ENGINE_ALIGNMENT_PLAN_2026-06-06.md` are done.
 
-### Round 2
-- Bash write risk gate (WorkflowFallback trace when bash is sole mutation path)
+### Tool & Permission Hardening (Phase A)
+- 26 tools: explicit ToolOperationKind overrides
+- `test_all_tools_have_correct_tool_family`: full registry semantic check
+- FileMutationResult `formatted` field + consistency tests
+- TUI permission diff: file_patch/format + bash mutation warnings
+- `/permissions explain`: match keys + matched rules (pattern+source)
 
-### Round 3
-- Progressive output cap: 8192→4096→2048→1024 for consecutive repair turns
-- `/memory status/review/files` productized (review shows decisions/flushes/conflicts)
-- `/validate` command (validation summary with file changes and tool rounds)
+### TUI Daily Ops (Phase B)
+- `/cost`: cache diagnostic with DynamicZoneTier breakdown
+- `/changes`: per-round file changes with (+adds/-dels)
+- `/validate`: validation summary with file changes and tool rounds
 
-### Deferred
-- TUI tool cards ToolKind/ToolFamily rendering
-- TUI permission panel zoned display
-- Changed files + validation in status bar (needs state plumbing)
-- Diagnostics → TUI panel
-- Full diagnostic export package (trace+session+db+log)
-- /cost fully from ledger
-- Turn-level additions/deletions from diffs
+### Provider & Usage (Phase C)
+- UsageLedgerEntry: 8 runtime fields + SQLite migration
+- Progressive output cap: 8192→4096→2048→1024 for consecutive repairs
+- `/diagnostic`: ledger-based session totals export (run_report.v1)
+
+### Cache & Evidence (Phase D)
+- DynamicZoneTier: stable-prefix/last-user/repair-only classification
+- EvidenceCategory: tool/validation/diagnostic/user
+- CacheMissReason detail includes dynamic zone breakdown
+
+### Test Infra & Docs (Phase E)
+- RunReport schema (run_report.v1) + /diagnostic export
+- FailureOwner::category() → Framework/ProviderModel/Harness/Environment
+- Route narrowing: CodeChange/BugFix file tools prioritized
+- Bash write risk gate: WorkflowFallback trace on bash-only mutations
+- `/memory status/review/files` productized
+- TUI tool cards with [Edit]/[Shell]/[Read]/[Search]/[Task] labels
+- Permission approval panel: 4-zone display
+- Turn-level additions/deletions from stored diffs
+- `fixtures/TASK_MATRIX.md` + `docs/CONTROLLER_INDEX.md` (52 controllers)
+- Desktop + TUI share same RuntimeFacade
 
 ### Gates
 2288 passed, 2 pre-existing failures, 0 new regressions.
