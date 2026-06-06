@@ -19,7 +19,10 @@ impl Tool for RunTestsTool {
     }
 
     fn description(&self) -> &str {
-        "Run a safe validation command such as cargo test/check/clippy, pytest, npm test, go test, py_compile, bash -n, or known local assertion scripts. Rejects mutation, install, network, interactive, and arbitrary shell commands."
+        "Run a safe validation command; prefer this over bash for user-requested \
+         tests/checks. Supports cargo test/check/clippy, pytest, npm test, go \
+         test, py_compile, bash -n, and known local assertion scripts. Rejects \
+         mutation, install, network, interactive, and arbitrary shell commands."
     }
 
     fn parameters(&self) -> serde_json::Value {
@@ -298,6 +301,14 @@ mod tests {
             memory_manager: None,
             read_tracker: None,
         }
+    }
+
+    #[test]
+    fn run_tests_contract_prefers_user_requested_validation() {
+        let tool = RunTestsTool;
+        assert!(tool.description().contains("prefer this over bash"));
+        assert!(tool.description().contains("user-requested"));
+        assert!(tool.description().contains("Rejects mutation"));
     }
 
     #[tokio::test]

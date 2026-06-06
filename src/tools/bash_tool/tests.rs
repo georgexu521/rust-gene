@@ -8,6 +8,12 @@ fn bash_tool_contract_keeps_output_non_user_facing() {
     assert!(tool.description().contains("shell-only"));
     assert!(tool
         .description()
+        .contains("Do not create/overwrite/edit files"));
+    assert!(tool.description().contains("file_write"));
+    assert!(tool.description().contains("file_edit"));
+    assert!(tool.description().contains("file_patch"));
+    assert!(tool
+        .description()
         .contains("not use bash output as user-facing"));
     assert!(
         tool.parameters()["properties"]["description"]["description"]

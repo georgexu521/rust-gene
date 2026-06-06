@@ -913,12 +913,12 @@ impl Tool for BashTool {
     }
 
     fn description(&self) -> &str {
-        "Run a shell-only command; returns stdout+stderr. \
-         Read-only/test/lint/typecheck commands run immediately; mutating/network/install \
-         commands require confirmation. For file ops use file_read, file_write, \
-         or file_edit for validation and rollback. Supports pipes/chains/redirects; \
-         rejects background, heredoc, command substitution, and subshells. \
-         Do not use bash output as user-facing communication; summarize results."
+        "Run shell-only commands and return stdout+stderr. Use for validation, \
+         read-only inspection, git status/diff, dev servers, and shell-only work. \
+         Do not create/overwrite/edit files with redirection, heredocs, or python \
+         write scripts; use file_write, file_edit, or file_patch instead. \
+         Mutating/network/install commands require confirmation. Do not use bash \
+         output as user-facing communication; summarize results."
     }
 
     fn parameters(&self) -> serde_json::Value {
