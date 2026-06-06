@@ -92,6 +92,44 @@ fn truncate_chars(text: &str, max_chars: usize) -> String {
     out
 }
 
+fn env_flag(name: &str) -> Option<bool> {
+    std::env::var(name).ok().map(|value| {
+        matches!(
+            value.trim().to_ascii_lowercase().as_str(),
+            "1" | "true" | "yes" | "on"
+        )
+    })
+}
+
+fn configure_eval_memory_isolation(output_file: Option<&str>, events_file: Option<&str>) {
+    let base_dir = output_file
+        .or(events_file)
+        .and_then(|path| {
+            std::path::Path::new(path)
+                .parent()
+                .map(std::path::Path::to_path_buf)
+        })
+        .unwrap_or_else(|| {
+            std::env::current_dir()
+                .unwrap_or_else(|_| std::path::PathBuf::from("."))
+                .join("target")
+                .join("eval-reports")
+        });
+    let state_dir = base_dir.join("eval-state");
+    if std::env::var("PRIORITY_AGENT_MEMORY_PROPOSALS_PATH").is_err() {
+        std::env::set_var(
+            "PRIORITY_AGENT_MEMORY_PROPOSALS_PATH",
+            state_dir.join("memory_proposals.jsonl"),
+        );
+    }
+    if std::env::var("PRIORITY_AGENT_PROJECT_PROGRESS_PATH").is_err() {
+        std::env::set_var(
+            "PRIORITY_AGENT_PROJECT_PROGRESS_PATH",
+            state_dir.join("project_progress.jsonl"),
+        );
+    }
+}
+
 async fn answer_pending_approval(
     engine: &std::sync::Arc<priority_agent::engine::streaming::StreamingQueryEngine>,
     approved: bool,
@@ -132,6 +170,12 @@ async fn run_eval_task(
 
     let prompt = std::fs::read_to_string(&prompt_file)
         .map_err(|e| anyhow::anyhow!("failed to read prompt file '{}': {}", prompt_file, e))?;
+
+    configure_eval_memory_isolation(output_file.as_deref(), events_file.as_deref());
+    let eval_memory_generate = env_flag("PRIORITY_AGENT_EVAL_MEMORY_GENERATE").unwrap_or(false);
+    components
+        .streaming_engine
+        .set_memory_generate(eval_memory_generate);
 
     // Eval-run optimizations: auto-approve ask_user, disable file cache
     // short-circuit so the model always sees full file content, and skip
@@ -560,7 +604,61 @@ async fn main() {
 
 #[cfg(test)]
 mod tests {
-    use super::{detect_startup_mode, StartupMode};
+    use super::{configure_eval_memory_isolation, detect_startup_mode, env_flag, StartupMode};
+    use std::collections::HashMap;
+    use std::sync::{LazyLock, Mutex, MutexGuard};
+
+    static ENV_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
+
+    struct TestEnvGuard {
+        _lock: MutexGuard<'static, ()>,
+        saved: HashMap<String, Option<String>>,
+    }
+
+    impl TestEnvGuard {
+        fn acquire() -> Self {
+            Self {
+                _lock: ENV_LOCK.lock().unwrap(),
+                saved: HashMap::new(),
+            }
+        }
+
+        fn set(&mut self, key: &str, value: &str) {
+            self.capture_if_needed(key);
+            // SAFETY: guarded by process-wide ENV_LOCK in this test module.
+            unsafe { std::env::set_var(key, value) };
+        }
+
+        fn remove(&mut self, key: &str) {
+            self.capture_if_needed(key);
+            // SAFETY: guarded by process-wide ENV_LOCK in this test module.
+            unsafe { std::env::remove_var(key) };
+        }
+
+        fn capture_if_needed(&mut self, key: &str) {
+            if self.saved.contains_key(key) {
+                return;
+            }
+            self.saved.insert(key.to_string(), std::env::var(key).ok());
+        }
+    }
+
+    impl Drop for TestEnvGuard {
+        fn drop(&mut self) {
+            for (key, old_value) in self.saved.drain() {
+                match old_value {
+                    Some(value) => {
+                        // SAFETY: guarded by process-wide ENV_LOCK in this test module.
+                        unsafe { std::env::set_var(key, value) };
+                    }
+                    None => {
+                        // SAFETY: guarded by process-wide ENV_LOCK in this test module.
+                        unsafe { std::env::remove_var(key) };
+                    }
+                }
+            }
+        }
+    }
 
     #[test]
     fn test_detect_startup_mode_help_variants() {
@@ -620,5 +718,40 @@ mod tests {
             detect_startup_mode(&["priority-agent".into(), "init".into()]),
             StartupMode::Cli
         );
+    }
+
+    #[test]
+    fn eval_memory_isolation_sets_report_local_paths() {
+        let mut env = TestEnvGuard::acquire();
+        env.remove("PRIORITY_AGENT_MEMORY_PROPOSALS_PATH");
+        env.remove("PRIORITY_AGENT_PROJECT_PROGRESS_PATH");
+        let dir = tempfile::tempdir().unwrap();
+        let output = dir.path().join("task.md");
+
+        configure_eval_memory_isolation(output.to_str(), None);
+
+        assert_eq!(
+            std::env::var("PRIORITY_AGENT_MEMORY_PROPOSALS_PATH").unwrap(),
+            dir.path()
+                .join("eval-state")
+                .join("memory_proposals.jsonl")
+                .to_string_lossy()
+        );
+        assert_eq!(
+            std::env::var("PRIORITY_AGENT_PROJECT_PROGRESS_PATH").unwrap(),
+            dir.path()
+                .join("eval-state")
+                .join("project_progress.jsonl")
+                .to_string_lossy()
+        );
+    }
+
+    #[test]
+    fn eval_memory_generate_flag_defaults_off() {
+        let mut env = TestEnvGuard::acquire();
+        env.remove("PRIORITY_AGENT_EVAL_MEMORY_GENERATE");
+        assert_eq!(env_flag("PRIORITY_AGENT_EVAL_MEMORY_GENERATE"), None);
+        env.set("PRIORITY_AGENT_EVAL_MEMORY_GENERATE", "1");
+        assert_eq!(env_flag("PRIORITY_AGENT_EVAL_MEMORY_GENERATE"), Some(true));
     }
 }

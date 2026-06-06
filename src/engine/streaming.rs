@@ -33,6 +33,71 @@ fn turn_execution_timeout() -> std::time::Duration {
     std::time::Duration::from_secs(secs)
 }
 
+fn session_end_memory_flush_timeout() -> std::time::Duration {
+    let secs = std::env::var("PRIORITY_AGENT_SESSION_END_MEMORY_FLUSH_TIMEOUT_SECS")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(5)
+        .clamp(1, 60);
+    std::time::Duration::from_secs(secs)
+}
+
+async fn flush_session_end_memory_best_effort(
+    mem_mutex: Arc<tokio::sync::Mutex<crate::memory::MemoryManager>>,
+    session_id: String,
+    flush_history: Vec<Message>,
+    tx: mpsc::Sender<StreamEvent>,
+) {
+    let timeout = session_end_memory_flush_timeout();
+    let timeout_ms = timeout.as_millis().min(u128::from(u64::MAX)) as u64;
+    let _ = tx
+        .send(StreamEvent::RuntimeDiagnostic {
+            diagnostic: serde_json::json!({
+                "schema": "streaming_stage.v1",
+                "stage": "session_end_memory_flush_start",
+                "timeout_ms": timeout_ms,
+            }),
+        })
+        .await;
+    let started = std::time::Instant::now();
+    let handle = tokio::task::spawn_blocking(move || {
+        let mut mem = mem_mutex.blocking_lock();
+        mem.flush_session_with_reason(
+            session_id,
+            crate::memory::MemoryFlushReason::SessionEnd,
+            &flush_history,
+        )
+    });
+
+    let (status, detail) = match tokio::time::timeout(timeout, handle).await {
+        Ok(Ok(record)) => (format!("{:?}", record.status), record.reason.to_string()),
+        Ok(Err(error)) => {
+            let detail = error.to_string();
+            warn!("session end memory flush join failed: {detail}");
+            ("failed".to_string(), detail)
+        }
+        Err(_) => {
+            warn!("session end memory flush exceeded {timeout_ms}ms; continuing stream close");
+            (
+                "timed_out".to_string(),
+                "timed out; stream close continued".to_string(),
+            )
+        }
+    };
+    let _ = tx
+        .send(StreamEvent::RuntimeDiagnostic {
+            diagnostic: serde_json::json!({
+                "schema": "streaming_stage.v1",
+                "stage": "session_end_memory_flush_done",
+                "status": status,
+                "detail": detail,
+                "duration_ms": started.elapsed().as_millis().min(u128::from(u64::MAX)) as u64,
+                "timeout_ms": timeout_ms,
+            }),
+        })
+        .await;
+}
+
 /// 流式查询事件
 #[derive(Debug, Clone)]
 pub enum StreamEvent {
@@ -1331,11 +1396,11 @@ impl StreamingQueryEngine {
                     let hist = history.lock().await;
                     hist.clone()
                 };
-                let mut mem = mem_mutex.lock().await;
-                mem.flush_session_with_reason_async(
+                flush_session_end_memory_best_effort(
+                    mem_mutex.clone(),
                     session_id,
-                    crate::memory::MemoryFlushReason::SessionEnd,
-                    &flush_history,
+                    flush_history,
+                    tx.clone(),
                 )
                 .await;
             }

@@ -216,6 +216,7 @@ fn control_loop_phase_for_event(event: &TraceEvent) -> Option<&'static str> {
         | TraceEvent::FinalCloseoutPrepared { .. }
         | TraceEvent::ExecutionReportPrepared { .. }
         | TraceEvent::MemoryProposalPrepared { .. }
+        | TraceEvent::CloseoutBackgroundStage { .. }
         | TraceEvent::Error { .. } => Some("closeout"),
     }
 }

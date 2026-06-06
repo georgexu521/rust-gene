@@ -36,6 +36,7 @@ impl TraceEvent {
             TraceEvent::PromptCacheUsageRecorded { .. } => "cache.usage",
             TraceEvent::MemoryBoundaryEvaluated { .. } => "memory.boundary",
             TraceEvent::MemoryProposalPrepared { .. } => "memory.proposal",
+            TraceEvent::CloseoutBackgroundStage { .. } => "closeout.background",
             TraceEvent::MemorySynced { .. } => "memory.sync",
             TraceEvent::ContextCompacted { .. } => "context.compact",
             TraceEvent::RuntimeDietReport { .. } => "runtime.diet",

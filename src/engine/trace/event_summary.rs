@@ -218,6 +218,20 @@ impl TraceEvent {
                 write_performed,
                 preview(reason)
             ),
+            TraceEvent::CloseoutBackgroundStage {
+                stage,
+                status,
+                duration_ms,
+                timeout_ms,
+                detail,
+            } => format!(
+                "closeout background: stage={} status={} duration={}ms timeout={}ms ({})",
+                stage,
+                status,
+                duration_ms,
+                timeout_ms,
+                preview(detail)
+            ),
             TraceEvent::MemorySynced { mode } => format!("memory synced: {}", mode),
             TraceEvent::ContextCompacted {
                 before_tokens,

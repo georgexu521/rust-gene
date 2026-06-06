@@ -15,7 +15,11 @@ use crate::engine::verification_proof::{
     VerificationProof, VerificationProofRequest, VerificationProofStatus, VerificationProofTaskType,
 };
 use crate::services::api::ToolCall;
+use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
+use tracing::warn;
+
+const DEFAULT_CLOSEOUT_BACKGROUND_TIMEOUT_SECS: u64 = 5;
 
 pub(super) struct FinalCloseoutContext<'a> {
     pub(super) trace: &'a TraceCollector,
@@ -37,6 +41,87 @@ pub(super) struct CloseoutEvaluation {
     pub(super) runtime_validation_label: Option<String>,
     pub(super) tool_evidence_summary: Option<String>,
     pub(super) verification_proof: VerificationProof,
+}
+
+fn closeout_background_timeout() -> Duration {
+    let secs = std::env::var("PRIORITY_AGENT_CLOSEOUT_BACKGROUND_TIMEOUT_SECS")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(DEFAULT_CLOSEOUT_BACKGROUND_TIMEOUT_SECS)
+        .clamp(1, 60);
+    Duration::from_secs(secs)
+}
+
+async fn run_closeout_background_stage<T, F>(
+    trace: TraceCollector,
+    stage: &'static str,
+    timeout: Duration,
+    work: F,
+) -> Option<T>
+where
+    T: Send + 'static,
+    F: FnOnce() -> anyhow::Result<T> + Send + 'static,
+{
+    trace.record(TraceEvent::CloseoutBackgroundStage {
+        stage: stage.to_string(),
+        status: "started".to_string(),
+        duration_ms: 0,
+        timeout_ms: timeout.as_millis().min(u128::from(u64::MAX)) as u64,
+        detail: "started".to_string(),
+    });
+    let started = Instant::now();
+    let handle = tokio::task::spawn_blocking(work);
+    let timeout_ms = timeout.as_millis().min(u128::from(u64::MAX)) as u64;
+    match tokio::time::timeout(timeout, handle).await {
+        Ok(Ok(Ok(value))) => {
+            trace.record(TraceEvent::CloseoutBackgroundStage {
+                stage: stage.to_string(),
+                status: "completed".to_string(),
+                duration_ms: started.elapsed().as_millis().min(u128::from(u64::MAX)) as u64,
+                timeout_ms,
+                detail: "completed".to_string(),
+            });
+            Some(value)
+        }
+        Ok(Ok(Err(error))) => {
+            let detail = error.to_string();
+            warn!("closeout background stage {stage} failed: {detail}");
+            trace.record(TraceEvent::CloseoutBackgroundStage {
+                stage: stage.to_string(),
+                status: "failed".to_string(),
+                duration_ms: started.elapsed().as_millis().min(u128::from(u64::MAX)) as u64,
+                timeout_ms,
+                detail,
+            });
+            None
+        }
+        Ok(Err(error)) => {
+            let detail = error.to_string();
+            warn!("closeout background stage {stage} join failed: {detail}");
+            trace.record(TraceEvent::CloseoutBackgroundStage {
+                stage: stage.to_string(),
+                status: "failed".to_string(),
+                duration_ms: started.elapsed().as_millis().min(u128::from(u64::MAX)) as u64,
+                timeout_ms,
+                detail,
+            });
+            None
+        }
+        Err(_) => {
+            warn!(
+                "closeout background stage {stage} exceeded {}ms; continuing closeout",
+                timeout_ms
+            );
+            trace.record(TraceEvent::CloseoutBackgroundStage {
+                stage: stage.to_string(),
+                status: "timed_out".to_string(),
+                duration_ms: started.elapsed().as_millis().min(u128::from(u64::MAX)) as u64,
+                timeout_ms,
+                detail: "timed out; closeout continued".to_string(),
+            });
+            None
+        }
+    }
 }
 
 pub(super) struct CloseoutEvaluator;
@@ -327,31 +412,6 @@ impl FinalCloseoutController {
                 .task_bundle
                 .task_contract(context.required_validation_commands);
             let report = ExecutionReport::from_closeout(&contract, &closeout);
-            let _ = ProjectProgressLedger::default().append_execution_report(&report);
-            let memory_proposal = context
-                .memory_generate_enabled
-                .then(|| MemoryProposal::from_execution_report(&report));
-            let background_proposal = if context.memory_generate_enabled {
-                let proposal_store = MemoryProposalReviewStore::default();
-                let recent_proposals = proposal_store.list();
-                if let Some(memory_proposal) = memory_proposal.as_ref() {
-                    let _ = proposal_store.upsert(memory_proposal);
-                }
-                let background_packet =
-                    BackgroundReviewPacket::from_execution_report(&report, &recent_proposals);
-                let background_output = BackgroundMemoryReviewWorker::review_execution_report(
-                    &background_packet,
-                    &report,
-                );
-                let background_proposal = BackgroundMemoryReviewWorker::proposal_from_output(
-                    &background_packet,
-                    background_output,
-                );
-                let _ = proposal_store.upsert(&background_proposal);
-                Some(background_proposal)
-            } else {
-                None
-            };
             context.trace.record(TraceEvent::ExecutionReportPrepared {
                 task_id: report.task_id.clone(),
                 status: report.status.label().to_string(),
@@ -360,6 +420,57 @@ impl FinalCloseoutController {
                 risks: report.risks.len(),
                 next_steps: report.next_steps.len(),
             });
+            let closeout_background_timeout = closeout_background_timeout();
+            let progress_report = report.clone();
+            let _ = run_closeout_background_stage(
+                context.trace.clone(),
+                "project_progress_append",
+                closeout_background_timeout,
+                move || {
+                    ProjectProgressLedger::default().append_execution_report(&progress_report)?;
+                    Ok(())
+                },
+            )
+            .await;
+            let memory_proposal = context
+                .memory_generate_enabled
+                .then(|| MemoryProposal::from_execution_report(&report));
+            let background_proposal = if context.memory_generate_enabled {
+                let proposal_report = report.clone();
+                let proposal_for_store = memory_proposal.clone();
+                run_closeout_background_stage(
+                    context.trace.clone(),
+                    "memory_proposal_review",
+                    closeout_background_timeout,
+                    move || {
+                        let proposal_store = MemoryProposalReviewStore::default();
+                        let recent_proposals = proposal_store.list();
+                        if let Some(memory_proposal) = proposal_for_store.as_ref() {
+                            proposal_store.upsert(memory_proposal)?;
+                        }
+                        let background_packet = BackgroundReviewPacket::from_execution_report(
+                            &proposal_report,
+                            &recent_proposals,
+                        );
+                        let background_output =
+                            BackgroundMemoryReviewWorker::review_execution_report(
+                                &background_packet,
+                                &proposal_report,
+                            );
+                        let background_proposal =
+                            BackgroundMemoryReviewWorker::proposal_from_output(
+                                &background_packet,
+                                background_output,
+                            );
+                        proposal_store.upsert(&background_proposal)?;
+                        Ok(Some(background_proposal))
+                    },
+                )
+                .await
+                .flatten()
+            } else {
+                None
+            };
             if let Some(memory_proposal) = memory_proposal.as_ref() {
                 context.trace.record(TraceEvent::MemoryProposalPrepared {
                     task_id: memory_proposal.task_id.clone(),
@@ -671,6 +782,7 @@ mod tests {
     use crate::engine::verification_proof::VerificationProofKind;
     use crate::test_utils::env_guard::EnvVarGuard;
     use std::path::PathBuf;
+    use std::time::{Duration, Instant};
 
     fn audit_route() -> IntentRoute {
         IntentRoute {
@@ -720,6 +832,32 @@ mod tests {
                 .to_str()
                 .unwrap(),
         );
+    }
+
+    #[tokio::test]
+    async fn closeout_background_stage_timeout_does_not_block_closeout() {
+        let trace = TraceCollector::new(TurnTrace::new("session", 1, "closeout timeout"));
+        let started = Instant::now();
+        let result = run_closeout_background_stage(
+            trace.clone(),
+            "test_timeout",
+            Duration::from_millis(20),
+            || {
+                std::thread::sleep(Duration::from_millis(250));
+                Ok(())
+            },
+        )
+        .await;
+
+        assert!(result.is_none());
+        assert!(
+            started.elapsed() < Duration::from_millis(200),
+            "closeout timeout should return before the blocking work finishes"
+        );
+        assert!(trace.snapshot().events.iter().any(|event| matches!(
+            event,
+            TraceEvent::CloseoutBackgroundStage { status, .. } if status == "timed_out"
+        )));
     }
 
     #[test]

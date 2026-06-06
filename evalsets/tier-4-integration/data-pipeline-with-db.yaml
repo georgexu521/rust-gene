@@ -129,6 +129,7 @@ repo:
       import unittest
       import sys
       import os
+      import json
       import tempfile
       import urllib.request
       import threading
@@ -196,17 +197,18 @@ repo:
               api.DB_PATH = cls.db_path
               db.DB_PATH = cls.db_path
               init_db()
-              clear_db()
-              
-              # Insert test data
-              insert_employee("Alice", 30, "Engineering", 80000, True)
-              insert_employee("Bob", 25, "Engineering", 60000, False)
               
               cls.server = api.HTTPServer(('127.0.0.1', 8083), api.ApiHandler)
               cls.base = 'http://127.0.0.1:8083'
               cls.thread = threading.Thread(target=cls.server.serve_forever, daemon=True)
               cls.thread.start()
               time.sleep(0.5)
+
+          def setUp(self):
+              clear_db()
+              # Insert test data
+              insert_employee("Alice", 30, "Engineering", 80000, True)
+              insert_employee("Bob", 25, "Engineering", 60000, False)
 
           @classmethod
           def tearDownClass(cls):

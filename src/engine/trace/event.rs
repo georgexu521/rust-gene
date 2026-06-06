@@ -324,6 +324,13 @@ pub enum TraceEvent {
         write_performed: bool,
         reason: String,
     },
+    CloseoutBackgroundStage {
+        stage: String,
+        status: String,
+        duration_ms: u64,
+        timeout_ms: u64,
+        detail: String,
+    },
     MemorySynced {
         mode: String,
     },
