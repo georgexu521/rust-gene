@@ -11,5 +11,6 @@ pub mod v5_add_agent_artifacts;
 pub mod v6_add_agent_task_states;
 pub mod v7_add_compact_boundaries;
 pub mod v8_add_todos;
+pub mod v9_add_session_events;
 
 pub use framework::{Migration, MigrationRunner};

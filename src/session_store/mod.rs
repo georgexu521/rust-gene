@@ -13,6 +13,7 @@ use tracing::info;
 
 mod agent_store;
 mod compact_store;
+mod event_store;
 mod learning_store;
 mod message_ops;
 mod records;
@@ -87,6 +88,9 @@ impl SessionStore {
         runner.register(std::sync::Arc::new(
             crate::migrations::v8_add_todos::V8AddTodos,
         ));
+        runner.register(std::sync::Arc::new(
+            crate::migrations::v9_add_session_events::V9AddSessionEvents,
+        ));
         runner.run(&conn)?;
 
         info!("SessionStore opened at {:?}", path);
@@ -127,6 +131,9 @@ impl SessionStore {
         ));
         runner.register(std::sync::Arc::new(
             crate::migrations::v8_add_todos::V8AddTodos,
+        ));
+        runner.register(std::sync::Arc::new(
+            crate::migrations::v9_add_session_events::V9AddSessionEvents,
         ));
         runner.run(&conn)?;
 
