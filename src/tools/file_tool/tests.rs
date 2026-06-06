@@ -1893,6 +1893,8 @@ async fn test_file_edit_insert_allows_intentional_bulk_anchor() {
 
 #[tokio::test]
 async fn test_file_edit_checkpoint_created() {
+    let mut env = crate::test_utils::env_guard::EnvVarGuard::acquire().await;
+    env.remove("PRIORITY_AGENT_TEST_FAIL_CHECKPOINT");
     let tool = FileEditTool;
     let path = "/tmp/test_priority_agent_edit_checkpoint.txt";
     let original = "original content\n";

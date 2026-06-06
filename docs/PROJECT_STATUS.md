@@ -2,9 +2,12 @@
 
 Last updated: 2026-06-06
 
-## Opencode Alignment — Complete
+## Opencode Alignment — Implemented, Hardening In Progress
 
-All phases from `docs/OPENCODE_AGENT_ENGINE_ALIGNMENT_PLAN_2026-06-06.md` are done.
+The implementation from `docs/OPENCODE_AGENT_ENGINE_ALIGNMENT_PLAN_2026-06-06.md`
+has landed. Follow-up hardening on 2026-06-06 fixed usage-ledger rebuild
+idempotency, checkpoint test isolation, `/diagnostic` session snapshots, and
+dynamic-zone counting for user-message injected context.
 
 ### Tool & Permission Hardening (Phase A)
 - 26 tools: explicit ToolOperationKind overrides
@@ -21,10 +24,13 @@ All phases from `docs/OPENCODE_AGENT_ENGINE_ALIGNMENT_PLAN_2026-06-06.md` are do
 ### Provider & Usage (Phase C)
 - UsageLedgerEntry: 8 runtime fields + SQLite migration
 - Progressive output cap: 8192→4096→2048→1024 for consecutive repairs
-- `/diagnostic`: ledger-based session totals export (run_report.v1)
+- `/diagnostic`: session snapshot export (run_report.v1) with usage totals,
+  changed files, tool rounds, failed tools, provider latency, and validation
+  status inferred from recorded TUI tool runs
 
 ### Cache & Evidence (Phase D)
 - DynamicZoneTier: stable-prefix/last-user/repair-only classification
+- Dynamic-zone counts include dynamic context prepended to the last user message
 - EvidenceCategory: tool/validation/diagnostic/user
 - CacheMissReason detail includes dynamic zone breakdown
 
@@ -41,8 +47,10 @@ All phases from `docs/OPENCODE_AGENT_ENGINE_ALIGNMENT_PLAN_2026-06-06.md` are do
 - Desktop + TUI share same RuntimeFacade
 
 ### Gates
-2288 passed, 2 pre-existing failures, 0 new regressions.
-`cargo fmt`, `cargo clippy --all-features -- -D warnings` clean.
+Latest targeted gates from the 2026-06-06 hardening pass:
+`cargo fmt --check`, `cargo check -q`, `cargo test -q cost_tracker --lib`,
+`cargo test -q checkpoint --lib`, `cargo test -q cache_stability --lib`, and
+`cargo test -q tui --lib` passed.
 
 2026-06-05 opencode programming-chain gap fixes landed:
 - File-edit deterministic recovery is now product-wired, not test-only. Exact

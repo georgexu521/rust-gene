@@ -139,6 +139,27 @@ pub async fn handle_diagnostic(app: &TuiApp) -> String {
     let model = app.current_model_label();
     let provider = Some(app.current_provider_label());
     let usage = app.stream_usage_snapshot;
+    let turns = app
+        .messages
+        .iter()
+        .filter(|message| message.role == crate::state::MessageRole::User)
+        .count();
+
+    let mgr = crate::engine::checkpoint::get_checkpoint_manager(session_id).await;
+    let cp = mgr.lock().await;
+    let file_changes = cp.list_file_changes().to_vec();
+    let file_change_rounds = cp.list_file_change_rounds();
+    drop(cp);
+
+    let mut changed_file_set = std::collections::BTreeSet::new();
+    for change in &file_changes {
+        changed_file_set.insert(change.path.clone());
+    }
+    let changed_files = changed_file_set.into_iter().collect::<Vec<_>>();
+
+    let tool_runs = diagnostic_tool_runs(app);
+    let failed_tool_names = diagnostic_failed_tool_names(&tool_runs);
+    let validation_status = diagnostic_validation_status(&tool_runs, !changed_files.is_empty());
 
     // Query usage ledger for session totals
     let ledger_summary =
@@ -156,6 +177,36 @@ pub async fn handle_diagnostic(app: &TuiApp) -> String {
     let cache_miss_reason = ledger_summary
         .as_ref()
         .and_then(|s| s.last_miss_reason.clone());
+    let ledger_entries = ledger_summary.as_ref().map(|s| s.entries).unwrap_or(0);
+
+    let provider_request = &app.facade_snapshot.provider_request;
+    let latency_ms = (provider_request.elapsed_ms > 0).then_some(provider_request.elapsed_ms);
+    let failure_owner = if !failed_tool_names.is_empty() {
+        Some("tool".to_string())
+    } else if provider_request.phase == crate::engine::runtime_facade::ProviderPhase::TimedOut {
+        Some("provider".to_string())
+    } else {
+        None
+    };
+    let status = if app.is_querying {
+        "running"
+    } else if failure_owner.is_some() {
+        "failed"
+    } else {
+        "snapshot"
+    };
+    let evidence_category = if !failed_tool_names.is_empty() {
+        Some("tool_failure".to_string())
+    } else if !changed_files.is_empty() {
+        Some("file_change".to_string())
+    } else if ledger_entries > 0 {
+        Some("usage_ledger".to_string())
+    } else {
+        None
+    };
+    let evidence_items = file_changes.len()
+        + tool_runs.iter().filter(|run| !run.is_active()).count()
+        + ledger_entries as usize;
 
     let report = crate::engine::evalset::RunReport {
         schema: crate::engine::evalset::RunReport::CURRENT_SCHEMA.to_string(),
@@ -166,21 +217,21 @@ pub async fn handle_diagnostic(app: &TuiApp) -> String {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_millis() as u64,
-        status: "snapshot".to_string(),
-        turns: 0,
-        tool_rounds: 0,
-        changed_files: Vec::new(),
-        verification_proof_status: None,
-        evidence_category: None,
-        evidence_items: 0,
+        status: status.to_string(),
+        turns,
+        tool_rounds: file_change_rounds.len().max(tool_runs.len()),
+        changed_files,
+        verification_proof_status: validation_status,
+        evidence_category,
+        evidence_items,
         prompt_tokens,
         completion_tokens,
         cost_usd,
-        latency_ms: None,
+        latency_ms,
         time_to_first_token_ms: None,
         cache_miss_reason: cache_miss_reason.clone(),
-        failure_owner: None,
-        failed_tool_names: Vec::new(),
+        failure_owner,
+        failed_tool_names,
     };
 
     let json = report.to_json_string();
@@ -210,10 +261,103 @@ pub async fn handle_diagnostic(app: &TuiApp) -> String {
             completion_tokens,
             cost_usd,
             cache_miss_reason.as_deref().unwrap_or("none"),
-            ledger_summary.map(|s| s.entries).unwrap_or(0),
+            ledger_entries,
         ),
         Err(e) => format!("Failed to write diagnostic report: {}", e),
     }
+}
+
+fn diagnostic_tool_runs(app: &TuiApp) -> Vec<crate::tui::tool_view::ToolRunView> {
+    let mut runs = Vec::new();
+    let mut seen = std::collections::BTreeSet::new();
+    for run in app
+        .tool_runs_by_message_id
+        .values()
+        .flat_map(|message_runs| message_runs.iter())
+        .chain(app.tool_runs_snapshot.iter())
+    {
+        if seen.insert(run.id.clone()) {
+            runs.push(run.clone());
+        }
+    }
+    runs
+}
+
+fn diagnostic_failed_tool_names(runs: &[crate::tui::tool_view::ToolRunView]) -> Vec<String> {
+    let mut names = std::collections::BTreeSet::new();
+    for run in runs {
+        if matches!(
+            run.status,
+            crate::tui::tool_view::ToolRunStatus::Failed
+                | crate::tui::tool_view::ToolRunStatus::TimedOut
+                | crate::tui::tool_view::ToolRunStatus::Cancelled
+        ) {
+            names.insert(run.name.clone());
+        }
+    }
+    names.into_iter().collect()
+}
+
+fn diagnostic_validation_status(
+    runs: &[crate::tui::tool_view::ToolRunView],
+    has_file_changes: bool,
+) -> Option<String> {
+    let mut saw_validation = false;
+    let mut saw_passed_validation = false;
+    for run in runs {
+        if !tool_run_looks_like_validation(run) {
+            continue;
+        }
+        saw_validation = true;
+        match run.status {
+            crate::tui::tool_view::ToolRunStatus::Completed => saw_passed_validation = true,
+            crate::tui::tool_view::ToolRunStatus::Failed
+            | crate::tui::tool_view::ToolRunStatus::TimedOut
+            | crate::tui::tool_view::ToolRunStatus::Cancelled => {
+                return Some("failed".to_string());
+            }
+            _ => {}
+        }
+    }
+    if saw_passed_validation {
+        Some("verified".to_string())
+    } else if has_file_changes && !saw_validation {
+        Some("pending".to_string())
+    } else {
+        None
+    }
+}
+
+fn tool_run_looks_like_validation(run: &crate::tui::tool_view::ToolRunView) -> bool {
+    if run.name == "run_tests" {
+        return true;
+    }
+    if run.name != "bash" {
+        return false;
+    }
+    let command = run
+        .arguments
+        .as_ref()
+        .and_then(|args| {
+            args.get("command")
+                .or_else(|| args.get("cmd"))
+                .and_then(serde_json::Value::as_str)
+        })
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    [
+        "cargo test",
+        "cargo check",
+        "cargo clippy",
+        "cargo fmt --check",
+        "npm test",
+        "pnpm test",
+        "yarn test",
+        "pytest",
+        "go test",
+    ]
+    .iter()
+    .any(|needle| command.contains(needle))
 }
 
 /// /retry - 重试上一次 LLM 调用

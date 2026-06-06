@@ -86,7 +86,11 @@ impl DynamicZoneTier {
 pub fn classify_dynamic_zone(content: &str) -> DynamicZoneTier {
     let trimmed = content.trim_start();
     // Stable enough for the prefix (rarely changes during a task)
-    if trimmed.starts_with("<task-contract>") || trimmed.starts_with("<context-pack>") {
+    if trimmed.starts_with("<task-contract>")
+        || trimmed.starts_with("<context-pack>")
+        || content.contains("<task-contract>")
+        || content.contains("<context-pack>")
+    {
         return DynamicZoneTier::StablePrefix;
     }
     // Only present during repair/failure turns
@@ -94,6 +98,9 @@ pub fn classify_dynamic_zone(content: &str) -> DynamicZoneTier {
         || trimmed.starts_with("<focused-repair>")
         || trimmed.starts_with("<self-evolution-guidance>")
         || trimmed.starts_with("MVA profile:")
+        || content.contains("<recent_observation>")
+        || content.contains("<focused-repair>")
+        || content.contains("<self-evolution-guidance>")
     {
         return DynamicZoneTier::RepairOnly;
     }
@@ -236,9 +243,7 @@ pub fn request_cache_diagnostic_shape(
     let dynamic_tail = dynamic_tail_material(messages);
     let dynamic_zone_messages = messages
         .iter()
-        .filter(|message| {
-            matches!(message, Message::System { content } if is_dynamic_context_system_message(content))
-        })
+        .filter(|message| message_contains_dynamic_context(message))
         .count();
     let last_user_index = messages
         .iter()
@@ -247,8 +252,10 @@ pub fn request_cache_diagnostic_shape(
         .iter()
         .enumerate()
         .filter(|(index, message)| {
-            matches!(message, Message::System { content } if is_dynamic_context_system_message(content))
-                && last_user_index.map(|last_user| *index < last_user).unwrap_or(false)
+            message_contains_dynamic_context(message)
+                && last_user_index
+                    .map(|last_user| *index < last_user)
+                    .unwrap_or(false)
         })
         .count();
 
@@ -257,13 +264,11 @@ pub fn request_cache_diagnostic_shape(
     let mut dynamic_zones_last_user: usize = 0;
     let mut dynamic_zones_repair_only: usize = 0;
     for message in messages {
-        if let Message::System { content } = message {
-            if is_dynamic_context_system_message(content) {
-                match classify_dynamic_zone(content) {
-                    DynamicZoneTier::StablePrefix => dynamic_zones_stable_prefix += 1,
-                    DynamicZoneTier::LastUserDynamic => dynamic_zones_last_user += 1,
-                    DynamicZoneTier::RepairOnly => dynamic_zones_repair_only += 1,
-                }
+        if let Some(content) = message_dynamic_context_content(message) {
+            match classify_dynamic_zone(content) {
+                DynamicZoneTier::StablePrefix => dynamic_zones_stable_prefix += 1,
+                DynamicZoneTier::LastUserDynamic => dynamic_zones_last_user += 1,
+                DynamicZoneTier::RepairOnly => dynamic_zones_repair_only += 1,
             }
         }
     }
@@ -456,6 +461,39 @@ pub fn is_dynamic_context_system_message(content: &str) -> bool {
     ]
     .iter()
     .any(|prefix| trimmed.starts_with(prefix))
+}
+
+fn message_contains_dynamic_context(message: &Message) -> bool {
+    message_dynamic_context_content(message).is_some()
+}
+
+fn message_dynamic_context_content(message: &Message) -> Option<&str> {
+    match message {
+        Message::System { content } if is_dynamic_context_system_message(content) => {
+            Some(content.as_str())
+        }
+        Message::User { content } if user_message_contains_dynamic_context(content) => {
+            Some(content.as_str())
+        }
+        _ => None,
+    }
+}
+
+fn user_message_contains_dynamic_context(content: &str) -> bool {
+    [
+        "<task-state>",
+        "<task_state>",
+        "<task-contract>",
+        "<context-pack>",
+        "<relevant_material>",
+        "<recent_observation>",
+        "<self-evolution-guidance>",
+        "<context_zones",
+        "<retrieval-context",
+        "MVA profile:",
+    ]
+    .iter()
+    .any(|tag| content.contains(tag))
 }
 
 fn provider_tool_entry(tool: &ProviderTool) -> ToolSchemaCacheEntry {
@@ -717,6 +755,25 @@ mod tests {
         assert_eq!(shape.dynamic_zone_messages, 2);
         assert!(!shape.prefix_fingerprint.is_empty());
         assert!(shape.prefix_fingerprint.len() == 12);
+    }
+
+    #[test]
+    fn cache_diagnostic_counts_dynamic_context_prepended_to_user_message() {
+        let tool = provider_tool("bash", serde_json::json!({"type": "object"}));
+        let messages = vec![
+            Message::system("stable system prefix"),
+            Message::user(
+                "<task-state>turn-1-state</task-state>\n\
+                 <recent_observation>validation failed</recent_observation>\n\
+                 fix the bug",
+            ),
+        ];
+
+        let shape = request_cache_diagnostic_shape(&messages, std::slice::from_ref(&tool));
+
+        assert_eq!(shape.dynamic_zone_messages, 1);
+        assert_eq!(shape.dynamic_zones_before_last_user, 0);
+        assert_eq!(shape.dynamic_zones_repair_only, 1);
     }
 
     #[test]

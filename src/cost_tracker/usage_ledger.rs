@@ -6,6 +6,8 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const USAGE_LEDGER_ENV: &str = "PRIORITY_AGENT_USAGE_LEDGER_PATH";
+#[cfg(test)]
+const USAGE_LEDGER_TEST_ENABLE_ENV: &str = "PRIORITY_AGENT_TEST_ENABLE_USAGE_LEDGER_WRITES";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -135,7 +137,8 @@ pub fn default_usage_ledger_path() -> PathBuf {
 }
 
 pub fn append_usage_ledger_entry(entry: &UsageLedgerEntry) -> io::Result<()> {
-    if cfg!(test) && std::env::var_os(USAGE_LEDGER_ENV).is_none() {
+    #[cfg(test)]
+    if std::env::var_os(USAGE_LEDGER_TEST_ENABLE_ENV).is_none() {
         return Ok(());
     }
     append_usage_ledger_entry_at(&default_usage_ledger_path(), entry)
@@ -333,7 +336,14 @@ pub fn sync_usage_to_sqlite(entry: &UsageLedgerEntry) {
     if ensure_usage_sqlite(&conn).is_err() {
         return;
     }
-    let _ = conn.execute(
+    let _ = insert_usage_sqlite_entry(&conn, entry);
+}
+
+fn insert_usage_sqlite_entry(
+    conn: &rusqlite::Connection,
+    entry: &UsageLedgerEntry,
+) -> rusqlite::Result<usize> {
+    conn.execute(
         &format!(
             "INSERT INTO {table} (ts, session, model, prompt_tokens, completion_tokens,
              total_tokens, cache_hit_tokens, cache_miss_tokens, cost_usd,
@@ -366,40 +376,48 @@ pub fn sync_usage_to_sqlite(entry: &UsageLedgerEntry) {
                   AND tool_schema_tokens = ?18
                   AND COALESCE(tool_round_count, -1) = COALESCE(?19, -1)
                   AND COALESCE(compaction_decision, '') = COALESCE(?20, '')
+                  AND COALESCE(request_id, '') = COALESCE(?21, '')
+                  AND COALESCE(provider, '') = COALESCE(?22, '')
+                  AND COALESCE(latency_ms, -1) = COALESCE(?23, -1)
+                  AND COALESCE(time_to_first_token_ms, -1) = COALESCE(?24, -1)
+                  AND COALESCE(finish_reason, '') = COALESCE(?25, '')
+                  AND COALESCE(error_kind, '') = COALESCE(?26, '')
+                  AND COALESCE(timeout_kind, '') = COALESCE(?27, '')
+                  AND COALESCE(retry_count, -1) = COALESCE(?28, -1)
              )",
             table = USAGE_SQLITE_TABLE
         ),
         rusqlite::params![
             entry.ts as i64,
-            entry.session,
-            entry.model,
+            &entry.session,
+            &entry.model,
             entry.prompt_tokens as i64,
             entry.completion_tokens as i64,
             entry.total_tokens as i64,
             entry.cache_hit_tokens as i64,
             entry.cache_miss_tokens as i64,
             entry.cost_usd,
-            entry.stable_prefix_hash,
-            entry.system_hash,
-            entry.tool_schema_hash,
-            entry.dynamic_tail_hash,
-            entry.miss_reason,
-            entry.miss_reason_detail,
-            entry.request_phase,
+            &entry.stable_prefix_hash,
+            &entry.system_hash,
+            &entry.tool_schema_hash,
+            &entry.dynamic_tail_hash,
+            &entry.miss_reason,
+            &entry.miss_reason_detail,
+            &entry.request_phase,
             entry.effective_output_cap.map(i64::from),
             entry.tool_schema_tokens as i64,
             entry.tool_round_count.map(|v| v as i64),
-            entry.compaction_decision,
-            entry.request_id,
-            entry.provider,
+            &entry.compaction_decision,
+            &entry.request_id,
+            &entry.provider,
             entry.latency_ms.map(|v| v as i64),
             entry.time_to_first_token_ms.map(|v| v as i64),
-            entry.finish_reason,
-            entry.error_kind,
-            entry.timeout_kind,
+            &entry.finish_reason,
+            &entry.error_kind,
+            &entry.timeout_kind,
             entry.retry_count.map(|v| v as i32),
         ],
-    );
+    )
 }
 
 /// Rebuild SQLite projection from JSONL. Useful after corruption or schema changes.
@@ -431,7 +449,8 @@ pub fn rebuild_usage_sqlite_from_jsonl() -> io::Result<usize> {
             continue;
         }
         if let Ok(entry) = serde_json::from_str::<UsageLedgerEntry>(&line) {
-            sync_usage_to_sqlite(&entry);
+            insert_usage_sqlite_entry(&conn, &entry)
+                .map_err(|e| io::Error::other(format!("sqlite insert: {e}")))?;
             count += 1;
         }
     }
