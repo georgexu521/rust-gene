@@ -575,9 +575,9 @@ async fn test_permissions_slash_includes_pending_approval_panel() {
         .last()
         .map(|message| message.content.as_str())
         .unwrap_or("");
-    assert!(content.contains("Permission mode:"));
+    assert!(content.contains("Mode:"));
     assert!(content.contains("# Approval Panel"));
-    assert!(content.contains("Pending approval: Tool approval"));
+    assert!(content.contains("Name: bash"));
 }
 
 #[tokio::test]

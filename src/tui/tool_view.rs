@@ -119,9 +119,46 @@ impl ToolRunView {
         )
     }
 
+    pub fn tool_kind_label(&self) -> &'static str {
+        match self.name.as_str() {
+            "file_write" | "file_edit" | "file_patch" | "format" | "rewind" | "memory_save"
+            | "memory_clear" | "copy" | "clear" | "refactor" => "Edit",
+            "bash" | "powershell" | "repl" => "Shell",
+            "file_read"
+            | "git_status"
+            | "git_diff"
+            | "memory_load"
+            | "skill_view"
+            | "context"
+            | "context_visualization"
+            | "datetime"
+            | "cost"
+            | "telemetry"
+            | "diff"
+            | "lsp"
+            | "symbol_query"
+            | "brief"
+            | "notebook"
+            | "project_list"
+            | "bash_output" => "Read",
+            "glob" | "grep" | "web_search" | "json_query" | "tool_search" => "Search",
+            "agent" | "todo_write" | "enter_plan_mode" | "exit_plan_mode" | "plan" | "ask_user"
+            | "socratic_analyze" | "cron" | "swarm" | "task_create" | "task_get" | "task_list"
+            | "task_update" | "task_stop" | "task_output" | "resume" | "run_tests"
+            | "start_dev_server" | "send_message" | "share" | "team" | "workbench"
+            | "skills_list" | "skill_manage" | "bash_cancel" | "bash_tasks" | "encode"
+            | "desktop" | "browser" | "sleep" => "Task",
+            "web_fetch" | "install_dependencies" | "github" => "Network",
+            "mcp" | "mcp_tool" | "mcp_auth" | "list_mcp_resources" | "read_mcp_resource" => "Mcp",
+            "plugin_list" | "plugin_manage" => "Plugin",
+            _ => "",
+        }
+    }
+
     pub fn summary(&self) -> String {
         let args = self.arguments.as_ref();
-        match self.name.as_str() {
+        let kind_label = self.tool_kind_label();
+        let text = match self.name.as_str() {
             "bash" => summarize_bash(args, self),
             "bash_output" => {
                 terminal_summary(self, "Reading background shell", "Read background shell")
@@ -167,6 +204,11 @@ impl ToolRunView {
                 &format!("Running {}", self.name),
                 &format!("Ran {}", self.name),
             ),
+        };
+        if kind_label.is_empty() {
+            text
+        } else {
+            format!("[{}] {}", kind_label, text)
         }
     }
 
@@ -264,7 +306,13 @@ impl ToolRunView {
         }
 
         if expanded {
-            lines.push(format!("  ├ tool: {}", self.name));
+            let kind = self.tool_kind_label();
+            let kind_info = if kind.is_empty() {
+                String::new()
+            } else {
+                format!(" ({})", kind)
+            };
+            lines.push(format!("  ├ tool: {}{}", self.name, kind_info));
             lines.push(format!("  ├ status: {}", status_hint));
             lines.push(format!("  ├ elapsed: {}s", self.elapsed().as_secs()));
             if let Some(arguments) = self.arguments.as_ref() {
@@ -836,14 +884,14 @@ mod tests {
     fn bash_ls_summary_counts_entries_after_completion() {
         let mut run = ToolRunView::new("tool_1".to_string(), "bash".to_string());
         run.arguments = Some(json!({ "command": "ls -la ~/Desktop" }));
-        assert_eq!(run.summary(), "Listing directory");
+        assert_eq!(run.summary(), "[Shell] Listing directory");
 
         run.mark_complete(
             "Result: OK\ntotal 8\ndrwxr-xr-x  .\ndrwxr-xr-x  ..\n-rw-r--r--  a.txt\ndrwxr-xr-x  project\n"
                 .to_string(),
         );
 
-        assert_eq!(run.summary(), "Listed 2 items");
+        assert_eq!(run.summary(), "[Shell] Listed 2 items");
         assert_eq!(
             run.result_stats().as_deref(),
             Some("output: 5 lines, 74 chars")
@@ -854,15 +902,15 @@ mod tests {
     fn bash_summary_uses_shared_shell_categories() {
         let mut install = ToolRunView::new("tool_install".to_string(), "bash".to_string());
         install.arguments = Some(json!({ "command": "pip3 install pygame" }));
-        assert_eq!(install.summary(), "Installing package");
+        assert_eq!(install.summary(), "[Shell] Installing package");
 
         let mut dev = ToolRunView::new("tool_dev".to_string(), "bash".to_string());
         dev.arguments = Some(json!({ "command": "npm run dev" }));
-        assert_eq!(dev.summary(), "Starting dev server");
+        assert_eq!(dev.summary(), "[Shell] Starting dev server");
 
         let mut search = ToolRunView::new("tool_search".to_string(), "bash".to_string());
         search.arguments = Some(json!({ "command": "rg TODO src" }));
-        assert_eq!(search.summary(), "Searching files");
+        assert_eq!(search.summary(), "[Shell] Searching files");
     }
 
     #[test]
@@ -931,7 +979,7 @@ mod tests {
 
         run.mark_complete("Result: OK\nsrc/tui/tool_view.rs:struct ToolRunView\n".to_string());
 
-        assert_eq!(run.summary(), "Found 1 matches");
+        assert_eq!(run.summary(), "[Search] Found 1 matches");
         assert!(run.render_lines(false)[0].contains("done"));
         assert!(run.render_lines(false)[0].contains("output: 1 line"));
         assert!(run.render_lines(false)[0].contains("ctrl+t output"));
@@ -958,11 +1006,11 @@ mod tests {
         let mut run = ToolRunView::new("tool_4".to_string(), "format".to_string());
         run.arguments = Some(json!({ "file_path": "src/main.rs" }));
 
-        assert_eq!(run.summary(), "Formatting main.rs");
+        assert_eq!(run.summary(), "[Edit] Formatting main.rs");
         assert_eq!(run.detail_line().as_deref(), Some("└ src/main.rs"));
 
         run.mark_complete("Result: OK\nFormatted src/main.rs using rustfmt\n".to_string());
-        assert_eq!(run.summary(), "Formatted main.rs");
+        assert_eq!(run.summary(), "[Edit] Formatted main.rs");
     }
 
     #[test]

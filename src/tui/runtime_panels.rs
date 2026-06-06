@@ -90,7 +90,7 @@ fn render_diff_panel(app: &TuiApp) -> String {
 pub fn render_approval_panel(app: &TuiApp) -> String {
     let mut lines = vec![
         "# Approval Panel".to_string(),
-        format!("Permission mode: {}", app.current_permission_label()),
+        format!("Mode: {}", app.current_permission_label()),
     ];
 
     let Some(request) = app.pending_permission_request.as_ref() else {
@@ -100,60 +100,69 @@ pub fn render_approval_panel(app: &TuiApp) -> String {
 
     let review = request.human_review_request();
     let permission = request.permission_review();
+
+    // Zone 1: Tool Semantic
+    lines.push("\n═══ Tool ═══".to_string());
     lines.push(format!(
-        "Pending approval: {} [{}]",
-        review.title,
-        review.risk.as_str()
-    ));
-    lines.push(format!(
-        "Tool: {} ({})",
+        "Name: {} | ID: {}",
         request.tool_call.name, request.tool_call.id
     ));
+    lines.push(format!("Description: {}", review.title));
+
+    // Zone 2: Risk & Rules
+    lines.push("\n═══ Risk & Rules ═══".to_string());
     lines.push(format!(
-        "Subject: {}",
-        compact_panel_line(&review.subject, 180)
+        "Risk: {} | Subject: {}",
+        review.risk.as_str(),
+        compact_panel_line(&review.subject, 140)
     ));
-    lines.push(format!("Rule: {}", permission.rule_pattern));
     lines.push(format!(
         "Reason: {}",
-        compact_panel_line(&review.reason, 220)
+        compact_panel_line(&review.reason, 200)
     ));
+    lines.push(format!("Match pattern: {}", permission.rule_pattern));
     if let Some(audit) = request.audit.as_ref() {
         if !audit.risk_facts.is_empty() {
             lines.push(format!(
                 "Risk facts: {}",
-                compact_panel_line(&audit.risk_facts.join(", "), 220)
+                compact_panel_line(&audit.risk_facts.join(", "), 200)
             ));
         }
         if !audit.matched_rules.is_empty() {
             lines.push(format!(
                 "Matched rules: {}",
-                compact_panel_line(&audit.matched_rules.join(", "), 180)
+                compact_panel_line(&audit.matched_rules.join(", "), 160)
             ));
         }
         if let Some(hint) = audit.recovery_hint.as_deref() {
-            lines.push(format!("Recovery: {}", compact_panel_line(hint, 220)));
+            lines.push(format!("Recovery: {}", compact_panel_line(hint, 200)));
         }
     }
 
+    // Zone 3: Diff / Command Preview
+    lines.push("\n═══ Preview ═══".to_string());
+    if let Some((title, preview)) = app.compute_permission_diff() {
+        lines.push(format!("  {}", title));
+        for preview_line in preview.lines().take(30) {
+            lines.push(format!("  {}", preview_line));
+        }
+    } else {
+        lines.push(format!("  {}", compact_panel_line(&review.subject, 160)));
+    }
+
+    // Zone 4: Actions
+    lines.push("\n═══ Actions ═══".to_string());
     let choices = permission
         .options
         .iter()
         .map(|option| format!("{}={}", option.key, option.label))
         .collect::<Vec<_>>()
-        .join(", ");
-    lines.push(format!("Choices: {}", choices));
-
-    if let Some((title, preview)) = app.compute_permission_diff() {
-        lines.push("Preview:".to_string());
-        lines.push(format!("  {}", title));
-        for line in preview.lines().take(10) {
-            lines.push(format!("  {}", compact_panel_line(line, 140)));
-        }
-        if preview.lines().count() > 10 {
-            lines.push("  ...".to_string());
-        }
-    }
+        .join(" | ");
+    lines.push(choices);
+    lines.push(
+        "  1=approve once · 2=approve session · 3=approve project · 4=deny · esc=cancel"
+            .to_string(),
+    );
 
     lines.join("\n")
 }
@@ -905,13 +914,13 @@ mod tests {
         let panel = render_runtime_panel(&app, RuntimePanelKind::Approval).await;
 
         assert!(panel.contains("# Approval Panel"));
-        assert!(panel.contains("Pending approval: Tool approval"));
-        assert!(panel.contains("Rule: bash"));
+        assert!(panel.contains("Name: bash"));
+        assert!(panel.contains("Match pattern: bash"));
         assert!(panel.contains("Risk facts: family:shell"));
         assert!(panel.contains("Matched rules: bash:cargo check*"));
         assert!(panel.contains("Recovery: Ask the user"));
-        assert!(panel.contains("Choices: y=allow once"));
-        assert!(panel.contains("Preview:"));
+        assert!(panel.contains("y=allow once"));
+        assert!(panel.contains("═══ Preview ═══"));
     }
 
     #[tokio::test]
