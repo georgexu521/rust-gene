@@ -51,6 +51,88 @@ print_warning() {
     echo -e "${YELLOW}⚠ $1${NC}"
 }
 
+print_progress() {
+    echo -e "${CYAN}[$1]${NC} $2"
+}
+
+# ─── Real-time Progress Monitor ───────────────────────────────
+# Watches events.jsonl and prints human-readable progress lines.
+# Runs as a background process; the caller must kill it when done.
+
+monitor_progress() {
+    local events_file="$1"
+    local task_name="$2"
+
+    python3 - "$events_file" "$task_name" <<'PY' &
+import json
+import sys
+import time
+import os
+
+events_file, task_name = sys.argv[1], sys.argv[2]
+
+# Wait for file to appear
+while not os.path.exists(events_file):
+    time.sleep(0.5)
+
+last_pos = 0
+
+while True:
+    try:
+        current_size = os.path.getsize(events_file)
+    except OSError:
+        time.sleep(0.5)
+        continue
+
+    if current_size > last_pos:
+        with open(events_file, 'r') as f:
+            f.seek(last_pos)
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    event = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+
+                ev = event.get("event", "")
+
+                if ev == "start":
+                    print(f"\n  [monitor] Agent started: {task_name}", flush=True)
+
+                elif ev == "tool_execution_start":
+                    meta = event.get("metadata", {})
+                    tool = meta.get("tool", event.get("name", "unknown"))
+                    path = meta.get("path", "")
+                    desc = meta.get("activity_description", "")
+                    if path:
+                        print(f"  [monitor] → {tool}: {path}", flush=True)
+                    elif desc:
+                        print(f"  [monitor] → {tool}: {desc}", flush=True)
+                    else:
+                        print(f"  [monitor] → {tool}", flush=True)
+
+                elif ev == "runtime_diagnostic":
+                    diag = event.get("diagnostic", {})
+                    stage = diag.get("stage", "")
+                    if stage == "api_request_started":
+                        it = diag.get("iteration", "?")
+                        model = diag.get("model", "")
+                        print(f"  [monitor] [{it}] LLM request → {model}", flush=True)
+                    elif stage == "provider_request_completed":
+                        ms = diag.get("elapsed_ms", "?")
+                        print(f"  [monitor]     Response ← ({ms}ms)", flush=True)
+
+                elif ev == "end":
+                    print(f"  [monitor] Agent finished\n", flush=True)
+
+            last_pos = f.tell()
+
+    time.sleep(1)
+PY
+}
+
 # Extract field from YAML task file using Python
 yaml_get() {
     local task_file="$1"
@@ -169,7 +251,7 @@ capture_status_paths() {
     {
         git diff --name-only
         git ls-files --others --exclude-standard
-    } | sed '/^[[:space:]]*$/d' | sort -u > "$output_file"
+    } | grep -v '^target/' | grep -v '/target/' | grep -v '^\.git/' | sed '/^[[:space:]]*$/d' | sort -u > "$output_file"
 }
 
 print_status_path_delta() {
@@ -365,7 +447,14 @@ run_task_file() {
     # Increase iteration limit for eval tasks (default 50 may not be enough for complex changes)
     export PRIORITY_AGENT_ENGINE_MAX_ITERATIONS="${PRIORITY_AGENT_ENGINE_MAX_ITERATIONS:-150}"
 
-    # Step 7: Run the eval task
+    # Step 7: Start real-time progress monitor
+    local monitor_pid=""
+    if [ "${EVAL_RUN_MONITOR:-1}" != "0" ]; then
+        monitor_progress "$events_file" "$task_name" &
+        monitor_pid=$!
+    fi
+
+    # Step 8: Run the eval task
     local exit_code=0
     local stderr_file="$ROOT_DIR/target/eval-reports/${task_name}-${timestamp}.stderr.log"
     if ./target/debug/priority-agent \
@@ -377,6 +466,12 @@ run_task_file() {
         exit_code=0
     else
         exit_code=$?
+    fi
+
+    # Stop progress monitor
+    if [ -n "$monitor_pid" ] && kill -0 "$monitor_pid" 2>/dev/null; then
+        kill "$monitor_pid" 2>/dev/null
+        wait "$monitor_pid" 2>/dev/null || true
     fi
 
     if [ $exit_code -eq 0 ]; then
