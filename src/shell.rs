@@ -38,6 +38,8 @@ const LOCAL_COMMANDS: &[ShellCommand] = &[
     ShellCommand::new("/sessions", "list previous conversations"),
     ShellCommand::new("/status", "show model and context status"),
     ShellCommand::new("/model", "show active model"),
+    ShellCommand::new("/cost", "show token and cost usage"),
+    ShellCommand::new("/token", "show token and cost usage"),
     ShellCommand::new("/clear", "clear terminal"),
     ShellCommand::new("/exit", "quit"),
 ];
@@ -165,6 +167,10 @@ async fn handle_local_command(
         }
         "/status" => {
             print_status(engine).await;
+            Ok(true)
+        }
+        "/cost" | "/token" => {
+            print_cost(engine).await;
             Ok(true)
         }
         "/clear" => {
@@ -442,6 +448,12 @@ async fn print_status(engine: &StreamingQueryEngine) {
         "{DIM}  prefix     {RESET}{}",
         usage.stable_prefix_fingerprint
     );
+}
+
+async fn print_cost(engine: &StreamingQueryEngine) {
+    let tracker = engine.cost_tracker().lock().await;
+    println!("{BOLD}Token Usage{RESET}");
+    println!("{}", tracker.generate_report());
 }
 
 fn permission_mode_label(mode: crate::permissions::PermissionMode) -> &'static str {
@@ -1130,6 +1142,7 @@ mod tests {
 
         assert_eq!(start, 0);
         assert!(candidates.iter().any(|pair| pair.replacement == "/clear"));
+        assert!(candidates.iter().any(|pair| pair.replacement == "/cost"));
         assert!(!candidates.iter().any(|pair| pair.replacement == "/help"));
     }
 

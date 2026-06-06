@@ -47,6 +47,109 @@ fn sanitize_required_validation_env(cmd: &mut tokio::process::Command) {
     }
 }
 
+fn push_required_validation_command(commands: &mut Vec<String>, command: &str) {
+    let command = command.trim();
+    if command.is_empty() || command == "(none)" {
+        return;
+    }
+    if RequiredValidationController::is_safe_required_validation_command(command)
+        && !commands.iter().any(|existing| existing == command)
+    {
+        commands.push(command.to_string());
+    }
+}
+
+fn extract_backtick_commands(line: &str) -> Vec<String> {
+    let mut commands = Vec::new();
+    let mut rest = line;
+    while let Some(start) = rest.find('`') {
+        let after_start = &rest[start + 1..];
+        let Some(end) = after_start.find('`') else {
+            break;
+        };
+        commands.push(after_start[..end].trim().to_string());
+        rest = &after_start[end + 1..];
+    }
+    commands
+}
+
+fn extract_inline_validation_command(line: &str) -> Option<String> {
+    if !line_has_validation_trigger(line) {
+        return None;
+    }
+    let start = inline_validation_command_start(line)?;
+    let candidate = collect_inline_command_tokens(&line[start..]);
+    if candidate.is_empty() {
+        None
+    } else {
+        Some(candidate)
+    }
+}
+
+fn line_has_validation_trigger(line: &str) -> bool {
+    let lower = line.to_ascii_lowercase();
+    line.contains("运行")
+        || line.contains("执行")
+        || line.contains("验证")
+        || line.contains("跑一下")
+        || lower.contains(" run ")
+        || lower.starts_with("run ")
+        || lower.contains(" verify ")
+        || lower.starts_with("verify ")
+}
+
+fn inline_validation_command_start(line: &str) -> Option<usize> {
+    const STARTERS: &[&str] = &[
+        "python3 -m ",
+        "python -m ",
+        "cargo test",
+        "cargo check",
+        "cargo fmt",
+        "cargo clippy",
+        "pnpm test",
+        "npm test",
+        "node ",
+        "bash -n ",
+        "! rg ",
+        "rg ",
+        "test ",
+    ];
+
+    STARTERS
+        .iter()
+        .filter_map(|starter| line.find(starter))
+        .min()
+}
+
+fn collect_inline_command_tokens(text: &str) -> String {
+    let mut tokens = Vec::new();
+    for raw in text.split_whitespace() {
+        let token = raw.trim_matches(|ch: char| {
+            matches!(ch, '。' | '，' | ',' | '；' | '、' | '：' | ':' | ')')
+        });
+        if token.is_empty() || token_starts_prose_tail(token) {
+            break;
+        }
+        tokens.push(token);
+    }
+    tokens.join(" ")
+}
+
+fn token_starts_prose_tail(token: &str) -> bool {
+    token.chars().any(is_cjk)
+        || matches!(
+            token.to_ascii_lowercase().as_str(),
+            "and" | "then" | "verify" | "confirm" | "report"
+        )
+}
+
+fn is_cjk(ch: char) -> bool {
+    ('\u{4e00}'..='\u{9fff}').contains(&ch)
+        || ('\u{3400}'..='\u{4dbf}').contains(&ch)
+        || ('\u{3040}'..='\u{30ff}').contains(&ch)
+        || ('\u{ac00}'..='\u{d7af}').contains(&ch)
+}
+
 pub(super) async fn shell_output_with_timeout(
     command: &str,
     working_dir: &std::path::Path,
@@ -398,21 +501,16 @@ impl RequiredValidationController {
         let mut commands = Vec::new();
         for line in prompt.lines() {
             let trimmed = line.trim();
-            if !trimmed.starts_with("- `") {
+            let mut found_backtick_command = false;
+            for command in extract_backtick_commands(trimmed) {
+                found_backtick_command = true;
+                push_required_validation_command(&mut commands, &command);
+            }
+            if found_backtick_command {
                 continue;
             }
-            let rest = &trimmed[3..];
-            let Some(end) = rest.find('`') else {
-                continue;
-            };
-            let command = rest[..end].trim();
-            if command.is_empty() || command == "(none)" {
-                continue;
-            }
-            if Self::is_safe_required_validation_command(command)
-                && !commands.iter().any(|existing| existing == command)
-            {
-                commands.push(command.to_string());
+            if let Some(command) = extract_inline_validation_command(trimmed) {
+                push_required_validation_command(&mut commands, &command);
             }
         }
         commands

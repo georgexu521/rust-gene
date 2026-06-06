@@ -148,6 +148,24 @@ fn test_extract_required_validation_commands_keeps_live_eval_script_checks() {
 }
 
 #[test]
+fn test_extract_required_validation_commands_from_interactive_chinese_prompt() {
+    let prompt = "请修复 todo.py，让测试期望的小写 todo 前缀通过。只改 todo.py，运行 python3 -m unittest test_todo.py 验证。";
+
+    let commands = RequiredValidationController::extract_commands(prompt);
+
+    assert_eq!(commands, vec!["python3 -m unittest test_todo.py"]);
+}
+
+#[test]
+fn test_extract_required_validation_commands_from_inline_backticks() {
+    let prompt = "改完后请运行 `cargo test -q shell -- --test-threads=1`，不要改其他文件。";
+
+    let commands = RequiredValidationController::extract_commands(prompt);
+
+    assert_eq!(commands, vec!["cargo test -q shell -- --test-threads=1"]);
+}
+
+#[test]
 fn test_not_allowed_tool_result_has_recovery_metadata() {
     let tool_call = ToolCall {
         id: "call_denied".to_string(),

@@ -334,13 +334,7 @@ impl WorkflowCloseout {
         } else {
             format!("changed {}", self.changed_files.join(", "))
         };
-        let validation = self
-            .validation
-            .iter()
-            .find(|item| item.contains(": passed"))
-            .or_else(|| self.validation.first())
-            .map(|item| item.as_str())
-            .unwrap_or("validation not recorded");
+        let validation = self.concise_validation_line();
         let risks = self
             .residual_risks
             .iter()
@@ -381,6 +375,36 @@ impl WorkflowCloseout {
             CloseoutVisibility::Hidden => String::new(),
             CloseoutVisibility::Concise => self.format_concise_for_final_response(),
             CloseoutVisibility::Full => self.format_for_final_response(),
+        }
+    }
+
+    fn concise_validation_line(&self) -> &str {
+        let blocking = || {
+            self.validation.iter().find(|item| {
+                item.contains(": failed")
+                    || item.contains(": not_verified")
+                    || item.contains(": partial")
+                    || item.contains("verification proof: failed")
+                    || item.contains("verification proof: not_run")
+                    || item.contains("verification proof: blocked")
+                    || item.contains("verification proof: unavailable")
+                    || item.contains("verification proof: user_deferred")
+            })
+        };
+        match self.status {
+            StageValidationStatus::Passed => self
+                .validation
+                .iter()
+                .find(|item| item.contains(": passed"))
+                .or_else(|| self.validation.first())
+                .map(|item| item.as_str())
+                .unwrap_or("validation not recorded"),
+            StageValidationStatus::Failed
+            | StageValidationStatus::Partial
+            | StageValidationStatus::NotVerified => blocking()
+                .or_else(|| self.validation.first())
+                .map(|item| item.as_str())
+                .unwrap_or("validation not recorded"),
         }
     }
 }

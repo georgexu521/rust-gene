@@ -385,6 +385,30 @@ fn low_risk_not_verified_closeout_formats_concise_caveat_by_default() {
 }
 
 #[test]
+fn not_verified_concise_closeout_prefers_blocking_proof_line() {
+    let mut env = EnvVarGuard::acquire_blocking();
+    env.remove("PRIORITY_AGENT_CLOSEOUT_VISIBILITY");
+    let closeout = WorkflowCloseout {
+        status: StageValidationStatus::NotVerified,
+        risk: RiskLevel::Medium,
+        changed_files: vec!["todo.py".to_string()],
+        validation: vec![
+            "file-change validation: passed (py_compile passed for 1 file(s).)".to_string(),
+            "verification proof: not_run (required validation missing 1/1 commands)".to_string(),
+        ],
+        acceptance: vec!["pending: run requested unittest".to_string()],
+        residual_risks: vec!["Required validation was not run or not recorded".to_string()],
+    };
+
+    let response = closeout.format_concise_for_final_response();
+
+    assert_eq!(closeout.status, StageValidationStatus::NotVerified);
+    assert!(response.contains("Done with caveats."));
+    assert!(response.contains("Not verified: verification proof: not_run"));
+    assert!(!response.contains("Not verified: file-change validation: passed"));
+}
+
+#[test]
 fn high_risk_passed_closeout_stays_full_by_default() {
     let mut env = EnvVarGuard::acquire_blocking();
     env.remove("PRIORITY_AGENT_CLOSEOUT_VISIBILITY");
