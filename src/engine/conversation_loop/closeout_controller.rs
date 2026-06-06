@@ -148,12 +148,19 @@ impl CloseoutEvaluator {
         let runtime_validation_label = evidence_ledger
             .runtime_required_validation_label(required_validation_commands)
             .or_else(|| evidence_ledger.runtime_validation_label());
+        let ledger_changed_files = evidence_ledger.changed_files();
         let mut closeout = code_workflow.build_closeout_with_runtime_validation(
             task_bundle,
             runtime_validation_label.as_deref(),
         );
         if let Some(closeout) = &mut closeout {
+            merge_ledger_changed_files_into_closeout(closeout, &ledger_changed_files);
             apply_verification_proof_to_closeout(
+                closeout,
+                &verification_proof,
+                validation_required,
+            );
+            apply_verified_runtime_validation_to_closeout(
                 closeout,
                 &verification_proof,
                 validation_required,
@@ -171,6 +178,23 @@ impl CloseoutEvaluator {
             tool_evidence_summary,
             verification_proof,
         }
+    }
+}
+
+fn merge_ledger_changed_files_into_closeout(closeout: &mut WorkflowCloseout, paths: &[String]) {
+    for path in paths {
+        if !closeout
+            .changed_files
+            .iter()
+            .any(|existing| existing == path)
+        {
+            closeout.changed_files.push(path.clone());
+        }
+    }
+    if !closeout.changed_files.is_empty() {
+        closeout.residual_risks.retain(|risk| {
+            !risk.contains("No changed files were recorded for this code-change workflow")
+        });
     }
 }
 
@@ -269,6 +293,47 @@ fn apply_verification_proof_to_closeout(
         closeout.residual_risks.push(residual);
     }
     apply_proof_support_to_closeout(closeout, proof);
+}
+
+fn apply_verified_runtime_validation_to_closeout(
+    closeout: &mut WorkflowCloseout,
+    proof: &VerificationProof,
+    validation_required: bool,
+) {
+    if !validation_required
+        || proof.status != VerificationProofStatus::Verified
+        || proof.derived_support.status != VerificationProofStatus::Verified
+        || !proof.derived_support.supports_verified
+        || proof.derived_support.residual_risk
+        || closeout.status == StageValidationStatus::Failed
+        || closeout.changed_files.is_empty()
+    {
+        return;
+    }
+
+    closeout.status = StageValidationStatus::Passed;
+    if closeout
+        .acceptance
+        .iter()
+        .all(|item| item.starts_with("pending:"))
+    {
+        closeout.acceptance.clear();
+        closeout.acceptance.push(
+            "accepted=true confidence=High unresolved=0 (required validation passed with runtime evidence)"
+                .to_string(),
+        );
+    }
+    closeout.residual_risks.retain(|risk| {
+        !matches!(
+            risk.as_str(),
+            "Required validation was not run or not recorded"
+                | "Acceptance criteria were generated but not reviewed"
+                | "Workflow finished with unresolved validation or acceptance risk"
+        )
+    });
+    if closeout.residual_risks.is_empty() {
+        closeout.residual_risks.push("none recorded".to_string());
+    }
 }
 
 fn apply_proof_support_to_closeout(closeout: &mut WorkflowCloseout, proof: &VerificationProof) {
@@ -815,6 +880,21 @@ mod tests {
         }
     }
 
+    fn code_change_route() -> IntentRoute {
+        IntentRoute {
+            intent: IntentKind::CodeChange,
+            confidence: 0.90,
+            workflow: WorkflowKind::CodeChange,
+            retrieval: RetrievalPolicy::Project,
+            reasoning: ReasoningPolicy::Medium,
+            risk: RiskLevel::High,
+            recommended_tools: Vec::new(),
+            dependency_install_intent: false,
+            mcp_auth_intent: false,
+            reason: "normal code change requires project verification".to_string(),
+        }
+    }
+
     fn isolate_project_memory_stores(env: &mut EnvVarGuard, store_dir: &tempfile::TempDir) {
         env.set(
             "PRIORITY_AGENT_PROJECT_PROGRESS_PATH",
@@ -1299,6 +1379,57 @@ mod tests {
             .residual_risks
             .iter()
             .any(|item| item.contains("Verification proof is not_run")));
+    }
+
+    #[test]
+    fn evaluator_promotes_bash_changed_code_with_verified_required_validation() {
+        let mut bundle = TaskContextBundle::new("实现一个小功能", ".", code_change_route(), None);
+        bundle.add_acceptance_check("required validation command: python3 -m unittest test_app.py");
+        let code_workflow = CodeChangeWorkflowRunner::new(&bundle);
+        let mut evidence_ledger = EvidenceLedger::new();
+        evidence_ledger.record_tool_result(
+            &ToolCall {
+                id: "write_app".to_string(),
+                name: "bash".to_string(),
+                arguments: serde_json::json!({
+                    "command": "cat > src/app.py <<'PY'\nprint('ok')\nPY"
+                }),
+            },
+            &crate::tools::ToolResult::success("wrote app.py"),
+        );
+        evidence_ledger.record_tool_result(
+            &ToolCall {
+                id: "run_tests".to_string(),
+                name: "bash".to_string(),
+                arguments: serde_json::json!({
+                    "command": "python3 -m unittest test_app.py"
+                }),
+            },
+            &crate::tools::ToolResult::success("Ran 3 tests in 1.0s\n\nOK"),
+        );
+        let required_commands = vec!["python3 -m unittest test_app.py".to_string()];
+
+        let evaluation = CloseoutEvaluator::evaluate(
+            &code_workflow,
+            &bundle,
+            &evidence_ledger,
+            &required_commands,
+        );
+        let closeout = evaluation.closeout.expect("closeout");
+
+        assert_eq!(closeout.status, StageValidationStatus::Passed);
+        assert!(closeout
+            .changed_files
+            .iter()
+            .any(|path| path == "src/app.py"));
+        assert!(closeout
+            .validation
+            .iter()
+            .any(|item| item.contains("verification proof: verified")));
+        assert!(closeout.acceptance.iter().any(|item| {
+            item.contains("accepted=true") && item.contains("required validation passed")
+        }));
+        assert_eq!(closeout.residual_risks, vec!["none recorded".to_string()]);
     }
 
     #[test]

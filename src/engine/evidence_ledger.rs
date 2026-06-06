@@ -887,6 +887,11 @@ impl EvidenceLedger {
             ToolExecutionStatus::Failed
         };
         let changed_paths = changed_paths_for_tool_result(tool_call, result);
+        if result.success {
+            for path in &changed_paths {
+                self.changed_files.insert(path.clone());
+            }
+        }
         let execution = tool_execution_context_record(result);
         let relevance = tool_execution_relevance(
             result,
