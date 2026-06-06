@@ -5,8 +5,8 @@
 
 use super::result::{ToolPermissionLevel, ToolResult};
 use super::schema::{
-    ToolInterruptBehavior, ToolOperationKind, ToolSchema, ToolSearchOrReadSemantics,
-    ToolUiRenderKind,
+    ToolFamily, ToolInterruptBehavior, ToolKind, ToolOperationKind, ToolSchema,
+    ToolSearchOrReadSemantics, ToolUiRenderKind,
 };
 use crate::services::api::ToolCall;
 use async_trait::async_trait;
@@ -516,6 +516,48 @@ pub trait Tool: Send + Sync {
             ToolOperationKind::Network
         } else {
             ToolOperationKind::Other
+        }
+    }
+
+    /// Provider/UI-facing tool kind for protocol adapters and compact traces.
+    fn tool_kind(&self, params: &Value) -> ToolKind {
+        let name = self.name().to_ascii_lowercase();
+        match self.operation_kind(params) {
+            ToolOperationKind::Shell => ToolKind::Execute,
+            ToolOperationKind::Write | ToolOperationKind::Edit | ToolOperationKind::Patch => {
+                ToolKind::Edit
+            }
+            ToolOperationKind::Search | ToolOperationKind::List => ToolKind::Search,
+            ToolOperationKind::Read => ToolKind::Read,
+            ToolOperationKind::Task => ToolKind::Think,
+            ToolOperationKind::Network if name.contains("fetch") => ToolKind::Fetch,
+            ToolOperationKind::Network if name.contains("search") => ToolKind::Search,
+            ToolOperationKind::Network => ToolKind::Fetch,
+            ToolOperationKind::Other => ToolKind::Other,
+        }
+    }
+
+    /// Broad permission/product family. This is intentionally separate from
+    /// side-effect policy, which can classify individual invocations more deeply.
+    fn tool_family(&self, params: &Value) -> ToolFamily {
+        let name = self.name().to_ascii_lowercase();
+        if name.starts_with("mcp") || name.contains("mcp_") {
+            return ToolFamily::Mcp;
+        }
+        if name.starts_with("plugin") || name.contains("plugin_") {
+            return ToolFamily::Plugin;
+        }
+
+        match self.operation_kind(params) {
+            ToolOperationKind::Write | ToolOperationKind::Edit | ToolOperationKind::Patch => {
+                ToolFamily::Edit
+            }
+            ToolOperationKind::Shell => ToolFamily::Shell,
+            ToolOperationKind::Read | ToolOperationKind::List => ToolFamily::Read,
+            ToolOperationKind::Search => ToolFamily::Search,
+            ToolOperationKind::Task => ToolFamily::Task,
+            ToolOperationKind::Network => ToolFamily::Network,
+            ToolOperationKind::Other => ToolFamily::Other,
         }
     }
 

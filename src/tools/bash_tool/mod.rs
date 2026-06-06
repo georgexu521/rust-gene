@@ -9,7 +9,8 @@ mod pty;
 
 use crate::engine::context_ledger::{record_bash_read, BashReadLedgerInput};
 use crate::tools::{
-    Tool, ToolContext, ToolErrorCode, ToolOperationKind, ToolResult, ToolSearchOrReadSemantics,
+    Tool, ToolContext, ToolErrorCode, ToolFamily, ToolKind, ToolOperationKind, ToolResult,
+    ToolSearchOrReadSemantics,
 };
 use async_trait::async_trait;
 use background::{background_shell_result_data, background_started_content};
@@ -988,6 +989,14 @@ impl Tool for BashTool {
             ShellCommandCategory::Search => ToolOperationKind::Search,
             _ => ToolOperationKind::Shell,
         }
+    }
+
+    fn tool_kind(&self, _params: &serde_json::Value) -> ToolKind {
+        ToolKind::Execute
+    }
+
+    fn tool_family(&self, _params: &serde_json::Value) -> ToolFamily {
+        ToolFamily::Shell
     }
 
     fn is_read_only(&self, params: &serde_json::Value) -> bool {

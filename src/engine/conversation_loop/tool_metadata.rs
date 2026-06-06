@@ -700,6 +700,8 @@ pub(super) fn attach_tool_contract_metadata(
     tool.backfill_observable_input(&mut observable_input);
     let contract = serde_json::json!({
         "operation_kind": serde_json::to_value(tool.operation_kind(params)).unwrap_or(serde_json::Value::Null),
+        "tool_kind": serde_json::to_value(tool.tool_kind(params)).unwrap_or(serde_json::Value::Null),
+        "tool_family": serde_json::to_value(tool.tool_family(params)).unwrap_or(serde_json::Value::Null),
         "read_only": tool.is_read_only(params),
         "concurrency_safe": tool.is_concurrency_safe(params),
         "destructive": tool.is_destructive(params),

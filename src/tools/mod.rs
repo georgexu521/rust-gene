@@ -79,8 +79,8 @@ mod examples;
 pub use registry::{CachedToolExecutor, ToolRegistry, ToolRegistryProfile};
 pub use result::{ToolErrorCode, ToolPermissionLevel, ToolResult};
 pub use schema::{
-    ToolInterruptBehavior, ToolOperationKind, ToolSchema, ToolSearchOrReadSemantics,
-    ToolUiRenderKind,
+    ToolFamily, ToolInterruptBehavior, ToolKind, ToolOperationKind, ToolSchema,
+    ToolSearchOrReadSemantics, ToolUiRenderKind,
 };
 pub use tool_trait::{
     Tool, ToolContext, ToolContextRetainedContext, ToolContextRetentionItem,

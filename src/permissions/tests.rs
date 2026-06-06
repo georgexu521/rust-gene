@@ -788,6 +788,32 @@ fn permission_rules_evaluate_purely_without_ui() {
 }
 
 #[test]
+fn edit_permission_alias_controls_file_mutation_family_not_bash() {
+    let mut context = crate::permissions::PermissionContext::new(".");
+    context.rules = crate::permissions::PermissionRules::new()
+        .deny("edit")
+        .allow("bash");
+
+    assert!(context.requires_confirmation("file_write", &serde_json::json!({"path": "src/lib.rs"})));
+    assert!(context.requires_confirmation("file_edit", &serde_json::json!({"path": "src/lib.rs"})));
+    assert!(context.requires_confirmation(
+        "file_patch",
+        &serde_json::json!({"operations": [{"path": "src/lib.rs"}]})
+    ));
+    assert!(context.requires_confirmation(
+        "format",
+        &serde_json::json!({"action": "format", "file_path": "src/lib.rs"})
+    ));
+    assert!(!context.requires_confirmation("bash", &serde_json::json!({"command": "cargo test"})));
+
+    assert!(!context.should_expose_tool("file_write"));
+    assert!(!context.should_expose_tool("file_edit"));
+    assert!(!context.should_expose_tool("file_patch"));
+    assert!(!context.should_expose_tool("format"));
+    assert!(context.should_expose_tool("bash"));
+}
+
+#[test]
 fn deny_blocks_tool_exposure() {
     let context = crate::permissions::PermissionContext::new(".");
     assert!(context.should_expose_tool("file_read"));

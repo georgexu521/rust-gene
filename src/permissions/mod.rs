@@ -235,6 +235,9 @@ pub enum PermissionDecision {
 
 fn permission_match_keys(tool_name: &str, params: &serde_json::Value) -> Vec<String> {
     let mut keys = Vec::new();
+    if is_edit_family_tool(tool_name, params) {
+        keys.push("edit".to_string());
+    }
     if tool_name == "mcp_tool" {
         let server = params["server_name"].as_str().unwrap_or("");
         let tool = params["tool_name"].as_str().unwrap_or("");
@@ -259,6 +262,11 @@ fn permission_match_keys(tool_name: &str, params: &serde_json::Value) -> Vec<Str
         keys.push(tool_name.to_string());
     }
     keys
+}
+
+fn is_edit_family_tool(tool_name: &str, params: &serde_json::Value) -> bool {
+    matches!(tool_name, "file_write" | "file_edit" | "file_patch")
+        || (tool_name == "format" && params["action"].as_str().unwrap_or("format") == "format")
 }
 
 /// 权限上下文
@@ -497,7 +505,11 @@ impl PermissionContext {
     /// 执行层仍会做最终授权；这个方法只用于请求前收窄工具池，减少
     /// 被明确拒绝或只读模式下不可用的工具被模型反复调用。
     pub fn should_expose_tool(&self, tool_name: &str) -> bool {
-        if matches!(self.rules.check(tool_name), PermissionDecision::Deny) {
+        let match_keys = permission_match_keys(tool_name, &serde_json::Value::Null);
+        if matches!(
+            self.rule_decision_for_keys(&match_keys),
+            PermissionDecision::Deny
+        ) {
             return false;
         }
 

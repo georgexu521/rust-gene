@@ -23,6 +23,19 @@ fn bash_tool_contract_keeps_output_non_user_facing() {
     );
 }
 
+#[test]
+fn bash_tool_kind_stays_execute_even_for_read_like_commands() {
+    let tool = BashTool;
+    let params = serde_json::json!({"command": "cat Cargo.toml"});
+
+    assert_eq!(
+        tool.operation_kind(&params),
+        crate::tools::ToolOperationKind::Read
+    );
+    assert_eq!(tool.tool_kind(&params), crate::tools::ToolKind::Execute);
+    assert_eq!(tool.tool_family(&params), crate::tools::ToolFamily::Shell);
+}
+
 #[tokio::test]
 async fn bash_read_persists_context_ledger_fact() {
     let tool = BashTool;

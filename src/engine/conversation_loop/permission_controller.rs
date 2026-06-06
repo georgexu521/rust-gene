@@ -218,6 +218,10 @@ impl PermissionController {
         let search_or_read =
             serde_json::to_value(tool.is_search_or_read_command(&tool_call.arguments))
                 .unwrap_or(serde_json::Value::Null);
+        let tool_kind = serde_json::to_value(tool.tool_kind(&tool_call.arguments))
+            .unwrap_or(serde_json::Value::Null);
+        let tool_family = serde_json::to_value(tool.tool_family(&tool_call.arguments))
+            .unwrap_or(serde_json::Value::Null);
         let ui_render_kind = serde_json::to_value(tool.ui_render_kind(&tool_call.arguments))
             .unwrap_or(serde_json::Value::Null);
         let permission_evidence = permission_decision_evidence_json(PermissionEvidenceInput {
@@ -254,6 +258,8 @@ impl PermissionController {
             "input_paths": tool.input_paths(&tool_call.arguments),
             "open_world": tool.is_open_world(&tool_call.arguments),
             "search_or_read": search_or_read,
+            "tool_kind": tool_kind,
+            "tool_family": tool_family,
             "ui_render_kind": ui_render_kind,
             "command_classification": command_classification,
             "remote_classification": remote_classification,

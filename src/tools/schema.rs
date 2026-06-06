@@ -27,6 +27,36 @@ pub enum ToolOperationKind {
     Other,
 }
 
+/// Provider/UI-facing tool kind aligned with ACP-style semantics.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolKind {
+    Execute,
+    Edit,
+    Fetch,
+    Search,
+    Read,
+    Think,
+    #[default]
+    Other,
+}
+
+/// Runtime permission and product grouping for broad tool families.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolFamily {
+    Edit,
+    Shell,
+    Read,
+    Search,
+    Task,
+    Network,
+    Mcp,
+    Plugin,
+    #[default]
+    Other,
+}
+
 /// How to handle user interruption while a tool is running.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
@@ -72,6 +102,10 @@ pub struct ToolSchema {
     pub error_codes: Vec<String>,
     /// 权限等级
     pub permission_level: ToolPermissionLevel,
+    /// Provider/UI-facing semantic kind.
+    pub tool_kind: ToolKind,
+    /// Broad permission/product family.
+    pub tool_family: ToolFamily,
     /// 是否幂等（相同参数重复执行结果相同）
     pub is_idempotent: bool,
     /// 是否可重试
@@ -107,6 +141,8 @@ impl ToolSchema {
             parameters: tool.parameters(),
             error_codes: tool.error_codes(),
             permission_level: tool.permission_level(),
+            tool_kind: tool.tool_kind(&Value::Null),
+            tool_family: tool.tool_family(&Value::Null),
             is_idempotent: tool.is_idempotent(),
             is_retryable: tool.is_retryable(),
             estimated_duration_ms: tool.estimated_duration_ms(),

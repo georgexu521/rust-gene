@@ -146,6 +146,15 @@ impl ToolBatchResultProcessor {
                 trace,
                 messages,
             );
+            if is_programming_workflow {
+                Self::append_shell_file_mutation_correction(
+                    tc,
+                    result,
+                    &mut outcome,
+                    trace,
+                    messages,
+                );
+            }
 
             if result.success && matches!(tc.name.as_str(), "file_edit" | "file_write") {
                 outcome.successful_write_tool = true;
@@ -335,6 +344,46 @@ impl ToolBatchResultProcessor {
         }
     }
 
+    fn append_shell_file_mutation_correction(
+        tool_call: &ToolCall,
+        result: &crate::tools::ToolResult,
+        outcome: &mut ToolBatchProcessingOutcome,
+        trace: &TraceCollector,
+        messages: &mut Vec<Message>,
+    ) {
+        if result.success || tool_call.name != "bash" {
+            return;
+        }
+        let command = tool_call.arguments["command"]
+            .as_str()
+            .or_else(|| tool_call.arguments["cmd"].as_str())
+            .unwrap_or_default();
+        let classification = crate::tools::bash_tool::command_classifier::classify_command(command);
+        if !matches!(
+            classification.category,
+            crate::tools::bash_tool::command_classifier::ShellCommandCategory::FileMutation
+        ) {
+            return;
+        }
+        if outcome
+            .tool_results_text
+            .contains("Shell file mutation correction")
+        {
+            return;
+        }
+
+        let correction = "Shell file mutation correction: the last bash command tried to create, overwrite, or edit files. For code changes, use file_write/file_edit/file_patch so permission, stale-read, diff, checkpoint, and rollback checks stay active. Keep bash or run_tests for validation after a file tool succeeds. Do not retry the same shell redirection, heredoc, or script-based file write.".to_string();
+        trace.record(TraceEvent::WorkflowFallback {
+            error: "bash file mutation failure redirected to file edit tools".to_string(),
+        });
+        outcome.tool_results_text.push('\n');
+        outcome.tool_results_text.push_str(&correction);
+        messages.push(Message::system(format!(
+            "<recent_observation>\n{}\n</recent_observation>",
+            correction
+        )));
+    }
+
     fn append_file_edit_failure_correction(
         outcome: &mut ToolBatchProcessingOutcome,
         trace: &TraceCollector,
@@ -512,6 +561,73 @@ mod tests {
             .contains("File edit repair correction"));
         assert!(messages.iter().any(|message| {
             matches!(message, Message::System { content } if content.contains("File edit repair correction"))
+        }));
+    }
+
+    #[tokio::test]
+    async fn failed_bash_file_mutation_adds_file_tool_repair_correction() {
+        let call = tool_call(
+            "call_1",
+            "bash",
+            serde_json::json!({
+                "command": "cat > src/lib.rs <<'EOF'\nfn main() {}\nEOF",
+                "description": "Write source file"
+            }),
+        );
+        let mut batch = ToolExecutionBatch::new(
+            vec![(
+                call.clone(),
+                ToolResult::error("Permission denied: 'bash' requires user confirmation."),
+            )],
+            Vec::new(),
+        );
+        let mut turn_state = TurnRuntimeState::new(true);
+        let mut messages = Vec::new();
+        let trace = trace();
+        let mut companion_keys = HashSet::new();
+        let mut failed_fingerprints = HashMap::new();
+        let mut failed_names = HashMap::new();
+        let mut successful_required = HashSet::new();
+        let mut task_bundle = task_bundle();
+        let destructive_scope = destructive_scope();
+        let baseline = HashSet::new();
+
+        let outcome = ToolBatchResultProcessor::process(ToolBatchProcessingContext {
+            tool_calls: std::slice::from_ref(&call),
+            tool_batch: &mut batch,
+            turn_state: &mut turn_state,
+            task_bundle: &mut task_bundle,
+            messages: &mut messages,
+            trace: &trace,
+            is_programming_workflow: true,
+            working_dir: Path::new("."),
+            last_user_preview: "edit file",
+            companion_context_keys: &mut companion_keys,
+            failed_tool_fingerprints: &mut failed_fingerprints,
+            failed_tool_names: &mut failed_names,
+            required_validation_commands: &[],
+            successful_required_validation_commands: &mut successful_required,
+            action_checkpoint_active: false,
+            destructive_scope: &destructive_scope,
+            baseline_git_status_files: &baseline,
+        })
+        .await;
+
+        assert!(outcome
+            .tool_results_text
+            .contains("Shell file mutation correction"));
+        assert!(outcome
+            .tool_results_text
+            .contains("file_write/file_edit/file_patch"));
+        assert!(messages.iter().any(|message| {
+            matches!(message, Message::System { content } if content.contains("Shell file mutation correction"))
+        }));
+        assert!(trace.snapshot().events.iter().any(|event| {
+            matches!(
+                event,
+                TraceEvent::WorkflowFallback { error }
+                    if error.contains("bash file mutation failure")
+            )
         }));
     }
 

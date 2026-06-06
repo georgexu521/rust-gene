@@ -373,6 +373,45 @@ fn core_tool_contract_descriptions_stay_compact() {
     }
 }
 
+#[test]
+fn core_tool_schema_exposes_protocol_kind_and_family() {
+    let registry = ToolRegistry::with_profile(ToolRegistryProfile::Core);
+
+    let bash = registry.get("bash").expect("bash registered");
+    assert_eq!(
+        bash.tool_kind(&json!({"command": "cargo test"})),
+        ToolKind::Execute
+    );
+    assert_eq!(
+        bash.tool_family(&json!({"command": "cargo test"})),
+        ToolFamily::Shell
+    );
+
+    let edit = registry.get("file_edit").expect("file_edit registered");
+    assert_eq!(
+        edit.tool_kind(&json!({"path": "src/lib.rs"})),
+        ToolKind::Edit
+    );
+    assert_eq!(
+        edit.tool_family(&json!({"path": "src/lib.rs"})),
+        ToolFamily::Edit
+    );
+
+    let read = registry.get("file_read").expect("file_read registered");
+    assert_eq!(
+        read.tool_kind(&json!({"path": "src/lib.rs"})),
+        ToolKind::Read
+    );
+    assert_eq!(
+        read.tool_family(&json!({"path": "src/lib.rs"})),
+        ToolFamily::Read
+    );
+
+    let schema = ToolSchema::from_tool(edit);
+    assert_eq!(schema.tool_kind, ToolKind::Edit);
+    assert_eq!(schema.tool_family, ToolFamily::Edit);
+}
+
 /// 工具数量不能回退
 #[test]
 fn test_tool_count_not_regressed() {
