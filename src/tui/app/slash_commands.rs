@@ -771,6 +771,7 @@ impl TuiApp {
             // Phase 10 Batch 1: Session & Control Commands
             "/session" => slash::handle_session_cmd(self, args).await,
             "/undo" => slash::handle_undo(self, args),
+            "/revert" => slash::handle_revert_turn(self).await,
             "/changes" => slash::handle_changes(self).await,
             "/validate" => {
                 if let Some(sid) = self.session_manager.current_session_id() {

@@ -62,6 +62,7 @@ pub mod repair_spec;
 pub mod resource_policy;
 pub mod retrieval_context;
 pub mod route_recovery;
+pub mod run_coordinator;
 pub mod runtime_controller;
 pub mod runtime_facade;
 #[cfg(test)]
@@ -79,6 +80,7 @@ pub mod task_context;
 pub mod task_contract;
 pub mod task_mode_score;
 pub mod tool_exposure;
+pub mod tool_settlement_ledger;
 pub mod trace;
 pub mod trace_replay;
 pub mod turn_ingress;

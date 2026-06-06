@@ -1,5 +1,60 @@
 use super::*;
 
+/// /revert last-turn — 一键回退最近一个 assistant turn 的所有文件变更
+pub async fn handle_revert_turn(app: &mut TuiApp) -> String {
+    let session_id = match app.session_manager.current_session_id() {
+        Some(id) => id.to_string(),
+        None => return "No active session.".to_string(),
+    };
+
+    let mgr = crate::engine::checkpoint::get_checkpoint_manager(&session_id).await;
+    let cp = mgr.lock().await;
+    let rounds = cp.list_file_change_rounds();
+
+    if rounds.is_empty() {
+        return "No file changes to revert. Changes are tracked when the agent uses file_write, file_edit, or file_patch."
+            .to_string();
+    }
+
+    let last_round = rounds.last().unwrap();
+    let restored_files: Vec<String> = Vec::new();
+    let mut errors: Vec<String> = Vec::new();
+
+    for checkpoint_id in &last_round.checkpoint_ids {
+        match cp.restore_checkpoint(checkpoint_id).await {
+            Ok(result) => {
+                for f in result.restored_files {
+                    errors.push(format!("  restored: {f}"));
+                }
+                for f in result.removed_files {
+                    errors.push(format!("  removed: {f}"));
+                }
+            }
+            Err(e) => errors.push(format!("  failed: {e}")),
+        }
+    }
+
+    let file_count = last_round.paths.len();
+    if restored_files.is_empty() && errors.is_empty() {
+        format!(
+            "Reverted {} file(s) from last turn (round: {:?}).\nUse /changes to see what was reverted.",
+            file_count,
+            last_round.tool_round_id.as_deref().unwrap_or("<single>"),
+        )
+    } else if errors.is_empty() {
+        format!(
+            "Reverted last turn's file changes:\n{}",
+            restored_files.join("\n")
+        )
+    } else {
+        format!(
+            "Partial revert of last turn:\n{}\nErrors:\n{}",
+            restored_files.join("\n"),
+            errors.join("\n")
+        )
+    }
+}
+
 /// /undo - 撤销上一次操作
 pub fn handle_undo(app: &mut TuiApp, args: &str) -> String {
     let session_id = match app.session_manager.current_session_id() {
