@@ -30,7 +30,7 @@ repo:
       serde = { version = "1.0", features = ["derive"] }
       serde_json = "1.0"
       TOML
-      
+
       cat > fixtures/rust_config_app/src/main.rs <<'RUST'
       pub mod config_validator;
 
@@ -40,15 +40,15 @@ repo:
       fn main() {
           let config_path = env::args().nth(1).expect("Usage: config_app <config.json>");
           let content = fs::read_to_string(&config_path).expect("Failed to read config");
-          
+
           // TODO: validate config before printing
           println!("Config loaded: {}", content);
-          
+
           let config: serde_json::Value = serde_json::from_str(&content).expect("Invalid JSON");
           println!("Name: {}", config["name"].as_str().unwrap_or("unknown"));
       }
       RUST
-      
+
       # Create test config files
       cat > fixtures/rust_config_app/valid.json <<'JSON'
       {
@@ -58,7 +58,7 @@ repo:
           "debug": false
       }
       JSON
-      
+
       cat > fixtures/rust_config_app/invalid.json <<'JSON'
       {
           "name": "",
@@ -67,7 +67,7 @@ repo:
           "debug": "yes"
       }
       JSON
-      
+
       cat > fixtures/rust_config_app/src/config_validator.rs <<'RUST'
       use serde::Deserialize;
 
@@ -76,7 +76,7 @@ repo:
       // - version must be non-empty string
       // - port must be a positive integer (1-65535)
       // - debug must be a boolean
-      
+
       #[derive(Debug, Deserialize)]
       pub struct Config {
           pub name: String,
@@ -90,7 +90,7 @@ repo:
           Err("not implemented".to_string())
       }
       RUST
-      
+
       cat > fixtures/rust_config_app/tests/integration.rs <<'RUST'
       use config_app::config_validator::{validate_config, Config};
 
@@ -160,19 +160,19 @@ prompt: |
   1. Complete `config_validator.rs`:
      - Implement `validate_config()` to parse JSON and validate:
        - `name`: non-empty string
-       - `version`: non-empty string  
+       - `version`: non-empty string
        - `port`: positive integer between 1-65535
        - `debug`: must be a boolean
      - Return `Ok(Config)` on success, `Err(String)` on failure
-  
+
   2. Update `main.rs`:
      - Import and use the `config_validator` module
      - Replace direct JSON parsing with `validate_config()`
      - Print error message and exit(1) on invalid config
      - Print validated fields on success
-  
+
   3. Make sure `config_validator` is a public module (add `pub mod config_validator`)
-  
+
   4. Verify:
      - Run `cargo test` in `fixtures/rust_config_app/`
      - All 8 tests should pass

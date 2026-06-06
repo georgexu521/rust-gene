@@ -24,11 +24,11 @@ repo:
       fn main() {
           let name = "world";
           println!("Hello, {}!", name);
-          
+
           let numbers = vec![1, 2, 3];
           let first = numbers.get(0).unwrap;
           println!("First number: {}", first);
-          
+
           let sum: i32 = numbers.iter().sum;
           println!("Sum: {}", sum);
       }
@@ -36,19 +36,19 @@ repo:
 
 prompt: |
   Please fix the compilation errors in `fixtures/test_fix_bug/src/main.rs`.
-  
-  IMPORTANT: Only modify the file at `fixtures/test_fix_bug/src/main.rs`. 
+
+  IMPORTANT: Only modify the file at `fixtures/test_fix_bug/src/main.rs`.
   Do NOT modify the project's own `src/main.rs` in the root directory.
-  
+
   The code has two simple Rust syntax errors:
   1. A missing `()` after `.unwrap`
   2. A missing `()` after `.sum`
-  
+
   Steps:
   1. Use file_read to read `fixtures/test_fix_bug/src/main.rs`
   2. Use file_edit to fix both errors in that file
   3. Run `cargo check` in the `fixtures/test_fix_bug/` directory to verify
-  
+
   Use separate file_edit calls for each fix if needed.
 
 allowed_tools:

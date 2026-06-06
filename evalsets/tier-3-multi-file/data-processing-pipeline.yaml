@@ -12,7 +12,7 @@ repo:
   prepare_commands:
     - |
       mkdir -p fixtures/data_pipeline/src fixtures/data_pipeline/tests fixtures/data_pipeline/data
-      
+
       # Stage 1: CSV reader (skeleton)
       cat > fixtures/data_pipeline/src/csv_reader.py <<'PY'
       import csv
@@ -21,12 +21,12 @@ repo:
           """Read CSV and return list of dicts with basic type conversion."""
           # TODO: implement CSV reading with type conversion
           # - age: int
-          # - salary: float  
+          # - salary: float
           # - active: bool (convert "true"/"false" strings)
           # Skip empty rows
           return []
       PY
-      
+
       # Stage 2: Filter and transform (skeleton)
       cat > fixtures/data_pipeline/src/transform.py <<'PY'
       def filter_active(records):
@@ -40,7 +40,7 @@ repo:
           # Return new records without modifying originals
           return records
       PY
-      
+
       # Stage 3: Aggregator (skeleton)
       cat > fixtures/data_pipeline/src/aggregator.py <<'PY'
       def group_by_department(records):
@@ -49,7 +49,7 @@ repo:
           # Return dict: {dept_name: {'count': N, 'avg_salary': X, 'avg_age': Y}}
           return {}
       PY
-      
+
       # Main pipeline orchestrator (skeleton)
       cat > fixtures/data_pipeline/src/pipeline.py <<'PY'
       from csv_reader import read_csv
@@ -65,7 +65,7 @@ repo:
           # 4. Group by department
           return {}
       PY
-      
+
       # Test data
       cat > fixtures/data_pipeline/data/employees.csv <<'CSV'
       name,age,department,salary,active
@@ -77,16 +77,16 @@ repo:
       Frank,45,Sales,75000,false
       Grace,33,Engineering,85000,true
       CSV
-      
+
       # Expected output helper
       cat > fixtures/data_pipeline/src/__init__.py <<'PY'
       # data_pipeline package
       PY
-      
+
       cat > fixtures/data_pipeline/tests/__init__.py <<'PY'
       # tests package
       PY
-      
+
       # Unit tests
       cat > fixtures/data_pipeline/tests/test_pipeline.py <<'PY'
       import unittest
@@ -164,13 +164,13 @@ repo:
           def test_run_pipeline(self):
               result = run_pipeline('fixtures/data_pipeline/data/employees.csv')
               # Engineering: Alice(80000), Grace(85000) = 2 active
-              # Marketing: Carol(70000), Dave(90000) = 2 active  
+              # Marketing: Carol(70000), Dave(90000) = 2 active
               # Sales: Eve(50000) = 1 active
               # Bob and Frank are inactive
               self.assertEqual(result['Engineering']['count'], 2)
               self.assertEqual(result['Marketing']['count'], 2)
               self.assertEqual(result['Sales']['count'], 1)
-              
+
               # Check avg salary (after filtering inactive)
               self.assertEqual(result['Engineering']['avg_salary'], 82500.0)
               self.assertEqual(result['Marketing']['avg_salary'], 80000.0)
@@ -202,19 +202,19 @@ prompt: |
      - Read CSV file into list of dicts
      - Type conversion: age→int, salary→float, active→bool (from "true"/"false")
      - Skip empty/blank rows
-  
+
   2. Complete `transform.py`:
      - `filter_active()`: Return only records where active == True
      - `compute_tax()`: Add 'tax' field = salary * rate, return new records (don't mutate input)
-  
+
   3. Complete `aggregator.py`:
      - `group_by_department()`: Group by 'department' field
      - Return dict with: {dept: {'count': N, 'avg_salary': avg, 'avg_age': avg}}
-  
+
   4. Complete `pipeline.py`:
      - `run_pipeline()`: Orchestrate read → filter → tax → aggregate
      - Return the aggregation result
-  
+
   5. Verify:
      - Run `python3 -m unittest fixtures/data_pipeline/tests/test_pipeline.py`
      - All 7 tests should pass

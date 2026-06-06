@@ -41,7 +41,7 @@ run_cmd() {
     print_info "Running: $name"
     echo "  Command: $cmd"
     echo ""
-    
+
     if eval "$cmd"; then
         print_success "$name passed"
         return 0

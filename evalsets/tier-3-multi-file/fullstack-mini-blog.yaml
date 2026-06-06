@@ -12,7 +12,7 @@ repo:
   prepare_commands:
     - |
       mkdir -p fixtures/fullstack_blog/backend fixtures/fullstack_blog/frontend
-      
+
       # Create backend skeleton
       cat > fixtures/fullstack_blog/backend/blog_api.py <<'PY'
       from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -60,7 +60,7 @@ repo:
           print('Blog API server running on http://127.0.0.1:8080')
           server.serve_forever()
       PY
-      
+
       # Create frontend skeleton
       cat > fixtures/fullstack_blog/frontend/index.html <<'HTML'
       <!DOCTYPE html>
@@ -80,20 +80,20 @@ repo:
       </head>
       <body>
           <h1>Mini Blog</h1>
-          
+
           <form id="post-form">
               <input type="text" id="title" placeholder="Title" required>
               <textarea id="content" placeholder="Content" rows="4" required></textarea>
               <button type="submit">Add Post</button>
           </form>
-          
+
           <div id="posts"></div>
-          
+
           <script src="app.js"></script>
       </body>
       </html>
       HTML
-      
+
       # Create frontend JS skeleton
       cat > fixtures/fullstack_blog/frontend/app.js <<'JS'
       const API_URL = 'http://127.0.0.1:8080';
@@ -125,7 +125,7 @@ repo:
       // Load posts on startup
       loadPosts();
       JS
-      
+
       # Create backend test
       cat > fixtures/fullstack_blog/backend/test_blog.py <<'PY'
       import unittest
@@ -150,7 +150,7 @@ repo:
           @classmethod
           def tearDownClass(cls):
               cls.server.shutdown()
-          
+
           def setUp(self):
               blog_api.posts.clear()
 
@@ -166,7 +166,7 @@ repo:
               data = json.loads(resp.read())
               self.assertIn('id', data)
               self.assertEqual(data['title'], 'Hello')
-              
+
               # List should include the post
               resp = urllib.request.urlopen(self.base + '/posts')
               self.assertEqual(resp.status, 200)
@@ -184,12 +184,12 @@ repo:
               )
               resp = urllib.request.urlopen(req)
               post = json.loads(resp.read())
-              
+
               # Delete it
               req = urllib.request.Request(self.base + '/posts/' + post['id'], method='DELETE')
               resp = urllib.request.urlopen(req)
               self.assertEqual(resp.status, 200)
-              
+
               # Should be empty now
               resp = urllib.request.urlopen(self.base + '/posts')
               posts = json.loads(resp.read())
@@ -214,13 +214,13 @@ prompt: |
      - `POST /posts` — Create a new post with {title, content}, auto-generate id and date
      - `DELETE /posts/<id>` — Delete a post by id
      - Add CORS headers (`Access-Control-Allow-Origin: *`)
-  
+
   2. Complete the frontend (`app.js`):
      - `loadPosts()` — Fetch posts from API and render them in #posts div
      - `createPost(title, content)` — POST new post to API
      - `deletePost(id)` — DELETE post by id, then reload posts
      - Each post should show: title, content, date, and a delete button
-  
+
   3. Verify:
      - Run `python3 -m unittest fixtures/fullstack_blog/backend/test_blog.py`
      - All tests should pass

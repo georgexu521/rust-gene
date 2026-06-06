@@ -126,5 +126,5 @@ Each task is a YAML file with:
 
 ## Legacy Tasks
 
-Original live tasks are preserved in `evalsets/live_tasks/` but are now 
+Original live tasks are preserved in `evalsets/live_tasks/` but are now
 shadow-copied into tier directories with added `tier` field.

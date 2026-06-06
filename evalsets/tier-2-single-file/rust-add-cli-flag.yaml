@@ -15,7 +15,7 @@ prompt: |
   Please add a `--verbose` command-line flag to `src/main.rs`.
 
   Requirements:
-  1. When the user passes `--verbose`, the default tracing log level should be "debug" 
+  1. When the user passes `--verbose`, the default tracing log level should be "debug"
      instead of the current mode-dependent default ("info" for API, "warn" for everything else).
   2. Update `print_help()` to document the new flag.
   3. Keep all existing startup modes and behavior intact when `--verbose` is absent.

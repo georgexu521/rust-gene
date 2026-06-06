@@ -55,24 +55,127 @@ print_warning() {
 yaml_get() {
     local task_file="$1"
     local field="$2"
-    python3 -c "
+    python3 - "$task_file" "$field" <<'PY' 2>/dev/null
 import yaml
-with open('$task_file') as f:
-    data = yaml.safe_load(f)
-    # Support nested paths like 'repo.prepare_commands'
-    keys = '$field'.split('.')
-    value = data
-    for key in keys:
-        if value is None:
-            break
-        value = value.get(key) if isinstance(value, dict) else None
-    
-    if isinstance(value, list):
-        for item in value:
-            print(item)
-    elif isinstance(value, str):
-        print(value)
-    " 2>/dev/null
+import sys
+
+task_file, field = sys.argv[1], sys.argv[2]
+with open(task_file) as f:
+    data = yaml.safe_load(f) or {}
+
+value = data
+for key in field.split('.'):
+    if value is None:
+        break
+    value = value.get(key) if isinstance(value, dict) else None
+
+if isinstance(value, list):
+    for item in value:
+        print(item)
+elif isinstance(value, (str, int, float, bool)):
+    print(value)
+PY
+}
+
+yaml_list_has_items() {
+    local task_file="$1"
+    local field="$2"
+    [ -n "$(yaml_get "$task_file" "$field" | sed '/^[[:space:]]*$/d')" ]
+}
+
+write_task_prompt() {
+    local task_file="$1"
+    local prompt_file="$2"
+    python3 - "$task_file" "$prompt_file" <<'PY'
+import yaml
+import sys
+
+task_file, prompt_file = sys.argv[1], sys.argv[2]
+with open(task_file) as f:
+    task = yaml.safe_load(f) or {}
+
+acceptance = task.get("acceptance") or {}
+diff_constraints = acceptance.get("diff_constraints") or {}
+
+def list_block(title, values, empty="(none)"):
+    lines = [f"## {title}"]
+    if not isinstance(values, list) or not values:
+        lines.append(empty)
+    else:
+        lines.extend(f"- {item}" for item in values)
+    return lines
+
+lines = [
+    f"# Eval task: {task.get('title') or task.get('id') or 'unknown'}",
+    "",
+    f"- Task id: `{task.get('id') or 'unknown'}`",
+    f"- Eval intent: `{task.get('eval_intent') or 'seeded_code_change'}`",
+    f"- Risk: `{task.get('risk') or 'unknown'}`",
+    f"- Complexity: `{task.get('complexity') or 'unknown'}`",
+    "",
+    "## User task",
+    "",
+    str(task.get("prompt") or "").strip(),
+    "",
+]
+lines.extend(list_block("Allowed tools", task.get("allowed_tools") or []))
+lines.append("")
+lines.extend(list_block("Forbidden tools", task.get("forbidden_tools") or []))
+lines.append("")
+lines.extend(list_block("Expected behavior", task.get("expected_behavior") or []))
+lines.extend(["", "## Acceptance checks", ""])
+
+required = acceptance.get("required_commands") or []
+if required:
+    lines.append("Before final closeout, run every required command below. If a command fails, repair and rerun it; do not claim verified completion while any required command is failing.")
+    lines.extend(f"- `{cmd}`" for cmd in required)
+else:
+    lines.append("- No agent-run required command is defined for this task.")
+
+harness = acceptance.get("harness_commands") or []
+if harness:
+    lines.extend([
+        "",
+        "Harness-only commands will run after the agent turn. Do not spend the agent loop on them unless a focused failure points there.",
+    ])
+
+lines.extend([
+    "",
+    "## Diff constraints",
+    "",
+    f"- Max files changed: `{diff_constraints.get('max_files_changed', 'unspecified')}`",
+])
+for forbidden in diff_constraints.get("forbidden_paths") or []:
+    lines.append(f"- Do not change path: `{forbidden}`")
+
+intent = str(task.get("eval_intent") or "seeded_code_change")
+lines.extend(["", "## Closeout requirements", ""])
+if intent == "direct_answer":
+    lines.append("- This is a direct-answer eval. Do not inspect or mutate the repository unless the task explicitly requires it.")
+elif intent == "read_only_audit":
+    lines.append("- This is a read-only local evidence eval. Inspect narrowly and do not modify files.")
+elif intent in {"audit_or_regression_check", "stale_or_already_satisfied"}:
+    lines.append("- This is an audit/regression eval. If behavior is already present, prove it instead of forcing an arbitrary edit.")
+else:
+    lines.append("- This is a real code-change eval. Fix the issue and provide verification evidence.")
+
+with open(prompt_file, "w") as out:
+    out.write("\n".join(lines).rstrip() + "\n")
+PY
+}
+
+capture_status_paths() {
+    local output_file="$1"
+    {
+        git diff --name-only
+        git ls-files --others --exclude-standard
+    } | sed '/^[[:space:]]*$/d' | sort -u > "$output_file"
+}
+
+print_status_path_delta() {
+    local baseline_file="$1"
+    local current_file="$2"
+    comm -13 "$baseline_file" "$current_file" || true
 }
 
 # Prepare task fixtures by running prepare_commands from YAML
@@ -80,13 +183,13 @@ prepare_task() {
     local task_file="$1"
     local task_name
     task_name=$(basename "$task_file" .yaml)
-    
+
     print_info "Preparing fixtures for: $task_name"
-    
+
     # Use Python to write each command to a separate file, then execute
     local temp_dir
     temp_dir=$(mktemp -d)
-    
+
     python3 -c "
 import yaml
 import sys
@@ -107,7 +210,7 @@ for i, cmd in enumerate(commands):
         out.write('\n')
     print(i)
 " 2>/dev/null
-    
+
     local count=0
     for cmd_file in "$temp_dir"/cmd_*.sh; do
         [ -f "$cmd_file" ] || continue
@@ -117,17 +220,19 @@ for i, cmd in enumerate(commands):
         if bash "$cmd_file" >/dev/null 2>&1; then
             echo -e "  ${GREEN}✓${NC} prepare command $count succeeded"
         else
-            echo -e "  ${YELLOW}⚠${NC} prepare command $count may have partial failure (continuing)"
+            echo -e "  ${RED}✗${NC} prepare command $count failed"
+            rm -rf "$temp_dir"
+            return 1
         fi
     done
-    
+
     rm -rf "$temp_dir"
-    
+
     if [ "$count" -eq 0 ]; then
         print_info "No prepare_commands found, skipping fixture setup"
         return 0
     fi
-    
+
     print_success "Fixture preparation complete ($count commands)"
 }
 
@@ -136,10 +241,10 @@ show_task_summary() {
     local task_name="$1"
     local output_file="$2"
     local events_file="$3"
-    
+
     echo ""
     echo -e "${CYAN}═══ Task Summary: $task_name ═══${NC}"
-    
+
     # Show response preview
     if [ -f "$output_file" ] && [ -s "$output_file" ]; then
         echo ""
@@ -156,7 +261,7 @@ show_task_summary() {
         echo ""
         echo "  <no output file>"
     fi
-    
+
     # Show event statistics
     if [ -f "$events_file" ] && [ -s "$events_file" ]; then
         echo ""
@@ -164,22 +269,22 @@ show_task_summary() {
         local tool_calls
         tool_calls=$(rg -c '"event":\s*"tool_call_start"' "$events_file" 2>/dev/null || echo 0)
         echo "  Tool calls: $tool_calls"
-        
+
         local text_chunks
         text_chunks=$(rg -c '"event":\s*"text_chunk"' "$events_file" 2>/dev/null || echo 0)
         echo "  Text chunks: $text_chunks"
-        
+
         local thinking_chunks
         thinking_chunks=$(rg -c '"event":\s*"thinking_chunk"' "$events_file" 2>/dev/null || echo 0)
         if [ "$thinking_chunks" -gt 0 ]; then
             echo "  Thinking chunks: $thinking_chunks"
         fi
-        
+
         # Check for errors
         if rg -q '"event":\s*"error"' "$events_file" 2>/dev/null; then
             echo -e "  ${RED}⚠ Errors detected in events${NC}"
         fi
-        
+
         # Check for closeout
         local closeout_status
         closeout_status=$(rg '"status":\s*"([^"]+)"' -o -r '$1' "$events_file" 2>/dev/null | tail -1)
@@ -187,13 +292,13 @@ show_task_summary() {
             echo -e "  Closeout status: ${CYAN}$closeout_status${NC}"
         fi
     fi
-    
+
     # Check for iteration limit warning
     if [ -f "$output_file" ] && rg -q "iteration limit" "$output_file" 2>/dev/null; then
         echo ""
         print_warning "Iteration limit was reached"
     fi
-    
+
     echo ""
     echo "Output files:"
     echo "  Report: $output_file"
@@ -205,22 +310,22 @@ run_task_file() {
     local task_file="$1"
     local task_name
     task_name=$(basename "$task_file" .yaml)
-    
+
     echo ""
     echo -e "${BLUE}═══ Task: $task_name ═══${NC}"
-    
+
     # Step 1: Prepare fixtures
-    prepare_task "$task_file"
-    
-    # Step 2: Extract prompt from YAML
-    local prompt
-    prompt=$(yaml_get "$task_file" "prompt")
-    
-    if [ -z "$prompt" ]; then
+    if ! prepare_task "$task_file"; then
+        print_error "Fixture preparation failed: $task_name"
+        return 1
+    fi
+
+    # Step 2: Ensure the YAML has a prompt.
+    if [ -z "$(yaml_get "$task_file" "prompt")" ]; then
         print_error "Could not extract prompt from $task_file"
         return 1
     fi
-    
+
     # Step 3: Check if eval-run mode is available
     if [ ! -f "./target/debug/priority-agent" ]; then
         print_info "Building priority-agent..."
@@ -229,40 +334,51 @@ run_task_file() {
             return 1
         fi
     fi
-    
-    # Step 4: Write prompt to temp file
+
+    # Step 4: Write enriched prompt to temp file
     local prompt_file
     prompt_file=$(mktemp)
-    echo "$prompt" > "$prompt_file"
-    
+    write_task_prompt "$task_file" "$prompt_file"
+
     # Step 5: Setup output paths
     local timestamp
     timestamp=$(date +%Y%m%d-%H%M%S)
     local output_file="$ROOT_DIR/target/eval-reports/${task_name}-${timestamp}.md"
     local events_file="$ROOT_DIR/target/eval-reports/${task_name}-${timestamp}.jsonl"
+    local baseline_status_file="$ROOT_DIR/target/eval-reports/${task_name}-${timestamp}.baseline-paths"
     mkdir -p "$ROOT_DIR/target/eval-reports"
-    
+    capture_status_paths "$baseline_status_file"
+
     print_info "Running eval task..."
-    
+
     # Step 6: Set eval environment
-    export PRIORITY_AGENT_EVAL_ALLOW_MUTATIONS=1
-    export PRIORITY_AGENT_AUTO_APPROVE=1
-    # Disable route-scoped tool filtering so all tools are available for eval tasks
-    export PRIORITY_AGENT_ROUTE_SCOPED_TOOLS=0
+    local eval_intent
+    eval_intent=$(yaml_get "$task_file" "eval_intent")
+    if [ -z "${PRIORITY_AGENT_EVAL_ALLOW_MUTATIONS:-}" ]; then
+        if [ "$eval_intent" = "seeded_code_change" ]; then
+            export PRIORITY_AGENT_EVAL_ALLOW_MUTATIONS=1
+        else
+            export PRIORITY_AGENT_EVAL_ALLOW_MUTATIONS=0
+        fi
+    fi
+    export PRIORITY_AGENT_AUTO_APPROVE="${PRIORITY_AGENT_AUTO_APPROVE:-1}"
     # Increase iteration limit for eval tasks (default 50 may not be enough for complex changes)
-    export PRIORITY_AGENT_ENGINE_MAX_ITERATIONS=150
-    
+    export PRIORITY_AGENT_ENGINE_MAX_ITERATIONS="${PRIORITY_AGENT_ENGINE_MAX_ITERATIONS:-150}"
+
     # Step 7: Run the eval task
     local exit_code=0
     local stderr_file="$ROOT_DIR/target/eval-reports/${task_name}-${timestamp}.stderr.log"
-    ./target/debug/priority-agent \
+    if ./target/debug/priority-agent \
         --eval-run \
         --prompt-file "$prompt_file" \
         --output "$output_file" \
         --events "$events_file" \
-        2>"$stderr_file"
-    exit_code=$?
-    
+        2>"$stderr_file"; then
+        exit_code=0
+    else
+        exit_code=$?
+    fi
+
     if [ $exit_code -eq 0 ]; then
         print_success "Task completed: $task_name"
     else
@@ -272,16 +388,20 @@ run_task_file() {
             head -5 "$stderr_file" | sed 's/^/    /'
         fi
     fi
-    
+
     rm -f "$prompt_file"
-    
+
     # Step 8: Show summary
     show_task_summary "$task_name" "$output_file" "$events_file"
-    
+
     # Step 9: Check acceptance criteria
-    check_acceptance "$task_file"
-    local acceptance_exit=$?
-    
+    local acceptance_exit=0
+    if check_acceptance "$task_file" "$events_file" "$baseline_status_file"; then
+        acceptance_exit=0
+    else
+        acceptance_exit=$?
+    fi
+
     # Task passes only if both agent succeeded AND acceptance criteria passed
     if [ $exit_code -ne 0 ] || [ $acceptance_exit -ne 0 ]; then
         return 1
@@ -292,68 +412,208 @@ run_task_file() {
 # Check acceptance criteria from task definition
 check_acceptance() {
     local task_file="$1"
-    
+    local events_file="$2"
+    local baseline_status_file="$3"
+
     echo ""
     echo -e "${CYAN}═══ Acceptance Criteria ═══${NC}"
-    
-    local commands
-    commands=$(yaml_get "$task_file" "acceptance.required_commands")
-    
-    if [ -z "$commands" ]; then
-        echo "  No required commands defined"
+
+    ACCEPTANCE_TOTAL=0
+    ACCEPTANCE_PASSED=0
+    ACCEPTANCE_FAILED=0
+
+    run_acceptance_commands "$task_file" "acceptance.required_commands" "Required"
+    run_acceptance_commands "$task_file" "acceptance.harness_commands" "Harness"
+
+    check_tool_constraints "$task_file" "$events_file"
+    check_diff_constraints "$task_file" "$baseline_status_file"
+
+    if [ "$ACCEPTANCE_TOTAL" -eq 0 ]; then
+        echo "  No executable acceptance criteria defined"
         return 0
     fi
-    
-    local total=0
-    local passed=0
-    
-    while IFS= read -r cmd; do
-        [ -z "$cmd" ] && continue
-        total=$((total + 1))
-        # Run each command in a subshell so `cd` doesn't affect the parent shell
-        if (eval "$cmd") >/dev/null 2>&1; then
-            print_result "Required: $cmd" "PASS"
-            passed=$((passed + 1))
-        else
-            print_result "Required: $cmd" "FAIL"
-        fi
-    done <<< "$commands"
-    
+
     echo ""
-    echo "  Total: $total, Passed: $passed, Failed: $((total - passed))"
-    
-    if [ "$passed" -eq "$total" ] && [ "$total" -gt 0 ]; then
+    echo "  Total: $ACCEPTANCE_TOTAL, Passed: $ACCEPTANCE_PASSED, Failed: $ACCEPTANCE_FAILED"
+
+    if [ "$ACCEPTANCE_FAILED" -eq 0 ]; then
         print_success "All acceptance criteria passed"
         return 0
-    elif [ "$total" -gt 0 ]; then
-        print_error "Some acceptance criteria failed"
-        return 1
     fi
+
+    print_error "Some acceptance criteria failed"
+    return 1
+}
+
+run_acceptance_commands() {
+    local task_file="$1"
+    local field="$2"
+    local label="$3"
+
+    local commands
+    commands=$(yaml_get "$task_file" "$field")
+
+    if [ -z "$commands" ]; then
+        echo "  No $label commands defined"
+        return 0
+    fi
+
+    while IFS= read -r cmd; do
+        [ -z "$cmd" ] && continue
+        ACCEPTANCE_TOTAL=$((ACCEPTANCE_TOTAL + 1))
+        # Run each command in a subshell so `cd` doesn't affect the parent shell
+        if (eval "$cmd") >/dev/null 2>&1; then
+            print_result "$label: $cmd" "PASS"
+            ACCEPTANCE_PASSED=$((ACCEPTANCE_PASSED + 1))
+        else
+            print_result "$label: $cmd" "FAIL"
+            ACCEPTANCE_FAILED=$((ACCEPTANCE_FAILED + 1))
+        fi
+    done <<< "$commands"
+}
+
+check_tool_constraints() {
+    local task_file="$1"
+    local events_file="$2"
+
+    if ! yaml_list_has_items "$task_file" "allowed_tools" && ! yaml_list_has_items "$task_file" "forbidden_tools"; then
+        echo "  No tool constraints defined"
+        return 0
+    fi
+
+    ACCEPTANCE_TOTAL=$((ACCEPTANCE_TOTAL + 1))
+    if python3 - "$task_file" "$events_file" <<'PY'
+import json
+import sys
+import yaml
+
+task_file, events_file = sys.argv[1], sys.argv[2]
+with open(task_file) as f:
+    task = yaml.safe_load(f) or {}
+
+allowed = task.get("allowed_tools")
+allowed_set = {str(tool).strip() for tool in allowed or [] if str(tool).strip()}
+forbidden_set = {str(tool).strip() for tool in task.get("forbidden_tools") or [] if str(tool).strip()}
+used = []
+
+try:
+    with open(events_file) as f:
+        for line in f:
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if event.get("event") == "tool_execution_start":
+                name = str(event.get("name") or "").strip()
+                if name and name not in used:
+                    used.append(name)
+except FileNotFoundError:
+    print("missing events file")
+    sys.exit(1)
+
+violations = []
+for name in used:
+    if name in forbidden_set:
+        violations.append(f"forbidden tool used: {name}")
+    if allowed is not None and name not in allowed_set:
+        violations.append(f"tool outside allowed_tools used: {name}")
+
+if violations:
+    for violation in violations:
+        print(violation)
+    sys.exit(1)
+PY
+    then
+        print_result "Tool constraints" "PASS"
+        ACCEPTANCE_PASSED=$((ACCEPTANCE_PASSED + 1))
+    else
+        print_result "Tool constraints" "FAIL"
+        ACCEPTANCE_FAILED=$((ACCEPTANCE_FAILED + 1))
+    fi
+}
+
+check_diff_constraints() {
+    local task_file="$1"
+    local baseline_status_file="$2"
+
+    local max_files
+    max_files=$(yaml_get "$task_file" "acceptance.diff_constraints.max_files_changed")
+    local forbidden_paths
+    forbidden_paths=$(yaml_get "$task_file" "acceptance.diff_constraints.forbidden_paths")
+
+    if [ -z "$max_files" ] && [ -z "$forbidden_paths" ]; then
+        echo "  No diff constraints defined"
+        return 0
+    fi
+
+    local current_status_file
+    current_status_file=$(mktemp)
+    capture_status_paths "$current_status_file"
+
+    local changed_after_prepare
+    changed_after_prepare=$(print_status_path_delta "$baseline_status_file" "$current_status_file")
+
+    if [ -n "$max_files" ] && [[ "$max_files" =~ ^[0-9]+$ ]]; then
+        local changed_count
+        changed_count=$(printf "%s\n" "$changed_after_prepare" | sed '/^[[:space:]]*$/d' | wc -l | tr -d ' ')
+        ACCEPTANCE_TOTAL=$((ACCEPTANCE_TOTAL + 1))
+        if [ "$changed_count" -le "$max_files" ]; then
+            print_result "Max changed paths since prepare <= $max_files" "PASS"
+            ACCEPTANCE_PASSED=$((ACCEPTANCE_PASSED + 1))
+        else
+            print_result "Max changed paths since prepare <= $max_files (actual: $changed_count)" "FAIL"
+            ACCEPTANCE_FAILED=$((ACCEPTANCE_FAILED + 1))
+        fi
+    fi
+
+    if [ -n "$forbidden_paths" ]; then
+        ACCEPTANCE_TOTAL=$((ACCEPTANCE_TOTAL + 1))
+        local forbidden_hit=0
+        while IFS= read -r forbidden; do
+            [ -z "$forbidden" ] && continue
+            while IFS= read -r changed_path; do
+                [ -z "$changed_path" ] && continue
+                case "$changed_path" in
+                    "$forbidden"|"$forbidden"*) forbidden_hit=1 ;;
+                esac
+            done <<< "$changed_after_prepare"
+        done <<< "$forbidden_paths"
+        if [ "$forbidden_hit" -eq 0 ]; then
+            print_result "Forbidden paths unchanged since prepare" "PASS"
+            ACCEPTANCE_PASSED=$((ACCEPTANCE_PASSED + 1))
+        else
+            print_result "Forbidden paths unchanged since prepare" "FAIL"
+            ACCEPTANCE_FAILED=$((ACCEPTANCE_FAILED + 1))
+        fi
+    fi
+
+    rm -f "$current_status_file"
+    return 0
 }
 
 # Run all tasks in a tier directory
 run_tier() {
     local tier="$1"
     local tier_dir="$EVALSETS_DIR/$tier"
-    
+
     if [ ! -d "$tier_dir" ]; then
         print_error "Tier directory not found: $tier_dir"
         return 1
     fi
-    
+
     echo -e "${BLUE}═══ Running $tier ═══${NC}"
-    
+
     local tasks
     tasks=$(find "$tier_dir" -name "*.yaml" -o -name "*.yml" | sort)
-    
+
     if [ -z "$tasks" ]; then
         print_info "No tasks found in $tier"
         return 0
     fi
-    
+
     local total=0
     local passed=0
-    
+
     while IFS= read -r task_file; do
         [ -z "$task_file" ] && continue
         total=$((total + 1))
@@ -361,13 +621,13 @@ run_tier() {
             passed=$((passed + 1))
         fi
     done <<< "$tasks"
-    
+
     echo ""
     echo -e "${BLUE}═══ $tier Summary ═══${NC}"
     echo "  Total: $total"
     echo -e "  Passed: ${GREEN}$passed${NC}"
     echo -e "  Failed: ${RED}$((total - passed))${NC}"
-    
+
     if [ "$passed" -eq "$total" ]; then
         print_success "All tasks in $tier passed"
         return 0
@@ -393,7 +653,7 @@ list_tasks() {
         done
         echo ""
     done
-    
+
     echo "Legacy live tasks:"
     find "$EVALSETS_DIR/live_tasks" -name "*.yaml" | while read -r f; do
         local task_name
@@ -410,11 +670,11 @@ Usage:
   ./scripts/eval-run.sh [COMMAND] [OPTIONS]
 
 Commands:
-  tier-1      Run tier-1 foundation tasks (tool health)
-  tier-2      Run tier-2 single-file tasks
-  tier-3      Run tier-3 multi-file tasks
-  tier-4      Run tier-4 integration tasks
-  tier-5      Run tier-5 edge-case tasks
+  tier-1      Run tier-1 foundation tasks (alias: tier-1-foundations)
+  tier-2      Run tier-2 single-file tasks (alias: tier-2-single-file)
+  tier-3      Run tier-3 multi-file tasks (alias: tier-3-multi-file)
+  tier-4      Run tier-4 integration tasks (alias: tier-4-integration)
+  tier-5      Run tier-5 edge-case tasks (alias: tier-5-edge-cases)
   all         Run all tiers (takes ~1 hour)
   list        List all available tasks
   help        Show this help
@@ -425,8 +685,10 @@ Examples:
   ./scripts/eval-run.sh all             # Full suite (~1 hour)
 
 Environment:
-  PRIORITY_AGENT_EVAL_ALLOW_MUTATIONS=1  Auto-approve mutating tools
-  PRIORITY_AGENT_AUTO_APPROVE=1          Auto-approve ask_user tool
+  PRIORITY_AGENT_EVAL_ALLOW_MUTATIONS=1  Auto-approve mutating tools.
+                                         Defaults to 1 only for seeded_code_change tasks.
+  PRIORITY_AGENT_AUTO_APPROVE=1          Auto-approve ask_user tool.
+  PRIORITY_AGENT_ROUTE_SCOPED_TOOLS=0    Optional override; not set by this runner.
 
 EOF
 }
@@ -435,19 +697,19 @@ EOF
 print_header
 
 case "${1:-help}" in
-    tier-1)
+    tier-1|tier-1-foundations)
         run_tier "tier-1-foundations"
         ;;
-    tier-2)
+    tier-2|tier-2-single-file)
         run_tier "tier-2-single-file"
         ;;
-    tier-3)
+    tier-3|tier-3-multi-file)
         run_tier "tier-3-multi-file"
         ;;
-    tier-4)
+    tier-4|tier-4-integration)
         run_tier "tier-4-integration"
         ;;
-    tier-5)
+    tier-5|tier-5-edge-cases)
         run_tier "tier-5-edge-cases"
         ;;
     all)

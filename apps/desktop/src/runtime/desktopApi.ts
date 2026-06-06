@@ -295,7 +295,7 @@ let webPreviewSettings: DesktopSettings = {
   permission_mode: "auto",
   detail_level: "coding",
   provider_name: "minimax",
-  model: "MiniMax-M2.7",
+  model: "MiniMax-M3",
   settings_path: "web-preview",
   diagnostic_logs_path: "web-preview/logs/desktop.log",
   recent_projects: ["/Users/georgexu/Desktop/rust-agent", "/Users/georgexu/Desktop/bioclaw"],
@@ -624,14 +624,14 @@ export function providerModelStatus(): Promise<ProviderModelStatus> {
   if (!isTauriRuntime()) {
     return Promise.resolve({
       active_provider: "minimax",
-      active_model: "MiniMax-M2.7",
+      active_model: "MiniMax-M3",
       configured_count: 1,
       providers: [
         {
           id: "minimax",
           label: "MiniMax",
           provider_type: "Minimax",
-  model: "MiniMax-M3",
+          model: "MiniMax-M3",
           base_url: "https://api.minimax.io/v1",
           configured: true,
           active: true,
