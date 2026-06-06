@@ -198,7 +198,11 @@ impl ToolResultContextPolicy {
         let durable_artifact_path = structured_metadata
             .get("tool_result_data")
             .and_then(|data| data.get("output_truncation"))
-            .and_then(|truncation| truncation.get("stored_path"))
+            .and_then(|truncation| {
+                truncation
+                    .get("stored_path")
+                    .or_else(|| truncation.get("output_uri"))
+            })
             .and_then(serde_json::Value::as_str)
             .map(str::to_string);
         let is_high_value = matches!(

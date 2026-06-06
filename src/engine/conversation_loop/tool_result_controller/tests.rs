@@ -56,10 +56,10 @@ async fn normalize_after_execution_truncates_large_output_with_metadata() {
         40_000
     );
     assert!(
-        normalized.structured_metadata["tool_result_data"]["output_truncation"]["stored_path"]
+        normalized.structured_metadata["tool_result_data"]["output_truncation"]["output_uri"]
             .as_str()
             .unwrap_or_default()
-            .contains("tool-results")
+            .contains("tool-output://")
     );
     assert!(normalized.context_policy.compaction_eligible);
     assert!(normalized
@@ -67,7 +67,7 @@ async fn normalize_after_execution_truncates_large_output_with_metadata() {
         .durable_artifact_path
         .as_deref()
         .unwrap_or_default()
-        .contains("tool-results"));
+        .contains("tool-output://"));
     assert_eq!(
         normalized.structured_metadata["tool_result_context_policy"]["compaction_eligible"],
         true

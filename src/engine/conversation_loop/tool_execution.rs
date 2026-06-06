@@ -411,16 +411,18 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_truncate_tool_result_preserves_high_signal_middle_snippet() {
+    async fn test_truncate_tool_result_preserves_head_and_tail() {
         let content = format!(
-            "{}\nlet assessment = assess_memory_candidate(content, category, &existing, true);\n{}",
+            "{}\nHIGH_SIGNAL_MIDDLE\n{}",
             "A".repeat(20_000),
             "B".repeat(20_000)
         );
         let mut result = ToolResult::success(content);
         truncate_tool_result(&mut result, "file_read", "call_signal", None).await;
-        assert!(result.content.contains("--- Relevant snippets ---"));
-        assert!(result.content.contains("assess_memory_candidate"));
+        assert!(result.content.contains("Output truncated"));
+        assert!(result.content.contains("tool-output://"));
+        assert!(result.content.contains("First"));
+        assert!(result.content.contains("Last"));
     }
 
     #[tokio::test]

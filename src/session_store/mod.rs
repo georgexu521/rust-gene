@@ -19,11 +19,14 @@ mod message_ops;
 mod records;
 mod search;
 mod session_ops;
+pub mod session_parts;
 mod todo_store;
 mod trace_store;
 
 pub use records::*;
 pub use todo_store::{PersistedTodoItem, TodoItem};
+
+pub use event_store::{query_session_events, SessionEventRow, SessionEventWriter};
 
 /// 会话存储
 #[derive(Clone)]
