@@ -68,6 +68,7 @@ fn api_test_state() -> Arc<ApiState> {
         )),
         lsp_manager: None,
         worktree_manager: None,
+        agent_runtime: None,
     })
 }
 
@@ -236,4 +237,89 @@ async fn session_prompt_returns_typed_full_agent_not_implemented_response() {
     assert_eq!(value["agent_runtime_entrypoint"], "RuntimeController");
     assert!(value["turn_id"].is_null(), "turn_id must be empty");
     assert!(value["diagnostic"].is_null(), "diagnostic must be empty");
+}
+
+/// Fake runtime that returns a successful outcome for tests.
+struct FakeAgentRuntime {
+    expected_session_id: String,
+    expected_message: String,
+}
+
+#[async_trait::async_trait]
+impl crate::api::state::ApiAgentRuntime for FakeAgentRuntime {
+    async fn submit_prompt(
+        &self,
+        input: crate::api::state::ApiSessionPromptInput,
+    ) -> anyhow::Result<crate::api::state::ApiSessionPromptOutcome> {
+        assert_eq!(input.session_id, self.expected_session_id);
+        assert_eq!(input.message, self.expected_message);
+        Ok(crate::api::state::ApiSessionPromptOutcome {
+            accepted: true,
+            turn_id: Some("turn-fake-001".to_string()),
+            status: "completed".to_string(),
+            events_written: 3,
+            latest_part_index: Some(5),
+            diagnostic: None,
+            error: None,
+        })
+    }
+}
+
+#[tokio::test]
+async fn session_prompt_with_runtime_returns_accepted_true() {
+    let _env_guard = ENV_LOCK.lock().await;
+    unsafe { std::env::set_var("PRIORITY_AGENT_BRIDGE_TOKEN", TEST_BRIDGE_TOKEN) };
+    let mut state = api_test_state();
+    Arc::get_mut(&mut state).unwrap().agent_runtime = Some(Arc::new(FakeAgentRuntime {
+        expected_session_id: "test".to_string(),
+        expected_message: "fix the bug".to_string(),
+    }));
+    let app = create_routes(state);
+    let (status, value) = json_request_response(
+        &app,
+        "POST",
+        "/api/sessions/test/prompt",
+        Some(json!({
+            "message": "fix the bug",
+            "agent_mode": "normal",
+            "stream": false
+        })),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(value["session_id"], "test");
+    assert_eq!(value["execution_kind"], "full_agent_turn");
+    assert_eq!(value["accepted"], true);
+    assert_eq!(value["status"], "completed");
+    assert_eq!(value["events_written"], 3);
+    assert_eq!(value["latest_part_index"], 5);
+    assert_eq!(value["turn_id"], "turn-fake-001");
+    assert_eq!(value["agent_runtime_entrypoint"], "RuntimeController");
+    assert!(value["error"].is_null(), "error must be null on success");
+}
+
+#[tokio::test]
+async fn session_prompt_without_runtime_still_returns_501() {
+    let _env_guard = ENV_LOCK.lock().await;
+    unsafe { std::env::set_var("PRIORITY_AGENT_BRIDGE_TOKEN", TEST_BRIDGE_TOKEN) };
+    let state = api_test_state();
+    assert!(state.agent_runtime.is_none());
+    let app = create_routes(state);
+    let (status, value) = json_request_response(
+        &app,
+        "POST",
+        "/api/sessions/test/prompt",
+        Some(json!({
+            "message": "fix the bug",
+        })),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::NOT_IMPLEMENTED);
+    assert_eq!(value["accepted"], false);
+    assert_eq!(
+        value["error"],
+        "full-agent prompt API is not wired to RuntimeController yet"
+    );
 }

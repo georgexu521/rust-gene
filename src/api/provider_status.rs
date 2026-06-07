@@ -345,6 +345,7 @@ mod tests {
             )),
             lsp_manager: None,
             worktree_manager: None,
+            agent_runtime: None,
         });
 
         let app = create_routes(state);

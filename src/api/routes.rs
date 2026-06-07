@@ -44,6 +44,9 @@ pub fn create_routes(state: Arc<ApiState>) -> Router {
         // Chat API
         .route("/api/chat", post(chat_handler))
         .route("/api/chat/stream", post(chat_stream_handler))
+        // Provider chat (explicit non-agent lane)
+        .route("/api/provider-chat", post(chat_handler))
+        // Session prompt (full-agent, requires ApiAgentRuntime)
         // WebSocket
         .route("/api/ws", get(ws_handler))
         // Session API
@@ -142,6 +145,11 @@ pub struct ChatResponse {
     pub full_agent: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub agent_runtime_entrypoint: Option<String>,
+    /// Deprecation metadata when called via legacy route.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub deprecated_route: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub replacement_route: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -172,6 +180,8 @@ async fn chat_handler(
             execution_kind: "provider_chat".to_string(),
             full_agent: false,
             agent_runtime_entrypoint: None,
+            deprecated_route: None,
+            replacement_route: None,
         }),
     ))
 }
@@ -307,6 +317,7 @@ async fn get_session_messages_handler(
 }
 
 async fn session_prompt_handler(
+    State(state): State<Arc<ApiState>>,
     Path(id): Path<String>,
     Json(req): Json<SessionPromptRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
@@ -314,22 +325,57 @@ async fn session_prompt_handler(
         return Err(ApiError::BadRequest("message is required".to_string()));
     }
 
-    let _requested_mode = req.agent_mode.as_deref().unwrap_or("normal");
-    let _stream_requested = req.stream.unwrap_or(false);
+    let Some(ref agent_runtime) = state.agent_runtime else {
+        return Ok((
+            StatusCode::NOT_IMPLEMENTED,
+            Json(SessionPromptResponse {
+                session_id: id,
+                execution_kind: "full_agent_turn".to_string(),
+                accepted: false,
+                turn_id: None,
+                status: "not_implemented".to_string(),
+                events_written: 0,
+                latest_part_index: None,
+                diagnostic: None,
+                agent_runtime_entrypoint: Some("RuntimeController".to_string()),
+                error: Some(
+                    "full-agent prompt API is not wired to RuntimeController yet".to_string(),
+                ),
+            }),
+        ));
+    };
+
+    let input = crate::api::state::ApiSessionPromptInput {
+        session_id: id.clone(),
+        message: req.message,
+        agent_mode: req.agent_mode.clone(),
+        stream: req.stream.unwrap_or(false),
+    };
+
+    let outcome = agent_runtime
+        .submit_prompt(input)
+        .await
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+
+    let status_code = if outcome.accepted {
+        StatusCode::OK
+    } else {
+        StatusCode::INTERNAL_SERVER_ERROR
+    };
 
     Ok((
-        StatusCode::NOT_IMPLEMENTED,
+        status_code,
         Json(SessionPromptResponse {
             session_id: id,
             execution_kind: "full_agent_turn".to_string(),
-            accepted: false,
-            turn_id: None,
-            status: "not_implemented".to_string(),
-            events_written: 0,
-            latest_part_index: None,
-            diagnostic: None,
+            accepted: outcome.accepted,
+            turn_id: outcome.turn_id,
+            status: outcome.status,
+            events_written: outcome.events_written,
+            latest_part_index: outcome.latest_part_index,
+            diagnostic: outcome.diagnostic,
             agent_runtime_entrypoint: Some("RuntimeController".to_string()),
-            error: Some("full-agent prompt API is not wired to RuntimeController yet".to_string()),
+            error: outcome.error,
         }),
     ))
 }

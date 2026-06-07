@@ -5,11 +5,46 @@
 use super::routes::*;
 use crate::services::config::AppConfig;
 use crate::tools::ToolContext;
+use serde::Serialize;
 use serde_json::json;
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::RwLock;
 use tracing::debug;
+
+/// Input shape for the full-agent runtime entrypoint.
+#[derive(Debug, Clone)]
+pub struct ApiSessionPromptInput {
+    pub session_id: String,
+    pub message: String,
+    pub agent_mode: Option<String>,
+    pub stream: bool,
+}
+
+/// Outcome from a full-agent prompt execution.
+#[derive(Debug, Clone, Serialize)]
+pub struct ApiSessionPromptOutcome {
+    pub accepted: bool,
+    pub turn_id: Option<String>,
+    pub status: String,
+    pub events_written: usize,
+    pub latest_part_index: Option<i64>,
+    pub diagnostic: Option<super::dto::diagnostic::DiagnosticExportDto>,
+    pub error: Option<String>,
+}
+
+/// Trait for the full-agent runtime entrypoint.
+///
+/// The real implementation delegates to `RuntimeController`.  Tests inject
+/// a fake implementation.  When the handle is `None`, the handler returns
+/// a typed 501.
+#[async_trait::async_trait]
+pub trait ApiAgentRuntime: Send + Sync {
+    async fn submit_prompt(
+        &self,
+        input: ApiSessionPromptInput,
+    ) -> anyhow::Result<ApiSessionPromptOutcome>;
+}
 
 /// API 服务器状态
 pub struct ApiState {
@@ -33,6 +68,8 @@ pub struct ApiState {
     pub lsp_manager: Option<Arc<crate::engine::lsp::LspManager>>,
     /// Worktree 管理器
     pub worktree_manager: Option<Arc<crate::engine::worktree::WorktreeManager>>,
+    /// Full-agent runtime handle.  None means typed 501 for session prompts.
+    pub agent_runtime: Option<Arc<dyn ApiAgentRuntime>>,
 }
 
 impl ApiState {
@@ -65,6 +102,7 @@ impl ApiState {
             audit_tracker: Arc::new(RwLock::new(crate::cost_tracker::CostTracker::new())),
             lsp_manager,
             worktree_manager,
+            agent_runtime: None,
         })
     }
 
@@ -122,6 +160,8 @@ impl ApiState {
             execution_kind: "provider_chat".to_string(),
             full_agent: false,
             agent_runtime_entrypoint: None,
+            deprecated_route: None,
+            replacement_route: None,
         })
     }
 

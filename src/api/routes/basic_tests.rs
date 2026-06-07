@@ -67,6 +67,7 @@ fn api_test_state() -> Arc<ApiState> {
         )),
         lsp_manager: None,
         worktree_manager: None,
+        agent_runtime: None,
     })
 }
 

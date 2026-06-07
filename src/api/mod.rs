@@ -91,12 +91,13 @@ pub async fn start_server(
 
     info!("API server listening on http://{}", addr);
     info!("API endpoints:");
-    info!("  POST /api/chat           - Send message");
-    info!("  GET  /api/sessions       - List sessions");
-    info!("  GET  /api/tools          - List tools");
-    info!("  GET  /api/config         - Get config");
-    info!("  GET  /api/health         - Health check");
-    info!("  WS   /api/ws             - WebSocket");
+    info!("  POST /api/sessions/:id/prompt  - Full-agent turn (primary)");
+    info!("  POST /api/chat                 - Provider chat (legacy)");
+    info!("  POST /api/provider-chat        - Provider chat");
+    info!("  GET  /api/sessions            - List sessions");
+    info!("  GET  /api/sessions/:id/parts  - Session parts cursor");
+    info!("  GET  /api/provider/status     - Provider status");
+    info!("  GET  /api/health              - Health check");
 
     let listener = tokio::net::TcpListener::bind(addr).await?;
     axum::serve(listener, app).await?;
