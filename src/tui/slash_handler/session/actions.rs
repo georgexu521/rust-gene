@@ -17,17 +17,18 @@ pub async fn handle_revert_turn(app: &mut TuiApp) -> String {
     }
 
     let last_round = rounds.last().unwrap();
-    let restored_files: Vec<String> = Vec::new();
+    let mut restored_files: Vec<String> = Vec::new();
+    let mut removed_files: Vec<String> = Vec::new();
     let mut errors: Vec<String> = Vec::new();
 
     for checkpoint_id in &last_round.checkpoint_ids {
         match cp.restore_checkpoint(checkpoint_id).await {
             Ok(result) => {
                 for f in result.restored_files {
-                    errors.push(format!("  restored: {f}"));
+                    restored_files.push(format!("  restored: {f}"));
                 }
                 for f in result.removed_files {
-                    errors.push(format!("  removed: {f}"));
+                    removed_files.push(format!("  removed: {f}"));
                 }
             }
             Err(e) => errors.push(format!("  failed: {e}")),
@@ -35,7 +36,11 @@ pub async fn handle_revert_turn(app: &mut TuiApp) -> String {
     }
 
     let file_count = last_round.paths.len();
-    if restored_files.is_empty() && errors.is_empty() {
+    let mut restored_summary = Vec::new();
+    restored_summary.extend(restored_files);
+    restored_summary.extend(removed_files);
+
+    if restored_summary.is_empty() && errors.is_empty() {
         format!(
             "Reverted {} file(s) from last turn (round: {:?}).\nUse /changes to see what was reverted.",
             file_count,
@@ -44,12 +49,12 @@ pub async fn handle_revert_turn(app: &mut TuiApp) -> String {
     } else if errors.is_empty() {
         format!(
             "Reverted last turn's file changes:\n{}",
-            restored_files.join("\n")
+            restored_summary.join("\n")
         )
     } else {
         format!(
             "Partial revert of last turn:\n{}\nErrors:\n{}",
-            restored_files.join("\n"),
+            restored_summary.join("\n"),
             errors.join("\n")
         )
     }

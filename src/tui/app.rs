@@ -583,6 +583,18 @@ impl TuiApp {
 
         debug!("Submitting message: {}", content);
 
+        if self.run_coordinator.is_active() || self.is_querying {
+            let queued = self.persist_queued_session_input(&content);
+            let message = if queued {
+                "A run is already active. Queued your message for the next turn.".to_string()
+            } else {
+                "A run is already active. Wait for it to complete or press Esc to cancel."
+                    .to_string()
+            };
+            self.add_system_message(message);
+            return;
+        }
+
         // 取消之前的流式任务（如果有）
         if let Some(handle) = self.stream_handle.take() {
             handle.abort();
@@ -702,16 +714,7 @@ impl TuiApp {
                     .submit_stream_turn_with_agent_mode(user_msg, agent_mode)
                     .await;
 
-                // Create event mirror for durable replay (Phase 2 wire-up)
-                let event_mirror = engine.session_binding().and_then(|(store, sid)| {
-                    crate::session_store::event_mirror::StreamEventMirror::shared(&store, &sid)
-                });
-
                 while let Some(event) = stream.next().await {
-                    // Mirror every event to session_events for replay
-                    if let Some(ref mirror) = event_mirror {
-                        mirror.lock().unwrap().mirror(&event);
-                    }
                     match event {
                         StreamEvent::TextChunk(text) => {
                             let mut resp = response_clone.lock().await;
@@ -832,6 +835,34 @@ impl TuiApp {
         !self.session_manager.is_current_session(&session_id)
     }
 
+    fn persist_queued_session_input(&self, content: &str) -> bool {
+        let Some(engine) = &self.streaming_engine else {
+            return false;
+        };
+        let Some((store, session_id)) = engine.session_binding() else {
+            return false;
+        };
+        let conn = store.shared_conn();
+        let conn = conn.lock().unwrap();
+        crate::engine::run_coordinator::persist_session_input(
+            &conn,
+            &session_id,
+            content,
+            crate::engine::run_coordinator::InputDelivery::Queue,
+        )
+        .is_ok()
+    }
+
+    fn promote_queued_session_input(&self) -> Option<String> {
+        let engine = self.streaming_engine.as_ref()?;
+        let (store, session_id) = engine.session_binding()?;
+        let conn = store.shared_conn();
+        let conn = conn.lock().unwrap();
+        crate::engine::run_coordinator::promote_session_input(&conn, &session_id)
+            .ok()
+            .flatten()
+    }
+
     /// 刷新当前响应（从缓冲区读取最新的流式内容，带打字机效果）
     pub async fn refresh_response(&mut self) {
         if !self.is_querying {
@@ -935,6 +966,12 @@ impl TuiApp {
                 self.runtime_facade_state.set_querying(false).await;
                 self.stream_started_at = None;
                 self.current_tool_anchor_id = None;
+                if let Some(next_input) = self.promote_queued_session_input() {
+                    self.add_system_message(
+                        "Running queued message from this session.".to_string(),
+                    );
+                    self.send_message(next_input).await;
+                }
             }
         }
 

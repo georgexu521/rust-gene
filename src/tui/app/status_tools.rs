@@ -349,10 +349,14 @@ impl TuiApp {
     }
 
     pub fn open_tool_viewer_for(&mut self, id: &str) -> bool {
-        let Some((title, content)) = self
+        let (title, content) = if let Some((title, content)) = self
             .find_visible_tool_run(id)
             .map(|run| (run.summary(), run.full_details()))
-        else {
+        {
+            (title, content)
+        } else if let Some((title, content)) = self.read_stored_tool_output(id) {
+            (title, content)
+        } else {
             return false;
         };
         self.tool_viewer_title = title;
@@ -363,7 +367,8 @@ impl TuiApp {
     }
 
     pub fn tool_output_index_lines(&self) -> Vec<String> {
-        self.visible_tool_runs()
+        let mut lines = self
+            .visible_tool_runs()
             .into_iter()
             .map(|run| {
                 format!(
@@ -373,7 +378,52 @@ impl TuiApp {
                     run.summary()
                 )
             })
-            .collect()
+            .collect::<Vec<_>>();
+        if let Some(session_id) = self.session_manager.current_session_id() {
+            if let Ok(metas) =
+                crate::tool_output_store::ToolOutputStore::new().list_for_session(session_id)
+            {
+                for meta in metas {
+                    lines.push(format!(
+                        "- {} [stored] {} · {} bytes · {}",
+                        meta.id,
+                        meta.tool_name,
+                        meta.original_bytes,
+                        meta.uri()
+                    ));
+                }
+            }
+        }
+        lines
+    }
+
+    pub fn reload_persisted_tool_runs_for_session(
+        &mut self,
+        session_id: &str,
+    ) -> Result<usize, String> {
+        let parts = self
+            .session_manager
+            .load_session_parts(session_id)
+            .map_err(|err| err.to_string())?;
+        let runs = parts
+            .into_iter()
+            .filter_map(persisted_part_to_tool_run)
+            .collect::<Vec<_>>();
+        if runs.is_empty() {
+            return Ok(0);
+        }
+
+        let anchor_id = self
+            .messages
+            .iter()
+            .rev()
+            .find(|message| message.role == MessageRole::User)
+            .or_else(|| self.messages.last())
+            .map(|message| message.id.clone())
+            .unwrap_or_else(|| format!("session-parts-{session_id}"));
+        self.tool_runs_by_message_id.insert(anchor_id, runs.clone());
+        self.tool_runs_snapshot = runs;
+        Ok(self.tool_runs_snapshot.len())
     }
 
     fn find_visible_tool_run(&self, id: &str) -> Option<&ToolRunView> {
@@ -392,6 +442,27 @@ impl TuiApp {
         runs
     }
 
+    fn read_stored_tool_output(&self, id_or_uri: &str) -> Option<(String, String)> {
+        let session_id = self.session_manager.current_session_id()?;
+        let store = crate::tool_output_store::ToolOutputStore::new();
+        let page = store.read_page(session_id, id_or_uri, 0, 64 * 1024).ok()?;
+        let meta = store.read_meta(id_or_uri).ok();
+        let title = meta
+            .as_ref()
+            .map(|m| format!("{} · {}", m.tool_name, m.uri()))
+            .unwrap_or_else(|| id_or_uri.to_string());
+        let mut content = page.content;
+        if page.has_more {
+            content.push_str(&format!(
+                "\n\n[Showing first {} of {} bytes. Full output: {}]",
+                page.limit.min(page.total_bytes),
+                page.total_bytes,
+                id_or_uri
+            ));
+        }
+        Some((title, content))
+    }
+
     fn visible_tool_run_ids(&self) -> Vec<String> {
         self.visible_tool_runs()
             .into_iter()
@@ -408,4 +479,64 @@ impl TuiApp {
             .get(message_id)
             .map(Vec::as_slice)
     }
+}
+
+fn persisted_part_to_tool_run(
+    part: crate::session_store::PersistedSessionPart,
+) -> Option<ToolRunView> {
+    if part.kind != "tool" && part.kind != "shell" {
+        return None;
+    }
+
+    let payload = part.payload;
+    let tool_name = part
+        .tool_name
+        .clone()
+        .or_else(|| payload["tool_name"].as_str().map(str::to_string))
+        .unwrap_or_else(|| {
+            if part.kind == "shell" {
+                "bash".to_string()
+            } else {
+                "tool".to_string()
+            }
+        });
+    let run_id = part
+        .tool_call_id
+        .clone()
+        .filter(|id| !id.trim().is_empty())
+        .unwrap_or(part.part_id);
+    let mut run = ToolRunView::new(run_id, tool_name.clone());
+    if let Some(input_args) = payload["input_args"].as_str() {
+        run.args_buffer = input_args.to_string();
+        run.arguments = serde_json::from_str(input_args).ok();
+    }
+    let body = payload["result_preview"]
+        .as_str()
+        .or_else(|| payload["error"].as_str())
+        .or_else(|| payload["output_uri"].as_str())
+        .or_else(|| payload["input_args"].as_str())
+        .unwrap_or("")
+        .to_string();
+    let success = !matches!(
+        part.status.as_deref(),
+        Some("failed" | "timed_out" | "cancelled")
+    );
+    let metadata = serde_json::json!({
+        "tool": tool_name,
+        "success": success,
+        "output_uri": payload["output_uri"].as_str(),
+        "error_preview": payload["error"].as_str(),
+        "persisted_session_part_id": part.id,
+        "projected_to_seq": part.projected_to_seq,
+    });
+    run.mark_complete_with_metadata(body, Some(metadata));
+    run.status = match part.status.as_deref() {
+        Some("pending") => ToolRunStatus::Queued,
+        Some("running") => ToolRunStatus::Running,
+        Some("failed") => ToolRunStatus::Failed,
+        Some("timed_out") => ToolRunStatus::TimedOut,
+        Some("cancelled") => ToolRunStatus::Cancelled,
+        _ => run.status,
+    };
+    Some(run)
 }

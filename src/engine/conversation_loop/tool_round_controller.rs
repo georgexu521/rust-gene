@@ -91,6 +91,7 @@ impl ToolRoundController {
             task_bundle,
             messages,
             trace: runtime.trace,
+            session_id: &conversation.session_id,
             is_programming_workflow,
             working_dir: runtime.working_dir,
             last_user_preview: runtime.last_user_preview,

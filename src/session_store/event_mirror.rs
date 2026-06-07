@@ -31,10 +31,23 @@ impl StreamEventMirror {
     }
 
     /// Mirror a StreamEvent to the session_events table.
-    pub fn mirror(&self, event: &StreamEvent) {
+    pub fn mirror(&mut self, event: &StreamEvent) {
         let _ = match event {
+            StreamEvent::Start => self.writer.step_started(),
+            StreamEvent::TextChunk(text) => self.writer.text_delta(text),
+            StreamEvent::ThinkingStart => self.writer.write_event("reasoning_started", "{}"),
+            StreamEvent::ThinkingChunk(text) => self.writer.reasoning_delta(text),
+            StreamEvent::ThinkingComplete => self.writer.write_event("reasoning_completed", "{}"),
+            StreamEvent::ToolCallStart { id, name } => self.writer.tool_called(id, name),
+            StreamEvent::ToolCallArgs { id, args_delta } => {
+                self.writer.tool_args_delta(id, args_delta)
+            }
+            StreamEvent::ToolCallComplete { id } => self.writer.tool_call_ready(id),
+            StreamEvent::ToolExecutionStart { id, name, .. } => self.writer.tool_started(id, name),
+            StreamEvent::ToolExecutionProgress { id, progress } => {
+                self.writer.tool_progress(id, progress)
+            }
             StreamEvent::ToolExecutionComplete { id, result, .. } => {
-                let _ = self.writer.tool_called(id, "completed");
                 self.writer.tool_succeeded(id, &safe_preview(result, 256))
             }
             StreamEvent::Closeout {
@@ -51,7 +64,22 @@ impl StreamEventMirror {
                 *completion_tokens as u64,
                 cached_tokens.unwrap_or(0) as u64,
             ),
-            _ => Ok(()),
+            StreamEvent::RuntimeDiagnostic { diagnostic } => {
+                let payload = serde_json::json!({ "diagnostic": diagnostic }).to_string();
+                self.writer.write_event("runtime_diagnostic", &payload)
+            }
+            StreamEvent::PermissionRequest {
+                id,
+                tool_name,
+                arguments,
+                prompt,
+                ..
+            } => self
+                .writer
+                .permission_requested(id, tool_name, arguments, prompt),
+            StreamEvent::OutputTruncated => self.writer.write_event("output_truncated", "{}"),
+            StreamEvent::Complete => self.writer.step_ended(),
+            StreamEvent::Error(message) => self.writer.runtime_error(message),
         };
     }
 }

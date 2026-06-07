@@ -28,6 +28,7 @@ pub use records::*;
 pub use todo_store::{PersistedTodoItem, TodoItem};
 
 pub use event_store::{query_session_events, SessionEventRow, SessionEventWriter};
+pub use session_parts::PersistedSessionPart;
 
 /// 会话存储
 #[derive(Clone)]
@@ -44,6 +45,19 @@ impl SessionStore {
     /// 获取共享连接（用于创建 SessionEventWriter 等）
     pub fn shared_conn(&self) -> Arc<Mutex<Connection>> {
         self.conn.clone()
+    }
+
+    pub fn refresh_session_parts(
+        &self,
+        session_id: &str,
+    ) -> SqlResult<Vec<session_parts::SessionPart>> {
+        let conn = self.conn();
+        session_parts::refresh_session_parts(&conn, session_id)
+    }
+
+    pub fn get_session_parts(&self, session_id: &str) -> SqlResult<Vec<PersistedSessionPart>> {
+        let conn = self.conn();
+        session_parts::query_persisted_session_parts(&conn, session_id)
     }
 
     /// 默认会话数据库路径。
@@ -103,6 +117,9 @@ impl SessionStore {
         runner.register(std::sync::Arc::new(
             crate::migrations::v10_add_session_inputs::V10AddSessionInputs,
         ));
+        runner.register(std::sync::Arc::new(
+            crate::migrations::v11_add_session_parts::V11AddSessionParts,
+        ));
         runner.run(&conn)?;
 
         info!("SessionStore opened at {:?}", path);
@@ -149,6 +166,9 @@ impl SessionStore {
         ));
         runner.register(std::sync::Arc::new(
             crate::migrations::v10_add_session_inputs::V10AddSessionInputs,
+        ));
+        runner.register(std::sync::Arc::new(
+            crate::migrations::v11_add_session_parts::V11AddSessionParts,
         ));
         runner.run(&conn)?;
 

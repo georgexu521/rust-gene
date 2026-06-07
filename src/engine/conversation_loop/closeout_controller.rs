@@ -32,6 +32,7 @@ pub(super) struct FinalCloseoutContext<'a> {
     pub(super) iterations_used: usize,
     pub(super) max_iterations: usize,
     pub(super) evidence_ledger: &'a EvidenceLedger,
+    pub(super) settlement_gaps: &'a [String],
     pub(super) memory_generate_enabled: bool,
     pub(super) tx: Option<&'a mpsc::Sender<super::super::streaming::StreamEvent>>,
 }
@@ -491,6 +492,22 @@ impl FinalCloseoutController {
                         error: "settlement_gap: tools executed but no file changes or validation proof produced"
                             .to_string(),
                     });
+            }
+
+            if !context.settlement_gaps.is_empty()
+                && closeout.status != StageValidationStatus::Failed
+            {
+                closeout.status = StageValidationStatus::NotVerified;
+                let gap_msg = format!(
+                    "settlement_gap: unsettled tool lifecycle record(s): {}",
+                    context.settlement_gaps.join(", ")
+                );
+                if !closeout.residual_risks.iter().any(|risk| risk == &gap_msg) {
+                    closeout.residual_risks.push(gap_msg.clone());
+                }
+                context
+                    .trace
+                    .record(TraceEvent::WorkflowFallback { error: gap_msg });
             }
 
             if let Some(tx) = context.tx {
@@ -1066,6 +1083,7 @@ mod tests {
             iterations_used: 1,
             max_iterations: 10,
             evidence_ledger: &evidence_ledger,
+            settlement_gaps: &[],
             memory_generate_enabled: true,
             tx: None,
         })
@@ -1147,6 +1165,7 @@ mod tests {
             iterations_used: 1,
             max_iterations: 10,
             evidence_ledger: &evidence_ledger,
+            settlement_gaps: &[],
             memory_generate_enabled: true,
             tx: None,
         })
@@ -1222,6 +1241,7 @@ mod tests {
             iterations_used: 1,
             max_iterations: 10,
             evidence_ledger: &evidence_ledger,
+            settlement_gaps: &[],
             memory_generate_enabled: true,
             tx: None,
         })
@@ -1295,6 +1315,7 @@ mod tests {
             iterations_used: 1,
             max_iterations: 10,
             evidence_ledger: &evidence_ledger,
+            settlement_gaps: &[],
             memory_generate_enabled: true,
             tx: None,
         })

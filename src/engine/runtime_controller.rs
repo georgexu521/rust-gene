@@ -29,6 +29,7 @@ use futures::Stream;
 use serde::{Deserialize, Serialize};
 use std::pin::Pin;
 use std::sync::Arc;
+use std::task::{Context, Poll};
 
 /// The product command/event controller shared across frontends.
 ///
@@ -87,7 +88,8 @@ impl RuntimeController {
         &self,
         user_message: impl Into<String>,
     ) -> Pin<Box<dyn Stream<Item = StreamEvent> + Send>> {
-        self.engine.query_stream(user_message).await
+        let stream = self.engine.query_stream(user_message).await;
+        self.mirror_stream(stream)
     }
 
     /// Submit a full agent turn with an explicit agent mode, preserving the
@@ -97,9 +99,27 @@ impl RuntimeController {
         user_message: impl Into<String>,
         agent_mode: AgentMode,
     ) -> Pin<Box<dyn Stream<Item = StreamEvent> + Send>> {
-        self.engine
+        let stream = self
+            .engine
             .query_stream_with_agent_mode(user_message, agent_mode)
-            .await
+            .await;
+        self.mirror_stream(stream)
+    }
+
+    fn mirror_stream(
+        &self,
+        stream: Pin<Box<dyn Stream<Item = StreamEvent> + Send>>,
+    ) -> Pin<Box<dyn Stream<Item = StreamEvent> + Send>> {
+        let mirror = self.engine.session_binding().and_then(|(store, sid)| {
+            crate::session_store::event_mirror::StreamEventMirror::shared(&store, &sid)
+        });
+        match mirror {
+            Some(mirror) => Box::pin(MirroredStream {
+                inner: stream,
+                mirror,
+            }),
+            None => stream,
+        }
     }
 
     /// Cancel the in-flight turn (if any).
@@ -475,6 +495,27 @@ impl Stream for StreamEventToTurnEvent {
         Pin::new(&mut self.inner)
             .poll_next(cx)
             .map(|opt| opt.map(TurnEvent::from))
+    }
+}
+
+struct MirroredStream {
+    inner: Pin<Box<dyn Stream<Item = StreamEvent> + Send>>,
+    mirror: Arc<std::sync::Mutex<crate::session_store::event_mirror::StreamEventMirror>>,
+}
+
+impl Stream for MirroredStream {
+    type Item = StreamEvent;
+
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        match self.inner.as_mut().poll_next(cx) {
+            Poll::Ready(Some(event)) => {
+                if let Ok(mut mirror) = self.mirror.lock() {
+                    mirror.mirror(&event);
+                }
+                Poll::Ready(Some(event))
+            }
+            other => other,
+        }
     }
 }
 

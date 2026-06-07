@@ -706,6 +706,7 @@ impl ConversationLoop {
         })
         .await?;
 
+        let settlement_gaps = turn_state.tool_lifecycle.unsettled_summaries();
         let result = TurnCompletionController::complete(TurnCompletionContext {
             trace: &trace,
             route: &route,
@@ -719,6 +720,7 @@ impl ConversationLoop {
             max_iterations: self.max_iterations,
             tool_calls_made: loop_state.tool_calls_made,
             evidence_ledger: &turn_state.evidence_ledger,
+            settlement_gaps: &settlement_gaps,
             memory_generate_enabled: self.memory_generate_enabled,
             tx,
         })

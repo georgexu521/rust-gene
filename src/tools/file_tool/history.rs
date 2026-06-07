@@ -44,7 +44,7 @@ pub(crate) async fn create_files_checkpoint(
     match checkpoint_manager
         .create_checkpoint(
             tool_name,
-            None,
+            assistant_message_id(context),
             context.metadata.get("tool_call_id").cloned(),
             paths,
         )
@@ -72,6 +72,11 @@ pub(crate) async fn record_file_change(
         checkpoint_id: checkpoint.id.clone(),
         tool_name: request.tool_name.to_string(),
         tool_call_id: context.metadata.get("tool_call_id").cloned(),
+        message_id: checkpoint
+            .message_id
+            .clone()
+            .or_else(|| assistant_message_id(context)),
+        part_id: assistant_part_id(context),
         tool_round_id: tool_round_id(context),
         path: request.path.to_string_lossy().to_string(),
         existed_before: request.existed_before,
@@ -101,6 +106,7 @@ pub(crate) fn checkpoint_metadata_json(checkpoint: Option<&Checkpoint>) -> Value
             json!({
                 "id": checkpoint.id.clone(),
                 "sequence": checkpoint.sequence,
+                "message_id": checkpoint.message_id.clone(),
                 "tool_name": checkpoint.tool_name.clone(),
                 "tool_call_id": checkpoint.tool_call_id.clone(),
                 "timestamp": checkpoint.timestamp.to_rfc3339(),
@@ -117,6 +123,8 @@ fn file_change_record_json(record: &FileChangeRecord) -> Value {
         "session_id": record.session_id.clone(),
         "tool_name": record.tool_name.clone(),
         "tool_call_id": record.tool_call_id.clone(),
+        "message_id": record.message_id.clone(),
+        "part_id": record.part_id.clone(),
         "tool_round_id": record.tool_round_id.clone(),
         "timestamp": record.timestamp.to_rfc3339(),
         "path": record.path.clone(),
@@ -126,6 +134,45 @@ fn file_change_record_json(record: &FileChangeRecord) -> Value {
         "diff": record.diff.clone(),
         "bytes_written": record.bytes_written,
     })
+}
+
+fn assistant_message_id(context: &ToolContext) -> Option<String> {
+    if let Some(id) = context.metadata.get("assistant_message_id") {
+        if !id.trim().is_empty() {
+            return Some(id.clone());
+        }
+    }
+
+    if !context.parent_assistant_tool_calls.is_empty() {
+        let mut ids = context
+            .parent_assistant_tool_calls
+            .iter()
+            .map(|tool_call| tool_call.id.as_str())
+            .collect::<Vec<_>>();
+        ids.sort_unstable();
+        return Some(format!(
+            "assistant_msg_{}",
+            stable_text_hash(&ids.join("|"))
+        ));
+    }
+
+    context
+        .metadata
+        .get("tool_call_id")
+        .map(|id| format!("assistant_msg_{}", stable_text_hash(id)))
+}
+
+fn assistant_part_id(context: &ToolContext) -> Option<String> {
+    if let Some(id) = context.metadata.get("assistant_part_id") {
+        if !id.trim().is_empty() {
+            return Some(id.clone());
+        }
+    }
+
+    context
+        .metadata
+        .get("tool_call_id")
+        .map(|id| format!("tool_part_{}", stable_text_hash(id)))
 }
 
 fn tool_round_id(context: &ToolContext) -> Option<String> {

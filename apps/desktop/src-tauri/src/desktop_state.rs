@@ -658,3 +658,27 @@ pub(super) fn load_compact_boundaries_from_store(
         })
         .collect())
 }
+
+pub(super) fn load_session_parts_from_store(
+    store: &SessionStore,
+    session_id: &str,
+) -> Result<Vec<DesktopSessionPart>, String> {
+    let parts = store
+        .get_session_parts(session_id)
+        .map_err(|err| err.to_string())?;
+    Ok(parts
+        .into_iter()
+        .map(|part| DesktopSessionPart {
+            id: part.id,
+            part_index: part.part_index,
+            part_id: part.part_id,
+            kind: part.kind,
+            tool_call_id: part.tool_call_id,
+            tool_name: part.tool_name,
+            status: part.status,
+            payload: part.payload,
+            projected_to_seq: part.projected_to_seq,
+            updated_at: part.updated_at,
+        })
+        .collect())
+}

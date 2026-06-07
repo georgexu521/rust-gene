@@ -10,6 +10,7 @@ pub(super) struct ToolTurnAppendContext<'a> {
     pub(super) runtime_diet: &'a mut RuntimeDietSnapshot,
     pub(super) tool_results_text: &'a mut String,
     pub(super) messages: &'a mut Vec<Message>,
+    pub(super) session_id: Option<&'a str>,
 }
 
 pub(super) struct ToolTurnController;
@@ -26,6 +27,7 @@ impl ToolTurnController {
             context.evidence_ledger,
             context.tool_results_text,
             context.messages,
+            context.session_id,
         )
         .await;
         let result_budget = ContextBudgetController::observe_tool_result(&normalized);
@@ -65,6 +67,7 @@ mod tests {
                 runtime_diet: &mut runtime_diet,
                 tool_results_text: &mut tool_results_text,
                 messages: &mut messages,
+                session_id: Some("session-test"),
             },
         )
         .await;

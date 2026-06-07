@@ -8,6 +8,7 @@
 //! The projector reads from `session_events` and produces a list of
 //! `SessionPart` items keyed by assistant message ID.
 
+use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 
 /// Typed part within a session assistant message.
@@ -98,6 +99,32 @@ pub fn project_session_parts(events: &[super::SessionEventRow]) -> Vec<SessionPa
         let payload: serde_json::Value = serde_json::from_str(&event.payload).unwrap_or_default();
 
         match event.event_type.as_str() {
+            "assistant_text_delta" => {
+                let text = payload["text"].as_str().unwrap_or("");
+                if text.is_empty() {
+                    continue;
+                }
+                match parts.last_mut() {
+                    Some(SessionPart::AssistantText { content, .. }) => content.push_str(text),
+                    _ => parts.push(SessionPart::AssistantText {
+                        part_id,
+                        content: text.to_string(),
+                    }),
+                }
+            }
+            "reasoning_delta" => {
+                let text = payload["text"].as_str().unwrap_or("");
+                if text.is_empty() {
+                    continue;
+                }
+                match parts.last_mut() {
+                    Some(SessionPart::Reasoning { content, .. }) => content.push_str(text),
+                    _ => parts.push(SessionPart::Reasoning {
+                        part_id,
+                        content: text.to_string(),
+                    }),
+                }
+            }
             "tool_called" => {
                 parts.push(SessionPart::Tool {
                     part_id,
@@ -108,6 +135,67 @@ pub fn project_session_parts(events: &[super::SessionEventRow]) -> Vec<SessionPa
                     result_preview: None,
                     error: None,
                 });
+            }
+            "tool_args_delta" => {
+                let call_id = payload["tool_call_id"].as_str().unwrap_or("").to_string();
+                let args_delta = payload["args_delta"].as_str().unwrap_or("");
+                if args_delta.is_empty() {
+                    continue;
+                }
+                let found = parts.iter_mut().rev().any(|p| match p {
+                    SessionPart::Tool {
+                        tool_call_id,
+                        input_args,
+                        ..
+                    } if tool_call_id == &call_id => {
+                        input_args
+                            .get_or_insert_with(String::new)
+                            .push_str(args_delta);
+                        true
+                    }
+                    _ => false,
+                });
+                if !found {
+                    parts.push(SessionPart::Tool {
+                        part_id,
+                        tool_call_id: call_id,
+                        tool_name: String::new(),
+                        status: ToolPartStatus::Pending,
+                        input_args: Some(args_delta.to_string()),
+                        result_preview: None,
+                        error: None,
+                    });
+                }
+            }
+            "tool_started" => {
+                let call_id = payload["tool_call_id"].as_str().unwrap_or("").to_string();
+                let name = payload["tool_name"].as_str().unwrap_or("").to_string();
+                let found = parts.iter_mut().rev().any(|p| match p {
+                    SessionPart::Tool {
+                        tool_call_id,
+                        tool_name,
+                        status,
+                        ..
+                    } if tool_call_id == &call_id => {
+                        if !name.is_empty() {
+                            *tool_name = name.clone();
+                        }
+                        *status = ToolPartStatus::Running;
+                        true
+                    }
+                    _ => false,
+                });
+                if !found {
+                    parts.push(SessionPart::Tool {
+                        part_id,
+                        tool_call_id: call_id,
+                        tool_name: name,
+                        status: ToolPartStatus::Running,
+                        input_args: None,
+                        result_preview: None,
+                        error: None,
+                    });
+                }
             }
             "tool_succeeded" => {
                 let call_id = payload["tool_call_id"].as_str().unwrap_or("").to_string();
@@ -180,11 +268,140 @@ pub fn project_session_parts(events: &[super::SessionEventRow]) -> Vec<SessionPa
                     after_tokens: payload["after_tokens"].as_u64().unwrap_or(0),
                 });
             }
+            "permission_requested" => {
+                parts.push(SessionPart::Permission {
+                    part_id,
+                    tool_name: payload["tool_name"].as_str().unwrap_or("").to_string(),
+                    decided: false,
+                    allowed: None,
+                });
+            }
             _ => {}
         }
     }
 
     parts
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PersistedSessionPart {
+    pub id: i64,
+    pub session_id: String,
+    pub part_index: i64,
+    pub part_id: String,
+    pub kind: String,
+    pub tool_call_id: Option<String>,
+    pub tool_name: Option<String>,
+    pub status: Option<String>,
+    pub payload: serde_json::Value,
+    pub projected_to_seq: i64,
+    pub updated_at: String,
+}
+
+pub fn refresh_session_parts(
+    conn: &Connection,
+    session_id: &str,
+) -> Result<Vec<SessionPart>, rusqlite::Error> {
+    let events = super::query_session_events(conn, session_id, None)?;
+    let projected_to_seq = events.last().map(|event| event.seq).unwrap_or_default();
+    let parts = project_session_parts(&events);
+    conn.execute(
+        "DELETE FROM session_parts WHERE session_id = ?1",
+        [session_id],
+    )?;
+    for (index, part) in parts.iter().enumerate() {
+        let payload = serde_json::to_value(part).unwrap_or_else(|_| serde_json::json!({}));
+        let kind = payload["kind"].as_str().unwrap_or("unknown").to_string();
+        let part_id = part_id(part);
+        let (tool_call_id, tool_name, status) = part_projection_fields(part);
+        conn.execute(
+            "INSERT INTO session_parts
+             (session_id, part_index, part_id, kind, tool_call_id, tool_name, status, payload, projected_to_seq)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            rusqlite::params![
+                session_id,
+                index as i64,
+                part_id,
+                kind,
+                tool_call_id,
+                tool_name,
+                status,
+                payload.to_string(),
+                projected_to_seq,
+            ],
+        )?;
+    }
+    Ok(parts)
+}
+
+pub fn query_persisted_session_parts(
+    conn: &Connection,
+    session_id: &str,
+) -> Result<Vec<PersistedSessionPart>, rusqlite::Error> {
+    let mut stmt = conn.prepare(
+        "SELECT id, session_id, part_index, part_id, kind, tool_call_id, tool_name, status, payload, projected_to_seq, updated_at
+         FROM session_parts
+         WHERE session_id = ?1
+         ORDER BY part_index ASC",
+    )?;
+    let rows = stmt.query_map([session_id], |row| {
+        let payload_text: String = row.get(8)?;
+        Ok(PersistedSessionPart {
+            id: row.get(0)?,
+            session_id: row.get(1)?,
+            part_index: row.get(2)?,
+            part_id: row.get(3)?,
+            kind: row.get(4)?,
+            tool_call_id: row.get(5)?,
+            tool_name: row.get(6)?,
+            status: row.get(7)?,
+            payload: serde_json::from_str(&payload_text).unwrap_or_else(|_| serde_json::json!({})),
+            projected_to_seq: row.get(9)?,
+            updated_at: row.get(10)?,
+        })
+    })?;
+    rows.collect()
+}
+
+fn part_id(part: &SessionPart) -> &str {
+    match part {
+        SessionPart::AssistantText { part_id, .. }
+        | SessionPart::Reasoning { part_id, .. }
+        | SessionPart::Tool { part_id, .. }
+        | SessionPart::Shell { part_id, .. }
+        | SessionPart::Permission { part_id, .. }
+        | SessionPart::Compaction { part_id, .. }
+        | SessionPart::Closeout { part_id, .. } => part_id,
+    }
+}
+
+fn part_projection_fields(part: &SessionPart) -> (Option<String>, Option<String>, Option<String>) {
+    match part {
+        SessionPart::Tool {
+            tool_call_id,
+            tool_name,
+            status,
+            ..
+        } => (
+            Some(tool_call_id.clone()),
+            Some(tool_name.clone()),
+            Some(status.label().to_string()),
+        ),
+        SessionPart::Shell {
+            tool_call_id,
+            status,
+            ..
+        } => (
+            Some(tool_call_id.clone()),
+            Some("shell".to_string()),
+            Some(status.label().to_string()),
+        ),
+        SessionPart::Permission { tool_name, .. } => {
+            (None, Some(tool_name.clone()), Some("waiting".to_string()))
+        }
+        SessionPart::Closeout { status, .. } => (None, None, Some(status.clone())),
+        _ => (None, None, None),
+    }
 }
 
 #[cfg(test)]

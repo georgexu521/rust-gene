@@ -155,8 +155,9 @@ impl ToolResultNormalizer {
     pub(super) async fn normalize_after_execution(
         tool_call: &ToolCall,
         result: &mut ToolResult,
+        session_id: Option<&str>,
     ) -> NormalizedToolResult {
-        truncate_tool_result(result, &tool_call.name, &tool_call.id, None).await;
+        truncate_tool_result(result, &tool_call.name, &tool_call.id, session_id).await;
         Self::attach_observation_metadata(tool_call, result);
         Self::normalize(tool_call, result)
     }
@@ -250,8 +251,10 @@ pub(super) async fn append_provider_tool_result(
     evidence_ledger: &mut EvidenceLedger,
     tool_results_text: &mut String,
     messages: &mut Vec<Message>,
+    session_id: Option<&str>,
 ) -> NormalizedToolResult {
-    let normalized = ToolResultNormalizer::normalize_after_execution(tool_call, result).await;
+    let normalized =
+        ToolResultNormalizer::normalize_after_execution(tool_call, result, session_id).await;
     normalized.record_evidence(evidence_ledger, tool_call, result);
     tool_results_text.push_str(&normalized.ui_content);
     tool_results_text.push('\n');

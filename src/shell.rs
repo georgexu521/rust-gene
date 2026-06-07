@@ -630,7 +630,8 @@ fn shell_history_path() -> Option<PathBuf> {
 }
 
 async fn run_turn(engine: Arc<StreamingQueryEngine>, message: String) -> anyhow::Result<()> {
-    let mut stream = engine.query_stream(message).await;
+    let controller = crate::engine::runtime_controller::RuntimeController::new(engine.clone());
+    let mut stream = controller.submit_stream_turn(message).await;
     let mut tool_runs: Vec<ToolRunView> = Vec::new();
     let mut assistant_printer = AssistantPrinter::default();
     show_status("Thinking...")?;

@@ -1976,6 +1976,11 @@ h1 {
   box-shadow: -18px 0 48px rgb(15 23 42 / 12%);
 }
 
+.tool-output-drawer {
+  z-index: 23;
+  width: min(760px, 100vw);
+}
+
 .workbench-drawer {
   position: fixed;
   top: 0;
@@ -2228,6 +2233,113 @@ h1 {
 .workbench-drawer .workbench-panel {
   width: auto;
   margin: 0;
+}
+
+.tool-output-layout {
+  display: grid;
+  grid-template-columns: minmax(170px, 220px) minmax(0, 1fr);
+  gap: 12px;
+  min-height: 0;
+  padding: 14px 16px 18px;
+  overflow: hidden;
+}
+
+.tool-output-list {
+  display: flex;
+  min-height: 0;
+  flex-direction: column;
+  gap: 8px;
+  overflow: auto;
+}
+
+.tool-output-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-height: 38px;
+  padding: 8px 10px;
+  border: 1px solid #d8dde3;
+  border-radius: 8px;
+  background: #ffffff;
+  color: #17202a;
+  font: inherit;
+  text-align: left;
+}
+
+.tool-output-item.active,
+.tool-output-item:hover {
+  border-color: #2f6fed;
+  background: #eef4ff;
+}
+
+.tool-output-item span {
+  min-width: 0;
+  overflow: hidden;
+  font-size: 13px;
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tool-output-item small {
+  flex: 0 0 auto;
+  color: #64748b;
+  font-size: 11px;
+}
+
+.tool-output-page {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.tool-output-page-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  color: #64748b;
+  font-size: 12px;
+}
+
+.tool-output-page-meta span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tool-output-page pre {
+  flex: 1 1 auto;
+  min-height: 0;
+  margin: 0;
+  padding: 12px;
+  overflow: auto;
+  border: 1px solid #d8dde3;
+  border-radius: 8px;
+  background: #0f172a;
+  color: #e2e8f0;
+  font-size: 12px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.tool-output-page-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.tool-output-page-actions button {
+  min-width: 72px;
+  min-height: 34px;
+  border: 1px solid #cbd2da;
+  border-radius: 8px;
+  background: #ffffff;
 }
 
 .workbench-drawer .workbench-panel {

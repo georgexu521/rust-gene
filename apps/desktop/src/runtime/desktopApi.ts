@@ -132,6 +132,42 @@ export type ResumedSession = {
   session_id: string;
   messages: DesktopMessage[];
   compact_boundaries: DesktopCompactBoundary[];
+  session_parts: DesktopSessionPart[];
+};
+
+export type DesktopSessionPart = {
+  id: number;
+  part_index: number;
+  part_id: string;
+  kind: string;
+  tool_call_id?: string | null;
+  tool_name?: string | null;
+  status?: string | null;
+  payload: Record<string, unknown>;
+  projected_to_seq: number;
+  updated_at: string;
+};
+
+export type DesktopToolOutputPage = {
+  id: string;
+  uri: string;
+  tool_name: string;
+  mime: string;
+  content: string;
+  offset: number;
+  limit: number;
+  total_bytes: number;
+  has_more: boolean;
+};
+
+export type DesktopToolOutputMeta = {
+  id: string;
+  uri: string;
+  tool_call_id: string;
+  tool_name: string;
+  mime: string;
+  original_bytes: number;
+  created_at_ms: number;
 };
 
 export type DesktopSettings = {
@@ -887,10 +923,42 @@ export function resumeSession(sessionId: string): Promise<ResumedSession> {
       session_id: sessionId,
       messages,
       compact_boundaries: [],
+      session_parts: [],
     }));
   }
 
   return invoke("resume_session", { sessionId });
+}
+
+export function loadDesktopToolOutputPage(
+  sessionId: string,
+  idOrUri: string,
+  offset = 0,
+  limit = 64 * 1024,
+): Promise<DesktopToolOutputPage> {
+  if (!isTauriRuntime()) {
+    return Promise.resolve({
+      id: idOrUri,
+      uri: idOrUri,
+      tool_name: "preview",
+      mime: "text/plain",
+      content: "",
+      offset,
+      limit,
+      total_bytes: 0,
+      has_more: false,
+    });
+  }
+
+  return invoke("desktop_tool_output_page", { sessionId, idOrUri, offset, limit });
+}
+
+export function loadDesktopToolOutputIndex(sessionId: string): Promise<DesktopToolOutputMeta[]> {
+  if (!isTauriRuntime()) {
+    return Promise.resolve([]);
+  }
+
+  return invoke("desktop_tool_output_index", { sessionId });
 }
 
 export async function pickProjectDirectory(): Promise<string | null> {

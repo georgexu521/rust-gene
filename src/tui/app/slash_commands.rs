@@ -1161,6 +1161,12 @@ impl TuiApp {
                 for msg in messages {
                     self.messages.push(msg);
                 }
+                let restored_tool_runs = self
+                    .reload_persisted_tool_runs_for_session(session_id)
+                    .unwrap_or_else(|err| {
+                        warn!("Failed to restore persisted tool runs: {}", err);
+                        0
+                    });
 
                 // 同步恢复引擎的对话历史
                 if let Some(ref engine) = self.streaming_engine {
@@ -1176,9 +1182,10 @@ impl TuiApp {
                 }
 
                 let mut lines = vec![format!(
-                    "Restored session {} ({} messages). Previous conversation loaded.",
+                    "Restored session {} ({} messages, {} tool runs). Previous conversation loaded.",
                     &session_id[..8.min(session_id.len())],
-                    self.messages.len()
+                    self.messages.len(),
+                    restored_tool_runs
                 )];
                 if let Ok(preview) = self.session_manager.recent_preview_lines(session_id, 4) {
                     if !preview.is_empty() {

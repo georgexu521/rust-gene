@@ -2,7 +2,52 @@
 
 Date: 2026-06-06
 
-Status: proposed
+Status: implemented with follow-up hardening
+
+Implementation review: 2026-06-07
+
+The main slices have landed in code:
+
+- `ToolOutputStore` stores long tool output behind `tool-output://...` and now
+  enforces session-scoped reads.
+- `SessionEventWriter` and `StreamEventMirror` now capture text, reasoning,
+  tool input, tool lifecycle, usage, closeout, permission, diagnostics, errors,
+  and completion events through the shared `RuntimeController` path used by TUI
+  and desktop.
+- `SessionPart` projection can rebuild assistant text, reasoning, tool parts,
+  permission, compaction, and closeout from `session_events`.
+- `SessionRunCoordinator` now prevents overlapping TUI runs and persists
+  queued follow-up input into `session_inputs`; completed runs drain the next
+  queued message.
+- `/revert last-turn` no longer reports successful restore/remove operations
+  as errors.
+- Tool lifecycle settlement gaps now flow into final closeout and downgrade
+  verified closeout when a tool remains pending/running.
+
+2026-06-07 completion update:
+
+- `session_parts` is now a persisted projection table refreshed from
+  `session_events`, with query APIs for desktop/TUI reload.
+- CLI shell turn submission now goes through `RuntimeController`, aligning the
+  CLI path with TUI/desktop controller semantics.
+- Desktop `resume_session` returns persisted `session_parts`; the React
+  transcript reload path maps assistant text, reasoning, tool, permission,
+  compaction, and closeout parts back into UI items.
+- TUI session restore rebuilds completed tool runs from persisted tool/shell
+  parts when available, while retaining message history as the text source.
+- Desktop exposes paged tool-output list/page Tauri commands, typed frontend
+  APIs, and a drawer viewer for session-scoped long-output reads.
+- `/revert last-turn` now records assistant `message_id` and `part_id` on file
+  changes, groups file-change rounds by assistant message before falling back to
+  legacy tool round IDs, and preserves checkpoint safety.
+
+Remaining follow-up hardening:
+
+- Add the desktop button/view for "revert this assistant turn" once revert
+  events are exported; the TUI command and backend mapping are in place, but
+  desktop revert UX is still API-ready rather than product-visible.
+- Emit a typed revert event into `session_events`/diagnostic export after a
+  revert succeeds or partially succeeds.
 
 ## 1. Purpose
 
@@ -518,8 +563,9 @@ Start consuming the projection in TUI/desktop for completed runs.
 Deliverables:
 
 - `SessionPart` projection
+- persisted `session_parts` table refreshed from `session_events`
 - TUI tool cards render from persisted parts when available
-- desktop reload shows the same completed tool cards
+- desktop reload shows persisted completed run parts
 
 ### Phase 4: Run Coordinator And Input Queue
 
@@ -544,6 +590,10 @@ Deliverables:
 - turn-centric revert
 - revert events in diagnostic export
 
+2026-06-07 status: typed compaction parts and turn-centric revert mapping are
+implemented. Revert diagnostic events and desktop revert UX remain follow-up
+hardening.
+
 ## 12. Non-Goals
 
 - Do not replace Priority Agent's memory system with opencode's lighter model.
@@ -561,8 +611,23 @@ This next phase is done when:
 - completed runs can be replayed from durable events/parts;
 - TUI and desktop share the same persisted tool-card data;
 - active-run follow-up user input is durable and ordered;
-- compaction and revert are visible product events, not hidden runtime side
-  effects;
+- compaction and revert have typed persisted state and checkpoint-safe command
+  behavior;
 - daily diagnostic export can reconstruct what happened without relying on
   in-memory UI state.
 
+2026-06-07 verification:
+
+```bash
+cargo fmt --check
+cargo check -q
+cargo test -q checkpoint --lib
+cargo test -q session_parts --lib
+cargo test -q event_store --lib
+cargo test -q session_store --lib
+cargo test -q tui --lib
+cargo test -q desktop_runtime --lib
+cargo test -q tool_output_store --lib
+cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml -q
+npx -y pnpm@11.2.2 build
+```

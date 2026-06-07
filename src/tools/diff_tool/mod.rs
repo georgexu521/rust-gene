@@ -375,6 +375,8 @@ mod tests {
                 checkpoint_id: checkpoint.id,
                 tool_name: "file_write".to_string(),
                 tool_call_id: None,
+                message_id: None,
+                part_id: None,
                 tool_round_id: None,
                 path: file.to_string_lossy().to_string(),
                 existed_before: true,

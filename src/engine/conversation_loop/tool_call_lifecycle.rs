@@ -103,6 +103,24 @@ impl ToolCallLifecycle {
         records
     }
 
+    pub(super) fn unsettled_summaries(&self) -> Vec<String> {
+        let mut gaps = self
+            .records
+            .iter()
+            .filter_map(|(id, record)| match record.status {
+                ToolCallStatus::Pending | ToolCallStatus::Running => {
+                    Some(format!("{}:{}:{:?}", id, record.tool_name, record.status))
+                }
+                ToolCallStatus::Completed
+                | ToolCallStatus::Failed
+                | ToolCallStatus::Denied
+                | ToolCallStatus::ProviderExecuted => None,
+            })
+            .collect::<Vec<_>>();
+        gaps.sort();
+        gaps
+    }
+
     fn update(
         &mut self,
         tool_call: &ToolCall,

@@ -101,7 +101,14 @@ impl ToolOutputStore {
     }
 
     /// Read a page from a stored output.
-    pub fn read_page(&self, id: &str, offset: u64, limit: u64) -> io::Result<ToolOutputPage> {
+    pub fn read_page(
+        &self,
+        session_id: &str,
+        id_or_uri: &str,
+        offset: u64,
+        limit: u64,
+    ) -> io::Result<ToolOutputPage> {
+        let id = normalize_id(id_or_uri)?;
         let content_path = self.content_path(id);
         if !content_path.exists() {
             return Err(io::Error::new(
@@ -111,6 +118,12 @@ impl ToolOutputStore {
         }
 
         let meta = self.read_meta(id)?;
+        if meta.session_id != session_id {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                format!("tool output {id} does not belong to session {session_id}"),
+            ));
+        }
         let total_bytes = meta.original_bytes;
 
         let mut file = std::fs::File::open(&content_path)?;
@@ -148,6 +161,7 @@ impl ToolOutputStore {
 
     /// Read metadata for a stored output.
     pub fn read_meta(&self, id: &str) -> io::Result<ToolOutputMeta> {
+        let id = normalize_id(id)?;
         let meta_path = self.meta_path(id);
         let text = std::fs::read_to_string(&meta_path)?;
         serde_json::from_str(&text)
@@ -287,6 +301,25 @@ fn output_id(tool_name: &str, tool_call_id: &str) -> String {
     format!("{safe_name}_{safe_id}")
 }
 
+fn normalize_id(id_or_uri: &str) -> io::Result<&str> {
+    let id = id_or_uri
+        .strip_prefix(TOOL_OUTPUT_URI_PREFIX)
+        .unwrap_or(id_or_uri)
+        .trim();
+    let valid = !id.is_empty()
+        && id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-'));
+    if valid {
+        Ok(id)
+    } else {
+        Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("invalid tool output id: {id_or_uri}"),
+        ))
+    }
+}
+
 fn now_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -340,10 +373,27 @@ mod tests {
         assert_eq!(meta.session_id, "sess-1");
         assert!(meta.uri().starts_with("tool-output://"));
 
-        let page = store.read_page(&meta.id, 0, 14).unwrap();
+        let page = store.read_page("sess-1", &meta.id, 0, 14).unwrap();
         assert!(page.content.starts_with("0123456789"));
         assert!(page.has_more);
         assert_eq!(page.total_bytes, content.len() as u64);
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn read_page_rejects_wrong_session() {
+        let dir = std::env::temp_dir().join(format!("tool-store-{}", uuid::Uuid::new_v4()));
+        let store = ToolOutputStore::at(dir.clone());
+        let content = "0123456789\n".repeat(4096);
+        let meta = store
+            .truncate_or_store("sess-1", "call-1", "bash", &content, "text/plain")
+            .await
+            .unwrap()
+            .unwrap();
+
+        let err = store.read_page("sess-2", &meta.uri(), 0, 14).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::PermissionDenied);
 
         let _ = std::fs::remove_dir_all(dir);
     }

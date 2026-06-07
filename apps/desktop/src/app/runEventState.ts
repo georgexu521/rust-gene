@@ -3,6 +3,7 @@ import {
   DesktopMessage,
   DesktopRunContext,
   DesktopRunEvent,
+  DesktopSessionPart,
 } from "../runtime/desktopApi";
 import {
   runtimeDiagnosticDetail,
@@ -451,24 +452,143 @@ export function loadSessionTranscript(
   sessionId: string,
   messages: DesktopMessage[],
   compactBoundaries: DesktopCompactBoundary[] = [],
+  sessionParts: DesktopSessionPart[] = [],
 ): RunViewState {
+  const projectedItems = sessionPartsToTranscriptItems(sessionParts);
+  const projectedTimelineItems = projectedItems.filter(
+    (item): item is Extract<TranscriptItem, { role: "timeline" }> => item.role === "timeline",
+  );
+  const userMessages = messages.filter((message) => message.role === "user");
+  const transcriptItems =
+    projectedItems.length > 0 && userMessages.length <= 1
+      ? [...userMessages.map(messageToTranscriptItem), ...projectedItems]
+      : projectedTimelineItems.length > 0
+        ? [...messages.map(messageToTranscriptItem), ...projectedTimelineItems]
+        : messages.map(messageToTranscriptItem);
+
   return {
     ...state,
     isRunning: false,
     selectedSessionId: sessionId,
     pendingRunContexts: [],
-    items: [...compactBoundaries.map(compactBoundaryToTranscriptItem), ...messages.map(messageToTranscriptItem)],
+    items: [...compactBoundaries.map(compactBoundaryToTranscriptItem), ...transcriptItems],
     traceItems: [
       {
         id: `loaded-${sessionId}`,
         kind: "run",
         title: "Session loaded",
-        detail: `${messages.length} messages`,
+        detail:
+          projectedItems.length > 0
+            ? `${messages.length} messages, ${projectedItems.length} persisted parts`
+            : `${messages.length} messages`,
       },
     ],
     pendingPermission: null,
     error: null,
   };
+}
+
+function sessionPartsToTranscriptItems(parts: DesktopSessionPart[]): TranscriptItem[] {
+  return parts
+    .slice()
+    .sort((left, right) => left.part_index - right.part_index)
+    .map((part) => sessionPartToTranscriptItem(part))
+    .filter((item): item is TranscriptItem => item !== null);
+}
+
+function sessionPartToTranscriptItem(part: DesktopSessionPart): TranscriptItem | null {
+  const payload = isRecord(part.payload) ? part.payload : {};
+  switch (part.kind) {
+    case "assistant_text": {
+      const content = stringField(payload, "content");
+      return content ? { id: `part-${part.part_id}`, role: "assistant", text: content, variant: "final" } : null;
+    }
+    case "reasoning": {
+      const content = stringField(payload, "content");
+      return content ? { id: `part-${part.part_id}`, role: "reasoning", text: content, streaming: false } : null;
+    }
+    case "tool":
+    case "shell":
+      return persistedToolPartToTimelineItem(part, payload);
+    case "permission": {
+      const decided = booleanField(payload, "decided");
+      const allowed = booleanField(payload, "allowed");
+      return timelineEvent({
+        id: `part-${part.part_id}`,
+        kind: "permission",
+        title: decided ? "Permission answered" : "Permission requested",
+        detail: part.tool_name || stringField(payload, "tool_name") || undefined,
+        status: decided ? (allowed === false ? "failed" : "completed") : "waiting",
+        facts: compactFacts([
+          part.tool_name ? `tool ${part.tool_name}` : null,
+          decided ? `allowed ${allowed === true}` : "waiting",
+        ]),
+      });
+    }
+    case "compaction":
+      return timelineEvent({
+        id: `part-${part.part_id}`,
+        kind: "compact",
+        title: "Context compacted",
+        detail: stringField(payload, "trigger") || stringField(payload, "strategy") || undefined,
+        facts: compactFacts([
+          stringField(payload, "strategy"),
+          numericField(payload, "before_tokens") !== undefined && numericField(payload, "after_tokens") !== undefined
+            ? `${numericField(payload, "before_tokens")} -> ${numericField(payload, "after_tokens")} tokens`
+            : null,
+        ]),
+        status: "completed",
+      });
+    case "closeout": {
+      const status = stringField(payload, "status") || part.status || "unknown";
+      return timelineEvent({
+        id: `part-${part.part_id}`,
+        kind: status === "failed" ? "error" : "run",
+        title: "Closeout",
+        detail: stringField(payload, "evidence_summary") || status,
+        status: timelineStatusFromPartStatus(status),
+      });
+    }
+    default:
+      return null;
+  }
+}
+
+function persistedToolPartToTimelineItem(
+  part: DesktopSessionPart,
+  payload: Record<string, unknown>,
+): Extract<TranscriptItem, { role: "timeline" }> {
+  const resultPreview =
+    stringField(payload, "result_preview") ||
+    stringField(payload, "error") ||
+    stringField(payload, "output_uri") ||
+    stringField(payload, "input_args") ||
+    "";
+  const toolName = part.tool_name || stringField(payload, "tool_name") || (part.kind === "shell" ? "bash" : "tool");
+  const status = timelineStatusFromPartStatus(part.status || stringField(payload, "status"));
+  const summary: ToolSummary = {
+    tool: toolName,
+    success: status !== "failed",
+    command: stringField(payload, "command"),
+    error_preview: stringField(payload, "error"),
+    output_chars: resultPreview ? resultPreview.length : undefined,
+  };
+  const presentation = presentToolCompletion(resultPreview, summary);
+
+  return timelineEvent({
+    id: part.tool_call_id || `part-${part.part_id}`,
+    kind: "tool",
+    title: presentation.title || toolName,
+    detail: presentation.detail,
+    facts: compactFacts([
+      ...((presentation.facts || []) as string[]),
+      part.tool_call_id ? `call ${part.tool_call_id}` : null,
+      part.projected_to_seq ? `seq ${part.projected_to_seq}` : null,
+    ]).slice(0, 6),
+    summary: presentation.summary,
+    status,
+    traceId: part.tool_call_id || `part-${part.part_id}`,
+  });
 }
 
 function compactBoundaryToTranscriptItem(boundary: DesktopCompactBoundary): TranscriptItem {
@@ -1482,6 +1602,32 @@ function stringField(value: Record<string, unknown> | null, key: string) {
 function booleanField(value: Record<string, unknown> | null, key: string) {
   const field = value?.[key];
   return typeof field === "boolean" ? field : undefined;
+}
+
+function numericField(value: Record<string, unknown> | null, key: string) {
+  const field = value?.[key];
+  return typeof field === "number" && Number.isFinite(field) ? field : undefined;
+}
+
+function timelineStatusFromPartStatus(status: string | null | undefined): TimelineStatus {
+  switch (status) {
+    case "pending":
+    case "running":
+      return "running";
+    case "waiting":
+      return "waiting";
+    case "completed":
+    case "verified":
+    case "not_verified":
+    case "partial":
+      return "completed";
+    case "failed":
+    case "timed_out":
+    case "cancelled":
+      return "failed";
+    default:
+      return "info";
+  }
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

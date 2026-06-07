@@ -41,6 +41,7 @@ impl SessionEventWriter {
             "INSERT INTO session_events (session_id, seq, event_type, timestamp_ms, payload) VALUES (?1, ?2, ?3, ?4, ?5)",
             rusqlite::params![self.session_id, seq, event_type, timestamp_ms, payload],
         )?;
+        super::session_parts::refresh_session_parts(&conn, &self.session_id)?;
         Ok(())
     }
 
@@ -58,6 +59,16 @@ impl SessionEventWriter {
         self.write_event("step_failed", &payload)
     }
 
+    pub fn text_delta(&self, text: &str) -> Result<(), rusqlite::Error> {
+        let payload = serde_json::json!({ "text": preview_bytes(text, 4096) }).to_string();
+        self.write_event("assistant_text_delta", &payload)
+    }
+
+    pub fn reasoning_delta(&self, text: &str) -> Result<(), rusqlite::Error> {
+        let payload = serde_json::json!({ "text": preview_bytes(text, 4096) }).to_string();
+        self.write_event("reasoning_delta", &payload)
+    }
+
     /// Mirror a tool lifecycle event.
     pub fn tool_called(&self, tool_call_id: &str, tool_name: &str) -> Result<(), rusqlite::Error> {
         let payload = serde_json::json!({
@@ -66,6 +77,42 @@ impl SessionEventWriter {
         })
         .to_string();
         self.write_event("tool_called", &payload)
+    }
+
+    pub fn tool_args_delta(
+        &self,
+        tool_call_id: &str,
+        args_delta: &str,
+    ) -> Result<(), rusqlite::Error> {
+        let payload = serde_json::json!({
+            "tool_call_id": tool_call_id,
+            "args_delta": preview_bytes(args_delta, 4096),
+        })
+        .to_string();
+        self.write_event("tool_args_delta", &payload)
+    }
+
+    pub fn tool_call_ready(&self, tool_call_id: &str) -> Result<(), rusqlite::Error> {
+        let payload = serde_json::json!({ "tool_call_id": tool_call_id }).to_string();
+        self.write_event("tool_call_ready", &payload)
+    }
+
+    pub fn tool_started(&self, tool_call_id: &str, tool_name: &str) -> Result<(), rusqlite::Error> {
+        let payload = serde_json::json!({
+            "tool_call_id": tool_call_id,
+            "tool_name": tool_name,
+        })
+        .to_string();
+        self.write_event("tool_started", &payload)
+    }
+
+    pub fn tool_progress(&self, tool_call_id: &str, progress: &str) -> Result<(), rusqlite::Error> {
+        let payload = serde_json::json!({
+            "tool_call_id": tool_call_id,
+            "progress": preview_bytes(progress, 1024),
+        })
+        .to_string();
+        self.write_event("tool_progress", &payload)
     }
 
     pub fn tool_succeeded(
@@ -88,6 +135,28 @@ impl SessionEventWriter {
         })
         .to_string();
         self.write_event("tool_failed", &payload)
+    }
+
+    pub fn permission_requested(
+        &self,
+        request_id: &str,
+        tool_name: &str,
+        arguments: &serde_json::Value,
+        prompt: &str,
+    ) -> Result<(), rusqlite::Error> {
+        let payload = serde_json::json!({
+            "request_id": request_id,
+            "tool_name": tool_name,
+            "arguments": arguments,
+            "prompt": preview_bytes(prompt, 1024),
+        })
+        .to_string();
+        self.write_event("permission_requested", &payload)
+    }
+
+    pub fn runtime_error(&self, error: &str) -> Result<(), rusqlite::Error> {
+        let payload = serde_json::json!({ "error": preview_bytes(error, 2048) }).to_string();
+        self.write_event("error", &payload)
     }
 
     /// Mirror a usage event.
@@ -208,7 +277,22 @@ mod tests {
                 timestamp_ms INTEGER NOT NULL,
                 payload TEXT NOT NULL DEFAULT '{}'
             );
-            CREATE INDEX IF NOT EXISTS idx_session_events_session ON session_events(session_id, seq);",
+            CREATE INDEX IF NOT EXISTS idx_session_events_session ON session_events(session_id, seq);
+            CREATE TABLE session_parts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id TEXT NOT NULL,
+                part_index INTEGER NOT NULL,
+                part_id TEXT NOT NULL,
+                kind TEXT NOT NULL,
+                tool_call_id TEXT,
+                tool_name TEXT,
+                status TEXT,
+                payload TEXT NOT NULL DEFAULT '{}',
+                projected_to_seq INTEGER NOT NULL DEFAULT 0,
+                updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_session_parts_session_part
+                ON session_parts(session_id, part_id);",
         )
         .unwrap();
         Arc::new(Mutex::new(conn))

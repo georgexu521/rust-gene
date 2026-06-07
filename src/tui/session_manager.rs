@@ -2,7 +2,7 @@
 //!
 //! 管理当前会话的持久化和恢复
 
-use crate::session_store::{SessionRecord, SessionStore};
+use crate::session_store::{PersistedSessionPart, SessionRecord, SessionStore};
 use crate::state::{MessageItem, MessageRole};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -272,6 +272,13 @@ impl TuiSessionManager {
         }
 
         Ok(messages)
+    }
+
+    pub fn load_session_parts(
+        &self,
+        session_id: &str,
+    ) -> anyhow::Result<Vec<PersistedSessionPart>> {
+        Ok(self.store.get_session_parts(session_id)?)
     }
 
     /// 切换到指定会话

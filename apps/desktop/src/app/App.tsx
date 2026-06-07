@@ -7,6 +7,7 @@ import {
   Globe,
   Info,
   LayoutDashboard,
+  FileText,
   Moon,
   MoreHorizontal,
   PanelRight,
@@ -72,6 +73,7 @@ import { SettingsDrawer } from "./components/SettingsDrawer";
 import { Sidebar } from "./components/Sidebar";
 import { Transcript } from "./components/Transcript";
 import { TraceDrawer } from "./components/TraceDrawer";
+import { ToolOutputDrawer } from "./components/ToolOutputDrawer";
 import { WorkbenchDrawer } from "./components/WorkbenchDrawer";
 import { useTheme } from "./theme";
 import {
@@ -107,6 +109,7 @@ export function App() {
   const [activeContextDetail, setActiveContextDetail] = useState<DesktopRunContext | null>(null);
   const [isTraceOpen, setIsTraceOpen] = useState(false);
   const [isWorkbenchOpen, setIsWorkbenchOpen] = useState(false);
+  const [isToolOutputOpen, setIsToolOutputOpen] = useState(false);
   const [activeTraceId, setActiveTraceId] = useState<string | null>(null);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isEnvironmentOpen, setIsEnvironmentOpen] = useState(false);
@@ -224,6 +227,7 @@ export function App() {
             resumed.session_id,
             resumed.messages,
             resumed.compact_boundaries,
+            resumed.session_parts,
           ),
         );
         await refreshContextSnapshot();
@@ -423,6 +427,7 @@ export function App() {
           resumed.session_id,
           resumed.messages,
           resumed.compact_boundaries,
+          resumed.session_parts,
         ),
       );
       await refreshContextSnapshot();
@@ -740,6 +745,15 @@ export function App() {
             <button
               className="trace-toggle"
               type="button"
+              aria-expanded={isToolOutputOpen}
+              onClick={() => setIsToolOutputOpen((open) => !open)}
+            >
+              <FileText aria-hidden="true" size={15} />
+              <span>Output</span>
+            </button>
+            <button
+              className="trace-toggle"
+              type="button"
               onClick={() => setIsTraceOpen((open) => !open)}
             >
               <PanelRight aria-hidden="true" size={15} />
@@ -786,6 +800,12 @@ export function App() {
           items={runState.traceItems}
           onOpenContext={setActiveContextDetail}
           onClose={() => setIsTraceOpen(false)}
+        />
+
+        <ToolOutputDrawer
+          isOpen={isToolOutputOpen}
+          sessionId={runState.selectedSessionId}
+          onClose={() => setIsToolOutputOpen(false)}
         />
 
         <WorkbenchDrawer

@@ -76,6 +76,12 @@ pub struct FileChangeRecord {
     pub tool_name: String,
     /// Provider/model tool call ID when available.
     pub tool_call_id: Option<String>,
+    /// Assistant message that produced this file change, when known.
+    #[serde(default)]
+    pub message_id: Option<String>,
+    /// Assistant message part/tool-call part that produced this file change, when known.
+    #[serde(default)]
+    pub part_id: Option<String>,
     /// Stable ID for the assistant tool-call round that produced this change.
     #[serde(default)]
     pub tool_round_id: Option<String>,
@@ -98,6 +104,12 @@ pub struct FileChangeRecord {
 /// Summary of file mutations produced by one assistant tool-call round.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FileChangeRoundSummary {
+    /// Assistant message that produced this group of changes, when known.
+    #[serde(default)]
+    pub message_id: Option<String>,
+    /// Assistant parts/tool-call parts included in this group.
+    #[serde(default)]
+    pub part_ids: Vec<String>,
     /// Stable ID for the assistant tool-call round, when available.
     pub tool_round_id: Option<String>,
     /// File change IDs included in this round summary.
@@ -147,6 +159,8 @@ pub struct FileChangeInput {
     pub checkpoint_id: String,
     pub tool_name: String,
     pub tool_call_id: Option<String>,
+    pub message_id: Option<String>,
+    pub part_id: Option<String>,
     pub tool_round_id: Option<String>,
     pub path: String,
     pub existed_before: bool,
@@ -436,6 +450,8 @@ impl CheckpointManager {
             session_id: self.session_id.clone(),
             tool_name: input.tool_name,
             tool_call_id: input.tool_call_id,
+            message_id: input.message_id,
+            part_id: input.part_id,
             tool_round_id: input.tool_round_id,
             timestamp: Local::now(),
             path: input.path,
@@ -790,14 +806,23 @@ impl CheckpointManager {
 
         for record in &self.file_changes {
             let key = record
-                .tool_round_id
+                .message_id
                 .clone()
+                .map(|message_id| format!("message:{message_id}"))
+                .or_else(|| {
+                    record
+                        .tool_round_id
+                        .clone()
+                        .map(|round_id| format!("round:{round_id}"))
+                })
                 .unwrap_or_else(|| format!("file_change:{}", record.id));
             let index = match by_key.get(&key).copied() {
                 Some(index) => index,
                 None => {
                     let index = summaries.len();
                     summaries.push(FileChangeRoundSummary {
+                        message_id: record.message_id.clone(),
+                        part_ids: Vec::new(),
                         tool_round_id: record.tool_round_id.clone(),
                         file_change_ids: Vec::new(),
                         checkpoint_ids: Vec::new(),
@@ -817,6 +842,15 @@ impl CheckpointManager {
             };
 
             let summary = &mut summaries[index];
+            if summary.message_id.is_none() {
+                summary.message_id = record.message_id.clone();
+            }
+            if summary.tool_round_id.is_none() {
+                summary.tool_round_id = record.tool_round_id.clone();
+            }
+            if let Some(part_id) = &record.part_id {
+                push_unique(&mut summary.part_ids, part_id.clone());
+            }
             push_unique(&mut summary.file_change_ids, record.id.clone());
             push_unique(&mut summary.checkpoint_ids, record.checkpoint_id.clone());
             push_unique(&mut summary.tool_names, record.tool_name.clone());
@@ -1159,6 +1193,8 @@ mod tests {
                 checkpoint_id: cp.id.clone(),
                 tool_name: "file_edit".to_string(),
                 tool_call_id: Some("call_1".to_string()),
+                message_id: None,
+                part_id: None,
                 tool_round_id: Some("round_1".to_string()),
                 path: test_file.to_string_lossy().to_string(),
                 existed_before: true,
@@ -1202,6 +1238,8 @@ mod tests {
                 checkpoint_id: cp.id.clone(),
                 tool_name: "file_write".to_string(),
                 tool_call_id: None,
+                message_id: None,
+                part_id: None,
                 tool_round_id: None,
                 path: test_file.to_string_lossy().to_string(),
                 existed_before: false,
@@ -1262,6 +1300,8 @@ mod tests {
             checkpoint_id: first_cp.id,
             tool_name: "file_edit".to_string(),
             tool_call_id: Some("call_1".to_string()),
+            message_id: None,
+            part_id: None,
             tool_round_id: round_id.clone(),
             path: first.to_string_lossy().to_string(),
             existed_before: true,
@@ -1287,6 +1327,8 @@ mod tests {
             checkpoint_id: second_cp.id,
             tool_name: "file_edit".to_string(),
             tool_call_id: Some("call_2".to_string()),
+            message_id: None,
+            part_id: None,
             tool_round_id: round_id.clone(),
             path: second.to_string_lossy().to_string(),
             existed_before: true,
@@ -1303,6 +1345,85 @@ mod tests {
         assert_eq!(restored.restored_changes.len(), 2);
         assert_eq!(std::fs::read_to_string(&first).unwrap(), "first-before");
         assert_eq!(std::fs::read_to_string(&second).unwrap(), "second-before");
+    }
+
+    #[tokio::test]
+    async fn test_file_change_rounds_group_by_assistant_message() {
+        let temp = TempDir::new().unwrap();
+        let first = temp.path().join("first.txt");
+        let second = temp.path().join("second.txt");
+        std::fs::write(&first, "first-before").unwrap();
+        std::fs::write(&second, "second-before").unwrap();
+
+        let session_id = format!("test_message_round_{}", Uuid::new_v4().simple());
+        let mut mgr = CheckpointManager::new(&session_id).await;
+        mgr.checkpoints_dir = temp.path().join("checkpoints").join(&session_id);
+        mgr.checkpoints.clear();
+        mgr.tracked_files.clear();
+        mgr.file_changes.clear();
+        mgr.sequence_counter = 0;
+
+        let message_id = Some("assistant_msg_same".to_string());
+        let first_cp = mgr
+            .create_checkpoint(
+                "file_edit",
+                message_id.clone(),
+                Some("call_1".to_string()),
+                &[first.clone()],
+            )
+            .await
+            .unwrap();
+        std::fs::write(&first, "first-after").unwrap();
+        mgr.record_file_change(FileChangeInput {
+            checkpoint_id: first_cp.id,
+            tool_name: "file_edit".to_string(),
+            tool_call_id: Some("call_1".to_string()),
+            message_id: message_id.clone(),
+            part_id: Some("part_1".to_string()),
+            tool_round_id: Some("round_1".to_string()),
+            path: first.to_string_lossy().to_string(),
+            existed_before: true,
+            before_hash: Some("first-before".to_string()),
+            after_hash: Some("first-after".to_string()),
+            diff: Some("first diff".to_string()),
+            bytes_written: 11,
+        })
+        .await
+        .unwrap();
+
+        let second_cp = mgr
+            .create_checkpoint(
+                "file_edit",
+                message_id.clone(),
+                Some("call_2".to_string()),
+                &[second.clone()],
+            )
+            .await
+            .unwrap();
+        std::fs::write(&second, "second-after").unwrap();
+        mgr.record_file_change(FileChangeInput {
+            checkpoint_id: second_cp.id,
+            tool_name: "file_edit".to_string(),
+            tool_call_id: Some("call_2".to_string()),
+            message_id: message_id.clone(),
+            part_id: Some("part_2".to_string()),
+            tool_round_id: Some("round_2".to_string()),
+            path: second.to_string_lossy().to_string(),
+            existed_before: true,
+            before_hash: Some("second-before".to_string()),
+            after_hash: Some("second-after".to_string()),
+            diff: Some("second diff".to_string()),
+            bytes_written: 12,
+        })
+        .await
+        .unwrap();
+
+        let rounds = mgr.list_file_change_rounds();
+        assert_eq!(rounds.len(), 1);
+        assert_eq!(rounds[0].message_id, message_id);
+        assert_eq!(rounds[0].part_ids, vec!["part_1", "part_2"]);
+        assert_eq!(rounds[0].change_count, 2);
+        assert_eq!(rounds[0].paths.len(), 2);
     }
 
     #[tokio::test]
