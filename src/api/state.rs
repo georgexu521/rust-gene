@@ -434,6 +434,8 @@ pub struct ApiState {
     pub worktree_manager: Option<Arc<crate::engine::worktree::WorktreeManager>>,
     /// Full-agent runtime handle.  None means typed 501 for session prompts.
     pub agent_runtime: Option<Arc<dyn ApiAgentRuntime>>,
+    /// Per-session runner registry for wait/cancel/status.
+    pub runner_registry: Arc<crate::api::session_runner::ApiSessionRunnerRegistry>,
 }
 
 impl ApiState {
@@ -467,6 +469,7 @@ impl ApiState {
             lsp_manager,
             worktree_manager,
             agent_runtime: None,
+            runner_registry: Arc::new(crate::api::session_runner::ApiSessionRunnerRegistry::new()),
         })
     }
 

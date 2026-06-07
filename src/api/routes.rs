@@ -63,6 +63,15 @@ pub fn create_routes(state: Arc<ApiState>) -> Router {
         )
         // Session prompt (full-agent, requires ApiAgentRuntime)
         .route("/api/sessions/:id/prompt", post(session_prompt_handler))
+        // Session run lifecycle
+        .route("/api/sessions/:id/wait", post(session_wait_handler))
+        .route("/api/sessions/:id/cancel", post(session_cancel_handler))
+        .route(
+            "/api/sessions/:id/run-status",
+            get(session_run_status_handler),
+        )
+        // Active context inspection
+        .route("/api/sessions/:id/context", get(session_context_handler))
         // Provider chat (explicit non-agent lane)
         .route("/api/provider-chat", post(provider_chat_handler))
         // Tool API
@@ -105,6 +114,9 @@ pub fn create_routes(state: Arc<ApiState>) -> Router {
         )
         // Provider status
         .route("/api/provider/status", get(get_provider_status_handler))
+        .route("/api/provider/catalog", get(get_provider_catalog_handler))
+        // Session jobs
+        .route("/api/sessions/:id/jobs", get(get_session_jobs_handler))
         // Diagnostic export
         .route("/api/diagnostics/latest", get(get_diagnostics_handler))
         .layer(middleware::from_fn(bridge_auth_middleware));
@@ -434,6 +446,176 @@ fn session_prompt_status_code(outcome: &crate::api::state::ApiSessionPromptOutco
         _ if outcome.accepted => StatusCode::OK,
         _ => StatusCode::INTERNAL_SERVER_ERROR,
     }
+}
+
+// ── Session Run Lifecycle ─────────────────────────────
+
+async fn session_wait_handler(
+    State(state): State<Arc<ApiState>>,
+    Path(id): Path<String>,
+) -> Result<impl IntoResponse, ApiError> {
+    state.runner_registry.wait_idle(&id).await;
+    Ok(Json(json!({
+        "session_id": id,
+        "status": state.runner_registry.status(&id).to_string(),
+    })))
+}
+
+async fn session_cancel_handler(
+    State(state): State<Arc<ApiState>>,
+    Path(id): Path<String>,
+) -> Result<impl IntoResponse, ApiError> {
+    let cancelled = state.runner_registry.request_cancel(&id);
+    Ok(Json(json!({
+        "session_id": id,
+        "cancelled": cancelled,
+        "status": state.runner_registry.status(&id).to_string(),
+    })))
+}
+
+#[derive(Debug, Serialize)]
+struct RunStatusResponse {
+    session_id: String,
+    status: String,
+}
+
+async fn session_run_status_handler(
+    State(state): State<Arc<ApiState>>,
+    Path(id): Path<String>,
+) -> Result<impl IntoResponse, ApiError> {
+    let status = state.runner_registry.status(&id);
+    Ok(Json(RunStatusResponse {
+        session_id: id,
+        status: format!("{:?}", status),
+    }))
+}
+
+// ── Active Context ─────────────────────────────────────
+
+async fn session_context_handler(
+    State(state): State<Arc<ApiState>>,
+    Path(id): Path<String>,
+) -> Result<impl IntoResponse, ApiError> {
+    let store = state.session_store.read().await;
+    let parts = store.get_session_parts(&id).unwrap_or_default();
+    let latest_boundary = store.latest_compact_boundary(&id).ok().flatten();
+
+    let (
+        compact_boundary_id,
+        before_tokens,
+        after_tokens,
+        strategy,
+        trigger,
+        messages_before,
+        messages_after,
+        preserved_tail_count,
+    ) = if let Some(ref b) = latest_boundary {
+        (
+            Some(b.boundary_id.clone()),
+            b.before_tokens as u64,
+            b.after_tokens as u64,
+            b.strategy.clone(),
+            b.trigger.clone().unwrap_or_default(),
+            b.messages_before as usize,
+            b.messages_after as usize,
+            b.preserved_tail_count.unwrap_or(0),
+        )
+    } else {
+        (None, 0u64, 0u64, String::new(), String::new(), 0, 0, 0)
+    };
+
+    let message_count = parts.len();
+    let compaction = if latest_boundary.is_some() {
+        Some(dto::context::CompactionSummaryDto {
+            boundary_id: compact_boundary_id.clone().unwrap_or_default(),
+            strategy,
+            trigger,
+            before_tokens,
+            after_tokens,
+            messages_before: messages_before as usize,
+            messages_after: messages_after as usize,
+            preserved_tail_count: preserved_tail_count as usize,
+        })
+    } else {
+        None
+    };
+
+    Ok(Json(dto::context::SessionContextDto {
+        session_id: id,
+        compact_boundary_id,
+        estimated_history_tokens: before_tokens.max(after_tokens),
+        tool_schema_tokens: 0,
+        memory_snapshot_tokens: 0,
+        stable_prefix_hash: None,
+        dynamic_tail_hash: None,
+        latest_compaction: compaction,
+        message_count_after_compaction: message_count,
+    }))
+}
+
+// ── Provider Catalog ───────────────────────────────────
+
+fn sanitize_base_url_host(base_url: &str) -> String {
+    let without_scheme = base_url
+        .split_once("://")
+        .map(|(_, rest)| rest)
+        .unwrap_or(base_url);
+    let authority = without_scheme.split('/').next().unwrap_or(without_scheme);
+    let host = authority.rsplit('@').next().unwrap_or(authority);
+    host.split(':').next().unwrap_or(host).to_string()
+}
+
+async fn get_provider_catalog_handler(
+    State(state): State<Arc<ApiState>>,
+) -> Result<impl IntoResponse, ApiError> {
+    let base_url = state.provider.base_url().to_string();
+    let capabilities = crate::services::api::provider_protocol::ProviderCapabilities::detect(
+        &base_url,
+        &state.model,
+    );
+    let profile = crate::services::api::provider_protocol::ProviderRuntimeProfile::snapshot(
+        &capabilities,
+        &state.model,
+        "api-current",
+    );
+    let context =
+        crate::engine::model_context::ModelContextProfile::detect(&base_url, &state.model);
+
+    Ok(Json(dto::provider_catalog::ProviderCatalogDto {
+        schema: "provider_catalog.v1".to_string(),
+        providers: vec![dto::provider_catalog::ProviderCatalogEntry {
+            provider_id: state.model.clone(),
+            label: state.model.clone(),
+            enabled: true,
+            source: "runtime".to_string(),
+            base_url_host: sanitize_base_url_host(&base_url),
+            default_model: state.model.clone(),
+            available_model_ids: vec![state.model.clone()],
+            context_limit: Some(context.context_window_tokens),
+            output_limit: Some(context.reserved_output_tokens),
+            protocol_family: profile.protocol_family.label().to_string(),
+            supports_streaming: profile.supports_streaming_tool_calls,
+            requires_nonstreaming: profile.requires_nonstreaming_tool_calls,
+            last_health_status: profile.last_health_status.clone(),
+            last_latency_ms: None,
+            recent_timeout_category: profile.last_timeout_category.clone(),
+            cost_input_per_1m: None,
+            cost_output_per_1m: None,
+        }],
+    }))
+}
+
+// ── Session Jobs ───────────────────────────────────────
+
+async fn get_session_jobs_handler(Path(id): Path<String>) -> Result<impl IntoResponse, ApiError> {
+    // Session jobs are currently tracked via shell task state in the runtime.
+    // Return an empty page as placeholder — full projection requires the
+    // session_jobs table migration (Slice D).
+    Ok(Json(dto::session_jobs::SessionJobsPage {
+        session_id: id,
+        jobs: vec![],
+        total: 0,
+    }))
 }
 
 // ── Tool Handlers ──────────────────────────────────────

@@ -53,8 +53,9 @@
 //!   - 多 token 轮换: `PRIORITY_AGENT_BRIDGE_TOKENS`（逗号/分号/空格分隔）
 
 pub mod dto;
-mod provider_status;
+pub mod provider_status;
 pub mod routes;
+pub mod session_runner;
 pub mod state;
 pub mod websocket;
 
