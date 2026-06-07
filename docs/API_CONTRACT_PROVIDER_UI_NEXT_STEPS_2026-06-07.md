@@ -60,9 +60,12 @@ Important current constraint:
 
 - `POST /api/chat` in `src/api/state.rs` is direct provider chat by design. It
   does not enter the full agent runtime.
-- `POST /api/sessions/:id/prompt` supports `delivery: "run"`. `queue` and
-  `admit_only` remain unimplemented and are rejected honestly until a runner
-  coordinator exists.
+- `POST /api/sessions/:id/prompt` supports `delivery: "run"` for synchronous
+  full-agent execution. `delivery: "queue"` and `delivery: "admit_only"` are
+  durable admission modes backed by `session_inputs` and return `202 Accepted`;
+  `queue` also schedules the API background drain task.
+- `idempotency_key` maps to `session_inputs.prompt_id`: same key/content is an
+  idempotent replay; same key/different content returns `409 Conflict`.
 - `stream: true` on `POST /api/sessions/:id/prompt` is rejected until the API
   has a real streaming/SSE response contract.
 - The true desktop/full-agent path goes through `desktop_runtime::DesktopRuntime`
@@ -253,7 +256,7 @@ Request shape:
   "message": "string",
   "agent_mode": "normal | plan | review | optional",
   "stream": "false | optional",
-  "delivery": "run | optional",
+  "delivery": "run | queue | admit_only | optional",
   "idempotency_key": "string | optional"
 }
 ```
@@ -266,7 +269,7 @@ Response shape for non-streaming first slice:
   "execution_kind": "full_agent_turn",
   "accepted": true,
   "turn_id": "string | null",
-  "status": "completed | failed | partial | not_verified",
+  "status": "completed | failed | partial | not_verified | queued | admitted | conflict",
   "events_written": "usize",
   "latest_part_index": "i64 | null",
   "diagnostic": "<DiagnosticExportDto | null>",
@@ -284,9 +287,11 @@ Implementation approach:
   CLI/TUI/desktop where feasible.
 - The real `RuntimeController` submission path is now wired for production API
   startup while preserving fake-runtime tests.
-- The remaining product work is to prove persisted `session_events` and
-  `session_parts` with real HTTP full-agent soak coverage, then add durable
-  idempotency before external clients depend on retries.
+- Persisted `session_events` and `session_parts` can be checked with
+  `scripts/api-full-agent-soak.sh`.
+- The API now has an opencode-like background drain task for queued HTTP
+  prompts. Remaining product work is to evolve the global serialized drain into
+  true per-session run handles with restart recovery.
 
 Key code entry points:
 
@@ -543,8 +548,7 @@ Do second.
 
 - Keep provider-chat metadata on both `/api/chat` and `/api/provider-chat`.
 - Keep the real RuntimeController-backed `POST /api/sessions/:id/prompt` route
-  and harden it with soak coverage, idempotency, and future queue/admit-only
-  semantics.
+  and harden it with true per-session API runners and restart recovery.
 
 Why second:
 

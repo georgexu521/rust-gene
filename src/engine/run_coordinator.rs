@@ -15,6 +15,10 @@ use std::sync::Arc;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum InputDelivery {
+    /// Execute immediately if no run is active.
+    Run,
+    /// Durably admit the input without starting execution.
+    AdmitOnly,
     /// Interrupt the current run and inject this prompt.
     Steer,
     /// Execute after the current run completes.
@@ -24,6 +28,8 @@ pub enum InputDelivery {
 impl InputDelivery {
     pub fn label(self) -> &'static str {
         match self {
+            Self::Run => "run",
+            Self::AdmitOnly => "admit_only",
             Self::Steer => "steer",
             Self::Queue => "queue",
         }
@@ -31,6 +37,8 @@ impl InputDelivery {
 
     pub fn from_label(label: &str) -> Self {
         match label {
+            "run" => Self::Run,
+            "admit_only" => Self::AdmitOnly,
             "steer" => Self::Steer,
             _ => Self::Queue,
         }
@@ -109,6 +117,18 @@ pub fn admit_session_input(
     prompt: &str,
     delivery: InputDelivery,
 ) -> Result<PromptAdmissionStatus, rusqlite::Error> {
+    admit_session_input_with_metadata(conn, session_id, prompt_id, prompt, delivery, None)
+}
+
+/// Idempotent admission with optional JSON metadata stored in attachments_json.
+pub fn admit_session_input_with_metadata(
+    conn: &rusqlite::Connection,
+    session_id: &str,
+    prompt_id: &str,
+    prompt: &str,
+    delivery: InputDelivery,
+    metadata: Option<&serde_json::Value>,
+) -> Result<PromptAdmissionStatus, rusqlite::Error> {
     if prompt_id.starts_with("__") {
         return Ok(PromptAdmissionStatus::Rejected {
             reason: "prompt_id starting with '__' is reserved for internal use".to_string(),
@@ -139,15 +159,18 @@ pub fn admit_session_input(
         }
         Err(rusqlite::Error::QueryReturnedNoRows) => {
             // Fresh admission.
+            let metadata = metadata.map(serde_json::Value::to_string);
             conn.execute(
-                "INSERT INTO session_inputs (session_id, delivery, content, prompt_id, prompt_hash, state, created_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, 'pending', datetime('now'))",
+                "INSERT INTO session_inputs
+                 (session_id, delivery, content, prompt_id, prompt_hash, attachments_json, state, created_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'pending', datetime('now'))",
                 rusqlite::params![
                     session_id,
                     delivery.label(),
                     prompt,
                     prompt_id,
                     prompt_hash,
+                    metadata,
                 ],
             )?;
             return Ok(PromptAdmissionStatus::Admitted);
@@ -185,6 +208,15 @@ impl PromptAdmissionStatus {
     }
 }
 
+/// Promoted queued input with enough metadata to resume through a runner.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PromotedSessionInput {
+    pub session_id: String,
+    pub prompt_id: Option<String>,
+    pub content: String,
+    pub agent_mode: Option<String>,
+}
+
 /// Promote a queued input for a session.
 ///
 /// Sets `promoted_at`, `promoted_seq` (to the next session event sequence),
@@ -193,6 +225,14 @@ pub fn promote_session_input(
     conn: &rusqlite::Connection,
     session_id: &str,
 ) -> Result<Option<String>, rusqlite::Error> {
+    Ok(promote_session_input_record(conn, session_id)?.map(|record| record.content))
+}
+
+/// Promote a queued input for a session and return the full record.
+pub fn promote_session_input_record(
+    conn: &rusqlite::Connection,
+    session_id: &str,
+) -> Result<Option<PromotedSessionInput>, rusqlite::Error> {
     let next_seq: i64 = conn
         .query_row(
             "SELECT COALESCE(MAX(seq), 0) + 1 FROM session_events WHERE session_id = ?1",
@@ -202,24 +242,54 @@ pub fn promote_session_input(
         .unwrap_or(1);
 
     let mut stmt = conn.prepare(
-        "SELECT id, content FROM session_inputs WHERE session_id = ?1 AND state = 'pending' ORDER BY id ASC LIMIT 1",
+        "SELECT id, prompt_id, content, attachments_json
+         FROM session_inputs
+         WHERE session_id = ?1 AND state = 'pending'
+         ORDER BY id ASC
+         LIMIT 1",
     )?;
     let result = stmt.query_row([session_id], |row| {
         let id: i64 = row.get(0)?;
-        let content: String = row.get(1)?;
-        Ok((id, content))
+        let prompt_id: Option<String> = row.get(1)?;
+        let content: String = row.get(2)?;
+        let attachments_json: Option<String> = row.get(3)?;
+        Ok((id, prompt_id, content, attachments_json))
     });
     match result {
-        Ok((id, content)) => {
+        Ok((id, prompt_id, content, attachments_json)) => {
             conn.execute(
                 "UPDATE session_inputs SET promoted_at = datetime('now'), promoted_seq = ?1, state = 'promoted' WHERE id = ?2",
                 rusqlite::params![next_seq, id],
             )?;
-            Ok(Some(content))
+            let agent_mode = attachments_json
+                .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
+                .and_then(|value| value["agent_mode"].as_str().map(str::to_string));
+            Ok(Some(PromotedSessionInput {
+                session_id: session_id.to_string(),
+                prompt_id,
+                content,
+                agent_mode,
+            }))
         }
         Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
         Err(e) => Err(e),
     }
+}
+
+/// List sessions with pending queued/admitted inputs.
+pub fn pending_session_ids(
+    conn: &rusqlite::Connection,
+    limit: usize,
+) -> Result<Vec<String>, rusqlite::Error> {
+    let mut stmt = conn.prepare(
+        "SELECT DISTINCT session_id
+         FROM session_inputs
+         WHERE state = 'pending'
+         ORDER BY id ASC
+         LIMIT ?1",
+    )?;
+    let rows = stmt.query_map([limit as i64], |row| row.get(0))?;
+    rows.collect()
 }
 
 /// User-visible queued/pending session input row.
@@ -282,6 +352,23 @@ pub fn cancel_session_input(
             rusqlite::params![session_id, id_or_prompt_id],
         )?
     };
+    Ok(changed > 0)
+}
+
+/// Mark one admitted input by prompt id.
+pub fn mark_session_input_state_by_prompt_id(
+    conn: &rusqlite::Connection,
+    session_id: &str,
+    prompt_id: &str,
+    state: &str,
+    error: Option<&str>,
+) -> Result<bool, rusqlite::Error> {
+    let changed = conn.execute(
+        "UPDATE session_inputs
+         SET state = ?1, error = ?2
+         WHERE session_id = ?3 AND prompt_id = ?4",
+        rusqlite::params![state, error, session_id, prompt_id],
+    )?;
     Ok(changed > 0)
 }
 
@@ -464,5 +551,76 @@ mod tests {
         assert_eq!(pending.len(), 1);
         assert_eq!(pending[0].prompt_id.as_deref(), Some("prompt-2"));
         assert!(!cancel_session_input(&conn, "s1", "missing").unwrap());
+    }
+
+    #[test]
+    fn marks_session_input_state_by_prompt_id() {
+        let conn = test_conn();
+        conn.execute(
+            "INSERT INTO sessions (id, title, model) VALUES ('s1', 'test', 'kimi')",
+            [],
+        )
+        .unwrap();
+        admit_session_input(&conn, "s1", "prompt-1", "fix bug", InputDelivery::Run).unwrap();
+
+        assert!(
+            mark_session_input_state_by_prompt_id(&conn, "s1", "prompt-1", "running", None)
+                .unwrap()
+        );
+        let state: String = conn
+            .query_row(
+                "SELECT state FROM session_inputs WHERE session_id = 's1' AND prompt_id = 'prompt-1'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(state, "running");
+    }
+
+    #[test]
+    fn promotes_session_input_record_with_metadata() {
+        let conn = test_conn();
+        conn.execute(
+            "INSERT INTO sessions (id, title, model) VALUES ('s1', 'test', 'kimi')",
+            [],
+        )
+        .unwrap();
+        admit_session_input_with_metadata(
+            &conn,
+            "s1",
+            "prompt-1",
+            "fix bug",
+            InputDelivery::Queue,
+            Some(&serde_json::json!({ "agent_mode": "review" })),
+        )
+        .unwrap();
+
+        let promoted = promote_session_input_record(&conn, "s1")
+            .unwrap()
+            .expect("promoted input");
+        assert_eq!(promoted.session_id, "s1");
+        assert_eq!(promoted.prompt_id.as_deref(), Some("prompt-1"));
+        assert_eq!(promoted.content, "fix bug");
+        assert_eq!(promoted.agent_mode.as_deref(), Some("review"));
+    }
+
+    #[test]
+    fn lists_sessions_with_pending_inputs() {
+        let conn = test_conn();
+        conn.execute(
+            "INSERT INTO sessions (id, title, model) VALUES ('s1', 'test', 'kimi')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO sessions (id, title, model) VALUES ('s2', 'test', 'kimi')",
+            [],
+        )
+        .unwrap();
+        admit_session_input(&conn, "s1", "prompt-1", "fix bug", InputDelivery::Queue).unwrap();
+        admit_session_input(&conn, "s2", "prompt-2", "add tests", InputDelivery::Queue).unwrap();
+
+        let sessions = pending_session_ids(&conn, 10).unwrap();
+        assert_eq!(sessions, vec!["s1".to_string(), "s2".to_string()]);
     }
 }

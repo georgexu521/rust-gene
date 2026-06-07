@@ -302,6 +302,19 @@ read from the durable `session_reverts` projection (not only from raw events).
   injects a `RuntimeController`-backed `ApiAgentRuntime`; if a custom/test
   `ApiState` is constructed without one, the route returns an honest typed
   `501`. Tests can inject a fake runtime and receive `accepted: true`.
+- Full-agent prompt delivery:
+  - `delivery: "run"` admits the prompt and executes it through
+    `RuntimeController`.
+  - `delivery: "queue"` durably admits the prompt into `session_inputs` and
+    returns `202 Accepted`; the API runtime schedules a background drain task.
+  - `delivery: "admit_only"` durably admits the prompt without starting
+    execution.
+  - `idempotency_key` is stored as `session_inputs.prompt_id`; same key/content
+    is an idempotent replay, while same key/different content returns
+    `409 Conflict`.
+  - Current API drain is globally serialized because the Rust runtime still uses
+    one shared `RuntimeController`. True per-session runner handles are the next
+    hardening layer.
 
 ---
 

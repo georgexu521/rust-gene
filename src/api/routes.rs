@@ -357,18 +357,19 @@ async fn session_prompt_handler(
     }
     if let Some(delivery) = req.delivery.as_deref() {
         match delivery.trim().to_ascii_lowercase().as_str() {
-            "" | "run" => {}
-            "admit_only" | "queue" => {
-                return Err(ApiError::BadRequest(format!(
-                    "delivery='{}' is not implemented yet; use delivery='run'",
-                    delivery
-                )));
-            }
+            "" | "run" | "admit_only" | "queue" => {}
             _ => {
                 return Err(ApiError::BadRequest(
                     "delivery must be one of: run, admit_only, queue".to_string(),
                 ));
             }
+        }
+    }
+    if let Some(idempotency_key) = req.idempotency_key.as_deref() {
+        if idempotency_key.trim().starts_with("__") {
+            return Err(ApiError::BadRequest(
+                "idempotency_key starting with '__' is reserved".to_string(),
+            ));
         }
     }
 
@@ -406,11 +407,7 @@ async fn session_prompt_handler(
         .await
         .map_err(|e| ApiError::Internal(e.to_string()))?;
 
-    let status_code = if outcome.accepted {
-        StatusCode::OK
-    } else {
-        StatusCode::INTERNAL_SERVER_ERROR
-    };
+    let status_code = session_prompt_status_code(&outcome);
 
     Ok((
         status_code,
@@ -427,6 +424,16 @@ async fn session_prompt_handler(
             error: outcome.error,
         }),
     ))
+}
+
+fn session_prompt_status_code(outcome: &crate::api::state::ApiSessionPromptOutcome) -> StatusCode {
+    match outcome.status.as_str() {
+        "admitted" | "queued" => StatusCode::ACCEPTED,
+        "conflict" => StatusCode::CONFLICT,
+        "rejected" => StatusCode::BAD_REQUEST,
+        _ if outcome.accepted => StatusCode::OK,
+        _ => StatusCode::INTERNAL_SERVER_ERROR,
+    }
 }
 
 // ── Tool Handlers ──────────────────────────────────────

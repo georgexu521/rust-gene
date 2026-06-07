@@ -300,6 +300,9 @@ struct FakeAgentRuntime {
     expected_message: String,
     expected_delivery: Option<String>,
     expected_idempotency_key: Option<String>,
+    response_accepted: bool,
+    response_status: String,
+    response_error: Option<String>,
 }
 
 #[async_trait::async_trait]
@@ -313,14 +316,29 @@ impl crate::api::state::ApiAgentRuntime for FakeAgentRuntime {
         assert_eq!(input.delivery, self.expected_delivery);
         assert_eq!(input.idempotency_key, self.expected_idempotency_key);
         Ok(crate::api::state::ApiSessionPromptOutcome {
-            accepted: true,
+            accepted: self.response_accepted,
             turn_id: Some("turn-fake-001".to_string()),
-            status: "completed".to_string(),
+            status: self.response_status.clone(),
             events_written: 3,
             latest_part_index: Some(5),
             diagnostic: None,
-            error: None,
+            error: self.response_error.clone(),
         })
+    }
+}
+
+fn successful_fake_runtime(
+    expected_delivery: Option<&str>,
+    expected_idempotency_key: Option<&str>,
+) -> FakeAgentRuntime {
+    FakeAgentRuntime {
+        expected_session_id: "test".to_string(),
+        expected_message: "fix the bug".to_string(),
+        expected_delivery: expected_delivery.map(str::to_string),
+        expected_idempotency_key: expected_idempotency_key.map(str::to_string),
+        response_accepted: true,
+        response_status: "completed".to_string(),
+        response_error: None,
     }
 }
 
@@ -329,12 +347,10 @@ async fn session_prompt_with_runtime_returns_accepted_true() {
     let _env_guard = ENV_LOCK.lock().await;
     unsafe { std::env::set_var("PRIORITY_AGENT_BRIDGE_TOKEN", TEST_BRIDGE_TOKEN) };
     let mut state = api_test_state();
-    Arc::get_mut(&mut state).unwrap().agent_runtime = Some(Arc::new(FakeAgentRuntime {
-        expected_session_id: "test".to_string(),
-        expected_message: "fix the bug".to_string(),
-        expected_delivery: Some("run".to_string()),
-        expected_idempotency_key: Some("idem-1".to_string()),
-    }));
+    Arc::get_mut(&mut state).unwrap().agent_runtime = Some(Arc::new(successful_fake_runtime(
+        Some("run"),
+        Some("idem-1"),
+    )));
     let app = create_routes(state);
     let (status, value) = json_request_response(
         &app,
@@ -388,7 +404,62 @@ async fn session_prompt_without_runtime_still_returns_501() {
 }
 
 #[tokio::test]
-async fn session_prompt_rejects_unimplemented_delivery_modes() {
+async fn session_prompt_accepts_queue_delivery_as_admission_contract() {
+    let _env_guard = ENV_LOCK.lock().await;
+    unsafe { std::env::set_var("PRIORITY_AGENT_BRIDGE_TOKEN", TEST_BRIDGE_TOKEN) };
+    let mut state = api_test_state();
+    let mut fake = successful_fake_runtime(Some("queue"), Some("queue-1"));
+    fake.response_status = "queued".to_string();
+    Arc::get_mut(&mut state).unwrap().agent_runtime = Some(Arc::new(fake));
+    let app = create_routes(state);
+    let (status, value) = json_request_response(
+        &app,
+        "POST",
+        "/api/sessions/test/prompt",
+        Some(json!({
+            "message": "fix the bug",
+            "delivery": "queue",
+            "idempotency_key": "queue-1"
+        })),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::ACCEPTED);
+    assert_eq!(value["accepted"], true);
+    assert_eq!(value["status"], "queued");
+}
+
+#[tokio::test]
+async fn session_prompt_maps_idempotency_conflict_to_409() {
+    let _env_guard = ENV_LOCK.lock().await;
+    unsafe { std::env::set_var("PRIORITY_AGENT_BRIDGE_TOKEN", TEST_BRIDGE_TOKEN) };
+    let mut state = api_test_state();
+    let mut fake = successful_fake_runtime(Some("run"), Some("idem-1"));
+    fake.response_accepted = false;
+    fake.response_status = "conflict".to_string();
+    fake.response_error =
+        Some("idempotency_key was reused with different message content".to_string());
+    Arc::get_mut(&mut state).unwrap().agent_runtime = Some(Arc::new(fake));
+    let app = create_routes(state);
+    let (status, value) = json_request_response(
+        &app,
+        "POST",
+        "/api/sessions/test/prompt",
+        Some(json!({
+            "message": "fix the bug",
+            "delivery": "run",
+            "idempotency_key": "idem-1"
+        })),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(value["accepted"], false);
+    assert_eq!(value["status"], "conflict");
+}
+
+#[tokio::test]
+async fn session_prompt_rejects_unknown_delivery_modes() {
     let _env_guard = ENV_LOCK.lock().await;
     unsafe { std::env::set_var("PRIORITY_AGENT_BRIDGE_TOKEN", TEST_BRIDGE_TOKEN) };
     let app = create_routes(api_test_state());
@@ -398,7 +469,7 @@ async fn session_prompt_rejects_unimplemented_delivery_modes() {
         "/api/sessions/test/prompt",
         Some(json!({
             "message": "fix the bug",
-            "delivery": "queue"
+            "delivery": "later"
         })),
     )
     .await;
@@ -406,7 +477,30 @@ async fn session_prompt_rejects_unimplemented_delivery_modes() {
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert_eq!(
         value["error"],
-        "delivery='queue' is not implemented yet; use delivery='run'"
+        "delivery must be one of: run, admit_only, queue"
+    );
+}
+
+#[tokio::test]
+async fn session_prompt_rejects_reserved_idempotency_keys() {
+    let _env_guard = ENV_LOCK.lock().await;
+    unsafe { std::env::set_var("PRIORITY_AGENT_BRIDGE_TOKEN", TEST_BRIDGE_TOKEN) };
+    let app = create_routes(api_test_state());
+    let (status, value) = json_request_response(
+        &app,
+        "POST",
+        "/api/sessions/test/prompt",
+        Some(json!({
+            "message": "fix the bug",
+            "idempotency_key": "__internal"
+        })),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(
+        value["error"],
+        "idempotency_key starting with '__' is reserved"
     );
 }
 

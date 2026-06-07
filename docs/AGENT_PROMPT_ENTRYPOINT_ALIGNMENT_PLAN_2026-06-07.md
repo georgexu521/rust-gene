@@ -2,11 +2,13 @@
 
 Date: 2026-06-07
 
-Status: implemented for the primary entrypoint alignment. Route vocabulary,
-provider-chat aliasing, `ApiAgentRuntime` injection, and production
-`RuntimeController` wiring are in place. Remaining work is hardening, not basic
-entrypoint wiring: idempotent prompt admission, async queue/admit-only delivery,
-and real long-run API soak coverage.
+Status: implemented for the primary entrypoint alignment and first opencode-like
+runner slice. Route vocabulary, provider-chat aliasing, `ApiAgentRuntime`
+injection, production `RuntimeController` wiring, durable prompt admission,
+idempotency conflict checks, queued prompt drain, and a real HTTP soak script are
+in place. Remaining work is to evolve the runner from global serialized draining
+to true per-session run handles once the runtime can safely run sessions in
+parallel.
 
 Reference code reviewed:
 
@@ -120,8 +122,13 @@ conversation.
 - `POST /api/provider-chat` is the explicit provider-chat non-agent route.
 - `POST /api/chat` remains as a legacy alias and points clients to
   `/api/provider-chat`.
-- `delivery: "run"` is the only implemented delivery mode. `admit_only` and
-  `queue` are rejected with a typed bad request instead of being faked.
+- `delivery: "run"` executes through `RuntimeController`.
+- `delivery: "admit_only"` now durably admits into `session_inputs` and returns
+  `202 Accepted` without execution.
+- `delivery: "queue"` durably admits into `session_inputs`, returns
+  `202 Accepted`, and schedules a background drain task.
+- `idempotency_key` is enforced through `session_inputs.prompt_id`: same key and
+  same content is a replay; same key and different content returns conflict.
 - `stream: true` is rejected until a real streaming/SSE response path exists.
 
 ### Remaining Gap
@@ -145,9 +152,9 @@ The API handler receives the runtime boundary rather than constructing a fresh
 provider/tool/runtime stack. API startup initializes the same streaming runtime
 used by other full-agent frontends and wraps it in `RuntimeController`.
 
-The next hardening layer should add durable request idempotency and a true
-runner/coordinator if `delivery: "queue"` or `delivery: "admit_only"` becomes a
-product requirement.
+The next hardening layer should split the current global serialized API runner
+into true per-session run handles, mirroring opencode's `SessionRunState`
+closely.
 
 ## 4. Target Policy
 
@@ -409,19 +416,27 @@ Current status:
   stream events, and returns status/diagnostic/latest-part metadata;
 - full-agent API turns are serialized around the shared streaming engine so
   concurrent HTTP requests cannot race by changing the global session binding;
-- `delivery: "run"` is supported; `admit_only` and `queue` are rejected until a
-  real coordinator exists;
+- `delivery: "run"` is supported and marks the admitted prompt
+  `running`/`completed`/`failed`;
+- `delivery: "admit_only"` is supported as durable admission only;
+- `delivery: "queue"` is supported as durable admission plus background drain;
 - `stream: true` is rejected until the API exposes a real streaming response;
-- `idempotency_key` is accepted as request metadata but does not yet provide a
-  retry guarantee.
+- `idempotency_key` prevents duplicate prompt execution for repeated HTTP
+  retries and returns conflict on content mismatch;
+- `scripts/api-full-agent-soak.sh` starts the experimental API server, submits a
+  real full-agent prompt, and verifies response/events/session parts.
+- The API runner currently drains queued prompts globally and serially because
+  one shared `RuntimeController` owns mutable session binding. This is safer
+  than fake parallelism; per-session parallel runners should come after the
+  runtime owns per-session controller instances.
 
 Important details:
 
-- Reusing an explicit request id should be idempotent where possible.
-- If full idempotency is too large, start with a documented `idempotency_key`
-  placeholder and no retry guarantee.
-- `delivery: "admit_only"` can be added later; do not fake it.
-- `delivery: "queue"` requires a run coordinator; defer if no coordinator exists.
+- Reusing an explicit request id is idempotent for same prompt content.
+- `delivery: "queue"` admits to the durable pending queue and the API runtime
+  schedules a background drain task.
+- `delivery: "admit_only"` is intentionally admission-only and should never
+  start execution by surprise.
 
 Code entry points:
 
@@ -646,10 +661,13 @@ Mitigation:
 4. Done: wire real `RuntimeController` for API server mode.
 5. Done: add `/api/provider-chat` and deprecate `/api/chat`.
 6. Next: update desktop/API examples to use session prompt for formal tasks.
-7. Next: add real API full-agent soak proving session events/parts/diagnostics
-   survive a completed run.
-8. Later: add durable idempotency plus a run coordinator before enabling
-   `delivery: "queue"` or `delivery: "admit_only"`.
+7. Done: add real API full-agent soak script proving session
+   events/parts/diagnostics survive a completed run.
+8. Done for admission: add durable idempotency plus queue/admit-only request
+   contracts.
+9. Done: add an opencode-like background drain task for queued HTTP prompts.
+10. Later: add true per-session runners and restart recovery for pending
+    prompts.
 
 ## 9. Definition Of Done
 
@@ -660,8 +678,8 @@ This plan is done when:
 - `/api/chat` is no longer documented as a normal user prompt route;
 - direct provider calls are named auxiliary lanes;
 - tests prove provider-chat cannot be mistaken for full-agent execution;
-- session events/parts/diagnostics are written for HTTP agent prompts in real
-  provider soak evidence;
+- session events/parts/diagnostics are written for HTTP agent prompts and can
+  be verified by `scripts/api-full-agent-soak.sh`;
 - desktop/TUI/API share the same entrypoint vocabulary;
 - simple/lightweight behavior exists only through explicit side-question or
   internal service routes.
@@ -670,37 +688,35 @@ This plan is done when:
 
 The next code slice should be:
 
-**Add real HTTP full-agent soak coverage and idempotent prompt admission.**
+**Upgrade API runner from global serialized drain to true per-session handles.**
 
 Why this next:
 
-- the route now enters the real runtime, so the remaining risk is operational:
-  long turns, permission pauses, persisted parts, diagnostics, and retry
-  behavior;
-- idempotency is necessary before external clients can safely retry network
-  failures;
-- `queue`/`admit_only` should not be enabled until a coordinator owns the run
-  lifecycle.
+- opencode keeps a process-global `SessionRunState` map keyed by session id;
+- each session has a runner with busy/idle/cancel semantics;
+- our first slice drains globally because the current Rust runtime shares one
+  mutable `RuntimeController`;
+- the next slice should make a per-session runtime handle or a safe session
+  runner map before enabling cross-session parallel execution.
 
 Suggested next tests:
 
 - start API mode with a mock/controlled provider and real
   `RuntimeControllerApiAgentRuntime`;
-- call `POST /api/sessions/test/prompt` with `delivery: "run"`;
+- call `POST /api/sessions/test/prompt` with `delivery: "queue"`;
 - assert:
-  - status `200` or an honest terminal failure with runtime evidence;
+  - status `202`;
   - `execution_kind == "full_agent_turn"`;
   - `accepted == true`;
   - `agent_runtime_entrypoint == "RuntimeController"`;
-  - `events_written > 0`;
-  - session parts/events are visible after the turn;
-  - diagnostics are exported when the runtime emits them.
+  - prompt appears in `session_inputs`;
+  - background runner promotes and runs it exactly once;
+  - final state is `completed` or honest `failed`.
 
 Then keep the existing negative tests:
 
 - construct `ApiState` without runtime;
 - call `POST /api/sessions/test/prompt`;
 - assert typed `501`;
-- call with `delivery: "queue"` or `delivery: "admit_only"` and assert typed
-  `400` until those modes are actually implemented.
+- call with unknown `delivery` and assert typed `400`.
 - call with `stream: true` or an unknown `agent_mode` and assert typed `400`.

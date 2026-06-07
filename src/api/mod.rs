@@ -81,19 +81,20 @@ pub async fn start_server(
     worktree_manager: Option<Arc<crate::engine::worktree::WorktreeManager>>,
     runtime_controller: Option<crate::engine::runtime_controller::RuntimeController>,
 ) -> anyhow::Result<()> {
-    let agent_runtime = runtime_controller.map(|controller| {
-        Arc::new(state::RuntimeControllerApiAgentRuntime::new(
-            controller,
-            model.clone(),
-        )) as Arc<dyn state::ApiAgentRuntime>
-    });
     let mut api_state = ApiState::new(
         provider,
-        model,
+        model.clone(),
         tool_registry,
         lsp_manager,
         worktree_manager,
     )?;
+    let agent_runtime = runtime_controller.map(|controller| {
+        Arc::new(state::RuntimeControllerApiAgentRuntime::new(
+            controller,
+            model,
+            api_state.session_store.clone(),
+        )) as Arc<dyn state::ApiAgentRuntime>
+    });
     api_state.agent_runtime = agent_runtime;
     let state = Arc::new(api_state);
 

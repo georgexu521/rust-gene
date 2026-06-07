@@ -4,9 +4,11 @@
 
 use super::routes::*;
 use crate::engine::agent_mode::AgentMode;
+use crate::engine::run_coordinator::{InputDelivery, PromptAdmissionStatus, SessionRunCoordinator};
 use crate::engine::runtime_controller::RuntimeController;
 use crate::engine::streaming::StreamEvent;
 use crate::services::config::AppConfig;
+use crate::session_store::SessionStore;
 use crate::tools::ToolContext;
 use serde::Serialize;
 use serde_json::json;
@@ -52,30 +54,147 @@ pub trait ApiAgentRuntime: Send + Sync {
 }
 
 /// Production full-agent API adapter backed by `RuntimeController`.
+#[derive(Clone)]
 pub struct RuntimeControllerApiAgentRuntime {
     controller: RuntimeController,
     model: String,
-    turn_lock: Mutex<()>,
+    session_store: Arc<RwLock<SessionStore>>,
+    run_coordinator: SessionRunCoordinator,
+    turn_lock: Arc<Mutex<()>>,
 }
 
 impl RuntimeControllerApiAgentRuntime {
-    pub fn new(controller: RuntimeController, model: impl Into<String>) -> Self {
+    pub fn new(
+        controller: RuntimeController,
+        model: impl Into<String>,
+        session_store: Arc<RwLock<SessionStore>>,
+    ) -> Self {
         Self {
             controller,
             model: model.into(),
-            turn_lock: Mutex::new(()),
+            session_store,
+            run_coordinator: SessionRunCoordinator::new(),
+            turn_lock: Arc::new(Mutex::new(())),
         }
     }
 
-    fn ensure_session(&self, session_id: &str) -> anyhow::Result<()> {
-        self.controller.set_session(session_id.to_string());
-        let Some((store, _)) = self.controller.engine().session_binding() else {
-            return Ok(());
-        };
+    async fn ensure_session_record(&self, session_id: &str) -> anyhow::Result<()> {
+        let store = self.session_store.read().await;
         if store.get_session(session_id)?.is_none() {
             store.create_session(session_id, "API Session", &self.model)?;
         }
         Ok(())
+    }
+
+    async fn admit_input(
+        &self,
+        input: &ApiSessionPromptInput,
+        prompt_id: &str,
+        delivery: InputDelivery,
+    ) -> anyhow::Result<PromptAdmissionStatus> {
+        let metadata = serde_json::json!({
+            "agent_mode": input.agent_mode,
+        });
+        let store = self.session_store.read().await;
+        let conn = store.shared_conn();
+        let conn = conn.lock().unwrap();
+        Ok(
+            crate::engine::run_coordinator::admit_session_input_with_metadata(
+                &conn,
+                &input.session_id,
+                prompt_id,
+                &input.message,
+                delivery,
+                Some(&metadata),
+            )?,
+        )
+    }
+
+    async fn mark_prompt_state(
+        &self,
+        session_id: &str,
+        prompt_id: &str,
+        state: &str,
+        error: Option<&str>,
+    ) -> anyhow::Result<()> {
+        let store = self.session_store.read().await;
+        let conn = store.shared_conn();
+        let conn = conn.lock().unwrap();
+        crate::engine::run_coordinator::mark_session_input_state_by_prompt_id(
+            &conn, session_id, prompt_id, state, error,
+        )?;
+        Ok(())
+    }
+
+    async fn next_pending_input(
+        &self,
+    ) -> anyhow::Result<Option<crate::engine::run_coordinator::PromotedSessionInput>> {
+        let store = self.session_store.read().await;
+        let conn = store.shared_conn();
+        let conn = conn.lock().unwrap();
+        let session_ids = crate::engine::run_coordinator::pending_session_ids(&conn, 1)?;
+        let Some(session_id) = session_ids.first() else {
+            return Ok(None);
+        };
+        Ok(crate::engine::run_coordinator::promote_session_input_record(&conn, session_id)?)
+    }
+
+    fn spawn_queue_drain(&self) {
+        let runtime = self.clone();
+        tokio::spawn(async move {
+            if let Err(err) = runtime.drain_pending_inputs().await {
+                tracing::warn!("API queued prompt drain failed: {}", err);
+            }
+        });
+    }
+
+    async fn drain_pending_inputs(&self) -> anyhow::Result<()> {
+        if !self.run_coordinator.start_run() {
+            return Ok(());
+        }
+
+        let result = async {
+            loop {
+                let Some(record) = self.next_pending_input().await? else {
+                    break;
+                };
+                let prompt_id = record
+                    .prompt_id
+                    .clone()
+                    .unwrap_or_else(|| format!("api-queued-{}", uuid::Uuid::new_v4().simple()));
+                let input = ApiSessionPromptInput {
+                    session_id: record.session_id,
+                    message: record.content,
+                    agent_mode: record.agent_mode,
+                    stream: false,
+                    delivery: Some("queue".to_string()),
+                    idempotency_key: Some(prompt_id.clone()),
+                };
+                if let Err(err) = self
+                    .run_prompt_inner(input.clone(), prompt_id.clone())
+                    .await
+                {
+                    self.mark_prompt_state(
+                        &input.session_id,
+                        &prompt_id,
+                        "failed",
+                        Some(&err.to_string()),
+                    )
+                    .await?;
+                    tracing::warn!(
+                        "API queued prompt failed: session_id={} prompt_id={} error={}",
+                        input.session_id,
+                        prompt_id,
+                        err
+                    );
+                }
+            }
+            Ok(())
+        }
+        .await;
+
+        self.run_coordinator.finish_run();
+        result
     }
 
     fn latest_part_index(&self, session_id: &str) -> Option<i64> {
@@ -86,25 +205,52 @@ impl RuntimeControllerApiAgentRuntime {
             .last()
             .map(|part| part.part_index)
     }
-}
 
-#[async_trait::async_trait]
-impl ApiAgentRuntime for RuntimeControllerApiAgentRuntime {
-    async fn submit_prompt(
+    async fn run_prompt(
         &self,
         input: ApiSessionPromptInput,
+        prompt_id: String,
+    ) -> anyhow::Result<ApiSessionPromptOutcome> {
+        if !self.run_coordinator.start_run() {
+            return Ok(ApiSessionPromptOutcome {
+                accepted: true,
+                turn_id: Some(prompt_id),
+                status: "queued".to_string(),
+                events_written: 0,
+                latest_part_index: self.latest_part_index(&input.session_id),
+                diagnostic: None,
+                error: None,
+            });
+        }
+
+        let result = self.run_prompt_inner(input, prompt_id).await;
+        self.run_coordinator.finish_run();
+        self.spawn_queue_drain();
+        result
+    }
+
+    async fn run_prompt_inner(
+        &self,
+        input: ApiSessionPromptInput,
+        prompt_id: String,
     ) -> anyhow::Result<ApiSessionPromptOutcome> {
         use futures::StreamExt;
 
         let _guard = self.turn_lock.lock().await;
+        self.mark_prompt_state(&input.session_id, &prompt_id, "running", None)
+            .await?;
         let agent_mode = input
             .agent_mode
             .as_deref()
             .and_then(AgentMode::parse)
             .unwrap_or_default();
-        self.ensure_session(&input.session_id)?;
+        self.controller.set_session(input.session_id.clone());
+        if let Some((store, _)) = self.controller.engine().session_binding() {
+            if store.get_session(&input.session_id)?.is_none() {
+                store.create_session(&input.session_id, "API Session", &self.model)?;
+            }
+        }
 
-        let turn_id = format!("api-turn-{}", uuid::Uuid::new_v4().simple());
         let mut events_written = 0usize;
         let mut status = "completed".to_string();
         let mut diagnostic = None;
@@ -140,15 +286,127 @@ impl ApiAgentRuntime for RuntimeControllerApiAgentRuntime {
             }
         }
 
+        self.mark_prompt_state(
+            &input.session_id,
+            &prompt_id,
+            if error.is_some() {
+                "failed"
+            } else {
+                "completed"
+            },
+            error.as_deref(),
+        )
+        .await?;
+
         Ok(ApiSessionPromptOutcome {
             accepted: error.is_none(),
-            turn_id: Some(turn_id),
+            turn_id: Some(prompt_id),
             status,
             events_written,
             latest_part_index: self.latest_part_index(&input.session_id),
             diagnostic,
             error,
         })
+    }
+}
+
+#[async_trait::async_trait]
+impl ApiAgentRuntime for RuntimeControllerApiAgentRuntime {
+    async fn submit_prompt(
+        &self,
+        input: ApiSessionPromptInput,
+    ) -> anyhow::Result<ApiSessionPromptOutcome> {
+        let delivery = delivery_from_api(input.delivery.as_deref());
+        let prompt_id = input
+            .idempotency_key
+            .as_deref()
+            .map(str::trim)
+            .filter(|key| !key.is_empty())
+            .map(str::to_string)
+            .unwrap_or_else(|| format!("api-turn-{}", uuid::Uuid::new_v4().simple()));
+
+        self.ensure_session_record(&input.session_id).await?;
+        match self.admit_input(&input, &prompt_id, delivery).await? {
+            PromptAdmissionStatus::Admitted => {}
+            PromptAdmissionStatus::AlreadyAdmitted { state } => {
+                if matches!(state.as_str(), "pending" | "promoted") {
+                    self.spawn_queue_drain();
+                }
+                return Ok(ApiSessionPromptOutcome {
+                    accepted: true,
+                    turn_id: Some(prompt_id),
+                    status: format!("already_{state}"),
+                    events_written: 0,
+                    latest_part_index: self.latest_part_index(&input.session_id),
+                    diagnostic: None,
+                    error: None,
+                });
+            }
+            PromptAdmissionStatus::Conflict { .. } => {
+                return Ok(ApiSessionPromptOutcome {
+                    accepted: false,
+                    turn_id: Some(prompt_id),
+                    status: "conflict".to_string(),
+                    events_written: 0,
+                    latest_part_index: self.latest_part_index(&input.session_id),
+                    diagnostic: None,
+                    error: Some("idempotency_key was reused with different message content".into()),
+                });
+            }
+            PromptAdmissionStatus::Rejected { reason } => {
+                return Ok(ApiSessionPromptOutcome {
+                    accepted: false,
+                    turn_id: Some(prompt_id),
+                    status: "rejected".to_string(),
+                    events_written: 0,
+                    latest_part_index: self.latest_part_index(&input.session_id),
+                    diagnostic: None,
+                    error: Some(reason),
+                });
+            }
+        }
+
+        match delivery {
+            InputDelivery::AdmitOnly => {
+                self.mark_prompt_state(&input.session_id, &prompt_id, "admitted", None)
+                    .await?;
+                Ok(ApiSessionPromptOutcome {
+                    accepted: true,
+                    turn_id: Some(prompt_id),
+                    status: "admitted".to_string(),
+                    events_written: 0,
+                    latest_part_index: self.latest_part_index(&input.session_id),
+                    diagnostic: None,
+                    error: None,
+                })
+            }
+            InputDelivery::Queue => {
+                self.spawn_queue_drain();
+                Ok(ApiSessionPromptOutcome {
+                    accepted: true,
+                    turn_id: Some(prompt_id),
+                    status: "queued".to_string(),
+                    events_written: 0,
+                    latest_part_index: self.latest_part_index(&input.session_id),
+                    diagnostic: None,
+                    error: None,
+                })
+            }
+            InputDelivery::Run | InputDelivery::Steer => self.run_prompt(input, prompt_id).await,
+        }
+    }
+}
+
+fn delivery_from_api(delivery: Option<&str>) -> InputDelivery {
+    match delivery
+        .map(str::trim)
+        .unwrap_or("run")
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "admit_only" => InputDelivery::AdmitOnly,
+        "queue" => InputDelivery::Queue,
+        _ => InputDelivery::Run,
     }
 }
 
