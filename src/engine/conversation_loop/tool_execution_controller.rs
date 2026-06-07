@@ -7,7 +7,8 @@ use super::tool_execution::{
 };
 use super::tool_metadata::{
     attach_tool_contract_metadata, attach_tool_execution_metadata, merge_tool_result_metadata,
-    persist_tool_outcome_learning_event, tool_execution_start_progress,
+    persist_session_job_if_shell, persist_tool_outcome_learning_event,
+    tool_execution_start_progress,
 };
 use super::tool_result_controller::ToolResultNormalizer;
 use super::turn_recording::{
@@ -326,6 +327,12 @@ impl ToolExecutionController {
                     .attach_action_decision(&tc, &mut result);
                 record_tool_observation(exec_context.trace, &tc, &result);
                 persist_tool_outcome_learning_event(
+                    execution.session_store.as_ref(),
+                    &execution.session_id,
+                    &tc,
+                    &result,
+                );
+                persist_session_job_if_shell(
                     execution.session_store.as_ref(),
                     &execution.session_id,
                     &tc,

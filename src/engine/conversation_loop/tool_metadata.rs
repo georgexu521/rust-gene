@@ -852,6 +852,54 @@ pub(super) fn persist_tool_outcome_learning_event(
     );
 }
 
+/// Persist a shell job record to session_jobs when a bash/shell tool completes.
+pub(super) fn persist_session_job_if_shell(
+    store: Option<&Arc<crate::session_store::SessionStore>>,
+    session_id: &str,
+    tool_call: &ToolCall,
+    result: &ToolResult,
+) {
+    let Some(store) = store else { return };
+    if !tool_call.name.starts_with("bash") && tool_call.name != "shell" {
+        return;
+    }
+    let command = tool_call
+        .arguments
+        .get("command")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    let timed_out = result
+        .data
+        .as_ref()
+        .and_then(|d| d.get("shell_result"))
+        .and_then(|s| s.get("timed_out"))
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let status = if timed_out {
+        "timed_out"
+    } else if result.success {
+        "completed"
+    } else {
+        "failed"
+    };
+    let tool_output_uri = result
+        .data
+        .as_ref()
+        .and_then(|d| d.get("tool_output_id"))
+        .and_then(|v| v.as_str())
+        .map(|id| format!("tool-output://{id}"));
+    let _ = store.record_session_job(
+        session_id,
+        &tool_call.id,
+        command,
+        None,
+        status,
+        None,
+        timed_out,
+        tool_output_uri.as_deref(),
+    );
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

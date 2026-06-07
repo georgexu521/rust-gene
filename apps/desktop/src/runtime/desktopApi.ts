@@ -400,6 +400,81 @@ let webPreviewSessions: RecentSession[] = [
 ];
 let webPreviewArchivedSessions: RecentSession[] = [];
 
+// ══ DTO types aligned with src/api/dto/* ──────────────────────
+
+export type ProviderCatalogEntry = {
+  provider_id: string;
+  label: string;
+  enabled: boolean;
+  source: string;
+  base_url_host: string;
+  default_model: string;
+  available_model_ids: string[];
+  context_limit: number | null;
+  output_limit: number | null;
+  protocol_family: string;
+  supports_streaming: boolean;
+  requires_nonstreaming: boolean;
+  last_health_status: string | null;
+  last_latency_ms: number | null;
+  recent_timeout_category: string | null;
+};
+
+export type FileMutationResult = {
+  operation: string;
+  changed_paths: string[];
+  checkpoint_id: string | null;
+  diff_preview: string | null;
+  additions: number;
+  deletions: number;
+  stale_state: string | null;
+  diagnostics_delta: unknown;
+  rollback_status: string | null;
+  error_hint: string | null;
+};
+
+export type SessionJobItem = {
+  job_id: string;
+  session_id: string;
+  command: string;
+  cwd: string | null;
+  status: string;
+  started_at: string;
+  completed_at: string | null;
+  exit_code: number | null;
+  timed_out: boolean;
+  tool_output_uri: string | null;
+  cancelled: boolean;
+};
+
+export type SessionContext = {
+  session_id: string;
+  compact_boundary_id: string | null;
+  estimated_history_tokens: number;
+  tool_schema_tokens: number;
+  memory_snapshot_tokens: number;
+  stable_prefix_hash: string | null;
+  dynamic_tail_hash: string | null;
+  latest_compaction: CompactionSummary | null;
+  message_count_after_compaction: number;
+};
+
+export type CompactionSummary = {
+  boundary_id: string;
+  strategy: string;
+  trigger: string;
+  before_tokens: number;
+  after_tokens: number;
+  messages_before: number;
+  messages_after: number;
+  preserved_tail_count: number;
+};
+
+export type SessionRunStatus = {
+  session_id: string;
+  status: string;
+};
+
 export function desktopHealth(): Promise<DesktopHealth> {
   if (!isTauriRuntime()) {
     return Promise.resolve({

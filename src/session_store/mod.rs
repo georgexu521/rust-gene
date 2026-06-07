@@ -332,10 +332,78 @@ impl SessionStore {
         let conn = self.conn();
         todo_store::clear_todos(&conn, session_id)
     }
+
+    // ==================== Session Jobs (Slice D) ====================
+
+    /// Record or update a shell job in the session_jobs table.
+    pub fn record_session_job(
+        &self,
+        session_id: &str,
+        job_id: &str,
+        command: &str,
+        cwd: Option<&str>,
+        status: &str,
+        exit_code: Option<i32>,
+        timed_out: bool,
+        tool_output_uri: Option<&str>,
+    ) -> SqlResult<()> {
+        let conn = self.conn();
+        conn.execute(
+            "INSERT INTO session_jobs (job_id, session_id, command, cwd, status, exit_code, timed_out, tool_output_uri)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+             ON CONFLICT(session_id, job_id) DO UPDATE SET
+               status = excluded.status,
+               completed_at = CASE WHEN excluded.status IN ('completed', 'failed', 'timed_out', 'cancelled')
+                                   THEN datetime('now') ELSE completed_at END,
+               exit_code = excluded.exit_code,
+               timed_out = excluded.timed_out,
+               tool_output_uri = excluded.tool_output_uri",
+            rusqlite::params![job_id, session_id, command, cwd, status, exit_code, timed_out as i32, tool_output_uri],
+        )?;
+        Ok(())
+    }
+
+    /// Query session jobs for a session.
+    pub fn get_session_jobs(&self, session_id: &str) -> SqlResult<Vec<SessionJobRow>> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare(
+            "SELECT job_id, session_id, command, cwd, status, started_at, completed_at, exit_code, timed_out, tool_output_uri, cancelled
+             FROM session_jobs WHERE session_id = ?1 ORDER BY started_at DESC",
+        )?;
+        let rows = stmt.query_map([session_id], |row| {
+            Ok(SessionJobRow {
+                job_id: row.get(0)?,
+                session_id: row.get(1)?,
+                command: row.get(2)?,
+                cwd: row.get(3)?,
+                status: row.get(4)?,
+                started_at: row.get(5)?,
+                completed_at: row.get(6)?,
+                exit_code: row.get(7)?,
+                timed_out: row.get::<_, i32>(8)? != 0,
+                tool_output_uri: row.get(9)?,
+                cancelled: row.get::<_, i32>(10)? != 0,
+            })
+        })?;
+        rows.collect()
+    }
 }
 
 /// 数据库统计
 #[derive(Debug, Clone)]
+pub struct SessionJobRow {
+    pub job_id: String,
+    pub session_id: String,
+    pub command: String,
+    pub cwd: Option<String>,
+    pub status: String,
+    pub started_at: String,
+    pub completed_at: Option<String>,
+    pub exit_code: Option<i32>,
+    pub timed_out: bool,
+    pub tool_output_uri: Option<String>,
+    pub cancelled: bool,
+}
 pub struct DbStats {
     pub session_count: i64,
     pub message_count: i64,

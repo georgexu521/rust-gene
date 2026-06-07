@@ -51,6 +51,21 @@ pub trait ApiAgentRuntime: Send + Sync {
         &self,
         input: ApiSessionPromptInput,
     ) -> anyhow::Result<ApiSessionPromptOutcome>;
+
+    async fn compact(&self, session_id: &str) -> anyhow::Result<Option<ApiCompactOutcome>> {
+        let _ = session_id;
+        Ok(None) // default: no-op
+    }
+}
+
+/// Outcome from a manual compaction trigger.
+#[derive(Debug, Clone, Serialize)]
+pub struct ApiCompactOutcome {
+    pub boundary_id: String,
+    pub before_tokens: u64,
+    pub after_tokens: u64,
+    pub messages_before: usize,
+    pub messages_after: usize,
 }
 
 /// Production full-agent API adapter backed by `RuntimeController`.

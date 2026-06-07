@@ -70,6 +70,7 @@ pub fn create_routes(state: Arc<ApiState>) -> Router {
             "/api/sessions/:id/run-status",
             get(session_run_status_handler),
         )
+        .route("/api/sessions/:id/compact", post(session_compact_handler))
         // Active context inspection
         .route("/api/sessions/:id/context", get(session_context_handler))
         // Provider chat (explicit non-agent lane)
@@ -490,6 +491,47 @@ async fn session_run_status_handler(
     }))
 }
 
+// ── Session Compact ────────────────────────────────────
+
+async fn session_compact_handler(
+    State(state): State<Arc<ApiState>>,
+    Path(id): Path<String>,
+) -> Result<impl IntoResponse, ApiError> {
+    match &state.agent_runtime {
+        Some(runtime) => match runtime.compact(&id).await {
+            Ok(Some(outcome)) => Ok((
+                StatusCode::OK,
+                Json(json!({
+                    "session_id": id,
+                    "compacted": true,
+                    "boundary_id": outcome.boundary_id,
+                    "before_tokens": outcome.before_tokens,
+                    "after_tokens": outcome.after_tokens,
+                    "messages_before": outcome.messages_before,
+                    "messages_after": outcome.messages_after,
+                })),
+            )),
+            Ok(None) => Ok((
+                StatusCode::OK,
+                Json(json!({
+                    "session_id": id,
+                    "compacted": false,
+                    "reason": "no compaction needed or runtime compaction not available"
+                })),
+            )),
+            Err(e) => Err(ApiError::Internal(e.to_string())),
+        },
+        None => Ok((
+            StatusCode::NOT_IMPLEMENTED,
+            Json(json!({
+                "session_id": id,
+                "compacted": false,
+                "reason": "compaction requires RuntimeController (not available in API server mode)"
+            })),
+        )),
+    }
+}
+
 // ── Active Context ─────────────────────────────────────
 
 async fn session_context_handler(
@@ -607,14 +649,32 @@ async fn get_provider_catalog_handler(
 
 // ── Session Jobs ───────────────────────────────────────
 
-async fn get_session_jobs_handler(Path(id): Path<String>) -> Result<impl IntoResponse, ApiError> {
-    // Session jobs are currently tracked via shell task state in the runtime.
-    // Return an empty page as placeholder — full projection requires the
-    // session_jobs table migration (Slice D).
+async fn get_session_jobs_handler(
+    State(state): State<Arc<ApiState>>,
+    Path(id): Path<String>,
+) -> Result<impl IntoResponse, ApiError> {
+    let store = state.session_store.read().await;
+    let rows = store.get_session_jobs(&id).unwrap_or_default();
+    let jobs: Vec<dto::session_jobs::SessionJobItem> = rows
+        .into_iter()
+        .map(|r| dto::session_jobs::SessionJobItem {
+            job_id: r.job_id,
+            session_id: r.session_id,
+            command: r.command,
+            cwd: r.cwd,
+            status: r.status,
+            started_at: r.started_at,
+            completed_at: r.completed_at,
+            exit_code: r.exit_code,
+            timed_out: r.timed_out,
+            tool_output_uri: r.tool_output_uri,
+            cancelled: r.cancelled,
+        })
+        .collect();
     Ok(Json(dto::session_jobs::SessionJobsPage {
         session_id: id,
-        jobs: vec![],
-        total: 0,
+        total: jobs.len(),
+        jobs,
     }))
 }
 
