@@ -1038,6 +1038,7 @@ impl PermissionContext {
                 .into_iter()
                 .map(|(d, r)| (d, r.clone()))
                 .collect(),
+            rule_views: Vec::new(),
         }
     }
 
@@ -1096,6 +1097,54 @@ pub struct ExplainableDecision {
     pub warnings: Vec<String>,
     /// The matched rules that led to this decision
     pub matched_rules: Vec<(PermissionDecision, SourcedRule)>,
+    /// Product-facing rule views for display.
+    pub rule_views: Vec<PermissionRuleView>,
+}
+
+/// Product-facing view of a single permission rule.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PermissionRuleView {
+    pub scope: String,
+    pub matcher_key: String,
+    pub effect: String,
+    pub source: String,
+    pub expires: Option<String>,
+    pub risk_reason: Option<String>,
+}
+
+impl PermissionRuleView {
+    pub fn from_sourced(rule: &SourcedRule, effect: &str) -> Self {
+        let scope = match rule.source {
+            RuleSource::Global => "global",
+            RuleSource::Project => "project",
+            RuleSource::User => "session",
+            RuleSource::System => "system",
+        };
+        Self {
+            scope: scope.to_string(),
+            matcher_key: rule.pattern.clone(),
+            effect: effect.to_string(),
+            source: format!("{:?}", rule.source),
+            expires: None,
+            risk_reason: None,
+        }
+    }
+
+    pub fn format(&self) -> String {
+        let mut parts = vec![
+            format!("  scope: {}", self.scope),
+            format!("  matcher: {}", self.matcher_key),
+            format!("  effect: {}", self.effect),
+            format!("  source: {}", self.source),
+        ];
+        if let Some(exp) = &self.expires {
+            parts.push(format!("  expires: {exp}"));
+        }
+        if let Some(reason) = &self.risk_reason {
+            parts.push(format!("  risk: {reason}"));
+        }
+        parts.join("\n")
+    }
 }
 
 impl ExplainableDecision {

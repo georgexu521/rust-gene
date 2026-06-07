@@ -41,7 +41,7 @@ impl SessionEventWriter {
             "INSERT INTO session_events (session_id, seq, event_type, timestamp_ms, payload) VALUES (?1, ?2, ?3, ?4, ?5)",
             rusqlite::params![self.session_id, seq, event_type, timestamp_ms, payload],
         )?;
-        super::session_parts::refresh_session_parts(&conn, &self.session_id)?;
+        super::session_parts::incremental_refresh_session_parts(&conn, &self.session_id)?;
         Ok(())
     }
 
@@ -185,6 +185,16 @@ impl SessionEventWriter {
         self.write_event("closeout", &payload)
     }
 
+    /// Write final complete assistant text for durable replay.
+    pub fn text_completed(&self, text: &str) -> Result<(), rusqlite::Error> {
+        let payload = serde_json::json!({
+            "text": text,
+            "length": text.len(),
+        })
+        .to_string();
+        self.write_event("assistant_text_completed", &payload)
+    }
+
     /// Mirror a compaction event.
     pub fn compaction(
         &self,
@@ -222,6 +232,28 @@ pub fn query_session_events(
     );
     let mut stmt = conn.prepare(&sql)?;
     let rows = stmt.query_map([session_id], |row| {
+        Ok(SessionEventRow {
+            id: row.get(0)?,
+            session_id: row.get(1)?,
+            seq: row.get(2)?,
+            event_type: row.get(3)?,
+            timestamp_ms: row.get(4)?,
+            payload: row.get(5)?,
+        })
+    })?;
+    rows.collect()
+}
+
+/// Query session events after a given sequence (for incremental projection).
+pub fn query_session_events_after(
+    conn: &Connection,
+    session_id: &str,
+    after_seq: i64,
+) -> Result<Vec<SessionEventRow>, rusqlite::Error> {
+    let mut stmt = conn.prepare(
+        "SELECT id, session_id, seq, event_type, timestamp_ms, payload FROM session_events WHERE session_id = ?1 AND seq > ?2 ORDER BY seq ASC",
+    )?;
+    let rows = stmt.query_map(rusqlite::params![session_id, after_seq], |row| {
         Ok(SessionEventRow {
             id: row.get(0)?,
             session_id: row.get(1)?,

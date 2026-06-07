@@ -16,6 +16,75 @@ pub const TOOL_OUTPUT_URI_PREFIX: &str = "tool-output://";
 /// Maximum inline content bytes kept in memory before storing to disk.
 pub const DEFAULT_STORE_THRESHOLD: usize = 32 * 1024; // 32 KiB
 
+/// Configurable policy for tool output truncation and retention.
+#[derive(Debug, Clone)]
+pub struct ToolOutputPolicy {
+    pub max_bytes: usize,
+    pub max_lines: usize,
+    pub preview_direction: PreviewDirection,
+    pub retention_days: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PreviewDirection {
+    Head,
+    Tail,
+    HeadTail,
+}
+
+impl Default for ToolOutputPolicy {
+    fn default() -> Self {
+        Self {
+            max_bytes: 32 * 1024,
+            max_lines: 500,
+            preview_direction: PreviewDirection::Tail,
+            retention_days: 7,
+        }
+    }
+}
+
+impl ToolOutputPolicy {
+    /// Load policy from environment variables.
+    pub fn from_env() -> Self {
+        let mut policy = Self::default();
+        if let Ok(val) = std::env::var("PRIORITY_AGENT_TOOL_OUTPUT_MAX_BYTES") {
+            if let Ok(n) = val.parse::<usize>() {
+                policy.max_bytes = n;
+            }
+        }
+        if let Ok(val) = std::env::var("PRIORITY_AGENT_TOOL_OUTPUT_MAX_LINES") {
+            if let Ok(n) = val.parse::<usize>() {
+                policy.max_lines = n;
+            }
+        }
+        if let Ok(val) = std::env::var("PRIORITY_AGENT_TOOL_OUTPUT_PREVIEW") {
+            policy.preview_direction = match val.to_lowercase().as_str() {
+                "head" => PreviewDirection::Head,
+                "head_tail" => PreviewDirection::HeadTail,
+                _ => PreviewDirection::Tail,
+            };
+        }
+        if let Ok(val) = std::env::var("PRIORITY_AGENT_TOOL_OUTPUT_RETENTION_DAYS") {
+            if let Ok(n) = val.parse::<u32>() {
+                policy.retention_days = n;
+            }
+        }
+        policy
+    }
+
+    pub fn cleanup_threshold_ms(&self) -> u64 {
+        let cutoff = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64;
+        cutoff.saturating_sub((self.retention_days as u64) * 86_400_000)
+    }
+
+    pub fn effective_threshold(&self) -> usize {
+        self.max_bytes
+    }
+}
+
 /// Metadata stored alongside each tool output.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolOutputMeta {

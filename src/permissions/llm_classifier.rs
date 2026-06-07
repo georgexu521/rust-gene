@@ -182,6 +182,7 @@ impl PermissionClassifier for LlmSecurityClassifier {
                 },
                 warnings: vec![],
                 matched_rules: vec![],
+                rule_views: Vec::new(),
             }),
             Err(e) => {
                 // 解析失败时回退到 ASK
@@ -196,6 +197,7 @@ impl PermissionClassifier for LlmSecurityClassifier {
                     risk_level: super::RiskLevel::Medium,
                     warnings: vec![format!("Classifier parse error: {}", e)],
                     matched_rules: vec![],
+                    rule_views: Vec::new(),
                 })
             }
         }

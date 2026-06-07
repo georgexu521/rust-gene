@@ -95,13 +95,114 @@ pub fn persist_session_input(
     Ok(())
 }
 
+/// Idempotent admission of a session input with caller-provided prompt id.
+///
+/// - Same prompt_id + same content hash → returns existing row (no insert).
+/// - Same prompt_id + different content hash → returns an error (conflict).
+/// - New prompt_id → inserts a new row with state `pending`.
+///
+/// Reserved internal ids (starting with `__`) are rejected.
+pub fn admit_session_input(
+    conn: &rusqlite::Connection,
+    session_id: &str,
+    prompt_id: &str,
+    prompt: &str,
+    delivery: InputDelivery,
+) -> Result<PromptAdmissionStatus, rusqlite::Error> {
+    if prompt_id.starts_with("__") {
+        return Ok(PromptAdmissionStatus::Rejected {
+            reason: "prompt_id starting with '__' is reserved for internal use".to_string(),
+        });
+    }
+    let prompt_hash = hash_prompt(prompt);
+
+    // Check for existing prompt with same id.
+    let existing = conn.query_row(
+        "SELECT prompt_hash, state FROM session_inputs WHERE session_id = ?1 AND prompt_id = ?2",
+        rusqlite::params![session_id, prompt_id],
+        |row| Ok((row.get::<_, Option<String>>(0)?, row.get::<_, String>(1)?)),
+    );
+    match existing {
+        Ok((Some(existing_hash), state)) => {
+            if existing_hash == prompt_hash {
+                return Ok(PromptAdmissionStatus::AlreadyAdmitted { state });
+            }
+            return Ok(PromptAdmissionStatus::Conflict {
+                existing_hash,
+                new_hash: prompt_hash,
+            });
+        }
+        Ok((None, state)) => {
+            // Existing row without hash may have been created pre-v12, treat as
+            // already admitted with unknown hash.
+            return Ok(PromptAdmissionStatus::AlreadyAdmitted { state });
+        }
+        Err(rusqlite::Error::QueryReturnedNoRows) => {
+            // Fresh admission.
+            conn.execute(
+                "INSERT INTO session_inputs (session_id, delivery, content, prompt_id, prompt_hash, state, created_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, 'pending', datetime('now'))",
+                rusqlite::params![
+                    session_id,
+                    delivery.label(),
+                    prompt,
+                    prompt_id,
+                    prompt_hash,
+                ],
+            )?;
+            return Ok(PromptAdmissionStatus::Admitted);
+        }
+        Err(e) => Err(e),
+    }
+}
+
+fn hash_prompt(prompt: &str) -> String {
+    use std::hash::{Hash, Hasher};
+    let mut s = std::collections::hash_map::DefaultHasher::new();
+    prompt.hash(&mut s);
+    format!("{:016x}", s.finish())
+}
+
+/// Result of idempotent prompt admission.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PromptAdmissionStatus {
+    /// New prompt admitted successfully.
+    Admitted,
+    /// Prompt already exists with same content (idempotent retry).
+    AlreadyAdmitted { state: String },
+    /// Prompt id reused with different content (hard conflict).
+    Conflict {
+        existing_hash: String,
+        new_hash: String,
+    },
+    /// Admission rejected by policy.
+    Rejected { reason: String },
+}
+
+impl PromptAdmissionStatus {
+    pub fn is_new(&self) -> bool {
+        matches!(self, Self::Admitted)
+    }
+}
+
 /// Promote a queued input for a session.
+///
+/// Sets `promoted_at`, `promoted_seq` (to the next session event sequence),
+/// and updates `state` to `promoted`.
 pub fn promote_session_input(
     conn: &rusqlite::Connection,
     session_id: &str,
 ) -> Result<Option<String>, rusqlite::Error> {
+    let next_seq: i64 = conn
+        .query_row(
+            "SELECT COALESCE(MAX(seq), 0) + 1 FROM session_events WHERE session_id = ?1",
+            [session_id],
+            |row| row.get(0),
+        )
+        .unwrap_or(1);
+
     let mut stmt = conn.prepare(
-        "SELECT id, content FROM session_inputs WHERE session_id = ?1 AND promoted_at IS NULL ORDER BY id ASC LIMIT 1",
+        "SELECT id, content FROM session_inputs WHERE session_id = ?1 AND state = 'pending' ORDER BY id ASC LIMIT 1",
     )?;
     let result = stmt.query_row([session_id], |row| {
         let id: i64 = row.get(0)?;
@@ -111,8 +212,8 @@ pub fn promote_session_input(
     match result {
         Ok((id, content)) => {
             conn.execute(
-                "UPDATE session_inputs SET promoted_at = datetime('now') WHERE id = ?1",
-                [id],
+                "UPDATE session_inputs SET promoted_at = datetime('now'), promoted_seq = ?1, state = 'promoted' WHERE id = ?2",
+                rusqlite::params![next_seq, id],
             )?;
             Ok(Some(content))
         }
@@ -153,6 +254,14 @@ mod tests {
         let conn = Connection::open_in_memory().unwrap();
         conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS sessions (id TEXT PRIMARY KEY, title TEXT, model TEXT);
+             CREATE TABLE IF NOT EXISTS session_events (
+                 id INTEGER PRIMARY KEY AUTOINCREMENT,
+                 session_id TEXT NOT NULL,
+                 seq INTEGER NOT NULL,
+                 event_type TEXT NOT NULL,
+                 timestamp_ms INTEGER NOT NULL DEFAULT 0,
+                 payload TEXT NOT NULL DEFAULT '{}'
+             );
              CREATE TABLE IF NOT EXISTS session_inputs (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 session_id TEXT NOT NULL,
@@ -160,9 +269,18 @@ mod tests {
                 content TEXT NOT NULL DEFAULT '',
                 created_at TEXT NOT NULL DEFAULT (datetime('now')),
                 promoted_at TEXT,
+                prompt_id TEXT,
+                prompt_hash TEXT,
+                attachments_json TEXT,
+                promoted_seq INTEGER,
+                state TEXT NOT NULL DEFAULT 'pending',
+                error TEXT,
                 FOREIGN KEY (session_id) REFERENCES sessions(id)
             );
-            CREATE INDEX IF NOT EXISTS idx_session_inputs_session ON session_inputs(session_id);",
+            CREATE INDEX IF NOT EXISTS idx_session_inputs_session ON session_inputs(session_id);
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_session_inputs_prompt_id
+                ON session_inputs(session_id, prompt_id)
+                WHERE prompt_id IS NOT NULL;",
         )
         .unwrap();
         conn
@@ -188,5 +306,54 @@ mod tests {
 
         let promoted3 = promote_session_input(&conn, "s1").unwrap();
         assert!(promoted3.is_none());
+    }
+
+    #[test]
+    fn idempotent_admission_same_id_same_content_returns_existing() {
+        let conn = test_conn();
+        conn.execute(
+            "INSERT INTO sessions (id, title, model) VALUES ('s1', 'test', 'kimi')",
+            [],
+        )
+        .unwrap();
+
+        let status =
+            admit_session_input(&conn, "s1", "prompt-1", "fix the bug", InputDelivery::Queue)
+                .unwrap();
+        assert!(status.is_new());
+
+        // Same id, same content → idempotent retry.
+        let status2 =
+            admit_session_input(&conn, "s1", "prompt-1", "fix the bug", InputDelivery::Queue)
+                .unwrap();
+        assert!(matches!(
+            status2,
+            PromptAdmissionStatus::AlreadyAdmitted { .. }
+        ));
+
+        // Same id, different content → conflict.
+        let status3 = admit_session_input(
+            &conn,
+            "s1",
+            "prompt-1",
+            "fix another bug",
+            InputDelivery::Queue,
+        )
+        .unwrap();
+        assert!(matches!(status3, PromptAdmissionStatus::Conflict { .. }));
+    }
+
+    #[test]
+    fn idempotent_admission_rejects_reserved_ids() {
+        let conn = test_conn();
+        conn.execute(
+            "INSERT INTO sessions (id, title, model) VALUES ('s1', 'test', 'kimi')",
+            [],
+        )
+        .unwrap();
+
+        let status =
+            admit_session_input(&conn, "s1", "__internal", "prompt", InputDelivery::Queue).unwrap();
+        assert!(matches!(status, PromptAdmissionStatus::Rejected { .. }));
     }
 }

@@ -8,11 +8,30 @@ pub async fn handle_revert_turn(app: &mut TuiApp) -> String {
     };
 
     let mgr = crate::engine::checkpoint::get_checkpoint_manager(&session_id).await;
-    let cp = mgr.lock().await;
+    let mut cp = mgr.lock().await;
     let result = match cp.revert_latest_assistant_turn().await {
         Ok(result) => result,
         Err(err) => return err,
     };
+
+    // Record the revert for potential unrevert later.
+    let record = crate::engine::checkpoint::RevertRecord {
+        session_id: result.session_id.clone(),
+        target_message_id: result.message_id.clone(),
+        target_part_ids: result.part_ids.clone(),
+        checkpoint_ids: result.checkpoint_ids.clone(),
+        snapshot_checkpoint_id: result.snapshot_checkpoint_id.clone(),
+        paths: result.paths.clone(),
+        restored_files: result.restored_files.clone(),
+        removed_files: result.removed_files.clone(),
+        diff_summary: result.diff_summary.clone(),
+        status: result.status.clone(),
+        timestamp: result.timestamp.clone().unwrap_or_default(),
+        unreverted: false,
+    };
+    cp.record_revert(record);
+    drop(cp);
+
     let payload = serde_json::to_value(&result).unwrap_or_else(|_| serde_json::json!({}));
     if let Err(err) = app
         .session_manager
@@ -36,21 +55,65 @@ pub async fn handle_revert_turn(app: &mut TuiApp) -> String {
             .map(|path| format!("  removed: {path}")),
     );
 
+    let unrevert_hint = if result.unrevert_possible {
+        "\nUse /unrevert to undo this revert."
+    } else {
+        ""
+    };
+
     if restored_summary.is_empty() && result.errors.is_empty() {
         format!(
-            "Reverted {} file(s) from last turn (round: {:?}).\nUse /changes to see what was reverted.",
+            "Reverted {} file(s) from last turn (round: {:?}).\nUse /changes to see what was reverted.{}",
             file_count,
             result.tool_round_id.as_deref().unwrap_or("<single>"),
+            unrevert_hint,
         )
     } else if result.errors.is_empty() {
         format!(
-            "Reverted last turn's file changes:\n{}",
-            restored_summary.join("\n")
+            "Reverted last turn's file changes:\n{}{}",
+            restored_summary.join("\n"),
+            unrevert_hint,
         )
     } else {
         format!(
-            "Partial revert of last turn:\n{}\nErrors:\n{}",
+            "Partial revert of last turn:\n{}\nErrors:\n{}{}",
             restored_summary.join("\n"),
+            result.errors.join("\n"),
+            unrevert_hint,
+        )
+    }
+}
+
+/// /unrevert — undo the last revert operation.
+pub async fn handle_unrevert(app: &mut TuiApp) -> String {
+    let session_id = match app.session_manager.current_session_id() {
+        Some(id) => id.to_string(),
+        None => return "No active session.".to_string(),
+    };
+
+    let mgr = crate::engine::checkpoint::get_checkpoint_manager(&session_id).await;
+    let mut cp = mgr.lock().await;
+    let result = match cp.unrevert_latest().await {
+        Ok(result) => result,
+        Err(err) => return format!("Unrevert failed: {err}"),
+    };
+    drop(cp);
+
+    let payload = serde_json::to_value(&result).unwrap_or_else(|_| serde_json::json!({}));
+    if let Err(err) = app
+        .session_manager
+        .write_session_event(&session_id, "unrevert", &payload)
+    {
+        tracing::warn!("Failed to record unrevert session event: {}", err);
+    }
+
+    let file_count = result.paths.len();
+    if result.errors.is_empty() {
+        format!("Unreverted {} file(s). Changes restored.", file_count)
+    } else {
+        format!(
+            "Unrevert completed with {} warnings:\n{}",
+            result.errors.len(),
             result.errors.join("\n")
         )
     }

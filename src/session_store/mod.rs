@@ -27,7 +27,9 @@ mod trace_store;
 pub use records::*;
 pub use todo_store::{PersistedTodoItem, TodoItem};
 
-pub use event_store::{query_session_events, SessionEventRow, SessionEventWriter};
+pub use event_store::{
+    query_session_events, query_session_events_after, SessionEventRow, SessionEventWriter,
+};
 pub use session_parts::PersistedSessionPart;
 
 /// 会话存储
@@ -58,6 +60,41 @@ impl SessionStore {
     pub fn get_session_parts(&self, session_id: &str) -> SqlResult<Vec<PersistedSessionPart>> {
         let conn = self.conn();
         session_parts::query_persisted_session_parts(&conn, session_id)
+    }
+
+    /// Full rebuild of session_parts from session_events (repair/debug only).
+    pub fn rebuild_session_parts(
+        &self,
+        session_id: &str,
+    ) -> SqlResult<Vec<session_parts::SessionPart>> {
+        let conn = self.conn();
+        session_parts::refresh_session_parts(&conn, session_id)
+    }
+
+    /// Cursor: query session parts after a given part_index.
+    pub fn get_session_parts_after(
+        &self,
+        session_id: &str,
+        after_part_index: i64,
+        limit: usize,
+    ) -> SqlResult<Vec<PersistedSessionPart>> {
+        let conn = self.conn();
+        session_parts::query_session_parts_after(&conn, session_id, after_part_index, limit)
+    }
+
+    /// Cursor: query session events after a given sequence.
+    pub fn get_session_events_after(
+        &self,
+        session_id: &str,
+        after_seq: i64,
+    ) -> SqlResult<Vec<SessionEventRow>> {
+        let conn = self.conn();
+        query_session_events_after(&conn, session_id, after_seq)
+    }
+
+    pub fn get_max_projected_seq(&self, session_id: &str) -> SqlResult<i64> {
+        let conn = self.conn();
+        session_parts::get_max_projected_seq(&conn, session_id)
     }
 
     /// 默认会话数据库路径。
@@ -120,6 +157,9 @@ impl SessionStore {
         runner.register(std::sync::Arc::new(
             crate::migrations::v11_add_session_parts::V11AddSessionParts,
         ));
+        runner.register(std::sync::Arc::new(
+            crate::migrations::v12_add_session_input_idempotency::V12AddSessionInputIdempotency,
+        ));
         runner.run(&conn)?;
 
         info!("SessionStore opened at {:?}", path);
@@ -169,6 +209,9 @@ impl SessionStore {
         ));
         runner.register(std::sync::Arc::new(
             crate::migrations::v11_add_session_parts::V11AddSessionParts,
+        ));
+        runner.register(std::sync::Arc::new(
+            crate::migrations::v12_add_session_input_idempotency::V12AddSessionInputIdempotency,
         ));
         runner.run(&conn)?;
 

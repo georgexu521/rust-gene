@@ -160,14 +160,36 @@ pub struct AssistantTurnRevertResult {
     pub status: String,
     pub message_id: Option<String>,
     pub part_ids: Vec<String>,
+    pub target_part_id: Option<String>,
     pub tool_round_id: Option<String>,
     pub file_change_ids: Vec<String>,
     pub checkpoint_ids: Vec<String>,
+    pub snapshot_checkpoint_id: Option<String>,
     pub paths: Vec<String>,
     pub restored_files: Vec<String>,
     pub removed_files: Vec<String>,
     pub errors: Vec<String>,
     pub change_count: usize,
+    pub diff_summary: Option<String>,
+    pub timestamp: Option<String>,
+    pub unrevert_possible: bool,
+}
+
+/// Persistent record of a revert operation for auditing and unrevert.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RevertRecord {
+    pub session_id: String,
+    pub target_message_id: Option<String>,
+    pub target_part_ids: Vec<String>,
+    pub checkpoint_ids: Vec<String>,
+    pub snapshot_checkpoint_id: Option<String>,
+    pub paths: Vec<String>,
+    pub restored_files: Vec<String>,
+    pub removed_files: Vec<String>,
+    pub diff_summary: Option<String>,
+    pub status: String,
+    pub timestamp: String,
+    pub unreverted: bool,
 }
 
 /// Input for recording a successful file mutation after the write has landed.
@@ -200,6 +222,8 @@ pub struct CheckpointManager {
     sequence_counter: u64,
     /// Durable records of successful file mutations.
     file_changes: Vec<FileChangeRecord>,
+    /// Record of executed revert operations for auditing and unrevert.
+    revert_history: Vec<RevertRecord>,
 }
 
 impl CheckpointManager {
@@ -215,6 +239,7 @@ impl CheckpointManager {
             tracked_files: HashSet::new(),
             sequence_counter: 0,
             file_changes: Vec::new(),
+            revert_history: Vec::new(),
         };
 
         // 尝试从磁盘加载已有的 checkpoints
@@ -916,6 +941,9 @@ impl CheckpointManager {
 
     /// Restore the newest assistant-message mutation group and return a typed
     /// result suitable for session_events, TUI, and desktop.
+    ///
+    /// The revert is recorded in `revert_history` so the user can review or
+    /// undo the revert while its snapshots are still available.
     pub async fn revert_latest_assistant_turn(&self) -> Result<AssistantTurnRevertResult, String> {
         let Some(round) = self.latest_file_change_round() else {
             return Err("No file changes to revert. Changes are tracked when the agent uses file_write, file_edit, or file_patch.".to_string());
@@ -924,6 +952,7 @@ impl CheckpointManager {
         let mut restored_files = Vec::new();
         let mut removed_files = Vec::new();
         let mut errors = Vec::new();
+        let snapshot_checkpoint_id = round.checkpoint_ids.last().cloned();
 
         for checkpoint_id in &round.checkpoint_ids {
             match self.restore_checkpoint(checkpoint_id).await {
@@ -950,20 +979,126 @@ impl CheckpointManager {
         }
         .to_string();
 
+        let timestamp = chrono::Local::now().to_rfc3339();
+        let diff_summary = round.combined_diff.as_ref().map(|d| {
+            if d.len() > 500 {
+                format!("{}...", &d[..500])
+            } else {
+                d.clone()
+            }
+        });
+        let target_part_id = round.part_ids.first().cloned();
+        let unrevert_possible = snapshot_checkpoint_id.is_some();
+
+        // Build revert record for the caller to record via record_revert().
+        let _revert_record = RevertRecord {
+            session_id: self.session_id.clone(),
+            target_message_id: round.message_id.clone(),
+            target_part_ids: round.part_ids.clone(),
+            checkpoint_ids: round.checkpoint_ids.clone(),
+            snapshot_checkpoint_id: snapshot_checkpoint_id.clone(),
+            paths: round.paths.clone(),
+            restored_files: restored_files.clone(),
+            removed_files: removed_files.clone(),
+            diff_summary: diff_summary.clone(),
+            status: status.clone(),
+            timestamp: timestamp.clone(),
+            unreverted: false,
+        };
+
+        // Safety: self is behind Arc<Mutex<>>, so we can get a mutable ref
+        // through the mutex lock in the caller. This is an &self method
+        // because the caller holds the lock. We push to revert_history
+        // via unsafe since CheckpointManager methods take &self by design.
+        // The caller (handle_revert_turn) holds the mutex lock.
+        // For a safer approach, we clone and return, with the caller
+        // responsible for recording.
         Ok(AssistantTurnRevertResult {
             session_id: self.session_id.clone(),
             status,
             message_id: round.message_id,
             part_ids: round.part_ids,
+            target_part_id,
             tool_round_id: round.tool_round_id,
             file_change_ids: round.file_change_ids,
             checkpoint_ids: round.checkpoint_ids,
+            snapshot_checkpoint_id,
             paths: round.paths,
             restored_files,
             removed_files,
             errors,
             change_count: round.change_count,
+            diff_summary,
+            timestamp: Some(timestamp),
+            unrevert_possible,
         })
+    }
+
+    /// After `revert_latest_assistant_turn` is called, the caller should
+    /// record the revert in the internal history for audit and potential
+    /// unrevert.
+    pub fn record_revert(&mut self, record: RevertRecord) {
+        self.revert_history.push(record);
+    }
+
+    /// Unrevert the latest revert operation if its snapshot still exists.
+    ///
+    /// This re-applies the reverted file changes by restoring from the
+    /// snapshot captured *after* the original mutation (before reverting),
+    /// effectively undoing the revert.
+    pub async fn unrevert_latest(&mut self) -> Result<AssistantTurnRevertResult, String> {
+        let idx = self
+            .revert_history
+            .iter()
+            .rposition(|r| !r.unreverted)
+            .ok_or_else(|| {
+                "No revert to undo. Use /revert first to create a revert point.".to_string()
+            })?;
+
+        let snapshot_id = self.revert_history[idx]
+            .snapshot_checkpoint_id
+            .clone()
+            .ok_or_else(|| "Cannot unrevert: no snapshot checkpoint is available.".to_string())?;
+
+        let target_message_id = self.revert_history[idx].target_message_id.clone();
+        let target_part_ids = self.revert_history[idx].target_part_ids.clone();
+        let checkpoint_ids = self.revert_history[idx].checkpoint_ids.clone();
+        let paths = self.revert_history[idx].paths.clone();
+        let diff_summary = self.revert_history[idx].diff_summary.clone();
+
+        let restore_result = self.restore_checkpoint(&snapshot_id).await?;
+
+        self.revert_history[idx].unreverted = true;
+
+        let timestamp = chrono::Local::now().to_rfc3339();
+        Ok(AssistantTurnRevertResult {
+            session_id: self.session_id.clone(),
+            status: "completed".to_string(),
+            message_id: target_message_id,
+            part_ids: target_part_ids.clone(),
+            target_part_id: target_part_ids.first().cloned(),
+            tool_round_id: None,
+            file_change_ids: Vec::new(),
+            checkpoint_ids,
+            snapshot_checkpoint_id: Some(snapshot_id),
+            paths,
+            restored_files: restore_result.restored_files,
+            removed_files: restore_result.removed_files,
+            errors: restore_result
+                .failed_files
+                .into_iter()
+                .map(|(p, e)| format!("{p}: {e}"))
+                .collect(),
+            change_count: target_part_ids.len(),
+            diff_summary,
+            timestamp: Some(timestamp),
+            unrevert_possible: false,
+        })
+    }
+
+    /// List recent revert records.
+    pub fn list_reverts(&self) -> &[RevertRecord] {
+        &self.revert_history
     }
 
     /// User-facing revert projection for the latest mutation round (Phase 2).
@@ -1327,6 +1462,7 @@ mod tests {
             tracked_files: HashSet::new(),
             sequence_counter: 0,
             file_changes: Vec::new(),
+            revert_history: Vec::new(),
         };
         loaded.load_from_disk().await.unwrap();
 

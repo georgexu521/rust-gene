@@ -13,8 +13,13 @@ use std::sync::{Arc, Mutex};
 ///
 /// Call `mirror(event)` for each received `StreamEvent` to persist
 /// tool lifecycle, usage, and closeout events.
+///
+/// Tracks accumulated assistant text so that when `Complete` arrives
+/// the mirror can write an `assistant_text_completed` final-value
+/// event for durable replay without concatenating every delta.
 pub struct StreamEventMirror {
     writer: SessionEventWriter,
+    accumulated_text: String,
 }
 
 impl StreamEventMirror {
@@ -22,7 +27,10 @@ impl StreamEventMirror {
     pub fn new(store: &SessionStore, session_id: &str) -> Option<Self> {
         let conn = store.shared_conn();
         let writer = SessionEventWriter::new(conn, session_id);
-        Some(Self { writer })
+        Some(Self {
+            writer,
+            accumulated_text: String::new(),
+        })
     }
 
     /// Create a shared mirror for use across async boundaries.
@@ -34,7 +42,10 @@ impl StreamEventMirror {
     pub fn mirror(&mut self, event: &StreamEvent) {
         let _ = match event {
             StreamEvent::Start => self.writer.step_started(),
-            StreamEvent::TextChunk(text) => self.writer.text_delta(text),
+            StreamEvent::TextChunk(text) => {
+                self.accumulated_text.push_str(text);
+                self.writer.text_delta(text)
+            }
             StreamEvent::ThinkingStart => self.writer.write_event("reasoning_started", "{}"),
             StreamEvent::ThinkingChunk(text) => self.writer.reasoning_delta(text),
             StreamEvent::ThinkingComplete => self.writer.write_event("reasoning_completed", "{}"),
@@ -78,7 +89,13 @@ impl StreamEventMirror {
                 .writer
                 .permission_requested(id, tool_name, arguments, prompt),
             StreamEvent::OutputTruncated => self.writer.write_event("output_truncated", "{}"),
-            StreamEvent::Complete => self.writer.step_ended(),
+            StreamEvent::Complete => {
+                if !self.accumulated_text.is_empty() {
+                    let _ = self.writer.text_completed(&self.accumulated_text);
+                }
+                self.accumulated_text.clear();
+                self.writer.step_ended()
+            }
             StreamEvent::Error(message) => self.writer.runtime_error(message),
         };
     }

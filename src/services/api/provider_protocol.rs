@@ -475,6 +475,146 @@ fn provider_report_from_tool_report(
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProviderTransformReport {
+    pub provider_family: ProviderProtocolFamily,
+    pub model: String,
+    pub reasoning_interleaved_present: bool,
+    pub empty_reasoning_inserted: bool,
+    pub empty_reasoning_preserved: bool,
+    pub provider_native_reasoning_option_sent: bool,
+    pub effective_output_cap: Option<u64>,
+    pub effective_tool_schema_mode: String,
+    pub assistant_text_messages: usize,
+    pub assistant_reasoning_messages: usize,
+    pub assistant_tool_call_messages: usize,
+    pub dsml_leaked_call_stripped: bool,
+    pub interrupted_tool_calls_repaired: bool,
+}
+
+impl Default for ProviderTransformReport {
+    fn default() -> Self {
+        Self {
+            provider_family: ProviderProtocolFamily::OpenAiCompatible,
+            model: String::new(),
+            reasoning_interleaved_present: false,
+            empty_reasoning_inserted: false,
+            empty_reasoning_preserved: false,
+            provider_native_reasoning_option_sent: false,
+            effective_output_cap: None,
+            effective_tool_schema_mode: "auto".to_string(),
+            assistant_text_messages: 0,
+            assistant_reasoning_messages: 0,
+            assistant_tool_call_messages: 0,
+            dsml_leaked_call_stripped: false,
+            interrupted_tool_calls_repaired: false,
+        }
+    }
+}
+
+impl ProviderTransformReport {
+    pub fn for_provider(family: ProviderProtocolFamily, model: &str) -> Self {
+        Self {
+            provider_family: family,
+            model: model.to_string(),
+            ..Default::default()
+        }
+    }
+
+    pub fn summary(&self) -> String {
+        let mut lines = vec![
+            format!("provider: {}", self.provider_family.label()),
+            format!("model: {}", self.model),
+            format!(
+                "reasoning_interleaved: {}",
+                self.reasoning_interleaved_present
+            ),
+            format!(
+                "empty_reasoning_inserted: {}",
+                self.empty_reasoning_inserted
+            ),
+            format!(
+                "provider_native_reasoning: {}",
+                self.provider_native_reasoning_option_sent
+            ),
+        ];
+        if let Some(cap) = self.effective_output_cap {
+            lines.push(format!("effective_output_cap: {cap}"));
+        }
+        lines.push(format!(
+            "tool_schema_mode: {}",
+            self.effective_tool_schema_mode
+        ));
+        if self.dsml_leaked_call_stripped {
+            lines.push("dsml_leaked_call: stripped".to_string());
+        }
+        if self.interrupted_tool_calls_repaired {
+            lines.push("interrupted_tool_calls: repaired".to_string());
+        }
+        lines.join("\n")
+    }
+}
+
+/// Snapshot of a provider's runtime profile for diagnostics and desktop status.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProviderRuntimeProfile {
+    pub provider_id: String,
+    pub model_id: String,
+    pub protocol_family: ProviderProtocolFamily,
+    pub supports_streaming_tool_calls: bool,
+    pub requires_nonstreaming_tool_calls: bool,
+    pub request_timeout_secs: u64,
+    pub stream_idle_timeout_secs: u64,
+    pub last_health_status: Option<String>,
+    pub last_timeout_category: Option<String>,
+    pub capability_summary: String,
+}
+
+impl ProviderRuntimeProfile {
+    pub fn snapshot(capabilities: &ProviderCapabilities, model: &str, provider_id: &str) -> Self {
+        let profile =
+            ProviderLatencyProfile::for_request(capabilities, model, true, true, false, 0, 0);
+        Self {
+            provider_id: provider_id.to_string(),
+            model_id: model.to_string(),
+            protocol_family: capabilities.protocol_family,
+            supports_streaming_tool_calls: capabilities.supports_streaming_tool_calls,
+            requires_nonstreaming_tool_calls: capabilities.requires_nonstreaming_tool_calls,
+            request_timeout_secs: profile.timeout.as_secs(),
+            stream_idle_timeout_secs: 60,
+            last_health_status: None,
+            last_timeout_category: None,
+            capability_summary: format!(
+                "streaming_tools={} nonstreaming_required={} family={}",
+                capabilities.supports_streaming_tool_calls,
+                capabilities.requires_nonstreaming_tool_calls,
+                capabilities.protocol_family.label(),
+            ),
+        }
+    }
+
+    pub fn label(&self) -> String {
+        format!("{}:{}", self.provider_id, self.model_id)
+    }
+}
+
+impl Default for ProviderRuntimeProfile {
+    fn default() -> Self {
+        Self {
+            provider_id: String::new(),
+            model_id: String::new(),
+            protocol_family: ProviderProtocolFamily::OpenAiCompatible,
+            supports_streaming_tool_calls: true,
+            requires_nonstreaming_tool_calls: false,
+            request_timeout_secs: 180,
+            stream_idle_timeout_secs: 60,
+            last_health_status: None,
+            last_timeout_category: None,
+            capability_summary: String::new(),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -730,5 +870,62 @@ mod tests {
             vec!["call_orphan".to_string()]
         );
         assert!(normalized.report.has_repairs());
+    }
+
+    // ---- DeepSeek/Provider transform golden tests ----
+
+    #[test]
+    fn deepseek_text_only_assistant_is_preserved() {
+        let report = ProviderTransformReport::for_provider(
+            ProviderProtocolFamily::OpenAiCompatible,
+            "deepseek-v4-pro",
+        );
+        assert_eq!(report.model, "deepseek-v4-pro");
+        assert!(!report.reasoning_interleaved_present);
+        assert!(!report.empty_reasoning_inserted);
+    }
+
+    #[test]
+    fn provider_transform_report_captures_reasoning_metadata() {
+        let mut report = ProviderTransformReport::for_provider(
+            ProviderProtocolFamily::OpenAiCompatible,
+            "deepseek-v4-pro",
+        );
+        report.reasoning_interleaved_present = true;
+        report.empty_reasoning_preserved = true;
+        report.effective_output_cap = Some(4096);
+        report.effective_tool_schema_mode = "strict".to_string();
+
+        let summary = report.summary();
+        assert!(summary.contains("reasoning_interleaved: true"));
+        assert!(summary.contains("effective_output_cap: 4096"));
+        assert!(summary.contains("tool_schema_mode: strict"));
+    }
+
+    #[test]
+    fn provider_transform_captures_dsml_stripping() {
+        let mut report = ProviderTransformReport::for_provider(
+            ProviderProtocolFamily::OpenAiCompatible,
+            "deepseek-v4-pro",
+        );
+        report.dsml_leaked_call_stripped = true;
+        report.interrupted_tool_calls_repaired = true;
+
+        let summary = report.summary();
+        assert!(summary.contains("dsml_leaked_call: stripped"));
+        assert!(summary.contains("interrupted_tool_calls: repaired"));
+    }
+
+    #[test]
+    fn provider_transform_default_is_clean() {
+        let report = ProviderTransformReport::default();
+        assert_eq!(
+            report.provider_family,
+            ProviderProtocolFamily::OpenAiCompatible
+        );
+        assert!(!report.reasoning_interleaved_present);
+        assert!(!report.empty_reasoning_inserted);
+        assert!(!report.dsml_leaked_call_stripped);
+        assert!(!report.interrupted_tool_calls_repaired);
     }
 }
