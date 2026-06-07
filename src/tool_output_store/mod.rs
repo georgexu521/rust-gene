@@ -17,7 +17,7 @@ pub const TOOL_OUTPUT_URI_PREFIX: &str = "tool-output://";
 pub const DEFAULT_STORE_THRESHOLD: usize = 32 * 1024; // 32 KiB
 
 /// Configurable policy for tool output truncation and retention.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolOutputPolicy {
     pub max_bytes: usize,
     pub max_lines: usize,
@@ -25,7 +25,7 @@ pub struct ToolOutputPolicy {
     pub retention_days: u32,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum PreviewDirection {
     Head,
     Tail,

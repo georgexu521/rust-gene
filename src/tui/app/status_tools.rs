@@ -463,6 +463,45 @@ impl TuiApp {
         Some((title, content))
     }
 
+    /// Clean up stored tool outputs that exceed the retention threshold.
+    pub fn clean_tool_outputs(&self) -> String {
+        let session_id = self.session_manager.current_session_id();
+        let policy = crate::tool_output_store::ToolOutputPolicy::from_env();
+        let store = crate::tool_output_store::ToolOutputStore::new();
+
+        match session_id {
+            Some(sid) => {
+                let removed = store
+                    .cleanup_older_than(policy.cleanup_threshold_ms())
+                    .unwrap_or(0);
+                let session_removed = store.cleanup_session(sid).unwrap_or(0);
+                if removed > 0 || session_removed > 0 {
+                    format!(
+                        "Cleaned {} tool outputs ({} from current session). Retention: {} days.",
+                        removed + session_removed,
+                        session_removed,
+                        policy.retention_days
+                    )
+                } else {
+                    "No tool outputs to clean.".to_string()
+                }
+            }
+            None => {
+                let removed = store
+                    .cleanup_older_than(policy.cleanup_threshold_ms())
+                    .unwrap_or(0);
+                if removed > 0 {
+                    format!(
+                        "Cleaned {} expired tool outputs (retention: {} days).",
+                        removed, policy.retention_days
+                    )
+                } else {
+                    "No tool outputs to clean.".to_string()
+                }
+            }
+        }
+    }
+
     fn visible_tool_run_ids(&self) -> Vec<String> {
         self.visible_tool_runs()
             .into_iter()

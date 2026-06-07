@@ -7,6 +7,10 @@ pub async fn handle_revert_turn(app: &mut TuiApp) -> String {
         None => return "No active session.".to_string(),
     };
 
+    if app.run_coordinator.is_active() || app.is_querying {
+        return "Cannot revert while a session run is active. Wait for the current turn to complete or cancel it first.".to_string();
+    }
+
     let mgr = crate::engine::checkpoint::get_checkpoint_manager(&session_id).await;
     let mut cp = mgr.lock().await;
     let result = match cp.revert_latest_assistant_turn().await {
@@ -90,6 +94,10 @@ pub async fn handle_unrevert(app: &mut TuiApp) -> String {
         Some(id) => id.to_string(),
         None => return "No active session.".to_string(),
     };
+
+    if app.run_coordinator.is_active() || app.is_querying {
+        return "Cannot unrevert while a session run is active. Wait for the current turn to complete or cancel it first.".to_string();
+    }
 
     let mgr = crate::engine::checkpoint::get_checkpoint_manager(&session_id).await;
     let mut cp = mgr.lock().await;
@@ -366,6 +374,15 @@ pub async fn handle_diagnostic(app: &TuiApp) -> String {
         failed_tool_names,
         revert_events,
         latest_revert_event,
+        provider_profile: Some(serde_json::json!({
+            "provider_id": app.current_provider_label(),
+            "model_id": app.current_model_label(),
+            "protocol_family": "openai_compatible",
+        })),
+        tool_output_policy: Some(
+            serde_json::to_value(crate::tool_output_store::ToolOutputPolicy::from_env())
+                .unwrap_or_default(),
+        ),
     };
 
     let json = report.to_json_string();

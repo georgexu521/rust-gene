@@ -557,6 +557,8 @@ pub struct RunReport {
     pub failed_tool_names: Vec<String>,
     pub revert_events: usize,
     pub latest_revert_event: Option<serde_json::Value>,
+    pub provider_profile: Option<serde_json::Value>,
+    pub tool_output_policy: Option<serde_json::Value>,
 }
 
 impl RunReport {

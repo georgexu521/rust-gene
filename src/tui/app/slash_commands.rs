@@ -746,6 +746,8 @@ impl TuiApp {
                     } else {
                         format!("Tool outputs:\n{}", lines.join("\n"))
                     }
+                } else if args == "clean" {
+                    self.clean_tool_outputs()
                 } else if self.open_tool_viewer_for(args) {
                     String::new()
                 } else {
