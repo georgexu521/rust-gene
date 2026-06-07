@@ -4,6 +4,7 @@ use super::tool_result_controller::{append_provider_tool_result, NormalizedToolR
 use crate::engine::evidence_ledger::EvidenceLedger;
 use crate::services::api::{Message, ToolCall};
 use crate::tools::ToolResult;
+use std::path::Path;
 
 pub(super) struct ToolTurnAppendContext<'a> {
     pub(super) evidence_ledger: &'a mut EvidenceLedger,
@@ -11,6 +12,7 @@ pub(super) struct ToolTurnAppendContext<'a> {
     pub(super) tool_results_text: &'a mut String,
     pub(super) messages: &'a mut Vec<Message>,
     pub(super) session_id: Option<&'a str>,
+    pub(super) working_dir: &'a Path,
 }
 
 pub(super) struct ToolTurnController;
@@ -28,6 +30,7 @@ impl ToolTurnController {
             context.tool_results_text,
             context.messages,
             context.session_id,
+            context.working_dir,
         )
         .await;
         let result_budget = ContextBudgetController::observe_tool_result(&normalized);
@@ -68,6 +71,7 @@ mod tests {
                 tool_results_text: &mut tool_results_text,
                 messages: &mut messages,
                 session_id: Some("session-test"),
+                working_dir: std::path::Path::new("."),
             },
         )
         .await;

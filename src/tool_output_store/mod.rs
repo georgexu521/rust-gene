@@ -47,29 +47,66 @@ impl ToolOutputPolicy {
     /// Load policy from environment variables.
     pub fn from_env() -> Self {
         let mut policy = Self::default();
+        policy.apply_env_overrides();
+        policy
+    }
+
+    /// Load policy from project config, then apply environment overrides.
+    pub fn from_project_env(working_dir: &Path) -> Self {
+        let mut policy = Self::default();
+        policy.apply_project_config(working_dir);
+        policy.apply_env_overrides();
+        policy
+    }
+
+    fn apply_env_overrides(&mut self) {
         if let Ok(val) = std::env::var("PRIORITY_AGENT_TOOL_OUTPUT_MAX_BYTES") {
             if let Ok(n) = val.parse::<usize>() {
-                policy.max_bytes = n;
+                self.max_bytes = n;
             }
         }
         if let Ok(val) = std::env::var("PRIORITY_AGENT_TOOL_OUTPUT_MAX_LINES") {
             if let Ok(n) = val.parse::<usize>() {
-                policy.max_lines = n;
+                self.max_lines = n;
             }
         }
         if let Ok(val) = std::env::var("PRIORITY_AGENT_TOOL_OUTPUT_PREVIEW") {
-            policy.preview_direction = match val.to_lowercase().as_str() {
-                "head" => PreviewDirection::Head,
-                "head_tail" => PreviewDirection::HeadTail,
-                _ => PreviewDirection::Tail,
-            };
+            self.preview_direction = parse_preview_direction(&val);
         }
         if let Ok(val) = std::env::var("PRIORITY_AGENT_TOOL_OUTPUT_RETENTION_DAYS") {
             if let Ok(n) = val.parse::<u32>() {
-                policy.retention_days = n;
+                self.retention_days = n;
             }
         }
-        policy
+    }
+
+    fn apply_project_config(&mut self, working_dir: &Path) {
+        let config_path = working_dir.join(".priority-agent").join("config.toml");
+        let Ok(text) = std::fs::read_to_string(config_path) else {
+            return;
+        };
+        let Ok(value) = text.parse::<toml::Value>() else {
+            return;
+        };
+        let Some(table) = value.get("tool_output").and_then(|value| value.as_table()) else {
+            return;
+        };
+        if let Some(n) = table.get("max_bytes").and_then(toml_value_as_usize) {
+            self.max_bytes = n;
+        }
+        if let Some(n) = table.get("max_lines").and_then(toml_value_as_usize) {
+            self.max_lines = n;
+        }
+        if let Some(s) = table
+            .get("preview_direction")
+            .or_else(|| table.get("preview"))
+            .and_then(|value| value.as_str())
+        {
+            self.preview_direction = parse_preview_direction(s);
+        }
+        if let Some(n) = table.get("retention_days").and_then(toml_value_as_u32) {
+            self.retention_days = n;
+        }
     }
 
     pub fn cleanup_threshold_ms(&self) -> u64 {
@@ -344,6 +381,12 @@ pub fn cleanup_expired_from_env() -> io::Result<usize> {
     ToolOutputStore::new().cleanup_older_than(policy.cleanup_threshold_ms())
 }
 
+/// Clean up expired tool outputs using project config plus environment policy.
+pub fn cleanup_expired_for_project(working_dir: &Path) -> io::Result<usize> {
+    let policy = ToolOutputPolicy::from_project_env(working_dir);
+    ToolOutputStore::new().cleanup_older_than(policy.cleanup_threshold_ms())
+}
+
 /// A page of tool output for TUI/desktop rendering.
 #[derive(Debug, Clone)]
 pub struct ToolOutputPage {
@@ -529,6 +572,28 @@ fn split_line_budget(max_lines: usize) -> (usize, usize) {
     (first, last)
 }
 
+fn parse_preview_direction(raw: &str) -> PreviewDirection {
+    match raw.to_lowercase().replace('-', "_").as_str() {
+        "head" => PreviewDirection::Head,
+        "head_tail" | "headtail" => PreviewDirection::HeadTail,
+        _ => PreviewDirection::Tail,
+    }
+}
+
+fn toml_value_as_usize(value: &toml::Value) -> Option<usize> {
+    value
+        .as_integer()
+        .and_then(|n| usize::try_from(n).ok())
+        .or_else(|| value.as_str()?.parse::<usize>().ok())
+}
+
+fn toml_value_as_u32(value: &toml::Value) -> Option<u32> {
+    value
+        .as_integer()
+        .and_then(|n| u32::try_from(n).ok())
+        .or_else(|| value.as_str()?.parse::<u32>().ok())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -646,6 +711,62 @@ mod tests {
         assert!(preview.contains("line4"));
         assert!(!preview.contains("line1"));
         assert!(preview.contains("preview=Tail"));
+    }
+
+    #[test]
+    fn policy_loads_project_tool_output_config() {
+        let mut env = crate::test_utils::env_guard::EnvVarGuard::acquire_blocking();
+        env.remove("PRIORITY_AGENT_TOOL_OUTPUT_MAX_BYTES");
+        env.remove("PRIORITY_AGENT_TOOL_OUTPUT_MAX_LINES");
+        env.remove("PRIORITY_AGENT_TOOL_OUTPUT_PREVIEW");
+        env.remove("PRIORITY_AGENT_TOOL_OUTPUT_RETENTION_DAYS");
+        let dir = std::env::temp_dir().join(format!("tool-policy-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(dir.join(".priority-agent")).unwrap();
+        std::fs::write(
+            dir.join(".priority-agent/config.toml"),
+            r#"
+[tool_output]
+max_bytes = 1234
+max_lines = "42"
+preview_direction = "head-tail"
+retention_days = 3
+"#,
+        )
+        .unwrap();
+
+        let policy = ToolOutputPolicy::from_project_env(&dir);
+
+        assert_eq!(policy.max_bytes, 1234);
+        assert_eq!(policy.max_lines, 42);
+        assert_eq!(policy.preview_direction, PreviewDirection::HeadTail);
+        assert_eq!(policy.retention_days, 3);
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn policy_env_overrides_project_tool_output_config() {
+        let mut env = crate::test_utils::env_guard::EnvVarGuard::acquire_blocking();
+        env.set("PRIORITY_AGENT_TOOL_OUTPUT_MAX_BYTES", "2048");
+        env.set("PRIORITY_AGENT_TOOL_OUTPUT_PREVIEW", "head");
+        let dir = std::env::temp_dir().join(format!("tool-policy-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(dir.join(".priority-agent")).unwrap();
+        std::fs::write(
+            dir.join(".priority-agent/config.toml"),
+            r#"
+[tool_output]
+max_bytes = 1234
+preview_direction = "tail"
+"#,
+        )
+        .unwrap();
+
+        let policy = ToolOutputPolicy::from_project_env(&dir);
+
+        assert_eq!(policy.max_bytes, 2048);
+        assert_eq!(policy.preview_direction, PreviewDirection::Head);
+
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]

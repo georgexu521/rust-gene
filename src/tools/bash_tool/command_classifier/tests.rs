@@ -34,6 +34,35 @@ fn classifies_shell_wrapped_validation() {
 }
 
 #[test]
+fn preserves_quoted_paths_with_spaces() {
+    let class = classify_command("rg TODO \"docs/My Project Notes.md\"");
+
+    assert_eq!(class.category, ShellCommandCategory::Search);
+    assert_eq!(class.path_patterns, vec!["docs/My Project Notes.md"]);
+
+    let view = ShellCommandView::from_command("cat > \"fixtures/site draft/index.html\"");
+    assert!(view.has_write_redirection);
+    assert_eq!(view.write_targets, vec!["fixtures/site draft/index.html"]);
+    assert_eq!(view.mutation_family, "file_write");
+}
+
+#[test]
+fn env_prefix_does_not_pollute_shell_path_or_validation_classification() {
+    let class = classify_command(
+        "env NODE_ENV=test PRIORITY_AGENT_WORKFLOW_ENABLED=1 pnpm --dir \"apps/desktop\" test",
+    );
+
+    assert!(class.env_prefixed);
+    assert_eq!(class.category, ShellCommandCategory::TestRun);
+    assert_eq!(class.validation_family, Some(ValidationFamily::PnpmTest));
+    assert_eq!(class.path_patterns, vec!["apps/desktop"]);
+    assert!(!class
+        .path_patterns
+        .iter()
+        .any(|path| path.contains("NODE_ENV")));
+}
+
+#[test]
 fn classifies_test_families() {
     assert_eq!(
         classify_command("bash -n scripts/run_live_eval.sh").validation_family,

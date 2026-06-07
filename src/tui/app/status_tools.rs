@@ -466,7 +466,8 @@ impl TuiApp {
     /// Clean up stored tool outputs that exceed the retention threshold.
     pub fn clean_tool_outputs(&self) -> String {
         let session_id = self.session_manager.current_session_id();
-        let policy = crate::tool_output_store::ToolOutputPolicy::from_env();
+        let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+        let policy = crate::tool_output_store::ToolOutputPolicy::from_project_env(&cwd);
         let store = crate::tool_output_store::ToolOutputStore::new();
 
         match session_id {

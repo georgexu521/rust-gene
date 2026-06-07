@@ -127,6 +127,73 @@ fn desktop_smoke_load_messages_preserves_order_and_roles() {
 }
 
 #[test]
+fn desktop_smoke_loads_persisted_long_session_parts_for_reload() {
+    let store = SessionStore::in_memory().unwrap();
+    let session_id = "desktop-long-reload";
+    store
+        .create_session(session_id, "Desktop Long Reload", "mock-model")
+        .unwrap();
+    let writer = priority_agent::session_store::SessionEventWriter::new(
+        store.shared_conn(),
+        session_id,
+    );
+
+    for index in 0..5 {
+        writer
+            .text_delta(&format!("assistant chunk {index}\n"))
+            .unwrap();
+        writer
+            .tool_called(&format!("call-{index}"), "file_read")
+            .unwrap();
+        writer
+            .tool_result_completed(
+                &format!("call-{index}"),
+                &format!("read src/file_{index}.rs"),
+            )
+            .unwrap();
+    }
+    writer
+        .write_event(
+            "closeout",
+            &serde_json::json!({
+                "status": "verified",
+                "evidence_summary": "reload smoke"
+            })
+            .to_string(),
+        )
+        .unwrap();
+    writer
+        .write_event(
+            "revert",
+            &serde_json::json!({
+                "status": "completed",
+                "target_part_id": "tool_call-2",
+                "reverted_after": "tool_call-2",
+                "part_ids": ["tool_call-2"],
+                "paths": ["src/file_2.rs"],
+                "restored_files": ["src/file_2.rs"],
+                "removed_files": [],
+                "errors": [],
+                "unrevert_possible": true
+            })
+            .to_string(),
+        )
+        .unwrap();
+
+    let parts = load_session_parts_from_store(&store, session_id).unwrap();
+
+    assert!(parts.len() >= 7);
+    assert!(parts.iter().any(|part| part.kind == "assistant_text"));
+    assert!(parts
+        .iter()
+        .any(|part| part.kind == "tool" && part.tool_call_id.as_deref() == Some("call-3")));
+    assert!(parts.iter().any(|part| part.kind == "closeout"));
+    let revert = parts.iter().find(|part| part.kind == "revert").unwrap();
+    assert_eq!(revert.status.as_deref(), Some("completed"));
+    assert_eq!(revert.payload["reverted_after"], "tool_call-2");
+}
+
+#[test]
 fn desktop_run_context_enriches_message_with_git_diff() {
     let project = std::env::temp_dir().join(format!(
         "priority-agent-desktop-diff-context-{}",

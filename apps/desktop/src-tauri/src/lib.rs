@@ -208,7 +208,12 @@ struct ProviderSetupInfo {
 #[derive(Debug, Serialize)]
 struct ProviderModelStatus {
     active_provider: Option<String>,
+    active_provider_label: Option<String>,
     active_model: String,
+    active_base_url: String,
+    runtime_model: Option<String>,
+    runtime_provider_ready: bool,
+    selection_source: String,
     configured_count: usize,
     providers: Vec<DesktopProviderOption>,
     models: Vec<DesktopModelOption>,
@@ -618,6 +623,17 @@ async fn resume_session(
 }
 
 #[tauri::command]
+fn list_session_reverts(
+    session_id: String,
+    limit: Option<usize>,
+) -> Result<Vec<priority_agent::session_store::SessionRevertRecord>, String> {
+    let store = open_session_store()?;
+    store
+        .list_session_reverts(&session_id, limit.unwrap_or(20).clamp(1, 100))
+        .map_err(|err| err.to_string())
+}
+
+#[tauri::command]
 fn desktop_tool_output_index(session_id: String) -> Result<Vec<DesktopToolOutputMeta>, String> {
     let store = priority_agent::tool_output_store::ToolOutputStore::new();
     let metas = store
@@ -681,6 +697,26 @@ async fn revert_last_turn(session_id: String) -> Result<DesktopRevertResult, Str
     let checkpoint_guard = manager.lock().await;
     let result = checkpoint_guard.revert_latest_assistant_turn().await?;
     let payload = serde_json::to_value(&result).map_err(|err| err.to_string())?;
+    store
+        .record_session_revert(&priority_agent::session_store::SessionRevertInsert {
+            session_id: result.session_id.clone(),
+            operation: "revert".to_string(),
+            status: result.status.clone(),
+            message_id: result.message_id.clone(),
+            target_part_id: result.target_part_id.clone(),
+            part_ids: result.part_ids.clone(),
+            checkpoint_ids: result.checkpoint_ids.clone(),
+            snapshot_checkpoint_id: result.snapshot_checkpoint_id.clone(),
+            paths: result.paths.clone(),
+            restored_files: result.restored_files.clone(),
+            removed_files: result.removed_files.clone(),
+            errors: result.errors.clone(),
+            diff_summary: result.diff_summary.clone(),
+            unrevert_possible: result.unrevert_possible,
+            unreverted: false,
+            payload: payload.clone(),
+        })
+        .map_err(|err| err.to_string())?;
     let writer =
         priority_agent::session_store::SessionEventWriter::new(store.shared_conn(), &session_id);
     writer
@@ -1594,6 +1630,7 @@ pub fn run() {
             delete_session,
             load_session_messages,
             resume_session,
+            list_session_reverts,
             desktop_tool_output_index,
             desktop_tool_output_page,
             revert_last_turn,

@@ -7,6 +7,7 @@ use crate::engine::evidence_ledger::EvidenceLedger;
 use crate::services::api::{Message, ToolCall};
 use crate::tools::{ToolErrorCode, ToolResult};
 use serde::{Deserialize, Serialize};
+use std::path::Path;
 
 mod observation_render;
 use observation_render::*;
@@ -156,8 +157,16 @@ impl ToolResultNormalizer {
         tool_call: &ToolCall,
         result: &mut ToolResult,
         session_id: Option<&str>,
+        working_dir: &Path,
     ) -> NormalizedToolResult {
-        truncate_tool_result(result, &tool_call.name, &tool_call.id, session_id).await;
+        truncate_tool_result(
+            result,
+            &tool_call.name,
+            &tool_call.id,
+            session_id,
+            working_dir,
+        )
+        .await;
         Self::attach_observation_metadata(tool_call, result);
         Self::normalize(tool_call, result)
     }
@@ -252,9 +261,11 @@ pub(super) async fn append_provider_tool_result(
     tool_results_text: &mut String,
     messages: &mut Vec<Message>,
     session_id: Option<&str>,
+    working_dir: &Path,
 ) -> NormalizedToolResult {
     let normalized =
-        ToolResultNormalizer::normalize_after_execution(tool_call, result, session_id).await;
+        ToolResultNormalizer::normalize_after_execution(tool_call, result, session_id, working_dir)
+            .await;
     normalized.record_evidence(evidence_ledger, tool_call, result);
     tool_results_text.push_str(&normalized.ui_content);
     tool_results_text.push('\n');

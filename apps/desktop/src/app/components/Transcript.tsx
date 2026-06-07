@@ -94,10 +94,11 @@ export function Transcript({
             />
           ) : (
             <article
-              className={`message ${item.role}${item.role === "assistant" && item.variant === "final" ? " final" : ""}${className ? ` ${className}` : ""}`}
+              className={`message ${item.role}${item.role === "assistant" && item.variant === "final" ? " final" : ""}${item.reverted ? " reverted" : ""}${className ? ` ${className}` : ""}`}
               key={item.id}
             >
               {item.role === "tool" ? <div className="message-label">{formatRole(item.role)}</div> : null}
+              {item.reverted ? <div className="message-revert-badge">{item.revertLabel || "Reverted"}</div> : null}
               <div className="message-body">
                 {item.text}
                 {isStreamingAssistant(item, isRunning, renderedItems) ? (
@@ -158,6 +159,9 @@ function timelineItemClass(
   baseClass = "",
 ) {
   const classes = [baseClass];
+  if (item.reverted) {
+    classes.push("reverted");
+  }
   if (shouldHideTimelineItem(item)) {
     classes.push("transcript-hidden");
   }
@@ -351,7 +355,10 @@ function TimelineEvent({
       <div className="timeline-content">
         <div className="timeline-row">
           <div className="timeline-title">{item.title}</div>
-          <div className="timeline-status">{labelForStatus(item.status)}</div>
+          <div className="timeline-status">
+            {item.reverted ? <span className="timeline-revert-badge">{item.revertLabel || "Reverted"}</span> : null}
+            {labelForStatus(item.status)}
+          </div>
         </div>
         {item.summary && !isCompactPermission ? (
           <TimelineSummaryView

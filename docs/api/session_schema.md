@@ -5,7 +5,9 @@ server.  These DTOs are the canonical vocabulary for session state — frontends
 consume them directly rather than re-interpreting raw trace internals.
 
 Status: P2 — DTOs defined, experimental API feature-gated, desktop integration
-in progress.
+in progress. Desktop frontend code should import session/provider/tool-output
+DTOs from `apps/desktop/src/runtime/desktopApi.ts` rather than redefining raw
+backend payload shapes inside components.
 
 ---
 
@@ -59,6 +61,41 @@ closeout, revert, compaction, permissions).
 API:
 - `SessionStore::get_session_parts_after(session_id, after_part_index, limit)` → cursor read
 - `SessionStore::get_session_parts(session_id)` → full read (small sessions)
+
+---
+
+## Session Reverts
+
+Durable revert/unrevert metadata for user-facing history, diagnostics, and
+desktop dim/trim projection.
+
+```json
+{
+  "id": "i64",
+  "session_id": "string",
+  "operation": "revert | unrevert",
+  "status": "completed | partial | failed",
+  "message_id": "string | null",
+  "target_part_id": "string | null",
+  "part_ids": ["string"],
+  "checkpoint_ids": ["string"],
+  "snapshot_checkpoint_id": "string | null",
+  "paths": ["string"],
+  "restored_files": ["string"],
+  "removed_files": ["string"],
+  "errors": ["string"],
+  "diff_summary": "string | null",
+  "unrevert_possible": "bool",
+  "unreverted": "bool",
+  "payload": "object",
+  "created_at": "datetime"
+}
+```
+
+API:
+- `SessionStore::record_session_revert(insert)` → durable revert row
+- `SessionStore::list_session_reverts(session_id, limit)` → latest rows
+- Desktop `list_session_reverts(sessionId, limit)` → same DTO for frontend use
 
 ---
 
@@ -191,6 +228,23 @@ API:
   `provider-health.jsonl`
 - `/provider status --json` → current provider/model/runtime facts plus latest
   provider health ledger entry
+
+Desktop provider status DTO:
+
+```json
+{
+  "active_provider": "string | null",
+  "active_provider_label": "string | null",
+  "active_model": "string",
+  "active_base_url": "string",
+  "runtime_model": "string | null",
+  "runtime_provider_ready": "bool",
+  "selection_source": "runtime | desktop_settings | environment | preview",
+  "configured_count": "usize",
+  "providers": ["DesktopProviderOption"],
+  "models": ["DesktopModelOption"]
+}
+```
 
 ---
 

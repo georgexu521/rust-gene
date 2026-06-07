@@ -37,6 +37,29 @@ pub async fn handle_revert_turn(app: &mut TuiApp) -> String {
     drop(cp);
 
     let payload = serde_json::to_value(&result).unwrap_or_else(|_| serde_json::json!({}));
+    if let Err(err) =
+        app.session_manager
+            .record_session_revert(&crate::session_store::SessionRevertInsert {
+                session_id: result.session_id.clone(),
+                operation: "revert".to_string(),
+                status: result.status.clone(),
+                message_id: result.message_id.clone(),
+                target_part_id: result.target_part_id.clone(),
+                part_ids: result.part_ids.clone(),
+                checkpoint_ids: result.checkpoint_ids.clone(),
+                snapshot_checkpoint_id: result.snapshot_checkpoint_id.clone(),
+                paths: result.paths.clone(),
+                restored_files: result.restored_files.clone(),
+                removed_files: result.removed_files.clone(),
+                errors: result.errors.clone(),
+                diff_summary: result.diff_summary.clone(),
+                unrevert_possible: result.unrevert_possible,
+                unreverted: false,
+                payload: payload.clone(),
+            })
+    {
+        tracing::warn!("Failed to record session revert row: {}", err);
+    }
     if let Err(err) = app
         .session_manager
         .write_session_event(&session_id, "revert", &payload)
@@ -108,6 +131,35 @@ pub async fn handle_unrevert(app: &mut TuiApp) -> String {
     drop(cp);
 
     let payload = serde_json::to_value(&result).unwrap_or_else(|_| serde_json::json!({}));
+    if let Err(err) = app
+        .session_manager
+        .mark_latest_revert_unreverted(&session_id)
+    {
+        tracing::warn!("Failed to mark session revert as unreverted: {}", err);
+    }
+    if let Err(err) =
+        app.session_manager
+            .record_session_revert(&crate::session_store::SessionRevertInsert {
+                session_id: result.session_id.clone(),
+                operation: "unrevert".to_string(),
+                status: result.status.clone(),
+                message_id: result.message_id.clone(),
+                target_part_id: result.target_part_id.clone(),
+                part_ids: result.part_ids.clone(),
+                checkpoint_ids: result.checkpoint_ids.clone(),
+                snapshot_checkpoint_id: result.snapshot_checkpoint_id.clone(),
+                paths: result.paths.clone(),
+                restored_files: result.restored_files.clone(),
+                removed_files: result.removed_files.clone(),
+                errors: result.errors.clone(),
+                diff_summary: result.diff_summary.clone(),
+                unrevert_possible: result.unrevert_possible,
+                unreverted: true,
+                payload: payload.clone(),
+            })
+    {
+        tracing::warn!("Failed to record session unrevert row: {}", err);
+    }
     if let Err(err) = app
         .session_manager
         .write_session_event(&session_id, "unrevert", &payload)
@@ -379,10 +431,11 @@ pub async fn handle_diagnostic(app: &TuiApp) -> String {
             "model_id": app.current_model_label(),
             "protocol_family": "openai_compatible",
         })),
-        tool_output_policy: Some(
-            serde_json::to_value(crate::tool_output_store::ToolOutputPolicy::from_env())
-                .unwrap_or_default(),
-        ),
+        tool_output_policy: Some({
+            let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+            serde_json::to_value(crate::tool_output_store::ToolOutputPolicy::from_project_env(&cwd))
+                .unwrap_or_default()
+        }),
     };
 
     let json = report.to_json_string();

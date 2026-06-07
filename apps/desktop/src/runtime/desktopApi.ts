@@ -148,6 +148,27 @@ export type DesktopSessionPart = {
   updated_at: string;
 };
 
+export type DesktopSessionRevertRecord = {
+  id: number;
+  session_id: string;
+  operation: string;
+  status: string;
+  message_id?: string | null;
+  target_part_id?: string | null;
+  part_ids: string[];
+  checkpoint_ids: string[];
+  snapshot_checkpoint_id?: string | null;
+  paths: string[];
+  restored_files: string[];
+  removed_files: string[];
+  errors: string[];
+  diff_summary?: string | null;
+  unrevert_possible: boolean;
+  unreverted: boolean;
+  payload: Record<string, unknown>;
+  created_at: string;
+};
+
 export type DesktopToolOutputPage = {
   id: string;
   uri: string;
@@ -235,7 +256,12 @@ export type ProviderSetupInfo = {
 
 export type ProviderModelStatus = {
   active_provider?: string | null;
+  active_provider_label?: string | null;
   active_model: string;
+  active_base_url: string;
+  runtime_model?: string | null;
+  runtime_provider_ready: boolean;
+  selection_source: string;
   configured_count: number;
   providers: DesktopProviderOption[];
   models: DesktopModelOption[];
@@ -675,7 +701,12 @@ export function providerModelStatus(): Promise<ProviderModelStatus> {
   if (!isTauriRuntime()) {
     return Promise.resolve({
       active_provider: "minimax",
+      active_provider_label: "MiniMax",
       active_model: "MiniMax-M3",
+      active_base_url: "https://api.minimax.io/v1",
+      runtime_model: "MiniMax-M3",
+      runtime_provider_ready: true,
+      selection_source: "preview",
       configured_count: 1,
       providers: [
         {
@@ -773,7 +804,12 @@ export function setProviderModel(providerId: string, model: string): Promise<Pro
     return providerModelStatus().then((status) => ({
       ...status,
       active_provider: providerId,
+      active_provider_label: status.providers.find((provider) => provider.id === providerId)?.label ?? providerId,
       active_model: model,
+      active_base_url: status.providers.find((provider) => provider.id === providerId)?.base_url ?? "",
+      runtime_model: model,
+      runtime_provider_ready: true,
+      selection_source: "desktop_settings",
       providers: status.providers.map((provider) => ({
         ...provider,
         active: provider.id === providerId,
@@ -943,6 +979,17 @@ export function resumeSession(sessionId: string): Promise<ResumedSession> {
   }
 
   return invoke("resume_session", { sessionId });
+}
+
+export function listSessionReverts(
+  sessionId: string,
+  limit = 20,
+): Promise<DesktopSessionRevertRecord[]> {
+  if (!isTauriRuntime()) {
+    return Promise.resolve([]);
+  }
+
+  return invoke("list_session_reverts", { sessionId, limit });
 }
 
 export function loadDesktopToolOutputPage(

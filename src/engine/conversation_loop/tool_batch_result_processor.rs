@@ -113,6 +113,7 @@ impl ToolBatchResultProcessor {
                     tool_results_text: &mut outcome.tool_results_text,
                     messages: &mut *messages,
                     session_id: Some(session_id),
+                    working_dir,
                 },
             )
             .await;

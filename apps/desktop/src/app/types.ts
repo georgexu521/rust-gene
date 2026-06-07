@@ -4,7 +4,12 @@ import {
   DesktopRuntimeDiagnostic,
 } from "../runtime/desktopApi";
 
-export type TranscriptItem =
+type RevertProjection = {
+  reverted?: boolean;
+  revertLabel?: string;
+};
+
+export type TranscriptItem = (
   | { id: string; role: "user"; text: string }
   | { id: string; role: "assistant"; text: string; variant?: "final" }
   | { id: string; role: "reasoning"; text: string; streaming?: boolean }
@@ -19,7 +24,9 @@ export type TranscriptItem =
       summary?: TimelineSummary;
       status?: TimelineStatus;
       traceId?: string;
-    };
+    }
+) &
+  RevertProjection;
 
 export type TimelineKind = "run" | "tool" | "permission" | "usage" | "error" | "compact";
 

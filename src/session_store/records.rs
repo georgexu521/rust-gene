@@ -86,6 +86,50 @@ pub struct CompactBoundaryInsert {
     pub payload: serde_json::Value,
 }
 
+/// Durable revert state for a session.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionRevertRecord {
+    pub id: i64,
+    pub session_id: String,
+    pub operation: String,
+    pub status: String,
+    pub message_id: Option<String>,
+    pub target_part_id: Option<String>,
+    pub part_ids: Vec<String>,
+    pub checkpoint_ids: Vec<String>,
+    pub snapshot_checkpoint_id: Option<String>,
+    pub paths: Vec<String>,
+    pub restored_files: Vec<String>,
+    pub removed_files: Vec<String>,
+    pub errors: Vec<String>,
+    pub diff_summary: Option<String>,
+    pub unrevert_possible: bool,
+    pub unreverted: bool,
+    pub payload: serde_json::Value,
+    pub created_at: String,
+}
+
+/// Insert payload for durable revert state.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionRevertInsert {
+    pub session_id: String,
+    pub operation: String,
+    pub status: String,
+    pub message_id: Option<String>,
+    pub target_part_id: Option<String>,
+    pub part_ids: Vec<String>,
+    pub checkpoint_ids: Vec<String>,
+    pub snapshot_checkpoint_id: Option<String>,
+    pub paths: Vec<String>,
+    pub restored_files: Vec<String>,
+    pub removed_files: Vec<String>,
+    pub errors: Vec<String>,
+    pub diff_summary: Option<String>,
+    pub unrevert_possible: bool,
+    pub unreverted: bool,
+    pub payload: serde_json::Value,
+}
+
 /// Durable subagent result artifact.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentArtifactRecord {

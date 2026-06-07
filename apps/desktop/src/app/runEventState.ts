@@ -489,11 +489,52 @@ export function loadSessionTranscript(
 }
 
 function sessionPartsToTranscriptItems(parts: DesktopSessionPart[]): TranscriptItem[] {
-  return parts
+  const entries = parts
     .slice()
     .sort((left, right) => left.part_index - right.part_index)
-    .map((part) => sessionPartToTranscriptItem(part))
-    .filter((item): item is TranscriptItem => item !== null);
+    .map((part) => ({ part, item: sessionPartToTranscriptItem(part) }))
+    .filter((entry): entry is { part: DesktopSessionPart; item: TranscriptItem } => entry.item !== null);
+  return applyRevertProjection(entries);
+}
+
+function applyRevertProjection(
+  entries: { part: DesktopSessionPart; item: TranscriptItem }[],
+): TranscriptItem[] {
+  const revertedPartIds = new Set<string>();
+  for (let index = 0; index < entries.length; index += 1) {
+    const { part } = entries[index]!;
+    if (part.kind !== "revert") {
+      continue;
+    }
+    const payload = isRecord(part.payload) ? part.payload : {};
+    const revertedAfter = stringField(payload, "reverted_after") || stringField(payload, "target_part_id");
+    if (!revertedAfter) {
+      continue;
+    }
+    const startIndex = entries.findIndex((entry) => entry.part.part_id === revertedAfter);
+    if (startIndex < 0) {
+      continue;
+    }
+    const status = stringField(payload, "status") || part.status || "";
+    const isUnrevert = status === "unreverted" || part.part_id.startsWith("unrevert_");
+    for (let marker = startIndex; marker < index; marker += 1) {
+      const candidate = entries[marker]?.part;
+      if (!candidate || candidate.kind === "revert") {
+        continue;
+      }
+      if (isUnrevert) {
+        revertedPartIds.delete(candidate.part_id);
+      } else {
+        revertedPartIds.add(candidate.part_id);
+      }
+    }
+  }
+
+  return entries.map(({ part, item }) =>
+    revertedPartIds.has(part.part_id)
+      ? { ...item, reverted: true, revertLabel: "Reverted" }
+      : item,
+  );
 }
 
 function sessionPartToTranscriptItem(part: DesktopSessionPart): TranscriptItem | null {
@@ -568,6 +609,7 @@ function sessionPartToTranscriptItem(part: DesktopSessionPart): TranscriptItem |
             ? `${numericField(payload, "change_count")} changes`
             : null,
           stringField(payload, "message_id") ? `message ${stringField(payload, "message_id")}` : null,
+          stringField(payload, "reverted_after") ? `after ${stringField(payload, "reverted_after")}` : null,
         ]),
         status: timelineStatusFromPartStatus(status),
       });

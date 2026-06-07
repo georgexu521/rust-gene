@@ -329,6 +329,17 @@ impl TuiSessionManager {
         )?)
     }
 
+    pub fn record_session_revert(
+        &self,
+        insert: &crate::session_store::SessionRevertInsert,
+    ) -> anyhow::Result<crate::session_store::SessionRevertRecord> {
+        Ok(self.store.record_session_revert(insert)?)
+    }
+
+    pub fn mark_latest_revert_unreverted(&self, session_id: &str) -> anyhow::Result<bool> {
+        Ok(self.store.mark_latest_revert_unreverted(session_id)?)
+    }
+
     /// 切换到指定会话
     pub fn switch_to_session(&mut self, session_id: &str) -> anyhow::Result<Vec<MessageItem>> {
         // 验证会话存在

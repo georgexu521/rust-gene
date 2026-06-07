@@ -114,6 +114,9 @@ pub struct AppConfig {
     /// Memory provider configuration
     #[serde(default)]
     pub memory: MemoryConfig,
+    /// Tool-output paging and retention policy
+    #[serde(default)]
+    pub tool_output: ToolOutputConfig,
     /// Hooks configuration
     #[serde(default)]
     pub hooks: HooksConfig,
@@ -140,6 +143,10 @@ impl AppConfig {
             .set_default("memory.external_provider.enabled", false)?
             .set_default("memory.external_provider.mode", "off")?
             .set_default("memory.external_provider.provider_type", "none")?
+            .set_default("tool_output.max_bytes", 32 * 1024)?
+            .set_default("tool_output.max_lines", 500)?
+            .set_default("tool_output.preview_direction", "tail")?
+            .set_default("tool_output.retention_days", 7)?
             // 2. 配置文件
             .add_source(File::from(config_path).required(false))
             // 3. 环境变量（前缀 PRIORITY_AGENT）
@@ -298,6 +305,34 @@ pub const CONFIG_KEY_SPECS: &[ConfigKeySpec] = &[
         secret: false,
         description: "Local JSONL records file for no-network external memory",
     },
+    ConfigKeySpec {
+        key: "tool_output.max_bytes",
+        value_type: "integer",
+        mutable: true,
+        secret: false,
+        description: "Maximum inline tool-output bytes before paging to store",
+    },
+    ConfigKeySpec {
+        key: "tool_output.max_lines",
+        value_type: "integer",
+        mutable: true,
+        secret: false,
+        description: "Maximum preview lines shown for stored tool output",
+    },
+    ConfigKeySpec {
+        key: "tool_output.preview_direction",
+        value_type: "head|tail|head_tail",
+        mutable: true,
+        secret: false,
+        description: "Preview slice direction for stored tool output",
+    },
+    ConfigKeySpec {
+        key: "tool_output.retention_days",
+        value_type: "integer",
+        mutable: true,
+        secret: false,
+        description: "Tool-output retention window in days",
+    },
 ];
 
 pub fn config_scope_paths(working_dir: &Path) -> ConfigScopePaths {
@@ -327,7 +362,7 @@ pub fn config_schema_json() -> Value {
 
 pub fn format_config_summary(config: &AppConfig) -> String {
     format!(
-        "Config:\n  api.base_url = {}\n  api.model = {}\n  api.temperature = {}\n  api.max_tokens = {}\n  ui.theme = {}\n  ui.show_token_usage = {}\n  storage.persistence_enabled = {}\n  features.mcp_enabled = {}\n  features.skills_enabled = {}\n  features.web_search = {}\n  features.plugin_trust_mode = {}\n  engine.max_iterations = {}\n  memory.external_provider.enabled = {}\n  memory.external_provider.mode = {}\n  memory.external_provider.provider_type = {}\n  memory.external_provider.records_path = {}",
+        "Config:\n  api.base_url = {}\n  api.model = {}\n  api.temperature = {}\n  api.max_tokens = {}\n  ui.theme = {}\n  ui.show_token_usage = {}\n  storage.persistence_enabled = {}\n  features.mcp_enabled = {}\n  features.skills_enabled = {}\n  features.web_search = {}\n  features.plugin_trust_mode = {}\n  engine.max_iterations = {}\n  memory.external_provider.enabled = {}\n  memory.external_provider.mode = {}\n  memory.external_provider.provider_type = {}\n  memory.external_provider.records_path = {}\n  tool_output.max_bytes = {}\n  tool_output.max_lines = {}\n  tool_output.preview_direction = {}\n  tool_output.retention_days = {}",
         config.api.base_url,
         config.api.model,
         config.api.temperature,
@@ -350,6 +385,10 @@ pub fn format_config_summary(config: &AppConfig) -> String {
             .as_ref()
             .map(|path| path.display().to_string())
             .unwrap_or_else(|| "none".to_string()),
+        config.tool_output.max_bytes,
+        config.tool_output.max_lines,
+        config.tool_output.preview_direction,
+        config.tool_output.retention_days,
     )
 }
 
@@ -389,6 +428,10 @@ pub fn get_config_value(config: &AppConfig, key: &str) -> Option<String> {
                 .map(|path| path.display().to_string())
                 .unwrap_or_else(|| "none".to_string()),
         ),
+        "tool_output.max_bytes" => Some(config.tool_output.max_bytes.to_string()),
+        "tool_output.max_lines" => Some(config.tool_output.max_lines.to_string()),
+        "tool_output.preview_direction" => Some(config.tool_output.preview_direction.clone()),
+        "tool_output.retention_days" => Some(config.tool_output.retention_days.to_string()),
         _ => None,
     }
 }
@@ -446,6 +489,24 @@ pub fn set_config_value(config: &mut AppConfig, key: &str, value: &str) -> Resul
                 Some(PathBuf::from(value))
             };
         }
+        "tool_output.max_bytes" => {
+            config.tool_output.max_bytes = value
+                .parse::<usize>()
+                .map_err(|_| format!("Invalid integer for {}: {}", key, value))?;
+        }
+        "tool_output.max_lines" => {
+            config.tool_output.max_lines = value
+                .parse::<usize>()
+                .map_err(|_| format!("Invalid integer for {}: {}", key, value))?;
+        }
+        "tool_output.preview_direction" => {
+            config.tool_output.preview_direction = normalize_tool_output_preview_direction(value)?;
+        }
+        "tool_output.retention_days" => {
+            config.tool_output.retention_days = value
+                .parse::<u32>()
+                .map_err(|_| format!("Invalid integer for {}: {}", key, value))?;
+        }
         _ => return Err(format!("Unknown config key: {}", key)),
     }
     Ok(())
@@ -463,6 +524,7 @@ pub fn validate_config(config: &AppConfig) -> Vec<String> {
     issues.extend(validate_external_memory_provider_config(
         &config.memory.external_provider,
     ));
+    issues.extend(validate_tool_output_config(&config.tool_output));
     let trust_mode =
         crate::plugins::trust::TrustMode::parse_lossy(&config.features.plugin_trust_mode);
     if trust_mode.as_str() != config.features.plugin_trust_mode {
@@ -473,6 +535,26 @@ pub fn validate_config(config: &AppConfig) -> Vec<String> {
         ));
     }
 
+    issues
+}
+
+fn validate_tool_output_config(config: &ToolOutputConfig) -> Vec<String> {
+    let mut issues = Vec::new();
+    if config.max_bytes == 0 {
+        issues.push("tool_output.max_bytes must be greater than 0".to_string());
+    }
+    if config.max_lines == 0 {
+        issues.push("tool_output.max_lines must be greater than 0".to_string());
+    }
+    if config.retention_days == 0 {
+        issues.push("tool_output.retention_days must be greater than 0".to_string());
+    }
+    if normalize_tool_output_preview_direction(&config.preview_direction).is_err() {
+        issues.push(format!(
+            "tool_output.preview_direction '{}' is unsupported",
+            config.preview_direction
+        ));
+    }
     issues
 }
 
@@ -632,6 +714,37 @@ pub struct StorageConfig {
 pub struct MemoryConfig {
     #[serde(default)]
     pub external_provider: ExternalMemoryProviderConfig,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct ToolOutputConfig {
+    pub max_bytes: usize,
+    pub max_lines: usize,
+    pub preview_direction: String,
+    pub retention_days: u32,
+}
+
+impl Default for ToolOutputConfig {
+    fn default() -> Self {
+        Self {
+            max_bytes: 32 * 1024,
+            max_lines: 500,
+            preview_direction: "tail".to_string(),
+            retention_days: 7,
+        }
+    }
+}
+
+fn normalize_tool_output_preview_direction(value: &str) -> Result<String, String> {
+    match value.trim().to_ascii_lowercase().replace('-', "_").as_str() {
+        "head" => Ok("head".to_string()),
+        "tail" => Ok("tail".to_string()),
+        "head_tail" | "headtail" => Ok("head_tail".to_string()),
+        _ => Err(format!(
+            "Invalid preview direction for tool_output.preview_direction: {}",
+            value
+        )),
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -796,6 +909,12 @@ mod tests {
         assert!(keys
             .iter()
             .any(|item| item["key"] == "memory.external_provider.records_path"));
+        assert!(keys
+            .iter()
+            .any(|item| item["key"] == "tool_output.max_bytes"));
+        assert!(keys
+            .iter()
+            .any(|item| item["key"] == "tool_output.preview_direction"));
     }
 
     #[test]
@@ -818,6 +937,10 @@ mod tests {
             "/tmp/mem.jsonl",
         )
         .unwrap();
+        set_config_value(&mut config, "tool_output.max_bytes", "4096").unwrap();
+        set_config_value(&mut config, "tool_output.max_lines", "80").unwrap();
+        set_config_value(&mut config, "tool_output.preview_direction", "head-tail").unwrap();
+        set_config_value(&mut config, "tool_output.retention_days", "14").unwrap();
 
         assert_eq!(
             get_config_value(&config, "features.plugin_trust_mode").as_deref(),
@@ -842,6 +965,22 @@ mod tests {
         assert_eq!(
             get_config_value(&config, "memory.external_provider.records_path").as_deref(),
             Some("/tmp/mem.jsonl")
+        );
+        assert_eq!(
+            get_config_value(&config, "tool_output.max_bytes").as_deref(),
+            Some("4096")
+        );
+        assert_eq!(
+            get_config_value(&config, "tool_output.max_lines").as_deref(),
+            Some("80")
+        );
+        assert_eq!(
+            get_config_value(&config, "tool_output.preview_direction").as_deref(),
+            Some("head_tail")
+        );
+        assert_eq!(
+            get_config_value(&config, "tool_output.retention_days").as_deref(),
+            Some("14")
         );
 
         set_config_value(&mut config, "memory.external_provider.mode", "off").unwrap();

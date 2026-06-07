@@ -965,6 +965,126 @@ test.describe("run event state", () => {
     });
   });
 
+  test("marks projected parts after revert target as reverted", () => {
+    const loaded = loadSessionTranscript(
+      initialRunViewState,
+      "session-revert",
+      [{ id: 1, role: "user", content: "change file", created_at: "preview" }],
+      [],
+      [
+        {
+          id: 1,
+          part_index: 0,
+          part_id: "tool_c1",
+          kind: "tool",
+          tool_call_id: "c1",
+          tool_name: "file_edit",
+          status: "completed",
+          payload: { result_preview: "edited src/lib.rs" },
+          projected_to_seq: 1,
+          updated_at: "preview",
+        },
+        {
+          id: 2,
+          part_index: 1,
+          part_id: "text_2",
+          kind: "assistant_text",
+          tool_call_id: null,
+          tool_name: null,
+          status: null,
+          payload: { content: "Done." },
+          projected_to_seq: 2,
+          updated_at: "preview",
+        },
+        {
+          id: 3,
+          part_index: 2,
+          part_id: "revert_3",
+          kind: "revert",
+          tool_call_id: null,
+          tool_name: "revert",
+          status: "completed",
+          payload: {
+            status: "completed",
+            reverted_after: "tool_c1",
+            restored_files: ["src/lib.rs"],
+            removed_files: [],
+            errors: [],
+          },
+          projected_to_seq: 3,
+          updated_at: "preview",
+        },
+      ],
+    );
+
+    expect(loaded.items).toContainEqual(
+      expect.objectContaining({
+        id: "c1",
+        role: "timeline",
+        reverted: true,
+        revertLabel: "Reverted",
+      }),
+    );
+    expect(loaded.items).toContainEqual(
+      expect.objectContaining({
+        id: "part-text_2",
+        role: "assistant",
+        reverted: true,
+      }),
+    );
+  });
+
+  test("unrevert clears projected reverted marker", () => {
+    const loaded = loadSessionTranscript(
+      initialRunViewState,
+      "session-unrevert",
+      [],
+      [],
+      [
+        {
+          id: 1,
+          part_index: 0,
+          part_id: "tool_c1",
+          kind: "tool",
+          tool_call_id: "c1",
+          tool_name: "file_edit",
+          status: "completed",
+          payload: { result_preview: "edited src/lib.rs" },
+          projected_to_seq: 1,
+          updated_at: "preview",
+        },
+        {
+          id: 2,
+          part_index: 1,
+          part_id: "revert_2",
+          kind: "revert",
+          tool_call_id: null,
+          tool_name: "revert",
+          status: "completed",
+          payload: { status: "completed", reverted_after: "tool_c1" },
+          projected_to_seq: 2,
+          updated_at: "preview",
+        },
+        {
+          id: 3,
+          part_index: 2,
+          part_id: "unrevert_3",
+          kind: "revert",
+          tool_call_id: null,
+          tool_name: "revert",
+          status: "unreverted",
+          payload: { status: "unreverted", reverted_after: "tool_c1" },
+          projected_to_seq: 3,
+          updated_at: "preview",
+        },
+      ],
+    );
+
+    const toolItem = loaded.items.find((item) => item.id === "c1" && item.role === "timeline");
+    expect(toolItem).toBeTruthy();
+    expect(toolItem?.reverted).toBeUndefined();
+  });
+
   test("keeps ledger reuse details out of the main transcript", () => {
     let state = submitUserMessage(initialRunViewState, "再看一下 README", [], () => "user-1");
     state = applyRunEvent(

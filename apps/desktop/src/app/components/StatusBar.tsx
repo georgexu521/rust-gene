@@ -48,17 +48,29 @@ export function StatusBar({
 }: StatusBarProps) {
   const online = health?.status === "ok";
   const model = providerStatus?.active_model || "--";
+  const providerLabel =
+    providerStatus?.active_provider_label || providerStatus?.active_provider || "--";
+  const providerHost = apiHost(providerStatus?.active_base_url);
   const totalTokens = contextSnapshot?.total_estimated_tokens ?? 0;
   const workspaceName = projectPath.split(/[\\/]/).pop() || "ws";
 
   return (
     <footer className="statusbar">
       {/* API connection status */}
-      <span className="statusbar-seg" title={online ? "API connected" : "API offline"}>
+      <span
+        className="statusbar-seg"
+        title={
+          providerStatus
+            ? `${providerLabel} · ${providerHost} · ${providerStatus.selection_source}`
+            : online
+              ? "API connected"
+              : "API offline"
+        }
+      >
         {online ? <Wifi size={11} /> : <WifiOff size={11} style={{ color: "var(--danger, #e55)" }} />}
-        <span className="statusbar-label">{apiHost(providerStatus?.active_provider)}</span>
+        <span className="statusbar-label">{providerHost}</span>
         <span className={`statusbar-val ${online ? "" : "warn"}`}>
-          {online ? (isRunning ? "running" : "online") : "offline"}
+          {online ? (isRunning ? "running" : providerLabel) : "offline"}
         </span>
       </span>
 
@@ -87,7 +99,10 @@ export function StatusBar({
       <span className="statusbar-grow" />
 
       {/* Model name */}
-      <span className="statusbar-seg" title={`model · ${model}`}>
+      <span
+        className="statusbar-seg"
+        title={`model · ${model}${providerStatus?.runtime_provider_ready ? " · runtime ready" : ""}`}
+      >
         <Brain size={11} style={{ color: "var(--violet, #8b5cf6)" }} />
         <span className="statusbar-val vio">{model}</span>
       </span>

@@ -201,8 +201,9 @@ pub(crate) async fn truncate_tool_result(
     tool_name: &str,
     tool_call_id: &str,
     session_id: Option<&str>,
+    working_dir: &std::path::Path,
 ) {
-    let policy = crate::tool_output_store::ToolOutputPolicy::from_env();
+    let policy = crate::tool_output_store::ToolOutputPolicy::from_project_env(working_dir);
     let threshold = policy.effective_threshold();
     if result.content.len() > threshold {
         let store = crate::tool_output_store::ToolOutputStore::new();
@@ -408,14 +409,28 @@ mod tests {
     #[tokio::test]
     async fn test_truncate_tool_result_small_output() {
         let mut result = ToolResult::success("short output");
-        truncate_tool_result(&mut result, "grep", "call_small", None).await;
+        truncate_tool_result(
+            &mut result,
+            "grep",
+            "call_small",
+            None,
+            std::path::Path::new("."),
+        )
+        .await;
         assert_eq!(result.content, "short output");
     }
 
     #[tokio::test]
     async fn test_truncate_tool_result_large_output() {
         let mut result = ToolResult::success("A".repeat(40_000));
-        truncate_tool_result(&mut result, "grep", "call_large", None).await;
+        truncate_tool_result(
+            &mut result,
+            "grep",
+            "call_large",
+            None,
+            std::path::Path::new("."),
+        )
+        .await;
         assert!(result.content.contains("Output truncated"));
         assert!(!result.content.contains("tool-results"));
         assert!(result.content.contains("--- First"));
@@ -430,7 +445,14 @@ mod tests {
             "B".repeat(20_000)
         );
         let mut result = ToolResult::success(content);
-        truncate_tool_result(&mut result, "file_read", "call_signal", None).await;
+        truncate_tool_result(
+            &mut result,
+            "file_read",
+            "call_signal",
+            None,
+            std::path::Path::new("."),
+        )
+        .await;
         assert!(result.content.contains("Output truncated"));
         assert!(result.content.contains("tool-output://"));
         assert!(result.content.contains("First"));
@@ -440,7 +462,14 @@ mod tests {
     #[tokio::test]
     async fn test_truncate_tool_result_utf8_boundaries() {
         let mut result = ToolResult::success("中".repeat(20_000));
-        truncate_tool_result(&mut result, "grep", "call_utf8", None).await;
+        truncate_tool_result(
+            &mut result,
+            "grep",
+            "call_utf8",
+            None,
+            std::path::Path::new("."),
+        )
+        .await;
         assert!(result.content.contains("Output truncated"));
     }
 }

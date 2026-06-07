@@ -22,6 +22,7 @@ async fn appends_provider_tool_result_and_records_evidence() {
         &mut tool_results_text,
         &mut messages,
         Some("session-test"),
+        std::path::Path::new("."),
     )
     .await;
 
@@ -49,6 +50,7 @@ async fn normalize_after_execution_truncates_large_output_with_metadata() {
         },
         &mut result,
         Some("session-test"),
+        std::path::Path::new("."),
     )
     .await;
 

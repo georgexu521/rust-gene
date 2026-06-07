@@ -257,12 +257,29 @@ pub(super) async fn provider_model_status_for_state(
     let runtime_model = runtime
         .as_ref()
         .map(|runtime| runtime.streaming_engine().model_name());
+    let runtime_provider_ready = runtime.is_some();
 
     let registry = priority_agent::services::api::provider::ProviderRegistry::from_env();
+    let selection_source = if runtime_model.is_some() {
+        "runtime"
+    } else if configured_model.is_some() || configured_provider.is_some() {
+        "desktop_settings"
+    } else {
+        "environment"
+    }
+    .to_string();
     let active_provider = configured_provider
         .or_else(|| provider_id_for_base_url(&registry, &runtime_base_url))
         .or_else(|| default_provider_id_from_env(&registry));
+    let active_base_url = active_provider
+        .as_deref()
+        .and_then(|provider| registry.get_config(provider))
+        .and_then(|config| config.base_url.clone())
+        .filter(|base_url| !base_url.trim().is_empty())
+        .unwrap_or(runtime_base_url);
+    let active_provider_label = active_provider.as_deref().map(provider_label);
     let active_model = runtime_model
+        .clone()
         .or(configured_model)
         .or_else(|| {
             active_provider
@@ -283,7 +300,12 @@ pub(super) async fn provider_model_status_for_state(
 
     Ok(ProviderModelStatus {
         active_provider,
+        active_provider_label,
         active_model,
+        active_base_url,
+        runtime_model,
+        runtime_provider_ready,
+        selection_source,
         configured_count,
         providers,
         models,

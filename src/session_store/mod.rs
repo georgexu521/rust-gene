@@ -18,6 +18,7 @@ mod event_store;
 mod learning_store;
 mod message_ops;
 mod records;
+mod revert_store;
 mod search;
 mod session_ops;
 pub mod session_parts;
@@ -60,6 +61,36 @@ impl SessionStore {
     pub fn get_session_parts(&self, session_id: &str) -> SqlResult<Vec<PersistedSessionPart>> {
         let conn = self.conn();
         session_parts::query_persisted_session_parts(&conn, session_id)
+    }
+
+    pub fn record_session_revert(
+        &self,
+        insert: &SessionRevertInsert,
+    ) -> SqlResult<SessionRevertRecord> {
+        let conn = self.conn();
+        revert_store::insert_revert(&conn, insert)
+    }
+
+    pub fn mark_latest_revert_unreverted(&self, session_id: &str) -> SqlResult<bool> {
+        let conn = self.conn();
+        revert_store::mark_latest_revert_unreverted(&conn, session_id)
+    }
+
+    pub fn list_session_reverts(
+        &self,
+        session_id: &str,
+        limit: usize,
+    ) -> SqlResult<Vec<SessionRevertRecord>> {
+        let conn = self.conn();
+        revert_store::list_reverts(&conn, session_id, limit)
+    }
+
+    pub fn latest_session_revert(
+        &self,
+        session_id: &str,
+    ) -> SqlResult<Option<SessionRevertRecord>> {
+        let conn = self.conn();
+        revert_store::latest_revert(&conn, session_id)
     }
 
     /// Full rebuild of session_parts from session_events (repair/debug only).
@@ -160,6 +191,9 @@ impl SessionStore {
         runner.register(std::sync::Arc::new(
             crate::migrations::v12_add_session_input_idempotency::V12AddSessionInputIdempotency,
         ));
+        runner.register(std::sync::Arc::new(
+            crate::migrations::v13_add_session_reverts::V13AddSessionReverts,
+        ));
         runner.run(&conn)?;
 
         info!("SessionStore opened at {:?}", path);
@@ -212,6 +246,9 @@ impl SessionStore {
         ));
         runner.register(std::sync::Arc::new(
             crate::migrations::v12_add_session_input_idempotency::V12AddSessionInputIdempotency,
+        ));
+        runner.register(std::sync::Arc::new(
+            crate::migrations::v13_add_session_reverts::V13AddSessionReverts,
         ));
         runner.run(&conn)?;
 

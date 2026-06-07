@@ -466,6 +466,8 @@ fn validation_family(command: &str) -> Option<ValidationFamily> {
         Some(ValidationFamily::CargoClippy)
     } else if lower.contains("cargo fmt") && lower.contains("--check") {
         Some(ValidationFamily::CargoFmtCheck)
+    } else if let Some(family) = package_manager_test_family(command) {
+        Some(family)
     } else if lower == "npm test"
         || lower.starts_with("npm test ")
         || lower.contains("npm run test")
@@ -495,6 +497,38 @@ fn validation_family(command: &str) -> Option<ValidationFamily> {
         Some(ValidationFamily::NodeScript)
     } else {
         None
+    }
+}
+
+fn package_manager_test_family(command: &str) -> Option<ValidationFamily> {
+    let tokens = shell_tokens(command);
+    let manager_index = tokens
+        .iter()
+        .position(|token| matches!(token.as_str(), "npm" | "pnpm" | "yarn"))?;
+    let manager = tokens[manager_index].as_str();
+    let mut i = manager_index + 1;
+    while i < tokens.len() {
+        let token = tokens[i].as_str();
+        if shell_control_token(token) {
+            break;
+        }
+        if token == "test" || (token == "run" && tokens.get(i + 1).is_some_and(|t| t == "test")) {
+            return match manager {
+                "npm" => Some(ValidationFamily::NpmTest),
+                "pnpm" => Some(ValidationFamily::PnpmTest),
+                "yarn" => Some(ValidationFamily::YarnTest),
+                _ => None,
+            };
+        }
+        i += package_manager_option_arity(token) + 1;
+    }
+    None
+}
+
+fn package_manager_option_arity(token: &str) -> usize {
+    match token {
+        "--dir" | "-C" | "--prefix" | "--filter" | "-F" | "--workspace" => 1,
+        _ => 0,
     }
 }
 
@@ -1324,6 +1358,15 @@ fn command_token_should_not_be_path(tokens: &[String], index: usize) -> bool {
     let Some(previous) = tokens.get(index.saturating_sub(1)).map(String::as_str) else {
         return false;
     };
+    if token == "test"
+        && tokens[..index]
+            .iter()
+            .rev()
+            .take_while(|candidate| !shell_control_token(candidate))
+            .any(|candidate| matches!(candidate.as_str(), "npm" | "pnpm" | "yarn"))
+    {
+        return true;
+    }
     matches!(
         (previous, token),
         (
