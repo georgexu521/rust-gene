@@ -153,6 +153,23 @@ pub struct RoundRevertSummary {
     pub rewind_command: String,
 }
 
+/// Result for reverting the latest assistant turn / message-level mutation group.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AssistantTurnRevertResult {
+    pub session_id: String,
+    pub status: String,
+    pub message_id: Option<String>,
+    pub part_ids: Vec<String>,
+    pub tool_round_id: Option<String>,
+    pub file_change_ids: Vec<String>,
+    pub checkpoint_ids: Vec<String>,
+    pub paths: Vec<String>,
+    pub restored_files: Vec<String>,
+    pub removed_files: Vec<String>,
+    pub errors: Vec<String>,
+    pub change_count: usize,
+}
+
 /// Input for recording a successful file mutation after the write has landed.
 #[derive(Debug, Clone)]
 pub struct FileChangeInput {
@@ -895,6 +912,58 @@ impl CheckpointManager {
     /// Return the newest file-change round summary.
     pub fn latest_file_change_round(&self) -> Option<FileChangeRoundSummary> {
         self.list_file_change_rounds().pop()
+    }
+
+    /// Restore the newest assistant-message mutation group and return a typed
+    /// result suitable for session_events, TUI, and desktop.
+    pub async fn revert_latest_assistant_turn(&self) -> Result<AssistantTurnRevertResult, String> {
+        let Some(round) = self.latest_file_change_round() else {
+            return Err("No file changes to revert. Changes are tracked when the agent uses file_write, file_edit, or file_patch.".to_string());
+        };
+
+        let mut restored_files = Vec::new();
+        let mut removed_files = Vec::new();
+        let mut errors = Vec::new();
+
+        for checkpoint_id in &round.checkpoint_ids {
+            match self.restore_checkpoint(checkpoint_id).await {
+                Ok(result) => {
+                    restored_files.extend(result.restored_files);
+                    removed_files.extend(result.removed_files);
+                    errors.extend(
+                        result
+                            .failed_files
+                            .into_iter()
+                            .map(|(path, err)| format!("{path}: {err}")),
+                    );
+                }
+                Err(err) => errors.push(format!("{checkpoint_id}: {err}")),
+            }
+        }
+
+        let status = if errors.is_empty() {
+            "completed"
+        } else if restored_files.is_empty() && removed_files.is_empty() {
+            "failed"
+        } else {
+            "partial"
+        }
+        .to_string();
+
+        Ok(AssistantTurnRevertResult {
+            session_id: self.session_id.clone(),
+            status,
+            message_id: round.message_id,
+            part_ids: round.part_ids,
+            tool_round_id: round.tool_round_id,
+            file_change_ids: round.file_change_ids,
+            checkpoint_ids: round.checkpoint_ids,
+            paths: round.paths,
+            restored_files,
+            removed_files,
+            errors,
+            change_count: round.change_count,
+        })
     }
 
     /// User-facing revert projection for the latest mutation round (Phase 2).

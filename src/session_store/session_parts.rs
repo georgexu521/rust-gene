@@ -58,6 +58,17 @@ pub enum SessionPart {
         status: String,
         evidence_summary: Option<String>,
     },
+    /// Checkpoint-backed revert result.
+    Revert {
+        part_id: String,
+        status: String,
+        message_id: Option<String>,
+        part_ids: Vec<String>,
+        paths: Vec<String>,
+        restored_files: Vec<String>,
+        removed_files: Vec<String>,
+        errors: Vec<String>,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -276,6 +287,18 @@ pub fn project_session_parts(events: &[super::SessionEventRow]) -> Vec<SessionPa
                     allowed: None,
                 });
             }
+            "revert" => {
+                parts.push(SessionPart::Revert {
+                    part_id,
+                    status: payload["status"].as_str().unwrap_or("unknown").to_string(),
+                    message_id: payload["message_id"].as_str().map(str::to_string),
+                    part_ids: string_array(&payload["part_ids"]),
+                    paths: string_array(&payload["paths"]),
+                    restored_files: string_array(&payload["restored_files"]),
+                    removed_files: string_array(&payload["removed_files"]),
+                    errors: string_array(&payload["errors"]),
+                });
+            }
             _ => {}
         }
     }
@@ -371,7 +394,8 @@ fn part_id(part: &SessionPart) -> &str {
         | SessionPart::Shell { part_id, .. }
         | SessionPart::Permission { part_id, .. }
         | SessionPart::Compaction { part_id, .. }
-        | SessionPart::Closeout { part_id, .. } => part_id,
+        | SessionPart::Closeout { part_id, .. }
+        | SessionPart::Revert { part_id, .. } => part_id,
     }
 }
 
@@ -400,8 +424,23 @@ fn part_projection_fields(part: &SessionPart) -> (Option<String>, Option<String>
             (None, Some(tool_name.clone()), Some("waiting".to_string()))
         }
         SessionPart::Closeout { status, .. } => (None, None, Some(status.clone())),
+        SessionPart::Revert { status, .. } => {
+            (None, Some("revert".to_string()), Some(status.clone()))
+        }
         _ => (None, None, None),
     }
+}
+
+fn string_array(value: &serde_json::Value) -> Vec<String> {
+    value
+        .as_array()
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| item.as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 #[cfg(test)]

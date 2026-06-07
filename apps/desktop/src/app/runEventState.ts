@@ -549,6 +549,29 @@ function sessionPartToTranscriptItem(part: DesktopSessionPart): TranscriptItem |
         status: timelineStatusFromPartStatus(status),
       });
     }
+    case "revert": {
+      const status = stringField(payload, "status") || part.status || "unknown";
+      const restored = arrayField(payload, "restored_files").length;
+      const removed = arrayField(payload, "removed_files").length;
+      const errors = arrayField(payload, "errors").length;
+      return timelineEvent({
+        id: `part-${part.part_id}`,
+        kind: status === "failed" ? "error" : "run",
+        title: "Reverted assistant turn",
+        detail: compactFacts([
+          restored > 0 ? `${restored} restored` : null,
+          removed > 0 ? `${removed} removed` : null,
+          errors > 0 ? `${errors} errors` : null,
+        ]).join(", ") || status,
+        facts: compactFacts([
+          numericField(payload, "change_count") !== undefined
+            ? `${numericField(payload, "change_count")} changes`
+            : null,
+          stringField(payload, "message_id") ? `message ${stringField(payload, "message_id")}` : null,
+        ]),
+        status: timelineStatusFromPartStatus(status),
+      });
+    }
     default:
       return null;
   }

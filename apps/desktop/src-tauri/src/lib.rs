@@ -121,6 +121,22 @@ struct DesktopToolOutputMeta {
     created_at_ms: u64,
 }
 
+#[derive(Debug, Serialize)]
+struct DesktopRevertResult {
+    session_id: String,
+    status: String,
+    message_id: Option<String>,
+    part_ids: Vec<String>,
+    tool_round_id: Option<String>,
+    file_change_ids: Vec<String>,
+    checkpoint_ids: Vec<String>,
+    paths: Vec<String>,
+    restored_files: Vec<String>,
+    removed_files: Vec<String>,
+    errors: Vec<String>,
+    change_count: usize,
+}
+
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 struct DesktopSettings {
     selected_project: Option<String>,
@@ -650,6 +666,40 @@ fn desktop_tool_output_page(
         limit: page.limit,
         total_bytes: page.total_bytes,
         has_more: page.has_more,
+    })
+}
+
+#[tauri::command]
+async fn revert_last_turn(session_id: String) -> Result<DesktopRevertResult, String> {
+    let store = open_session_store()?;
+    store
+        .get_session(&session_id)
+        .map_err(|err| err.to_string())?
+        .ok_or_else(|| format!("session not found: {session_id}"))?;
+
+    let manager = priority_agent::engine::checkpoint::get_checkpoint_manager(&session_id).await;
+    let checkpoint_guard = manager.lock().await;
+    let result = checkpoint_guard.revert_latest_assistant_turn().await?;
+    let payload = serde_json::to_value(&result).map_err(|err| err.to_string())?;
+    let writer =
+        priority_agent::session_store::SessionEventWriter::new(store.shared_conn(), &session_id);
+    writer
+        .write_event("revert", &payload.to_string())
+        .map_err(|err| err.to_string())?;
+
+    Ok(DesktopRevertResult {
+        session_id: result.session_id,
+        status: result.status,
+        message_id: result.message_id,
+        part_ids: result.part_ids,
+        tool_round_id: result.tool_round_id,
+        file_change_ids: result.file_change_ids,
+        checkpoint_ids: result.checkpoint_ids,
+        paths: result.paths,
+        restored_files: result.restored_files,
+        removed_files: result.removed_files,
+        errors: result.errors,
+        change_count: result.change_count,
     })
 }
 
@@ -1546,6 +1596,7 @@ pub fn run() {
             resume_session,
             desktop_tool_output_index,
             desktop_tool_output_page,
+            revert_last_turn,
             send_message,
             compact_context,
             desktop_context_snapshot,

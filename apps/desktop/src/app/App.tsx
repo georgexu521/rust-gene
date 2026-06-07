@@ -12,6 +12,7 @@ import {
   MoreHorizontal,
   PanelRight,
   Plus,
+  RotateCcw,
   Settings,
   Sun,
 } from "lucide-react";
@@ -53,6 +54,7 @@ import {
   providerSetupInfo,
   renameSession,
   restoreArchivedSession,
+  revertLastTurn,
   resumeSession,
   searchSessions,
   selectProject,
@@ -110,6 +112,7 @@ export function App() {
   const [isTraceOpen, setIsTraceOpen] = useState(false);
   const [isWorkbenchOpen, setIsWorkbenchOpen] = useState(false);
   const [isToolOutputOpen, setIsToolOutputOpen] = useState(false);
+  const [isRevertingTurn, setIsRevertingTurn] = useState(false);
   const [activeTraceId, setActiveTraceId] = useState<string | null>(null);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isEnvironmentOpen, setIsEnvironmentOpen] = useState(false);
@@ -515,6 +518,38 @@ export function App() {
     }
   }
 
+  async function handleRevertLastTurn() {
+    const sessionId = runState.selectedSessionId;
+    if (!sessionId || isRevertingTurn || runState.isRunning) {
+      return;
+    }
+
+    setIsRevertingTurn(true);
+    try {
+      await revertLastTurn(sessionId);
+      const resumed = await resumeSession(sessionId);
+      setRunState((current) =>
+        loadSessionTranscript(
+          current,
+          resumed.session_id,
+          resumed.messages,
+          resumed.compact_boundaries,
+          resumed.session_parts,
+        ),
+      );
+      await Promise.allSettled([
+        refreshSessions(),
+        refreshDiagnostics(),
+        refreshContextSnapshot(),
+        refreshWorkbenchSnapshot(),
+      ]);
+    } catch (err) {
+      setRunState((current) => withError(current, err));
+    } finally {
+      setIsRevertingTurn(false);
+    }
+  }
+
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const message = composer.trim();
@@ -741,6 +776,15 @@ export function App() {
               <LayoutDashboard aria-hidden="true" size={15} />
               <span>Workbench</span>
               <small>{workbenchBadge.label}</small>
+            </button>
+            <button
+              className="trace-toggle"
+              type="button"
+              disabled={!runState.selectedSessionId || runState.isRunning || isRevertingTurn}
+              onClick={() => void handleRevertLastTurn()}
+            >
+              <RotateCcw aria-hidden="true" size={15} />
+              <span>{isRevertingTurn ? "Reverting" : "Revert"}</span>
             </button>
             <button
               className="trace-toggle"

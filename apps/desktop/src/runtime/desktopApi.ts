@@ -170,6 +170,21 @@ export type DesktopToolOutputMeta = {
   created_at_ms: number;
 };
 
+export type DesktopRevertResult = {
+  session_id: string;
+  status: string;
+  message_id?: string | null;
+  part_ids: string[];
+  tool_round_id?: string | null;
+  file_change_ids: string[];
+  checkpoint_ids: string[];
+  paths: string[];
+  restored_files: string[];
+  removed_files: string[];
+  errors: string[];
+  change_count: number;
+};
+
 export type DesktopSettings = {
   selected_project: string;
   active_session_id?: string | null;
@@ -959,6 +974,25 @@ export function loadDesktopToolOutputIndex(sessionId: string): Promise<DesktopTo
   }
 
   return invoke("desktop_tool_output_index", { sessionId });
+}
+
+export function revertLastTurn(sessionId: string): Promise<DesktopRevertResult> {
+  if (!isTauriRuntime()) {
+    return Promise.resolve({
+      session_id: sessionId,
+      status: "completed",
+      part_ids: [],
+      file_change_ids: [],
+      checkpoint_ids: [],
+      paths: [],
+      restored_files: [],
+      removed_files: [],
+      errors: [],
+      change_count: 0,
+    });
+  }
+
+  return invoke("revert_last_turn", { sessionId });
 }
 
 export async function pickProjectDirectory(): Promise<string | null> {

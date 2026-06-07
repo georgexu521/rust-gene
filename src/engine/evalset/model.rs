@@ -555,6 +555,8 @@ pub struct RunReport {
     pub cache_miss_reason: Option<String>,
     pub failure_owner: Option<String>,
     pub failed_tool_names: Vec<String>,
+    pub revert_events: usize,
+    pub latest_revert_event: Option<serde_json::Value>,
 }
 
 impl RunReport {

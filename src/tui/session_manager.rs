@@ -2,7 +2,7 @@
 //!
 //! 管理当前会话的持久化和恢复
 
-use crate::session_store::{PersistedSessionPart, SessionRecord, SessionStore};
+use crate::session_store::{PersistedSessionPart, SessionEventRow, SessionRecord, SessionStore};
 use crate::state::{MessageItem, MessageRole};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -279,6 +279,26 @@ impl TuiSessionManager {
         session_id: &str,
     ) -> anyhow::Result<Vec<PersistedSessionPart>> {
         Ok(self.store.get_session_parts(session_id)?)
+    }
+
+    pub fn write_session_event(
+        &self,
+        session_id: &str,
+        event_type: &str,
+        payload: &serde_json::Value,
+    ) -> anyhow::Result<()> {
+        let writer =
+            crate::session_store::SessionEventWriter::new(self.store.shared_conn(), session_id);
+        writer.write_event(event_type, &payload.to_string())?;
+        Ok(())
+    }
+
+    pub fn load_session_events(&self, session_id: &str) -> anyhow::Result<Vec<SessionEventRow>> {
+        let conn = self.store.shared_conn();
+        let conn = conn.lock().unwrap_or_else(|err| err.into_inner());
+        Ok(crate::session_store::query_session_events(
+            &conn, session_id, None,
+        )?)
     }
 
     /// 切换到指定会话

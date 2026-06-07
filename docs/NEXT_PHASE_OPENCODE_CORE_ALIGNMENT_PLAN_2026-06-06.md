@@ -41,13 +41,15 @@ The main slices have landed in code:
   changes, groups file-change rounds by assistant message before falling back to
   legacy tool round IDs, and preserves checkpoint safety.
 
-Remaining follow-up hardening:
+2026-06-07 follow-up hardening completion:
 
-- Add the desktop button/view for "revert this assistant turn" once revert
-  events are exported; the TUI command and backend mapping are in place, but
-  desktop revert UX is still API-ready rather than product-visible.
-- Emit a typed revert event into `session_events`/diagnostic export after a
-  revert succeeds or partially succeeds.
+- Desktop now exposes a visible `Revert` control for the active session. It
+  calls the same checkpoint-backed assistant-turn revert path as TUI, then
+  reloads the persisted transcript.
+- Revert success, partial success, and failure results are recorded as typed
+  `revert` events in `session_events`, projected into `session_parts`, rendered
+  as transcript timeline items, and included in `/diagnostic` export as
+  `revert_events` plus `latest_revert_event`.
 
 ## 1. Purpose
 
@@ -590,9 +592,8 @@ Deliverables:
 - turn-centric revert
 - revert events in diagnostic export
 
-2026-06-07 status: typed compaction parts and turn-centric revert mapping are
-implemented. Revert diagnostic events and desktop revert UX remain follow-up
-hardening.
+2026-06-07 status: typed compaction parts, turn-centric revert mapping,
+desktop revert UX, and revert diagnostic events are implemented.
 
 ## 12. Non-Goals
 

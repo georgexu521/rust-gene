@@ -9,44 +9,40 @@ pub async fn handle_revert_turn(app: &mut TuiApp) -> String {
 
     let mgr = crate::engine::checkpoint::get_checkpoint_manager(&session_id).await;
     let cp = mgr.lock().await;
-    let rounds = cp.list_file_change_rounds();
-
-    if rounds.is_empty() {
-        return "No file changes to revert. Changes are tracked when the agent uses file_write, file_edit, or file_patch."
-            .to_string();
+    let result = match cp.revert_latest_assistant_turn().await {
+        Ok(result) => result,
+        Err(err) => return err,
+    };
+    let payload = serde_json::to_value(&result).unwrap_or_else(|_| serde_json::json!({}));
+    if let Err(err) = app
+        .session_manager
+        .write_session_event(&session_id, "revert", &payload)
+    {
+        tracing::warn!("Failed to record revert session event: {}", err);
     }
 
-    let last_round = rounds.last().unwrap();
-    let mut restored_files: Vec<String> = Vec::new();
-    let mut removed_files: Vec<String> = Vec::new();
-    let mut errors: Vec<String> = Vec::new();
-
-    for checkpoint_id in &last_round.checkpoint_ids {
-        match cp.restore_checkpoint(checkpoint_id).await {
-            Ok(result) => {
-                for f in result.restored_files {
-                    restored_files.push(format!("  restored: {f}"));
-                }
-                for f in result.removed_files {
-                    removed_files.push(format!("  removed: {f}"));
-                }
-            }
-            Err(e) => errors.push(format!("  failed: {e}")),
-        }
-    }
-
-    let file_count = last_round.paths.len();
+    let file_count = result.paths.len();
     let mut restored_summary = Vec::new();
-    restored_summary.extend(restored_files);
-    restored_summary.extend(removed_files);
+    restored_summary.extend(
+        result
+            .restored_files
+            .iter()
+            .map(|path| format!("  restored: {path}")),
+    );
+    restored_summary.extend(
+        result
+            .removed_files
+            .iter()
+            .map(|path| format!("  removed: {path}")),
+    );
 
-    if restored_summary.is_empty() && errors.is_empty() {
+    if restored_summary.is_empty() && result.errors.is_empty() {
         format!(
             "Reverted {} file(s) from last turn (round: {:?}).\nUse /changes to see what was reverted.",
             file_count,
-            last_round.tool_round_id.as_deref().unwrap_or("<single>"),
+            result.tool_round_id.as_deref().unwrap_or("<single>"),
         )
-    } else if errors.is_empty() {
+    } else if result.errors.is_empty() {
         format!(
             "Reverted last turn's file changes:\n{}",
             restored_summary.join("\n")
@@ -55,7 +51,7 @@ pub async fn handle_revert_turn(app: &mut TuiApp) -> String {
         format!(
             "Partial revert of last turn:\n{}\nErrors:\n{}",
             restored_summary.join("\n"),
-            errors.join("\n")
+            result.errors.join("\n")
         )
     }
 }
@@ -238,6 +234,16 @@ pub async fn handle_diagnostic(app: &TuiApp) -> String {
         .as_ref()
         .and_then(|s| s.last_miss_reason.clone());
     let ledger_entries = ledger_summary.as_ref().map(|s| s.entries).unwrap_or(0);
+    let revert_payloads = app
+        .session_manager
+        .load_session_events(session_id)
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|event| event.event_type == "revert")
+        .filter_map(|event| serde_json::from_str::<serde_json::Value>(&event.payload).ok())
+        .collect::<Vec<_>>();
+    let latest_revert_event = revert_payloads.last().cloned();
+    let revert_events = revert_payloads.len();
 
     let provider_request = &app.facade_snapshot.provider_request;
     let latency_ms = (provider_request.elapsed_ms > 0).then_some(provider_request.elapsed_ms);
@@ -261,12 +267,15 @@ pub async fn handle_diagnostic(app: &TuiApp) -> String {
         Some("file_change".to_string())
     } else if ledger_entries > 0 {
         Some("usage_ledger".to_string())
+    } else if revert_events > 0 {
+        Some("revert".to_string())
     } else {
         None
     };
     let evidence_items = file_changes.len()
         + tool_runs.iter().filter(|run| !run.is_active()).count()
-        + ledger_entries as usize;
+        + ledger_entries as usize
+        + revert_events;
 
     let report = crate::engine::evalset::RunReport {
         schema: crate::engine::evalset::RunReport::CURRENT_SCHEMA.to_string(),
@@ -292,6 +301,8 @@ pub async fn handle_diagnostic(app: &TuiApp) -> String {
         cache_miss_reason: cache_miss_reason.clone(),
         failure_owner,
         failed_tool_names,
+        revert_events,
+        latest_revert_event,
     };
 
     let json = report.to_json_string();
