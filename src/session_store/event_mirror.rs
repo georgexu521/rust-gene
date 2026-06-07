@@ -20,6 +20,7 @@ use std::sync::{Arc, Mutex};
 pub struct StreamEventMirror {
     writer: SessionEventWriter,
     accumulated_text: String,
+    accumulated_reasoning: String,
 }
 
 impl StreamEventMirror {
@@ -30,6 +31,7 @@ impl StreamEventMirror {
         Some(Self {
             writer,
             accumulated_text: String::new(),
+            accumulated_reasoning: String::new(),
         })
     }
 
@@ -47,8 +49,19 @@ impl StreamEventMirror {
                 self.writer.text_delta(text)
             }
             StreamEvent::ThinkingStart => self.writer.write_event("reasoning_started", "{}"),
-            StreamEvent::ThinkingChunk(text) => self.writer.reasoning_delta(text),
-            StreamEvent::ThinkingComplete => self.writer.write_event("reasoning_completed", "{}"),
+            StreamEvent::ThinkingChunk(text) => {
+                self.accumulated_reasoning.push_str(text);
+                self.writer.reasoning_delta(text)
+            }
+            StreamEvent::ThinkingComplete => {
+                if self.accumulated_reasoning.is_empty() {
+                    self.writer.write_event("reasoning_completed", "{}")
+                } else {
+                    let result = self.writer.reasoning_completed(&self.accumulated_reasoning);
+                    self.accumulated_reasoning.clear();
+                    result
+                }
+            }
             StreamEvent::ToolCallStart { id, name } => self.writer.tool_called(id, name),
             StreamEvent::ToolCallArgs { id, args_delta } => {
                 self.writer.tool_args_delta(id, args_delta)
@@ -94,6 +107,7 @@ impl StreamEventMirror {
                     let _ = self.writer.text_completed(&self.accumulated_text);
                 }
                 self.accumulated_text.clear();
+                self.accumulated_reasoning.clear();
                 self.writer.step_ended()
             }
             StreamEvent::Error(message) => self.writer.runtime_error(message),

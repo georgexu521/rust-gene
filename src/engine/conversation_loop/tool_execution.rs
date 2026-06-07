@@ -32,9 +32,6 @@ pub(crate) fn force_serial_tool_dispatch() -> bool {
         .unwrap_or(false)
 }
 
-/// 工具结果截断阈值（字节），超过此值会截断并写入磁盘
-pub(crate) const TOOL_RESULT_TRUNCATE_THRESHOLD: usize = 32 * 1024; // 32 KiB
-
 /// 工具结果磁盘缓存目录
 #[allow(dead_code)]
 pub(crate) fn tool_result_cache_dir() -> std::path::PathBuf {
@@ -205,19 +202,31 @@ pub(crate) async fn truncate_tool_result(
     tool_call_id: &str,
     session_id: Option<&str>,
 ) {
-    if result.content.len() > TOOL_RESULT_TRUNCATE_THRESHOLD {
+    let policy = crate::tool_output_store::ToolOutputPolicy::from_env();
+    let threshold = policy.effective_threshold();
+    if result.content.len() > threshold {
         let store = crate::tool_output_store::ToolOutputStore::new();
         let _ = tokio::fs::create_dir_all(store.base_dir()).await;
 
         let sid = session_id.unwrap_or("unknown");
         match store
-            .truncate_or_store(sid, tool_call_id, tool_name, &result.content, "text/plain")
+            .truncate_or_store_with_policy(
+                sid,
+                tool_call_id,
+                tool_name,
+                &result.content,
+                "text/plain",
+                &policy,
+            )
             .await
         {
             Ok(Some(meta)) => {
                 let original_len = result.content.len();
-                let preview =
-                    crate::tool_output_store::build_result_preview(&result.content, &meta);
+                let preview = crate::tool_output_store::build_result_preview_with_policy(
+                    &result.content,
+                    &meta,
+                    &policy,
+                );
                 result.content = preview;
                 merge_tool_result_data(
                     result,
@@ -225,7 +234,10 @@ pub(crate) async fn truncate_tool_result(
                     serde_json::json!({
                         "original_bytes": original_len,
                         "preview_bytes": result.content.len(),
-                        "threshold_bytes": TOOL_RESULT_TRUNCATE_THRESHOLD,
+                        "threshold_bytes": threshold,
+                        "max_lines": policy.max_lines,
+                        "preview_direction": format!("{:?}", policy.preview_direction),
+                        "retention_days": policy.retention_days,
                         "output_uri": meta.uri(),
                         "tool_output_id": meta.id,
                     }),

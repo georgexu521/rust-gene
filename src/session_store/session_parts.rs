@@ -109,9 +109,6 @@ impl ToolPartStatus {
 /// produce identical ids.
 pub fn project_session_parts(events: &[super::SessionEventRow]) -> Vec<SessionPart> {
     let mut parts = Vec::new();
-    // Track the seq of the first delta in each contiguous text/reasoning block.
-    let mut text_first_seq: Option<i64> = None;
-    let mut reasoning_first_seq: Option<i64> = None;
 
     for event in events {
         let payload: serde_json::Value = serde_json::from_str(&event.payload).unwrap_or_default();
@@ -122,12 +119,10 @@ pub fn project_session_parts(events: &[super::SessionEventRow]) -> Vec<SessionPa
                 if text.is_empty() {
                     continue;
                 }
-                let id = text_first_seq.get_or_insert(event.seq);
-                let part_id = format!("text_{id}");
                 match parts.last_mut() {
                     Some(SessionPart::AssistantText { content, .. }) => content.push_str(text),
                     _ => parts.push(SessionPart::AssistantText {
-                        part_id,
+                        part_id: format!("text_{}", event.seq),
                         content: text.to_string(),
                     }),
                 }
@@ -138,14 +133,17 @@ pub fn project_session_parts(events: &[super::SessionEventRow]) -> Vec<SessionPa
                     continue;
                 }
                 // Replace accumulated delta text with the authoritative full value.
-                match parts.last_mut() {
+                match parts
+                    .iter_mut()
+                    .rev()
+                    .find(|part| matches!(part, SessionPart::AssistantText { .. }))
+                {
                     Some(SessionPart::AssistantText { content, .. }) => {
                         *content = full_text.to_string();
                     }
                     _ => {
-                        let id = text_first_seq.unwrap_or(event.seq);
                         parts.push(SessionPart::AssistantText {
-                            part_id: format!("text_{id}"),
+                            part_id: format!("text_{}", event.seq),
                             content: full_text.to_string(),
                         });
                     }
@@ -156,12 +154,10 @@ pub fn project_session_parts(events: &[super::SessionEventRow]) -> Vec<SessionPa
                 if text.is_empty() {
                     continue;
                 }
-                let id = reasoning_first_seq.get_or_insert(event.seq);
-                let part_id = format!("reasoning_{id}");
                 match parts.last_mut() {
                     Some(SessionPart::Reasoning { content, .. }) => content.push_str(text),
                     _ => parts.push(SessionPart::Reasoning {
-                        part_id,
+                        part_id: format!("reasoning_{}", event.seq),
                         content: text.to_string(),
                     }),
                 }
@@ -171,14 +167,17 @@ pub fn project_session_parts(events: &[super::SessionEventRow]) -> Vec<SessionPa
                 if full_text.is_empty() {
                     continue;
                 }
-                match parts.last_mut() {
+                match parts
+                    .iter_mut()
+                    .rev()
+                    .find(|part| matches!(part, SessionPart::Reasoning { .. }))
+                {
                     Some(SessionPart::Reasoning { content, .. }) => {
                         *content = full_text.to_string();
                     }
                     _ => {
-                        let id = reasoning_first_seq.unwrap_or(event.seq);
                         parts.push(SessionPart::Reasoning {
-                            part_id: format!("reasoning_{id}"),
+                            part_id: format!("reasoning_{}", event.seq),
                             content: full_text.to_string(),
                         });
                     }
@@ -313,65 +312,59 @@ pub fn project_session_parts(events: &[super::SessionEventRow]) -> Vec<SessionPa
             }
             // Non-merge events reset text/reasoning block tracking so the
             // next delta starts a fresh block with a new part_id.
-            other => {
-                match other {
-                    "closeout" => parts.push(SessionPart::Closeout {
-                        part_id: format!("closeout_{}", event.seq),
-                        status: payload["status"].as_str().unwrap_or("unknown").to_string(),
-                        evidence_summary: payload["evidence_summary"]
-                            .as_str()
-                            .map(|s| s.to_string()),
-                    }),
-                    "compaction" => parts.push(SessionPart::Compaction {
-                        part_id: format!("compaction_{}", event.seq),
-                        strategy: payload["strategy"].as_str().unwrap_or("").to_string(),
-                        trigger: payload["trigger"].as_str().unwrap_or("").to_string(),
-                        before_tokens: payload["before_tokens"].as_u64().unwrap_or(0),
-                        after_tokens: payload["after_tokens"].as_u64().unwrap_or(0),
-                    }),
-                    "permission_requested" => parts.push(SessionPart::Permission {
-                        part_id: format!("perm_{}", event.seq),
-                        tool_name: payload["tool_name"].as_str().unwrap_or("").to_string(),
-                        decided: false,
-                        allowed: None,
-                    }),
-                    "revert" => parts.push(SessionPart::Revert {
-                        part_id: format!("revert_{}", event.seq),
-                        status: payload["status"].as_str().unwrap_or("unknown").to_string(),
-                        message_id: payload["message_id"].as_str().map(str::to_string),
-                        target_part_id: payload["target_part_id"].as_str().map(str::to_string),
-                        part_ids: string_array(&payload["part_ids"]),
-                        paths: string_array(&payload["paths"]),
-                        restored_files: string_array(&payload["restored_files"]),
-                        removed_files: string_array(&payload["removed_files"]),
-                        errors: string_array(&payload["errors"]),
-                        snapshot_checkpoint_id: payload["snapshot_checkpoint_id"]
-                            .as_str()
-                            .map(str::to_string),
-                        timestamp: payload["timestamp"].as_str().map(str::to_string),
-                        unrevert_possible: payload["unrevert_possible"].as_bool().unwrap_or(false),
-                    }),
-                    "unrevert" => parts.push(SessionPart::Revert {
-                        part_id: format!("unrevert_{}", event.seq),
-                        status: "unreverted".to_string(),
-                        message_id: payload["message_id"].as_str().map(str::to_string),
-                        target_part_id: payload["target_part_id"].as_str().map(str::to_string),
-                        part_ids: string_array(&payload["part_ids"]),
-                        paths: string_array(&payload["paths"]),
-                        restored_files: string_array(&payload["restored_files"]),
-                        removed_files: string_array(&payload["removed_files"]),
-                        errors: string_array(&payload["errors"]),
-                        snapshot_checkpoint_id: payload["snapshot_checkpoint_id"]
-                            .as_str()
-                            .map(str::to_string),
-                        timestamp: payload["timestamp"].as_str().map(str::to_string),
-                        unrevert_possible: false,
-                    }),
-                    _ => {}
-                }
-                text_first_seq = None;
-                reasoning_first_seq = None;
-            }
+            other => match other {
+                "closeout" => parts.push(SessionPart::Closeout {
+                    part_id: format!("closeout_{}", event.seq),
+                    status: payload["status"].as_str().unwrap_or("unknown").to_string(),
+                    evidence_summary: payload["evidence_summary"].as_str().map(|s| s.to_string()),
+                }),
+                "compaction" => parts.push(SessionPart::Compaction {
+                    part_id: format!("compaction_{}", event.seq),
+                    strategy: payload["strategy"].as_str().unwrap_or("").to_string(),
+                    trigger: payload["trigger"].as_str().unwrap_or("").to_string(),
+                    before_tokens: payload["before_tokens"].as_u64().unwrap_or(0),
+                    after_tokens: payload["after_tokens"].as_u64().unwrap_or(0),
+                }),
+                "permission_requested" => parts.push(SessionPart::Permission {
+                    part_id: format!("perm_{}", event.seq),
+                    tool_name: payload["tool_name"].as_str().unwrap_or("").to_string(),
+                    decided: false,
+                    allowed: None,
+                }),
+                "revert" => parts.push(SessionPart::Revert {
+                    part_id: format!("revert_{}", event.seq),
+                    status: payload["status"].as_str().unwrap_or("unknown").to_string(),
+                    message_id: payload["message_id"].as_str().map(str::to_string),
+                    target_part_id: payload["target_part_id"].as_str().map(str::to_string),
+                    part_ids: string_array(&payload["part_ids"]),
+                    paths: string_array(&payload["paths"]),
+                    restored_files: string_array(&payload["restored_files"]),
+                    removed_files: string_array(&payload["removed_files"]),
+                    errors: string_array(&payload["errors"]),
+                    snapshot_checkpoint_id: payload["snapshot_checkpoint_id"]
+                        .as_str()
+                        .map(str::to_string),
+                    timestamp: payload["timestamp"].as_str().map(str::to_string),
+                    unrevert_possible: payload["unrevert_possible"].as_bool().unwrap_or(false),
+                }),
+                "unrevert" => parts.push(SessionPart::Revert {
+                    part_id: format!("unrevert_{}", event.seq),
+                    status: "unreverted".to_string(),
+                    message_id: payload["message_id"].as_str().map(str::to_string),
+                    target_part_id: payload["target_part_id"].as_str().map(str::to_string),
+                    part_ids: string_array(&payload["part_ids"]),
+                    paths: string_array(&payload["paths"]),
+                    restored_files: string_array(&payload["restored_files"]),
+                    removed_files: string_array(&payload["removed_files"]),
+                    errors: string_array(&payload["errors"]),
+                    snapshot_checkpoint_id: payload["snapshot_checkpoint_id"]
+                        .as_str()
+                        .map(str::to_string),
+                    timestamp: payload["timestamp"].as_str().map(str::to_string),
+                    unrevert_possible: false,
+                }),
+                _ => {}
+            },
         }
     }
 
@@ -715,11 +708,17 @@ fn append_text_part(
     seq: i64,
 ) -> Result<(), rusqlite::Error> {
     match conn.query_row(
-        "SELECT id, payload FROM session_parts WHERE session_id = ?1 AND kind = ?2 ORDER BY part_index DESC LIMIT 1",
-        rusqlite::params![session_id, kind],
-        |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?)),
+        "SELECT id, kind, payload FROM session_parts WHERE session_id = ?1 ORDER BY part_index DESC LIMIT 1",
+        rusqlite::params![session_id],
+        |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+            ))
+        },
     ) {
-        Ok((row_id, existing_payload)) => {
+        Ok((row_id, last_kind, existing_payload)) if last_kind == kind => {
             let mut value: serde_json::Value =
                 serde_json::from_str(&existing_payload).unwrap_or_default();
             if let Some(content) = value.get_mut("content") {
@@ -732,20 +731,10 @@ fn append_text_part(
                 rusqlite::params![value.to_string(), row_id],
             )?;
         }
-        Err(_) => {
-            let part_id = format!("{kind}_{seq}");
-            let part = match kind {
-                "reasoning" => SessionPart::Reasoning {
-                    part_id: part_id.clone(),
-                    content: text.to_string(),
-                },
-                _ => SessionPart::AssistantText {
-                    part_id: part_id.clone(),
-                    content: text.to_string(),
-                },
-            };
-            insert_session_part(conn, session_id, part_id, part, seq)?;
+        Ok(_) | Err(rusqlite::Error::QueryReturnedNoRows) => {
+            insert_text_part(conn, session_id, kind, text, seq)?
         }
+        Err(err) => return Err(err),
     }
     Ok(())
 }
@@ -774,7 +763,7 @@ fn replace_text_with_completed(
             )?;
         }
         Err(_) => {
-            let part_id = format!("{kind}_{seq}");
+            let part_id = text_part_id(kind, seq);
             let part = match kind {
                 "reasoning" => SessionPart::Reasoning {
                     part_id: part_id.clone(),
@@ -789,6 +778,34 @@ fn replace_text_with_completed(
         }
     }
     Ok(())
+}
+
+fn insert_text_part(
+    conn: &Connection,
+    session_id: &str,
+    kind: &str,
+    text: &str,
+    seq: i64,
+) -> Result<(), rusqlite::Error> {
+    let part_id = text_part_id(kind, seq);
+    let part = match kind {
+        "reasoning" => SessionPart::Reasoning {
+            part_id: part_id.clone(),
+            content: text.to_string(),
+        },
+        _ => SessionPart::AssistantText {
+            part_id: part_id.clone(),
+            content: text.to_string(),
+        },
+    };
+    insert_session_part(conn, session_id, part_id, part, seq)
+}
+
+fn text_part_id(kind: &str, seq: i64) -> String {
+    match kind {
+        "reasoning" => format!("reasoning_{seq}"),
+        _ => format!("text_{seq}"),
+    }
 }
 
 /// Find the row id for a given part_id in a session.
@@ -992,6 +1009,7 @@ fn string_array(value: &serde_json::Value) -> Vec<String> {
 mod tests {
     use super::*;
     use crate::session_store::SessionEventRow;
+    use rusqlite::Connection;
 
     #[test]
     fn projects_tool_lifecycle() {
@@ -1050,6 +1068,76 @@ mod tests {
         }
     }
 
+    #[test]
+    fn projects_separate_text_blocks_around_tool_parts() {
+        let events = vec![
+            row(1, "assistant_text_delta", r#"{"text":"before"}"#),
+            row(
+                2,
+                "tool_called",
+                r#"{"tool_call_id":"c1","tool_name":"bash"}"#,
+            ),
+            row(
+                3,
+                "tool_succeeded",
+                r#"{"tool_call_id":"c1","result_preview":"ok"}"#,
+            ),
+            row(4, "assistant_text_delta", r#"{"text":"after"}"#),
+        ];
+
+        let parts = project_session_parts(&events);
+        assert_eq!(parts.len(), 3);
+        assert!(matches!(
+            &parts[0],
+            SessionPart::AssistantText { part_id, content }
+                if part_id == "text_1" && content == "before"
+        ));
+        assert!(matches!(&parts[1], SessionPart::Tool { .. }));
+        assert!(matches!(
+            &parts[2],
+            SessionPart::AssistantText { part_id, content }
+                if part_id == "text_4" && content == "after"
+        ));
+    }
+
+    #[test]
+    fn incremental_projection_matches_full_projection_for_text_tool_text() {
+        let conn = test_conn();
+        let events = vec![
+            row(1, "assistant_text_delta", r#"{"text":"before"}"#),
+            row(
+                2,
+                "tool_called",
+                r#"{"tool_call_id":"c1","tool_name":"bash"}"#,
+            ),
+            row(
+                3,
+                "tool_succeeded",
+                r#"{"tool_call_id":"c1","result_preview":"ok"}"#,
+            ),
+            row(4, "assistant_text_delta", r#"{"text":"after"}"#),
+            row(5, "reasoning_delta", r#"{"text":"think"}"#),
+            row(6, "reasoning_completed", r#"{"text":"think done"}"#),
+        ];
+
+        for event in &events {
+            insert_event(&conn, event);
+            incremental_refresh_session_parts(&conn, "sess-1").unwrap();
+        }
+
+        let full_payloads = project_session_parts(&events)
+            .iter()
+            .map(|part| serde_json::to_value(part).unwrap())
+            .collect::<Vec<_>>();
+        let incremental_payloads = query_persisted_session_parts(&conn, "sess-1")
+            .unwrap()
+            .into_iter()
+            .map(|part| part.payload)
+            .collect::<Vec<_>>();
+
+        assert_eq!(incremental_payloads, full_payloads);
+    }
+
     fn row(seq: i64, event_type: &str, payload: &str) -> SessionEventRow {
         SessionEventRow {
             id: seq,
@@ -1059,5 +1147,52 @@ mod tests {
             timestamp_ms: 0,
             payload: payload.to_string(),
         }
+    }
+
+    fn test_conn() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE session_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id TEXT NOT NULL,
+                seq INTEGER NOT NULL,
+                event_type TEXT NOT NULL,
+                timestamp_ms INTEGER NOT NULL,
+                payload TEXT NOT NULL DEFAULT '{}'
+            );
+            CREATE INDEX IF NOT EXISTS idx_session_events_session ON session_events(session_id, seq);
+            CREATE TABLE session_parts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id TEXT NOT NULL,
+                part_index INTEGER NOT NULL,
+                part_id TEXT NOT NULL,
+                kind TEXT NOT NULL,
+                tool_call_id TEXT,
+                tool_name TEXT,
+                status TEXT,
+                payload TEXT NOT NULL DEFAULT '{}',
+                projected_to_seq INTEGER NOT NULL DEFAULT 0,
+                updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_session_parts_session_part
+                ON session_parts(session_id, part_id);",
+        )
+        .unwrap();
+        conn
+    }
+
+    fn insert_event(conn: &Connection, event: &SessionEventRow) {
+        conn.execute(
+            "INSERT INTO session_events (session_id, seq, event_type, timestamp_ms, payload)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            rusqlite::params![
+                event.session_id,
+                event.seq,
+                event.event_type,
+                event.timestamp_ms,
+                event.payload
+            ],
+        )
+        .unwrap();
     }
 }

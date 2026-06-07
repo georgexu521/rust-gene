@@ -69,6 +69,16 @@ impl SessionEventWriter {
         self.write_event("reasoning_delta", &payload)
     }
 
+    /// Write final complete reasoning text for durable replay.
+    pub fn reasoning_completed(&self, text: &str) -> Result<(), rusqlite::Error> {
+        let payload = serde_json::json!({
+            "text": text,
+            "length": text.len(),
+        })
+        .to_string();
+        self.write_event("reasoning_completed", &payload)
+    }
+
     /// Mirror a tool lifecycle event.
     pub fn tool_called(&self, tool_call_id: &str, tool_name: &str) -> Result<(), rusqlite::Error> {
         let payload = serde_json::json!({

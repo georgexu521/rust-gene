@@ -142,7 +142,28 @@ impl ToolOutputStore {
         content: &str,
         mime: &str,
     ) -> io::Result<Option<ToolOutputMeta>> {
-        if content.len() <= DEFAULT_STORE_THRESHOLD {
+        self.truncate_or_store_with_policy(
+            session_id,
+            tool_call_id,
+            tool_name,
+            content,
+            mime,
+            &ToolOutputPolicy::default(),
+        )
+        .await
+    }
+
+    /// Store a tool result using an explicit truncation policy.
+    pub async fn truncate_or_store_with_policy(
+        &self,
+        session_id: &str,
+        tool_call_id: &str,
+        tool_name: &str,
+        content: &str,
+        mime: &str,
+        policy: &ToolOutputPolicy,
+    ) -> io::Result<Option<ToolOutputMeta>> {
+        if content.len() <= policy.effective_threshold() {
             return Ok(None);
         }
 
@@ -333,25 +354,84 @@ pub fn trunched_preview_with_uri(
     meta: &ToolOutputMeta,
     threshold: usize,
 ) -> String {
+    let policy = ToolOutputPolicy {
+        max_bytes: threshold,
+        ..ToolOutputPolicy::default()
+    };
+    truncated_preview_with_policy(original, meta, &policy)
+}
+
+pub fn truncated_preview_with_policy(
+    original: &str,
+    meta: &ToolOutputMeta,
+    policy: &ToolOutputPolicy,
+) -> String {
     let original_len = original.len();
-    let half = threshold / 2;
-    let first = safe_prefix_by_bytes(original, half);
-    let last = safe_suffix_by_bytes(original, half);
+    let budget = policy.max_bytes;
+    let (label, preview) = match policy.preview_direction {
+        PreviewDirection::Head => {
+            let head = limit_lines(
+                &safe_prefix_by_bytes(original, budget),
+                policy.max_lines,
+                PreviewDirection::Head,
+            );
+            (format!("First {} bytes", head.len()), head)
+        }
+        PreviewDirection::Tail => {
+            let tail = limit_lines(
+                &safe_suffix_by_bytes(original, budget),
+                policy.max_lines,
+                PreviewDirection::Tail,
+            );
+            (format!("Last {} bytes", tail.len()), tail)
+        }
+        PreviewDirection::HeadTail => {
+            let half = budget / 2;
+            let per_side_lines = split_line_budget(policy.max_lines);
+            let first = limit_lines(
+                &safe_prefix_by_bytes(original, half),
+                per_side_lines.0,
+                PreviewDirection::Head,
+            );
+            let last = limit_lines(
+                &safe_suffix_by_bytes(original, half),
+                per_side_lines.1,
+                PreviewDirection::Tail,
+            );
+            let preview = format!(
+                "--- First {} bytes ---\n{}\n\n--- Last {} bytes ---\n{}",
+                first.len(),
+                first,
+                last.len(),
+                last
+            );
+            ("Head/tail preview".to_string(), preview)
+        }
+    };
     format!(
-        "[Output truncated: {} bytes → {}]\nFull output: {}\n\n--- First {} bytes ---\n{}\n\n--- Last {} bytes ---\n{}",
+        "[Output truncated: {} bytes -> {}]\nFull output: {}\nPolicy: max_bytes={}, max_lines={}, preview={:?}\n\n--- {} ---\n{}",
         original_len,
         meta.uri(),
         meta.uri(),
-        first.len(),
-        first,
-        last.len(),
-        last,
+        policy.max_bytes,
+        policy.max_lines,
+        policy.preview_direction,
+        label,
+        preview,
     )
 }
 
 /// Build a complete tool result preview string (head + URI + tail).
 pub fn build_result_preview(original: &str, meta: &ToolOutputMeta) -> String {
     trunched_preview_with_uri(original, meta, DEFAULT_STORE_THRESHOLD)
+}
+
+pub fn build_result_preview_with_policy(
+    original: &str,
+    meta: &ToolOutputMeta,
+    policy: &ToolOutputPolicy,
+) -> String {
+    truncated_preview_with_policy(original, meta, policy)
 }
 
 // ── Helpers ──
@@ -417,6 +497,32 @@ fn safe_suffix_by_bytes(text: &str, max_bytes: usize) -> String {
         .collect::<String>()
 }
 
+fn limit_lines(text: &str, max_lines: usize, direction: PreviewDirection) -> String {
+    if max_lines == 0 {
+        return String::new();
+    }
+    let lines: Vec<&str> = text.lines().collect();
+    if lines.len() <= max_lines {
+        return text.to_string();
+    }
+    match direction {
+        PreviewDirection::Tail => lines[lines.len().saturating_sub(max_lines)..].join("\n"),
+        _ => lines[..max_lines].join("\n"),
+    }
+}
+
+fn split_line_budget(max_lines: usize) -> (usize, usize) {
+    if max_lines == 0 {
+        return (0, 0);
+    }
+    if max_lines == 1 {
+        return (0, 1);
+    }
+    let first = max_lines / 2;
+    let last = max_lines.saturating_sub(first);
+    (first, last)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -480,6 +586,60 @@ mod tests {
         assert!(meta.is_none(), "short output should not be stored");
 
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn policy_threshold_controls_storage() {
+        let dir = std::env::temp_dir().join(format!("tool-store-{}", uuid::Uuid::new_v4()));
+        let store = ToolOutputStore::at(dir.clone());
+        let policy = ToolOutputPolicy {
+            max_bytes: 8,
+            max_lines: 2,
+            preview_direction: PreviewDirection::Tail,
+            retention_days: 1,
+        };
+
+        let meta = store
+            .truncate_or_store_with_policy(
+                "sess-1",
+                "call-policy",
+                "bash",
+                "0123456789",
+                "text/plain",
+                &policy,
+            )
+            .await
+            .unwrap();
+
+        assert!(meta.is_some(), "policy max_bytes should force storage");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn policy_preview_honors_tail_line_limit() {
+        let meta = ToolOutputMeta {
+            id: "bash_call".to_string(),
+            session_id: "sess-1".to_string(),
+            tool_call_id: "call".to_string(),
+            tool_name: "bash".to_string(),
+            mime: "text/plain".to_string(),
+            original_bytes: 24,
+            created_at_ms: 0,
+        };
+        let policy = ToolOutputPolicy {
+            max_bytes: 64,
+            max_lines: 2,
+            preview_direction: PreviewDirection::Tail,
+            retention_days: 7,
+        };
+
+        let preview =
+            build_result_preview_with_policy("line1\nline2\nline3\nline4\n", &meta, &policy);
+
+        assert!(preview.contains("line3"));
+        assert!(preview.contains("line4"));
+        assert!(!preview.contains("line1"));
+        assert!(preview.contains("preview=Tail"));
     }
 
     #[test]
