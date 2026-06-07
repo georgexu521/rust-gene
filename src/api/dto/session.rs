@@ -78,17 +78,23 @@ pub struct EventsCursor {
 /// Session revert history item.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionRevertItem {
+    pub id: i64,
+    pub operation: String,
     pub status: String,
     pub message_id: Option<String>,
     pub target_part_id: Option<String>,
     pub part_ids: Vec<String>,
+    pub checkpoint_ids: Vec<String>,
     pub paths: Vec<String>,
     pub restored_files: Vec<String>,
     pub removed_files: Vec<String>,
     pub errors: Vec<String>,
+    pub diff_summary: Option<String>,
     pub snapshot_checkpoint_id: Option<String>,
-    pub timestamp: Option<String>,
+    pub created_at: String,
     pub unrevert_possible: bool,
+    pub unreverted: bool,
+    pub payload: serde_json::Value,
 }
 
 /// Page of session revert events.

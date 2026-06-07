@@ -17,6 +17,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use super::dto;
+use super::provider_status::provider_product_statuses;
 use super::{ws_handler, ApiError, ApiState, MessageInfo};
 
 /// 创建 API 路由
@@ -957,11 +958,11 @@ async fn get_session_parts_handler(
         has_more,
         limit,
     };
-    Ok(Json(json!({
-        "session_id": id,
-        "parts": items,
-        "cursor": cursor,
-    })))
+    Ok(Json(dto::session::SessionPartsPage {
+        session_id: id,
+        parts: items,
+        cursor,
+    }))
 }
 
 #[derive(Debug, Deserialize)]
@@ -998,11 +999,11 @@ async fn get_session_events_handler(
         has_more,
         limit,
     };
-    Ok(Json(json!({
-        "session_id": id,
-        "events": page_events,
-        "cursor": cursor,
-    })))
+    Ok(Json(dto::session::SessionEventsPage {
+        session_id: id,
+        events: page_events,
+        cursor,
+    }))
 }
 
 #[derive(Debug, Deserialize)]
@@ -1016,50 +1017,38 @@ async fn get_session_reverts_handler(
     Query(query): Query<RevertsQuery>,
 ) -> Result<impl IntoResponse, ApiError> {
     let store = state.session_store.read().await;
-    let parts = store
-        .get_session_parts(&id)
-        .map_err(|e| ApiError::Internal(e.to_string()))?;
     let limit = query.limit.unwrap_or(20).min(100);
-    let reverts: Vec<dto::session::SessionRevertItem> = parts
-        .iter()
-        .filter(|p| p.kind == "revert")
-        .take(limit)
-        .filter_map(|p| {
-            let payload = &p.payload;
-            Some(dto::session::SessionRevertItem {
-                status: payload["status"].as_str().unwrap_or("unknown").to_string(),
-                message_id: payload["message_id"].as_str().map(str::to_string),
-                target_part_id: payload["target_part_id"].as_str().map(str::to_string),
-                part_ids: json_string_array(&payload["part_ids"]),
-                paths: json_string_array(&payload["paths"]),
-                restored_files: json_string_array(&payload["restored_files"]),
-                removed_files: json_string_array(&payload["removed_files"]),
-                errors: json_string_array(&payload["errors"]),
-                snapshot_checkpoint_id: payload["snapshot_checkpoint_id"]
-                    .as_str()
-                    .map(str::to_string),
-                timestamp: payload["timestamp"].as_str().map(str::to_string),
-                unrevert_possible: payload["unrevert_possible"].as_bool().unwrap_or(false),
-            })
+    let records = store
+        .list_session_reverts(&id, limit)
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+    let reverts: Vec<dto::session::SessionRevertItem> = records
+        .into_iter()
+        .map(|record| dto::session::SessionRevertItem {
+            id: record.id,
+            operation: record.operation,
+            status: record.status,
+            message_id: record.message_id,
+            target_part_id: record.target_part_id,
+            part_ids: record.part_ids,
+            checkpoint_ids: record.checkpoint_ids,
+            paths: record.paths,
+            restored_files: record.restored_files,
+            removed_files: record.removed_files,
+            errors: record.errors,
+            diff_summary: record.diff_summary,
+            snapshot_checkpoint_id: record.snapshot_checkpoint_id,
+            created_at: record.created_at,
+            unrevert_possible: record.unrevert_possible,
+            unreverted: record.unreverted,
+            payload: record.payload,
         })
         .collect();
-    Ok(Json(json!({
-        "session_id": id,
-        "reverts": reverts,
-        "total": reverts.len(),
-    })))
-}
-
-/// Helper: extract a `Vec<String>` from a `serde_json::Value` array.
-fn json_string_array(value: &serde_json::Value) -> Vec<String> {
-    value
-        .as_array()
-        .map(|arr| {
-            arr.iter()
-                .filter_map(|v| v.as_str().map(str::to_string))
-                .collect()
-        })
-        .unwrap_or_default()
+    let total = reverts.len();
+    Ok(Json(dto::session::SessionRevertsPage {
+        session_id: id,
+        reverts,
+        total,
+    }))
 }
 
 async fn get_tool_outputs_handler(Path(id): Path<String>) -> Result<impl IntoResponse, ApiError> {
@@ -1083,10 +1072,10 @@ async fn get_tool_outputs_handler(Path(id): Path<String>) -> Result<impl IntoRes
             }
         })
         .collect();
-    Ok(Json(json!({
-        "session_id": id,
-        "outputs": outputs,
-    })))
+    Ok(Json(dto::tool_output::ToolOutputIndex {
+        session_id: id,
+        outputs,
+    }))
 }
 
 #[derive(Debug, Deserialize)]
@@ -1108,38 +1097,27 @@ async fn get_tool_output_page_handler(
             query.limit.unwrap_or(65536),
         )
         .map_err(|e| ApiError::Internal(e.to_string()))?;
-    Ok(Json(json!({
-        "content": page.content,
-        "offset": page.offset,
-        "limit": page.limit,
-        "total_bytes": page.total_bytes,
-        "has_more": page.has_more,
-    })))
+    Ok(Json(dto::tool_output::ToolOutputPageDto {
+        content: page.content,
+        offset: page.offset,
+        limit: page.limit,
+        total_bytes: page.total_bytes,
+        has_more: page.has_more,
+    }))
 }
 
 async fn get_provider_status_handler(
     State(state): State<Arc<ApiState>>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let provider_label = state.model.clone();
-    let capabilities =
-        crate::services::api::provider_protocol::ProviderCapabilities::detect("auto", &state.model);
-    let profile = crate::services::api::provider_protocol::ProviderRuntimeProfile::snapshot(
-        &capabilities,
-        &state.model,
-        &provider_label,
-    );
-    Ok(Json(json!({
-        "provider_id": profile.provider_id,
-        "model_id": profile.model_id,
-        "protocol_family": profile.protocol_family.label(),
-        "supports_streaming_tool_calls": profile.supports_streaming_tool_calls,
-        "requires_nonstreaming_tool_calls": profile.requires_nonstreaming_tool_calls,
-        "request_timeout_secs": profile.request_timeout_secs,
-        "stream_idle_timeout_secs": profile.stream_idle_timeout_secs,
-        "last_health_status": profile.last_health_status,
-        "last_timeout_category": profile.last_timeout_category,
-        "capability_summary": profile.capability_summary,
-    })))
+    let configured_max_output = state.config.read().await.api.max_tokens.map(u64::from);
+    let latest_health = crate::diagnostics::provider_health::latest_provider_health_entry()
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+    let statuses = provider_product_statuses(&state, configured_max_output, latest_health.as_ref());
+    let record_count = statuses.len();
+    Ok(Json(dto::provider::ProviderStatusPage {
+        statuses,
+        record_count,
+    }))
 }
 
 #[derive(Debug, Deserialize)]
@@ -1166,38 +1144,44 @@ async fn get_diagnostics_handler(
         &state.model,
     );
 
-    Ok(Json(json!({
-        "schema": "diagnostic.v1",
-        "session_id": session_id,
-        "model": state.model,
-        "provider": state.model,
-        "timestamp_ms": std::time::SystemTime::now()
+    Ok(Json(dto::diagnostic::DiagnosticExportDto {
+        schema: "diagnostic.v1".to_string(),
+        session_id,
+        model: state.model.clone(),
+        provider: Some(state.model.clone()),
+        timestamp_ms: std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_millis() as u64,
-        "status": "snapshot",
-        "turns": 0usize,
-        "tool_rounds": 0usize,
-        "changed_files": serde_json::Value::Array(vec![]),
-        "evidence_items": 0usize,
-        "prompt_tokens": 0u64,
-        "completion_tokens": 0u64,
-        "cost_usd": 0.0,
-        "revert_events": revert_events,
-        "provider_profile": json!({
+        status: "snapshot".to_string(),
+        turns: 0,
+        tool_rounds: 0,
+        changed_files: Vec::new(),
+        verification_proof_status: None,
+        evidence_category: None,
+        evidence_items: 0,
+        prompt_tokens: 0,
+        completion_tokens: 0,
+        cost_usd: 0.0,
+        latency_ms: None,
+        cache_miss_reason: None,
+        failure_owner: None,
+        failed_tool_names: Vec::new(),
+        revert_events,
+        provider_profile: Some(json!({
             "provider_id": profile.provider_id,
             "model_id": profile.model_id,
             "protocol_family": profile.protocol_family.label(),
             "request_timeout_secs": profile.request_timeout_secs,
             "stream_idle_timeout_secs": profile.stream_idle_timeout_secs,
-        }),
-        "tool_output_policy": json!({
+        })),
+        tool_output_policy: Some(json!({
             "max_bytes": policy.max_bytes,
             "max_lines": policy.max_lines,
             "preview_direction": format!("{:?}", policy.preview_direction),
             "retention_days": policy.retention_days,
-        }),
-    })))
+        })),
+    }))
 }
 
 #[cfg(test)]

@@ -27,6 +27,9 @@ pub struct ProviderProductStatus {
     pub latest_timeout_category: Option<String>,
     pub last_request_latency_ms: Option<u64>,
     pub last_retry_count: Option<u32>,
+    pub request_timeout_secs: u64,
+    pub stream_idle_timeout_secs: u64,
+    pub capability_summary: String,
 }
 
 /// Provider status page response.
