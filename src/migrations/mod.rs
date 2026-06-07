@@ -7,6 +7,7 @@ pub mod v10_add_session_inputs;
 pub mod v11_add_session_parts;
 pub mod v12_add_session_input_idempotency;
 pub mod v13_add_session_reverts;
+pub mod v14_add_provider_health_runs;
 pub mod v1_initial;
 pub mod v2_add_tasks;
 pub mod v3_add_traces;

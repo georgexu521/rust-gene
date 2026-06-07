@@ -50,6 +50,7 @@
 //!   - 单 token: `PRIORITY_AGENT_BRIDGE_TOKEN` / `BRIDGE_TOKEN`
 //!   - 多 token 轮换: `PRIORITY_AGENT_BRIDGE_TOKENS`（逗号/分号/空格分隔）
 
+pub mod dto;
 pub mod routes;
 pub mod state;
 pub mod websocket;

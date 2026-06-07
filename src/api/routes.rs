@@ -16,6 +16,7 @@ use serde_json::json;
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use super::dto;
 use super::{ws_handler, ApiError, ApiState, MessageInfo};
 
 /// 创建 API 路由
@@ -82,6 +83,25 @@ pub fn create_routes(state: Arc<ApiState>) -> Router {
         .route("/api/audit/summary", get(get_audit_summary_handler))
         .route("/api/audit/recent", get(get_audit_recent_handler))
         .route("/api/audit/export", post(export_audit_handler))
+        // Session parts & events cursors (Phase 1 productization)
+        .route("/api/sessions/:id/parts", get(get_session_parts_handler))
+        .route("/api/sessions/:id/events", get(get_session_events_handler))
+        .route(
+            "/api/sessions/:id/reverts",
+            get(get_session_reverts_handler),
+        )
+        .route(
+            "/api/sessions/:id/tool-outputs",
+            get(get_tool_outputs_handler),
+        )
+        .route(
+            "/api/sessions/:id/tool-outputs/:output_id",
+            get(get_tool_output_page_handler),
+        )
+        // Provider status
+        .route("/api/provider/status", get(get_provider_status_handler))
+        // Diagnostic export
+        .route("/api/diagnostics/latest", get(get_diagnostics_handler))
         .layer(middleware::from_fn(bridge_auth_middleware));
 
     // 公开路由（无需认证）
@@ -896,6 +916,288 @@ async fn bridge_auth_middleware(req: Request<Body>, next: Next) -> Response {
             .into_response();
     }
     next.run(req).await
+}
+
+// ── Phase 1: Session Parts / Events / Reverts / Tool-Outputs / Provider / Diagnostics ──
+
+#[derive(Debug, Deserialize)]
+struct PartsQuery {
+    after: Option<i64>,
+    limit: Option<usize>,
+}
+
+async fn get_session_parts_handler(
+    State(state): State<Arc<ApiState>>,
+    Path(id): Path<String>,
+    Query(query): Query<PartsQuery>,
+) -> Result<impl IntoResponse, ApiError> {
+    let store = state.session_store.read().await;
+    let after = query.after.unwrap_or(-1);
+    let limit = query.limit.unwrap_or(50).min(200);
+    let parts = store
+        .get_session_parts_after(&id, after, limit)
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+    let has_more = parts.len() >= limit;
+    let items: Vec<dto::session::SessionPartItem> = parts
+        .into_iter()
+        .map(|p| dto::session::SessionPartItem {
+            part_id: p.part_id,
+            part_index: p.part_index,
+            kind: p.kind,
+            tool_call_id: p.tool_call_id,
+            tool_name: p.tool_name,
+            status: p.status,
+            payload: p.payload,
+            projected_to_seq: p.projected_to_seq,
+            updated_at: p.updated_at,
+        })
+        .collect();
+    let cursor = dto::session::PartsCursor {
+        after_part_index: items.last().map(|p| p.part_index),
+        has_more,
+        limit,
+    };
+    Ok(Json(json!({
+        "session_id": id,
+        "parts": items,
+        "cursor": cursor,
+    })))
+}
+
+#[derive(Debug, Deserialize)]
+struct EventsQuery {
+    after: Option<i64>,
+    limit: Option<usize>,
+}
+
+async fn get_session_events_handler(
+    State(state): State<Arc<ApiState>>,
+    Path(id): Path<String>,
+    Query(query): Query<EventsQuery>,
+) -> Result<impl IntoResponse, ApiError> {
+    let store = state.session_store.read().await;
+    let after = query.after.unwrap_or(0);
+    let limit = query.limit.unwrap_or(50).min(200);
+    let events = store
+        .get_session_events_after(&id, after)
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+    let has_more = events.len() > limit;
+    let page_events: Vec<dto::session::SessionEventItem> = events
+        .into_iter()
+        .take(limit)
+        .map(|e| dto::session::SessionEventItem {
+            id: e.id,
+            seq: e.seq,
+            event_type: e.event_type,
+            timestamp_ms: e.timestamp_ms,
+            payload: serde_json::from_str(&e.payload).unwrap_or_default(),
+        })
+        .collect();
+    let cursor = dto::session::EventsCursor {
+        after_seq: page_events.last().map(|e| e.seq),
+        has_more,
+        limit,
+    };
+    Ok(Json(json!({
+        "session_id": id,
+        "events": page_events,
+        "cursor": cursor,
+    })))
+}
+
+#[derive(Debug, Deserialize)]
+struct RevertsQuery {
+    limit: Option<usize>,
+}
+
+async fn get_session_reverts_handler(
+    State(state): State<Arc<ApiState>>,
+    Path(id): Path<String>,
+    Query(query): Query<RevertsQuery>,
+) -> Result<impl IntoResponse, ApiError> {
+    let store = state.session_store.read().await;
+    let parts = store
+        .get_session_parts(&id)
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+    let limit = query.limit.unwrap_or(20).min(100);
+    let reverts: Vec<dto::session::SessionRevertItem> = parts
+        .iter()
+        .filter(|p| p.kind == "revert")
+        .take(limit)
+        .filter_map(|p| {
+            let payload = &p.payload;
+            Some(dto::session::SessionRevertItem {
+                status: payload["status"].as_str().unwrap_or("unknown").to_string(),
+                message_id: payload["message_id"].as_str().map(str::to_string),
+                target_part_id: payload["target_part_id"].as_str().map(str::to_string),
+                part_ids: json_string_array(&payload["part_ids"]),
+                paths: json_string_array(&payload["paths"]),
+                restored_files: json_string_array(&payload["restored_files"]),
+                removed_files: json_string_array(&payload["removed_files"]),
+                errors: json_string_array(&payload["errors"]),
+                snapshot_checkpoint_id: payload["snapshot_checkpoint_id"]
+                    .as_str()
+                    .map(str::to_string),
+                timestamp: payload["timestamp"].as_str().map(str::to_string),
+                unrevert_possible: payload["unrevert_possible"].as_bool().unwrap_or(false),
+            })
+        })
+        .collect();
+    Ok(Json(json!({
+        "session_id": id,
+        "reverts": reverts,
+        "total": reverts.len(),
+    })))
+}
+
+/// Helper: extract a `Vec<String>` from a `serde_json::Value` array.
+fn json_string_array(value: &serde_json::Value) -> Vec<String> {
+    value
+        .as_array()
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+async fn get_tool_outputs_handler(Path(id): Path<String>) -> Result<impl IntoResponse, ApiError> {
+    let store = crate::tool_output_store::ToolOutputStore::new();
+    let metas = store
+        .list_for_session(&id)
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+    let outputs: Vec<dto::tool_output::ToolOutputIndexEntry> = metas
+        .into_iter()
+        .map(|m| {
+            let uri = m.uri();
+            dto::tool_output::ToolOutputIndexEntry {
+                id: m.id,
+                uri,
+                session_id: m.session_id,
+                tool_call_id: m.tool_call_id,
+                tool_name: m.tool_name,
+                mime: m.mime,
+                original_bytes: m.original_bytes,
+                created_at_ms: m.created_at_ms,
+            }
+        })
+        .collect();
+    Ok(Json(json!({
+        "session_id": id,
+        "outputs": outputs,
+    })))
+}
+
+#[derive(Debug, Deserialize)]
+struct ToolOutputPageQuery {
+    offset: Option<u64>,
+    limit: Option<u64>,
+}
+
+async fn get_tool_output_page_handler(
+    Path((session_id, output_id)): Path<(String, String)>,
+    Query(query): Query<ToolOutputPageQuery>,
+) -> Result<impl IntoResponse, ApiError> {
+    let store = crate::tool_output_store::ToolOutputStore::new();
+    let page = store
+        .read_page(
+            &session_id,
+            &format!("tool-output://{output_id}"),
+            query.offset.unwrap_or(0),
+            query.limit.unwrap_or(65536),
+        )
+        .map_err(|e| ApiError::Internal(e.to_string()))?;
+    Ok(Json(json!({
+        "content": page.content,
+        "offset": page.offset,
+        "limit": page.limit,
+        "total_bytes": page.total_bytes,
+        "has_more": page.has_more,
+    })))
+}
+
+async fn get_provider_status_handler(
+    State(state): State<Arc<ApiState>>,
+) -> Result<impl IntoResponse, ApiError> {
+    let provider_label = state.model.clone();
+    let capabilities =
+        crate::services::api::provider_protocol::ProviderCapabilities::detect("auto", &state.model);
+    let profile = crate::services::api::provider_protocol::ProviderRuntimeProfile::snapshot(
+        &capabilities,
+        &state.model,
+        &provider_label,
+    );
+    Ok(Json(json!({
+        "provider_id": profile.provider_id,
+        "model_id": profile.model_id,
+        "protocol_family": profile.protocol_family.label(),
+        "supports_streaming_tool_calls": profile.supports_streaming_tool_calls,
+        "requires_nonstreaming_tool_calls": profile.requires_nonstreaming_tool_calls,
+        "request_timeout_secs": profile.request_timeout_secs,
+        "stream_idle_timeout_secs": profile.stream_idle_timeout_secs,
+        "last_health_status": profile.last_health_status,
+        "last_timeout_category": profile.last_timeout_category,
+        "capability_summary": profile.capability_summary,
+    })))
+}
+
+#[derive(Debug, Deserialize)]
+struct DiagnosticQuery {
+    session_id: Option<String>,
+}
+
+async fn get_diagnostics_handler(
+    State(state): State<Arc<ApiState>>,
+    Query(query): Query<DiagnosticQuery>,
+) -> Result<impl IntoResponse, ApiError> {
+    let session_id = query.session_id.unwrap_or_else(|| "unknown".to_string());
+    let store = state.session_store.read().await;
+
+    // Build a lightweight diagnostic snapshot from what's available
+    let parts = store.get_session_parts(&session_id).unwrap_or_default();
+    let revert_events = parts.iter().filter(|p| p.kind == "revert").count();
+    let policy = crate::tool_output_store::ToolOutputPolicy::from_env();
+    let capabilities =
+        crate::services::api::provider_protocol::ProviderCapabilities::detect("auto", &state.model);
+    let profile = crate::services::api::provider_protocol::ProviderRuntimeProfile::snapshot(
+        &capabilities,
+        &state.model,
+        &state.model,
+    );
+
+    Ok(Json(json!({
+        "schema": "diagnostic.v1",
+        "session_id": session_id,
+        "model": state.model,
+        "provider": state.model,
+        "timestamp_ms": std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64,
+        "status": "snapshot",
+        "turns": 0usize,
+        "tool_rounds": 0usize,
+        "changed_files": serde_json::Value::Array(vec![]),
+        "evidence_items": 0usize,
+        "prompt_tokens": 0u64,
+        "completion_tokens": 0u64,
+        "cost_usd": 0.0,
+        "revert_events": revert_events,
+        "provider_profile": json!({
+            "provider_id": profile.provider_id,
+            "model_id": profile.model_id,
+            "protocol_family": profile.protocol_family.label(),
+            "request_timeout_secs": profile.request_timeout_secs,
+            "stream_idle_timeout_secs": profile.stream_idle_timeout_secs,
+        }),
+        "tool_output_policy": json!({
+            "max_bytes": policy.max_bytes,
+            "max_lines": policy.max_lines,
+            "preview_direction": format!("{:?}", policy.preview_direction),
+            "retention_days": policy.retention_days,
+        }),
+    })))
 }
 
 #[cfg(test)]
