@@ -301,6 +301,34 @@ impl TuiSessionManager {
         )?)
     }
 
+    pub fn pending_session_inputs(
+        &self,
+    ) -> anyhow::Result<Vec<crate::engine::run_coordinator::SessionInputRecord>> {
+        let session_id = self
+            .current_session_id
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("No active session"))?;
+        let conn = self.store.shared_conn();
+        let conn = conn.lock().unwrap_or_else(|err| err.into_inner());
+        Ok(crate::engine::run_coordinator::list_pending_session_inputs(
+            &conn, session_id, 20,
+        )?)
+    }
+
+    pub fn cancel_session_input(&self, id_or_prompt_id: &str) -> anyhow::Result<bool> {
+        let session_id = self
+            .current_session_id
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("No active session"))?;
+        let conn = self.store.shared_conn();
+        let conn = conn.lock().unwrap_or_else(|err| err.into_inner());
+        Ok(crate::engine::run_coordinator::cancel_session_input(
+            &conn,
+            session_id,
+            id_or_prompt_id,
+        )?)
+    }
+
     /// 切换到指定会话
     pub fn switch_to_session(&mut self, session_id: &str) -> anyhow::Result<Vec<MessageItem>> {
         // 验证会话存在

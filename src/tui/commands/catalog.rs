@@ -97,8 +97,8 @@ pub const CMD_PROVIDER: CommandDef = CommandDef::new(
     "/provider",
     &[],
     "Info",
-    "/provider",
-    "Show or switch LLM provider",
+    "/provider [list|switch <name>|status --json]",
+    "Show provider state or switch LLM provider",
 );
 
 pub const CMD_STATUS: CommandDef =
@@ -429,8 +429,8 @@ pub const CMD_SESSION: CommandDef = CommandDef::new(
     "/session",
     &["/sessions"],
     "Session",
-    "/session [list|new|delete <id>]",
-    "Manage sessions (list/create/delete)",
+    "/session [list|new|delete <id>|pending|cancel <id>]",
+    "Manage sessions and queued inputs",
 );
 
 pub const CMD_UNDO: CommandDef = CommandDef::new(

@@ -187,6 +187,10 @@ API:
 
 API:
 - `ProviderRuntimeProfile::snapshot(capabilities, model, provider_id)` → snapshot
+- `diagnostics::provider_health::provider_health_ledger_path()` →
+  `provider-health.jsonl`
+- `/provider status --json` → current provider/model/runtime facts plus latest
+  provider health ledger entry
 
 ---
 

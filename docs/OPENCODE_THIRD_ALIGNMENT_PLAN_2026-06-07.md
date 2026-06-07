@@ -272,8 +272,10 @@ Current status:
 
 - Priority Agent already stores long outputs in `ToolOutputStore` and exposes
   session-scoped paging through TUI/desktop.
-- opencode still has a more complete product policy: configurable max
-  lines/bytes, retention, and preview direction.
+- Priority Agent now has environment-configurable max bytes/lines, retention,
+  preview direction, startup cleanup, manual cleanup, diagnostic export, and
+  model-facing hints.
+- opencode still has a cleaner project-level product config surface.
 
 Optimization plan:
 
@@ -284,10 +286,11 @@ Optimization plan:
   - `tool_output.retention_days`.
 - Use head-tail or tail preview by default for validation/test failures where
   the useful error is usually near the end.
-- Add startup cleanup and `/tool-output clean`.
-- Record the active policy in diagnostic export and desktop status.
+- Add startup cleanup and `/tool-output clean`. Done.
+- Record the active policy in diagnostic export and desktop status. Diagnostic
+  export is done; richer desktop status remains follow-up polish.
 - Add model-facing hints telling the agent to inspect stored output by search or
-  offset instead of re-dumping full logs into context.
+  offset instead of re-dumping full logs into context. Done.
 
 Acceptance:
 
@@ -380,13 +383,15 @@ completion boundaries.
 ### Priority Agent status
 
 Priority Agent persists live delta events and now also writes final-value events
-for assistant text and reasoning. Projection prefers the completed value when it
-is present, while deltas still support live UI streaming.
+for assistant text, reasoning, tool input, tool result, and shell output.
+Projection prefers the completed value when it is present, while deltas still
+support live UI streaming.
 
-The remaining durability gap is large tool input/result final values. Tool
-output is stored behind `tool-output://...`, but tool input completion,
-shell-output completion, and canonical replay source metadata still need more
-hardening.
+The 2026-06-07 hardening added canonical replay metadata on tool parts:
+`input_replay_source`, `result_replay_source`, `output_uri`, and shell-specific
+`shell_output_completed` parts. Large tool output still uses
+`tool-output://...`; the completed tool-result event records the URI and preview
+needed for reload instead of relying only on live deltas.
 
 ### Plan
 
@@ -397,24 +402,30 @@ Work items:
 - Add final-value events:
   - `assistant_text_completed`; done.
   - `reasoning_completed`; done.
-  - `tool_input_completed`;
-  - `tool_result_completed`;
-  - `shell_output_completed`.
+  - `tool_input_completed`; done.
+  - `tool_result_completed`; done.
+  - `shell_output_completed`; done.
 - Keep deltas for live UI only; projection should prefer completed values when
-  present. Done for assistant text and reasoning.
+  present. Done for assistant text, reasoning, tool input, and tool result.
 - For large final values, store content behind `tool-output://...` or a
-  session-content store and keep only URI + metadata in the event payload.
+  session-content store and keep only URI + metadata in the replayable part.
+  Done for current tool-output flow.
 - Update diagnostic export to show whether a part was rebuilt from deltas or
-  completed from final value.
+  completed from final value. Done at the `session_parts` payload level through
+  replay-source fields; richer diagnostic formatting can still be improved.
 - Add tests for missing delta plus completed event, truncated preview plus full
-  stored output, and interrupted tool input.
+  stored output, and interrupted tool input. Done for missing-delta tool input,
+  completed tool result with `tool-output://`, and full-vs-incremental
+  projection equivalence.
 
 Acceptance:
 
 - Restart/reload can reconstruct final assistant text/tool input even if live
-  deltas were partial.
+  deltas were partial. Met.
 - Diagnostic export can prove whether replay came from final events or deltas.
-- No durable event relies on a preview-only payload for canonical content.
+  Met through persisted part payload fields.
+- No durable part relies on a preview-only payload for canonical tool-output
+  references. Met for stored outputs through `tool-output://` URI projection.
 
 Suggested gates:
 
@@ -443,9 +454,10 @@ migration and `run_coordinator` helpers. Same `prompt_id` plus same prompt is an
 idempotent retry; same `prompt_id` plus different prompt is a conflict; reserved
 internal ids are rejected.
 
-The remaining gap is product visibility and recovery polish: queued/pending
-inputs should be easier to inspect and cancel from TUI/desktop, and crash
-recovery should make interrupted steer inputs explicit.
+Queued/pending inputs are now inspectable and cancellable from the TUI via
+`/sessions pending`, `/sessions cancel <id|prompt_id>`, `/session pending`, and
+`/session cancel <id|prompt_id>`. Crash recovery still has room for more
+explicit in-flight steer classification if a process dies mid-promotion.
 
 ### Plan
 
@@ -467,7 +479,10 @@ Work items:
   - reserved internal ids are rejected.
 - Promote input by setting `promoted_seq` to the current session event sequence.
   Done.
-- Add `/sessions pending` or desktop status display for queued prompts.
+- Add `/sessions pending` or desktop status display for queued prompts. Done for
+  TUI session commands.
+- Add cancellation for queued prompts. Done for TUI session commands and
+  `run_coordinator` helpers.
 - Add crash recovery policy:
   - pending queue inputs survive;
   - in-flight steer inputs are marked interrupted unless promoted safely.
@@ -476,7 +491,7 @@ Acceptance:
 
 - Double submit from desktop cannot produce duplicate turns.
 - Retry after frontend/network failure can safely reuse the same prompt id.
-- Queued prompts are visible and can be cancelled.
+- Queued prompts are visible and can be cancelled from TUI.
 - Tests prove no overlapping drains for one session.
 
 Suggested gates:
@@ -511,11 +526,11 @@ Priority Agent now has an important user-facing path:
 - revert/unrevert are blocked while a session run is busy.
 
 The remaining gap is session consistency after revert. The file system can be
-restored, but the projected conversation is not yet trimmed or marked as
-reverted at message/part granularity. Revert metadata exists in checkpoint
-history and typed events, but there is not yet a persisted `session_reverts`
-table or projected `reverted_after` marker comparable to opencode's session
-state.
+restored, and projected revert parts now include a `reverted_after` marker, but
+the projected conversation is not yet trimmed/dimmed automatically after the
+target point. Revert metadata exists in checkpoint history and typed events,
+but there is not yet a dedicated `session_reverts` table comparable to
+opencode's session state.
 
 ### Plan
 
@@ -532,7 +547,8 @@ Work items:
   - status;
   - timestamp.
 - Add a projected `reverted_after` marker so desktop/TUI can hide, dim, or
-  label assistant parts after the revert point.
+  label assistant parts after the revert point. Done in `session_parts`
+  projection.
 - Add cleanup behavior for "confirm revert":
   - remove projected parts after target;
   - preserve raw events for audit unless user deletes session;
@@ -543,8 +559,10 @@ Work items:
 Acceptance:
 
 - After revert, desktop/TUI no longer makes reverted assistant parts look
-  current.
-- Diagnostic export distinguishes active parts from reverted parts.
+  current. Partially met: backend projection now exposes the marker; frontend
+  dim/trim treatment remains a UI follow-up.
+- Diagnostic export distinguishes active parts from reverted parts. Partially
+  met through the projected marker.
 - A successful revert can be undone while its snapshot is still available.
 - Raw audit trail remains available for debugging.
 
@@ -571,9 +589,10 @@ for reading/searching large output.
 Priority Agent has `ToolOutputStore`, `tool-output://` URIs, session-scoped
 reads, desktop drawer, and TUI `/tool-output`. `ToolOutputPolicy` now controls
 the actual storage threshold, preview byte budget, preview line budget, preview
-direction, and retention cleanup. The remaining gap is product polish:
-project-level config files and startup scheduling should eventually sit above
-the current environment-variable policy.
+direction, and retention cleanup. Startup now performs best-effort expired
+output cleanup using the current environment policy. The remaining gap is
+product polish: project-level config files should eventually sit above the
+current environment-variable policy.
 
 ### Plan
 
@@ -589,12 +608,12 @@ Work items:
 - Make shell/test output default to tail or head-tail when failures are more
   likely at the end of output. Done: default preview is tail.
 - Add a scheduled cleanup path on app startup and a manual `/tool-output clean`.
-  Manual clean is done; startup cleanup remains follow-up.
+  Done: startup cleanup is best-effort and manual clean already exists.
 - Include output policy in `/diagnostic` and desktop status. Diagnostic export is
   done; desktop surfacing remains follow-up if a richer settings/status view is
   added.
 - Add a prompt hint that tells the model to inspect by offset/search, not to
-  dump full logs into context.
+  dump full logs into context. Done in truncated tool-output previews.
 
 Acceptance:
 
@@ -630,15 +649,18 @@ Priority Agent has improved significantly:
 - MiniMax/OpenAI-compatible differences;
 - request timeouts and stream idle timeout;
 - provider health diagnostics;
+- `ProviderRuntimeProfile` snapshot DTO;
+- provider health JSONL ledger for recent runs;
+- TUI `/provider status --json`;
 - runtime facade provider lifecycle status.
 
 The gap is product polish and consistency:
 
 - slow-tail timeout settings are still spread across runtime env, provider
-  profile, and diagnostics;
+  profile, status JSON, and diagnostics;
 - model capability/status is not yet a first-class persisted table or API;
-- desktop status can show runtime state, but provider health history is still
-  mostly diagnostic rather than operational.
+- desktop status can show runtime state, but provider health history is not yet
+  surfaced in a rich desktop view.
 
 ### Plan
 
@@ -655,9 +677,12 @@ Work items:
   - stream idle timeout;
   - last health result;
   - last timeout category.
-- Persist recent provider health runs in a small table or JSONL ledger.
+  Done as `ProviderRuntimeProfile`; health/timeout fields are present but need
+  richer live population from persisted health history.
+- Persist recent provider health runs in a small table or JSONL ledger. Done as
+  `provider-health.jsonl`.
 - Add `/provider status --json` and desktop status fields backed by the same
-  profile snapshot.
+  profile snapshot. Done for TUI JSON status; desktop status remains follow-up.
 - Normalize timeout names and config/env precedence in docs and code.
 - Add explicit tests for:
   - stream-open timeout;
@@ -694,6 +719,9 @@ resource / effect model. Users can reason about rules by scope and resource.
 Priority Agent's permission system is more safety-oriented and more powerful:
 mode, rule source, once TTL, wildcard rules, action review, shell command
 classifier, checkpoint requirement, high-risk paths, and permission evidence.
+It also now has `PermissionRuleView` and `/permissions explain <tool_name>
+[json_params]`, so the product-facing explanation path is no longer only a
+trace/debug concept.
 
 The risk is complexity. A powerful system is only useful if the user can
 understand why a command was allowed or blocked and how to change it safely.
@@ -710,10 +738,12 @@ Work items:
   - effect (`allow`, `deny`, `ask`);
   - source;
   - expires_at for once/session rules.
+  Done for current rule views; expiry remains `None` until once/session expiry
+  is surfaced in the view.
 - Persist project-scoped rules explicitly instead of only carrying in-memory
   session rules.
 - Add `/permissions explain <tool-or-command>` that returns the exact matcher
-  keys and winning rule.
+  keys and winning rule. Done.
 - Desktop settings should show rule scope and risk reason, not only mode.
 - Keep destructive/high-risk gates hard even if user adds broad allow rules.
 
@@ -746,6 +776,9 @@ only scan strings.
 Priority Agent has a strong bash classifier and blocks dangerous shell write
 patterns. It also routes programming edits toward file tools. This is safer
 than simply allowing shell writes.
+`ShellCommandView` now exists as a product-facing structured command view, and
+the classifier already has tests for heredoc, redirection, ambiguous command
+substitution, fanout, and dynamic shell risk.
 
 The remaining gap is precision:
 
@@ -767,6 +800,7 @@ Work items:
   - dynamic/unknown args;
   - mutation family;
   - recommended tool alternative.
+  Done.
 - Add more tests from opencode-style shell cases:
   - heredoc;
   - redirect;
@@ -776,6 +810,9 @@ Work items:
   - nested `sh -c`;
   - path with spaces;
   - env assignments.
+  Partially done; current tests cover heredoc, redirects, ambiguous
+  substitution, fanout, and several mutation cases. Path-with-spaces and env
+  assignment cases should stay as follow-up regression tests.
 - Use detected paths in permission and checkpoint evidence.
 
 Acceptance:
@@ -803,8 +840,10 @@ clients. The app and external clients use the same session concepts.
 ### Priority Agent status
 
 Priority Agent has a desktop Tauri API and an experimental API server feature,
-but the newly improved session projection is not yet a clearly documented API
-contract.
+and `docs/api/session_schema.md` now documents session parts, tool output,
+permission explanation, provider runtime profile, and diagnostic export DTOs.
+The remaining gap is enforcing those DTOs as the sole frontend/API contract and
+keeping the experimental API feature-gated until coverage is broader.
 
 ### Plan
 
@@ -822,6 +861,7 @@ Work items:
   - diagnostic export.
 - Make desktop consume these DTOs directly where possible.
 - Add API schema docs under `docs/api/`.
+  Done in `docs/api/session_schema.md`.
 - Keep experimental API feature-gated until the DTOs are tested.
 
 Acceptance:
@@ -882,10 +922,12 @@ Do first.
 
 Do immediately after Phase 1.
 
-- Add completed/final-value events.
-- Prefer completed events in projection.
-- Store large final values by URI.
-- Export replay source in diagnostics.
+- Add completed/final-value events. Done for assistant text, reasoning, tool
+  input, tool result, and shell output.
+- Prefer completed events in projection. Done.
+- Store large final values by URI. Done for current tool-output flow.
+- Export replay source in diagnostics. Done through persisted part payload
+  fields; richer diagnostic formatting remains optional polish.
 
 ### Phase 3: Prompt admission idempotency
 
@@ -893,16 +935,18 @@ Do before more real desktop/TUI stress testing.
 
 - Add prompt ids and hashes. Done.
 - Add duplicate/conflict detection. Done.
-- Add promoted sequence and pending/cancelled state. Promoted/pending support is
-  done; cancellation and user-facing pending views remain follow-up.
-- Show queued input in TUI/desktop.
+- Add promoted sequence and pending/cancelled state. Done.
+- Show queued input in TUI/desktop. Done for TUI; desktop status remains
+  follow-up polish.
+- Cancel queued input from product UI. Done for TUI.
 
 ### Phase 4: Revert state machine
 
 Do after session projection is stable.
 
 - Persist session revert metadata.
-- Mark or trim reverted projected parts.
+- Mark or trim reverted projected parts. Backend marker is done through
+  `reverted_after`; frontend trim/dim behavior remains follow-up.
 - Add unrevert while snapshot exists. Done for TUI.
 - Block revert while busy. Done for TUI revert/unrevert.
 
@@ -910,26 +954,30 @@ Do after session projection is stable.
 
 Can run partly in parallel after Phase 1.
 
-- Configurable tool-output limits and cleanup.
-- Provider runtime profile snapshot.
-- Provider health history.
-- Desktop/TUI status based on the same provider profile.
+- Configurable tool-output limits and cleanup. Done for environment policy,
+  startup cleanup, and manual cleanup; project config remains follow-up.
+- Provider runtime profile snapshot. Done.
+- Provider health history. Done through JSONL ledger.
+- Desktop/TUI status based on the same provider profile. Done for TUI JSON
+  status; desktop richer status remains follow-up.
 - Diagnostic export includes active output policy and provider transform report.
 
 ### Phase 6: Permission and shell explainability
 
 Do after the next real-task testing cycle identifies the most confusing cases.
 
-- Product-facing permission rule view.
-- `/permissions explain`.
-- Better shell path extraction and dynamic risk metadata.
+- Product-facing permission rule view. Done.
+- `/permissions explain`. Done.
+- Better shell path extraction and dynamic risk metadata. Partially done through
+  `ShellCommandView` and command-plan tests; keep adding regressions from real
+  blocked shell cases.
 
 ### Phase 7: API contract cleanup
 
 Do last.
 
-- Stabilize session/event/tool-output/provider DTOs.
-- Document `docs/api/`.
+- Stabilize session/event/tool-output/provider DTOs. Partially done.
+- Document `docs/api/`. Done in `docs/api/session_schema.md`.
 - Keep experimental API feature-gated until the contract is used by desktop and
   covered by tests.
 
@@ -939,20 +987,26 @@ This phase should be considered complete only when the following are true:
 
 - a long coding session can be stopped and reloaded in desktop without losing
   assistant text, reasoning, tool state, tool output links, closeout, or revert
-  markers;
+  markers; backend replay fields are now present, but this still needs a real
+  desktop long-session reload run.
 - `session_parts` projection does not rebuild the entire session on every event
-  during normal streaming;
+  during normal streaming; met by incremental projection tests.
 - submitted prompts have stable ids and duplicate submit cannot create duplicate
-  turns;
+  turns; met for admission and TUI pending/cancel controls.
 - stale or whitespace-shifted `file_edit` anchors either apply through a
   single-candidate safe fallback or fail closed with targeted recovery metadata;
 - DeepSeek/provider transforms are covered by golden tests and visible in
   diagnostics;
 - provider timeout diagnostics show which provider/model/profile/timeout path
-  fired;
-- tool output policy is configurable and visible in diagnostics;
+  fired; profile DTO, provider runtime facts, JSONL health history, and
+  `/provider status --json` exist, while richer desktop status remains
+  follow-up.
+- tool output policy is configurable and visible in diagnostics; met for
+  environment policy and startup/manual cleanup, project config remains
+  follow-up.
 - permission and shell blocks explain both the reason and the correct recovery
-  path.
+  path; mostly met through `/permissions explain`, `PermissionRuleView`,
+  `ShellCommandView`, and command-plan metadata.
 
 Suggested full gate:
 

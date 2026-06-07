@@ -696,6 +696,26 @@ impl TuiApp {
                     .filter(|p| !p.is_empty())
                 {
                     self.switch_provider_by_name(provider)
+                } else if args == "status --json" || args == "status json" {
+                    let provider = self.current_provider_label();
+                    let model = self.current_model_label();
+                    let base_url = self.current_provider_base_url();
+                    let facts =
+                        crate::services::api::provider_protocol::ProviderRuntimeFacts::detect(
+                            &base_url, &model,
+                        );
+                    let latest_health =
+                        crate::diagnostics::provider_health::latest_provider_health_entry()
+                            .ok()
+                            .flatten();
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "provider_id": provider,
+                        "model_id": model,
+                        "base_url": base_url,
+                        "runtime_facts": facts,
+                        "latest_health": latest_health,
+                    }))
+                    .unwrap_or_else(|_| "{}".to_string())
                 } else if args == "list" {
                     let lines = self
                         .provider_choices()
@@ -828,7 +848,7 @@ impl TuiApp {
                 }
                 "Use Ctrl+C to exit".to_string()
             }
-            "/sessions" => slash::handle_sessions(self),
+            "/sessions" => slash::handle_sessions(self, args),
             "/new" => slash::handle_new(self).await,
             "/stats" => slash::handle_stats(self),
             "/checkpoints" => slash::handle_checkpoints(self).await,

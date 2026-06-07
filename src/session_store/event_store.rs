@@ -107,6 +107,22 @@ impl SessionEventWriter {
         self.write_event("tool_call_ready", &payload)
     }
 
+    /// Write the authoritative completed tool input for durable replay.
+    pub fn tool_input_completed(
+        &self,
+        tool_call_id: &str,
+        input_args: &str,
+    ) -> Result<(), rusqlite::Error> {
+        let payload = serde_json::json!({
+            "tool_call_id": tool_call_id,
+            "input_args": input_args,
+            "replay_source": "completed_event",
+            "length": input_args.len(),
+        })
+        .to_string();
+        self.write_event("tool_input_completed", &payload)
+    }
+
     pub fn tool_started(&self, tool_call_id: &str, tool_name: &str) -> Result<(), rusqlite::Error> {
         let payload = serde_json::json!({
             "tool_call_id": tool_call_id,
@@ -136,6 +152,44 @@ impl SessionEventWriter {
         })
         .to_string();
         self.write_event("tool_succeeded", &payload)
+    }
+
+    /// Write the authoritative completed tool result for durable replay.
+    pub fn tool_result_completed(
+        &self,
+        tool_call_id: &str,
+        result: &str,
+    ) -> Result<(), rusqlite::Error> {
+        let payload = serde_json::json!({
+            "tool_call_id": tool_call_id,
+            "result": result,
+            "result_preview": preview_bytes(result, 512),
+            "output_uri": extract_tool_output_uri(result),
+            "replay_source": "completed_event",
+            "length": result.len(),
+        })
+        .to_string();
+        self.write_event("tool_result_completed", &payload)
+    }
+
+    /// Write a shell-specific completed output marker for shell replay views.
+    pub fn shell_output_completed(
+        &self,
+        tool_call_id: &str,
+        command: Option<&str>,
+        output: &str,
+    ) -> Result<(), rusqlite::Error> {
+        let payload = serde_json::json!({
+            "tool_call_id": tool_call_id,
+            "command": command,
+            "output": output,
+            "output_preview": preview_bytes(output, 512),
+            "output_uri": extract_tool_output_uri(output),
+            "replay_source": "completed_event",
+            "length": output.len(),
+        })
+        .to_string();
+        self.write_event("shell_output_completed", &payload)
     }
 
     pub fn tool_failed(&self, tool_call_id: &str, error: &str) -> Result<(), rusqlite::Error> {
@@ -301,6 +355,18 @@ fn preview_bytes(text: &str, max_bytes: usize) -> String {
         truncated.push_str("...");
         truncated
     }
+}
+
+fn extract_tool_output_uri(text: &str) -> Option<String> {
+    text.split_whitespace()
+        .find(|token| token.starts_with("tool-output://"))
+        .map(|token| {
+            token
+                .trim_matches(|ch: char| {
+                    matches!(ch, '.' | ',' | ';' | ':' | ')' | ']' | '}' | '"' | '\'')
+                })
+                .to_string()
+        })
 }
 
 #[cfg(test)]

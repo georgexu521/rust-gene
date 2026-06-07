@@ -66,7 +66,43 @@ pub async fn handle_resume(app: &mut TuiApp, args: &str) -> String {
     }
 }
 
-pub fn handle_sessions(app: &TuiApp) -> String {
+pub fn handle_sessions(app: &TuiApp, args: &str) -> String {
+    let args = args.trim();
+    if args == "pending" {
+        return match app.session_manager.pending_session_inputs() {
+            Ok(pending) if pending.is_empty() => "No pending session inputs.".to_string(),
+            Ok(pending) => {
+                let mut lines = vec!["Pending session inputs:".to_string()];
+                for item in pending {
+                    let prompt_id = item.prompt_id.as_deref().unwrap_or("-");
+                    lines.push(format!(
+                        "- #{} prompt_id={} delivery={} state={} created={} {}",
+                        item.id,
+                        prompt_id,
+                        item.delivery.label(),
+                        item.state,
+                        item.created_at,
+                        item.content_preview
+                    ));
+                }
+                lines.push("Use /sessions cancel <id|prompt_id> to cancel one.".to_string());
+                lines.join("\n")
+            }
+            Err(e) => format!("Failed to list pending inputs: {}", e),
+        };
+    }
+    if let Some(rest) = args.strip_prefix("cancel ") {
+        let id = rest.trim();
+        if id.is_empty() {
+            return "Usage: /sessions cancel <id|prompt_id>".to_string();
+        }
+        return match app.session_manager.cancel_session_input(id) {
+            Ok(true) => format!("Cancelled pending session input: {id}"),
+            Ok(false) => format!("No pending session input matched: {id}"),
+            Err(e) => format!("Failed to cancel pending input: {}", e),
+        };
+    }
+
     match app.session_manager.list_sessions(10) {
         Ok(sessions) => {
             if sessions.is_empty() {
@@ -90,6 +126,7 @@ pub fn handle_sessions(app: &TuiApp) -> String {
                     ));
                 }
                 lines.push("\nUse /resume <number|id|search> to restore a session.".to_string());
+                lines.push("Use /sessions pending to inspect queued inputs.".to_string());
                 lines.join("\n")
             }
         }
@@ -1138,7 +1175,9 @@ pub fn handle_keybindings(app: &mut TuiApp, args: &str) -> String {
 /// /session - 会话管理
 pub async fn handle_session_cmd(app: &mut TuiApp, args: &str) -> String {
     let args = args.trim();
-    if args.is_empty() || args == "list" {
+    if args == "pending" || args.starts_with("cancel ") {
+        handle_sessions(app, args)
+    } else if args.is_empty() || args == "list" {
         // List sessions
         match app.session_manager.list_sessions(10) {
             Ok(sessions) => {

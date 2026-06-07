@@ -338,6 +338,12 @@ impl Default for ToolOutputStore {
     }
 }
 
+/// Clean up expired tool outputs using the current environment policy.
+pub fn cleanup_expired_from_env() -> io::Result<usize> {
+    let policy = ToolOutputPolicy::from_env();
+    ToolOutputStore::new().cleanup_older_than(policy.cleanup_threshold_ms())
+}
+
 /// A page of tool output for TUI/desktop rendering.
 #[derive(Debug, Clone)]
 pub struct ToolOutputPage {
@@ -409,7 +415,7 @@ pub fn truncated_preview_with_policy(
         }
     };
     format!(
-        "[Output truncated: {} bytes -> {}]\nFull output: {}\nPolicy: max_bytes={}, max_lines={}, preview={:?}\n\n--- {} ---\n{}",
+        "[Output truncated: {} bytes -> {}]\nFull output: {}\nUse paged tool-output reads for more; do not paste the full log back into context.\nPolicy: max_bytes={}, max_lines={}, preview={:?}\n\n--- {} ---\n{}",
         original_len,
         meta.uri(),
         meta.uri(),

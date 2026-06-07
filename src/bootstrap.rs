@@ -188,6 +188,7 @@ pub async fn init_app(working_dir: &std::path::Path) -> Result<AppComponents> {
 pub async fn init_api_components(working_dir: &std::path::Path) -> Result<ApiComponents> {
     let (provider, model) = init_provider()?;
     let tool_registry = init_tool_registry(working_dir);
+    cleanup_expired_tool_outputs();
 
     let mut lsp_manager = crate::engine::lsp::LspManager::new();
     lsp_manager.detect_servers(working_dir);
@@ -214,6 +215,7 @@ pub async fn init_components(
     // 加载配置
     let app_config = crate::services::config::AppConfig::load().unwrap_or_default();
     let engine_config = app_config.engine.clone();
+    cleanup_expired_tool_outputs();
 
     // LSP 管理器
     let mut lsp_manager = crate::engine::lsp::LspManager::new();
@@ -301,6 +303,18 @@ pub async fn init_components(
         lsp_manager,
         worktree_manager,
     })
+}
+
+fn cleanup_expired_tool_outputs() {
+    match crate::tool_output_store::cleanup_expired_from_env() {
+        Ok(removed) if removed > 0 => {
+            info!("Cleaned {} expired tool outputs during startup", removed);
+        }
+        Ok(_) => {}
+        Err(err) => {
+            info!("Tool output startup cleanup skipped: {}", err);
+        }
+    }
 }
 
 #[cfg(test)]

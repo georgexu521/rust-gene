@@ -222,6 +222,69 @@ pub fn promote_session_input(
     }
 }
 
+/// User-visible queued/pending session input row.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SessionInputRecord {
+    pub id: i64,
+    pub prompt_id: Option<String>,
+    pub delivery: InputDelivery,
+    pub content_preview: String,
+    pub state: String,
+    pub created_at: String,
+}
+
+/// List queued inputs that are still pending for a session.
+pub fn list_pending_session_inputs(
+    conn: &rusqlite::Connection,
+    session_id: &str,
+    limit: usize,
+) -> Result<Vec<SessionInputRecord>, rusqlite::Error> {
+    let mut stmt = conn.prepare(
+        "SELECT id, prompt_id, delivery, content, state, created_at
+         FROM session_inputs
+         WHERE session_id = ?1 AND state = 'pending'
+         ORDER BY id ASC
+         LIMIT ?2",
+    )?;
+    let rows = stmt.query_map(rusqlite::params![session_id, limit as i64], |row| {
+        let delivery: String = row.get(2)?;
+        let content: String = row.get(3)?;
+        Ok(SessionInputRecord {
+            id: row.get(0)?,
+            prompt_id: row.get(1)?,
+            delivery: InputDelivery::from_label(&delivery),
+            content_preview: preview_input(&content),
+            state: row.get(4)?,
+            created_at: row.get(5)?,
+        })
+    })?;
+    rows.collect()
+}
+
+/// Cancel one pending input by numeric id or prompt_id.
+pub fn cancel_session_input(
+    conn: &rusqlite::Connection,
+    session_id: &str,
+    id_or_prompt_id: &str,
+) -> Result<bool, rusqlite::Error> {
+    let changed = if let Ok(id) = id_or_prompt_id.parse::<i64>() {
+        conn.execute(
+            "UPDATE session_inputs
+             SET state = 'cancelled', error = 'cancelled_by_user'
+             WHERE session_id = ?1 AND id = ?2 AND state = 'pending'",
+            rusqlite::params![session_id, id],
+        )?
+    } else {
+        conn.execute(
+            "UPDATE session_inputs
+             SET state = 'cancelled', error = 'cancelled_by_user'
+             WHERE session_id = ?1 AND prompt_id = ?2 AND state = 'pending'",
+            rusqlite::params![session_id, id_or_prompt_id],
+        )?
+    };
+    Ok(changed > 0)
+}
+
 /// Clean up promoted session inputs.
 pub fn cleanup_session_inputs(
     conn: &rusqlite::Connection,
@@ -231,6 +294,17 @@ pub fn cleanup_session_inputs(
         "DELETE FROM session_inputs WHERE session_id = ?1 AND promoted_at IS NOT NULL",
         [session_id],
     )?)
+}
+
+fn preview_input(content: &str) -> String {
+    const MAX_CHARS: usize = 120;
+    let mut chars = content.chars();
+    let preview = chars.by_ref().take(MAX_CHARS).collect::<String>();
+    if chars.next().is_some() {
+        format!("{preview}...")
+    } else {
+        preview
+    }
 }
 
 #[cfg(test)]
@@ -355,5 +429,40 @@ mod tests {
         let status =
             admit_session_input(&conn, "s1", "__internal", "prompt", InputDelivery::Queue).unwrap();
         assert!(matches!(status, PromptAdmissionStatus::Rejected { .. }));
+    }
+
+    #[test]
+    fn lists_and_cancels_pending_session_inputs() {
+        let conn = test_conn();
+        conn.execute(
+            "INSERT INTO sessions (id, title, model) VALUES ('s1', 'test', 'kimi')",
+            [],
+        )
+        .unwrap();
+
+        admit_session_input(&conn, "s1", "prompt-1", "fix bug", InputDelivery::Queue).unwrap();
+        admit_session_input(
+            &conn,
+            "s1",
+            "prompt-2",
+            &"long ".repeat(60),
+            InputDelivery::Steer,
+        )
+        .unwrap();
+
+        let pending = list_pending_session_inputs(&conn, "s1", 10).unwrap();
+        assert_eq!(pending.len(), 2);
+        assert_eq!(pending[0].prompt_id.as_deref(), Some("prompt-1"));
+        assert_eq!(pending[1].delivery, InputDelivery::Steer);
+        assert!(
+            pending[1].content_preview.ends_with("..."),
+            "long queued input should be previewed"
+        );
+
+        assert!(cancel_session_input(&conn, "s1", "prompt-1").unwrap());
+        let pending = list_pending_session_inputs(&conn, "s1", 10).unwrap();
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].prompt_id.as_deref(), Some("prompt-2"));
+        assert!(!cancel_session_input(&conn, "s1", "missing").unwrap());
     }
 }

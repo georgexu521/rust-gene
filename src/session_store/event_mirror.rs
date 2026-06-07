@@ -7,6 +7,7 @@
 use crate::engine::streaming::StreamEvent;
 use crate::session_store::event_store::SessionEventWriter;
 use crate::session_store::SessionStore;
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 /// Wraps a `SessionEventWriter` for use in the StreamEvent pipeline.
@@ -21,6 +22,8 @@ pub struct StreamEventMirror {
     writer: SessionEventWriter,
     accumulated_text: String,
     accumulated_reasoning: String,
+    tool_args: HashMap<String, String>,
+    tool_names: HashMap<String, String>,
 }
 
 impl StreamEventMirror {
@@ -32,6 +35,8 @@ impl StreamEventMirror {
             writer,
             accumulated_text: String::new(),
             accumulated_reasoning: String::new(),
+            tool_args: HashMap::new(),
+            tool_names: HashMap::new(),
         })
     }
 
@@ -62,17 +67,46 @@ impl StreamEventMirror {
                     result
                 }
             }
-            StreamEvent::ToolCallStart { id, name } => self.writer.tool_called(id, name),
+            StreamEvent::ToolCallStart { id, name } => {
+                self.tool_names.insert(id.clone(), name.clone());
+                self.writer.tool_called(id, name)
+            }
             StreamEvent::ToolCallArgs { id, args_delta } => {
+                self.tool_args
+                    .entry(id.clone())
+                    .or_default()
+                    .push_str(args_delta);
                 self.writer.tool_args_delta(id, args_delta)
             }
-            StreamEvent::ToolCallComplete { id } => self.writer.tool_call_ready(id),
-            StreamEvent::ToolExecutionStart { id, name, .. } => self.writer.tool_started(id, name),
+            StreamEvent::ToolCallComplete { id } => {
+                let result = self.writer.tool_call_ready(id);
+                if let Some(args) = self.tool_args.get(id) {
+                    let _ = self.writer.tool_input_completed(id, args);
+                }
+                result
+            }
+            StreamEvent::ToolExecutionStart { id, name, .. } => {
+                self.tool_names.insert(id.clone(), name.clone());
+                self.writer.tool_started(id, name)
+            }
             StreamEvent::ToolExecutionProgress { id, progress } => {
                 self.writer.tool_progress(id, progress)
             }
             StreamEvent::ToolExecutionComplete { id, result, .. } => {
-                self.writer.tool_succeeded(id, &safe_preview(result, 256))
+                let succeeded = self.writer.tool_succeeded(id, &safe_preview(result, 256));
+                let _ = self.writer.tool_result_completed(id, result);
+                if is_shell_tool(self.tool_names.get(id).map(String::as_str)) {
+                    let command = self
+                        .tool_args
+                        .get(id)
+                        .and_then(|args| extract_command(args));
+                    let _ = self
+                        .writer
+                        .shell_output_completed(id, command.as_deref(), result);
+                }
+                self.tool_args.remove(id);
+                self.tool_names.remove(id);
+                succeeded
             }
             StreamEvent::Closeout {
                 status,
@@ -108,6 +142,8 @@ impl StreamEventMirror {
                 }
                 self.accumulated_text.clear();
                 self.accumulated_reasoning.clear();
+                self.tool_args.clear();
+                self.tool_names.clear();
                 self.writer.step_ended()
             }
             StreamEvent::Error(message) => self.writer.runtime_error(message),
@@ -123,4 +159,20 @@ fn safe_preview(s: &str, max_bytes: usize) -> String {
         truncated.push_str("...");
         truncated
     }
+}
+
+fn is_shell_tool(tool_name: Option<&str>) -> bool {
+    matches!(tool_name, Some("bash" | "shell" | "run_shell_command"))
+}
+
+fn extract_command(args: &str) -> Option<String> {
+    serde_json::from_str::<serde_json::Value>(args)
+        .ok()
+        .and_then(|value| {
+            value
+                .get("command")
+                .or_else(|| value.get("cmd"))
+                .and_then(|command| command.as_str())
+                .map(str::to_string)
+        })
 }

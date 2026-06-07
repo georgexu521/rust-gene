@@ -417,6 +417,9 @@ async fn run_provider_health_command(args: &[String]) -> anyhow::Result<()> {
         std::time::Duration::from_secs(timeout_secs),
     )
     .await;
+    if let Err(err) = diagnostics::provider_health::append_provider_health_ledger(&report) {
+        tracing::warn!("failed to append provider health ledger: {}", err);
+    }
     let json = serde_json::to_string_pretty(&report)?;
 
     if let Some(path) = output_file {

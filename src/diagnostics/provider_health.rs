@@ -1,8 +1,11 @@
 use crate::services::api::{ChatRequest, LlmProvider, Message, Tool, ToolCall, ToolChoice};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use std::fs::OpenOptions;
+use std::io::{BufRead, Write};
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -32,6 +35,12 @@ pub struct ProviderHealthReport {
     pub timeout_secs: u64,
     pub duration_ms: u128,
     pub steps: Vec<ProviderHealthStep>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProviderHealthLedgerEntry {
+    pub recorded_at_ms: u64,
+    pub report: ProviderHealthReport,
 }
 
 impl ProviderHealthReport {
@@ -89,6 +98,60 @@ pub async fn run_provider_health(
         duration_ms: started.elapsed().as_millis(),
         steps,
     }
+}
+
+pub fn provider_health_ledger_path() -> PathBuf {
+    dirs::data_local_dir()
+        .unwrap_or_else(|| PathBuf::from(".priority-agent"))
+        .join("priority-agent")
+        .join("provider-health.jsonl")
+}
+
+pub fn append_provider_health_ledger(report: &ProviderHealthReport) -> std::io::Result<()> {
+    append_provider_health_ledger_at(&provider_health_ledger_path(), report)
+}
+
+pub fn append_provider_health_ledger_at(
+    path: &Path,
+    report: &ProviderHealthReport,
+) -> std::io::Result<()> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let entry = ProviderHealthLedgerEntry {
+        recorded_at_ms: now_ms(),
+        report: report.clone(),
+    };
+    let mut file = OpenOptions::new().create(true).append(true).open(path)?;
+    serde_json::to_writer(&mut file, &entry)
+        .map_err(|err| std::io::Error::other(format!("serialize provider health ledger: {err}")))?;
+    file.write_all(b"\n")?;
+    Ok(())
+}
+
+pub fn latest_provider_health_entry() -> std::io::Result<Option<ProviderHealthLedgerEntry>> {
+    latest_provider_health_entry_at(&provider_health_ledger_path())
+}
+
+pub fn latest_provider_health_entry_at(
+    path: &Path,
+) -> std::io::Result<Option<ProviderHealthLedgerEntry>> {
+    if !path.exists() {
+        return Ok(None);
+    }
+    let file = std::fs::File::open(path)?;
+    let reader = std::io::BufReader::new(file);
+    let mut latest = None;
+    for line in reader.lines() {
+        let line = line?;
+        if line.trim().is_empty() {
+            continue;
+        }
+        if let Ok(entry) = serde_json::from_str::<ProviderHealthLedgerEntry>(&line) {
+            latest = Some(entry);
+        }
+    }
+    Ok(latest)
 }
 
 async fn run_plain_chat(
@@ -332,6 +395,13 @@ pub fn provider_health_error_category(error: &str) -> &'static str {
     }
 }
 
+fn now_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -384,5 +454,41 @@ mod tests {
 
         assert!(report.failure_summary().contains("plain_chat"));
         assert!(!report.is_ok());
+    }
+
+    #[test]
+    fn provider_health_ledger_appends_and_reads_latest() {
+        let path =
+            std::env::temp_dir().join(format!("provider-health-{}.jsonl", uuid::Uuid::new_v4()));
+        let first = ProviderHealthReport {
+            status: ProviderHealthStatus::Ok,
+            model: "model-a".to_string(),
+            base_url: "https://example-a.test".to_string(),
+            timeout_secs: 5,
+            duration_ms: 1,
+            steps: vec![ok_step("plain_chat", Instant::now(), "ok")],
+        };
+        let second = ProviderHealthReport {
+            status: ProviderHealthStatus::Failed,
+            model: "model-b".to_string(),
+            base_url: "https://example-b.test".to_string(),
+            timeout_secs: 6,
+            duration_ms: 2,
+            steps: vec![failed_step(
+                "tool_call",
+                Instant::now(),
+                "timeout",
+                Some("timeout"),
+            )],
+        };
+
+        append_provider_health_ledger_at(&path, &first).unwrap();
+        append_provider_health_ledger_at(&path, &second).unwrap();
+        let latest = latest_provider_health_entry_at(&path).unwrap().unwrap();
+
+        assert_eq!(latest.report.model, "model-b");
+        assert_eq!(latest.report.status, ProviderHealthStatus::Failed);
+        assert!(latest.recorded_at_ms > 0);
+        let _ = std::fs::remove_file(path);
     }
 }

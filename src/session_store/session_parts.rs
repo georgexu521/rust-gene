@@ -27,6 +27,9 @@ pub enum SessionPart {
         status: ToolPartStatus,
         input_args: Option<String>,
         result_preview: Option<String>,
+        output_uri: Option<String>,
+        input_replay_source: Option<String>,
+        result_replay_source: Option<String>,
         error: Option<String>,
     },
     /// Shell output (large, may reference tool-output:// URI).
@@ -72,6 +75,7 @@ pub enum SessionPart {
         snapshot_checkpoint_id: Option<String>,
         timestamp: Option<String>,
         unrevert_possible: bool,
+        reverted_after: Option<String>,
     },
 }
 
@@ -192,6 +196,9 @@ pub fn project_session_parts(events: &[super::SessionEventRow]) -> Vec<SessionPa
                     status: ToolPartStatus::Running,
                     input_args: None,
                     result_preview: None,
+                    output_uri: None,
+                    input_replay_source: None,
+                    result_replay_source: None,
                     error: None,
                 });
             }
@@ -205,11 +212,13 @@ pub fn project_session_parts(events: &[super::SessionEventRow]) -> Vec<SessionPa
                     SessionPart::Tool {
                         tool_call_id,
                         input_args,
+                        input_replay_source,
                         ..
                     } if tool_call_id == &call_id => {
                         input_args
                             .get_or_insert_with(String::new)
                             .push_str(args_delta);
+                        *input_replay_source = Some("delta".to_string());
                         true
                     }
                     _ => false,
@@ -222,6 +231,44 @@ pub fn project_session_parts(events: &[super::SessionEventRow]) -> Vec<SessionPa
                         status: ToolPartStatus::Pending,
                         input_args: Some(args_delta.to_string()),
                         result_preview: None,
+                        output_uri: None,
+                        input_replay_source: Some("delta".to_string()),
+                        result_replay_source: None,
+                        error: None,
+                    });
+                }
+            }
+            "tool_input_completed" => {
+                let call_id = payload["tool_call_id"].as_str().unwrap_or("").to_string();
+                let input = payload["input_args"].as_str().unwrap_or("").to_string();
+                let replay_source = payload["replay_source"]
+                    .as_str()
+                    .unwrap_or("completed_event")
+                    .to_string();
+                let found = parts.iter_mut().rev().any(|p| match p {
+                    SessionPart::Tool {
+                        tool_call_id,
+                        input_args,
+                        input_replay_source,
+                        ..
+                    } if tool_call_id == &call_id => {
+                        *input_args = Some(input.clone());
+                        *input_replay_source = Some(replay_source.clone());
+                        true
+                    }
+                    _ => false,
+                });
+                if !found {
+                    parts.push(SessionPart::Tool {
+                        part_id: format!("tool_{call_id}"),
+                        tool_call_id: call_id,
+                        tool_name: String::new(),
+                        status: ToolPartStatus::Pending,
+                        input_args: Some(input),
+                        result_preview: None,
+                        output_uri: None,
+                        input_replay_source: Some(replay_source),
+                        result_replay_source: None,
                         error: None,
                     });
                 }
@@ -252,6 +299,9 @@ pub fn project_session_parts(events: &[super::SessionEventRow]) -> Vec<SessionPa
                         status: ToolPartStatus::Running,
                         input_args: None,
                         result_preview: None,
+                        output_uri: None,
+                        input_replay_source: None,
+                        result_replay_source: None,
                         error: None,
                     });
                 }
@@ -263,10 +313,12 @@ pub fn project_session_parts(events: &[super::SessionEventRow]) -> Vec<SessionPa
                         tool_call_id,
                         status,
                         result_preview,
+                        result_replay_source,
                         ..
                     } if tool_call_id == &call_id => {
                         *status = ToolPartStatus::Completed;
                         *result_preview = payload["result_preview"].as_str().map(|s| s.to_string());
+                        *result_replay_source = Some("preview_event".to_string());
                         true
                     }
                     _ => false,
@@ -279,6 +331,52 @@ pub fn project_session_parts(events: &[super::SessionEventRow]) -> Vec<SessionPa
                         status: ToolPartStatus::Completed,
                         input_args: None,
                         result_preview: payload["result_preview"].as_str().map(|s| s.to_string()),
+                        output_uri: None,
+                        input_replay_source: None,
+                        result_replay_source: Some("preview_event".to_string()),
+                        error: None,
+                    });
+                }
+            }
+            "tool_result_completed" => {
+                let call_id = payload["tool_call_id"].as_str().unwrap_or("").to_string();
+                let result_preview = payload["result_preview"]
+                    .as_str()
+                    .or_else(|| payload["result"].as_str())
+                    .map(str::to_string);
+                let output_uri = payload["output_uri"].as_str().map(str::to_string);
+                let replay_source = payload["replay_source"]
+                    .as_str()
+                    .unwrap_or("completed_event")
+                    .to_string();
+                let found = parts.iter_mut().rev().any(|p| match p {
+                    SessionPart::Tool {
+                        tool_call_id,
+                        status,
+                        result_preview: current_preview,
+                        output_uri: current_uri,
+                        result_replay_source,
+                        ..
+                    } if tool_call_id == &call_id => {
+                        *status = ToolPartStatus::Completed;
+                        *current_preview = result_preview.clone();
+                        *current_uri = output_uri.clone();
+                        *result_replay_source = Some(replay_source.clone());
+                        true
+                    }
+                    _ => false,
+                });
+                if !found {
+                    parts.push(SessionPart::Tool {
+                        part_id: format!("tool_{call_id}"),
+                        tool_call_id: call_id,
+                        tool_name: String::new(),
+                        status: ToolPartStatus::Completed,
+                        input_args: None,
+                        result_preview,
+                        output_uri,
+                        input_replay_source: None,
+                        result_replay_source: Some(replay_source),
                         error: None,
                     });
                 }
@@ -306,6 +404,9 @@ pub fn project_session_parts(events: &[super::SessionEventRow]) -> Vec<SessionPa
                         status: ToolPartStatus::Failed,
                         input_args: None,
                         result_preview: None,
+                        output_uri: None,
+                        input_replay_source: None,
+                        result_replay_source: None,
                         error: payload["error"].as_str().map(|s| s.to_string()),
                     });
                 }
@@ -313,6 +414,16 @@ pub fn project_session_parts(events: &[super::SessionEventRow]) -> Vec<SessionPa
             // Non-merge events reset text/reasoning block tracking so the
             // next delta starts a fresh block with a new part_id.
             other => match other {
+                "shell_output_completed" => {
+                    let call_id = payload["tool_call_id"].as_str().unwrap_or("").to_string();
+                    parts.push(SessionPart::Shell {
+                        part_id: format!("shell_{call_id}"),
+                        tool_call_id: call_id,
+                        command: payload["command"].as_str().map(str::to_string),
+                        status: ToolPartStatus::Completed,
+                        output_uri: payload["output_uri"].as_str().map(str::to_string),
+                    });
+                }
                 "closeout" => parts.push(SessionPart::Closeout {
                     part_id: format!("closeout_{}", event.seq),
                     status: payload["status"].as_str().unwrap_or("unknown").to_string(),
@@ -346,6 +457,7 @@ pub fn project_session_parts(events: &[super::SessionEventRow]) -> Vec<SessionPa
                         .map(str::to_string),
                     timestamp: payload["timestamp"].as_str().map(str::to_string),
                     unrevert_possible: payload["unrevert_possible"].as_bool().unwrap_or(false),
+                    reverted_after: reverted_after_marker(&payload),
                 }),
                 "unrevert" => parts.push(SessionPart::Revert {
                     part_id: format!("unrevert_{}", event.seq),
@@ -362,6 +474,7 @@ pub fn project_session_parts(events: &[super::SessionEventRow]) -> Vec<SessionPa
                         .map(str::to_string),
                     timestamp: payload["timestamp"].as_str().map(str::to_string),
                     unrevert_possible: false,
+                    reverted_after: reverted_after_marker(&payload),
                 }),
                 _ => {}
             },
@@ -500,6 +613,9 @@ fn apply_event_to_session_parts(
                 status: ToolPartStatus::Running,
                 input_args: None,
                 result_preview: None,
+                output_uri: None,
+                input_replay_source: None,
+                result_replay_source: None,
                 error: None,
             };
             insert_session_part(conn, session_id, part_id, part, event.seq)
@@ -510,7 +626,32 @@ fn apply_event_to_session_parts(
             if args_delta.is_empty() {
                 return Ok(());
             }
-            upsert_tool_field(conn, session_id, &call_id, "input_args", args_delta, true)
+            upsert_tool_field(conn, session_id, &call_id, "input_args", args_delta, true)?;
+            upsert_tool_field(
+                conn,
+                session_id,
+                &call_id,
+                "input_replay_source",
+                "delta",
+                false,
+            )
+        }
+        "tool_input_completed" => {
+            let call_id = payload["tool_call_id"].as_str().unwrap_or("").to_string();
+            let input = payload["input_args"].as_str().unwrap_or("");
+            let replay_source = payload["replay_source"]
+                .as_str()
+                .unwrap_or("completed_event");
+            ensure_tool_part(conn, session_id, &call_id, event.seq)?;
+            upsert_tool_field(conn, session_id, &call_id, "input_args", input, false)?;
+            upsert_tool_field(
+                conn,
+                session_id,
+                &call_id,
+                "input_replay_source",
+                replay_source,
+                false,
+            )
         }
         "tool_started" => {
             let call_id = payload["tool_call_id"].as_str().unwrap_or("").to_string();
@@ -545,6 +686,9 @@ fn apply_event_to_session_parts(
                         status: ToolPartStatus::Running,
                         input_args: None,
                         result_preview: None,
+                        output_uri: None,
+                        input_replay_source: None,
+                        result_replay_source: None,
                         error: None,
                     };
                     insert_session_part(conn, session_id, part_id, part, event.seq)?;
@@ -558,7 +702,57 @@ fn apply_event_to_session_parts(
             let part_id = format!("tool_{call_id}");
             if let Some(v) = result.as_ref() {
                 upsert_tool_field(conn, session_id, &call_id, "result_preview", v, false)?;
+                upsert_tool_field(
+                    conn,
+                    session_id,
+                    &call_id,
+                    "result_replay_source",
+                    "preview_event",
+                    false,
+                )?;
             }
+            let _ = conn.execute(
+                "UPDATE session_parts SET status = ?1, updated_at = datetime('now') WHERE session_id = ?2 AND part_id = ?3",
+                rusqlite::params![ToolPartStatus::Completed.label(), session_id, part_id],
+            );
+            update_payload_field_direct(
+                conn,
+                session_id,
+                &part_id,
+                "status",
+                &serde_json::Value::String(ToolPartStatus::Completed.label().to_string()),
+            )
+        }
+        "tool_result_completed" => {
+            let call_id = payload["tool_call_id"].as_str().unwrap_or("").to_string();
+            let result_preview = payload["result_preview"]
+                .as_str()
+                .or_else(|| payload["result"].as_str())
+                .unwrap_or("");
+            let replay_source = payload["replay_source"]
+                .as_str()
+                .unwrap_or("completed_event");
+            let part_id = format!("tool_{call_id}");
+            ensure_tool_part(conn, session_id, &call_id, event.seq)?;
+            upsert_tool_field(
+                conn,
+                session_id,
+                &call_id,
+                "result_preview",
+                result_preview,
+                false,
+            )?;
+            if let Some(output_uri) = payload["output_uri"].as_str() {
+                upsert_tool_field(conn, session_id, &call_id, "output_uri", output_uri, false)?;
+            }
+            upsert_tool_field(
+                conn,
+                session_id,
+                &call_id,
+                "result_replay_source",
+                replay_source,
+                false,
+            )?;
             let _ = conn.execute(
                 "UPDATE session_parts SET status = ?1, updated_at = datetime('now') WHERE session_id = ?2 AND part_id = ?3",
                 rusqlite::params![ToolPartStatus::Completed.label(), session_id, part_id],
@@ -620,6 +814,18 @@ fn apply_event_to_session_parts(
             };
             insert_session_part(conn, session_id, part_id, part, event.seq)
         }
+        "shell_output_completed" => {
+            let call_id = payload["tool_call_id"].as_str().unwrap_or("").to_string();
+            let part_id = format!("shell_{call_id}");
+            let part = SessionPart::Shell {
+                part_id: part_id.clone(),
+                tool_call_id: call_id,
+                command: payload["command"].as_str().map(str::to_string),
+                status: ToolPartStatus::Completed,
+                output_uri: payload["output_uri"].as_str().map(str::to_string),
+            };
+            insert_session_part(conn, session_id, part_id, part, event.seq)
+        }
         "revert" => {
             let part_id = format!("revert_{}", event.seq);
             let part = SessionPart::Revert {
@@ -637,6 +843,7 @@ fn apply_event_to_session_parts(
                     .map(str::to_string),
                 timestamp: payload["timestamp"].as_str().map(str::to_string),
                 unrevert_possible: payload["unrevert_possible"].as_bool().unwrap_or(false),
+                reverted_after: reverted_after_marker(&payload),
             };
             insert_session_part(conn, session_id, part_id, part, event.seq)
         }
@@ -657,6 +864,7 @@ fn apply_event_to_session_parts(
                     .map(str::to_string),
                 timestamp: payload["timestamp"].as_str().map(str::to_string),
                 unrevert_possible: false,
+                reverted_after: reverted_after_marker(&payload),
             };
             insert_session_part(conn, session_id, part_id, part, event.seq)
         }
@@ -816,6 +1024,31 @@ fn find_part_id_by_part_id(conn: &Connection, session_id: &str, part_id: &str) -
         |row| row.get(0),
     )
     .ok()
+}
+
+fn ensure_tool_part(
+    conn: &Connection,
+    session_id: &str,
+    tool_call_id: &str,
+    seq: i64,
+) -> Result<(), rusqlite::Error> {
+    let part_id = format!("tool_{tool_call_id}");
+    if find_part_id_by_part_id(conn, session_id, &part_id).is_some() {
+        return Ok(());
+    }
+    let part = SessionPart::Tool {
+        part_id: part_id.clone(),
+        tool_call_id: tool_call_id.to_string(),
+        tool_name: String::new(),
+        status: ToolPartStatus::Pending,
+        input_args: None,
+        result_preview: None,
+        output_uri: None,
+        input_replay_source: None,
+        result_replay_source: None,
+        error: None,
+    };
+    insert_session_part(conn, session_id, part_id, part, seq)
 }
 
 /// Upsert a field in a tool part's JSON payload.
@@ -1005,6 +1238,14 @@ fn string_array(value: &serde_json::Value) -> Vec<String> {
         .unwrap_or_default()
 }
 
+fn reverted_after_marker(payload: &serde_json::Value) -> Option<String> {
+    payload["reverted_after"]
+        .as_str()
+        .or_else(|| payload["target_part_id"].as_str())
+        .map(str::to_string)
+        .or_else(|| string_array(&payload["part_ids"]).last().cloned())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1101,6 +1342,104 @@ mod tests {
     }
 
     #[test]
+    fn projects_completed_tool_input_without_delta() {
+        let events = vec![
+            row(
+                1,
+                "tool_input_completed",
+                r#"{"tool_call_id":"c1","input_args":"{\"command\":\"cargo test\"}","replay_source":"completed_event"}"#,
+            ),
+            row(
+                2,
+                "tool_started",
+                r#"{"tool_call_id":"c1","tool_name":"bash"}"#,
+            ),
+        ];
+
+        let parts = project_session_parts(&events);
+        match &parts[0] {
+            SessionPart::Tool {
+                input_args,
+                input_replay_source,
+                tool_name,
+                ..
+            } => {
+                assert_eq!(tool_name, "bash");
+                assert_eq!(input_args.as_deref(), Some(r#"{"command":"cargo test"}"#));
+                assert_eq!(input_replay_source.as_deref(), Some("completed_event"));
+            }
+            _ => panic!("expected tool"),
+        }
+    }
+
+    #[test]
+    fn projects_completed_tool_result_with_output_uri() {
+        let events = vec![
+            row(
+                1,
+                "tool_called",
+                r#"{"tool_call_id":"c1","tool_name":"bash"}"#,
+            ),
+            row(
+                2,
+                "tool_result_completed",
+                r#"{"tool_call_id":"c1","result_preview":"tail","output_uri":"tool-output://bash_c1","replay_source":"completed_event"}"#,
+            ),
+            row(
+                3,
+                "shell_output_completed",
+                r#"{"tool_call_id":"c1","command":"cargo test","output_uri":"tool-output://bash_c1","replay_source":"completed_event"}"#,
+            ),
+        ];
+
+        let parts = project_session_parts(&events);
+        assert_eq!(parts.len(), 2);
+        match &parts[0] {
+            SessionPart::Tool {
+                status,
+                result_preview,
+                output_uri,
+                result_replay_source,
+                ..
+            } => {
+                assert_eq!(*status, ToolPartStatus::Completed);
+                assert_eq!(result_preview.as_deref(), Some("tail"));
+                assert_eq!(output_uri.as_deref(), Some("tool-output://bash_c1"));
+                assert_eq!(result_replay_source.as_deref(), Some("completed_event"));
+            }
+            _ => panic!("expected tool"),
+        }
+        assert!(matches!(
+            &parts[1],
+            SessionPart::Shell {
+                command,
+                output_uri,
+                ..
+            } if command.as_deref() == Some("cargo test")
+                && output_uri.as_deref() == Some("tool-output://bash_c1")
+        ));
+    }
+
+    #[test]
+    fn projects_revert_marker_from_target_part() {
+        let events = vec![row(
+            1,
+            "revert",
+            r#"{"status":"completed","target_part_id":"tool_c1","part_ids":["tool_c1"],"unrevert_possible":true}"#,
+        )];
+
+        let parts = project_session_parts(&events);
+        assert!(matches!(
+            &parts[0],
+            SessionPart::Revert {
+                reverted_after,
+                unrevert_possible,
+                ..
+            } if reverted_after.as_deref() == Some("tool_c1") && *unrevert_possible
+        ));
+    }
+
+    #[test]
     fn incremental_projection_matches_full_projection_for_text_tool_text() {
         let conn = test_conn();
         let events = vec![
@@ -1112,12 +1451,27 @@ mod tests {
             ),
             row(
                 3,
+                "tool_input_completed",
+                r#"{"tool_call_id":"c1","input_args":"{\"command\":\"cargo test\"}","replay_source":"completed_event"}"#,
+            ),
+            row(
+                4,
                 "tool_succeeded",
                 r#"{"tool_call_id":"c1","result_preview":"ok"}"#,
             ),
-            row(4, "assistant_text_delta", r#"{"text":"after"}"#),
-            row(5, "reasoning_delta", r#"{"text":"think"}"#),
-            row(6, "reasoning_completed", r#"{"text":"think done"}"#),
+            row(
+                5,
+                "tool_result_completed",
+                r#"{"tool_call_id":"c1","result_preview":"ok full","output_uri":"tool-output://bash_c1","replay_source":"completed_event"}"#,
+            ),
+            row(
+                6,
+                "shell_output_completed",
+                r#"{"tool_call_id":"c1","command":"cargo test","output_uri":"tool-output://bash_c1","replay_source":"completed_event"}"#,
+            ),
+            row(7, "assistant_text_delta", r#"{"text":"after"}"#),
+            row(8, "reasoning_delta", r#"{"text":"think"}"#),
+            row(9, "reasoning_completed", r#"{"text":"think done"}"#),
         ];
 
         for event in &events {
