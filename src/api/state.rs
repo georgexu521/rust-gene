@@ -119,6 +119,9 @@ impl ApiState {
                 completion_tokens: u.completion_tokens,
                 total_tokens: u.total_tokens,
             }),
+            execution_kind: "provider_chat".to_string(),
+            full_agent: false,
+            agent_runtime_entrypoint: None,
         })
     }
 

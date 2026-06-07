@@ -32,6 +32,47 @@ pub struct ProviderProductStatus {
     pub capability_summary: String,
 }
 
+/// Effective timeout configuration with source tracking.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProviderTimeoutEffectiveDto {
+    pub request_secs: u64,
+    pub stream_idle_secs: u64,
+    pub slow_warning_secs: u64,
+    pub max_retry_attempts: u32,
+    pub source: String,
+}
+
+impl ProviderTimeoutEffectiveDto {
+    pub fn from_env() -> Self {
+        let source = if std::env::var("PRIORITY_AGENT_REQUEST_TIMEOUT_SECS").is_ok()
+            || std::env::var("PRIORITY_AGENT_STREAM_IDLE_TIMEOUT_SECS").is_ok()
+        {
+            "env"
+        } else {
+            "default"
+        };
+        Self {
+            request_secs: std::env::var("PRIORITY_AGENT_REQUEST_TIMEOUT_SECS")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(180),
+            stream_idle_secs: std::env::var("PRIORITY_AGENT_STREAM_IDLE_TIMEOUT_SECS")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(60),
+            slow_warning_secs: std::env::var("PRIORITY_AGENT_SLOW_WARNING_SECS")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(45),
+            max_retry_attempts: std::env::var("PRIORITY_AGENT_MAX_RETRY_ATTEMPTS")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(3),
+            source: source.to_string(),
+        }
+    }
+}
+
 /// Provider status page response.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProviderStatusPage {

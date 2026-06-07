@@ -205,18 +205,113 @@ API:
 
 ---
 
-## Provider Runtime Profile
+## Provider Status Page
+
+The `GET /api/provider/status` route returns a `ProviderStatusPage` DTO
+(not a single runtime profile object).  Each entry is a `ProviderProductStatus`
+with stable product fields.
 
 ```json
 {
-  "provider_id": "string",
-  "model_id": "string",
-  "protocol_family": "openai_compatible | minimax | kimi | anthropic_like | reasoning_capable",
-  "supports_streaming_tool_calls": "bool",
-  "requires_nonstreaming_tool_calls": "bool",
-  "request_timeout_secs": "u64",
-  "stream_idle_timeout_secs": "u64",
-  "last_health_status": "string | null",
+  "statuses": [
+    {
+      "provider_id": "string",
+      "label": "string",
+      "model_id": "string",
+      "model_display_name": "string",
+      "connection_source": "env | config | runtime | custom",
+      "configured": "bool",
+      "active": "bool",
+      "disabled": "bool",
+      "base_url_host": "string (host only, no credentials)",
+      "protocol_family": "openai_compatible | minimax | kimi | anthropic_like",
+      "supports_streaming_tool_calls": "bool",
+      "requires_nonstreaming": "bool",
+      "context_limit": "u64 | null",
+      "output_limit": "u64 | null",
+      "configured_max_output": "u64 | null",
+      "cost_input_per_1m": "f64 | null",
+      "cost_output_per_1m": "f64 | null",
+      "cost_cache_read_per_1m": "f64 | null",
+      "latest_health_status": "ok | failed | null",
+      "latest_timeout_category": "string | null",
+      "last_request_latency_ms": "u64 | null",
+      "request_timeout_secs": "u64",
+      "stream_idle_timeout_secs": "u64",
+      "capability_summary": "string"
+    }
+  ],
+  "record_count": "usize"
+}
+```
+
+API:
+- `GET /api/provider/status` → `ProviderStatusPage`
+
+---
+
+## Session Revert Item
+
+`GET /api/sessions/:id/reverts` returns a page of `SessionRevertItem` payloads
+read from the durable `session_reverts` projection (not only from raw events).
+
+```json
+{
+  "session_id": "string",
+  "reverts": [
+    {
+      "status": "completed | partial | failed",
+      "message_id": "string | null",
+      "target_part_id": "string | null",
+      "part_ids": ["string"],
+      "paths": ["string"],
+      "restored_files": ["string"],
+      "removed_files": ["string"],
+      "errors": ["string"],
+      "snapshot_checkpoint_id": "string | null",
+      "timestamp": "datetime | null",
+      "unrevert_possible": "bool"
+    }
+  ],
+  "total": "usize"
+}
+```
+
+---
+
+## API Chat vs Full-Agent
+
+- `POST /api/chat` is **provider chat only** — it sends a message to the
+  configured LLM provider directly.  It does **not** enter the full
+  programming-agent runtime (no tool loop, no checkpoint, no closeout proof,
+  no session event stream).  The response includes `execution_kind: "provider_chat"`
+  and `full_agent: false` to make this unambiguous.
+- The full-agent prompt path for HTTP is `POST /api/sessions/:id/prompt`
+  (feature-gated, returns typed `501` until wired to `RuntimeController`).
+
+---
+
+## Cursor Semantics
+
+All cursor-based routes include `cursor.limit` (the requested page size),
+`cursor.has_more` (whether additional pages exist beyond the returned items),
+and a next-cursor field (`after_part_index` or `after_seq`) to use on the next
+request.  Clients should drive paging with `after` + `limit`, not by guessing
+indices.
+
+- `session_parts` is the **preferred UI projection** (typed, stable part_ids).
+- `session_events` is the **audit/debug stream** (raw event entries, append-only,
+  use only when you need replay fidelity).
+
+---
+
+## Original Schema (pre-v2)
+
+The sections below describe the earlier schema versions and remain valid for
+the baseline `run_report.v1` diagnostic export format.
+
+Previous Provider Runtime Profile (single profile, deprecated in favor of
+`ProviderStatusPage`):
   "last_timeout_category": "string | null",
   "capability_summary": "string"
 }

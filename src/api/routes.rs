@@ -135,6 +135,12 @@ pub struct ChatResponse {
     pub session_id: String,
     pub model: String,
     pub usage: Option<UsageInfo>,
+    #[serde(default)]
+    pub execution_kind: String,
+    #[serde(default)]
+    pub full_agent: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub agent_runtime_entrypoint: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -162,6 +168,9 @@ async fn chat_handler(
             session_id,
             model: result.model,
             usage: result.usage,
+            execution_kind: "provider_chat".to_string(),
+            full_agent: false,
+            agent_runtime_entrypoint: None,
         }),
     ))
 }
@@ -1451,5 +1460,141 @@ mod tests {
             "generated_at should be present"
         );
         assert!(value["weeks"].is_array(), "weeks should be array");
+    }
+
+    // ══ Phase 5: API route contract tests ───────────────────────────
+
+    fn api_test_state() -> Arc<ApiState> {
+        let session_store =
+            crate::session_store::SessionStore::in_memory().expect("in-memory session store");
+        Arc::new(crate::api::state::ApiState {
+            provider: Arc::new(MockProvider),
+            model: "mock-model".to_string(),
+            tool_registry: Arc::new(crate::tools::ToolRegistry::new()),
+            session_store: Arc::new(tokio::sync::RwLock::new(session_store)),
+            config: Arc::new(tokio::sync::RwLock::new(
+                crate::services::config::AppConfig::default(),
+            )),
+            start_time: Instant::now(),
+            request_count: Arc::new(tokio::sync::RwLock::new(0)),
+            audit_tracker: Arc::new(tokio::sync::RwLock::new(
+                crate::cost_tracker::CostTracker::new(),
+            )),
+            lsp_manager: None,
+            worktree_manager: None,
+        })
+    }
+
+    async fn json_response(app: &axum::Router, uri: &str) -> serde_json::Value {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(uri)
+                    .method("GET")
+                    .header(
+                        axum::http::header::AUTHORIZATION,
+                        format!("Bearer {TEST_BRIDGE_TOKEN}"),
+                    )
+                    .body(Body::empty())
+                    .expect("build request"),
+            )
+            .await
+            .expect("request should succeed");
+        assert_eq!(response.status(), StatusCode::OK, "expected 200 for {uri}");
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        serde_json::from_slice(&body).expect("valid json response")
+    }
+
+    #[tokio::test]
+    async fn provider_status_has_required_fields() {
+        let _env_guard = ENV_LOCK.lock().await;
+        unsafe { std::env::set_var("PRIORITY_AGENT_BRIDGE_TOKEN", TEST_BRIDGE_TOKEN) };
+        let state = api_test_state();
+        let app = create_routes(state);
+        let value = json_response(&app, "/api/provider/status").await;
+        assert!(value["statuses"].is_array(), "statuses is array");
+        assert!(value["record_count"].is_number(), "record_count");
+        let first = &value["statuses"][0];
+        assert!(first["provider_id"].is_string(), "provider_id");
+        assert!(first["model_id"].is_string(), "model_id");
+        assert!(first["protocol_family"].is_string(), "protocol_family");
+    }
+
+    #[tokio::test]
+    async fn diagnostics_has_policy_and_profile_fields() {
+        let _env_guard = ENV_LOCK.lock().await;
+        unsafe { std::env::set_var("PRIORITY_AGENT_BRIDGE_TOKEN", TEST_BRIDGE_TOKEN) };
+        let state = api_test_state();
+        let app = create_routes(state);
+        let value = json_response(&app, "/api/diagnostics/latest?session_id=test").await;
+        assert!(value["schema"].is_string(), "schema");
+        assert!(value["provider_profile"].is_object(), "provider_profile");
+        assert!(
+            value["tool_output_policy"].is_object(),
+            "tool_output_policy"
+        );
+        assert!(value["revert_events"].is_number(), "revert_events");
+    }
+
+    #[tokio::test]
+    async fn session_parts_returns_cursor_shape() {
+        let _env_guard = ENV_LOCK.lock().await;
+        unsafe { std::env::set_var("PRIORITY_AGENT_BRIDGE_TOKEN", TEST_BRIDGE_TOKEN) };
+        let state = api_test_state();
+        {
+            let store = state.session_store.read().await;
+            let _ = store.create_session("test", "Test Session", "mock-model");
+        }
+        let app = create_routes(state);
+        let value = json_response(&app, "/api/sessions/test/parts?limit=10").await;
+        assert_eq!(value["session_id"], "test");
+        assert!(value["parts"].is_array(), "parts is array");
+        assert!(value["cursor"].is_object(), "cursor is object");
+        assert!(value["cursor"]["has_more"].is_boolean(), "cursor.has_more");
+        assert!(value["cursor"]["limit"].is_number(), "cursor.limit");
+    }
+
+    #[tokio::test]
+    async fn session_reverts_reads_durable_parts() {
+        let _env_guard = ENV_LOCK.lock().await;
+        unsafe { std::env::set_var("PRIORITY_AGENT_BRIDGE_TOKEN", TEST_BRIDGE_TOKEN) };
+        let state = api_test_state();
+        {
+            let store = state.session_store.read().await;
+            let _ = store.create_session("test", "Test Session", "mock-model");
+        }
+        let app = create_routes(state);
+        let value = json_response(&app, "/api/sessions/test/reverts?limit=5").await;
+        assert_eq!(value["session_id"], "test");
+        assert!(value["reverts"].is_array(), "reverts is array");
+        assert!(value["total"].is_number(), "total is number");
+    }
+
+    #[tokio::test]
+    async fn tool_outputs_returns_session_scoped_index() {
+        let _env_guard = ENV_LOCK.lock().await;
+        unsafe { std::env::set_var("PRIORITY_AGENT_BRIDGE_TOKEN", TEST_BRIDGE_TOKEN) };
+        let state = api_test_state();
+        let app = create_routes(state);
+        let value = json_response(&app, "/api/sessions/test/tool-outputs").await;
+        assert_eq!(value["session_id"], "test");
+        assert!(value["outputs"].is_array(), "outputs is array");
+    }
+
+    #[tokio::test]
+    async fn session_events_returns_cursor_shape() {
+        let _env_guard = ENV_LOCK.lock().await;
+        unsafe { std::env::set_var("PRIORITY_AGENT_BRIDGE_TOKEN", TEST_BRIDGE_TOKEN) };
+        let state = api_test_state();
+        {
+            let store = state.session_store.read().await;
+            let _ = store.create_session("test", "Test Session", "mock-model");
+        }
+        let app = create_routes(state);
+        let value = json_response(&app, "/api/sessions/test/events?limit=10").await;
+        assert_eq!(value["session_id"], "test");
+        assert!(value["events"].is_array(), "events is array");
+        assert!(value["cursor"]["has_more"].is_boolean(), "cursor.has_more");
     }
 }
