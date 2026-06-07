@@ -63,6 +63,18 @@ impl ToolApprovalResponse {
         }
     }
 
+    pub fn approved_session() -> Self {
+        Self {
+            approved: true,
+            decision: Some(PermissionReviewDecision::ApproveSession),
+            rule_decision: None,
+            persistence_scope: Some("session".to_string()),
+            rule_pattern: None,
+            persisted_path: None,
+            note: None,
+        }
+    }
+
     pub fn rejected_once() -> Self {
         Self {
             approved: false,

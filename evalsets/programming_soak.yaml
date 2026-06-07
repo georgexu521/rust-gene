@@ -1,0 +1,41 @@
+# Soak suite evalset — real programming tasks for release confidence.
+name: programming_soak
+description: Real programming soak tasks for opencode parity validation.
+scenarios:
+  - id: soak-single-file-bug-fix
+    eval_intent: seeded_code_change
+    prompt: |
+      You are working on a Rust CLI tool located in the `fixtures/cli_tool` directory.
+
+      The project has a `main.rs` that uses `clap` for argument parsing. Currently the `name` field is only read from config.toml.
+
+      Task: Add a `--name <NAME>` flag (global, long, takes a value) to the CLI that overrides the config name. When `--name` is provided, the `run` and `status` commands should use the CLI-provided name instead of the config file name.
+
+      Steps:
+      1. Read `fixtures/cli_tool/src/main.rs`
+      2. Use file_edit to add the `--name` flag to the `Cli` struct
+      3. Update `run_status` and `run_run` functions to use the CLI flag when provided
+      4. Run `cargo check` inside `fixtures/cli_tool` to verify
+      5. Close out with verification result
+
+      Working directory: fixtures/cli_tool
+    expect:
+      intent: code_change
+      changed_files:
+        - fixtures/cli_tool/src/main.rs
+    required_commands:
+      - cargo check
+    working_directory: fixtures/cli_tool
+
+  - id: soak-permission-deny-safe-retry
+    eval_intent: seeded_code_change
+    prompt: |
+      Working directory: fixtures/cli_tool
+
+      Add a `--debug` flag to the CLI struct in `src/main.rs` (just like `--verbose` but named `--debug`).
+      Use `file_edit`, not raw bash write. Then run `cargo check`.
+    expect:
+      intent: code_change
+      required_commands:
+        - cargo check
+    working_directory: fixtures/cli_tool

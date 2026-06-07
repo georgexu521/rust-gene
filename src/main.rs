@@ -133,6 +133,7 @@ fn configure_eval_memory_isolation(output_file: Option<&str>, events_file: Optio
 async fn answer_pending_approval(
     engine: &std::sync::Arc<priority_agent::engine::streaming::StreamingQueryEngine>,
     approved: bool,
+    session_scoped: bool,
 ) -> bool {
     let Some(channel) = engine.approval_channel() else {
         return false;
@@ -141,7 +142,11 @@ async fn answer_pending_approval(
     for _ in 0..20 {
         if let Some((_request, tx)) = channel.take_pending().await {
             let response = if approved {
-                priority_agent::engine::conversation_loop::ToolApprovalResponse::approved_once()
+                if session_scoped {
+                    priority_agent::engine::conversation_loop::ToolApprovalResponse::approved_session()
+                } else {
+                    priority_agent::engine::conversation_loop::ToolApprovalResponse::approved_once()
+                }
             } else {
                 priority_agent::engine::conversation_loop::ToolApprovalResponse::rejected_once()
             };
@@ -168,8 +173,21 @@ async fn run_eval_task(
     let events_file =
         arg_value(args, "--events").or_else(|| std::env::var("PRIORITY_AGENT_EVAL_EVENTS").ok());
 
-    let prompt = std::fs::read_to_string(&prompt_file)
+    let mut prompt = std::fs::read_to_string(&prompt_file)
         .map_err(|e| anyhow::anyhow!("failed to read prompt file '{}': {}", prompt_file, e))?;
+
+    // When eval mutations are enabled, insert a code_change signal prefix
+    // so the intent router exposes file_edit/file_write/bash and the
+    // permission handler auto-approves mutating tools.
+    let allow_mutations = std::env::var("PRIORITY_AGENT_EVAL_ALLOW_MUTATIONS")
+        .unwrap_or_else(|_| "0".to_string())
+        .trim()
+        == "1";
+    if allow_mutations && !prompt.trim().is_empty() {
+        // Force code_change route: prepend the exact pattern that
+        // is_live_coding_code_change_request detects.
+        prompt = format!("eval intent: seeded_code_change\n\n{prompt}");
+    }
 
     configure_eval_memory_isolation(output_file.as_deref(), events_file.as_deref());
     let eval_memory_generate = env_flag("PRIORITY_AGENT_EVAL_MEMORY_GENERATE").unwrap_or(false);
@@ -331,12 +349,10 @@ async fn run_eval_task(
             } => {
                 // Eval-run is read-only by default; set PRIORITY_AGENT_EVAL_ALLOW_MUTATIONS=1
                 // to auto-approve tool permissions for seeded code-change tasks.
-                let should_auto_approve = std::env::var("PRIORITY_AGENT_EVAL_ALLOW_MUTATIONS")
-                    .unwrap_or_else(|_| "0".to_string())
-                    .trim()
-                    == "1";
+                // Session-scoped approval means bash/file_edit/file_write stay
+                // approved across multiple iterations during the eval.
                 let answered =
-                    answer_pending_approval(&components.streaming_engine, should_auto_approve)
+                    answer_pending_approval(&components.streaming_engine, allow_mutations, allow_mutations)
                         .await;
                 write_eval_event(
                     &mut event_writer,
@@ -346,7 +362,7 @@ async fn run_eval_task(
                         "tool_name": tool_name,
                         "arguments": arguments,
                         "prompt": prompt,
-                        "auto_response": if should_auto_approve { "approve" } else { "deny" },
+                        "auto_response": if allow_mutations { "approve" } else { "deny" },
                         "answered": answered,
                     }),
                 )?;
