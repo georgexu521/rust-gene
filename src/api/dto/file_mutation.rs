@@ -1,35 +1,25 @@
-//! File mutation result DTO — unified schema for write/edit/patch.
+//! API aliases for canonical file mutation metadata.
 //!
-//! Slice C of the opencode programming parity plan.
+//! The source of truth lives with the file tools so API, TUI, desktop, trace,
+//! repair, and rollback do not drift into separate schemas.
 
-use serde::{Deserialize, Serialize};
+pub type FileMutationResultV2 = crate::tools::file_tool::mutation_result::FileMutationResult;
+pub type FileMutationFileResultV2 = crate::tools::file_tool::mutation_result::FileResult;
+pub type FileMutationDiffV2 = crate::tools::file_tool::mutation_result::MutationDiff;
+pub type FileMutationCheckpointV2 = crate::tools::file_tool::mutation_result::MutationCheckpoint;
 
-/// Compact, model-friendly mutation result shared across file_write, file_edit,
-/// and file_patch.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct FileMutationResultV2 {
-    pub operation: String,
-    pub changed_paths: Vec<String>,
-    pub checkpoint_id: Option<String>,
-    pub diff_preview: Option<String>,
-    pub additions: usize,
-    pub deletions: usize,
-    pub stale_state: Option<String>,
-    pub diagnostics_delta: Option<serde_json::Value>,
-    pub rollback_status: Option<String>,
-    pub error_hint: Option<String>,
+/// Standard stale-content recovery hint.
+pub fn stale_content_hint() -> &'static str {
+    "file changed since read; re-run file_read and retry the edit"
 }
 
-impl FileMutationResultV2 {
-    /// Standard stale-content recovery hint.
-    pub fn stale_content_hint() -> &'static str {
-        "file changed since read; re-run file_read and retry the edit"
-    }
+/// Standard ambiguous match recovery hint.
+pub fn ambiguous_match_hint(count: usize) -> String {
+    format!("old_string matched {count} times; add surrounding context lines to make it unique")
+}
 
-    /// Standard ambiguous match recovery hint.
-    pub fn ambiguous_match_hint(count: usize) -> String {
-        format!("old_string matched {count} times; add surrounding context lines to make it unique")
-    }
+pub fn from_tool_data(data: &serde_json::Value) -> Option<FileMutationResultV2> {
+    crate::tools::file_tool::mutation_result::from_tool_data(data)
 }
 
 /// Normalized error message for common file mutation failures.
@@ -46,7 +36,7 @@ pub enum FileMutationErrorKind {
 impl FileMutationErrorKind {
     pub fn model_hint(self) -> &'static str {
         match self {
-            Self::StaleContent => FileMutationResultV2::stale_content_hint(),
+            Self::StaleContent => stale_content_hint(),
             Self::AnchorNotFound => {
                 "old_string not found in file; read the file again and copy the exact text to replace"
             }

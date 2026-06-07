@@ -88,6 +88,7 @@ impl ApiSessionRunnerRegistry {
             .or_insert_with(SessionRunState::new);
         match entry.status {
             ApiRunStatus::Idle
+            | ApiRunStatus::Queued { .. }
             | ApiRunStatus::Failed { .. }
             | ApiRunStatus::Completed
             | ApiRunStatus::Cancelled => {
@@ -105,6 +106,15 @@ impl ApiSessionRunnerRegistry {
             entry.status = status;
             entry.idle_notify.notify_waiters();
         }
+    }
+
+    /// Update non-terminal status without waking idle waiters.
+    pub fn set_status(&self, session_id: &str, status: ApiRunStatus) {
+        let mut guard = self.states.lock().unwrap();
+        let entry = guard
+            .entry(session_id.to_string())
+            .or_insert_with(SessionRunState::new);
+        entry.status = status;
     }
 
     /// Mark as queued.
@@ -163,6 +173,11 @@ impl ApiSessionRunnerRegistry {
         }
     }
 
+    /// Whether a cancellation has been requested for this session.
+    pub fn is_cancelling(&self, session_id: &str) -> bool {
+        matches!(self.status(session_id), ApiRunStatus::Cancelling)
+    }
+
     /// Mark cancellation as completed.
     pub fn cancel_completed(&self, session_id: &str) {
         self.finish_run(session_id, ApiRunStatus::Cancelled);
@@ -173,21 +188,15 @@ impl ApiSessionRunnerRegistry {
         &self,
         conn: &rusqlite::Connection,
     ) -> Result<usize, rusqlite::Error> {
-        // Mark any promoted but stalled inputs as failed.
-        let recovered = conn.execute(
-            "UPDATE session_inputs SET state = 'failed', error = 'recovered_after_restart'
+        conn.execute(
+            "UPDATE session_inputs
+             SET state = 'pending',
+                 promoted_at = NULL,
+                 promoted_seq = NULL,
+                 error = 'recovered_after_restart'
              WHERE state = 'promoted' AND promoted_at IS NOT NULL",
             [],
-        )?;
-
-        // Reset any in-progress inputs back to pending so they can be retried.
-        let reset = conn.execute(
-            "UPDATE session_inputs SET state = 'pending', promoted_at = NULL, promoted_seq = NULL
-             WHERE state = 'promoted' AND promoted_at IS NOT NULL",
-            [],
-        )?;
-
-        Ok(recovered + reset)
+        )
     }
 }
 

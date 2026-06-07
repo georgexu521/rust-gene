@@ -94,6 +94,7 @@ pub async fn start_server(
             controller,
             model,
             api_state.session_store.clone(),
+            api_state.runner_registry.clone(),
         )) as Arc<dyn state::ApiAgentRuntime>
     });
     api_state.agent_runtime = agent_runtime;

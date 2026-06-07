@@ -198,6 +198,10 @@ async fn file_write_rejects_generated_target_with_recovery_data() {
 async fn file_write_allows_live_eval_worktree_under_target() {
     let tool = FileWriteTool;
     let dir = tempfile::tempdir().unwrap();
+    let session_id = format!(
+        "test-session-write-live-eval-worktree-{}",
+        uuid::Uuid::new_v4().simple()
+    );
     let worktree = dir
         .path()
         .join("target/live-evals/run-123/minimum-agent-loop/worktree");
@@ -211,7 +215,7 @@ async fn file_write_allows_live_eval_worktree_under_target() {
                 "path": "fixtures/generated.py",
                 "content": "print('ok')\n"
             }),
-            ToolContext::new(&worktree, "test-session-write-live-eval-worktree"),
+            ToolContext::new(&worktree, &session_id),
         )
         .await;
 
@@ -2093,11 +2097,13 @@ async fn test_file_edit_line_range() {
 #[tokio::test]
 async fn test_file_edit_normalize_whitespace() {
     let tool = FileEditTool;
-    let path = "/tmp/test_priority_agent_edit_normws.txt";
-    tokio::fs::write(path, "    hello world    \n")
+    let unique = uuid::Uuid::new_v4().simple().to_string();
+    let path = format!("/tmp/test_priority_agent_edit_normws_{unique}.txt");
+    let session_id = format!("test-session-edit-normws-{unique}");
+    tokio::fs::write(&path, "    hello world    \n")
         .await
         .unwrap();
-    read_test_file_for_edit(path, "test-session-edit-normws").await;
+    read_test_file_for_edit(&path, &session_id).await;
 
     // old_string 有额外空白，但 normalize_whitespace=true 应能匹配
     let params = json!({
@@ -2106,15 +2112,15 @@ async fn test_file_edit_normalize_whitespace() {
         "new_string": "hi world",
         "normalize_whitespace": true
     });
-    let context = ToolContext::new(".", "test-session-edit-normws");
+    let context = ToolContext::new(".", &session_id);
     let result = tool.execute(params, context).await;
 
     assert!(result.success, "normalize edit failed: {:?}", result.error);
-    let content = tokio::fs::read_to_string(path).await.unwrap();
+    let content = tokio::fs::read_to_string(&path).await.unwrap();
     assert!(content.contains("hi world"));
     assert!(!content.contains("hello world"));
 
-    let _ = tokio::fs::remove_file(path).await;
+    let _ = tokio::fs::remove_file(&path).await;
 }
 
 #[tokio::test]

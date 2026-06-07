@@ -466,7 +466,13 @@ async fn session_cancel_handler(
     State(state): State<Arc<ApiState>>,
     Path(id): Path<String>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let cancelled = state.runner_registry.request_cancel(&id);
+    let cancelled = match &state.agent_runtime {
+        Some(runtime) => runtime
+            .cancel(&id)
+            .await
+            .map_err(|e| ApiError::Internal(e.to_string()))?,
+        None => state.runner_registry.request_cancel(&id),
+    };
     Ok(Json(json!({
         "session_id": id,
         "cancelled": cancelled,
@@ -487,7 +493,7 @@ async fn session_run_status_handler(
     let status = state.runner_registry.status(&id);
     Ok(Json(RunStatusResponse {
         session_id: id,
-        status: format!("{:?}", status),
+        status: status.to_string(),
     }))
 }
 
@@ -538,6 +544,72 @@ async fn session_context_handler(
     State(state): State<Arc<ApiState>>,
     Path(id): Path<String>,
 ) -> Result<impl IntoResponse, ApiError> {
+    if let Some(runtime) = &state.agent_runtime {
+        if let Some(snapshot) = runtime
+            .context_snapshot(&id)
+            .await
+            .map_err(|e| ApiError::Internal(e.to_string()))?
+        {
+            let latest_boundary = {
+                let store = state.session_store.read().await;
+                store.latest_compact_boundary(&id).ok().flatten()
+            };
+            let latest_compaction = latest_boundary
+                .as_ref()
+                .map(|b| dto::context::CompactionSummaryDto {
+                    boundary_id: b.boundary_id.clone(),
+                    strategy: b.strategy.clone(),
+                    trigger: b.trigger.clone().unwrap_or_default(),
+                    before_tokens: b.before_tokens as u64,
+                    after_tokens: b.after_tokens as u64,
+                    messages_before: b.messages_before as usize,
+                    messages_after: b.messages_after as usize,
+                    preserved_tail_count: b.preserved_tail_count.unwrap_or(0) as usize,
+                })
+                .or_else(|| {
+                    snapshot.compact.latest_attempt_tokens_before.map(|before| {
+                        dto::context::CompactionSummaryDto {
+                            boundary_id: snapshot
+                                .compact
+                                .latest_boundary_id
+                                .clone()
+                                .unwrap_or_else(|| "latest_attempt".to_string()),
+                            strategy: snapshot.compact.latest_strategy.clone().unwrap_or_default(),
+                            trigger: snapshot
+                                .compact
+                                .latest_attempt_trigger
+                                .clone()
+                                .unwrap_or_default(),
+                            before_tokens: before,
+                            after_tokens: snapshot
+                                .compact
+                                .latest_attempt_tokens_after
+                                .unwrap_or(before),
+                            messages_before: 0,
+                            messages_after: 0,
+                            preserved_tail_count: 0,
+                        }
+                    })
+                });
+            let compact_boundary_id = snapshot
+                .compact
+                .latest_boundary_id
+                .clone()
+                .or_else(|| latest_boundary.as_ref().map(|b| b.boundary_id.clone()));
+            return Ok(Json(dto::context::SessionContextDto {
+                session_id: id,
+                compact_boundary_id,
+                estimated_history_tokens: snapshot.history_tokens,
+                tool_schema_tokens: snapshot.tool_schema_tokens,
+                memory_snapshot_tokens: snapshot.memory_snapshot_tokens,
+                stable_prefix_hash: Some(snapshot.stable_prefix_fingerprint),
+                dynamic_tail_hash: None,
+                latest_compaction,
+                message_count_after_compaction: snapshot.history_messages,
+            }));
+        }
+    }
+
     let store = state.session_store.read().await;
     let parts = store.get_session_parts(&id).unwrap_or_default();
     let latest_boundary = store.latest_compact_boundary(&id).ok().flatten();

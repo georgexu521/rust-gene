@@ -875,7 +875,29 @@ pub(super) fn persist_session_job_if_shell(
         .and_then(|s| s.get("timed_out"))
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
-    let status = if timed_out {
+    let shell_result = result.data.as_ref().and_then(|d| d.get("shell_result"));
+    let exit_code = shell_result
+        .and_then(|s| s.get("exit_code"))
+        .and_then(|v| v.as_i64())
+        .and_then(|v| i32::try_from(v).ok());
+    let cwd = shell_result
+        .and_then(|s| s.get("cwd"))
+        .and_then(|v| v.as_str());
+    let explicit_cancelled = shell_result
+        .and_then(|s| s.get("cancelled"))
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+        || shell_result
+            .and_then(|s| s.get("status"))
+            .and_then(|v| v.as_str())
+            .is_some_and(|status| status == "cancelled")
+        || result
+            .error
+            .as_deref()
+            .is_some_and(|error| error.contains("cancelled") || error.contains("canceled"));
+    let status = if explicit_cancelled {
+        "cancelled"
+    } else if timed_out {
         "timed_out"
     } else if result.success {
         "completed"
@@ -892,9 +914,9 @@ pub(super) fn persist_session_job_if_shell(
         session_id,
         &tool_call.id,
         command,
-        None,
+        cwd,
         status,
-        None,
+        exit_code,
         timed_out,
         tool_output_uri.as_deref(),
     );
@@ -941,6 +963,65 @@ mod tests {
                 .map(|entry| entry.command == "cargo test -q")
                 .unwrap_or(false)
         }));
+    }
+
+    #[test]
+    fn persist_session_job_if_shell_records_shell_metadata() {
+        let store = Arc::new(crate::session_store::SessionStore::in_memory().unwrap());
+        store.create_session("s1", "test", "model").unwrap();
+        let call = tool_call("bash");
+        let result = ToolResult::success_with_data(
+            "ok",
+            serde_json::json!({
+                "shell_result": {
+                    "command": "cargo test -q",
+                    "cwd": "/tmp/project",
+                    "exit_code": 0,
+                    "timed_out": false
+                },
+                "tool_output_id": "out_123"
+            }),
+        );
+
+        persist_session_job_if_shell(Some(&store), "s1", &call, &result);
+
+        let jobs = store.get_session_jobs("s1").unwrap();
+        assert_eq!(jobs.len(), 1);
+        assert_eq!(jobs[0].command, "cargo test -q");
+        assert_eq!(jobs[0].cwd.as_deref(), Some("/tmp/project"));
+        assert_eq!(jobs[0].status, "completed");
+        assert_eq!(jobs[0].exit_code, Some(0));
+        assert!(!jobs[0].timed_out);
+        assert_eq!(
+            jobs[0].tool_output_uri.as_deref(),
+            Some("tool-output://out_123")
+        );
+        assert!(!jobs[0].cancelled);
+    }
+
+    #[test]
+    fn persist_session_job_if_shell_records_cancelled_status() {
+        let store = Arc::new(crate::session_store::SessionStore::in_memory().unwrap());
+        store.create_session("s1", "test", "model").unwrap();
+        let call = tool_call("bash");
+        let mut result = ToolResult::error("cancelled");
+        result.data = Some(serde_json::json!({
+            "shell_result": {
+                "command": "cargo test -q",
+                "cwd": "/tmp/project",
+                "exit_code": null,
+                "timed_out": false,
+                "status": "cancelled",
+                "cancelled": true
+            }
+        }));
+
+        persist_session_job_if_shell(Some(&store), "s1", &call, &result);
+
+        let jobs = store.get_session_jobs("s1").unwrap();
+        assert_eq!(jobs.len(), 1);
+        assert_eq!(jobs[0].status, "cancelled");
+        assert!(jobs[0].cancelled);
     }
 
     #[test]

@@ -351,9 +351,12 @@ async fn run_eval_task(
                 // to auto-approve tool permissions for seeded code-change tasks.
                 // Session-scoped approval means bash/file_edit/file_write stay
                 // approved across multiple iterations during the eval.
-                let answered =
-                    answer_pending_approval(&components.streaming_engine, allow_mutations, allow_mutations)
-                        .await;
+                let answered = answer_pending_approval(
+                    &components.streaming_engine,
+                    allow_mutations,
+                    allow_mutations,
+                )
+                .await;
                 write_eval_event(
                     &mut event_writer,
                     json!({

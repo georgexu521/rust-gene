@@ -349,16 +349,27 @@ impl SessionStore {
     ) -> SqlResult<()> {
         let conn = self.conn();
         conn.execute(
-            "INSERT INTO session_jobs (job_id, session_id, command, cwd, status, exit_code, timed_out, tool_output_uri)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+            "INSERT INTO session_jobs (job_id, session_id, command, cwd, status, exit_code, timed_out, tool_output_uri, cancelled)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
              ON CONFLICT(session_id, job_id) DO UPDATE SET
                status = excluded.status,
                completed_at = CASE WHEN excluded.status IN ('completed', 'failed', 'timed_out', 'cancelled')
                                    THEN datetime('now') ELSE completed_at END,
                exit_code = excluded.exit_code,
                timed_out = excluded.timed_out,
+               cancelled = excluded.cancelled,
                tool_output_uri = excluded.tool_output_uri",
-            rusqlite::params![job_id, session_id, command, cwd, status, exit_code, timed_out as i32, tool_output_uri],
+            rusqlite::params![
+                job_id,
+                session_id,
+                command,
+                cwd,
+                status,
+                exit_code,
+                timed_out as i32,
+                tool_output_uri,
+                (status == "cancelled") as i32
+            ],
         )?;
         Ok(())
     }

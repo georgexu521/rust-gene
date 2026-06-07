@@ -3,9 +3,11 @@
 //! 管理 API 服务器状态和提供业务逻辑方法
 
 use super::routes::*;
+use crate::api::session_runner::{ApiRunStatus, ApiSessionRunnerRegistry};
 use crate::engine::agent_mode::AgentMode;
 use crate::engine::run_coordinator::{InputDelivery, PromptAdmissionStatus, SessionRunCoordinator};
 use crate::engine::runtime_controller::RuntimeController;
+use crate::engine::runtime_facade::ProviderPhase;
 use crate::engine::streaming::StreamEvent;
 use crate::services::config::AppConfig;
 use crate::session_store::SessionStore;
@@ -56,6 +58,19 @@ pub trait ApiAgentRuntime: Send + Sync {
         let _ = session_id;
         Ok(None) // default: no-op
     }
+
+    async fn cancel(&self, session_id: &str) -> anyhow::Result<bool> {
+        let _ = session_id;
+        Ok(false)
+    }
+
+    async fn context_snapshot(
+        &self,
+        session_id: &str,
+    ) -> anyhow::Result<Option<crate::desktop_runtime::DesktopContextSnapshot>> {
+        let _ = session_id;
+        Ok(None)
+    }
 }
 
 /// Outcome from a manual compaction trigger.
@@ -75,6 +90,7 @@ pub struct RuntimeControllerApiAgentRuntime {
     model: String,
     session_store: Arc<RwLock<SessionStore>>,
     run_coordinator: SessionRunCoordinator,
+    runner_registry: Arc<ApiSessionRunnerRegistry>,
     turn_lock: Arc<Mutex<()>>,
 }
 
@@ -83,12 +99,14 @@ impl RuntimeControllerApiAgentRuntime {
         controller: RuntimeController,
         model: impl Into<String>,
         session_store: Arc<RwLock<SessionStore>>,
+        runner_registry: Arc<ApiSessionRunnerRegistry>,
     ) -> Self {
         Self {
             controller,
             model: model.into(),
             session_store,
             run_coordinator: SessionRunCoordinator::new(),
+            runner_registry,
             turn_lock: Arc::new(Mutex::new(())),
         }
     }
@@ -141,6 +159,18 @@ impl RuntimeControllerApiAgentRuntime {
         Ok(())
     }
 
+    async fn cancel_session_inputs(&self, session_id: &str) -> anyhow::Result<usize> {
+        let store = self.session_store.read().await;
+        let conn = store.shared_conn();
+        let conn = conn.lock().unwrap();
+        Ok(conn.execute(
+            "UPDATE session_inputs
+             SET state = 'cancelled', error = 'cancelled_by_user'
+             WHERE session_id = ?1 AND state IN ('pending', 'promoted', 'running')",
+            rusqlite::params![session_id],
+        )?)
+    }
+
     async fn next_pending_input(
         &self,
     ) -> anyhow::Result<Option<crate::engine::run_coordinator::PromotedSessionInput>> {
@@ -189,6 +219,12 @@ impl RuntimeControllerApiAgentRuntime {
                     .run_prompt_inner(input.clone(), prompt_id.clone())
                     .await
                 {
+                    self.runner_registry.finish_run(
+                        &input.session_id,
+                        ApiRunStatus::Failed {
+                            error: err.to_string(),
+                        },
+                    );
                     self.mark_prompt_state(
                         &input.session_id,
                         &prompt_id,
@@ -227,6 +263,7 @@ impl RuntimeControllerApiAgentRuntime {
         prompt_id: String,
     ) -> anyhow::Result<ApiSessionPromptOutcome> {
         if !self.run_coordinator.start_run() {
+            self.runner_registry.enqueue(&input.session_id);
             return Ok(ApiSessionPromptOutcome {
                 accepted: true,
                 turn_id: Some(prompt_id),
@@ -252,6 +289,17 @@ impl RuntimeControllerApiAgentRuntime {
         use futures::StreamExt;
 
         let _guard = self.turn_lock.lock().await;
+        if !self.runner_registry.start_run(&input.session_id) {
+            return Ok(ApiSessionPromptOutcome {
+                accepted: true,
+                turn_id: Some(prompt_id),
+                status: "queued".to_string(),
+                events_written: 0,
+                latest_part_index: self.latest_part_index(&input.session_id),
+                diagnostic: None,
+                error: None,
+            });
+        }
         self.mark_prompt_state(&input.session_id, &prompt_id, "running", None)
             .await?;
         let agent_mode = input
@@ -279,6 +327,14 @@ impl RuntimeControllerApiAgentRuntime {
             events_written += 1;
             match event {
                 StreamEvent::RuntimeDiagnostic { diagnostic: value } => {
+                    if value
+                        .get("stage")
+                        .and_then(|stage| stage.as_str())
+                        .is_some_and(|stage| stage == "permission_request")
+                    {
+                        self.runner_registry
+                            .set_status(&input.session_id, ApiRunStatus::WaitingPermission);
+                    }
                     if let Ok(dto) =
                         serde_json::from_value::<super::dto::diagnostic::DiagnosticExportDto>(value)
                     {
@@ -299,12 +355,39 @@ impl RuntimeControllerApiAgentRuntime {
                 StreamEvent::Complete => break,
                 _ => {}
             }
+            if self.runner_registry.is_cancelling(&input.session_id)
+                || self
+                    .controller
+                    .runtime_state()
+                    .snapshot()
+                    .await
+                    .provider_request
+                    .phase
+                    == ProviderPhase::Cancelled
+            {
+                status = "cancelled".to_string();
+                error = Some("cancelled_by_user".to_string());
+                break;
+            }
         }
 
+        let final_registry_status = if status == "cancelled" {
+            ApiRunStatus::Cancelled
+        } else if let Some(error) = &error {
+            ApiRunStatus::Failed {
+                error: error.clone(),
+            }
+        } else {
+            ApiRunStatus::Completed
+        };
+        self.runner_registry
+            .finish_run(&input.session_id, final_registry_status);
         self.mark_prompt_state(
             &input.session_id,
             &prompt_id,
-            if error.is_some() {
+            if status == "cancelled" {
+                "cancelled"
+            } else if error.is_some() {
                 "failed"
             } else {
                 "completed"
@@ -345,6 +428,7 @@ impl ApiAgentRuntime for RuntimeControllerApiAgentRuntime {
             PromptAdmissionStatus::Admitted => {}
             PromptAdmissionStatus::AlreadyAdmitted { state } => {
                 if matches!(state.as_str(), "pending" | "promoted") {
+                    self.runner_registry.enqueue(&input.session_id);
                     self.spawn_queue_drain();
                 }
                 return Ok(ApiSessionPromptOutcome {
@@ -385,6 +469,8 @@ impl ApiAgentRuntime for RuntimeControllerApiAgentRuntime {
             InputDelivery::AdmitOnly => {
                 self.mark_prompt_state(&input.session_id, &prompt_id, "admitted", None)
                     .await?;
+                self.runner_registry
+                    .set_status(&input.session_id, ApiRunStatus::Idle);
                 Ok(ApiSessionPromptOutcome {
                     accepted: true,
                     turn_id: Some(prompt_id),
@@ -396,6 +482,7 @@ impl ApiAgentRuntime for RuntimeControllerApiAgentRuntime {
                 })
             }
             InputDelivery::Queue => {
+                self.runner_registry.enqueue(&input.session_id);
                 self.spawn_queue_drain();
                 Ok(ApiSessionPromptOutcome {
                     accepted: true,
@@ -409,6 +496,44 @@ impl ApiAgentRuntime for RuntimeControllerApiAgentRuntime {
             }
             InputDelivery::Run | InputDelivery::Steer => self.run_prompt(input, prompt_id).await,
         }
+    }
+
+    async fn compact(&self, session_id: &str) -> anyhow::Result<Option<ApiCompactOutcome>> {
+        let _guard = self.turn_lock.lock().await;
+        self.controller.set_session(session_id.to_string());
+        let Some(record) = self.controller.compact().await else {
+            return Ok(None);
+        };
+        Ok(Some(ApiCompactOutcome {
+            boundary_id: record.boundary_id.unwrap_or_default(),
+            before_tokens: record.before_tokens,
+            after_tokens: record.after_tokens.unwrap_or(record.before_tokens),
+            messages_before: record.messages_before,
+            messages_after: record.messages_after.unwrap_or(record.messages_before),
+        }))
+    }
+
+    async fn cancel(&self, session_id: &str) -> anyhow::Result<bool> {
+        let requested = self.runner_registry.request_cancel(session_id);
+        let cancelled_inputs = self.cancel_session_inputs(session_id).await?;
+        self.controller.set_session(session_id.to_string());
+        self.controller.cancel().await;
+        if requested {
+            self.runner_registry.cancel_completed(session_id);
+        } else if cancelled_inputs > 0 {
+            self.runner_registry
+                .set_status(session_id, ApiRunStatus::Cancelled);
+        }
+        Ok(requested || cancelled_inputs > 0)
+    }
+
+    async fn context_snapshot(
+        &self,
+        session_id: &str,
+    ) -> anyhow::Result<Option<crate::desktop_runtime::DesktopContextSnapshot>> {
+        let _guard = self.turn_lock.lock().await;
+        self.controller.set_session(session_id.to_string());
+        Ok(Some(self.controller.context_snapshot().await))
     }
 }
 
