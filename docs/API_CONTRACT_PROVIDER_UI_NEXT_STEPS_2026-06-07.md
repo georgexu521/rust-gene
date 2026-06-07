@@ -2,7 +2,7 @@
 
 Date: 2026-06-07
 
-Status: next implementation plan after the first API DTO/provider-status slice
+Status: active implementation plan after API contract/provider status hardening
 
 ## 1. Current Baseline
 
@@ -25,9 +25,23 @@ Implemented or in progress:
   `ProviderProductStatus` and keeps provider status logic out of
   `src/api/routes.rs`.
 - `src/api/routes.rs` is back under the 1500-line maintainability limit.
+- API route contract tests live in `src/api/routes/contract_tests.rs` so
+  route code and contract tests can evolve without pushing `routes.rs` back
+  over the file-size limit.
 - `GET /api/sessions/:id/reverts` reads the durable `session_reverts` table
   rather than inferring revert history from projected session parts.
-- Basic provider status route/helper tests exist.
+- `POST /api/chat` returns explicit `execution_kind: "provider_chat"` and
+  `full_agent: false`.
+- `POST /api/sessions/:id/prompt` exists as a typed `501` full-agent boundary:
+  it returns `execution_kind: "full_agent_turn"`, `accepted: false`,
+  `agent_runtime_entrypoint: "RuntimeController"`, and no diagnostic/events
+  until the route is wired to the real runtime controller.
+- Provider timeout DTOs read `PRIORITY_AGENT_LLM_REQUEST_TIMEOUT_SECS`, matching
+  the runtime timeout path, and use the runtime stream-idle default of 120s.
+- `GET /api/provider/status` returns top-level `timeout_effective` with
+  timeout values and source metadata, so UI can render the runtime timeout
+  policy without reverse-engineering per-provider rows.
+- Basic provider status/helper and API route contract tests exist.
 
 Verified gates:
 
@@ -39,8 +53,9 @@ cargo test -q api::routes --features experimental-api-server
 
 Important current constraint:
 
-- `POST /api/chat` in `src/api/state.rs` is still direct provider chat. It does
-  not enter the full agent runtime.
+- `POST /api/chat` in `src/api/state.rs` is direct provider chat by design. It
+  does not enter the full agent runtime.
+- `POST /api/sessions/:id/prompt` is still a typed `501`, not a real agent run.
 - The true desktop/full-agent path goes through `desktop_runtime::DesktopRuntime`
   and `engine::runtime_controller::RuntimeController`.
 - Desktop frontend DTOs are still primarily in
@@ -237,12 +252,14 @@ Response shape for non-streaming first slice:
 {
   "session_id": "string",
   "execution_kind": "full_agent_turn",
-  "accepted": true,
+  "accepted": false,
   "turn_id": "string | null",
-  "status": "completed | failed | not_verified | partial",
+  "status": "not_implemented",
   "events_written": "usize",
   "latest_part_index": "i64 | null",
-  "diagnostic": "<DiagnosticExportDto | null>"
+  "diagnostic": "<DiagnosticExportDto | null>",
+  "agent_runtime_entrypoint": "RuntimeController",
+  "error": "string | null"
 }
 ```
 
@@ -253,9 +270,9 @@ Implementation approach:
   `RuntimeController::submit_turn` or `submit_stream_turn`.
 - Reuse the same `StreamingQueryEngine` provider/tool/session setup used by
   CLI/TUI/desktop where feasible.
-- If full reuse is too large for one slice, add a feature-gated stub route that
-  returns a typed `501` with a precise message:
-  `full-agent prompt API is not wired to RuntimeController yet`.
+- The typed `501` boundary is now present. The remaining product work is to
+  replace that stub with a real `RuntimeController` submission path while
+  preserving the same response vocabulary.
 - The final implementation must persist `session_events` and `session_parts`
   the same way desktop/TUI do.
 
@@ -303,13 +320,18 @@ fields are still placeholders or best-effort:
 - timeout source is not explicit;
 - health history is latest JSONL only, not a queryable provider history.
 
-Next implementation:
+Implemented in the current slice:
 
-- Add explicit timeout source reporting:
-  - default;
-  - env;
-  - project config;
-  - runtime override.
+- Expose top-level `timeout_effective` on `GET /api/provider/status`.
+- Report the currently implemented timeout sources:
+  - `default`;
+  - `env`.
+
+Remaining implementation:
+
+- Add additional timeout source values when those paths exist:
+  - `project_config`;
+  - `runtime_override`.
 - Connect latest request latency/retry count from runtime evidence or usage
   ledger where available.
 - Add "unverified" status when no health check exists for a provider/model.
@@ -508,9 +530,8 @@ This protects the work already done and gives UI/provider work a stable base.
 Do second.
 
 - Add explicit provider-chat metadata to `/api/chat`.
-- Add `POST /api/sessions/:id/prompt` as either:
-  - real RuntimeController-backed route; or
-  - typed feature-gated `501` if the wiring is too large for one slice.
+- Replace the current typed `501` `POST /api/sessions/:id/prompt` route with a
+  real RuntimeController-backed route.
 
 Why second:
 
@@ -578,4 +599,3 @@ This phase is done when:
 - Desktop/TUI/API share DTO vocabulary for session, provider, diagnostic, and
   tool-output surfaces.
 - The standard gates pass after a clean build.
-

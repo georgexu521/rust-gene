@@ -44,7 +44,7 @@ pub struct ProviderTimeoutEffectiveDto {
 
 impl ProviderTimeoutEffectiveDto {
     pub fn from_env() -> Self {
-        let source = if std::env::var("PRIORITY_AGENT_REQUEST_TIMEOUT_SECS").is_ok()
+        let source = if std::env::var("PRIORITY_AGENT_LLM_REQUEST_TIMEOUT_SECS").is_ok()
             || std::env::var("PRIORITY_AGENT_STREAM_IDLE_TIMEOUT_SECS").is_ok()
         {
             "env"
@@ -52,14 +52,14 @@ impl ProviderTimeoutEffectiveDto {
             "default"
         };
         Self {
-            request_secs: std::env::var("PRIORITY_AGENT_REQUEST_TIMEOUT_SECS")
+            request_secs: std::env::var("PRIORITY_AGENT_LLM_REQUEST_TIMEOUT_SECS")
                 .ok()
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(180),
             stream_idle_secs: std::env::var("PRIORITY_AGENT_STREAM_IDLE_TIMEOUT_SECS")
                 .ok()
                 .and_then(|v| v.parse().ok())
-                .unwrap_or(60),
+                .unwrap_or(120),
             slow_warning_secs: std::env::var("PRIORITY_AGENT_SLOW_WARNING_SECS")
                 .ok()
                 .and_then(|v| v.parse().ok())
@@ -78,6 +78,7 @@ impl ProviderTimeoutEffectiveDto {
 pub struct ProviderStatusPage {
     pub statuses: Vec<ProviderProductStatus>,
     pub record_count: usize,
+    pub timeout_effective: ProviderTimeoutEffectiveDto,
 }
 
 /// Effective timeout configuration.
@@ -94,10 +95,44 @@ impl Default for ProviderTimeoutConfig {
     fn default() -> Self {
         Self {
             request_secs: 180,
-            stream_idle_secs: 60,
+            stream_idle_secs: 120,
             slow_warning_secs: 45,
             max_retry_attempts: 3,
             source: "default".to_string(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_utils::env_guard::EnvVarGuard;
+
+    #[test]
+    fn timeout_effective_uses_runtime_llm_timeout_env() {
+        let mut guard = EnvVarGuard::acquire_blocking();
+        guard.remove("PRIORITY_AGENT_REQUEST_TIMEOUT_SECS");
+        guard.remove("PRIORITY_AGENT_STREAM_IDLE_TIMEOUT_SECS");
+        guard.set("PRIORITY_AGENT_LLM_REQUEST_TIMEOUT_SECS", "222");
+
+        let effective = ProviderTimeoutEffectiveDto::from_env();
+
+        assert_eq!(effective.request_secs, 222);
+        assert_eq!(effective.stream_idle_secs, 120);
+        assert_eq!(effective.source, "env");
+    }
+
+    #[test]
+    fn timeout_effective_ignores_legacy_request_timeout_env() {
+        let mut guard = EnvVarGuard::acquire_blocking();
+        guard.remove("PRIORITY_AGENT_LLM_REQUEST_TIMEOUT_SECS");
+        guard.remove("PRIORITY_AGENT_STREAM_IDLE_TIMEOUT_SECS");
+        guard.set("PRIORITY_AGENT_REQUEST_TIMEOUT_SECS", "222");
+
+        let effective = ProviderTimeoutEffectiveDto::from_env();
+
+        assert_eq!(effective.request_secs, 180);
+        assert_eq!(effective.stream_idle_secs, 120);
+        assert_eq!(effective.source, "default");
     }
 }

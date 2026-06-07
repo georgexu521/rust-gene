@@ -241,7 +241,14 @@ with stable product fields.
       "capability_summary": "string"
     }
   ],
-  "record_count": "usize"
+  "record_count": "usize",
+  "timeout_effective": {
+    "request_secs": "u64",
+    "stream_idle_secs": "u64",
+    "slow_warning_secs": "u64",
+    "max_retry_attempts": "u32",
+    "source": "default | env"
+  }
 }
 ```
 
@@ -287,7 +294,9 @@ read from the durable `session_reverts` projection (not only from raw events).
   no session event stream).  The response includes `execution_kind: "provider_chat"`
   and `full_agent: false` to make this unambiguous.
 - The full-agent prompt path for HTTP is `POST /api/sessions/:id/prompt`
-  (feature-gated, returns typed `501` until wired to `RuntimeController`).
+  (currently a typed `501` route with `execution_kind: "full_agent_turn"`,
+  `accepted: false`, and `agent_runtime_entrypoint: "RuntimeController"` until
+  the HTTP path is wired to the real runtime controller).
 
 ---
 

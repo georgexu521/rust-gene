@@ -59,6 +59,7 @@ cargo test -q openai_compat        # protocol adapter
 - `supports_streaming_tool_calls` / `requires_nonstreaming` — capability flags
 - `context_limit` / `output_limit` — model limits from `ModelContextProfile`
 - `request_timeout_secs` / `stream_idle_timeout_secs` — effective timeout config
+- `timeout_effective` — top-level timeout config/source used by the API runtime
 - `latest_health_status` — `ok`, `failed`, or `null` (unverified)
 - `latest_timeout_category` — `auth`, `rate_limit`, `protocol`, `schema`, `timeout`, `transport`
 - `capability_summary` — human-readable one-liner

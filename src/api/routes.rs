@@ -61,6 +61,7 @@ pub fn create_routes(state: Arc<ApiState>) -> Router {
             "/api/sessions/:id/messages",
             get(get_session_messages_handler),
         )
+        .route("/api/sessions/:id/prompt", post(session_prompt_handler))
         // Tool API
         .route("/api/tools", get(list_tools_handler))
         .route("/api/tools/:name", get(get_tool_handler))
@@ -206,6 +207,27 @@ pub struct UpdateSessionRequest {
     pub title: String,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct SessionPromptRequest {
+    pub message: String,
+    pub agent_mode: Option<String>,
+    pub stream: Option<bool>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct SessionPromptResponse {
+    pub session_id: String,
+    pub execution_kind: String,
+    pub accepted: bool,
+    pub turn_id: Option<String>,
+    pub status: String,
+    pub events_written: usize,
+    pub latest_part_index: Option<i64>,
+    pub diagnostic: Option<dto::diagnostic::DiagnosticExportDto>,
+    pub agent_runtime_entrypoint: Option<String>,
+    pub error: Option<String>,
+}
+
 async fn list_sessions_handler(
     Query(params): Query<HashMap<String, String>>,
     State(state): State<Arc<ApiState>>,
@@ -281,6 +303,34 @@ async fn get_session_messages_handler(
             "messages": messages,
             "session_id": id,
         })),
+    ))
+}
+
+async fn session_prompt_handler(
+    Path(id): Path<String>,
+    Json(req): Json<SessionPromptRequest>,
+) -> Result<impl IntoResponse, ApiError> {
+    if req.message.trim().is_empty() {
+        return Err(ApiError::BadRequest("message is required".to_string()));
+    }
+
+    let _requested_mode = req.agent_mode.as_deref().unwrap_or("normal");
+    let _stream_requested = req.stream.unwrap_or(false);
+
+    Ok((
+        StatusCode::NOT_IMPLEMENTED,
+        Json(SessionPromptResponse {
+            session_id: id,
+            execution_kind: "full_agent_turn".to_string(),
+            accepted: false,
+            turn_id: None,
+            status: "not_implemented".to_string(),
+            events_written: 0,
+            latest_part_index: None,
+            diagnostic: None,
+            agent_runtime_entrypoint: Some("RuntimeController".to_string()),
+            error: Some("full-agent prompt API is not wired to RuntimeController yet".to_string()),
+        }),
     ))
 }
 
@@ -1126,6 +1176,7 @@ async fn get_provider_status_handler(
     Ok(Json(dto::provider::ProviderStatusPage {
         statuses,
         record_count,
+        timeout_effective: dto::provider::ProviderTimeoutEffectiveDto::from_env(),
     }))
 }
 
@@ -1196,52 +1247,7 @@ async fn get_diagnostics_handler(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::services::api::{
-        ChatRequest as LlmChatRequest, ChatResponse as LlmChatResponse, LlmProvider, Usage,
-    };
-    use async_openai::types::ChatCompletionResponseStream;
-    use axum::body::to_bytes;
-    use once_cell::sync::Lazy;
-    use std::time::Instant;
-    use tower::util::ServiceExt;
-
-    static ENV_LOCK: Lazy<tokio::sync::Mutex<()>> = Lazy::new(|| tokio::sync::Mutex::new(()));
-    const TEST_BRIDGE_TOKEN: &str = "test-bridge-token";
-
-    struct MockProvider;
-
-    #[async_trait::async_trait]
-    impl LlmProvider for MockProvider {
-        async fn chat(&self, _request: LlmChatRequest) -> anyhow::Result<LlmChatResponse> {
-            Ok(LlmChatResponse {
-                content: "ok".to_string(),
-                tool_calls: None,
-                usage: Some(Usage {
-                    prompt_tokens: 1,
-                    completion_tokens: 1,
-                    total_tokens: 2,
-                    reasoning_tokens: None,
-                    cached_tokens: None,
-                }),
-                tool_call_repair: None,
-            })
-        }
-
-        async fn chat_stream(
-            &self,
-            _request: LlmChatRequest,
-        ) -> anyhow::Result<ChatCompletionResponseStream> {
-            Err(anyhow::anyhow!("not implemented in test"))
-        }
-
-        fn base_url(&self) -> &str {
-            "mock://local"
-        }
-
-        fn default_model(&self) -> &str {
-            "mock-model"
-        }
-    }
+    use serde_json::json;
 
     #[test]
     fn test_sanitize_tenant_id() {
@@ -1295,306 +1301,10 @@ mod tests {
             &json!({"task_id": "task_1", "action": "append", "line": "x"})
         ));
     }
-
-    #[tokio::test]
-    async fn test_audit_summary_contains_structured_coding_quality() {
-        let _env_guard = ENV_LOCK.lock().await;
-        unsafe { std::env::set_var("PRIORITY_AGENT_BRIDGE_TOKEN", TEST_BRIDGE_TOKEN) };
-        let provider = Arc::new(MockProvider);
-        let state = Arc::new(crate::api::state::ApiState {
-            provider,
-            model: "mock-model".to_string(),
-            tool_registry: Arc::new(crate::tools::ToolRegistry::new()),
-            session_store: Arc::new(tokio::sync::RwLock::new(
-                crate::session_store::SessionStore::in_memory().expect("in-memory session store"),
-            )),
-            config: Arc::new(tokio::sync::RwLock::new(
-                crate::services::config::AppConfig::default(),
-            )),
-            start_time: Instant::now(),
-            request_count: Arc::new(tokio::sync::RwLock::new(0)),
-            audit_tracker: Arc::new(tokio::sync::RwLock::new(
-                crate::cost_tracker::CostTracker::new(),
-            )),
-            lsp_manager: None,
-            worktree_manager: None,
-        });
-
-        {
-            let mut tracker = state.audit_tracker.write().await;
-            tracker.record_coding_round(false);
-            tracker.record_coding_round(true);
-        }
-
-        let app = create_routes(state);
-        let response = app
-            .oneshot(
-                Request::builder()
-                    .uri("/api/audit/summary")
-                    .method("GET")
-                    .header(
-                        axum::http::header::AUTHORIZATION,
-                        format!("Bearer {TEST_BRIDGE_TOKEN}"),
-                    )
-                    .body(Body::empty())
-                    .expect("build request"),
-            )
-            .await
-            .expect("request should succeed");
-
-        assert_eq!(response.status(), StatusCode::OK);
-        let body = to_bytes(response.into_body(), usize::MAX)
-            .await
-            .expect("read response body");
-        let value: serde_json::Value = serde_json::from_slice(&body).expect("valid json response");
-        let cq = &value["coding_quality"];
-        assert!(cq.is_object(), "coding_quality should be an object");
-        let rate = cq["first_pass_rate_pct"]
-            .as_f64()
-            .expect("first_pass_rate_pct should be f64");
-        assert!(
-            (0.0..=100.0).contains(&rate),
-            "first_pass_rate_pct should be in [0,100], got {rate}"
-        );
-    }
-
-    #[tokio::test]
-    async fn test_workflow_weekly_metrics_endpoint() {
-        let _env_guard = ENV_LOCK.lock().await;
-        unsafe { std::env::set_var("PRIORITY_AGENT_BRIDGE_TOKEN", TEST_BRIDGE_TOKEN) };
-        let provider = Arc::new(MockProvider);
-        let state = Arc::new(crate::api::state::ApiState {
-            provider,
-            model: "mock-model".to_string(),
-            tool_registry: Arc::new(crate::tools::ToolRegistry::new()),
-            session_store: Arc::new(tokio::sync::RwLock::new(
-                crate::session_store::SessionStore::in_memory().expect("in-memory session store"),
-            )),
-            config: Arc::new(tokio::sync::RwLock::new(
-                crate::services::config::AppConfig::default(),
-            )),
-            start_time: Instant::now(),
-            request_count: Arc::new(tokio::sync::RwLock::new(0)),
-            audit_tracker: Arc::new(tokio::sync::RwLock::new(
-                crate::cost_tracker::CostTracker::new(),
-            )),
-            lsp_manager: None,
-            worktree_manager: None,
-        });
-        let app = create_routes(state);
-
-        let response = app
-            .oneshot(
-                Request::builder()
-                    .uri("/api/workflow/metrics/weekly?limit=4")
-                    .method("GET")
-                    .header(
-                        axum::http::header::AUTHORIZATION,
-                        format!("Bearer {TEST_BRIDGE_TOKEN}"),
-                    )
-                    .body(Body::empty())
-                    .expect("build request"),
-            )
-            .await
-            .expect("request should succeed");
-
-        assert_eq!(response.status(), StatusCode::OK);
-        let body = to_bytes(response.into_body(), usize::MAX)
-            .await
-            .expect("read response body");
-        let value: serde_json::Value = serde_json::from_slice(&body).expect("valid json response");
-        assert!(
-            value["generated_at"].as_str().is_some(),
-            "generated_at should be present"
-        );
-        assert!(value["weeks"].is_array(), "weeks should be array");
-    }
-
-    #[tokio::test]
-    async fn test_workflow_weekly_calibration_endpoint() {
-        let _env_guard = ENV_LOCK.lock().await;
-        unsafe { std::env::set_var("PRIORITY_AGENT_BRIDGE_TOKEN", TEST_BRIDGE_TOKEN) };
-        let provider = Arc::new(MockProvider);
-        let state = Arc::new(crate::api::state::ApiState {
-            provider,
-            model: "mock-model".to_string(),
-            tool_registry: Arc::new(crate::tools::ToolRegistry::new()),
-            session_store: Arc::new(tokio::sync::RwLock::new(
-                crate::session_store::SessionStore::in_memory().expect("in-memory session store"),
-            )),
-            config: Arc::new(tokio::sync::RwLock::new(
-                crate::services::config::AppConfig::default(),
-            )),
-            start_time: Instant::now(),
-            request_count: Arc::new(tokio::sync::RwLock::new(0)),
-            audit_tracker: Arc::new(tokio::sync::RwLock::new(
-                crate::cost_tracker::CostTracker::new(),
-            )),
-            lsp_manager: None,
-            worktree_manager: None,
-        });
-        let app = create_routes(state);
-
-        let response = app
-            .oneshot(
-                Request::builder()
-                    .uri("/api/workflow/metrics/calibration/weekly?limit=4")
-                    .method("GET")
-                    .header(
-                        axum::http::header::AUTHORIZATION,
-                        format!("Bearer {TEST_BRIDGE_TOKEN}"),
-                    )
-                    .body(Body::empty())
-                    .expect("build request"),
-            )
-            .await
-            .expect("request should succeed");
-
-        assert_eq!(response.status(), StatusCode::OK);
-        let body = to_bytes(response.into_body(), usize::MAX)
-            .await
-            .expect("read response body");
-        let value: serde_json::Value = serde_json::from_slice(&body).expect("valid json response");
-        assert!(
-            value["generated_at"].as_str().is_some(),
-            "generated_at should be present"
-        );
-        assert!(value["weeks"].is_array(), "weeks should be array");
-    }
-
-    // ══ Phase 5: API route contract tests ───────────────────────────
-
-    fn api_test_state() -> Arc<ApiState> {
-        let session_store =
-            crate::session_store::SessionStore::in_memory().expect("in-memory session store");
-        Arc::new(crate::api::state::ApiState {
-            provider: Arc::new(MockProvider),
-            model: "mock-model".to_string(),
-            tool_registry: Arc::new(crate::tools::ToolRegistry::new()),
-            session_store: Arc::new(tokio::sync::RwLock::new(session_store)),
-            config: Arc::new(tokio::sync::RwLock::new(
-                crate::services::config::AppConfig::default(),
-            )),
-            start_time: Instant::now(),
-            request_count: Arc::new(tokio::sync::RwLock::new(0)),
-            audit_tracker: Arc::new(tokio::sync::RwLock::new(
-                crate::cost_tracker::CostTracker::new(),
-            )),
-            lsp_manager: None,
-            worktree_manager: None,
-        })
-    }
-
-    async fn json_response(app: &axum::Router, uri: &str) -> serde_json::Value {
-        let response = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .uri(uri)
-                    .method("GET")
-                    .header(
-                        axum::http::header::AUTHORIZATION,
-                        format!("Bearer {TEST_BRIDGE_TOKEN}"),
-                    )
-                    .body(Body::empty())
-                    .expect("build request"),
-            )
-            .await
-            .expect("request should succeed");
-        assert_eq!(response.status(), StatusCode::OK, "expected 200 for {uri}");
-        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
-        serde_json::from_slice(&body).expect("valid json response")
-    }
-
-    #[tokio::test]
-    async fn provider_status_has_required_fields() {
-        let _env_guard = ENV_LOCK.lock().await;
-        unsafe { std::env::set_var("PRIORITY_AGENT_BRIDGE_TOKEN", TEST_BRIDGE_TOKEN) };
-        let state = api_test_state();
-        let app = create_routes(state);
-        let value = json_response(&app, "/api/provider/status").await;
-        assert!(value["statuses"].is_array(), "statuses is array");
-        assert!(value["record_count"].is_number(), "record_count");
-        let first = &value["statuses"][0];
-        assert!(first["provider_id"].is_string(), "provider_id");
-        assert!(first["model_id"].is_string(), "model_id");
-        assert!(first["protocol_family"].is_string(), "protocol_family");
-    }
-
-    #[tokio::test]
-    async fn diagnostics_has_policy_and_profile_fields() {
-        let _env_guard = ENV_LOCK.lock().await;
-        unsafe { std::env::set_var("PRIORITY_AGENT_BRIDGE_TOKEN", TEST_BRIDGE_TOKEN) };
-        let state = api_test_state();
-        let app = create_routes(state);
-        let value = json_response(&app, "/api/diagnostics/latest?session_id=test").await;
-        assert!(value["schema"].is_string(), "schema");
-        assert!(value["provider_profile"].is_object(), "provider_profile");
-        assert!(
-            value["tool_output_policy"].is_object(),
-            "tool_output_policy"
-        );
-        assert!(value["revert_events"].is_number(), "revert_events");
-    }
-
-    #[tokio::test]
-    async fn session_parts_returns_cursor_shape() {
-        let _env_guard = ENV_LOCK.lock().await;
-        unsafe { std::env::set_var("PRIORITY_AGENT_BRIDGE_TOKEN", TEST_BRIDGE_TOKEN) };
-        let state = api_test_state();
-        {
-            let store = state.session_store.read().await;
-            let _ = store.create_session("test", "Test Session", "mock-model");
-        }
-        let app = create_routes(state);
-        let value = json_response(&app, "/api/sessions/test/parts?limit=10").await;
-        assert_eq!(value["session_id"], "test");
-        assert!(value["parts"].is_array(), "parts is array");
-        assert!(value["cursor"].is_object(), "cursor is object");
-        assert!(value["cursor"]["has_more"].is_boolean(), "cursor.has_more");
-        assert!(value["cursor"]["limit"].is_number(), "cursor.limit");
-    }
-
-    #[tokio::test]
-    async fn session_reverts_reads_durable_parts() {
-        let _env_guard = ENV_LOCK.lock().await;
-        unsafe { std::env::set_var("PRIORITY_AGENT_BRIDGE_TOKEN", TEST_BRIDGE_TOKEN) };
-        let state = api_test_state();
-        {
-            let store = state.session_store.read().await;
-            let _ = store.create_session("test", "Test Session", "mock-model");
-        }
-        let app = create_routes(state);
-        let value = json_response(&app, "/api/sessions/test/reverts?limit=5").await;
-        assert_eq!(value["session_id"], "test");
-        assert!(value["reverts"].is_array(), "reverts is array");
-        assert!(value["total"].is_number(), "total is number");
-    }
-
-    #[tokio::test]
-    async fn tool_outputs_returns_session_scoped_index() {
-        let _env_guard = ENV_LOCK.lock().await;
-        unsafe { std::env::set_var("PRIORITY_AGENT_BRIDGE_TOKEN", TEST_BRIDGE_TOKEN) };
-        let state = api_test_state();
-        let app = create_routes(state);
-        let value = json_response(&app, "/api/sessions/test/tool-outputs").await;
-        assert_eq!(value["session_id"], "test");
-        assert!(value["outputs"].is_array(), "outputs is array");
-    }
-
-    #[tokio::test]
-    async fn session_events_returns_cursor_shape() {
-        let _env_guard = ENV_LOCK.lock().await;
-        unsafe { std::env::set_var("PRIORITY_AGENT_BRIDGE_TOKEN", TEST_BRIDGE_TOKEN) };
-        let state = api_test_state();
-        {
-            let store = state.session_store.read().await;
-            let _ = store.create_session("test", "Test Session", "mock-model");
-        }
-        let app = create_routes(state);
-        let value = json_response(&app, "/api/sessions/test/events?limit=10").await;
-        assert_eq!(value["session_id"], "test");
-        assert!(value["events"].is_array(), "events is array");
-        assert!(value["cursor"]["has_more"].is_boolean(), "cursor.has_more");
-    }
 }
+
+#[cfg(test)]
+mod basic_tests;
+
+#[cfg(test)]
+mod contract_tests;
