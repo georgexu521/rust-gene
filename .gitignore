@@ -34,3 +34,4 @@ eval-summaries/
 docs/benchmarks/live-product-daily*/
 .priority-agent/
 .reasonix/
+.env
