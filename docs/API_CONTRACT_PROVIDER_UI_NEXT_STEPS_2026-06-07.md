@@ -31,11 +31,16 @@ Implemented or in progress:
 - `GET /api/sessions/:id/reverts` reads the durable `session_reverts` table
   rather than inferring revert history from projected session parts.
 - `POST /api/chat` returns explicit `execution_kind: "provider_chat"` and
-  `full_agent: false`.
-- `POST /api/sessions/:id/prompt` exists as a typed `501` full-agent boundary:
-  it returns `execution_kind: "full_agent_turn"`, `accepted: false`,
-  `agent_runtime_entrypoint: "RuntimeController"`, and no diagnostic/events
-  until the route is wired to the real runtime controller.
+  `full_agent: false`; it is now a legacy alias that points to
+  `/api/provider-chat`.
+- `POST /api/provider-chat` is the explicit non-agent provider-chat route.
+- `POST /api/sessions/:id/prompt` is now a real full-agent boundary in
+  production API startup: it returns `execution_kind: "full_agent_turn"` and
+  `agent_runtime_entrypoint: "RuntimeController"` after submitting through the
+  injected runtime adapter.
+- `ApiState` now has an optional `ApiAgentRuntime` injection point. Tests can
+  inject a fake runtime and receive `accepted: true`; missing-runtime typed
+  `501` remains only for custom/test states that do not inject the adapter.
 - Provider timeout DTOs read `PRIORITY_AGENT_LLM_REQUEST_TIMEOUT_SECS`, matching
   the runtime timeout path, and use the runtime stream-idle default of 120s.
 - `GET /api/provider/status` returns top-level `timeout_effective` with
@@ -55,7 +60,11 @@ Important current constraint:
 
 - `POST /api/chat` in `src/api/state.rs` is direct provider chat by design. It
   does not enter the full agent runtime.
-- `POST /api/sessions/:id/prompt` is still a typed `501`, not a real agent run.
+- `POST /api/sessions/:id/prompt` supports `delivery: "run"`. `queue` and
+  `admit_only` remain unimplemented and are rejected honestly until a runner
+  coordinator exists.
+- `stream: true` on `POST /api/sessions/:id/prompt` is rejected until the API
+  has a real streaming/SSE response contract.
 - The true desktop/full-agent path goes through `desktop_runtime::DesktopRuntime`
   and `engine::runtime_controller::RuntimeController`.
 - Desktop frontend DTOs are still primarily in
@@ -209,14 +218,15 @@ Option 1, low risk:
 Option 2, clearer API:
 
 - Add a new route:
-  - `POST /api/provider/chat`
+  - `POST /api/provider-chat`
 - Keep `/api/chat` as a compatibility alias for now.
 - Mark `/api/chat` as legacy or provider-chat compatibility in docs.
 
 Recommended for this project:
 
-- Start with Option 1 to avoid churn.
-- Add Option 2 only when the full-agent route exists.
+- Done: keep `/api/chat` as a legacy alias and expose `/api/provider-chat` as
+  the canonical non-agent route.
+- Remaining: do not remove `/api/chat` until a release boundary.
 
 Acceptance:
 
@@ -242,7 +252,9 @@ Request shape:
 {
   "message": "string",
   "agent_mode": "normal | plan | review | optional",
-  "stream": "bool | optional"
+  "stream": "false | optional",
+  "delivery": "run | optional",
+  "idempotency_key": "string | optional"
 }
 ```
 
@@ -252,9 +264,9 @@ Response shape for non-streaming first slice:
 {
   "session_id": "string",
   "execution_kind": "full_agent_turn",
-  "accepted": false,
+  "accepted": true,
   "turn_id": "string | null",
-  "status": "not_implemented",
+  "status": "completed | failed | partial | not_verified",
   "events_written": "usize",
   "latest_part_index": "i64 | null",
   "diagnostic": "<DiagnosticExportDto | null>",
@@ -270,11 +282,11 @@ Implementation approach:
   `RuntimeController::submit_turn` or `submit_stream_turn`.
 - Reuse the same `StreamingQueryEngine` provider/tool/session setup used by
   CLI/TUI/desktop where feasible.
-- The typed `501` boundary is now present. The remaining product work is to
-  replace that stub with a real `RuntimeController` submission path while
-  preserving the same response vocabulary.
-- The final implementation must persist `session_events` and `session_parts`
-  the same way desktop/TUI do.
+- The real `RuntimeController` submission path is now wired for production API
+  startup while preserving fake-runtime tests.
+- The remaining product work is to prove persisted `session_events` and
+  `session_parts` with real HTTP full-agent soak coverage, then add durable
+  idempotency before external clients depend on retries.
 
 Key code entry points:
 
@@ -529,9 +541,10 @@ This protects the work already done and gives UI/provider work a stable base.
 
 Do second.
 
-- Add explicit provider-chat metadata to `/api/chat`.
-- Replace the current typed `501` `POST /api/sessions/:id/prompt` route with a
-  real RuntimeController-backed route.
+- Keep provider-chat metadata on both `/api/chat` and `/api/provider-chat`.
+- Keep the real RuntimeController-backed `POST /api/sessions/:id/prompt` route
+  and harden it with soak coverage, idempotency, and future queue/admit-only
+  semantics.
 
 Why second:
 

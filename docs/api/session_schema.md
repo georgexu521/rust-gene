@@ -288,15 +288,20 @@ read from the durable `session_reverts` projection (not only from raw events).
 
 ## API Chat vs Full-Agent
 
-- `POST /api/chat` is **provider chat only** — it sends a message to the
-  configured LLM provider directly.  It does **not** enter the full
-  programming-agent runtime (no tool loop, no checkpoint, no closeout proof,
-  no session event stream).  The response includes `execution_kind: "provider_chat"`
-  and `full_agent: false` to make this unambiguous.
+- `POST /api/provider-chat` is the explicit **provider chat** route. It sends a
+  message to the configured LLM provider directly. It does **not** enter the
+  full programming-agent runtime (no tool loop, no checkpoint, no closeout
+  proof, no session event stream). The response includes
+  `execution_kind: "provider_chat"` and `full_agent: false`.
+- `POST /api/chat` is a legacy alias for provider chat. It also returns
+  `execution_kind: "provider_chat"` and `full_agent: false`, plus
+  `deprecated_route: "/api/chat"` and `replacement_route: "/api/provider-chat"`.
 - The full-agent prompt path for HTTP is `POST /api/sessions/:id/prompt`
-  (currently a typed `501` route with `execution_kind: "full_agent_turn"`,
-  `accepted: false`, and `agent_runtime_entrypoint: "RuntimeController"` until
-  the HTTP path is wired to the real runtime controller).
+  with `execution_kind: "full_agent_turn"` and
+  `agent_runtime_entrypoint: "RuntimeController"`. Production API startup
+  injects a `RuntimeController`-backed `ApiAgentRuntime`; if a custom/test
+  `ApiState` is constructed without one, the route returns an honest typed
+  `501`. Tests can inject a fake runtime and receive `accepted: true`.
 
 ---
 

@@ -529,6 +529,10 @@ async fn main() {
                     .unwrap_or(8787);
                 info!("Starting API server on port {}...", port);
                 let components = init_api_or_exit(&working_dir).await;
+                let runtime_controller =
+                    priority_agent::engine::runtime_controller::RuntimeController::new(
+                        components.streaming_engine,
+                    );
                 if let Err(e) = api::start_server(
                     components.provider,
                     components.model,
@@ -536,6 +540,7 @@ async fn main() {
                     port,
                     Some(components.lsp_manager),
                     Some(components.worktree_manager),
+                    Some(runtime_controller),
                 )
                 .await
                 {

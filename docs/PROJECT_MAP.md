@@ -46,15 +46,19 @@ full-agent command/event boundary; lightweight turns are explicitly non-agent.
 
 | Frontend | Entry File | Call Chain | Classification |
 |----------|-----------|-----------|----------------|
-| CLI interactive | `src/shell.rs:620` | `run_shell()` → `run_turn()` → `engine.query_stream(message)` | Full agent |
-| TUI interactive | `src/tui/app.rs:688` | `submit_message()` → `send_message()` → `engine.query_stream_with_agent_mode(user_msg, agent_mode)` | Full agent |
-| Desktop full turn | `src/desktop_runtime/mod.rs:118` | `DesktopRuntime::run_full_turn()` → `engine.query_stream(user_message)` | Full agent |
+| CLI interactive | `src/shell.rs` | `run_shell()` → `run_turn()` → `RuntimeController::submit_stream_turn(message)` | Full agent |
+| TUI interactive | `src/tui/app.rs` | `submit_message()` → `send_message()` → `RuntimeController::submit_stream_turn_with_agent_mode(user_msg, agent_mode)` | Full agent |
+| Desktop full turn | `src/desktop_runtime/mod.rs` | `DesktopRuntime::run_full_turn()` → `RuntimeController::submit_stream_turn(user_message)` | Full agent |
 | Tauri full turn | `apps/desktop/src-tauri/src/lib.rs:785` | `run_submit()` → `runtime.run_full_turn(message)` | Full agent (via DesktopRuntime) |
 | Eval/headless | `src/main.rs:167` | `run_eval_task()` → `engine.query_stream(prompt)` | Full agent, auto-approve, headless |
+| HTTP session prompt | `src/api/routes.rs` | `POST /api/sessions/:id/prompt` → injected `ApiAgentRuntime` / `RuntimeController` boundary | Full agent in production API startup; typed 501 only when runtime is not injected |
 
-> All five paths converge on `StreamingQueryEngine::query_stream()`. The
+> Full-agent product paths converge through `RuntimeController` or its
+> underlying `StreamingQueryEngine::query_stream()` execution path. The
 > converged path runs the full conversation loop with tool execution,
-> permission gates, validation, and closeout.
+> permission gates, validation, and closeout. The HTTP route must receive an
+> injected runtime boundary; it must not construct a separate fake runtime in
+> the handler.
 
 ### Lightweight Non-Agent Lane
 
@@ -62,6 +66,8 @@ full-agent command/event boundary; lightweight turns are explicitly non-agent.
 |----------|-----------|-----------|----------------|
 | Desktop side question | `src/desktop_runtime/mod.rs:125` | `DesktopRuntime::run_lightweight_turn()` → direct provider `chat()` | Non-agent: no tools, 512 max_tokens, dedicated system prompt |
 | Tauri side question | `apps/desktop/src-tauri/src/lib.rs:706` | `classify_turn_ingress()` → `runtime.run_lightweight_turn()` | Non-agent (via DesktopRuntime) |
+| HTTP provider chat | `src/api/routes.rs` | `POST /api/provider-chat` → `ApiState::chat()` → direct provider `chat()` | Non-agent: explicit provider-chat route |
+| HTTP legacy chat | `src/api/routes.rs` | `POST /api/chat` → `ApiState::chat()` → direct provider `chat()` | Non-agent legacy alias; response points to `/api/provider-chat` |
 
 > `classify_turn_ingress()` lives in `src/engine/turn_ingress.rs` (runtime-owned).
 > Lightweight turns bypass agent history, tool execution, permission, validation,

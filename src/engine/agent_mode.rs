@@ -30,7 +30,7 @@ impl AgentMode {
 
     pub fn parse(value: &str) -> Option<Self> {
         match value.trim().to_ascii_lowercase().as_str() {
-            "auto" | "default" => Some(Self::Auto),
+            "auto" | "default" | "normal" => Some(Self::Auto),
             "build" | "code" | "implement" | "implementation" => Some(Self::Build),
             "plan" | "planning" => Some(Self::Plan),
             "explore" | "inspect" | "inspection" | "read" | "research-local" => Some(Self::Explore),

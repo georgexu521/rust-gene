@@ -5,9 +5,11 @@
 //!
 //! ## API 端点
 //!
-//! ### Chat
-//! - `POST /api/chat` - 发送消息（非流式）
-//! - `POST /api/chat/stream` - 发送消息（SSE 流式）
+//! ### Agent Prompt / Provider Chat
+//! - `POST /api/sessions/:id/prompt` - 正式 full-agent 用户任务入口
+//! - `POST /api/provider-chat` - 显式 provider-chat 非 agent 辅助入口
+//! - `POST /api/chat` - legacy provider-chat 兼容入口
+//! - `POST /api/chat/stream` - legacy SSE 入口（尚未实现）
 //!
 //! ### Sessions
 //! - `GET /api/sessions` - 列出会话
@@ -77,14 +79,23 @@ pub async fn start_server(
     port: u16,
     lsp_manager: Option<Arc<crate::engine::lsp::LspManager>>,
     worktree_manager: Option<Arc<crate::engine::worktree::WorktreeManager>>,
+    runtime_controller: Option<crate::engine::runtime_controller::RuntimeController>,
 ) -> anyhow::Result<()> {
-    let state = Arc::new(ApiState::new(
+    let agent_runtime = runtime_controller.map(|controller| {
+        Arc::new(state::RuntimeControllerApiAgentRuntime::new(
+            controller,
+            model.clone(),
+        )) as Arc<dyn state::ApiAgentRuntime>
+    });
+    let mut api_state = ApiState::new(
         provider,
         model,
         tool_registry,
         lsp_manager,
         worktree_manager,
-    )?);
+    )?;
+    api_state.agent_runtime = agent_runtime;
+    let state = Arc::new(api_state);
 
     let app = create_router(state);
     let addr = SocketAddr::from(([127, 0, 0, 1], port));

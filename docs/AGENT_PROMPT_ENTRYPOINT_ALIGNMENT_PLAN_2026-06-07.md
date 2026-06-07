@@ -2,7 +2,11 @@
 
 Date: 2026-06-07
 
-Status: proposed implementation plan
+Status: implemented for the primary entrypoint alignment. Route vocabulary,
+provider-chat aliasing, `ApiAgentRuntime` injection, and production
+`RuntimeController` wiring are in place. Remaining work is hardening, not basic
+entrypoint wiring: idempotent prompt admission, async queue/admit-only delivery,
+and real long-run API soak coverage.
 
 Reference code reviewed:
 
@@ -102,18 +106,31 @@ conversation.
 - Desktop lightweight lane is explicitly non-agent in `DesktopRuntime`.
 - `/api/chat` now labels itself as `execution_kind: "provider_chat"` and
   `full_agent: false`.
-- `POST /api/sessions/:id/prompt` now exists as a typed `501` boundary with:
+- `POST /api/sessions/:id/prompt` now exists as a real full-agent route in
+  production API startup:
   - `execution_kind: "full_agent_turn"`;
-  - `accepted: false`;
   - `agent_runtime_entrypoint: "RuntimeController"`;
-  - no fake diagnostic/events.
+  - the request is submitted through an injected `ApiAgentRuntime` backed by
+    `RuntimeController`.
+- `ApiState` now has an optional `agent_runtime: Option<Arc<dyn
+  ApiAgentRuntime>>` attachment point.
+- `POST /api/sessions/:id/prompt` calls the injected `ApiAgentRuntime` when it
+  is present and still returns typed `501` only when a test/custom API state is
+  constructed without runtime injection.
+- `POST /api/provider-chat` is the explicit provider-chat non-agent route.
+- `POST /api/chat` remains as a legacy alias and points clients to
+  `/api/provider-chat`.
+- `delivery: "run"` is the only implemented delivery mode. `admit_only` and
+  `queue` are rejected with a typed bad request instead of being faked.
+- `stream: true` is rejected until a real streaming/SSE response path exists.
 
-### Main Gap
+### Remaining Gap
 
-The HTTP API has the right full-agent route name, but it is not wired to the
-real runtime yet.
+The HTTP API now has the right full-agent route name, runtime injection point,
+and real `RuntimeController` adapter. The remaining gap is prompt-admission
+product hardening, not basic execution.
 
-`ApiState` currently owns:
+`ApiState` owns:
 
 - provider;
 - model;
@@ -121,14 +138,16 @@ real runtime yet.
 - session store;
 - config;
 - audit tracker;
-- LSP/worktree managers.
+- LSP/worktree managers;
+- optional full-agent runtime handle.
 
-It does not own or receive a `RuntimeController` or `StreamingQueryEngine`.
+The API handler receives the runtime boundary rather than constructing a fresh
+provider/tool/runtime stack. API startup initializes the same streaming runtime
+used by other full-agent frontends and wraps it in `RuntimeController`.
 
-That means a direct implementation inside `session_prompt_handler` would be
-tempting but dangerous: it could instantiate a fresh runtime that does not share
-the real frontend session/history/permission/checkpoint path. That would create
-a fake API agent lane.
+The next hardening layer should add durable request idempotency and a true
+runner/coordinator if `delivery: "queue"` or `delivery: "admit_only"` becomes a
+product requirement.
 
 ## 4. Target Policy
 
@@ -204,7 +223,7 @@ Recommended request:
   "message": "string",
   "agent_mode": "normal | plan | review | optional",
   "delivery": "run | admit_only | queue | optional",
-  "stream": "bool | optional",
+  "stream": "false | optional",
   "idempotency_key": "string | optional"
 }
 ```
@@ -226,8 +245,9 @@ Recommended non-streaming response:
 }
 ```
 
-For the current transition period, typed `501` is acceptable only as an honest
-blocker. It should not be treated as feature completion.
+Typed `501` remains acceptable only for explicitly constructed API states where
+no runtime was injected. Production API startup should inject the
+`RuntimeController` adapter.
 
 ### Async Route
 
@@ -268,6 +288,8 @@ Do not let `/api/chat` become the recommended user task route.
 
 ### Slice 1: Documentation And Route Vocabulary
 
+Status: complete.
+
 Goal:
 
 Make the product vocabulary unambiguous before wiring more runtime.
@@ -285,8 +307,8 @@ Changes:
   - main prompt path = `RuntimeController`;
   - provider-chat path = auxiliary only.
 - Update `docs/API_CONTRACT_PROVIDER_UI_NEXT_STEPS_2026-06-07.md`:
-  - keep typed 501 as an honest blocker;
-  - make real controller injection the next hard requirement.
+  - document production `RuntimeController` injection;
+  - keep typed 501 as an honest test/custom-state fallback.
 
 Tests:
 
@@ -300,9 +322,11 @@ Done when:
 - docs no longer imply `/api/chat` is a user-task route;
 - route contract test still proves `/api/chat` is `full_agent: false`;
 - route contract test proves `/api/sessions/:id/prompt` is the full-agent
-  boundary, even if still typed 501.
+  boundary and can call an injected runtime.
 
 ### Slice 2: Add An API Runtime Handle
+
+Status: complete.
 
 Goal:
 
@@ -335,7 +359,8 @@ Rules:
 - No API handler should call `StreamingQueryEngine::new(...)` directly.
 - No API handler should initialize a new provider/tool/runtime stack for a
   formal user task.
-- If no runtime handle exists, return the existing typed 501.
+- If no runtime handle exists, return the existing typed 501. Production API
+  startup should inject a runtime handle.
 
 Code entry points:
 
@@ -354,7 +379,7 @@ cargo check --features experimental-api-server -q
 Done when:
 
 - `ApiState` can hold an optional full-agent runtime boundary;
-- existing API server still starts without it;
+- production API server injects it;
 - tests can inject a fake runtime and receive a full-agent response;
 - missing runtime still returns typed 501.
 
@@ -373,6 +398,22 @@ Minimum behavior:
 - collect stream events until terminal status for non-streaming mode;
 - write/refresh durable events and parts through existing mirror/projection;
 - return latest diagnostic summary.
+
+Current status:
+
+- production API startup creates a `RuntimeController` from the initialized
+  streaming runtime and injects it into `ApiState`;
+- `RuntimeControllerApiAgentRuntime` binds the requested session id, creates the
+  session if needed, submits the message through
+  `RuntimeController::submit_stream_turn_with_agent_mode`, consumes terminal
+  stream events, and returns status/diagnostic/latest-part metadata;
+- full-agent API turns are serialized around the shared streaming engine so
+  concurrent HTTP requests cannot race by changing the global session binding;
+- `delivery: "run"` is supported; `admit_only` and `queue` are rejected until a
+  real coordinator exists;
+- `stream: true` is rejected until the API exposes a real streaming response;
+- `idempotency_key` is accepted as request metadata but does not yet provide a
+  retry guarantee.
 
 Important details:
 
@@ -407,9 +448,13 @@ Done when:
   `accepted: true`;
 - the handler never calls direct provider chat;
 - response includes terminal status and stable metadata;
-- session parts/events are visible after the call in tests.
+- session parts/events are visible after the call in tests or API soak evidence.
+  This is the remaining validation gap for real provider runs.
 
 ### Slice 4: Rename Or Deprecate `/api/chat`
+
+Status: partially complete. `/api/provider-chat` exists and `/api/chat` is a
+legacy alias; full removal is deferred to a release boundary.
 
 Goal:
 
@@ -593,16 +638,18 @@ Mitigation:
 
 ## 8. Recommended Execution Order
 
-1. Document route vocabulary and update API startup logs.
-2. Add optional `ApiAgentRuntime` / `RuntimeController` handle to `ApiState`.
-3. Add fake-runtime route tests proving `/api/sessions/:id/prompt` can return
-   `accepted: true`.
-4. Wire real `RuntimeController` for API server mode.
-5. Add `/api/provider-chat` and deprecate `/api/chat`.
-6. Update desktop/API examples to use session prompt for formal tasks.
-7. Review and reduce heuristic routing dependency.
-8. Run a real task soak through CLI/TUI/desktop/API to prove the same runtime
-   semantics.
+1. Done: document route vocabulary and update API startup logs.
+2. Done: add optional `ApiAgentRuntime` / `RuntimeController` handle to
+   `ApiState`.
+3. Done: add fake-runtime route tests proving `/api/sessions/:id/prompt` can
+   return `accepted: true`.
+4. Done: wire real `RuntimeController` for API server mode.
+5. Done: add `/api/provider-chat` and deprecate `/api/chat`.
+6. Next: update desktop/API examples to use session prompt for formal tasks.
+7. Next: add real API full-agent soak proving session events/parts/diagnostics
+   survive a completed run.
+8. Later: add durable idempotency plus a run coordinator before enabling
+   `delivery: "queue"` or `delivery: "admit_only"`.
 
 ## 9. Definition Of Done
 
@@ -613,7 +660,8 @@ This plan is done when:
 - `/api/chat` is no longer documented as a normal user prompt route;
 - direct provider calls are named auxiliary lanes;
 - tests prove provider-chat cannot be mistaken for full-agent execution;
-- session events/parts/diagnostics are written for HTTP agent prompts;
+- session events/parts/diagnostics are written for HTTP agent prompts in real
+  provider soak evidence;
 - desktop/TUI/API share the same entrypoint vocabulary;
 - simple/lightweight behavior exists only through explicit side-question or
   internal service routes.
@@ -622,32 +670,37 @@ This plan is done when:
 
 The next code slice should be:
 
-**Add `ApiAgentRuntime` injection to `ApiState` and keep missing-runtime typed
-501 behavior.**
+**Add real HTTP full-agent soak coverage and idempotent prompt admission.**
 
-Why this first:
+Why this next:
 
-- it avoids fake runtime construction;
-- it gives tests a clean fake runtime;
-- it creates the attachment point for real `RuntimeController`;
-- it can be implemented without changing provider/tool/runtime internals.
+- the route now enters the real runtime, so the remaining risk is operational:
+  long turns, permission pauses, persisted parts, diagnostics, and retry
+  behavior;
+- idempotency is necessary before external clients can safely retry network
+  failures;
+- `queue`/`admit_only` should not be enabled until a coordinator owns the run
+  lifecycle.
 
-Suggested first test:
+Suggested next tests:
 
-- construct `ApiState` with a fake `ApiAgentRuntime`;
-- call `POST /api/sessions/test/prompt`;
+- start API mode with a mock/controlled provider and real
+  `RuntimeControllerApiAgentRuntime`;
+- call `POST /api/sessions/test/prompt` with `delivery: "run"`;
 - assert:
-  - status `200`;
+  - status `200` or an honest terminal failure with runtime evidence;
   - `execution_kind == "full_agent_turn"`;
   - `accepted == true`;
   - `agent_runtime_entrypoint == "RuntimeController"`;
-  - fake runtime received `session_id == "test"`;
-  - fake runtime received the exact message;
-  - no provider-chat handler was used.
+  - `events_written > 0`;
+  - session parts/events are visible after the turn;
+  - diagnostics are exported when the runtime emits them.
 
-Then keep the existing missing-runtime test:
+Then keep the existing negative tests:
 
 - construct `ApiState` without runtime;
 - call `POST /api/sessions/test/prompt`;
-- assert typed `501`.
-
+- assert typed `501`;
+- call with `delivery: "queue"` or `delivery: "admit_only"` and assert typed
+  `400` until those modes are actually implemented.
+- call with `stream: true` or an unknown `agent_mode` and assert typed `400`.

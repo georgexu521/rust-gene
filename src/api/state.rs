@@ -3,13 +3,16 @@
 //! 管理 API 服务器状态和提供业务逻辑方法
 
 use super::routes::*;
+use crate::engine::agent_mode::AgentMode;
+use crate::engine::runtime_controller::RuntimeController;
+use crate::engine::streaming::StreamEvent;
 use crate::services::config::AppConfig;
 use crate::tools::ToolContext;
 use serde::Serialize;
 use serde_json::json;
 use std::sync::Arc;
 use std::time::Instant;
-use tokio::sync::RwLock;
+use tokio::sync::{Mutex, RwLock};
 use tracing::debug;
 
 /// Input shape for the full-agent runtime entrypoint.
@@ -19,6 +22,8 @@ pub struct ApiSessionPromptInput {
     pub message: String,
     pub agent_mode: Option<String>,
     pub stream: bool,
+    pub delivery: Option<String>,
+    pub idempotency_key: Option<String>,
 }
 
 /// Outcome from a full-agent prompt execution.
@@ -44,6 +49,107 @@ pub trait ApiAgentRuntime: Send + Sync {
         &self,
         input: ApiSessionPromptInput,
     ) -> anyhow::Result<ApiSessionPromptOutcome>;
+}
+
+/// Production full-agent API adapter backed by `RuntimeController`.
+pub struct RuntimeControllerApiAgentRuntime {
+    controller: RuntimeController,
+    model: String,
+    turn_lock: Mutex<()>,
+}
+
+impl RuntimeControllerApiAgentRuntime {
+    pub fn new(controller: RuntimeController, model: impl Into<String>) -> Self {
+        Self {
+            controller,
+            model: model.into(),
+            turn_lock: Mutex::new(()),
+        }
+    }
+
+    fn ensure_session(&self, session_id: &str) -> anyhow::Result<()> {
+        self.controller.set_session(session_id.to_string());
+        let Some((store, _)) = self.controller.engine().session_binding() else {
+            return Ok(());
+        };
+        if store.get_session(session_id)?.is_none() {
+            store.create_session(session_id, "API Session", &self.model)?;
+        }
+        Ok(())
+    }
+
+    fn latest_part_index(&self, session_id: &str) -> Option<i64> {
+        let (store, _) = self.controller.engine().session_binding()?;
+        store
+            .get_session_parts(session_id)
+            .ok()?
+            .last()
+            .map(|part| part.part_index)
+    }
+}
+
+#[async_trait::async_trait]
+impl ApiAgentRuntime for RuntimeControllerApiAgentRuntime {
+    async fn submit_prompt(
+        &self,
+        input: ApiSessionPromptInput,
+    ) -> anyhow::Result<ApiSessionPromptOutcome> {
+        use futures::StreamExt;
+
+        let _guard = self.turn_lock.lock().await;
+        let agent_mode = input
+            .agent_mode
+            .as_deref()
+            .and_then(AgentMode::parse)
+            .unwrap_or_default();
+        self.ensure_session(&input.session_id)?;
+
+        let turn_id = format!("api-turn-{}", uuid::Uuid::new_v4().simple());
+        let mut events_written = 0usize;
+        let mut status = "completed".to_string();
+        let mut diagnostic = None;
+        let mut error = None;
+        let mut stream = self
+            .controller
+            .submit_stream_turn_with_agent_mode(input.message, agent_mode)
+            .await;
+
+        while let Some(event) = stream.next().await {
+            events_written += 1;
+            match event {
+                StreamEvent::RuntimeDiagnostic { diagnostic: value } => {
+                    if let Ok(dto) =
+                        serde_json::from_value::<super::dto::diagnostic::DiagnosticExportDto>(value)
+                    {
+                        diagnostic = Some(dto);
+                    }
+                }
+                StreamEvent::Closeout {
+                    status: closeout_status,
+                    ..
+                } => {
+                    status = closeout_status;
+                }
+                StreamEvent::Error(message) => {
+                    status = "failed".to_string();
+                    error = Some(message);
+                    break;
+                }
+                StreamEvent::Complete => break,
+                _ => {}
+            }
+        }
+
+        Ok(ApiSessionPromptOutcome {
+            accepted: error.is_none(),
+            turn_id: Some(turn_id),
+            status,
+            events_written,
+            latest_part_index: self.latest_part_index(&input.session_id),
+            diagnostic,
+            error,
+        })
+    }
 }
 
 /// API 服务器状态

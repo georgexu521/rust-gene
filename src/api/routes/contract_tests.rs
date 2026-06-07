@@ -110,6 +110,61 @@ async fn json_request_response(
 }
 
 #[tokio::test]
+async fn provider_chat_route_is_explicit_non_agent_lane() {
+    let _env_guard = ENV_LOCK.lock().await;
+    unsafe { std::env::set_var("PRIORITY_AGENT_BRIDGE_TOKEN", TEST_BRIDGE_TOKEN) };
+    let state = api_test_state();
+    let app = create_routes(state);
+    let (status, value) = json_request_response(
+        &app,
+        "POST",
+        "/api/provider-chat",
+        Some(json!({
+            "message": "explain this term",
+            "session_id": "test"
+        })),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(value["execution_kind"], "provider_chat");
+    assert_eq!(value["full_agent"], false);
+    assert!(value["agent_runtime_entrypoint"].is_null());
+    assert!(
+        value.get("deprecated_route").is_none(),
+        "canonical provider-chat route should not mark itself deprecated"
+    );
+    assert!(
+        value.get("replacement_route").is_none(),
+        "canonical provider-chat route should not need replacement"
+    );
+}
+
+#[tokio::test]
+async fn legacy_chat_route_points_to_provider_chat_replacement() {
+    let _env_guard = ENV_LOCK.lock().await;
+    unsafe { std::env::set_var("PRIORITY_AGENT_BRIDGE_TOKEN", TEST_BRIDGE_TOKEN) };
+    let state = api_test_state();
+    let app = create_routes(state);
+    let (status, value) = json_request_response(
+        &app,
+        "POST",
+        "/api/chat",
+        Some(json!({
+            "message": "explain this term",
+            "session_id": "test"
+        })),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(value["execution_kind"], "provider_chat");
+    assert_eq!(value["full_agent"], false);
+    assert_eq!(value["deprecated_route"], "/api/chat");
+    assert_eq!(value["replacement_route"], "/api/provider-chat");
+}
+
+#[tokio::test]
 async fn provider_status_has_required_fields() {
     let _env_guard = ENV_LOCK.lock().await;
     unsafe { std::env::set_var("PRIORITY_AGENT_BRIDGE_TOKEN", TEST_BRIDGE_TOKEN) };
@@ -243,6 +298,8 @@ async fn session_prompt_returns_typed_full_agent_not_implemented_response() {
 struct FakeAgentRuntime {
     expected_session_id: String,
     expected_message: String,
+    expected_delivery: Option<String>,
+    expected_idempotency_key: Option<String>,
 }
 
 #[async_trait::async_trait]
@@ -253,6 +310,8 @@ impl crate::api::state::ApiAgentRuntime for FakeAgentRuntime {
     ) -> anyhow::Result<crate::api::state::ApiSessionPromptOutcome> {
         assert_eq!(input.session_id, self.expected_session_id);
         assert_eq!(input.message, self.expected_message);
+        assert_eq!(input.delivery, self.expected_delivery);
+        assert_eq!(input.idempotency_key, self.expected_idempotency_key);
         Ok(crate::api::state::ApiSessionPromptOutcome {
             accepted: true,
             turn_id: Some("turn-fake-001".to_string()),
@@ -273,6 +332,8 @@ async fn session_prompt_with_runtime_returns_accepted_true() {
     Arc::get_mut(&mut state).unwrap().agent_runtime = Some(Arc::new(FakeAgentRuntime {
         expected_session_id: "test".to_string(),
         expected_message: "fix the bug".to_string(),
+        expected_delivery: Some("run".to_string()),
+        expected_idempotency_key: Some("idem-1".to_string()),
     }));
     let app = create_routes(state);
     let (status, value) = json_request_response(
@@ -282,7 +343,9 @@ async fn session_prompt_with_runtime_returns_accepted_true() {
         Some(json!({
             "message": "fix the bug",
             "agent_mode": "normal",
-            "stream": false
+            "stream": false,
+            "delivery": "run",
+            "idempotency_key": "idem-1"
         })),
     )
     .await;
@@ -321,5 +384,74 @@ async fn session_prompt_without_runtime_still_returns_501() {
     assert_eq!(
         value["error"],
         "full-agent prompt API is not wired to RuntimeController yet"
+    );
+}
+
+#[tokio::test]
+async fn session_prompt_rejects_unimplemented_delivery_modes() {
+    let _env_guard = ENV_LOCK.lock().await;
+    unsafe { std::env::set_var("PRIORITY_AGENT_BRIDGE_TOKEN", TEST_BRIDGE_TOKEN) };
+    let app = create_routes(api_test_state());
+    let (status, value) = json_request_response(
+        &app,
+        "POST",
+        "/api/sessions/test/prompt",
+        Some(json!({
+            "message": "fix the bug",
+            "delivery": "queue"
+        })),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(
+        value["error"],
+        "delivery='queue' is not implemented yet; use delivery='run'"
+    );
+}
+
+#[tokio::test]
+async fn session_prompt_rejects_unimplemented_streaming_mode() {
+    let _env_guard = ENV_LOCK.lock().await;
+    unsafe { std::env::set_var("PRIORITY_AGENT_BRIDGE_TOKEN", TEST_BRIDGE_TOKEN) };
+    let app = create_routes(api_test_state());
+    let (status, value) = json_request_response(
+        &app,
+        "POST",
+        "/api/sessions/test/prompt",
+        Some(json!({
+            "message": "fix the bug",
+            "stream": true
+        })),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(
+        value["error"],
+        "stream=true is not implemented for /api/sessions/:id/prompt yet; use stream=false"
+    );
+}
+
+#[tokio::test]
+async fn session_prompt_rejects_unknown_agent_mode() {
+    let _env_guard = ENV_LOCK.lock().await;
+    unsafe { std::env::set_var("PRIORITY_AGENT_BRIDGE_TOKEN", TEST_BRIDGE_TOKEN) };
+    let app = create_routes(api_test_state());
+    let (status, value) = json_request_response(
+        &app,
+        "POST",
+        "/api/sessions/test/prompt",
+        Some(json!({
+            "message": "fix the bug",
+            "agent_mode": "fast"
+        })),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(
+        value["error"],
+        "agent_mode must be one of: auto, normal, build, plan, explore, review"
     );
 }

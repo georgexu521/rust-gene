@@ -23,13 +23,15 @@ pub struct AppComponents {
     pub worktree_manager: Arc<crate::engine::worktree::WorktreeManager>,
 }
 
-/// Components needed by the HTTP API server without initializing CLI-only
-/// runtime state such as memory snapshots, conversation sessions, or streaming
-/// engines.
+/// Components needed by the HTTP API server.
+///
+/// The API session prompt route is a formal full-agent entrypoint, so API
+/// startup must carry the same streaming runtime used by CLI/TUI/desktop.
 pub struct ApiComponents {
     pub provider: Arc<dyn crate::services::api::LlmProvider>,
     pub model: String,
     pub tool_registry: Arc<ToolRegistry>,
+    pub streaming_engine: Arc<StreamingQueryEngine>,
     pub lsp_manager: Arc<crate::engine::lsp::LspManager>,
     pub worktree_manager: Arc<crate::engine::worktree::WorktreeManager>,
 }
@@ -184,24 +186,16 @@ pub async fn init_app(working_dir: &std::path::Path) -> Result<AppComponents> {
     init_components(provider, model, tool_registry, working_dir).await
 }
 
-/// 初始化 API server 所需组件，避免创建未使用的 CLI session/memory/streaming engine。
+/// 初始化 API server 所需组件。
 pub async fn init_api_components(working_dir: &std::path::Path) -> Result<ApiComponents> {
-    let (provider, model) = init_provider()?;
-    let tool_registry = init_tool_registry(working_dir);
-    cleanup_expired_tool_outputs(working_dir);
-
-    let mut lsp_manager = crate::engine::lsp::LspManager::new();
-    lsp_manager.detect_servers(working_dir);
-    let lsp_manager = Arc::new(lsp_manager);
-
-    let worktree_manager = Arc::new(crate::engine::worktree::WorktreeManager::new().await);
-
+    let components = init_app(working_dir).await?;
     Ok(ApiComponents {
-        provider,
-        model,
-        tool_registry,
-        lsp_manager,
-        worktree_manager,
+        provider: components.provider,
+        model: components.model,
+        tool_registry: components.tool_registry,
+        streaming_engine: components.streaming_engine,
+        lsp_manager: components.lsp_manager,
+        worktree_manager: components.worktree_manager,
     })
 }
 

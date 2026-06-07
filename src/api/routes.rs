@@ -41,12 +41,9 @@ pub fn create_routes(state: Arc<ApiState>) -> Router {
 
     // 受保护的 API 路由（需要认证）
     let api_routes = Router::new()
-        // Chat API
-        .route("/api/chat", post(chat_handler))
+        // Provider chat compatibility API (explicit non-agent lane)
+        .route("/api/chat", post(legacy_chat_handler))
         .route("/api/chat/stream", post(chat_stream_handler))
-        // Provider chat (explicit non-agent lane)
-        .route("/api/provider-chat", post(chat_handler))
-        // Session prompt (full-agent, requires ApiAgentRuntime)
         // WebSocket
         .route("/api/ws", get(ws_handler))
         // Session API
@@ -64,7 +61,10 @@ pub fn create_routes(state: Arc<ApiState>) -> Router {
             "/api/sessions/:id/messages",
             get(get_session_messages_handler),
         )
+        // Session prompt (full-agent, requires ApiAgentRuntime)
         .route("/api/sessions/:id/prompt", post(session_prompt_handler))
+        // Provider chat (explicit non-agent lane)
+        .route("/api/provider-chat", post(provider_chat_handler))
         // Tool API
         .route("/api/tools", get(list_tools_handler))
         .route("/api/tools/:name", get(get_tool_handler))
@@ -159,9 +159,25 @@ pub struct UsageInfo {
     pub total_tokens: u32,
 }
 
-async fn chat_handler(
+async fn legacy_chat_handler(
     State(state): State<Arc<ApiState>>,
     Json(req): Json<ChatRequest>,
+) -> Result<impl IntoResponse, ApiError> {
+    chat_response(state, req, Some("/api/chat"), Some("/api/provider-chat")).await
+}
+
+async fn provider_chat_handler(
+    State(state): State<Arc<ApiState>>,
+    Json(req): Json<ChatRequest>,
+) -> Result<impl IntoResponse, ApiError> {
+    chat_response(state, req, None, None).await
+}
+
+async fn chat_response(
+    state: Arc<ApiState>,
+    req: ChatRequest,
+    deprecated_route: Option<&'static str>,
+    replacement_route: Option<&'static str>,
 ) -> Result<impl IntoResponse, ApiError> {
     let session_id = req
         .session_id
@@ -180,8 +196,8 @@ async fn chat_handler(
             execution_kind: "provider_chat".to_string(),
             full_agent: false,
             agent_runtime_entrypoint: None,
-            deprecated_route: None,
-            replacement_route: None,
+            deprecated_route: deprecated_route.map(str::to_string),
+            replacement_route: replacement_route.map(str::to_string),
         }),
     ))
 }
@@ -222,6 +238,8 @@ pub struct SessionPromptRequest {
     pub message: String,
     pub agent_mode: Option<String>,
     pub stream: Option<bool>,
+    pub delivery: Option<String>,
+    pub idempotency_key: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -324,6 +342,35 @@ async fn session_prompt_handler(
     if req.message.trim().is_empty() {
         return Err(ApiError::BadRequest("message is required".to_string()));
     }
+    if req.stream.unwrap_or(false) {
+        return Err(ApiError::BadRequest(
+            "stream=true is not implemented for /api/sessions/:id/prompt yet; use stream=false"
+                .to_string(),
+        ));
+    }
+    if let Some(agent_mode) = req.agent_mode.as_deref() {
+        if crate::engine::agent_mode::AgentMode::parse(agent_mode).is_none() {
+            return Err(ApiError::BadRequest(
+                "agent_mode must be one of: auto, normal, build, plan, explore, review".to_string(),
+            ));
+        }
+    }
+    if let Some(delivery) = req.delivery.as_deref() {
+        match delivery.trim().to_ascii_lowercase().as_str() {
+            "" | "run" => {}
+            "admit_only" | "queue" => {
+                return Err(ApiError::BadRequest(format!(
+                    "delivery='{}' is not implemented yet; use delivery='run'",
+                    delivery
+                )));
+            }
+            _ => {
+                return Err(ApiError::BadRequest(
+                    "delivery must be one of: run, admit_only, queue".to_string(),
+                ));
+            }
+        }
+    }
 
     let Some(ref agent_runtime) = state.agent_runtime else {
         return Ok((
@@ -350,6 +397,8 @@ async fn session_prompt_handler(
         message: req.message,
         agent_mode: req.agent_mode.clone(),
         stream: req.stream.unwrap_or(false),
+        delivery: req.delivery.clone(),
+        idempotency_key: req.idempotency_key.clone(),
     };
 
     let outcome = agent_runtime
