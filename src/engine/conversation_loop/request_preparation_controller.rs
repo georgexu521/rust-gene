@@ -116,6 +116,27 @@ impl RequestPreparationController {
             ContextBudgetController::observe_request(&request_messages, &canonical_tools);
         ContextBudgetController::record_runtime_diet(memory_context.runtime_diet, &request_budget);
 
+        // Selective compression: compress old tool outputs to structured summaries.
+        // Preserves last 2 turns of raw tool output for closeout verification.
+        let compression_report =
+            crate::engine::message_compression::selectively_compress_tool_outputs(
+                &mut request_messages,
+                2,
+            );
+        if compression_report.compressed_count > 0 {
+            trace.record(TraceEvent::WorkflowFallback {
+                error: format!(
+                    "selective compression: compressed={} chars_before={} chars_after={} saved={}",
+                    compression_report.compressed_count,
+                    compression_report.chars_before,
+                    compression_report.chars_after,
+                    compression_report
+                        .chars_before
+                        .saturating_sub(compression_report.chars_after),
+                ),
+            });
+        }
+
         // Heal messages before sending: shrink oversized tool results and
         // drop dangling tool_calls to prevent provider 400 errors.
         let (request_messages, heal_report) =

@@ -45,6 +45,7 @@ pub mod lightweight_planner;
 pub mod lsp;
 pub mod mcp;
 pub mod mcp_server;
+pub mod message_compression;
 pub mod message_healing;
 pub mod model_context;
 pub mod plan_mode;
