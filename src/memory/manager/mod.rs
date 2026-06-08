@@ -48,7 +48,8 @@ pub use self::helpers::{
     kind_label, log_preview, memory_decision_event, memory_llm_timeout, memory_messages_hash,
     memory_scope_label, record_needs_revalidation, MemoryDecisionEvent,
     MAX_LEARNINGS_PER_SESSION_EXTRACT, MAX_LEARNINGS_PER_TURN, MEMORY_DIR_NAME,
-    MEMORY_FLUSH_LOG_FILE, MEMORY_FLUSH_MAX_ATTEMPTS, MEMORY_RECORDS_FILE,
+    MEMORY_FLUSH_LOG_FILE, MEMORY_FLUSH_MAX_ATTEMPTS, MEMORY_NUDGE_DEFAULT_INTERVAL,
+    MEMORY_RECORDS_FILE,
 };
 
 #[cfg(test)]
@@ -175,6 +176,8 @@ pub struct MemoryManager {
     /// 冻结快照（会话开始时捕获，整个会话不变）
     pub(super) frozen_memory: Option<String>,
     frozen_user: Option<String>,
+    pub(super) frozen_agents: Option<String>,
+    pub(super) frozen_claude: Option<String>,
     pub(super) frozen_memory_files: Vec<MemoryFileSnapshot>,
     /// 字符限制
     memory_char_limit: usize,
@@ -199,6 +202,12 @@ pub struct MemoryManager {
     pub(super) trailing_mode: bool,
     /// Trailing run 是否已执行
     pub(super) trailing_completed: bool,
+    /// Nudge 计数器：距离上次 memory_* 工具调用已过的轮数
+    pub(super) turns_since_memory_write: usize,
+    /// Nudge 阈值：多少轮没调 memory 工具后触发后台审查
+    memory_nudge_interval: usize,
+    /// 后台审查是否正在运行（防重入）
+    pub(super) background_review_active: bool,
     /// 缓存命中率统计
     cache_hits: usize,
     cache_misses: usize,
@@ -257,6 +266,8 @@ impl MemoryManager {
             memory_dir,
             frozen_memory: None,
             frozen_user: None,
+            frozen_agents: None,
+            frozen_claude: None,
             frozen_memory_files: Vec::new(),
             memory_char_limit: 3000,
             user_char_limit: 1500,
@@ -270,6 +281,12 @@ impl MemoryManager {
             forked_mode,
             trailing_mode,
             trailing_completed: false,
+            turns_since_memory_write: 0,
+            memory_nudge_interval: std::env::var("PRIORITY_AGENT_MEMORY_NUDGE_INTERVAL")
+                .ok()
+                .and_then(|v| v.parse::<usize>().ok())
+                .unwrap_or(MEMORY_NUDGE_DEFAULT_INTERVAL),
+            background_review_active: false,
             cache_hits: 0,
             cache_misses: 0,
             provider_registry: MemoryProviderRegistry::with_local(Arc::new(
@@ -277,6 +294,45 @@ impl MemoryManager {
             )),
             active_scope: MemoryScope::local("unknown"),
         }
+    }
+
+    // ---------------------------------------------------------------------------
+    // Nudge / background review
+    // ---------------------------------------------------------------------------
+
+    /// 每轮递增 nudge 计数器。如果 LLM 本轮调用了 memory_* 工具则重置。
+    /// 达到 `memory_nudge_interval` 时返回 `true`，触发后台审查。
+    pub fn advance_nudge(&mut self, memory_tool_called_this_turn: bool) -> bool {
+        if memory_tool_called_this_turn {
+            self.turns_since_memory_write = 0;
+            return false;
+        }
+        self.turns_since_memory_write = self.turns_since_memory_write.saturating_add(1);
+        if self.turns_since_memory_write >= self.memory_nudge_interval {
+            self.turns_since_memory_write = 0;
+            true
+        } else {
+            false
+        }
+    }
+
+    /// LLM 调用了 memory_* 工具时重置 nudge 计数器。
+    pub fn record_memory_tool_call(&mut self) {
+        self.turns_since_memory_write = 0;
+    }
+
+    pub fn nudge_interval(&self) -> usize {
+        self.memory_nudge_interval
+    }
+
+    /// 检测 Accepted 记录中可能存在的矛盾（共享主题但内容不同）。
+    pub fn contradictions(
+        &self,
+        threshold: f32,
+        limit: usize,
+    ) -> Vec<crate::memory::contradiction::ContradictionPair> {
+        let records = self.memory_records();
+        crate::memory::contradiction::detect_contradictions(&records, threshold, limit)
     }
 
     pub fn records_path(&self) -> &Path {

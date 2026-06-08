@@ -5,38 +5,41 @@
 use super::helpers::{memory_scope_label, record_needs_revalidation};
 use super::MemoryManager;
 use crate::memory::files::{
-    format_memory_file_manifest, load_memory_files, safe_memory_content_for_load,
-    MEMORY_MANIFEST_CHAR_LIMIT,
+    format_memory_file_manifest, load_memory_files, resolve_memory_imports,
+    safe_memory_content_for_load, MEMORY_MANIFEST_CHAR_LIMIT,
 };
 use crate::memory::reports::{
     format_pinned_memory_text_index, memory_snapshot_skip_report_from_records,
     pinned_snapshot_sources, MemorySnapshotReport, MemorySnapshotSkipReport,
 };
+use std::path::Path;
 use tracing::info;
 
 impl MemoryManager {
     /// 会话开始时冻结快照（同步版本 — 兼容非异步上下文）
     pub fn freeze_snapshot(&mut self) {
-        self.frozen_memory = std::fs::read_to_string(&self.memory_path)
-            .ok()
-            .and_then(|content| safe_memory_content_for_load("MEMORY.md", &content));
-        self.frozen_user = std::fs::read_to_string(&self.user_path)
-            .ok()
-            .and_then(|content| safe_memory_content_for_load("USER.md", &content));
+        let base_dir = self.memory_path.parent().unwrap_or_else(|| Path::new("."));
+        self.frozen_memory = load_and_resolve_memory_file(&self.memory_path, base_dir, "MEMORY.md");
+        self.frozen_user = load_and_resolve_memory_file(&self.user_path, base_dir, "USER.md");
+        // Load AGENTS.md and CLAUDE.md if they exist (cross-tool compatibility).
+        // They are merged into the frozen_memory snapshot with labels.
+        let agents_path = base_dir.join("AGENTS.md");
+        let claude_path = base_dir.join("CLAUDE.md");
+        self.frozen_agents = load_compat_memory_file(&agents_path, &self.memory_path, base_dir, "AGENTS.md");
+        self.frozen_claude = load_compat_memory_file(&claude_path, &self.memory_path, base_dir, "CLAUDE.md");
         self.frozen_memory_files = load_memory_files(&self.memory_dir);
         info!("Memory snapshot frozen for this session");
     }
 
     /// 会话开始时冻结快照（异步版本 — 推荐在异步上下文中使用）
     pub async fn freeze_snapshot_async(&mut self) {
-        self.frozen_memory = tokio::fs::read_to_string(&self.memory_path)
-            .await
-            .ok()
-            .and_then(|content| safe_memory_content_for_load("MEMORY.md", &content));
-        self.frozen_user = tokio::fs::read_to_string(&self.user_path)
-            .await
-            .ok()
-            .and_then(|content| safe_memory_content_for_load("USER.md", &content));
+        let base_dir = self.memory_path.parent().unwrap_or_else(|| Path::new("."));
+        self.frozen_memory = load_and_resolve_memory_file_async(&self.memory_path, base_dir, "MEMORY.md").await;
+        self.frozen_user = load_and_resolve_memory_file_async(&self.user_path, base_dir, "USER.md").await;
+        let agents_path = base_dir.join("AGENTS.md");
+        let claude_path = base_dir.join("CLAUDE.md");
+        self.frozen_agents = load_compat_memory_file(&agents_path, &self.memory_path, base_dir, "AGENTS.md");
+        self.frozen_claude = load_compat_memory_file(&claude_path, &self.memory_path, base_dir, "CLAUDE.md");
         self.frozen_memory_files = load_memory_files(&self.memory_dir);
         info!("Memory snapshot frozen for this session (async)");
     }
@@ -51,6 +54,24 @@ impl MemoryManager {
                 format_pinned_memory_text_index("MEMORY.md", trimmed, self.memory_char_limit)
             {
                 parts.push(format!("## Pinned Project Memory Index\n{}", index));
+            }
+        }
+
+        // Cross-tool compatibility: AGENTS.md and CLAUDE.md loaded alongside MEMORY.md
+        if let Some(ref agents) = self.frozen_agents {
+            let trimmed = agents.trim();
+            if let Some(index) =
+                format_pinned_memory_text_index("AGENTS.md", trimmed, self.memory_char_limit)
+            {
+                parts.push(format!("## Agents Memory Index (compat)\n{}", index));
+            }
+        }
+        if let Some(ref claude) = self.frozen_claude {
+            let trimmed = claude.trim();
+            if let Some(index) =
+                format_pinned_memory_text_index("CLAUDE.md", trimmed, self.memory_char_limit)
+            {
+                parts.push(format!("## Claude Memory Index (compat)\n{}", index));
             }
         }
 
@@ -138,4 +159,59 @@ impl MemoryManager {
             self.memory_conflicts(usize::MAX).len(),
         )
     }
+}
+
+// ---------------------------------------------------------------------------
+// Snapshot helpers — @path import resolution and cross-tool doc discovery
+// ---------------------------------------------------------------------------
+
+use std::fs;
+
+fn load_and_resolve_memory_file(path: &Path, base_dir: &Path, source: &str) -> Option<String> {
+    let raw = fs::read_to_string(path).ok()?;
+    let resolved = resolve_memory_imports(&raw, base_dir);
+    safe_memory_content_for_load(source, &resolved)
+}
+
+async fn load_and_resolve_memory_file_async(
+    path: &Path,
+    base_dir: &Path,
+    source: &str,
+) -> Option<String> {
+    let raw = tokio::fs::read_to_string(path).await.ok()?;
+    let resolved = resolve_memory_imports(&raw, base_dir);
+    safe_memory_content_for_load(source, &resolved)
+}
+
+/// Load a compatibility memory file (AGENTS.md, CLAUDE.md) from
+/// `compat_path` if it exists, is not a symlink to `memory_path`,
+/// and passes safety scan.
+fn load_compat_memory_file(
+    compat_path: &Path,
+    memory_path: &Path,
+    base_dir: &Path,
+    source: &str,
+) -> Option<String> {
+    // Skip if the file doesn't exist.
+    if !compat_path.exists() {
+        return None;
+    }
+    // Skip if it's a symlink to the primary MEMORY.md (dedup).
+    if is_symlink_to(compat_path, memory_path) {
+        return None;
+    }
+    let raw = fs::read_to_string(compat_path).ok()?;
+    let resolved = resolve_memory_imports(&raw, base_dir);
+    safe_memory_content_for_load(source, &resolved)
+}
+
+fn is_symlink_to(path: &Path, target: &Path) -> bool {
+    fs::read_link(path)
+        .ok()
+        .zip(fs::canonicalize(target).ok())
+        .map(|(link_target, canonical_target)| {
+            link_target == canonical_target
+                || fs::canonicalize(&link_target).ok().as_ref() == Some(&canonical_target)
+        })
+        .unwrap_or(false)
 }

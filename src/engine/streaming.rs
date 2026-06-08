@@ -15,9 +15,11 @@ use std::sync::Arc;
 use tokio::sync::mpsc;
 use tracing::{debug, warn};
 
+mod context_scrubber;
 mod fallback;
 mod turn_messages;
 
+use context_scrubber::ContextScrubber;
 use fallback::{ErrorType, FallbackState};
 use turn_messages::{
     build_messages_for_turn, estimate_registry_tool_schema_tokens, reactive_context_retry_messages,
@@ -165,7 +167,20 @@ pub enum StreamEvent {
     },
 }
 
+/// 清理完整文本中的记忆上下文标签区间。
+fn scrub_memory_context(text: String) -> String {
+    let mut scrubber = ContextScrubber::new();
+    let visible = scrubber.feed(&text);
+    let tail = scrubber.flush();
+    if tail.is_empty() {
+        visible
+    } else {
+        visible + &tail
+    }
+}
+
 pub async fn emit_text_progressively(tx: &mpsc::Sender<StreamEvent>, text: String) {
+    let text = scrub_memory_context(text);
     let chunks = progressive_text_chunks(&text);
     let chunk_count = chunks.len();
     for chunk in chunks {

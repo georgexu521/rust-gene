@@ -4,6 +4,7 @@ use crate::memory::{MemoryManager, MemoryWriteTarget};
 use crate::services::api::{LlmProvider, Message};
 use std::sync::Arc;
 use tokio::sync::Mutex;
+use tracing::debug;
 
 pub(super) struct MemorySyncContext<'a> {
     pub(super) memory_manager: Option<&'a Arc<Mutex<MemoryManager>>>,
@@ -98,6 +99,51 @@ impl MemorySyncController {
             }
         }
         memory.increment_turn();
+
+        // ── Nudge check: trigger background review if LLM hasn't used memory tools ──
+        let had_memory_tool = Self::turn_used_memory_tool(context.messages);
+        let should_review = memory.advance_nudge(had_memory_tool);
+        if should_review {
+            debug!("Memory nudge triggered background review ({} turns without memory tool)",
+                memory.nudge_interval());
+            let user_msg = Self::latest_user_message(context.messages).to_string();
+            let assistant_text =
+                Self::assistant_memory_text(context.final_content, context.tool_results_text);
+            if let Some(provider) = context.provider.clone() {
+                let model = context.model.to_string();
+                let memory_arc = context.memory_manager
+                    .expect("memory_manager is Some when should_review is true")
+                    .clone();
+                tokio::spawn(async move {
+                    let mut mem = memory_arc.lock().await;
+                    mem.run_background_review(
+                        &user_msg,
+                        &assistant_text,
+                        provider.as_ref(),
+                        &model,
+                    ).await;
+                });
+                context.trace.record(TraceEvent::MemorySynced {
+                    mode: "background_review_nudge".to_string(),
+                });
+            }
+        }
+    }
+
+    fn turn_used_memory_tool(messages: &[Message]) -> bool {
+        messages.iter().any(|msg| {
+            if let Message::Assistant {
+                tool_calls: Some(calls),
+                ..
+            } = msg
+            {
+                calls.iter().any(|tc| {
+                    tc.name == "memory_save" || tc.name == "memory_load" || tc.name == "memory_clear"
+                })
+            } else {
+                false
+            }
+        })
     }
 
     fn latest_user_message(messages: &[Message]) -> &str {

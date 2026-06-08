@@ -196,6 +196,79 @@ impl MemoryManager {
         )
     }
 
+    pub async fn prefetch_retrieval_context_dialectic(
+        &mut self,
+        user_message: &str,
+        provider: &dyn LlmProvider,
+        model: &str,
+        policy: crate::engine::intent_router::RetrievalPolicy,
+        depth: usize,
+    ) -> Option<crate::engine::retrieval_context::RetrievalContext> {
+        if !policy.allows_memory_context() {
+            return None;
+        }
+        if self.prefetched_this_turn {
+            return None;
+        }
+        if depth <= 1 {
+            return self
+                .prefetch_retrieval_context_with_llm_rerank(user_message, provider, model, policy)
+                .await;
+        }
+        self.prefetched_this_turn = true;
+        let candidates = self.preview_relevant_memories(user_message, 15);
+        if candidates.is_empty() {
+            return None;
+        }
+
+        let mut prior_results = Vec::new();
+        for pass in 0..depth.min(3) {
+            let prompt = dialectic_pass_prompt(pass, prior_results.last().map(String::as_str));
+            let selected = rerank_memory_matches_dialectic(
+                user_message,
+                &candidates,
+                provider,
+                model,
+                prompt,
+            )
+            .await;
+            if let Some(ref result) = selected {
+                prior_results.push(result.clone());
+            }
+            if dialectic_signal_sufficient(selected.as_deref().unwrap_or("")) {
+                break;
+            }
+        }
+
+        let final_selection = crate::memory::files::parse_rerank_ids(
+            prior_results.last().unwrap_or(&String::new()),
+            candidates.len(),
+        );
+        let mut selected = Vec::new();
+        let mut used = std::collections::HashSet::new();
+        for id in &final_selection {
+            if *id < candidates.len() && used.insert(*id) {
+                let mut candidate = candidates[*id].clone();
+                candidate.rerank_score = Some(0.9 - (selected.len() as f32 * 0.12));
+                selected.push(candidate);
+            }
+        }
+        for (idx, candidate) in candidates.iter().enumerate() {
+            if used.insert(idx) && selected.len() < 5 {
+                selected.push(candidate.clone());
+            }
+        }
+        self.record_memory_usage_for_matches(&selected);
+        let conflicts = self.memory_conflicts(8);
+        crate::engine::retrieval_context::RetrievalContext::from_memory_matches_with_budget(
+            user_message,
+            selected,
+            &conflicts,
+            policy,
+            crate::engine::retrieval_context::MemoryRetrievalBudget::for_policy(policy, 5),
+        )
+    }
+
     pub async fn prefetch_retrieval_context_with_llm_rerank(
         &mut self,
         user_message: &str,
@@ -466,6 +539,94 @@ Select at most 5 ids. Do not explain.";
         }
     }
     selected
+}
+
+/// Dialectic pass prompts, borrowed from Hermes Honcho's multi-pass dialectic reasoning.
+const DIALECTIC_PASS_0_PROMPT: &str = r#"Given a user request and candidate memory snippets, identify which memories are most relevant. Focus on concrete facts that directly inform the current task. Return a JSON array of the most relevant candidate indices, most relevant first."#;
+
+const DIALECTIC_PASS_1_PROMPT: &str = r#"Review your initial selection. What gaps remain? Are there memories outside your first picks that might also be relevant? Consider cross-references between memories. Return a revised JSON array of candidate indices."#;
+
+const DIALECTIC_PASS_2_PROMPT: &str = r#"Do these memory selections cohere? Reconcile any apparent contradictions and produce a final, concise set of the most actionable memories. Return a JSON array of candidate indices."#;
+
+fn dialectic_pass_prompt(pass: usize, prior_result: Option<&str>) -> String {
+    let base = match pass {
+        0 => DIALECTIC_PASS_0_PROMPT,
+        1 => DIALECTIC_PASS_1_PROMPT,
+        _ => DIALECTIC_PASS_2_PROMPT,
+    };
+    if let Some(prior) = prior_result {
+        format!("{base}\n\nYour previous assessment:\n{prior}")
+    } else {
+        base.to_string()
+    }
+}
+
+/// Returns true if the dialectic response is "sufficient" to skip further passes.
+/// Borrowed from Hermes' `_signal_sufficient` heuristic.
+fn dialectic_signal_sufficient(result: &str) -> bool {
+    let len = result.trim().chars().count();
+    if len > 300 {
+        return true;
+    }
+    if len > 100 && (result.contains("##") || result.contains('-') || result.contains('[')) {
+        return true;
+    }
+    false
+}
+
+async fn rerank_memory_matches_dialectic(
+    user_message: &str,
+    candidates: &[MemoryMatch],
+    provider: &dyn LlmProvider,
+    model: &str,
+    system_prompt: String,
+) -> Option<String> {
+    if candidates.is_empty() {
+        return None;
+    }
+
+    let mut candidate_text = String::new();
+    for (idx, candidate) in candidates.iter().enumerate() {
+        let snippet = candidate
+            .snippet
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty())
+            .take(6)
+            .collect::<Vec<_>>()
+            .join(" ");
+        candidate_text.push_str(&format!(
+            "[{}] source={} local_score={}\n{}\n\n",
+            idx,
+            candidate.source,
+            candidate.score,
+            snippet.chars().take(700).collect::<String>()
+        ));
+    }
+
+    let user_prompt = format!(
+        "Current user request:\n{}\n\nCandidate memories:\n{}",
+        user_message, candidate_text
+    );
+    let request = ChatRequest::new(model).with_messages(vec![
+        Message::system(&system_prompt),
+        Message::user(&user_prompt),
+    ]);
+
+    match tokio::time::timeout(memory_llm_timeout(), provider.chat(request)).await {
+        Ok(Ok(response)) => Some(response.content),
+        Ok(Err(e)) => {
+            tracing::debug!("Dialectic pass failed: {}", e);
+            None
+        }
+        Err(_) => {
+            tracing::debug!(
+                "Dialectic pass timed out after {}s",
+                memory_llm_timeout().as_secs()
+            );
+            None
+        }
+    }
 }
 
 #[cfg(test)]

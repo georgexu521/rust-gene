@@ -14,6 +14,7 @@ pub const MEMORY_DIR_NAME: &str = "memory";
 pub const MEMORY_FLUSH_LOG_FILE: &str = "flush_queue.jsonl";
 pub const MEMORY_RECORDS_FILE: &str = "records.jsonl";
 pub const MEMORY_FLUSH_MAX_ATTEMPTS: u8 = 3;
+pub const MEMORY_NUDGE_DEFAULT_INTERVAL: usize = 10;
 
 pub fn memory_llm_timeout() -> Duration {
     let secs = std::env::var("PRIORITY_AGENT_MEMORY_LLM_TIMEOUT_SECS")

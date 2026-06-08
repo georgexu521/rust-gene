@@ -3,6 +3,8 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use tracing::warn;
 
+pub(super) const MAX_IMPORT_DEPTH: usize = 5;
+
 pub(super) const MAX_MEMORY_FILES: usize = 24;
 pub(super) const MEMORY_FILE_CHAR_LIMIT: usize = 2_000;
 pub(super) const MEMORY_MANIFEST_CHAR_LIMIT: usize = 2_500;
@@ -192,8 +194,10 @@ fn collect_memory_files(root: &Path, dir: &Path, files: &mut Vec<MemoryFileSnaps
             .unwrap_or(&path)
             .to_string_lossy()
             .replace('\\', "/");
+        let file_base = path.parent().unwrap_or_else(|| Path::new("."));
+        let with_imports = resolve_memory_imports(&content, file_base);
         let Some(content) =
-            safe_memory_content_for_load(&format!("memory/{relative_path}"), &content)
+            safe_memory_content_for_load(&format!("memory/{relative_path}"), &with_imports)
         else {
             continue;
         };
@@ -536,4 +540,202 @@ pub(super) fn hash_learning(text: &str) -> u64 {
     let mut hasher = DefaultHasher::new();
     normalized.hash(&mut hasher);
     hasher.finish()
+}
+
+/// Resolve `@path/to/file` imports in memory content.
+///
+/// A line consisting solely of `@<path>` (with the `@` at the start and the
+/// path containing a `/` or `.` separator) is treated as a file import. The
+/// path is resolved relative to `base_dir` (the directory containing the
+/// importing file). Recursive imports are resolved up to `MAX_IMPORT_DEPTH`.
+/// Cyclic imports emit a `<!-- skipped: import cycle -->` comment.
+///
+/// Lines like `@mention` (no path separator or dot in the part after `@`) are
+/// left as literal prose — they are not mistaken for imports.
+pub(super) fn resolve_memory_imports(content: &str, base_dir: &Path) -> String {
+    resolve_imports_recursive(content, base_dir, 0, &mut Vec::new())
+}
+
+fn resolve_imports_recursive(
+    content: &str,
+    base_dir: &Path,
+    depth: usize,
+    seen: &mut Vec<PathBuf>,
+) -> String {
+    let mut out = String::with_capacity(content.len());
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if let Some(import_path) = parse_import_line(trimmed) {
+            let resolved = resolve_import_path(import_path, base_dir);
+            if depth >= MAX_IMPORT_DEPTH {
+                out.push_str("<!-- skipped: max import depth -->\n");
+                continue;
+            }
+            if seen.iter().any(|p| paths_equal(p, &resolved)) {
+                out.push_str("<!-- skipped: import cycle -->\n");
+                continue;
+            }
+            match std::fs::read_to_string(&resolved) {
+                Ok(imported_content) => {
+                    seen.push(resolved.clone());
+                    let resolved = resolve_imports_recursive(
+                        &imported_content,
+                        resolved.parent().unwrap_or(base_dir),
+                        depth + 1,
+                        seen,
+                    );
+                    seen.pop();
+                    out.push_str(&resolved);
+                }
+                Err(_) => {
+                    out.push_str(&format!(
+                        "<!-- skipped: import not found: {} -->\n",
+                        import_path
+                    ));
+                }
+            }
+        } else {
+            out.push_str(line);
+            out.push('\n');
+        }
+    }
+    out
+}
+
+fn parse_import_line(trimmed: &str) -> Option<&str> {
+    let path = trimmed.strip_prefix('@')?;
+    if path.is_empty() {
+        return None;
+    }
+    // A path import must contain at least one `/` or `.` to distinguish prose
+    // mentions like `@username` or `@mention` from actual paths like `@docs/setup.md`.
+    if !path.contains('/') && !path.contains('.') {
+        return None;
+    }
+    // The entire line must be only the import — no trailing prose.
+    // Already guaranteed because we trimmed the whole line.
+    Some(path)
+}
+
+fn resolve_import_path(path: &str, base_dir: &Path) -> PathBuf {
+    if path.starts_with('~') {
+        if let Some(home) = dirs::home_dir() {
+            if let Some(rest) = path.strip_prefix("~/") {
+                return home.join(rest);
+            }
+            return home;
+        }
+    }
+    if Path::new(path).is_absolute() {
+        return PathBuf::from(path);
+    }
+    base_dir.join(path)
+}
+
+fn paths_equal(a: &Path, b: &Path) -> bool {
+    a.canonicalize()
+        .ok()
+        .zip(b.canonicalize().ok())
+        .map(|(a, b)| a == b)
+        .unwrap_or(false)
+}
+
+#[cfg(test)]
+mod import_tests {
+    use super::*;
+
+    fn temp_dir() -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "priority-agent-import-test-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn resolves_simple_import() {
+        let dir = temp_dir();
+        std::fs::write(dir.join("doc.md"), "hello from doc.md").unwrap();
+        std::fs::write(dir.join("MAIN.md"), "before\n@doc.md\nafter").unwrap();
+
+        let result = resolve_memory_imports(
+            &std::fs::read_to_string(dir.join("MAIN.md")).unwrap(),
+            &dir,
+        );
+        assert!(result.contains("before"));
+        assert!(result.contains("hello from doc.md"));
+        assert!(result.contains("after"));
+        assert!(!result.contains("@doc.md"));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn skips_non_path_mentions() {
+        let dir = temp_dir();
+        let content = "I like @username\n@some-tag\nreal @docs/file.md\nnot an import\nalso not @import here";
+        std::fs::write(dir.join("MAIN.md"), content).unwrap();
+
+        let result = resolve_memory_imports(content, &dir);
+        assert!(result.contains("@username")); // prose mention: no path separator
+        assert!(result.contains("@some-tag")); // prose mention: no path separator
+        assert!(result.contains("real @docs/file.md")); // has preceding text on the line
+        assert!(result.contains("@import here")); // has "also not" preceding it
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn recursive_import_with_depth_limit() {
+        let dir = temp_dir();
+        std::fs::write(dir.join("a.md"), "@b.md").unwrap();
+        std::fs::write(dir.join("b.md"), "@c.md").unwrap();
+        std::fs::write(dir.join("c.md"), "@d.md").unwrap();
+        std::fs::write(dir.join("d.md"), "@e.md").unwrap();
+        std::fs::write(dir.join("e.md"), "@f.md").unwrap();
+        std::fs::write(dir.join("f.md"), "deep content").unwrap();
+
+        let result = resolve_memory_imports("@a.md", &dir);
+        // f.md is at depth 5 (a→b→c→d→e→f), should trigger max depth
+        assert!(!result.contains("deep content"));
+        assert!(result.contains("max import depth"));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn detects_import_cycle() {
+        let dir = temp_dir();
+        std::fs::write(dir.join("x.md"), "@y.md").unwrap();
+        std::fs::write(dir.join("y.md"), "@x.md").unwrap();
+
+        let result = resolve_memory_imports("@x.md", &dir);
+        assert!(result.contains("import cycle"));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn missing_import_is_commented() {
+        let dir = temp_dir();
+        let result = resolve_memory_imports("@nonexistent.md", &dir);
+        assert!(result.contains("import not found"));
+        assert!(result.contains("nonexistent.md"));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn empty_content_no_imports() {
+        let dir = temp_dir();
+        let result = resolve_memory_imports("", &dir);
+        assert!(result.is_empty());
+
+        let result = resolve_memory_imports("just some text\nno imports here", &dir);
+        assert_eq!(result, "just some text\nno imports here\n");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

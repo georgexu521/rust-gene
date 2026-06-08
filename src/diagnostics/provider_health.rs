@@ -189,7 +189,7 @@ async fn run_tool_call(
     let mut request = ChatRequest::new(model)
         .with_temperature(0.0)
         .with_tools(vec![tool])
-        .with_tool_choice(ToolChoice::Function("provider_health_echo".to_string()))
+        .with_tool_choice(ToolChoice::Auto)
         .with_messages(vec![
             Message::system("You are a provider health probe. Use the available tool when asked."),
             Message::user(
