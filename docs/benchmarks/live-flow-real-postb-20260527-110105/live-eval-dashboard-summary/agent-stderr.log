@@ -1,8 +1,0 @@
-[required validation still running after 30s] cargo test -q -- --test-threads=1
-[required validation still running after 60s] cargo test -q -- --test-threads=1
-[required validation still running after 90s] cargo test -q -- --test-threads=1
-[required validation still running after 120s] cargo test -q -- --test-threads=1
-[required validation still running after 150s] cargo test -q -- --test-threads=1
-2026-05-27T03:33:15.678610Z  WARN priority_agent::engine::context_ledger: failed to persist tool observation context ledger entry session_id="session-f17f7e4c-6fb6-4bcc-8bd1-9af3daa77e3e" kind="context_ledger.tool_observation" source="file_read" error=database or disk is full
-2026-05-27T03:33:15.680292Z ERROR priority_agent: Evaluation run failed: No space left on device (os error 28)
-Evaluation run failed: No space left on device (os error 28)

@@ -1,5 +1,0 @@
-[required validation still running after 30s] cargo test -q learning_planning -- --test-threads=1
-[required validation still running after 60s] cargo test -q learning_planning -- --test-threads=1
-[required validation still running after 30s] cargo test -q retrieval_context -- --test-threads=1
-[required validation still running after 30s] cargo test -q -- --test-threads=1
-2026-05-17T08:53:48.559466Z  WARN priority_agent::engine::conversation_loop::patch_recovery: Patch synthesis JSON actions were not directly applicable: patch synthesis declined without a reason; patch synthesis declined without a reason

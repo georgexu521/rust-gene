@@ -1,8 +1,0 @@
-2026-05-09T03:11:41.185319Z  WARN priority_agent::engine::conversation_loop: Patch synthesis JSON actions were not directly applicable: synthesized patch old_string was not found exactly in /Users/georgexu/Desktop/rust-agent/target/live-evals/checkpoint-required-commands-20260509-110945/live-eval-dashboard-summary/worktree/scripts/run_live_eval.sh; refusing inexact multi-line replacement; patch synthesis declined without a reason
-[required validation still running after 30s] cargo test -q -- --test-threads=1
-[required validation still running after 60s] cargo test -q -- --test-threads=1
-[required validation still running after 90s] cargo test -q -- --test-threads=1
-[required validation still running after 120s] cargo test -q -- --test-threads=1
-2026-05-09T03:16:30.534583Z  WARN priority_agent::engine::conversation_loop: Patch synthesis JSON actions were not directly applicable: response was not valid patch JSON; patch synthesis declined without a reason
-2026-05-09T03:20:45.992524Z  WARN priority_agent::engine::conversation_loop: Patch synthesis JSON actions were not directly applicable: synthesized patch old_string was not found exactly in /Users/georgexu/Desktop/rust-agent/target/live-evals/checkpoint-required-commands-20260509-110945/live-eval-dashboard-summary/worktree/scripts/run_live_eval.sh; refusing inexact multi-line replacement
-2026-05-09T03:22:41.714805Z  WARN priority_agent::engine::conversation_loop: Patch synthesis JSON actions were not directly applicable: synthesized patch old_string was not found exactly in /Users/georgexu/Desktop/rust-agent/target/live-evals/checkpoint-required-commands-20260509-110945/live-eval-dashboard-summary/worktree/scripts/run_live_eval.sh; refusing inexact multi-line replacement

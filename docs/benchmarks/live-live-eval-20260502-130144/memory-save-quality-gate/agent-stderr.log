@@ -1,2 +1,0 @@
-2026-05-02T05:02:04.031619Z  WARN priority_agent::engine::conversation_loop: Workflow judgment analysis failed: missing field `uncertainty_reduction`
-2026-05-02T05:02:49.704297Z  WARN priority_agent::tools::file_tool: File 'src/tui/app.rs' was modified since it was read

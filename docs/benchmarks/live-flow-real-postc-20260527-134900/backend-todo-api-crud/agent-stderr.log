@@ -1,1 +1,0 @@
-2026-05-27T05:24:57.662989Z  WARN priority_agent::engine::conversation_loop::patch_recovery: Patch synthesis JSON actions were not directly applicable: patch plan did not include a valid file_edit action

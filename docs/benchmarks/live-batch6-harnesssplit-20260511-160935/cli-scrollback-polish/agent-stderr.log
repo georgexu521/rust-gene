@@ -1,9 +1,0 @@
-2026-05-11T08:09:51.824888Z  WARN priority_agent::services::api::retry: Provider request failed transiently; reconnecting 1/5 for MiniMax chat.completions after 611ms: http error: error sending request for url (https://api.minimaxi.com/v1/chat/completions)
-[required validation still running after 30s] cargo test -q shell -- --test-threads=1
-[required validation still running after 60s] cargo test -q shell -- --test-threads=1
-2026-05-11T08:15:08.395610Z  WARN priority_agent::services::api::retry: Provider request failed transiently; reconnecting 1/5 for MiniMax chat.completions after 681ms: http error: error sending request for url (https://api.minimaxi.com/v1/chat/completions)
-2026-05-11T08:15:12.085236Z  WARN priority_agent::services::api::retry: Provider request failed transiently; reconnecting 2/5 for MiniMax chat.completions after 1.159s: http error: error sending request for url (https://api.minimaxi.com/v1/chat/completions)
-2026-05-11T08:15:16.251884Z  WARN priority_agent::services::api::retry: Provider request failed transiently; reconnecting 3/5 for MiniMax chat.completions after 2.112s: http error: error sending request for url (https://api.minimaxi.com/v1/chat/completions)
-2026-05-11T08:18:05.384469Z  WARN priority_agent::engine::conversation_loop::repair_controller: Guided validation debugging failed: guided debugging timed out after 180s
-2026-05-11T08:18:08.386708Z  WARN priority_agent::services::api::retry: Provider request failed transiently; reconnecting 1/5 for MiniMax chat.completions after 673ms: http error: error sending request for url (https://api.minimaxi.com/v1/chat/completions)
-2026-05-11T08:18:12.067060Z  WARN priority_agent::services::api::retry: Provider request failed transiently; reconnecting 2/5 for MiniMax chat.completions after 1.141s: http error: error sending request for url (https://api.minimaxi.com/v1/chat/completions)

@@ -1,3 +1,0 @@
-status=failed
-failure_owner=eval_harness
-failure=required_commands_not_passing

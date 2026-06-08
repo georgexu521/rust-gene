@@ -1,3 +1,0 @@
-status=failed
-failure_owner=mixed
-failure=forbidden_tool_used

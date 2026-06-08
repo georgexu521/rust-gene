@@ -1,1 +1,0 @@
-2026-05-01T06:03:39.295786Z  WARN priority_agent::engine::conversation_loop: Guided validation debugging failed: missing field `symptom` at line 18 column 1

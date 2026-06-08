@@ -1,2 +1,0 @@
-2026-05-11T05:58:51.405157Z  WARN priority_agent::services::api::retry: Provider request failed transiently; reconnecting 1/5 for MiniMax chat.completions after 692ms: http error: error sending request for url (https://api.minimaxi.com/v1/chat/completions)
-2026-05-11T06:02:27.139571Z  WARN priority_agent::services::api::retry: Provider request failed transiently; reconnecting 1/5 for MiniMax chat.completions after 675ms: http error: error sending request for url (https://api.minimaxi.com/v1/chat/completions)

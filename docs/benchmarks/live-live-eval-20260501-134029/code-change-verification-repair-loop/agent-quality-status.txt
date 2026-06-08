@@ -1,4 +1,0 @@
-status=failed
-failure=closeout_not_successful
-warning=no_code_diff
-warning=tool_errors_seen

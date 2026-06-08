@@ -1,6 +1,0 @@
-2026-05-09T02:55:00.357692Z  WARN priority_agent::engine::conversation_loop: Workflow judgment analysis failed: key must be a string at line 1 column 2
-2026-05-09T02:57:27.258718Z  WARN priority_agent::engine::conversation_loop: Patch synthesis JSON actions were not directly applicable: synthesized patch old_string was not found exactly in /Users/georgexu/Desktop/rust-agent/target/live-evals/checkpoint-sanitized-validation-20260509-105451/live-eval-dashboard-summary/worktree/scripts/run_live_eval.sh; refusing inexact multi-line replacement
-[required validation still running after 30s] cargo test -q -- --test-threads=1
-[required validation still running after 60s] cargo test -q -- --test-threads=1
-[required validation still running after 90s] cargo test -q -- --test-threads=1
-[required validation still running after 120s] cargo test -q -- --test-threads=1

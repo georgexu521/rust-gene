@@ -1,3 +1,0 @@
-## claude-test...rust-gene/claude-test
-?? docs/RELEASE_CANDIDATE_STABILITY_TEST_PLAN_2026-06-05.md
-?? docs/benchmarks/rc-stability-20260605-160101/

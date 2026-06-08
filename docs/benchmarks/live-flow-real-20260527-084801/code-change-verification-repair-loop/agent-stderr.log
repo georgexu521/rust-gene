@@ -1,6 +1,0 @@
-2026-05-27T00:51:18.911325Z  WARN priority_agent::engine::conversation_loop::workflow_contract_controller: Workflow judgment analysis failed: missing field `task_type`
-[required validation still running after 30s] cargo test -q reflection_pass -- --test-threads=1
-[required validation still running after 60s] cargo test -q reflection_pass -- --test-threads=1
-[required validation still running after 90s] cargo test -q reflection_pass -- --test-threads=1
-[required validation still running after 120s] cargo test -q reflection_pass -- --test-threads=1
-[required validation still running after 150s] cargo test -q reflection_pass -- --test-threads=1

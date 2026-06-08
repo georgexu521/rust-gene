@@ -1,2 +1,0 @@
-status=ok
-failure_owner=none

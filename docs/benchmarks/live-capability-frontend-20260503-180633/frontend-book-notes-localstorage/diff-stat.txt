@@ -1,2 +1,0 @@
- fixtures/live_frontend/book_notes/app.js | 49 ++++++++++++++++++++++++++------
- 1 file changed, 40 insertions(+), 9 deletions(-)

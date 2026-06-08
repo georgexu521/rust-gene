@@ -1,1 +1,0 @@
-2026-04-29T14:56:24.118852Z  WARN priority_agent::engine::conversation_loop: Patch synthesis JSON actions were not directly applicable: synthesized patch path is not editable: src/memory/assessment.rs

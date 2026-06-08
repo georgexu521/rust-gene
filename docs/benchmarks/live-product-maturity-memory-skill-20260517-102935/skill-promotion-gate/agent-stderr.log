@@ -1,4 +1,0 @@
-[required validation still running after 30s] cargo test -q skill_evolution -- --test-threads=1
-[required validation still running after 60s] cargo test -q skill_evolution -- --test-threads=1
-[required validation still running after 90s] cargo test -q skill_evolution -- --test-threads=1
-2026-05-17T02:43:13.162875Z  WARN priority_agent::engine::conversation_loop::patch_recovery: Patch synthesis JSON actions were not directly applicable: synthesized patch old_string was not found exactly in /Users/georgexu/Desktop/rust-agent/target/live-evals/product-maturity-memory-skill-20260517-102935/skill-promotion-gate/worktree/src/tui/slash_handler/learning.rs; refusing inexact multi-line replacement; patch synthesis declined: Need exact current file content. The evidence showed lines 1290-1304 but the actual file may differ. Will re-read to get precise old_string.

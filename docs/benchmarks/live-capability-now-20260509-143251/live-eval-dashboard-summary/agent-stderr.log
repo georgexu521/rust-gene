@@ -1,2 +1,0 @@
-2026-05-09T06:33:48.771184Z  WARN priority_agent::engine::conversation_loop: Patch synthesis JSON actions were not directly applicable: patch synthesis declined without a reason; patch synthesis declined without a reason
-2026-05-09T06:36:35.256426Z  WARN priority_agent::engine::conversation_loop: Patch synthesis JSON actions were not directly applicable: run_live_eval.sh patch contains Markdown emphasis markers (`**`), likely copied from highlighted tool output rather than source code

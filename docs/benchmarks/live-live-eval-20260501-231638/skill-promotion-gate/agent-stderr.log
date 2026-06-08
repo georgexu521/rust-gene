@@ -1,1 +1,0 @@
-2026-05-01T15:19:54.620146Z  WARN priority_agent::engine::conversation_loop: Patch synthesis JSON actions were not directly applicable: response was not valid patch JSON; patch synthesis declined without a reason

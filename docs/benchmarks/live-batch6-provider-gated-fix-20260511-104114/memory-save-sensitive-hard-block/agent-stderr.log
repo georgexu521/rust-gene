@@ -1,6 +1,0 @@
-provider unavailable: provider health preflight failed before agent-run
-Health status: docs/benchmarks/live-batch6-provider-gated-fix-20260511-104114/provider-health-status.txt
-Health report: docs/benchmarks/live-batch6-provider-gated-fix-20260511-104114/provider-health.json
-
-2026-05-11T02:41:35.302435Z ERROR priority_agent: Provider health failed: provider health failed: tool_call: provider returned no tool call
-Provider health failed: provider health failed: tool_call: provider returned no tool call

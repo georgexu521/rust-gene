@@ -1,1 +1,0 @@
-2026-05-01T09:01:59.779234Z  WARN priority_agent::engine::conversation_loop: Patch synthesis JSON actions were not directly applicable: persistent memory prefetch in conversation_loop must lock the Arc<Mutex<MemoryManager>> before calling prefetch

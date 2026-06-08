@@ -1,9 +1,0 @@
-status=failed
-failure_owner=llm_reasoning
-failure=required_commands_not_passing
-failure=behavior_assertions_not_passing
-failure=closeout_not_successful
-failure=acceptance_review_rejected
-failure=stage_validation_failed
-failure=verification_failed
-warning=tool_errors_seen

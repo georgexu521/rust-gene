@@ -1,2 +1,0 @@
-2026-05-01T15:50:27.415818Z  WARN priority_agent::engine::conversation_loop: Workflow judgment analysis failed: workflow judgment response did not contain JSON
-2026-05-01T15:51:27.172568Z  WARN priority_agent::engine::conversation_loop: Patch synthesis JSON actions were not directly applicable: response was not valid patch JSON; response was not valid patch JSON

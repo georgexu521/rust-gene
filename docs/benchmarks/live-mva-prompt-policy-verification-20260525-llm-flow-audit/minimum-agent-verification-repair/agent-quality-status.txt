@@ -1,3 +1,0 @@
-status=ok
-failure_owner=none
-warning=tool_errors_seen

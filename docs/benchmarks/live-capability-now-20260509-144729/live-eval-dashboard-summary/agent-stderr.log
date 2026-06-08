@@ -1,6 +1,0 @@
-2026-05-09T06:49:01.960836Z  WARN priority_agent::engine::conversation_loop: Workflow judgment analysis failed: missing field `task_type`
-[required validation still running after 30s] cargo test -q -- --test-threads=1
-[required validation still running after 60s] cargo test -q -- --test-threads=1
-[required validation still running after 90s] cargo test -q -- --test-threads=1
-[required validation still running after 120s] cargo test -q -- --test-threads=1
-2026-05-09T06:55:14.214108Z  WARN priority_agent::engine::conversation_loop: Guided validation debugging failed: guided debugging response did not contain JSON

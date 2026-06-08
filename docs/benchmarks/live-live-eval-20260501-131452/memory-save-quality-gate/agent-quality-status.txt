@@ -1,2 +1,0 @@
-status=failed
-failure=closeout_not_successful

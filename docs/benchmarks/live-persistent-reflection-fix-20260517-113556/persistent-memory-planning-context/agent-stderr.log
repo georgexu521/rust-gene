@@ -1,8 +1,0 @@
-[required validation still running after 30s] cargo test -q learning_planning -- --test-threads=1
-[required validation still running after 60s] cargo test -q learning_planning -- --test-threads=1
-[required validation still running after 30s] cargo test -q retrieval_context -- --test-threads=1
-[required validation still running after 30s] cargo test -q -- --test-threads=1
-2026-05-17T03:41:18.834841Z  WARN priority_agent::engine::conversation_loop::patch_recovery: Patch synthesis JSON actions were not directly applicable: synthesized patch old_string was not found exactly and assignment anchor `_memory_ctx` matched 0 lines in /Users/georgexu/Desktop/rust-agent/target/live-evals/persistent-reflection-fix-20260517-113556/persistent-memory-planning-context/worktree/src/engine/conversation_loop/turn_retrieval_context_controller.rs
-2026-05-17T03:42:37.168996Z  WARN priority_agent::engine::conversation_loop::patch_recovery: Patch synthesis JSON actions were not directly applicable: synthesized patch old_string was not found exactly in /Users/georgexu/Desktop/rust-agent/target/live-evals/persistent-reflection-fix-20260517-113556/persistent-memory-planning-context/worktree/src/engine/conversation_loop/turn_retrieval_context_controller.rs; refusing inexact multi-line replacement; patch synthesis declined without a reason
-[required validation still running after 30s] cargo test -q learning_planning -- --test-threads=1
-[required validation still running after 60s] cargo test -q learning_planning -- --test-threads=1

@@ -1,4 +1,0 @@
-2026-05-02T06:31:35.685806Z  WARN priority_agent::tools::file_tool: File 'src/tui/slash_handler/config.rs' was modified since it was read
-2026-05-02T06:59:38.205484Z  WARN priority_agent::tools::bash_tool: Command timed out after 180s, killing process tree (pid: Some(28780))
-
-[timeout after 1800s]

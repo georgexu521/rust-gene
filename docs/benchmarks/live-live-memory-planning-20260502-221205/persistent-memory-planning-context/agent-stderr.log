@@ -1,3 +1,0 @@
-2026-05-02T14:18:17.697899Z  WARN priority_agent::engine::auto_verify: Failed to run cargo test: cargo test timed out after 180s
-2026-05-02T14:31:57.381895Z  WARN priority_agent::engine::auto_verify: Failed to run cargo test: cargo test timed out after 180s
-2026-05-02T14:38:46.869034Z  WARN priority_agent::engine::auto_verify: Failed to run cargo test: cargo test timed out after 180s

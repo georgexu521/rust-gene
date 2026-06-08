@@ -1,3 +1,0 @@
-status=ok
-failure_owner=none
-warning=no_code_diff

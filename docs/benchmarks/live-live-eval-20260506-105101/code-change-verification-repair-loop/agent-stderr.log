@@ -1,5 +1,0 @@
-[required validation still running after 30s] cargo test -q reflection_pass -- --test-threads=1
-[required validation still running after 60s] cargo test -q reflection_pass -- --test-threads=1
-[required validation still running after 30s] cargo test -q -- --test-threads=1
-[required validation still running after 60s] cargo test -q -- --test-threads=1
-2026-05-06T02:58:34.168172Z  WARN priority_agent::engine::conversation_loop: Acceptance review failed: invalid type: map, expected a string at line 52 column 4

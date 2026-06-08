@@ -1,5 +1,0 @@
-2026-05-11T07:09:50.153792Z  WARN priority_agent::services::api::retry: Provider request failed transiently; reconnecting 1/5 for MiniMax chat.completions after 690ms: http error: error sending request for url (https://api.minimaxi.com/v1/chat/completions)
-[required validation still running after 30s] cargo test -q resume -- --test-threads=1
-[required validation still running after 60s] cargo test -q resume -- --test-threads=1
-[required validation still running after 90s] cargo test -q resume -- --test-threads=1
-2026-05-11T07:15:24.182772Z  WARN priority_agent::services::api::retry: Provider request failed transiently; reconnecting 1/5 for MiniMax chat.completions after 702ms: http error: error sending request for url (https://api.minimaxi.com/v1/chat/completions)

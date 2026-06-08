@@ -1,4 +1,0 @@
-[required validation still running after 30s] cargo test -q reflection_pass -- --test-threads=1
-[required validation still running after 60s] cargo test -q reflection_pass -- --test-threads=1
-[required validation still running after 90s] cargo test -q reflection_pass -- --test-threads=1
-2026-05-17T10:39:30.318328Z  WARN priority_agent::engine::conversation_loop::repair_controller: Guided validation debugging failed: guided debugging response did not contain JSON
