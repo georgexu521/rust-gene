@@ -388,7 +388,11 @@ impl ContextCompressor {
             && self.consecutive_llm_failures < self.max_consecutive_llm_failures
         {
             self.llm_compression_attempts += 1;
-            match self.llm_summarize_middle(messages).await {
+            let prev_summary = self
+                .accumulated_summary
+                .as_ref()
+                .map(|s| s.to_text());
+            match self.llm_summarize_middle(messages, prev_summary.as_deref()).await {
                 Some(summary_text) => {
                     self.consecutive_llm_failures = 0;
                     let compressed = self.compress_with_summary_for_strategy(
@@ -1040,7 +1044,12 @@ impl ContextCompressor {
     /// 使用 LLM 生成高质量结构化摘要（异步）
     /// 需要先通过 with_llm_provider() 设置 provider。
     /// Gated by PRIORITY_AGENT_LLM_COMPACTION=1 (default off).
-    pub async fn llm_summarize_middle(&self, messages: &[Message]) -> Option<String> {
+    /// 如果 previous_summary 不为空，做 anchored update 而不是全新摘要。
+    pub async fn llm_summarize_middle(
+        &self,
+        messages: &[Message],
+        previous_summary: Option<&str>,
+    ) -> Option<String> {
         if !llm_compaction_enabled() {
             return None;
         }
@@ -1063,9 +1072,21 @@ impl ContextCompressor {
 
         // LLM compaction contract: strict 8-section template with evidence rules.
         // Summary is continuation context ONLY, not closeout verification proof.
-        let prompt = format!(
-            "Compress the conversation below into a structured summary.\n\n\
-             Output exactly these sections and keep the order:\n\n\
+        let mut prompt_parts = Vec::new();
+
+        if let Some(prev) = previous_summary {
+            prompt_parts.push(format!(
+                "Update the anchored summary below using the new conversation history above.\n\
+                 Preserve still-true details, remove stale details, and merge in the new facts.\n\n\
+                 <previous-summary>\n{}\n</previous-summary>",
+                prev
+            ));
+        } else {
+            prompt_parts.push("Create a new anchored summary from the conversation history above.".to_string());
+        }
+
+        prompt_parts.push(
+            "Output exactly these sections and keep the order:\n\n\
              ## Goal\n\
              ## Constraints\n\
              ## Progress\n\
@@ -1082,11 +1103,16 @@ impl ContextCompressor {
              - Do not claim tests passed unless raw test output evidence remains.\n\
              - Do not omit unresolved blockers.\n\
              - Do not include secrets or API keys.\n\
-             - This summary is continuation context, NOT verification proof.\n\n\
-             {}\n\n\
-             Summary:",
-            &conversation.chars().take(16000).collect::<String>()
+             - This summary is continuation context, NOT verification proof."
+                .to_string(),
         );
+
+        prompt_parts.push(format!(
+            "Conversation to summarize:\n\n{}",
+            &conversation.chars().take(16000).collect::<String>()
+        ));
+
+        let prompt = prompt_parts.join("\n\n");
         let mut summary_messages = Vec::new();
         if let Some(prefix) = self.llm_summary_stable_prefix.as_deref() {
             summary_messages.push(crate::services::api::Message::system(prefix));
