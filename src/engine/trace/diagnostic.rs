@@ -184,6 +184,9 @@ fn control_loop_phase_for_event(event: &TraceEvent) -> Option<&'static str> {
         | TraceEvent::ActionDecisionEvaluated { .. }
         | TraceEvent::CandidateActionsEvaluated { .. }
         | TraceEvent::ActionReviewed { .. }
+        | TraceEvent::MemoryRecallScored { .. }
+        | TraceEvent::MemoryWriteScored { .. }
+        | TraceEvent::MemoryKeepScored { .. }
         | TraceEvent::WorkflowRouted { .. } => Some("decision"),
         TraceEvent::GoalDriftDetected { .. }
         | TraceEvent::DestructiveScopeChecked { .. }

@@ -26,6 +26,7 @@ mod legacy_workflow_gate_controller;
 mod main_loop_profile;
 mod memory_snapshot_controller;
 mod memory_sync_controller;
+mod task_guidance_controller;
 #[cfg(test)]
 mod patch_recovery;
 #[cfg(test)]

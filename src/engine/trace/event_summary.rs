@@ -631,6 +631,44 @@ impl TraceEvent {
                 external_effect,
                 preview(recovery)
             ),
+            TraceEvent::MemoryRecallScored {
+                item_count,
+                injected,
+                available,
+                omitted,
+                conflict_capped,
+                top_score,
+                budget_exhausted,
+                policy,
+            } => format!(
+                "memory recall scored: items={} injected={} available={} omitted={} conflict_capped={} top_score={:.2} budget_exhausted={} policy={}",
+                item_count, injected, available, omitted, conflict_capped, top_score, budget_exhausted, policy
+            ),
+            TraceEvent::MemoryWriteScored {
+                candidate_id,
+                kind,
+                status,
+                score,
+                threshold,
+                explicit,
+                duplication,
+                reason,
+            } => format!(
+                "memory write scored: id={} kind={} status={} score={:.2} threshold={:.2} explicit={} duplication={:.2} reason={}",
+                short_id(&candidate_id), kind, status, score, threshold, explicit, duplication, reason
+            ),
+            TraceEvent::MemoryKeepScored {
+                record_id,
+                kind,
+                action,
+                score,
+                contradiction_risk,
+                redundancy,
+                reason,
+            } => format!(
+                "memory keep scored: id={} kind={} action={} score={:.2} contradiction={:.2} redundancy={:.2} reason={}",
+                short_id(&record_id), kind, action, score, contradiction_risk, redundancy, reason
+            ),
             TraceEvent::PermissionRequested {
                 tool,
                 call_id,

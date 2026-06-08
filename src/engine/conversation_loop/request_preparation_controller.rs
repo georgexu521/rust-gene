@@ -91,6 +91,10 @@ impl RequestPreparationController {
             Self::inject_focused_repair_zone(&mut request_messages, focused_repair_prompt);
             Self::inject_context_ledger_hint(&mut request_messages, session_store, session_id);
             Self::inject_project_map_zone(&mut request_messages, trace, working_dir);
+            super::task_guidance_controller::inject_task_guidance(
+                &mut request_messages,
+                trace,
+            );
         }
 
         let mut memory_context = MemoryPrefetchContext {

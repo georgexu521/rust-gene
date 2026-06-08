@@ -53,13 +53,13 @@ impl CandidateActionMode {
 }
 
 pub fn model_led_weighting_enabled() -> bool {
-    !matches!(
+    matches!(
         std::env::var("PRIORITY_AGENT_MODEL_LED_WEIGHTING")
-            .unwrap_or_else(|_| "1".to_string())
+            .unwrap_or_else(|_| "0".to_string())
             .trim()
             .to_ascii_lowercase()
             .as_str(),
-        "0" | "false" | "no" | "off"
+        "1" | "true" | "yes" | "on" | "shadow" | "gated"
     )
 }
 
