@@ -91,10 +91,7 @@ impl RequestPreparationController {
             Self::inject_focused_repair_zone(&mut request_messages, focused_repair_prompt);
             Self::inject_context_ledger_hint(&mut request_messages, session_store, session_id);
             Self::inject_project_map_zone(&mut request_messages, trace, working_dir);
-            super::task_guidance_controller::inject_task_guidance(
-                &mut request_messages,
-                trace,
-            );
+            super::task_guidance_controller::inject_task_guidance(&mut request_messages, trace);
         }
 
         let mut memory_context = MemoryPrefetchContext {
@@ -556,23 +553,22 @@ impl RequestPreparationController {
         let content = content.clone();
 
         let mut memory = memory_manager.lock().await;
-        let dialectic_depth =
-            if context.retrieval_policy.allows_memory_context() {
-                // Use dialectic multi-pass for Memory/Project policies where
-                // deeper reasoning about memory relevance is valuable.
-                // Light policy stays at depth 1 (single pass, no extra LLM cost).
-                let depth_env = std::env::var("PRIORITY_AGENT_MEMORY_DIALECTIC_DEPTH")
-                    .ok()
-                    .and_then(|v| v.parse::<usize>().ok())
-                    .unwrap_or(0);
-                if depth_env > 0 {
-                    depth_env
-                } else {
-                    1 // default: single pass (same as current behavior)
-                }
+        let dialectic_depth = if context.retrieval_policy.allows_memory_context() {
+            // Use dialectic multi-pass for Memory/Project policies where
+            // deeper reasoning about memory relevance is valuable.
+            // Light policy stays at depth 1 (single pass, no extra LLM cost).
+            let depth_env = std::env::var("PRIORITY_AGENT_MEMORY_DIALECTIC_DEPTH")
+                .ok()
+                .and_then(|v| v.parse::<usize>().ok())
+                .unwrap_or(0);
+            if depth_env > 0 {
+                depth_env
             } else {
-                0 // disabled
-            };
+                1 // default: single pass (same as current behavior)
+            }
+        } else {
+            0 // disabled
+        };
         let retrieval_context = if dialectic_depth > 1 {
             memory
                 .prefetch_retrieval_context_dialectic(
@@ -625,6 +621,7 @@ impl RequestPreparationController {
             provenance: ctx.provenance_summaries(),
             conflicts: ctx.conflict_count(),
         });
+        Self::record_memory_recall_scored(context.trace, &ctx);
         if mva_runtime_profile_enabled() {
             context.trace.record(TraceEvent::MemoryBoundaryEvaluated {
                 read_status: if ctx.items.is_empty() {
@@ -651,6 +648,43 @@ impl RequestPreparationController {
         );
         prepend_to_last_user_message(request_messages, retrieval_block);
         debug!("Prefetched memory context injected as background system message");
+    }
+
+    fn record_memory_recall_scored(trace: &TraceCollector, ctx: &RetrievalContext) {
+        let Some(memory_trace) = ctx.memory_trace.as_ref() else {
+            return;
+        };
+
+        let mut injected = 0;
+        let mut available = 0;
+        let mut omitted = 0;
+        let mut conflict_capped = 0;
+        let mut top_score = 0.0_f32;
+
+        for decision in &memory_trace.decisions {
+            let Some(score) = decision.score_explanation.as_ref() else {
+                continue;
+            };
+            top_score = top_score.max(score.final_score);
+            match score.status.as_str() {
+                "Inject" => injected += 1,
+                "Available" => available += 1,
+                "Omit" => omitted += 1,
+                "ConflictCapped" => conflict_capped += 1,
+                _ => {}
+            }
+        }
+
+        trace.record(TraceEvent::MemoryRecallScored {
+            item_count: memory_trace.decisions.len(),
+            injected,
+            available,
+            omitted,
+            conflict_capped,
+            top_score,
+            budget_exhausted: memory_trace.skipped_budget > 0,
+            policy: format!("{:?}", ctx.policy),
+        });
     }
 
     fn normalize_context_zone_envelope(

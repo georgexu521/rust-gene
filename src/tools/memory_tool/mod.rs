@@ -649,6 +649,68 @@ fn repeated_line_ratio(content: &str) -> f32 {
     ((total - unique.len()) as f32 / total as f32).clamp(0.0, 1.0)
 }
 
+fn memory_write_score_json(trace: &crate::memory::MemoryWriteScoringTrace) -> serde_json::Value {
+    json!({
+        "candidate_id": trace.candidate_id,
+        "kind": trace.kind,
+        "status": trace.status,
+        "score": trace.score,
+        "threshold": trace.threshold,
+        "explicit": trace.explicit,
+        "duplication": trace.duplication,
+        "reason": trace.reason,
+    })
+}
+
+fn record_memory_write_score_trace(
+    context: &ToolContext,
+    trace: &crate::memory::MemoryWriteScoringTrace,
+) {
+    let Some(collector) = context.trace_collector.as_ref() else {
+        return;
+    };
+    collector.record(crate::engine::trace::TraceEvent::MemoryWriteScored {
+        candidate_id: trace.candidate_id.clone(),
+        kind: trace.kind.clone(),
+        status: trace.status.clone(),
+        score: trace.score,
+        threshold: trace.threshold,
+        explicit: trace.explicit,
+        duplication: trace.duplication,
+        reason: trace.reason.clone(),
+    });
+}
+
+fn record_memory_keep_score_traces(
+    context: &ToolContext,
+    docs: &[MemoryDocument],
+    conflicts: &[String],
+) {
+    let Some(collector) = context.trace_collector.as_ref() else {
+        return;
+    };
+    for doc in docs.iter().take(24) {
+        let redundancy = repeated_line_ratio(&doc.content);
+        let has_conflict = document_has_conflict(doc, conflicts);
+        let factors = crate::memory::memory_keep_factors_from_document(
+            &doc.namespace,
+            &doc.content,
+            has_conflict,
+            redundancy,
+        );
+        let decision = crate::memory::score_memory_keep(factors);
+        collector.record(crate::engine::trace::TraceEvent::MemoryKeepScored {
+            record_id: doc.path.clone(),
+            kind: doc.namespace.clone(),
+            action: format!("{:?}", decision.action),
+            score: decision.score,
+            contradiction_risk: decision.factors.contradiction_risk,
+            redundancy: decision.factors.redundancy,
+            reason: decision.reason,
+        });
+    }
+}
+
 fn extract_key_values(doc: &MemoryDocument) -> Vec<MemoryKeyValue> {
     doc.content
         .lines()
@@ -839,7 +901,11 @@ impl Tool for MemorySaveTool {
             .map(|score| format!("{score:.2}"))
             .unwrap_or_else(|| "n/a".to_string());
 
-        match outcome.status {
+        if let Some(scoring_trace) = outcome.scoring_trace.as_ref() {
+            record_memory_write_score_trace(&context, scoring_trace);
+        }
+
+        let mut result = match outcome.status {
             crate::memory::manager::MemoryWriteOutcomeStatus::Saved => ToolResult::success(
                 format!("Saved to {} (quality {}): [{}] {}", path, score, category, content),
             ),
@@ -870,7 +936,13 @@ impl Tool for MemorySaveTool {
             crate::memory::manager::MemoryWriteOutcomeStatus::InvalidTarget => {
                 ToolResult::error(format!("Invalid memory target: {}", outcome.reason))
             }
+        };
+        if let Some(scoring_trace) = outcome.scoring_trace.as_ref() {
+            result.data = Some(json!({
+                "memory_write_score": memory_write_score_json(scoring_trace),
+            }));
         }
+        result
     }
 }
 
@@ -1038,6 +1110,7 @@ impl Tool for MemoryLoadTool {
         };
 
         if action == "doctor" {
+            record_memory_keep_score_traces(&context, &docs, &conflicts);
             let provider_lifecycle = provider_lifecycle
                 .as_ref()
                 .expect("provider lifecycle is loaded for doctor");
@@ -1053,6 +1126,7 @@ impl Tool for MemoryLoadTool {
         }
 
         if action == "doctor_json" {
+            record_memory_keep_score_traces(&context, &docs, &conflicts);
             let provider_lifecycle = provider_lifecycle
                 .as_ref()
                 .expect("provider lifecycle is loaded for doctor_json");
@@ -1073,6 +1147,7 @@ impl Tool for MemoryLoadTool {
         }
 
         if action == "review" {
+            record_memory_keep_score_traces(&context, &docs, &conflicts);
             let provider_lifecycle = provider_lifecycle
                 .as_ref()
                 .expect("provider lifecycle is loaded for review");

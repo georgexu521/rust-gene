@@ -27,6 +27,16 @@ pub struct ActionReviewTraceSummary {
     pub latest_reason: Option<String>,
 }
 
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ScoringTraceSummary {
+    pub latest_action: Option<String>,
+    pub latest_candidate: Option<String>,
+    pub latest_memory_recall: Option<String>,
+    pub latest_memory_write: Option<String>,
+    pub latest_memory_keep: Option<String>,
+    pub latest_workflow: Option<String>,
+}
+
 impl ControlLoopDiagnostic {
     pub fn compact_summary(&self) -> String {
         self.phases
@@ -66,6 +76,35 @@ impl ActionReviewTraceSummary {
             self.checkpoint_required,
             latest
         )
+    }
+}
+
+impl ScoringTraceSummary {
+    pub fn compact_summary(&self) -> String {
+        let mut parts = Vec::new();
+        if let Some(action) = self.latest_action.as_ref() {
+            parts.push(format!("action={action}"));
+        }
+        if let Some(candidate) = self.latest_candidate.as_ref() {
+            parts.push(format!("candidate={candidate}"));
+        }
+        if let Some(recall) = self.latest_memory_recall.as_ref() {
+            parts.push(format!("memory_recall={recall}"));
+        }
+        if let Some(write) = self.latest_memory_write.as_ref() {
+            parts.push(format!("memory_write={write}"));
+        }
+        if let Some(keep) = self.latest_memory_keep.as_ref() {
+            parts.push(format!("memory_keep={keep}"));
+        }
+        if let Some(workflow) = self.latest_workflow.as_ref() {
+            parts.push(format!("workflow={workflow}"));
+        }
+        if parts.is_empty() {
+            "none".to_string()
+        } else {
+            parts.join(" | ")
+        }
     }
 }
 
@@ -124,6 +163,139 @@ pub fn action_review_trace_summary(trace: &TurnTrace) -> Option<ActionReviewTrac
         summary.latest_reason = Some(reason.clone());
     }
     (summary.total > 0).then_some(summary)
+}
+
+pub fn scoring_trace_summary(trace: &TurnTrace) -> Option<ScoringTraceSummary> {
+    let mut summary = ScoringTraceSummary::default();
+    for event in &trace.events {
+        match event {
+            TraceEvent::ActionDecisionEvaluated {
+                tool,
+                action_score,
+                value,
+                risk,
+                uncertainty_reduction,
+                scope_fit,
+                ..
+            } => {
+                summary.latest_action = Some(format!(
+                    "{} score={} value={} risk={} uncertainty={} scope_fit={}",
+                    tool, action_score, value, risk, uncertainty_reduction, scope_fit
+                ));
+            }
+            TraceEvent::CandidateActionsEvaluated {
+                mode,
+                candidate_count,
+                selected_tool,
+                selected_runtime_score,
+                selected_model_score,
+                runtime_selected_differs_from_model_order,
+                ..
+            } => {
+                summary.latest_candidate = Some(format!(
+                    "mode={} candidates={} selected={} runtime_score={} model_score={} differs={}",
+                    mode,
+                    candidate_count,
+                    selected_tool.as_deref().unwrap_or("none"),
+                    selected_runtime_score
+                        .map(|score| score.to_string())
+                        .unwrap_or_else(|| "n/a".to_string()),
+                    selected_model_score
+                        .map(|score| score.to_string())
+                        .unwrap_or_else(|| "n/a".to_string()),
+                    runtime_selected_differs_from_model_order
+                ));
+            }
+            TraceEvent::MemoryRecallScored {
+                item_count,
+                injected,
+                available,
+                omitted,
+                conflict_capped,
+                top_score,
+                budget_exhausted,
+                ..
+            } => {
+                summary.latest_memory_recall = Some(format!(
+                    "items={} injected={} available={} omitted={} conflict_capped={} top={:.2} budget_exhausted={}",
+                    item_count,
+                    injected,
+                    available,
+                    omitted,
+                    conflict_capped,
+                    top_score,
+                    budget_exhausted
+                ));
+            }
+            TraceEvent::MemoryWriteScored {
+                kind,
+                status,
+                score,
+                threshold,
+                explicit,
+                duplication,
+                ..
+            } => {
+                summary.latest_memory_write = Some(format!(
+                    "kind={} status={} score={:.2} threshold={:.2} explicit={} duplication={:.2}",
+                    kind, status, score, threshold, explicit, duplication
+                ));
+            }
+            TraceEvent::MemoryKeepScored {
+                record_id,
+                kind,
+                action,
+                score,
+                contradiction_risk,
+                redundancy,
+                ..
+            } => {
+                summary.latest_memory_keep = Some(format!(
+                    "{} kind={} action={} score={:.2} contradiction={:.2} redundancy={:.2}",
+                    preview(record_id),
+                    kind,
+                    action,
+                    score,
+                    contradiction_risk,
+                    redundancy
+                ));
+            }
+            TraceEvent::WorkflowPlanProgress {
+                active_step,
+                top_priority,
+                top_importance_score,
+                top_weight_share,
+                weight_source,
+                reweighted,
+                ..
+            } => {
+                summary.latest_workflow = Some(format!(
+                    "step={} importance={} share={} source={} reweighted={}",
+                    active_step
+                        .as_deref()
+                        .or(top_priority.as_deref())
+                        .map(preview)
+                        .unwrap_or_else(|| "none".to_string()),
+                    top_importance_score
+                        .map(|score| format!("{score:.2}"))
+                        .unwrap_or_else(|| "n/a".to_string()),
+                    top_weight_share
+                        .map(|share| format!("{share:.2}"))
+                        .unwrap_or_else(|| "n/a".to_string()),
+                    weight_source.as_deref().unwrap_or("unknown"),
+                    reweighted
+                ));
+            }
+            _ => {}
+        }
+    }
+    (summary.latest_action.is_some()
+        || summary.latest_candidate.is_some()
+        || summary.latest_memory_recall.is_some()
+        || summary.latest_memory_write.is_some()
+        || summary.latest_memory_keep.is_some()
+        || summary.latest_workflow.is_some())
+    .then_some(summary)
 }
 
 fn action_review_checkpoint_required(checkpoint: &str, reason: &str) -> bool {

@@ -247,6 +247,7 @@ fn test_format_memory_write_outcome_reports_safety_block() {
         reason: "secret_like_content: memory appears to contain a raw token".to_string(),
         path: None,
         record: None,
+        scoring_trace: None,
     };
 
     let rendered = format_memory_write_outcome("api_key = [redacted]", &outcome);

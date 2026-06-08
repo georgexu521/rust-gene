@@ -1,4 +1,10 @@
 use super::*;
+use std::sync::{Mutex, OnceLock};
+
+fn env_lock() -> &'static Mutex<()> {
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(()))
+}
 
 #[test]
 fn test_memory_path() {
@@ -401,4 +407,93 @@ fn test_agent_memory_json_formats_as_key_values() {
     let content = r#"[{"key":"review_style","value":"strict","created_at":1,"updated_at":1,"tags":["review"]}]"#;
     let formatted = format_agent_memory_content(content);
     assert!(formatted.contains("review_style: strict [review]"));
+}
+
+#[tokio::test]
+async fn memory_save_records_write_scoring_trace() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let manager = crate::memory::MemoryManager::with_base_dir(dir.path().join(".priority-agent"));
+    let manager = std::sync::Arc::new(tokio::sync::Mutex::new(manager));
+    let trace = crate::engine::trace::TraceCollector::new(crate::engine::trace::TurnTrace::new(
+        "session",
+        1,
+        "save memory",
+    ));
+    let context = ToolContext::new(dir.path(), "session")
+        .with_memory_manager(manager)
+        .with_trace_collector(trace.clone());
+
+    let result = MemorySaveTool
+        .execute(
+            json!({
+                "content": "Project convention: run cargo test -q before verified closeout.",
+                "category": "convention",
+                "target": "index",
+            }),
+            context,
+        )
+        .await;
+
+    assert!(result.success, "memory_save should return a tool result");
+    assert!(result
+        .data
+        .as_ref()
+        .and_then(|data| data.get("memory_write_score"))
+        .is_some());
+    let turn = trace.snapshot();
+    assert!(turn.events.iter().any(|event| {
+        matches!(
+            event,
+            crate::engine::trace::TraceEvent::MemoryWriteScored {
+                kind,
+                status,
+                score,
+                ..
+            } if kind == "workflow_convention" && status == "accepted" && *score >= 0.65
+        )
+    }));
+}
+
+#[tokio::test]
+async fn memory_doctor_records_keep_scoring_trace() {
+    let _guard = env_lock().lock().unwrap();
+    let dir = tempfile::tempdir().expect("tempdir");
+    let previous_home = std::env::var("HOME").ok();
+    std::env::set_var("HOME", dir.path());
+    let base = dir.path().join(".priority-agent");
+    std::fs::create_dir_all(&base).expect("create memory dir");
+    std::fs::write(
+        base.join("MEMORY.md"),
+        "Project convention: run cargo test -q before verified closeout.\n",
+    )
+    .expect("write memory");
+    let trace = crate::engine::trace::TraceCollector::new(crate::engine::trace::TurnTrace::new(
+        "session",
+        1,
+        "doctor memory",
+    ));
+    let context = ToolContext::new(dir.path(), "session").with_trace_collector(trace.clone());
+
+    let result = MemoryLoadTool
+        .execute(json!({"action": "doctor"}), context)
+        .await;
+
+    assert!(result.success);
+    let turn = trace.snapshot();
+    assert!(turn.events.iter().any(|event| {
+        matches!(
+            event,
+            crate::engine::trace::TraceEvent::MemoryKeepScored {
+                record_id,
+                kind,
+                score,
+                ..
+            } if record_id == "MEMORY.md" && kind == "project" && *score > 0.0
+        )
+    }));
+    if let Some(home) = previous_home {
+        std::env::set_var("HOME", home);
+    } else {
+        std::env::remove_var("HOME");
+    }
 }

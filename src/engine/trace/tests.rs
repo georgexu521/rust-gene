@@ -256,6 +256,80 @@ fn trace_summary_includes_action_review_counts() {
 }
 
 #[test]
+fn trace_summary_includes_scoring_summary() {
+    let collector = TraceCollector::new(TurnTrace::new("s1", 1, "score this"));
+    collector.record(TraceEvent::WorkflowPlanProgress {
+        total_steps: 2,
+        completed_steps: 0,
+        active_step: Some("inspect target".to_string()),
+        top_priority: None,
+        top_importance_score: Some(0.82),
+        top_weight_share: Some(0.55),
+        weight_source: Some("workflow_contract".to_string()),
+        reweighted: true,
+    });
+    collector.record(TraceEvent::ActionDecisionEvaluated {
+        tool: "file_read".to_string(),
+        call_id: "call_read".to_string(),
+        stage: "Inspect".to_string(),
+        value: 6,
+        risk: 1,
+        uncertainty_reduction: 8,
+        cost: 1,
+        reversibility: 9,
+        scope_fit: 7,
+        action_score: 18,
+        formula_stage: "diagnosis".to_string(),
+        formula_version: "action_score.v1".to_string(),
+        phase_aligned: true,
+        mutates_workspace: false,
+        broad_shell: false,
+        modifiers: Vec::new(),
+        requires_confirmation: false,
+        reason: "read reduces uncertainty".to_string(),
+    });
+    collector.record(TraceEvent::MemoryRecallScored {
+        item_count: 3,
+        injected: 1,
+        available: 1,
+        omitted: 1,
+        conflict_capped: 0,
+        top_score: 0.78,
+        budget_exhausted: false,
+        policy: "Project".to_string(),
+    });
+    collector.record(TraceEvent::MemoryWriteScored {
+        candidate_id: "mem_1".to_string(),
+        kind: "workflow_convention".to_string(),
+        status: "accepted".to_string(),
+        score: 0.72,
+        threshold: 0.65,
+        explicit: true,
+        duplication: 0.10,
+        reason: "stable convention".to_string(),
+    });
+    collector.record(TraceEvent::MemoryKeepScored {
+        record_id: "MEMORY.md".to_string(),
+        kind: "project".to_string(),
+        action: "KeepActive".to_string(),
+        score: 0.81,
+        contradiction_risk: 0.0,
+        redundancy: 0.1,
+        reason: "keep_score=0.81".to_string(),
+    });
+
+    let trace = collector.finish(TurnStatus::Completed);
+    let summary = format_trace_summary(&trace, 20);
+
+    assert!(summary.contains("Scoring:"));
+    assert!(summary.contains("action=file_read score=18"));
+    assert!(summary.contains("memory_recall=items=3 injected=1"));
+    assert!(summary.contains("memory_write=kind=workflow_convention status=accepted"));
+    assert!(summary.contains("memory_keep=MEMORY.md kind=project action=KeepActive"));
+    assert!(summary.contains("workflow=step=inspect target importance=0.82"));
+}
+
+#[test]
 fn trace_summary_includes_mcp_resource_access() {
     let collector = TraceCollector::new(TurnTrace::new("s1", 1, "read mcp resource"));
     collector.record(TraceEvent::McpResourceAccessed {

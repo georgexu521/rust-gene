@@ -22,7 +22,8 @@ use crate::engine::task_contract::MemoryProposalReviewStore;
 #[cfg(test)]
 use crate::memory::extraction::parse_llm_memory_candidates;
 use crate::memory::provider::{
-    LocalMemoryProvider, MemoryOperationJournalEntry, MemoryProviderRegistry,
+    LocalMemoryProvider, MemoryOperationJournalEntry, MemoryProviderCallOutcome,
+    MemoryProviderRegistry,
 };
 use crate::memory::quality::assess_memory_candidate;
 use crate::memory::search_index::MemorySearchDocument;
@@ -351,6 +352,25 @@ impl MemoryManager {
 
     pub fn set_active_scope(&mut self, scope: MemoryScope) {
         self.active_scope = scope;
+    }
+
+    pub async fn provider_prefetch(
+        &self,
+        query: &str,
+        scope: &MemoryScope,
+    ) -> (Vec<MemoryRecord>, Vec<MemoryProviderCallOutcome>) {
+        self.provider_registry.prefetch_all(query, scope).await
+    }
+
+    pub async fn provider_search(
+        &self,
+        query: &str,
+        scope: &MemoryScope,
+        max_results: usize,
+    ) -> (Vec<MemoryRecord>, Vec<MemoryProviderCallOutcome>) {
+        self.provider_registry
+            .search_all(query, scope, max_results)
+            .await
     }
 
     pub fn memory_records(&self) -> Vec<MemoryRecord> {

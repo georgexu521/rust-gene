@@ -16,6 +16,7 @@ pub struct MemoryQualityAssessment {
     pub duplication: f32,
     pub write_factors: MemoryWriteFactors,
     pub score: f32,
+    pub threshold: f32,
     pub status: MemoryStatus,
     pub sensitivity: SensitivityLevel,
     pub reason: String,
@@ -177,6 +178,7 @@ pub fn assess_memory_candidate(
     );
     let write_decision = score_memory_write(write_factors, sensitivity, duplication, explicit);
     let score = write_decision.score;
+    let threshold = write_decision.threshold;
     let status = write_decision.status;
 
     let reason = format!(
@@ -194,6 +196,7 @@ pub fn assess_memory_candidate(
         duplication,
         write_factors,
         score,
+        threshold,
         status,
         sensitivity,
         reason,

@@ -13,7 +13,7 @@ use crate::memory::extraction::infer_memory_tags;
 use crate::memory::files::{infer_learning_topic, topic_memory_path, write_memory_file_atomically};
 use crate::memory::provider::{LocalMemoryRecordWriteStatus, MemoryOperationJournalEntry};
 use crate::memory::quality::assess_memory_candidate;
-use crate::memory::reports::{MemoryWriteOutcome, MemoryWriteTarget};
+use crate::memory::reports::{MemoryWriteOutcome, MemoryWriteScoringTrace, MemoryWriteTarget};
 use crate::memory::types::{
     MemoryCandidate, MemoryEvidenceKind, MemoryKind, MemoryProjection, MemoryProvenance,
     MemoryRecord, MemoryStatus,
@@ -34,6 +34,26 @@ fn markdown_entry_for_record(record: &MemoryRecord, category: &str) -> String {
         record.confidence,
         record.importance,
     )
+}
+
+fn scoring_trace_for_candidate(
+    candidate: &MemoryCandidate,
+    status: MemoryStatus,
+    score: f32,
+    threshold: f32,
+    duplication: f32,
+    reason: impl Into<String>,
+) -> MemoryWriteScoringTrace {
+    MemoryWriteScoringTrace {
+        candidate_id: candidate.id.clone(),
+        kind: kind_label(candidate.kind).to_string(),
+        status: status_label(status).to_string(),
+        score,
+        threshold,
+        explicit: candidate.explicit,
+        duplication,
+        reason: reason.into(),
+    }
 }
 
 impl MemoryManager {
@@ -106,6 +126,17 @@ impl MemoryManager {
         };
 
         if assessment.duplication >= 0.85 || normalized_contains(&existing, &candidate.content) {
+            let scoring_trace = MemoryWriteScoringTrace {
+                status: "duplicate".to_string(),
+                ..scoring_trace_for_candidate(
+                    &candidate,
+                    assessment.status,
+                    assessment.score,
+                    assessment.threshold,
+                    assessment.duplication,
+                    format!("duplicate memory already exists; {}", assessment.reason),
+                )
+            };
             self.record_memory_decision_event(memory_decision_event(
                 "duplicate",
                 &candidate,
@@ -116,7 +147,8 @@ impl MemoryManager {
             return MemoryWriteOutcome::duplicate(
                 path,
                 format!("duplicate memory already exists; {}", assessment.reason),
-            );
+            )
+            .with_scoring_trace(scoring_trace);
         }
 
         let mut status = assessment.status;
@@ -156,6 +188,14 @@ impl MemoryManager {
                 reason
             );
         }
+        let scoring_trace = scoring_trace_for_candidate(
+            &candidate,
+            status,
+            assessment.score,
+            assessment.threshold,
+            assessment.duplication,
+            reason.clone(),
+        );
 
         let mut record = MemoryRecord::from_candidate(
             candidate.clone(),
@@ -182,14 +222,19 @@ impl MemoryManager {
                 return MemoryWriteOutcome::failed(
                     self.records_path.clone(),
                     format!("failed to append typed memory record: {error}"),
-                );
+                )
+                .with_scoring_trace(scoring_trace);
             }
         };
         if write_status == LocalMemoryRecordWriteStatus::Duplicate {
             return MemoryWriteOutcome::duplicate(
                 self.records_path.clone(),
                 "duplicate typed memory record already exists",
-            );
+            )
+            .with_scoring_trace(MemoryWriteScoringTrace {
+                status: "duplicate".to_string(),
+                ..scoring_trace
+            });
         }
 
         self.record_memory_decision_event(memory_decision_event(
@@ -201,7 +246,8 @@ impl MemoryManager {
         ));
 
         if status != MemoryStatus::Accepted {
-            return MemoryWriteOutcome::gated_with_record(record, status, assessment.score, reason);
+            return MemoryWriteOutcome::gated_with_record(record, status, assessment.score, reason)
+                .with_scoring_trace(scoring_trace);
         }
 
         let entry = markdown_entry_for_record(&record, &candidate.category);
@@ -218,10 +264,12 @@ impl MemoryManager {
         };
         let new_content = format!("{}{}{}", existing, header, entry);
         if let Err(error) = write_memory_file_atomically(&path, &new_content) {
-            return MemoryWriteOutcome::failed(path, error.to_string());
+            return MemoryWriteOutcome::failed(path, error.to_string())
+                .with_scoring_trace(scoring_trace);
         }
 
         MemoryWriteOutcome::saved_with_record(path, assessment.score, reason, record)
+            .with_scoring_trace(scoring_trace)
     }
 
     pub async fn submit_candidate_with_provider_notifications(

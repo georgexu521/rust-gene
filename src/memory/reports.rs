@@ -351,12 +351,25 @@ pub enum MemoryWriteTarget {
 }
 
 #[derive(Debug, Clone)]
+pub struct MemoryWriteScoringTrace {
+    pub candidate_id: String,
+    pub kind: String,
+    pub status: String,
+    pub score: f32,
+    pub threshold: f32,
+    pub explicit: bool,
+    pub duplication: f32,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone)]
 pub struct MemoryWriteOutcome {
     pub status: MemoryWriteOutcomeStatus,
     pub quality_score: Option<f32>,
     pub reason: String,
     pub path: Option<PathBuf>,
     pub record: Option<MemoryRecord>,
+    pub scoring_trace: Option<MemoryWriteScoringTrace>,
 }
 
 impl MemoryWriteOutcome {
@@ -372,6 +385,7 @@ impl MemoryWriteOutcome {
             reason: reason.into(),
             path: Some(path.into()),
             record: Some(record),
+            scoring_trace: None,
         }
     }
 
@@ -387,6 +401,7 @@ impl MemoryWriteOutcome {
             reason: reason.into(),
             path: None,
             record: None,
+            scoring_trace: None,
         }
     }
 
@@ -405,6 +420,11 @@ impl MemoryWriteOutcome {
         self.record.as_ref()
     }
 
+    pub(crate) fn with_scoring_trace(mut self, trace: MemoryWriteScoringTrace) -> Self {
+        self.scoring_trace = Some(trace);
+        self
+    }
+
     pub(crate) fn duplicate(path: impl Into<PathBuf>, reason: impl Into<String>) -> Self {
         Self {
             status: MemoryWriteOutcomeStatus::Duplicate,
@@ -412,6 +432,7 @@ impl MemoryWriteOutcome {
             reason: reason.into(),
             path: Some(path.into()),
             record: None,
+            scoring_trace: None,
         }
     }
 
@@ -422,6 +443,7 @@ impl MemoryWriteOutcome {
             reason: reason.into(),
             path: None,
             record: None,
+            scoring_trace: None,
         }
     }
 
@@ -432,6 +454,7 @@ impl MemoryWriteOutcome {
             reason: reason.into(),
             path: Some(path.into()),
             record: None,
+            scoring_trace: None,
         }
     }
 
@@ -442,6 +465,7 @@ impl MemoryWriteOutcome {
             reason: reason.into(),
             path: None,
             record: None,
+            scoring_trace: None,
         }
     }
 }

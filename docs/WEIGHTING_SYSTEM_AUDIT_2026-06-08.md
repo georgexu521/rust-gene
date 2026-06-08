@@ -108,11 +108,15 @@ System A 在 code-change 路径中始终激活。
 ### 问题 2: CandidateAction 默认模式是纯开销
 
 ```
-model_led_weighting_enabled()  → 默认 true
-CandidateActionMode::from_env() → 默认 "shadow"
+model_led_weighting_enabled()  → 默认 false
+CandidateActionMode::from_env() → 默认 "off"
 ```
 
-在 **shadow** 模式下的流程：
+2026-06-08 修正后，CandidateAction 默认不再要求模型输出候选评分，也不再做
+shadow 排名。只有显式设置 `PRIORITY_AGENT_MODEL_LED_WEIGHTING=1` 或
+`PRIORITY_AGENT_CANDIDATE_ACTION_MODE=shadow|gated` 时，才进入以下流程。
+
+在 **shadow** 模式下：
 1. 模型在回复的 JSON 里带了 `candidate_actions`（3个候选+每个6个0-10分数）— **浪费 token**
 2. `ActionDecision` 对每个候选算一遍运行时分数 — **浪费 CPU**
 3. `rank_candidate_actions` 对比模型和运行时排名 — **记录但不干预**
@@ -151,9 +155,11 @@ runtime_order = cmp(action_score) > cmp(scope_fit) > cmp(-risk) > cmp(original_i
 - 是 WorkflowContract 和 WeightsEngine 互相矛盾？
 
 Action spine 已有 trace：`ActionDecisionEvaluated`、`CandidateActionsEvaluated`
-和 `ActionReviewed` 都会记录关键字段。但 trace 还不统一：Memory recall/write/keep
-没有对应的 scoring trace 事件，也没有 dashboard 把 action、memory、workflow 的
-评分输出放在同一个视图里。
+和 `ActionReviewed` 都会记录关键字段。2026-06-08 已补上三类 memory scoring
+真实记录点：prefetch 生成 `RetrievalContext` 后记录 `MemoryRecallScored`；
+`memory_save` 的 write outcome 记录 `MemoryWriteScored`；`memory doctor/review`
+的 maintenance decisions 记录 `MemoryKeepScored`。`/trace` summary 也会把
+action、candidate、memory、workflow 的最新评分放进同一个 `Scoring:` 行。
 
 ---
 
@@ -223,10 +229,11 @@ Action spine 已有 trace：`ActionDecisionEvaluated`、`CandidateActionsEvaluat
 ### 具体行动
 
 **P0: Scoring observability（先看清，不改行为）**
-1. 补 memory scoring trace：`RecallScored`、`MemoryWriteScored`、
-   `MemoryKeepScored`；`ActionDecisionEvaluated` 已存在。
+1. 补 memory scoring trace：`MemoryRecallScored`、`MemoryWriteScored`、
+   `MemoryKeepScored` 均已接入真实 call site；`ActionDecisionEvaluated` 已存在。
 2. 在 `/trace` 或 `/diagnostic` 增加一个 scoring summary，把 action、
-   candidate、memory、workflow 的最新分数放在同一屏。
+   candidate、memory、workflow 的最新分数放在同一屏。✅ 已接入
+   `format_trace_summary()` 的 `Scoring:` 行。
 3. 输出字段只放结果、主因子、decision、source，不把完整公式塞进普通 prompt。
 
 **P1: CandidateAction 默认降噪**
@@ -243,16 +250,31 @@ Action spine 已有 trace：`ActionDecisionEvaluated`、`CandidateActionsEvaluat
 8. System B 标记为 "maintenance-only"：不添加新功能，不迁移到 System A，
    仅修复 bug。如有需要逐步将 legacy 工作流迁移到 code-change workflow。
 
-**P3: Minimal task-guidance experiment**
+**P3: Minimal task-guidance experiment** ✅ 已完成最小实现
 9. 只从现有 task state / workflow plan / risk signal 生成一个 4 行以内的
    `<task-guidance>`，不引入新评分公式。
 10. guidance 只放具体事实：当前阶段、top plan step、最近风险、最近一次低效动作。
 11. 用 env 开关或 experiment flag 控制；默认先在 eval/replay 中打开，不直接全量。
+12. 实现状态：`PRIORITY_AGENT_TASK_GUIDANCE` 默认关闭；开启后 guidance
+    附着到最后一条 user message 的 `<recent_observation>`，不新增 system
+    message；单元测试覆盖默认关闭和四行事实注入。
 
-**P4: 校准和回归** ✅ 已完成
+**P4: 校准和回归** 🟡 部分完成
 12. 以下 15 个 behavior calibration case 覆盖 4 个主干系统的关键行为。
     每个 case 定义了一个具体的 agent 行为断言——不是回测公式，而是验证
     agent 在特定场景下是否做出了正确的决策。
+13. 当前已有可执行入口：`scripts/weighting-calibration-gate.sh`，覆盖
+    CandidateAction 默认关闭、task-guidance 注入、memory manager provider
+    编译回归、memory write/keep scoring trace、retrieval context 和 scoring
+    summary 相关测试。
+14. P0 五个 live task 已落成：
+    `weighting-p0-premature-edit-revise`、
+    `weighting-p0-high-risk-bash-ask-user`、
+    `weighting-p0-budget-exceeded-deny`、
+    `weighting-p0-memory-write-low-quality-rejected`、
+    `weighting-p0-high-risk-contract-activation`。
+15. 未完成项：P1/P2 的 10 个 case 尚未全部落成 `evalsets/live_tasks/` YAML；
+    因此本节仍是部分完成。
 
 ---
 
@@ -291,7 +313,8 @@ Action spine 已有 trace：`ActionDecisionEvaluated`、`CandidateActionsEvaluat
 **C6: 记忆写入阻止低质候选**
 - 场景：LLM 提取了一条"today we did some work"的 note，内容 < 12 chars
 - 预期：`score_memory_write()` < 0.45 → Rejected
-- 验证：trace 中 `MemoryWriteScored { status: "rejected", score < 0.45 }`
+- 验证：trace 中 `MemoryWriteScored { status: "rejected"|"proposed", score < 0.65 }`
+  且 `threshold`、`explicit`、`duplication` 字段存在
 
 **C7: 记忆写入接受高质候选**
 - 场景：LLM 提取了"Project convention: run cargo test --quiet before committing"
@@ -354,11 +377,26 @@ Action spine 已有 trace：`ActionDecisionEvaluated`、`CandidateActionsEvaluat
 
 ### 执行方式
 
-不新建测试框架。用现有的 live_eval 机制：
+当前不新建测试框架。先用一个 focused gate 证明已落地部分：
+
+```bash
+bash scripts/weighting-calibration-gate.sh
+```
+
+完整 15-case 套件继续使用现有 live_eval 机制：
 1. 每个 case 写一个 `evalsets/live_tasks/` YAML
 2. 在 `acceptance.required_commands` 中验证 trace 事件
 3. 在 `acceptance.behavior_assertions` 中定义断言
 4. 通过 `scripts/run_live_eval.sh` 运行，`scripts/product-daily-gate.sh` 集成
+
+当前已落成的 P0 live task 可按需单独运行：
+```bash
+bash scripts/run_live_eval.sh --case weighting-p0-premature-edit-revise --mode agent-run --run-tests
+bash scripts/run_live_eval.sh --case weighting-p0-high-risk-bash-ask-user --mode agent-run --run-tests
+bash scripts/run_live_eval.sh --case weighting-p0-budget-exceeded-deny --mode agent-run --run-tests
+bash scripts/run_live_eval.sh --case weighting-p0-memory-write-low-quality-rejected --mode agent-run --run-tests
+bash scripts/run_live_eval.sh --case weighting-p0-high-risk-contract-activation --mode agent-run --run-tests
+```
 
 **系数 AB 测试**（P4.14）：任何系数变更必须先跑这 15 个 case，生成 AB 对比
 trace（旧系数 vs 新系数），附带 eval 证据和人工 review。不做自动调参。

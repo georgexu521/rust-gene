@@ -37,6 +37,7 @@ pub use provider::{
 };
 pub use quality::{assess_memory_candidate, MemoryQualityAssessment};
 pub use recall::{score_recall, RecallDecision, RecallFactors, RecallScore};
+pub use reports::MemoryWriteScoringTrace;
 pub use safety::{scan_memory_content, MemorySafetyIssue};
 pub use scoring::{
     memory_keep_factors_from_document, memory_write_factors_from_signals, score_memory_keep,

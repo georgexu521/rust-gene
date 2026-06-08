@@ -1,6 +1,7 @@
 use super::{
     action_review_trace_summary, control_loop_diagnostic, latest_runtime_diet_summary,
-    latest_tool_record_count, latest_tool_record_evidence_summary, short_id, TurnTrace,
+    latest_tool_record_count, latest_tool_record_evidence_summary, scoring_trace_summary, short_id,
+    TurnTrace,
 };
 
 pub fn format_trace_summary(trace: &TurnTrace, max_events: usize) -> String {
@@ -32,6 +33,9 @@ pub fn format_trace_summary(trace: &TurnTrace, max_events: usize) -> String {
             "\nAction Reviews: {}",
             action_reviews.compact_summary()
         ));
+    }
+    if let Some(scoring) = scoring_trace_summary(trace) {
+        lines.push(format!("\nScoring: {}", scoring.compact_summary()));
     }
 
     lines.push("\nEvents:".to_string());
