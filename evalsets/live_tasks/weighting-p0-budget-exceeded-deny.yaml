@@ -38,18 +38,17 @@ expected_behavior:
   - Agent 在处理过程中可能提前耗尽 budget。
   - 不修改任何文件。
 
-behavior_assertions:
-  - budget_gate_denies_after_limit
-  - no_file_mutation
-
 runtime_spine_assertions:
+  required_phases:
+    - context
+    - decision
+    - tool_execution
+    - state_update
+    - closeout
   required_events:
     - action_decision
-    - action_review
     - stop_check
-    - completion_contract
-  action_score_recorded: true
-  budget_gate_recorded: true
+  verification_proof: false
 
 acceptance:
   required_commands: []

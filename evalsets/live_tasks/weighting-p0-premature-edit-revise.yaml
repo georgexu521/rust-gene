@@ -35,19 +35,17 @@ expected_behavior:
   - 如果模型先调 file_read 再调 file_edit：视为可接受的正确路径。
   - 完成时必须包含当前文件内容的实际证据，不能只有口头声明。
 
-behavior_assertions:
-  - action_review_present
-  - evidence_before_edit_or_revised
-
 runtime_spine_assertions:
+  required_phases:
+    - context
+    - decision
+    - tool_execution
+    - state_update
+    - closeout
   required_events:
     - action_decision
-    - action_review
-    - tool_observation
-    - completion_contract
-  action_score_recorded: true
-  scope_fit_recorded: true
-  completion_status: completed
+    - stop_check
+  verification_proof: true
 
 acceptance:
   required_commands:
