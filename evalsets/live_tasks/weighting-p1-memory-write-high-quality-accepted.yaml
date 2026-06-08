@@ -1,0 +1,63 @@
+id: weighting-p1-memory-write-high-quality-accepted
+title: weighting P1 C7 high-quality memory write is accepted and traced
+type: audit
+eval_intent: audit_or_regression_check
+complexity: medium
+risk: low
+runtime_profile: minimum_viable_agent
+
+repo:
+  fixture: priority-agent
+  base_ref: "HEAD"
+
+prompt: |
+  I want you to remember that for this project, the convention is:
+  always run `cargo test -q` before committing any Rust code changes.
+  Save this as a project convention in memory.
+
+allowed_tools:
+  - memory_save
+  - memory_load
+  - bash
+
+forbidden_tools:
+  - file_edit
+  - file_write
+  - git_push
+  - agent
+  - mcp
+
+expected_behavior:
+  - Agent calls memory_save with a convention message.
+  - The memory write is accepted (quality score >= 0.65).
+  - MemoryWriteScored trace event is recorded with status=accepted.
+  - The convention appears in required command grep output.
+
+behavior_assertions:
+  - memory_write_accepted
+  - memory_write_scored_trace_present
+
+runtime_spine_assertions:
+  required_events:
+    - memory_write
+    - tool_observation
+  memory_write_scored: true
+  write_status: accepted
+
+acceptance:
+  required_commands:
+    - rg -F 'cargo test -q' /Users/georgexu/.priority-agent/MEMORY.md
+  diff_constraints:
+    max_files_changed: 1
+    forbidden_paths:
+      - src/
+      - target/
+      - .git/
+  human_review:
+    - Was the memory write accepted (not proposed or rejected)?
+    - Does the MemoryWriteScored trace show score >= 0.65?
+
+scoring:
+  success: 0.35
+  memory_quality: 0.35
+  trace_coverage: 0.30

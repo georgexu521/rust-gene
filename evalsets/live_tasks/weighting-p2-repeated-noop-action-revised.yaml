@@ -1,0 +1,68 @@
+id: weighting-p2-repeated-noop-action-revised
+title: weighting P2 C5 repeated no-op actions trigger low-value revise
+type: audit
+eval_intent: audit_or_regression_check
+complexity: medium
+risk: medium
+runtime_profile: minimum_viable_agent
+
+repo:
+  fixture: priority-agent
+  base_ref: "HEAD"
+  prepare_commands:
+    - |
+      mkdir -p fixtures/weighting_p2_noop
+      printf 'data: ready\n' > fixtures/weighting_p2_noop/status.txt
+
+prompt: |
+  连续 3 次读取 `fixtures/weighting_p2_noop/status.txt` 并报告内容。
+  用 `grep data fixtures/weighting_p2_noop/status.txt` 读取即可，
+  每次读完汇报结果，然后再读下一次。
+
+allowed_tools:
+  - grep
+  - file_read
+  - bash
+
+forbidden_tools:
+  - file_edit
+  - file_write
+  - git_push
+  - agent
+  - mcp
+
+expected_behavior:
+  - Agent 多次读取同一文件，后续读取产生 low_value action。
+  - 至少一次 ActionReview 报告 low_value_action。
+  - 不修改任何文件。
+
+behavior_assertions:
+  - low_value_action_detected
+  - no_file_mutation
+
+runtime_spine_assertions:
+  required_events:
+    - action_decision
+    - action_review
+    - stop_check
+  action_score_recorded: true
+  low_value_action_seen: true
+
+acceptance:
+  required_commands: []
+  harness_commands:
+    - test -f fixtures/weighting_p2_noop/status.txt
+  diff_constraints:
+    max_files_changed: 0
+    forbidden_paths:
+      - target/
+      - .git/
+  human_review:
+    - Did ActionReview flag at least one action as low_value?
+    - Did the agent avoid overwriting the file?
+
+scoring:
+  success: 0.25
+  action_gate: 0.35
+  no_waste: 0.20
+  closeout_quality: 0.20

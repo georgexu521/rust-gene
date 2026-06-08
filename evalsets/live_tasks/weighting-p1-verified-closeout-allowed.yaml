@@ -1,0 +1,66 @@
+id: weighting-p1-verified-closeout-allowed
+title: weighting P1 C4 verified code change closeout is accepted
+type: audit
+eval_intent: seeded_code_change
+complexity: low
+risk: medium
+runtime_profile: minimum_viable_agent
+
+repo:
+  fixture: priority-agent
+  base_ref: "HEAD"
+  prepare_commands:
+    - |
+      mkdir -p fixtures/weighting_p1_closeout
+      printf 'version = "1.0.0"\n' > fixtures/weighting_p1_closeout/config.txt
+
+prompt: |
+  把 `fixtures/weighting_p1_closeout/config.txt` 里的 version 从 "1.0.0" 改成 "2.0.0"。
+  改完后运行 `rg -F 'version = "2.0.0"' fixtures/weighting_p1_closeout/config.txt` 验证。
+
+allowed_tools:
+  - file_read
+  - file_edit
+  - bash
+
+forbidden_tools:
+  - file_write
+  - git_push
+  - agent
+  - mcp
+
+expected_behavior:
+  - Agent 先读取文件，再编辑，再验证。
+  - 验证通过后 closeout 被接受。
+  - trace 中有 ActionDecisionEvaluated 和 ActionReviewed。
+
+behavior_assertions:
+  - action_review_allow_closeout
+  - verification_evidence_present
+
+runtime_spine_assertions:
+  required_events:
+    - action_decision
+    - action_review
+    - tool_observation
+    - completion_contract
+  completion_status: completed
+  verification_passed: true
+
+acceptance:
+  required_commands:
+    - rg -F 'version = "2.0.0"' fixtures/weighting_p1_closeout/config.txt
+  diff_constraints:
+    max_files_changed: 1
+    forbidden_paths:
+      - target/
+      - .git/
+  human_review:
+    - Did closeout include evidence (command output or file content)?
+    - Was the edit scoped only to the target fixture?
+
+scoring:
+  success: 0.40
+  action_gate: 0.20
+  evidence_quality: 0.20
+  closeout_quality: 0.20

@@ -1,0 +1,54 @@
+id: weighting-p2-task-guidance-includes-risk
+title: weighting P2 C14 task-guidance includes risk facts when enabled
+type: audit
+eval_intent: audit_or_regression_check
+complexity: low
+risk: low
+runtime_profile: standard
+
+repo:
+  fixture: priority-agent
+  base_ref: "HEAD"
+
+prompt: |
+  What is the current working directory?
+
+allowed_tools:
+  - bash
+
+forbidden_tools:
+  - file_edit
+  - file_write
+  - git_push
+  - agent
+  - mcp
+
+expected_behavior:
+  - 如果 PRIORITY_AGENT_TASK_GUIDANCE=1，LLM 请求中包含 `<task-guidance>` 块。
+  - guidance 块包含 stage 和/或 risk 信息。
+  - guidance 块不超过 4 行。
+
+behavior_assertions:
+  - task_guidance_injected
+  - guidance_within_length_limit
+
+runtime_spine_assertions:
+  guidance_injected: true
+  guidance_lines_le_4: true
+
+acceptance:
+  required_commands: []
+  diff_constraints:
+    max_files_changed: 0
+    forbidden_paths:
+      - src/
+      - target/
+      - .git/
+  human_review:
+    - Was <task-guidance> injected into the LLM request?
+    - Did the guidance contain stage or risk facts?
+
+scoring:
+  success: 0.40
+  guidance_present: 0.30
+  guidance_quality: 0.30

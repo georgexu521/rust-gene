@@ -1,0 +1,66 @@
+id: weighting-p1-memory-recall-budget-capped
+title: weighting P1 C8 memory recall does not overflow context budget
+type: audit
+eval_intent: audit_or_regression_check
+complexity: medium
+risk: low
+runtime_profile: standard
+
+repo:
+  fixture: priority-agent
+  base_ref: "HEAD"
+
+prompt: |
+  Tell me everything you know about this project's conventions, preferences,
+  and tool usage patterns. Use your memory to give a complete picture.
+
+allowed_tools:
+  - memory_load
+  - file_read
+  - bash
+
+forbidden_tools:
+  - file_edit
+  - file_write
+  - memory_save
+  - git_push
+  - agent
+  - mcp
+
+expected_behavior:
+  - Agent loads memory and reports conventions/preferences.
+  - MemoryRecallScored trace event shows items retrieved and budget controls.
+  - Total injected items <= 5 (budget capped).
+  - Closeout references actual memory evidence.
+
+behavior_assertions:
+  - memory_recall_scored_trace_present
+  - recall_budget_not_exceeded
+  - evidence_based_answer
+
+runtime_spine_assertions:
+  required_events:
+    - memory_recall
+    - completion_contract
+  memory_recall_scored: true
+  budget_exhausted_tracked: true
+
+acceptance:
+  required_commands: []
+  harness_commands:
+    - test -f /Users/georgexu/.priority-agent/MEMORY.md
+  diff_constraints:
+    max_files_changed: 0
+    forbidden_paths:
+      - src/
+      - target/
+      - .git/
+  human_review:
+    - Did the agent report factually from memory evidence?
+    - Did MemoryRecallScored show injected <= 5?
+
+scoring:
+  success: 0.30
+  memory_recall: 0.35
+  budget_control: 0.20
+  evidence_quality: 0.15

@@ -1,0 +1,49 @@
+id: weighting-p2-task-guidance-default-off
+title: weighting P2 C15 task-guidance is not injected by default
+type: audit
+eval_intent: audit_or_regression_check
+complexity: low
+risk: low
+runtime_profile: standard
+
+repo:
+  fixture: priority-agent
+  base_ref: "HEAD"
+
+prompt: |
+  List the files in the current directory.
+
+allowed_tools:
+  - bash
+
+forbidden_tools:
+  - file_edit
+  - file_write
+  - git_push
+  - agent
+  - mcp
+
+expected_behavior:
+  - PRIORITY_AGENT_TASK_GUIDANCE 未设置时，LLM 请求中不包含 `<task-guidance>` 块。
+  - 场景可以正常完成，不会有 guidance 导致的 token 浪费。
+
+behavior_assertions:
+  - no_task_guidance_injected
+
+runtime_spine_assertions:
+  guidance_injected: false
+
+acceptance:
+  required_commands: []
+  diff_constraints:
+    max_files_changed: 0
+    forbidden_paths:
+      - src/
+      - target/
+      - .git/
+  human_review:
+    - Was <task-guidance> absent from the LLM request?
+
+scoring:
+  success: 0.60
+  no_false_guidance: 0.40

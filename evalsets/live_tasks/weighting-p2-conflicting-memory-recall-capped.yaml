@@ -1,0 +1,65 @@
+id: weighting-p2-conflicting-memory-recall-capped
+title: weighting P2 C9 conflicting memories are recalled as ConflictCapped
+type: audit
+eval_intent: audit_or_regression_check
+complexity: medium
+risk: low
+runtime_profile: standard
+
+repo:
+  fixture: priority-agent
+  base_ref: "HEAD"
+
+prompt: |
+  What is the project convention for the preferred language in CLI output?
+  Search your memory and report what you find, including any conflicts.
+
+allowed_tools:
+  - memory_load
+  - file_read
+  - bash
+
+forbidden_tools:
+  - file_edit
+  - file_write
+  - memory_save
+  - git_push
+  - agent
+  - mcp
+
+expected_behavior:
+  - Agent 从记忆中发现可能存在冲突的语言偏好。
+  - MemoryRecallScored trace 显示 conflict_capped >= 1。
+  - 冲突记忆不进入 Inject 决策（score < 0.50）。
+  - Agent 如实报告冲突，不做强行选择。
+
+behavior_assertions:
+  - memory_recall_conflict_capped
+  - conflict_reported_honestly
+
+runtime_spine_assertions:
+  required_events:
+    - memory_recall
+    - completion_contract
+  memory_recall_scored: true
+  conflict_capped_seen: true
+
+acceptance:
+  required_commands: []
+  harness_commands:
+    - test -f /Users/georgexu/.priority-agent/MEMORY.md
+  diff_constraints:
+    max_files_changed: 0
+    forbidden_paths:
+      - src/
+      - target/
+      - .git/
+  human_review:
+    - Was any memory conflict detected and reported?
+    - Did conflict_capped entries stay out of Inject?
+
+scoring:
+  success: 0.30
+  memory_conflict: 0.35
+  honesty: 0.20
+  closeout_quality: 0.15
