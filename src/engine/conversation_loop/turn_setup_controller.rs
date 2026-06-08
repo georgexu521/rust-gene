@@ -62,6 +62,8 @@ impl TurnSetupController {
             IntentRouter::new().route_with_learning(&last_user_preview, &learning_events);
         // Shadow diagnostics: record all matching heuristic candidates (gated by env var)
         IntentRouter::new().record_route_candidates(&last_user_preview, &trace);
+        // LLM-assisted routing shadow: flag low-confidence routes (P4)
+        crate::engine::intent_router::record_llm_route_shadow(&route, &last_user_preview, &trace);
         Self::apply_unfinished_route_continuation(
             &mut route,
             &last_user_preview,

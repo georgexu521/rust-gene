@@ -108,6 +108,51 @@ impl IntentRoute {
 #[derive(Debug, Default, Clone)]
 pub struct IntentRouter;
 
+/// Shadow LLM-assisted routing: when deterministic confidence is low,
+/// record a hint in trace that LLM assistance could help. Does not change
+/// the actual route. Gated by PRIORITY_AGENT_LLM_ROUTE_SHADOW=1.
+///
+/// This is P4 from docs/ROUTING_AND_CONTEXT_ANALYSIS_2026-06-08.md.
+/// Only activates when deterministic routing confidence < 0.4.
+pub fn record_llm_route_shadow(
+    route: &IntentRoute,
+    user_message: &str,
+    trace: &crate::engine::trace::TraceCollector,
+) {
+    if !llm_route_shadow_enabled() {
+        return;
+    }
+    if route.confidence >= 0.4 {
+        return; // confidence is fine, no shadow needed
+    }
+    // Record that deterministic routing had low confidence here.
+    // In a future iteration, this is where we'd inject a hint into the LLM
+    // prompt asking for intent classification. For now, just trace.
+    trace.record(crate::engine::trace::TraceEvent::RouteCandidateEvaluated {
+        intent: format!("llm_shadow:{:?}", route.intent),
+        confidence: route.confidence,
+        matched_signals: vec![format!(
+            "low_confidence_deterministic={:.2}",
+            route.confidence
+        )],
+        reason: format!(
+            "deterministic routing produced low-confidence route for: {}",
+            user_message.chars().take(80).collect::<String>()
+        ),
+    });
+}
+
+fn llm_route_shadow_enabled() -> bool {
+    matches!(
+        std::env::var("PRIORITY_AGENT_LLM_ROUTE_SHADOW")
+            .unwrap_or_default()
+            .trim()
+            .to_ascii_lowercase()
+            .as_str(),
+        "1" | "true" | "yes" | "on"
+    )
+}
+
 fn route_diagnostics_enabled() -> bool {
     matches!(
         std::env::var("PRIORITY_AGENT_ROUTE_DIAGNOSTICS")
