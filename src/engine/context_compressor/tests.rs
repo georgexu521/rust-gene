@@ -636,6 +636,7 @@ impl LlmProvider for CapturingLlmProvider {
 
 #[tokio::test]
 async fn test_compress_async_with_llm_success() {
+    std::env::set_var("PRIORITY_AGENT_LLM_COMPACTION", "1");
     let summary_text = "## Goal\nTest goal\n\n## Constraints\n\n## Progress\n\n## Key Decisions\n\n## Relevant Files\n\n## Next Steps\n\n## Critical Context\n\n## Tools & Patterns\n";
     let provider = std::sync::Arc::new(MockLlmProvider {
         response: Some(summary_text.to_string()),
@@ -681,6 +682,7 @@ async fn test_compress_async_with_llm_success() {
 
 #[tokio::test]
 async fn llm_summary_request_reuses_main_agent_stable_prefix() {
+    std::env::set_var("PRIORITY_AGENT_LLM_COMPACTION", "1");
     let summary_text = "## Goal\nTest goal\n\n## Constraints\n\n## Progress\n\n## Key Decisions\n\n## Relevant Files\n\n## Next Steps\n\n## Critical Context\n\n## Tools & Patterns\n";
     let provider = std::sync::Arc::new(CapturingLlmProvider {
         requests: std::sync::Mutex::new(Vec::new()),
@@ -706,12 +708,13 @@ async fn llm_summary_request_reuses_main_agent_stable_prefix() {
     ));
     assert!(matches!(
         &requests[0].messages[1],
-        Message::User { content } if content.contains("Summarize this conversation")
+        Message::User { content } if content.contains("Create a new anchored summary")
     ));
 }
 
 #[tokio::test]
 async fn llm_summary_prefix_from_messages_skips_dynamic_context_zones() {
+    std::env::set_var("PRIORITY_AGENT_LLM_COMPACTION", "1");
     let summary_text = "## Goal\nTest goal\n\n## Constraints\n\n## Progress\n\n## Key Decisions\n\n## Relevant Files\n\n## Next Steps\n\n## Critical Context\n\n## Tools & Patterns\n";
     let provider = std::sync::Arc::new(CapturingLlmProvider {
         requests: std::sync::Mutex::new(Vec::new()),

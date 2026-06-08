@@ -197,7 +197,7 @@ mod tests {
         let profile = ModelContextProfile::detect("https://api.minimaxi.com/v1", "MiniMax-M3");
         assert_eq!(profile.provider_family, ProviderProtocolFamily::MiniMax);
         assert_eq!(profile.context_window_tokens, 1_000_000);
-        assert_eq!(profile.reserved_output_tokens, 20_000);
+        assert_eq!(profile.reserved_output_tokens, 24_000);
         assert!(profile.auto_compact_threshold_tokens < profile.effective_context_window_tokens());
     }
 
