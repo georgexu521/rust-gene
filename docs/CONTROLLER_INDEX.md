@@ -120,3 +120,28 @@ post-merge module names; archived docs may still mention older controllers.
 | `text_sanitizer` | Visible text sanitization | response/final rendering |
 | `turn_recording` | Turn recording helpers | turn lifecycle |
 | `step_executor` | Real workflow step execution bridge | workflow/runtime flow |
+
+## Module Rename Map (2026-06-09 merge)
+
+When reading older docs, map these stale names to the current module:
+
+| Old Name | Current Location |
+|----------|-----------------|
+| `turn_loop_state_controller` | `turn_state` |
+| `turn_runtime_state` | `turn_state` |
+| `turn_runtime_context` | `turn_state` |
+| `iteration_budget_controller` | inlined in `tool_round_controller` |
+| `tool_exposure_plan` | inlined in `turn_iteration_setup_controller` |
+| `session_goal_controller` | inlined in `turn_entry_gate_controller` |
+| `task_context_trace_controller` | inlined in `turn_entry_gate_controller` |
+| `turn_runtime_diet_bootstrap_controller` | inlined in `turn_loop_bootstrap_controller` |
+| `retrieval_context_builder` | inlined in `turn_retrieval_context_controller` |
+| `retrieval_prompt_controller` | inlined in `turn_request_bootstrap_controller` |
+| `turn_tool_round_outcome_controller` | inlined in `turn_tool_round_step_controller` |
+| `turn_tool_failure_followup_controller` | inlined in `tool_failure_guided_debugging` |
+| `tool_failure_stop_controller` | deleted (test-only, no production refs) |
+| `turn_post_change_closeout_controller` | inlined in `turn_iteration_controller` |
+| `runtime_timeouts` | renamed to `request_timeouts` |
+| `main_loop_profile` | `turn_loop_policy` |
+| `force_summary` | `turn_loop_policy` |
+| `closeout_controller` | dir module: `closeout_controller/mod.rs` + `tests.rs` |
