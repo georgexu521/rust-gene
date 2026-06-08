@@ -1,21 +1,22 @@
+use super::post_change_workflow_controller::{
+    PostChangeWorkflowContext, PostChangeWorkflowController,
+};
+use super::tool_failure_guided_debugging::{
+    TurnToolFailureFollowupContext, TurnToolFailureFollowupController,
+};
 use super::turn_focused_repair_flow_controller::{
     TurnFocusedRepairFlow, TurnFocusedRepairFlowContext, TurnFocusedRepairFlowController,
+};
+use super::turn_iteration_closeout_controller::{
+    TurnIterationCloseoutContext, TurnIterationCloseoutController,
 };
 use super::turn_iteration_setup_controller::{
     TurnIterationSetupContext, TurnIterationSetupController, TurnIterationSetupFlow,
 };
-use super::turn_loop_state_controller::TurnLoopState;
 use super::turn_model_step_controller::{
     TurnModelStepContext, TurnModelStepController, TurnModelStepFlow,
 };
-use super::turn_post_change_closeout_controller::{
-    TurnPostChangeCloseoutContext, TurnPostChangeCloseoutController, TurnPostChangeCloseoutFlow,
-};
-use super::turn_runtime_context::TurnRuntimeContext;
-use super::turn_runtime_state::TurnRuntimeState;
-use super::turn_tool_failure_followup_controller::{
-    TurnToolFailureFollowupContext, TurnToolFailureFollowupController,
-};
+use super::turn_state::{TurnLoopState, TurnRuntimeContext, TurnRuntimeState};
 use super::turn_tool_round_step_controller::{
     TurnToolRoundStepContext, TurnToolRoundStepController,
 };
@@ -35,6 +36,80 @@ use crate::engine::trace::{TraceCollector, TraceEvent};
 use crate::services::api::{Message, Tool};
 use crate::tools::ToolContextRetainedContext;
 use std::collections::HashSet;
+
+enum TurnPostChangeCloseoutFlow {
+    Continue,
+    Break,
+}
+
+struct TurnPostChangeCloseoutContext<'a> {
+    conversation: &'a ConversationLoop,
+    trace: &'a TraceCollector,
+    route: &'a IntentRoute,
+    code_workflow: &'a mut CodeChangeWorkflowRunner,
+    task_bundle: &'a mut TaskContextBundle,
+    round_state: &'a mut super::turn_tool_round_step_controller::TurnToolRoundState,
+    required_validation_commands: &'a [String],
+    successful_required_validation_commands: &'a mut HashSet<String>,
+    turn_state: &'a mut TurnRuntimeState,
+    final_content: &'a mut String,
+    messages: &'a mut Vec<Message>,
+    last_user_preview: &'a str,
+}
+
+struct TurnPostChangeCloseoutController;
+
+impl TurnPostChangeCloseoutController {
+    async fn run(context: TurnPostChangeCloseoutContext<'_>) -> TurnPostChangeCloseoutFlow {
+        let post_change_workflow = PostChangeWorkflowController::run(PostChangeWorkflowContext {
+            conversation: context.conversation,
+            trace: context.trace,
+            route: context.route,
+            code_workflow: context.code_workflow,
+            task_bundle: context.task_bundle,
+            changed_files: &context.round_state.changed_files,
+            required_validation_commands: context.required_validation_commands,
+            successful_validation_commands: &context.round_state.successful_validation_commands,
+            successful_required_validation_commands: context
+                .successful_required_validation_commands,
+            turn_state: context.turn_state,
+            should_closeout_after_verified_change: context
+                .round_state
+                .should_closeout_after_verified_change,
+            final_content: &mut *context.final_content,
+            tool_results_text: &mut context.round_state.tool_results_text,
+            messages: &mut *context.messages,
+            last_user_preview: context.last_user_preview,
+        })
+        .await;
+
+        context.round_state.should_closeout_after_verified_change =
+            post_change_workflow.should_closeout_after_verified_change;
+
+        if post_change_workflow.break_loop {
+            return TurnPostChangeCloseoutFlow::Break;
+        }
+
+        let iteration_closeout =
+            TurnIterationCloseoutController::run(TurnIterationCloseoutContext {
+                conversation: context.conversation,
+                trace: context.trace,
+                messages: &*context.messages,
+                final_content: &*context.final_content,
+                tool_results_text: &context.round_state.tool_results_text,
+                should_closeout_after_verified_change: context
+                    .round_state
+                    .should_closeout_after_verified_change,
+            })
+            .await;
+
+        if iteration_closeout.break_loop {
+            TurnPostChangeCloseoutFlow::Break
+        } else {
+            TurnPostChangeCloseoutFlow::Continue
+        }
+    }
+}
 use std::path::{Path, PathBuf};
 use tokio::sync::mpsc;
 
@@ -294,7 +369,7 @@ fn record_stop_check(
     trace: &TraceCollector,
     task_bundle: &mut TaskContextBundle,
     turn_state: &TurnRuntimeState,
-    tool_round_state: &super::turn_tool_round_outcome_controller::TurnToolRoundState,
+    tool_round_state: &super::turn_tool_round_step_controller::TurnToolRoundState,
     exposed_tool_count: usize,
     selected_tool_calls: usize,
     force_patch_synthesis_after_no_change: bool,
@@ -429,7 +504,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::super::turn_loop_state_controller::TurnLoopStateController;
+    use super::super::turn_state::TurnLoopStateController;
     use super::*;
     use crate::engine::destructive_scope::DestructiveScopeContract;
     use crate::engine::intent_router::{
@@ -560,7 +635,7 @@ mod tests {
         };
         let mut task_bundle = TaskContextBundle::new("fix slugify", ".", route, None);
         let turn_state = TurnRuntimeState::new(true);
-        let round_state = super::super::turn_tool_round_outcome_controller::TurnToolRoundState {
+        let round_state = super::super::turn_tool_round_step_controller::TurnToolRoundState {
             tool_results_text: String::new(),
             changed_files: Vec::new(),
             batch_has_unsuccessful_tools: false,
@@ -606,7 +681,7 @@ mod tests {
         let mut turn_state = TurnRuntimeState::new(true);
         turn_state.focused_repair.no_code_progress_rounds = 2;
         turn_state.focused_repair.action_checkpoint_active = true;
-        let round_state = super::super::turn_tool_round_outcome_controller::TurnToolRoundState {
+        let round_state = super::super::turn_tool_round_step_controller::TurnToolRoundState {
             tool_results_text: String::new(),
             changed_files: Vec::new(),
             batch_has_unsuccessful_tools: false,
@@ -671,6 +746,94 @@ mod tests {
                 selected_tool_calls: 1,
                 ..
             } if stage_before == "Understand" && stage_after == "Understand"
+        )));
+    }
+
+    fn round_state(
+        should_closeout_after_verified_change: bool,
+    ) -> super::super::turn_tool_round_step_controller::TurnToolRoundState {
+        use std::path::PathBuf;
+        super::super::turn_tool_round_step_controller::TurnToolRoundState {
+            tool_results_text: "tool output".to_string(),
+            changed_files: Vec::<PathBuf>::new(),
+            batch_has_unsuccessful_tools: false,
+            used_write_tool: false,
+            successful_write_tool: false,
+            used_action_checkpoint_lookup: false,
+            any_tool_success: false,
+            repeated_failed_tools: Vec::new(),
+            failed_tool_names_this_round: Vec::new(),
+            failed_tool_evidence: Vec::new(),
+            file_edit_failure_correction_added: false,
+            successful_validation_commands: Vec::new(),
+            duplicate_successful_read_only_tools: Vec::new(),
+            should_closeout_after_verified_change,
+        }
+    }
+
+    async fn run_no_change_closeout(
+        round_state: &mut super::super::turn_tool_round_step_controller::TurnToolRoundState,
+        trace: &TraceCollector,
+    ) -> TurnPostChangeCloseoutFlow {
+        let conversation = conversation(ChatResponse {
+            content: String::new(),
+            tool_calls: None,
+            usage: None,
+            tool_call_repair: None,
+        });
+        let route = IntentRouter::new().route("finish the change");
+        let mut task_bundle = TaskContextBundle::new("finish the change", ".", route.clone(), None);
+        let mut code_workflow = CodeChangeWorkflowRunner::new(&task_bundle);
+        let mut successful_required_validation_commands = HashSet::new();
+        let mut turn_state = TurnRuntimeState::new(true);
+        let mut final_content = "done".to_string();
+        let mut messages = vec![Message::user("finish the change")];
+        let required_validation_commands = Vec::new();
+
+        TurnPostChangeCloseoutController::run(TurnPostChangeCloseoutContext {
+            conversation: &conversation,
+            trace,
+            route: &route,
+            code_workflow: &mut code_workflow,
+            task_bundle: &mut task_bundle,
+            round_state,
+            required_validation_commands: &required_validation_commands,
+            successful_required_validation_commands: &mut successful_required_validation_commands,
+            turn_state: &mut turn_state,
+            final_content: &mut final_content,
+            messages: &mut messages,
+            last_user_preview: "finish the change",
+        })
+        .await
+    }
+
+    #[tokio::test]
+    async fn no_changed_files_continue_without_closeout_flag() {
+        let trace = TraceCollector::new(TurnTrace::new("session", 1, "finish the change"));
+        let mut round_state = round_state(false);
+
+        let flow = run_no_change_closeout(&mut round_state, &trace).await;
+
+        assert!(matches!(flow, TurnPostChangeCloseoutFlow::Continue));
+        assert!(!round_state.should_closeout_after_verified_change);
+        assert_eq!(round_state.tool_results_text, "tool output");
+    }
+
+    #[tokio::test]
+    async fn no_changed_files_break_when_closeout_flag_already_set() {
+        let trace = TraceCollector::new(TurnTrace::new("session", 1, "finish the change"));
+        let mut round_state = round_state(true);
+
+        let flow = run_no_change_closeout(&mut round_state, &trace).await;
+
+        assert!(matches!(flow, TurnPostChangeCloseoutFlow::Break));
+        assert!(round_state.should_closeout_after_verified_change);
+
+        let finished = trace.finish(TurnStatus::Completed);
+        assert!(finished.events.iter().any(|event| matches!(
+            event,
+            TraceEvent::WorkflowFallback { error }
+                if error == "verified code change passed validation; preparing deterministic closeout"
         )));
     }
 }

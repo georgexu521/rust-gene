@@ -1,11 +1,7 @@
-use super::turn_loop_state_controller::{TurnLoopState, TurnLoopStateController};
 use super::turn_request_bootstrap_controller::{
     TurnRequestBootstrapContext, TurnRequestBootstrapController,
 };
-use super::turn_runtime_diet_bootstrap_controller::{
-    TurnRuntimeDietBootstrapContext, TurnRuntimeDietBootstrapController,
-};
-use super::turn_runtime_state::TurnRuntimeState;
+use super::turn_state::{TurnLoopState, TurnLoopStateController, TurnRuntimeState};
 use super::ConversationLoop;
 use crate::engine::conversation_loop::main_loop_profile::MainLoopProfile;
 use crate::engine::intent_router::IntentRoute;
@@ -15,6 +11,40 @@ use crate::engine::trace::TraceCollector;
 use crate::services::api::{Message, Tool};
 use std::path::Path;
 use tokio::sync::mpsc;
+
+// ---------------------------------------------------------------------------
+// TurnRuntimeDietBootstrap
+// ---------------------------------------------------------------------------
+
+struct TurnRuntimeDietBootstrapContext<'a> {
+    retrieval_context: Option<&'a RetrievalContext>,
+    tools: &'a [Tool],
+    working_dir: &'a Path,
+    runtime_diet: &'a mut crate::engine::conversation_loop::runtime_diet::RuntimeDietSnapshot,
+}
+
+struct TurnRuntimeDietBootstrapController;
+
+impl TurnRuntimeDietBootstrapController {
+    fn observe(context: TurnRuntimeDietBootstrapContext<'_>) {
+        if let Some(retrieval_context) = context.retrieval_context {
+            context
+                .runtime_diet
+                .observe_retrieval_context(retrieval_context);
+        }
+        if Self::skills_list_exposed(context.tools) {
+            let skill_summary =
+                crate::skills::SkillRuntime::load(context.working_dir).discovery_summary("", 30);
+            context
+                .runtime_diet
+                .observe_skill_list_summary(&skill_summary);
+        }
+    }
+
+    fn skills_list_exposed(tools: &[Tool]) -> bool {
+        tools.iter().any(|tool| tool.name == "skills_list")
+    }
+}
 
 pub(super) struct TurnLoopBootstrapContext<'a> {
     pub(super) conversation: &'a ConversationLoop,
@@ -166,5 +196,70 @@ mod tests {
             turn_state.runtime_diet.exposed_tools,
             bootstrap.base_tools.len()
         );
+    }
+
+    fn tool(name: &str) -> Tool {
+        Tool {
+            name: name.to_string(),
+            description: "tool".to_string(),
+            parameters: serde_json::json!({}),
+            strict_schema: false,
+        }
+    }
+
+    #[test]
+    fn observe_records_retrieval_context_budget() {
+        use super::super::runtime_diet::RuntimeDietSnapshot;
+        use crate::engine::intent_router::RetrievalPolicy;
+        use tempfile::tempdir;
+
+        let mut runtime_diet = RuntimeDietSnapshot::new(true);
+        let retrieval_context = RetrievalContext::from_memory_prefetch(
+            "fix bug",
+            "remember to run cargo test",
+            RetrievalPolicy::Memory,
+        )
+        .expect("memory context");
+        let tmp = tempdir().expect("tempdir");
+
+        TurnRuntimeDietBootstrapController::observe(TurnRuntimeDietBootstrapContext {
+            retrieval_context: Some(&retrieval_context),
+            tools: &[tool("file_read")],
+            working_dir: tmp.path(),
+            runtime_diet: &mut runtime_diet,
+        });
+
+        assert_eq!(runtime_diet.retrieval_items, 1);
+        assert!(runtime_diet.retrieval_tokens > 0);
+        assert_eq!(runtime_diet.skill_list_chars, 0);
+    }
+
+    #[test]
+    fn observe_records_skill_summary_only_when_tool_is_exposed() {
+        use super::super::runtime_diet::RuntimeDietSnapshot;
+        use tempfile::tempdir;
+
+        let tmp = tempdir().expect("tempdir");
+        let mut without_skill_tool = RuntimeDietSnapshot::new(true);
+
+        TurnRuntimeDietBootstrapController::observe(TurnRuntimeDietBootstrapContext {
+            retrieval_context: None,
+            tools: &[tool("file_read")],
+            working_dir: tmp.path(),
+            runtime_diet: &mut without_skill_tool,
+        });
+
+        assert_eq!(without_skill_tool.skill_list_chars, 0);
+
+        let mut with_skill_tool = RuntimeDietSnapshot::new(true);
+        TurnRuntimeDietBootstrapController::observe(TurnRuntimeDietBootstrapContext {
+            retrieval_context: None,
+            tools: &[tool("skills_list")],
+            working_dir: tmp.path(),
+            runtime_diet: &mut with_skill_tool,
+        });
+
+        assert!(with_skill_tool.skill_list_chars > 0);
+        assert!(with_skill_tool.skill_list_tokens > 0);
     }
 }

@@ -4,7 +4,7 @@ use super::api_request_controller::{
 use super::assistant_response_retry_controller::{
     AssistantResponseRetryController, NoToolAssistantResponseContext, NoToolAssistantResponseFlow,
 };
-use super::turn_loop_state_controller::TurnLoopState;
+use super::turn_state::TurnLoopState;
 use crate::engine::evidence_ledger::EvidenceLedger;
 use crate::engine::intent_router::IntentRoute;
 use crate::engine::streaming::StreamEvent;
@@ -95,7 +95,7 @@ impl TurnAssistantResponseController {
 #[cfg(test)]
 mod tests {
     use super::super::session_processor::{SessionStepResult, SessionStepSource};
-    use super::super::turn_loop_state_controller::TurnLoopStateController;
+    use super::super::turn_state::TurnLoopStateController;
     use super::*;
     use crate::engine::intent_router::IntentRouter;
     use crate::engine::trace::{TraceEvent, TurnStatus, TurnTrace};

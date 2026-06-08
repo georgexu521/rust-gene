@@ -1,8 +1,8 @@
 use super::turn_iteration_controller::{
     TurnIterationContext, TurnIterationController, TurnIterationFlow,
 };
-use super::turn_loop_state_controller::TurnLoopState;
-use super::turn_runtime_state::TurnRuntimeState;
+use super::turn_state::TurnLoopState;
+use super::turn_state::TurnRuntimeState;
 use super::workflow_change_tracker::WorkflowChangeTracker;
 use super::ConversationLoop;
 use crate::engine::code_change_workflow::CodeChangeWorkflowRunner;
@@ -127,7 +127,7 @@ impl TurnIterationLoopController {
 
 #[cfg(test)]
 mod tests {
-    use super::super::turn_loop_state_controller::TurnLoopStateController;
+    use super::super::turn_state::TurnLoopStateController;
     use super::*;
     use crate::engine::destructive_scope::DestructiveScopeContract;
     use crate::engine::intent_router::IntentRouter;

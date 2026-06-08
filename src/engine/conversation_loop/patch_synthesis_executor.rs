@@ -2,7 +2,7 @@ use super::tool_execution_controller::{
     ToolExecutionBatch, ToolExecutionContext, ToolExecutionController, ToolExecutionRequest,
 };
 use super::tool_turn_controller::{ToolTurnAppendContext, ToolTurnController};
-use super::turn_runtime_state::TurnRuntimeState;
+use super::turn_state::TurnRuntimeState;
 use super::workflow_change_tracker::WorkflowChangeTracker;
 use super::ConversationLoop;
 use crate::engine::destructive_scope::DestructiveScopeContract;

@@ -2,7 +2,7 @@ use super::action_checkpoint::{
     ProgressCheckpointAction, ProgressCheckpointActionApplier, ProgressCheckpointActionContext,
     ProgressCheckpointController, ProgressCheckpointRequest,
 };
-use super::turn_runtime_state::FocusedRepairRuntimeState;
+use super::turn_state::FocusedRepairRuntimeState;
 use super::ConversationLoop;
 use crate::engine::code_change_workflow::CodeChangeWorkflowRunner;
 use crate::engine::intent_router::WorkflowKind;

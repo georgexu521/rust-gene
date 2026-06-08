@@ -3,8 +3,8 @@ use super::focused_repair_state_controller::FocusedRepairStateOutcome;
 use super::patch_synthesis_flow_controller::{
     PatchSynthesisFlowController, PatchSynthesisProposalContext, PatchSynthesisProposalFlow,
 };
-use super::turn_runtime_state::FocusedRepairRuntimeState;
-use super::turn_tool_round_outcome_controller::TurnToolRoundState;
+use super::turn_state::FocusedRepairRuntimeState;
+use super::turn_tool_round_step_controller::TurnToolRoundState;
 use super::ConversationLoop;
 use crate::engine::trace::TraceCollector;
 use crate::services::api::Message;
@@ -73,7 +73,7 @@ impl TurnFocusedRepairActionController {
 #[cfg(test)]
 mod tests {
     use super::super::action_checkpoint::ProgressCheckpointAction;
-    use super::super::turn_tool_round_outcome_controller::TurnToolRoundState;
+    use super::super::turn_tool_round_step_controller::TurnToolRoundState;
     use super::*;
     use crate::engine::trace::{TraceEvent, TurnStatus, TurnTrace};
     use std::path::PathBuf;

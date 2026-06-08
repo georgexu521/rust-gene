@@ -1,11 +1,36 @@
-use super::tool_exposure_plan::{ToolExposurePlan, ToolExposureRequest};
-use super::turn_runtime_state::TurnRuntimeState;
+use super::turn_state::TurnRuntimeState;
 use crate::memory::MemoryManager;
-use crate::services::api::Tool;
-use std::collections::HashMap;
+use crate::services::api::{Message, Tool};
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tracing::debug;
+
+pub(super) struct ToolExposureRequest<'a> {
+    pub(super) base_tools: &'a [Tool],
+}
+
+pub(super) struct ToolExposurePlan {
+    pub(super) tools: Vec<Tool>,
+    pub(super) exposed_tool_names: HashSet<String>,
+    pub(super) focused_repair_prompt: Option<Message>,
+}
+
+impl ToolExposurePlan {
+    pub(super) fn build(request: ToolExposureRequest<'_>) -> Self {
+        let tools = request.base_tools.to_vec();
+        let exposed_tool_names = tools
+            .iter()
+            .map(|tool| tool.name.clone())
+            .collect::<HashSet<_>>();
+
+        Self {
+            tools,
+            exposed_tool_names,
+            focused_repair_prompt: None,
+        }
+    }
+}
 
 pub(super) struct TurnIterationSetupContext<'a> {
     pub(super) iteration: usize,
@@ -164,5 +189,32 @@ mod tests {
         assert!(exposure_plan.exposed_tool_names.contains("grep"));
         assert!(!exposure_plan.exposed_tool_names.contains("file_edit"));
         assert!(!exposure_plan.exposed_tool_names.contains("bash"));
+    }
+
+    #[test]
+    fn build_exposes_the_base_tools_without_runtime_scoping() {
+        let base_tools = vec![
+            tool("file_write"),
+            tool("file_edit"),
+            tool("file_patch"),
+            tool("file_read"),
+            tool("grep"),
+            tool("bash"),
+            tool("run_tests"),
+            tool("start_dev_server"),
+            tool("install_dependencies"),
+            tool("git_status"),
+            tool("git_diff"),
+        ];
+
+        let plan = ToolExposurePlan::build(ToolExposureRequest {
+            base_tools: &base_tools,
+        });
+
+        assert_eq!(plan.tools.len(), base_tools.len());
+        for tool in &base_tools {
+            assert!(plan.exposed_tool_names.contains(&tool.name));
+        }
+        assert!(plan.focused_repair_prompt.is_none());
     }
 }

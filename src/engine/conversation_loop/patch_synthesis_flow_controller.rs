@@ -6,7 +6,7 @@ use super::focused_repair_recovery::{
 use super::focused_repair_state_controller::FocusedRepairStateController;
 use super::patch_recovery::{PatchSynthesisOutcome, PatchSynthesisSource};
 use super::patch_synthesis_executor::{PatchSynthesisExecutionContext, PatchSynthesisExecutor};
-use super::turn_runtime_state::{FocusedRepairRuntimeState, TurnRuntimeState};
+use super::turn_state::{FocusedRepairRuntimeState, TurnRuntimeState};
 use super::ConversationLoop;
 use crate::engine::destructive_scope::DestructiveScopeContract;
 use crate::engine::resource_policy::ResourcePolicy;

@@ -6,8 +6,8 @@ use super::turn_api_failure_controller::{TurnApiFailureContext, TurnApiFailureCo
 use super::turn_assistant_response_controller::{
     TurnAssistantResponseContext, TurnAssistantResponseController, TurnAssistantResponseFlow,
 };
-use super::turn_loop_state_controller::TurnLoopState;
-use super::turn_runtime_state::TurnRuntimeState;
+use super::turn_state::TurnLoopState;
+use super::turn_state::TurnRuntimeState;
 use super::ConversationLoop;
 use crate::engine::action_decision::ActionDecisionInput;
 use crate::engine::candidate_action::{
@@ -285,7 +285,7 @@ fn candidate_gate_triggered(task_bundle: &TaskContextBundle) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::super::turn_loop_state_controller::TurnLoopStateController;
+    use super::super::turn_state::TurnLoopStateController;
     use super::*;
     use crate::engine::intent_router::IntentRouter;
     use crate::engine::trace::{TraceEvent, TurnStatus, TurnTrace};

@@ -2,7 +2,7 @@ use super::post_edit_verification_controller::PostEditVerificationOutcome;
 use super::repair_controller::{
     AcceptanceRepairContext, GuidedValidationDebuggingContext, VerificationRepairContext,
 };
-use super::turn_runtime_state::{FocusedRepairRuntimeState, TurnRuntimeState};
+use super::turn_state::{FocusedRepairRuntimeState, TurnRuntimeState};
 use super::workflow_trace::{apply_workflow_feedback_and_trace, trace_stage_validation};
 use super::ConversationLoop;
 use crate::engine::code_change_workflow::CodeChangeWorkflowRunner;

@@ -6,7 +6,7 @@ use super::post_edit_verification_controller::{
     PostEditVerificationContext, PostEditVerificationController,
 };
 use super::safe_prefix_by_bytes;
-use super::turn_runtime_state::TurnRuntimeState;
+use super::turn_state::TurnRuntimeState;
 use super::validation_runner::RequiredValidationController;
 use super::ConversationLoop;
 use crate::engine::code_change_workflow::{is_programming_workflow, CodeChangeWorkflowRunner};

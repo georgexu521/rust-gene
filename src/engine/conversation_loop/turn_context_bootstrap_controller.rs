@@ -1,7 +1,7 @@
 use super::turn_retrieval_context_controller::{
     TurnRetrievalContextController, TurnRetrievalContextRequest,
 };
-use super::turn_runtime_state::TurnRuntimeState;
+use super::turn_state::TurnRuntimeState;
 use super::turn_task_context_controller::{
     TurnTaskContextSetupContext, TurnTaskContextSetupController,
 };
