@@ -1,247 +1,368 @@
-# LLM-Based Context Compaction Plan — 2026-06-08
+# LLM Context Compaction Plan - 2026-06-08
 
-将现有规则压缩升级为 OpenCode 式的 LLM 语义压缩。保留 closeout 证据安全。
+目标：学习 OpenCode 的主动上下文管理，但按 Priority Agent 的 runtime evidence
+边界实现，避免为了省 token 破坏 closeout verification。
 
----
+结论先放前面：
 
-## 1. 现状
-
-### 我们已经有的基础
-
-| 已有 | 位置 | 状态 |
-|------|------|------|
-| `AutoCompact` 策略 | `context_compressor.rs:796` | ✅ LLM 摘要模板已存在（8-section Hermes 格式） |
-| `SUMMARY_TEMPLATE` | `context_compressor.rs:73` | ✅ Goal/Constraints/Progress/Decisions/NextSteps/CriticalContext/RelevantFiles |
-| `SUMMARY_PREFIX` | `context_compressor.rs:101` | ✅ 摘要前缀 |
-| LLM 调用能力 | `context_compressor.rs::compress_via_llm()` | ✅ 已有 |
-| 选择性压缩 | `message_compression.rs` | 🟡 刚加的，基于规则 |
-
-### 和 OpenCode 的核心差距
-
-| | OpenCode | Priority Agent |
-|---|---|---|
-| 触发时机 | **主动**（token 快满前就压） | **被动**（80% 才动） |
-| 谁做压缩 | 专用 compaction agent（LLM） | 规则引擎（extract key lines） |
-| 压什么 | **对话历史 + 工具输出** | 只压工具输出 |
-| 多轮压缩 | 支持（previous summary → merge） | 不支持 |
-| 摘要格式 | 8-section Markdown（与 Hermes 同） | 结构化 [compressed-tool-output] |
-
-实际上我们的 `AutoCompact` 策略已经有 LLM 摘要能力——和 OpenCode 使用同一个 8-section 模板！差距只是触发策略和压缩范围。
+- 应该做上下文压缩，长任务的 dynamic tail 和 tool output 确实会持续增加成本。
+- 不应该直接照搬 OpenCode 的整段对话压缩，因为 Priority Agent 的 closeout 依赖
+  真实工具证据、验证命令、diff 状态和 context ledger。
+- 当前代码已经有 `ContextCompressor`、LLM 摘要能力、preflight compression、
+  reactive compression 和 message healing；下一步不是新起一套 `llm_compaction.rs`，
+  而是把现有压缩链路做成 **evidence-aware compaction**。
+- 第一版不要直接把 60% 阈值作为默认主动压缩。先加观测和证据保护，再打开压缩。
 
 ---
 
-## 2. 改进方案：三层压缩
+## 1. 当前代码事实
 
-```
-Layer 1: 规则压缩（现有 message_compression.rs，改造）
-  → 压缩单个超大 tool output（>2000 chars 的 build/test output）
-  → 保留 exit code + 关键行
-  → 不调用 LLM，零成本
+### 已有基础
 
-Layer 2: LLM 对话压缩（新增，借鉴 OpenCode）
-  → 当 token 达到 60% 预算时主动触发
-  → 把旧轮对话（不含最后 2 轮）发给 LLM 生成 8-section 摘要
-  → 旧轮被替换为摘要消息
-  → 成本：每次压缩 1 次 LLM 调用
+| 能力 | 位置 | 当前状态 |
+|------|------|----------|
+| `ContextCompressor` | `src/engine/context_compressor.rs` + `context_compressor/compressor.rs` | 已有压缩主模块 |
+| 策略枚举 | `src/engine/context_collapse.rs` | `NoOp`、`Snip`、`MicroCompact`、`AutoCompact`、`ReactiveCompact`、`SessionMemoryCompact` |
+| Hermes-style summary template | `src/engine/context_compressor.rs` | 已有 `SUMMARY_TEMPLATE` 和 `SUMMARY_PREFIX` |
+| LLM 摘要能力 | `ContextCompressor::llm_summarize_middle()` | 已有，但 prompt 不是严格复用 `SUMMARY_TEMPLATE` |
+| LLM provider 接入 | `with_llm_provider(...)` | 已有，可用主 provider/model |
+| preflight compression | `src/engine/conversation_loop/preflight_compression_controller.rs` | 已接入请求前压缩 |
+| reactive compression | `src/engine/conversation_loop/api_request_controller.rs` | provider 报 context size error 时压缩并重试 |
+| streaming history preflight | `src/engine/streaming.rs` | streaming history 也有 preflight compression |
+| message healing | `src/engine/message_healing.rs` | 每次请求前 shrink oversized tool results、drop dangling tool calls |
+| tool result metadata | `src/engine/conversation_loop/tool_result_controller.rs` | 已记录 `compaction_eligible`、`protected_recent_tail`、`ledger_fact_eligible` 等元数据 |
+| runtime diet | `src/engine/conversation_loop/runtime_diet.rs` | 已记录 prompt/tool schema/tool result/retrieval/memory 等 token 信号 |
 
-Layer 3: 增量压缩（新增，借鉴 OpenCode 的 anchored summary）
-  → 再次触发时，把之前的摘要 + 新对话发给 LLM
-  → LLM 更新摘要（保留仍有效的事实，合并新信息）
-  → 单次摘要可以跨多轮复用
-```
+### 原文需要修正的点
 
-### Layer 1 vs Layer 2/3 的区别
-
-```
-Layer 1（规则）:
-  5000 行 build output → [compressed] exit=0, pass: "19 passed", raw=5000
-  免费、可靠、但不理解语义
-
-Layer 2/3（LLM）:
-  10 轮对话 → "用户正在重构 scoring.rs，已完成系数提取，
-  当前卡在 test_score_memory_write 的 use_super 导入缺失"
-  有成本、有语义理解、可能有遗漏
-```
+- 当前没有 `src/engine/message_compression.rs`。
+- 当前没有 `src/engine/llm_compaction.rs`。
+- 当前没有名为 `compress_via_llm()` 的函数；实际函数是
+  `ContextCompressor::llm_summarize_middle()`。
+- `AutoCompact` 已有 LLM 摘要路径，但不是“和 OpenCode 一样只差触发策略”。
+  当前还缺少 evidence boundary、strict summary contract、closeout trust boundary 和
+  增量 LLM summary 的生产验证。
+- LLM 增量压缩不是完全没有基础：`StructuredSummary` 有 heuristic accumulated
+  summary / merge；但 LLM anchored summary 还没有作为生产 contract 建立。
+- 不能把 request preparation 作为唯一接入点。当前生产路径已经有
+  `PreflightCompressionController`，这是更自然的接入点。
 
 ---
 
-## 3. 实现细节
+## 2. 和 OpenCode 的核心差距
 
-### Layer 2：LLM 对话压缩
+| 维度 | OpenCode 倾向 | Priority Agent 当前状态 | 下一步 |
+|------|---------------|-------------------------|--------|
+| 触发时机 | 主动 compact | preflight 80% + reactive context error | 先观测，再调阈值 |
+| 压缩对象 | 对话历史 + tool output | compressor 可压历史，message healing 可截断 tool output | 先压旧 tool output，再扩大 |
+| 摘要者 | LLM compaction agent | `ContextCompressor` 可调用 LLM provider | 复用现有 compressor，不新建并行系统 |
+| 多轮摘要 | anchored summary | heuristic accumulated summary 有基础 | 补 LLM anchored contract |
+| 验证证据 | 不以 closeout evidence 为核心 | closeout 强依赖 runtime evidence | 必须 evidence-aware |
 
-**触发条件**：
-```rust
-// 在 request_preparation_controller 中，zone 注入之后
-let estimated_tokens = estimate_request_tokens(&request_messages);
-if estimated_tokens > max_tokens * 0.6 {
-    llm_compact_conversation(&mut request_messages, provider, model, trace).await;
-}
+OpenCode 值得学的是主动管理上下文，不是把所有旧消息都压成自然语言摘要。
+
+Priority Agent 的特殊约束是：压缩后的历史不能伪装成验证证据。对于代码任务，
+最终 closeout 需要的是：
+
+- required validation command 是否运行过。
+- exit/status 是什么。
+- 关键输出是否支持 acceptance。
+- changed files / diff 状态是否匹配任务。
+- 若证据不足，必须保留 `not_verified` 或 `partial`，不能 false green。
+
+---
+
+## 3. 推荐架构：三层，但复用现有 compressor
+
+### Layer 1: Evidence-aware tool-output compaction
+
+目标：先压最贵、最容易膨胀、语义风险相对可控的旧 tool output。
+
+当前基础：
+
+- `message_healing.rs` 已能按字符数截断 oversized tool results。
+- `tool_result_controller.rs` 已记录 `compaction_eligible` 和
+  `protected_recent_tail`。
+- `ContextCompressor::snip_tool_results()` / `prune_old_tool_results()` 已能裁剪旧工具结果。
+
+下一步不是新增 `message_compression.rs`，而是增强现有路径：
+
+```text
+keep raw:
+  - 最近 2 轮 tool output
+  - required validation / closeout evidence
+  - failed tool output 的关键错误上下文
+  - 用户明确要求查看的输出
+
+compress:
+  - 更早轮次的大 stdout/stderr
+  - 重复 build/test/log 噪声
+  - 已经被 ledger 结构化记录过的输出
 ```
 
-**压缩范围**：
+压缩结果必须是结构化摘要：
+
+```text
+[compressed-tool-output]
+tool=bash
+cmd=cargo test -q
+exit=0
+status=passed
+raw_preserved=false
+evidence_safe_for_closeout=false
+key_lines:
+  - test result: ok
+  - 19 passed; 0 failed
+call_id=...
+source_turn=...
 ```
-messages: [sys] [u1] [a1] [t1] [t2] [u2] [a2] [u3] [a3] [t3] [t4] [u4]
-                                                    ↑
-                                              preserve_boundary (最后 2 个 user turn)
-                                         
-压缩部分: [u1][a1][t1][t2] → LLM → summary
-保留部分: [u2][a2][u3][a3][t3][t4][u4] ← 原文不动
-```
 
-**消息替换**：
-```rust
-// 替换后:
-messages: [sys] [user(compaction)] [assistant(summary)] [u2][a2][u3][a3][t3][t4][u4]
-```
+`evidence_safe_for_closeout=false` 时，closeout controller 不能把它当完整验证证据。
 
-- 被压缩的消息被移除
-- 插入一个 compaction user 消息（含 `[COMPACTION_BOUNDARY]` 标记）
-- 插入一个 summary assistant 消息（LLM 生成的 8-section 摘要）
-- 保留的消息（最后 2 轮）原文不动
+### Layer 2: Existing LLM conversation compaction hardening
 
-**LLM prompt**：复用现有 `SUMMARY_TEMPLATE`，和 OpenCode 内容一致：
+目标：把已有 `ContextCompressor::llm_summarize_middle()` 做成可安全生产使用的
+LLM 语义压缩，而不是新建一套平行模块。
 
-```markdown
-Output exactly the Markdown structure shown below:
+当前 LLM prompt 只是要求“Summarize this conversation into 8 sections”，并截取
+前 8000 chars。下一步应该改成严格 contract：
+
+```text
+Output exactly these sections:
 
 ## Goal
-- [single-sentence task summary]
-
-## Constraints & Preferences
-- [user constraints, preferences, or "(none)"]
-
+## Constraints
 ## Progress
-### Done
-- [completed work]
-
-### In Progress
-- [current work]
-
-### Blocked
-- [blockers or "(none)"]
-
 ## Key Decisions
-- [decision and why]
-
-## Next Steps
-- [ordered next actions]
-
-## Critical Context
-- [important technical facts, errors, open questions]
-
 ## Relevant Files
-- [file path: why it matters]
+## Next Steps
+## Critical Context
+## Tools & Patterns
 
 Rules:
-- Keep every section, even when empty.
-- Use terse bullets, not prose paragraphs.
-- Preserve exact file paths, commands, error strings, identifiers.
-- Do not mention the summary process or that context was compacted.
+- Preserve exact file paths, command strings, error strings, identifiers.
+- Mark validation evidence as historical unless raw evidence is preserved.
+- Do not claim tests passed unless raw validation evidence remains available.
+- Do not omit unresolved blockers.
+- Do not include secrets.
 ```
 
-**closeout 证据保护**：
-```rust
-// 在压缩时，标记哪些消息是 closeout 需要的证据
-fn is_closeout_evidence(msg: &Message) -> bool {
-    // Required validation 命令的输出不压缩
-    matches!(msg, Message::Tool { content, .. } 
-        if content.contains("required command") 
-        || content.contains("[exit status:")
-        || content.contains("cargo test"))
-    // 最后 2 轮的 tool output 不压缩
-}
+LLM compaction summary 应该是 continuation context，不是 closeout proof。
+
+### Layer 3: Anchored incremental summary
+
+目标：多次 compaction 时，不重复总结全部历史，而是：
+
+```text
+previous summary + newly compacted range -> updated summary
 ```
 
-### Layer 3：增量压缩
+当前 `StructuredSummary` 已有 heuristic accumulated summary / merge 基础，但 LLM
+anchored summary 还需要补：
 
-当再次触发压缩时，不是压全部历史，而是：
+- previous summary marker。
+- summary version / boundary id。
+- stale facts removal rule。
+- retained evidence counts。
+- no-gain / failure circuit breaker。
 
-```
-上一次的 summary + 新对话 → LLM → 更新后的 summary
-```
+---
 
-prompt 格式（借鉴 OpenCode）：
-```
-Update the anchored summary below using the conversation history above.
-Preserve still-true details, remove stale details, and merge in the new facts.
-<previous-summary>
-(上次的 summary)
-</previous-summary>
+## 4. 接入点
+
+### 不建议新增 `llm_compaction.rs`
+
+当前 `ContextCompressor` 已经包含：
+
+- provider/model。
+- LLM summary attempts/failures。
+- compact records。
+- compact boundary metadata。
+- circuit breaker。
+- strategy labels。
+
+新增 `llm_compaction.rs` 容易制造第二套状态机。更稳的做法是：
+
+1. 扩展 `ContextCompressor` 的 evidence-aware selection。
+2. 扩展 `CompactionRuntimeRecord` / `CompactionAttemptRecord` 的 retained evidence 字段。
+3. 让 `PreflightCompressionController` 继续作为请求前主入口。
+4. 保留 `ApiRequestController` 的 reactive compression 路径。
+
+### 主要文件
+
+| 文件 | 建议改动 |
+|------|----------|
+| `src/engine/context_compressor.rs` | 增加 evidence-aware retained item / token 字段，必要时扩展 strategy |
+| `src/engine/context_compressor/compressor.rs` | 增强 tool-output selection、LLM summary prompt、anchored summary |
+| `src/engine/context_collapse.rs` | 扩展 runtime record 字段，记录 evidence preservation |
+| `src/engine/conversation_loop/preflight_compression_controller.rs` | 继续作为主动压缩入口，补 trace / runtime diet 观测 |
+| `src/engine/conversation_loop/tool_result_controller.rs` | 将 `compaction_eligible` / `protected_recent_tail` 用于压缩选择 |
+| `src/engine/conversation_loop/runtime_diet.rs` | 增加 dynamic tail / compressible / required evidence token 观测 |
+| `src/engine/conversation_loop/closeout_controller.rs` | 明确 compact summary 不可作为 raw validation evidence |
+| `src/engine/message_healing.rs` | 保留 provider 400 防护；不要把它当完整 compaction 系统 |
+
+---
+
+## 5. 触发策略
+
+### 当前触发
+
+当前 `TokenBudget::needs_compression()` 使用约 80% 可用历史预算作为阈值。
+`CompressionWarning` 在 60% 进入 approaching，但 warning 不是主动压缩。
+
+### 推荐顺序
+
+不要第一步就把主动压缩阈值改为 60%。先做：
+
+1. 记录 token breakdown。
+2. 看真实长任务里 dynamic tail 的组成。
+3. 证明旧 tool output 是主要来源。
+4. 再把 Layer 1 tool-output compaction 提前。
+5. 最后再讨论是否把 LLM compaction 提前到 60% 或 70%。
+
+建议新增或扩展 runtime diet 字段：
+
+```text
+dynamic_tail_tokens
+tool_result_tokens
+compressible_tool_result_tokens
+required_evidence_tokens
+raw_tool_outputs_preserved
+tool_outputs_compressed
+compression_chars_saved
+evidence_summaries_emitted
 ```
 
 ---
 
-## 4. 改动文件
+## 6. 环境变量
 
-| 文件 | 改动 |
+建议按两级开关，不要一个总开关直接启用所有压缩：
+
+```text
+PRIORITY_AGENT_TOOL_OUTPUT_COMPACTION=1
+PRIORITY_AGENT_LLM_COMPACTION=0
+PRIORITY_AGENT_LLM_COMPACTION_THRESHOLD=0.8
+PRIORITY_AGENT_LLM_COMPACTION_PRESERVE_TURNS=2
+PRIORITY_AGENT_LLM_COMPACTION_MAX_INPUT_CHARS=8000
+```
+
+默认建议：
+
+- tool-output compaction 可以先在 eval/replay 中开。
+- LLM compaction 默认关，等证据保护和 closeout tests 过后再开。
+- threshold 初始沿用 80%，不要直接改成 60%。
+
+---
+
+## 7. 安全约束
+
+1. **compact summary 不是验证证据**
+   LLM summary 只能作为 continuation context，不能作为 closeout proof。
+
+2. **required validation raw evidence 必须保留或有 ledger-backed proof**
+   如果 raw output 被压缩，必须有结构化 ledger evidence 支撑，否则 closeout 只能
+   `not_verified` / `partial`。
+
+3. **最后 N 轮原文保留**
+   默认至少保留最后 2 个 user turn 对应的 assistant/tool 上下文。
+
+4. **失败输出要保留关键错误行**
+   `error[E...]`、panic、failed command、missing file、permission denial 等不能被
+   摘要吞掉。
+
+5. **LLM 摘要失败必须 fallback**
+   当前 compressor 已有 LLM failure counters 和 circuit breaker；继续保留。
+
+6. **不能增加 prompt 常驻规则墙**
+   summary prompt 是压缩调用专用，不进入普通 agent always-on prompt。
+
+---
+
+## 8. 验证方式
+
+### 必须新增/更新的测试
+
+| 测试 | 验证 |
 |------|------|
-| `src/engine/context_compressor.rs` | 复用现有 `AutoCompact` 和 `SUMMARY_TEMPLATE`，无改动 |
-| `src/engine/llm_compaction.rs` | **新建**：LLM 对话压缩 + 增量压缩 |
-| `src/engine/message_compression.rs` | 保留 Layer 1 规则压缩，改名为 `rule_compression.rs` 或保留 |
-| `src/engine/conversation_loop/request_preparation_controller.rs` | 接入触发逻辑 |
-| `src/engine/mod.rs` | 注册 `llm_compaction` 模块 |
+| `tool_output_compaction_preserves_recent_tail` | 最近 2 轮 tool output 原文保留 |
+| `required_validation_output_not_trusted_when_compacted` | compact summary 不能让 closeout false green |
+| `llm_compaction_summary_is_context_not_evidence` | LLM summary 不被当作 raw validation proof |
+| `failed_tool_output_keeps_key_error_lines` | 失败输出关键错误行保留 |
+| `preflight_records_compressible_token_breakdown` | runtime diet / trace 有压缩机会观测 |
+| `anchored_summary_updates_previous_summary` | 增量 summary 合并新事实并保留仍有效事实 |
 
-### llm_compaction.rs 核心函数
+### Live eval / YAML
 
-```rust
-// 检查是否需要 LLM 压缩
-pub fn should_compact(messages: &[Message], max_tokens: usize) -> bool {
-    estimate_tokens(messages) > max_tokens * 6 / 10  // 60% 触发
-}
+建议新增或复用：
 
-// 执行 LLM 压缩
-pub async fn compact_conversation(
-    messages: &mut Vec<Message>,
-    provider: &dyn LlmProvider,
-    model: &str,
-    preserve_turns: usize,
-    previous_summary: Option<&str>,
-    trace: &TraceCollector,
-) -> LlmCompactionReport {
-    // 1. 找到压缩边界（最后 preserve_turns 个 user turn 之前）
-    // 2. 提取被压缩的消息
-    // 3. 构建 prompt（含 previous summary 如果有）
-    // 4. 调用 LLM 生成 8-section 摘要
-    // 5. 替换消息列表
-    // 6. 记录 trace
-}
-```
+- `context-closeout-evidence-preserved`
+- `context-cache-dynamic-tail-tracked`
+- `context-llm-compaction-no-false-green`
+- `context-tool-output-compaction-saves-tokens`
 
-### 环境变量控制
+### 验证命令
 
-```
-PRIORITY_AGENT_LLM_COMPACTION=1       # 启用 LLM 压缩（默认关闭）
-PRIORITY_AGENT_LLM_COMPACTION_THRESHOLD=0.6  # 触发阈值（默认 60%）
-PRIORITY_AGENT_LLM_COMPACTION_PRESERVE_TURNS=2  # 保留轮数（默认 2）
+```bash
+cargo test -q context_compressor -- --test-threads=1
+cargo test -q preflight_compression_controller -- --test-threads=1
+cargo test -q closeout -- --test-threads=1
+cargo test -q request_preparation_controller -- --test-threads=1
 ```
 
 ---
 
-## 5. 安全约束
+## 9. 推荐执行顺序
 
-1. **不压缩 closeout 证据**：required_validation 命令的输出、`[exit status:]` 标记的行不进入压缩范围
-2. **保留最后 N 轮原文**：默认 2 轮，确保 LLM 有足够上下文理解当前状态
-3. **摘要标记为不可信**：compaction summary 消息标记 `_compacted=true`，closeout controller 不能把它当验证证据
-4. **增量压缩不丢关键事实**：每次压缩前把 previous summary 传给 LLM，LLM 自己判断哪些还有效
-5. **单 LLM 调用的 cost 预算**：压缩用的 provider 可以降级（比如用 flash 而不是 pro），不影响 agent 质量
+### Phase 0: 修正观测
+
+1. 增加 token breakdown：dynamic tail / tool output / required evidence /
+   compressible output。
+2. 在 trace/runtime diet 中显示压缩机会。
+3. 不改变压缩行为。
+
+### Phase 1: Evidence-aware Layer 1
+
+1. 用 `tool_result_controller` 的元数据驱动旧 tool output selection。
+2. 保留 raw recent tail 和 required evidence。
+3. 输出 `[compressed-tool-output]` 结构化摘要。
+4. 跑 closeout tests，证明不 false green。
+
+### Phase 2: Harden existing LLM compaction
+
+1. 强化 `llm_summarize_middle()` 的 prompt contract。
+2. 标记 LLM summary 为 context-only。
+3. 继续用 preflight controller 触发，不新建并行状态机。
+4. 默认 env off，只在 eval/replay 开。
+
+### Phase 3: Anchored incremental summary
+
+1. 将 previous summary 作为输入。
+2. 输出 updated summary。
+3. 记录 boundary id、summary version、retained evidence。
+4. 对比 no-compaction / compaction 两组 closeout pass rate。
+
+### Phase 4: 阈值调优
+
+1. 用真实长任务数据决定 80% 是否太晚。
+2. 如果 Layer 1 稳定，可以考虑 tool-output compaction 在 60%-70% 主动触发。
+3. LLM compaction 继续保守，除非 token savings 和 closeout safety 都有证据。
 
 ---
 
-## 6. 验证方式
+## 10. 总结
 
-| 验证项 | 方法 |
-|--------|------|
-| 压缩后 closeout 不 false green | `context-closeout-evidence-preserved` YAML 重跑 |
-| 压缩后 token 减少 | `ContextTokenBreakdown` trace 对比压缩前后 |
-| LLM 摘要质量 | 人工抽查 3-5 次压缩结果 |
-| 增量压缩不过度丢失 | 对比"无压缩"vs"压缩"两组的 closeout pass rate |
+这份计划的方向是对的：Priority Agent 应该学习 OpenCode 的主动上下文压缩，用
+LLM 做语义摘要，降低长任务 token 成本。
 
----
+需要修正的是实现路线：
 
-## 7. 推荐执行顺序
+- 不新建一套 `llm_compaction.rs` 状态机。
+- 不把不存在的 `message_compression.rs` 当基础。
+- 不直接把阈值改成 60%。
+- 不把 LLM summary 当 closeout evidence。
+- 先做 evidence-aware tool-output compaction 和 token observability，再启用 LLM
+  conversation compaction。
 
-1. **Layer 1 保留**：`message_compression.rs` 继续做超大 tool output 的规则压缩（零成本）
-2. **Layer 2 先实现**：LLM 对话压缩（主动触发、8-section 摘要、保留 2 轮）
-3. **验证**：跑 context-closeout-evidence-preserved 确认不 false green
-4. **Layer 3 后实现**：增量压缩（需要 Layer 2 的摘要格式稳定后再做）
-5. **阈值调优**：用真实长任务的 token breakdown 数据决定 60% 是否合适
+最终目标不是“压得越多越好”，而是在不破坏 runtime proof 的前提下，让长任务的
+dynamic tail 可控、可解释、可回放。

@@ -1038,8 +1038,12 @@ impl ContextCompressor {
     }
 
     /// 使用 LLM 生成高质量结构化摘要（异步）
-    /// 需要先通过 with_llm_provider() 设置 provider
+    /// 需要先通过 with_llm_provider() 设置 provider。
+    /// Gated by PRIORITY_AGENT_LLM_COMPACTION=1 (default off).
     pub async fn llm_summarize_middle(&self, messages: &[Message]) -> Option<String> {
+        if !llm_compaction_enabled() {
+            return None;
+        }
         let provider = self.llm_provider.as_ref()?;
         if messages.is_empty() {
             return None;
@@ -1057,9 +1061,31 @@ impl ContextCompressor {
             conversation.push_str(&format!("{}: {}\n\n", role, content));
         }
 
+        // LLM compaction contract: strict 8-section template with evidence rules.
+        // Summary is continuation context ONLY, not closeout verification proof.
         let prompt = format!(
-            "Summarize this conversation into 8 sections: Goal, Constraints & Preferences, Progress (Done/InProgress/Blocked), Key Decisions, Relevant Files, Next Steps, Critical Context, Tools & Patterns.\n\n{}",
-            &conversation.chars().take(8000).collect::<String>()
+            "Compress the conversation below into a structured summary.\n\n\
+             Output exactly these sections and keep the order:\n\n\
+             ## Goal\n\
+             ## Constraints\n\
+             ## Progress\n\
+             ## Key Decisions\n\
+             ## Relevant Files\n\
+             ## Next Steps\n\
+             ## Critical Context\n\
+             ## Tools & Patterns\n\n\
+             Rules:\n\
+             - Keep every section, even when empty — write \"(none)\" for empty ones.\n\
+             - Use terse bullets, not prose paragraphs.\n\
+             - Preserve exact file paths, commands, error strings, and identifiers.\n\
+             - Mark validation evidence as historical unless raw output is preserved.\n\
+             - Do not claim tests passed unless raw test output evidence remains.\n\
+             - Do not omit unresolved blockers.\n\
+             - Do not include secrets or API keys.\n\
+             - This summary is continuation context, NOT verification proof.\n\n\
+             {}\n\n\
+             Summary:",
+            &conversation.chars().take(16000).collect::<String>()
         );
         let mut summary_messages = Vec::new();
         if let Some(prefix) = self.llm_summary_stable_prefix.as_deref() {
@@ -1278,4 +1304,15 @@ impl ContextCompressor {
             time_based_enabled: self.time_config.enabled,
         }
     }
+}
+
+fn llm_compaction_enabled() -> bool {
+    matches!(
+        std::env::var("PRIORITY_AGENT_LLM_COMPACTION")
+            .unwrap_or_default()
+            .trim()
+            .to_ascii_lowercase()
+            .as_str(),
+        "1" | "true" | "yes" | "on"
+    )
 }
