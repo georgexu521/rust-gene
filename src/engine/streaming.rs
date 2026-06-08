@@ -1416,10 +1416,8 @@ impl StreamingQueryEngine {
                         {
                             warn!("Failed to persist assistant message: {}", e);
                         }
-                        // After compression may have modified messages, sync full history to DB.
-                        // This ensures restarted sessions see the compressed state.
-                        if crate::engine::message_compression::background_prune_enabled()
-                            || crate::engine::message_compression::selective_compression_enabled()
+                        // Sync compressed history to DB so restarted sessions see compressed state.
+                        if crate::engine::message_compression::selective_compression_enabled()
                         {
                             if let Err(e) = store.replace_session_messages(sid, &hist) {
                                 warn!("Failed to sync compressed history to DB: {}", e);

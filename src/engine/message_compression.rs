@@ -104,13 +104,15 @@ fn compress_tool_output(call_id: &str, content: &str) -> String {
 }
 
 pub fn selective_compression_enabled() -> bool {
-    matches!(
+    // Default ON: compress old tool outputs to structured summaries.
+    // Set PRIORITY_AGENT_SELECTIVE_COMPRESSION=0 to disable.
+    !matches!(
         std::env::var("PRIORITY_AGENT_SELECTIVE_COMPRESSION")
-            .unwrap_or_default()
+            .unwrap_or_else(|_| "1".to_string())
             .trim()
             .to_ascii_lowercase()
             .as_str(),
-        "1" | "true" | "yes" | "on"
+        "0" | "false" | "no" | "off"
     )
 }
 
@@ -247,7 +249,7 @@ mod tests {
     }
 
     #[test]
-    fn disabled_by_default() {
-        assert!(!selective_compression_enabled() || std::env::var("PRIORITY_AGENT_SELECTIVE_COMPRESSION").is_ok());
+    fn enabled_by_default() {
+        assert!(selective_compression_enabled() || std::env::var("PRIORITY_AGENT_SELECTIVE_COMPRESSION").is_ok());
     }
 }
