@@ -27,6 +27,54 @@ pub(super) fn workflow_summary(event: &TraceEvent) -> String {
                     preview(reason)
                 )
             }
+            TraceEvent::RouteCandidateEvaluated {
+                intent,
+                confidence,
+                matched_signals,
+                reason,
+            } => format!(
+                "route candidate intent={} confidence={:.2} signals={} reason={}",
+                intent,
+                confidence,
+                if matched_signals.is_empty() {
+                    "none".to_string()
+                } else {
+                    matched_signals.join(",")
+                },
+                preview(reason)
+            ),
+            TraceEvent::RouteCompetitionSummary {
+                selected_intent,
+                selected_confidence,
+                runner_up_intent,
+                runner_up_confidence,
+                candidate_count,
+                delta,
+            } => format!(
+                "route competition selected={}({:.2}) runner_up={}({:.2}) candidates={} delta={:.2}",
+                selected_intent,
+                selected_confidence,
+                runner_up_intent,
+                runner_up_confidence,
+                candidate_count,
+                delta
+            ),
+            TraceEvent::ContextTokenBreakdown {
+                total_chars,
+                system_chars,
+                history_chars,
+                tool_result_chars,
+                dynamic_zone_chars,
+                last_user_chars,
+            } => format!(
+                "context tokens chars total={} system={} history={} tool={} dynamic={} last_user={}",
+                total_chars,
+                system_chars,
+                history_chars,
+                tool_result_chars,
+                dynamic_zone_chars,
+                last_user_chars
+            ),
             TraceEvent::ResourcePolicySelected {
                 latency,
                 target_ms,

@@ -15,13 +15,21 @@ use crate::services::api::Message;
 ///
 /// 保留最后 `preserve_turns` 轮工具输出的原文，压缩更早的。
 pub fn selectively_compress_tool_outputs(
-    messages: &mut Vec<Message>,
+    messages: &mut [Message],
     preserve_turns: usize,
 ) -> SelectiveCompressionReport {
-    let mut report = SelectiveCompressionReport::default();
     if !selective_compression_enabled() {
-        return report;
+        return SelectiveCompressionReport::default();
     }
+    compress_old_tool_outputs(messages, preserve_turns, 300)
+}
+
+fn compress_old_tool_outputs(
+    messages: &mut [Message],
+    preserve_turns: usize,
+    min_chars: usize,
+) -> SelectiveCompressionReport {
+    let mut report = SelectiveCompressionReport::default();
 
     // 从后往前找到最后 `preserve_turns` 个 user 消息的位置
     let preserve_boundary = find_preserve_boundary(messages, preserve_turns);
@@ -32,8 +40,12 @@ pub fn selectively_compress_tool_outputs(
             tool_call_id,
         } = &messages[i]
         {
-            if content.len() <= 300 {
+            if content.len() <= min_chars {
                 continue; // already short, skip
+            }
+            if is_validation_evidence(content) {
+                report.evidence_preserved += 1;
+                continue;
             }
             let summary = compress_tool_output(tool_call_id, content);
             report.compressed_count += 1;
@@ -50,6 +62,9 @@ pub fn selectively_compress_tool_outputs(
 }
 
 fn find_preserve_boundary(messages: &[Message], preserve_turns: usize) -> usize {
+    if preserve_turns == 0 {
+        return messages.len();
+    }
     let mut user_count = 0usize;
     for (i, msg) in messages.iter().enumerate().rev() {
         if matches!(msg, Message::User { .. }) {
@@ -86,9 +101,15 @@ fn compress_tool_output(call_id: &str, content: &str) -> String {
         .unwrap_or("");
 
     let key_line = if !fail_line.is_empty() {
-        format!("fail: {}", fail_line.trim().chars().take(120).collect::<String>())
+        format!(
+            "fail: {}",
+            fail_line.trim().chars().take(120).collect::<String>()
+        )
     } else if !pass_line.is_empty() {
-        format!("pass: {}", pass_line.trim().chars().take(120).collect::<String>())
+        format!(
+            "pass: {}",
+            pass_line.trim().chars().take(120).collect::<String>()
+        )
     } else if !exit_line.is_empty() {
         exit_line.trim().to_string()
     } else {
@@ -104,15 +125,17 @@ fn compress_tool_output(call_id: &str, content: &str) -> String {
 }
 
 pub fn selective_compression_enabled() -> bool {
-    // Default ON: compress old tool outputs to structured summaries.
-    // Set PRIORITY_AGENT_SELECTIVE_COMPRESSION=0 to disable.
-    !matches!(
-        std::env::var("PRIORITY_AGENT_SELECTIVE_COMPRESSION")
-            .unwrap_or_else(|_| "1".to_string())
+    selective_compression_enabled_from(std::env::var("PRIORITY_AGENT_SELECTIVE_COMPRESSION").ok())
+}
+
+fn selective_compression_enabled_from(value: Option<String>) -> bool {
+    matches!(
+        value
+            .unwrap_or_default()
             .trim()
             .to_ascii_lowercase()
             .as_str(),
-        "0" | "false" | "no" | "off"
+        "1" | "true" | "yes" | "on"
     )
 }
 
@@ -120,9 +143,7 @@ pub fn selective_compression_enabled() -> bool {
 /// 将非 evidence 的旧输出压缩为结构化摘要。
 /// 保护：最近 2 轮 + required validation evidence + 失败输出的关键错误行。
 /// 借鉴 OpenCode 的 `prune()` 后台裁剪模式。
-pub fn background_prune_tool_outputs(
-    messages: &mut Vec<Message>,
-) -> BackgroundPruneReport {
+pub fn background_prune_tool_outputs(messages: &mut [Message]) -> BackgroundPruneReport {
     let mut report = BackgroundPruneReport::default();
     if !background_prune_enabled() {
         return report;
@@ -192,6 +213,7 @@ pub struct BackgroundPruneReport {
 #[derive(Debug, Default)]
 pub struct SelectiveCompressionReport {
     pub compressed_count: usize,
+    pub evidence_preserved: usize,
     pub chars_before: usize,
     pub chars_after: usize,
 }
@@ -216,7 +238,7 @@ mod tests {
             },
         ];
 
-        let report = selectively_compress_tool_outputs(&mut messages, 1);
+        let report = compress_old_tool_outputs(&mut messages, 1, 300);
         assert!(report.compressed_count >= 1);
 
         // t1 should be compressed (old)
@@ -228,7 +250,7 @@ mod tests {
         assert!(t1.contains("evidence_safe_for_closeout=false"));
 
         // t2 should NOT be compressed (recent)
-        let t2 = match &messages[3] {
+        let t2 = match &messages[4] {
             Message::Tool { content, .. } => content,
             _ => panic!("expected tool"),
         };
@@ -244,12 +266,38 @@ mod tests {
                 content: "short".to_string(),
             },
         ];
-        let report = selectively_compress_tool_outputs(&mut messages, 0);
+        let report = compress_old_tool_outputs(&mut messages, 0, 300);
         assert_eq!(report.compressed_count, 0);
     }
 
     #[test]
-    fn enabled_by_default() {
-        assert!(selective_compression_enabled() || std::env::var("PRIORITY_AGENT_SELECTIVE_COMPRESSION").is_ok());
+    fn preserves_validation_evidence() {
+        let mut messages = vec![
+            Message::user("first"),
+            Message::Tool {
+                tool_call_id: "t1".to_string(),
+                content: "cargo test\nall tests passed\n[exit status: 0]\n".repeat(20),
+            },
+        ];
+
+        let report = compress_old_tool_outputs(&mut messages, 0, 300);
+        assert_eq!(report.compressed_count, 0);
+        assert_eq!(report.evidence_preserved, 1);
+        let content = match &messages[1] {
+            Message::Tool { content, .. } => content,
+            _ => panic!("expected tool"),
+        };
+        assert!(content.contains("[exit status: 0]"));
+    }
+
+    #[test]
+    fn disabled_by_default_and_enabled_explicitly() {
+        assert!(!selective_compression_enabled_from(None));
+        assert!(!selective_compression_enabled_from(Some("0".to_string())));
+        assert!(!selective_compression_enabled_from(Some(
+            "false".to_string()
+        )));
+        assert!(selective_compression_enabled_from(Some("1".to_string())));
+        assert!(selective_compression_enabled_from(Some("true".to_string())));
     }
 }

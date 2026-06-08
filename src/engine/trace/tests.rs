@@ -28,6 +28,39 @@ fn trace_summary_includes_events() {
 }
 
 #[test]
+fn trace_summary_handles_route_and_context_diagnostics() {
+    let collector = TraceCollector::new(TurnTrace::new("s1", 1, "fix code"));
+    collector.record(TraceEvent::RouteCandidateEvaluated {
+        intent: "code_change".to_string(),
+        confidence: 0.5,
+        matched_signals: vec!["code_change".to_string()],
+        reason: "heuristic matched".to_string(),
+    });
+    collector.record(TraceEvent::RouteCompetitionSummary {
+        selected_intent: "CodeChange".to_string(),
+        selected_confidence: 0.8,
+        runner_up_intent: "debug".to_string(),
+        runner_up_confidence: 0.5,
+        candidate_count: 2,
+        delta: 0.3,
+    });
+    collector.record(TraceEvent::ContextTokenBreakdown {
+        total_chars: 100,
+        system_chars: 20,
+        history_chars: 30,
+        tool_result_chars: 10,
+        dynamic_zone_chars: 15,
+        last_user_chars: 25,
+    });
+
+    let trace = collector.finish(TurnStatus::Completed);
+    let summary = format_trace_summary(&trace, 10);
+    assert!(summary.contains("route candidate intent=code_change"));
+    assert!(summary.contains("route competition selected=CodeChange"));
+    assert!(summary.contains("context tokens chars total=100"));
+}
+
+#[test]
 fn trace_summary_includes_control_loop_diagnostic() {
     let collector = TraceCollector::new(TurnTrace::new("s1", 1, "fix code"));
     collector.record(TraceEvent::ActionDecisionEvaluated {

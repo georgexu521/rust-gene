@@ -60,16 +60,16 @@ impl TurnSetupController {
             .unwrap_or_default();
         let mut route =
             IntentRouter::new().route_with_learning(&last_user_preview, &learning_events);
-        // Shadow diagnostics: record all matching heuristic candidates (gated by env var)
-        IntentRouter::new().record_route_candidates(&last_user_preview, &trace);
-        // LLM-assisted routing shadow: flag low-confidence routes (P4)
-        crate::engine::intent_router::record_llm_route_shadow(&route, &last_user_preview, &trace);
         Self::apply_unfinished_route_continuation(
             &mut route,
             &last_user_preview,
             context.conversation,
         );
         context.conversation.agent_mode.apply_to_route(&mut route);
+        // Shadow diagnostics: record all matching heuristic candidates (gated by env var).
+        IntentRouter::new().record_route_candidates(&last_user_preview, &route, &trace);
+        // LLM-assisted routing shadow: flag low-confidence routes (P4).
+        crate::engine::intent_router::record_llm_route_shadow(&route, &last_user_preview, &trace);
         Self::record_route(&trace, context.conversation, &route);
         let resource_policy = ResourcePolicy::from_route(&route);
         Self::record_resource_policy(&trace, &resource_policy);

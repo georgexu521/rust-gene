@@ -126,8 +126,9 @@ impl RequestPreparationController {
         if compression_report.compressed_count > 0 {
             trace.record(TraceEvent::WorkflowFallback {
                 error: format!(
-                    "selective compression: compressed={} chars_before={} chars_after={} saved={}",
+                    "selective compression: compressed={} evidence_preserved={} chars_before={} chars_after={} saved={}",
                     compression_report.compressed_count,
+                    compression_report.evidence_preserved,
                     compression_report.chars_before,
                     compression_report.chars_after,
                     compression_report
@@ -777,10 +778,7 @@ impl RequestPreparationController {
         });
     }
 
-    fn record_token_breakdown(
-        request_messages: &[Message],
-        trace: &TraceCollector,
-    ) {
+    fn record_token_breakdown(request_messages: &[Message], trace: &TraceCollector) {
         let mut system_chars = 0usize;
         let mut history_chars = 0usize;
         let mut tool_result_chars = 0usize;
@@ -820,11 +818,16 @@ impl RequestPreparationController {
         }
 
         trace.record(TraceEvent::ContextTokenBreakdown {
-            total_chars: request_messages.iter().map(|m| match m {
-                Message::System { content } | Message::User { content } => content.chars().count(),
-                Message::Assistant { content, .. } => content.chars().count(),
-                Message::Tool { content, .. } => content.chars().count(),
-            }).sum(),
+            total_chars: request_messages
+                .iter()
+                .map(|m| match m {
+                    Message::System { content } | Message::User { content } => {
+                        content.chars().count()
+                    }
+                    Message::Assistant { content, .. } => content.chars().count(),
+                    Message::Tool { content, .. } => content.chars().count(),
+                })
+                .sum(),
             system_chars,
             history_chars,
             tool_result_chars,
