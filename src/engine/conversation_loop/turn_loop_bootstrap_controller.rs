@@ -3,7 +3,7 @@ use super::turn_request_bootstrap_controller::{
 };
 use super::turn_state::{TurnLoopState, TurnLoopStateController, TurnRuntimeState};
 use super::ConversationLoop;
-use crate::engine::conversation_loop::main_loop_profile::MainLoopProfile;
+use crate::engine::conversation_loop::turn_loop_policy::MainLoopProfile;
 use crate::engine::intent_router::IntentRoute;
 use crate::engine::retrieval_context::RetrievalContext;
 use crate::engine::streaming::StreamEvent;

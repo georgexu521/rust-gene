@@ -22,7 +22,7 @@ use super::turn_tool_round_step_controller::{
 };
 use super::ConversationLoop;
 use crate::engine::code_change_workflow::CodeChangeWorkflowRunner;
-use crate::engine::conversation_loop::main_loop_profile::MainLoopProfile;
+use crate::engine::conversation_loop::turn_loop_policy::MainLoopProfile;
 use crate::engine::destructive_scope::DestructiveScopeContract;
 use crate::engine::intent_router::IntentRoute;
 use crate::engine::resource_policy::ResourcePolicy;
@@ -153,13 +153,13 @@ impl TurnIterationController {
         // Force-summary: inject wrap-up prompt before the last 2 iterations
         // so the model has time to stop calling tools and produce a final answer.
         // Mirrors Reasonix's forceSummaryAfterIterLimit pattern.
-        if crate::engine::conversation_loop::force_summary::should_force_summary(
+        if crate::engine::conversation_loop::turn_loop_policy::should_force_summary(
             context.iteration,
             context.conversation.max_iterations,
         ) && context.loop_state.final_content.is_empty()
         {
             let summary_msg =
-                crate::engine::conversation_loop::force_summary::force_summary_message();
+                crate::engine::conversation_loop::turn_loop_policy::force_summary_message();
             context.messages.push(summary_msg);
             context.trace.record(TraceEvent::WorkflowFallback {
                 error: format!(

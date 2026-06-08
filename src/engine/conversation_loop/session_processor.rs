@@ -1,4 +1,4 @@
-use super::runtime_timeouts::{llm_request_timeout, stream_chunk_idle_timeout};
+use super::request_timeouts::{llm_request_timeout, stream_chunk_idle_timeout};
 use super::text_sanitizer::{strip_hidden_blocks, VisibleTextSanitizer};
 use super::tool_execution::read_only_tool_concurrency;
 use super::turn_recording::{

@@ -20,9 +20,7 @@ mod first_code_change_controller;
 #[cfg(test)]
 mod focused_repair_recovery;
 mod focused_repair_state_controller;
-mod force_summary;
 mod legacy_workflow_gate_controller;
-mod main_loop_profile;
 mod memory_snapshot_controller;
 mod memory_sync_controller;
 #[cfg(test)]
@@ -43,11 +41,11 @@ mod pseudo_tool_text;
 mod reflection_gate_controller;
 mod repair_controller;
 mod request_preparation_controller;
+mod request_timeouts;
 mod risk_signal_controller;
 #[cfg(test)]
 mod route_scoped_tools_tests;
 mod runtime_diet;
-mod runtime_timeouts;
 mod session_processor;
 mod step_executor;
 mod task_guidance_controller;
@@ -76,6 +74,7 @@ mod turn_iteration_controller;
 mod turn_iteration_loop_controller;
 mod turn_iteration_setup_controller;
 mod turn_loop_bootstrap_controller;
+mod turn_loop_policy;
 mod turn_model_step_controller;
 mod turn_recording;
 mod turn_request_bootstrap_controller;
@@ -605,7 +604,7 @@ impl ConversationLoop {
         let working_dir = setup.working_dir;
         let destructive_scope = setup.destructive_scope;
         let main_loop_profile =
-            main_loop_profile::MainLoopProfile::from_turn(&route, &required_validation_commands);
+            turn_loop_policy::MainLoopProfile::from_turn(&route, &required_validation_commands);
         let turn_context_bootstrap =
             TurnContextBootstrapController::run(TurnContextBootstrapContext {
                 conversation: self,

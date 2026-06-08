@@ -7,7 +7,7 @@ use super::turn_task_context_controller::{
 };
 use super::ConversationLoop;
 use crate::engine::code_change_workflow::CodeChangeWorkflowRunner;
-use crate::engine::conversation_loop::main_loop_profile::MainLoopProfile;
+use crate::engine::conversation_loop::turn_loop_policy::MainLoopProfile;
 use crate::engine::intent_router::IntentRoute;
 use crate::engine::resource_policy::ResourcePolicy;
 use crate::engine::retrieval_context::RetrievalContext;

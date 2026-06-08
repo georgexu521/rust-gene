@@ -6,7 +6,7 @@ use super::turn_state::TurnRuntimeState;
 use super::workflow_change_tracker::WorkflowChangeTracker;
 use super::ConversationLoop;
 use crate::engine::code_change_workflow::CodeChangeWorkflowRunner;
-use crate::engine::conversation_loop::main_loop_profile::MainLoopProfile;
+use crate::engine::conversation_loop::turn_loop_policy::MainLoopProfile;
 use crate::engine::destructive_scope::DestructiveScopeContract;
 use crate::engine::intent_router::IntentRoute;
 use crate::engine::resource_policy::ResourcePolicy;
@@ -56,8 +56,8 @@ impl TurnIterationLoopController {
         for iteration in 0..max_loop_iterations {
             // Force summary: inject wrap-up instruction in the last 2 iterations
             // so the model produces a final summary instead of looping or failing.
-            if super::force_summary::should_force_summary(iteration, max_loop_iterations) {
-                let msg = super::force_summary::force_summary_message();
+            if super::turn_loop_policy::should_force_summary(iteration, max_loop_iterations) {
+                let msg = super::turn_loop_policy::force_summary_message();
                 context.messages.push(msg);
             }
 
@@ -100,15 +100,15 @@ impl TurnIterationLoopController {
                 ));
 
         if needs_forced_closeout_summary {
-            let summary = super::force_summary::force_summary_after_iter_limit(
-                super::force_summary::ForceSummaryAfterLimitContext {
+            let summary = super::turn_loop_policy::force_summary_after_iter_limit(
+                super::turn_loop_policy::ForceSummaryAfterLimitContext {
                     provider: context.conversation.provider.clone(),
                     model: &context.conversation.model,
                     messages: context.messages,
                     trace: context.trace,
                     tx: context.tx,
                     cost_tracker: &context.conversation.cost_tracker,
-                    reason: super::force_summary::ForceSummaryReason::Stuck,
+                    reason: super::turn_loop_policy::ForceSummaryReason::Stuck,
                 },
             )
             .await;

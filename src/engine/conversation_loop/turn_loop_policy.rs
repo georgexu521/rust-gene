@@ -1,17 +1,73 @@
-//! Force summary / wrap-up controller.
-//!
-//! When the conversation is approaching the iteration or token budget limit,
-//! inject a wrap-up instruction. If the model still does not stop, make one
-//! final Reasonix-style summarization call with no tools attached.
-//!
-//! Mirrors Reasonix's `ForceSummaryReason` enum in `loop/force-summary.ts`.
-
+use crate::engine::intent_router::{IntentRoute, RetrievalPolicy, RiskLevel, WorkflowKind};
 use crate::engine::streaming::StreamEvent;
 use crate::engine::trace::{TraceCollector, TraceEvent};
 use crate::services::api::{ChatRequest, LlmProvider, Message};
 use regex::Regex;
 use std::sync::Arc;
 use tokio::sync::{mpsc, Mutex};
+
+// ---------------------------------------------------------------------------
+// MainLoopProfile
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum MainLoopProfile {
+    QuietDirect,
+    Standard,
+}
+
+impl MainLoopProfile {
+    /// Request-shaping only. QuietDirect still enters the model loop; it just
+    /// suppresses optional tools/dynamic context for low-risk direct turns.
+    pub(super) fn from_turn(route: &IntentRoute, required_validation_commands: &[String]) -> Self {
+        let simple_direct = route.workflow == WorkflowKind::Direct
+            && matches!(
+                route.retrieval,
+                RetrievalPolicy::None | RetrievalPolicy::Light
+            )
+            && route.risk == RiskLevel::Low
+            && route.recommended_tools.is_empty()
+            && required_validation_commands.is_empty();
+
+        if simple_direct {
+            Self::QuietDirect
+        } else {
+            Self::Standard
+        }
+    }
+
+    pub(super) fn is_quiet_direct(self) -> bool {
+        matches!(self, Self::QuietDirect)
+    }
+
+    pub(super) fn emit_start_event(self) -> bool {
+        !self.is_quiet_direct()
+    }
+
+    pub(super) fn expose_tools(self) -> bool {
+        !self.is_quiet_direct()
+    }
+
+    pub(super) fn inject_dynamic_context(self) -> bool {
+        !self.is_quiet_direct()
+    }
+
+    pub(super) fn max_loop_iterations(
+        self,
+        configured_max: usize,
+        _repair_attempts: usize,
+    ) -> usize {
+        if self.is_quiet_direct() {
+            1
+        } else {
+            configured_max
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// ForceSummary
+// ---------------------------------------------------------------------------
 
 const FORCE_SUMMARY_MAX_TOKENS: u32 = 2048;
 const FORCE_SUMMARY_INSTRUCTION: &str = "The turn is being force-summarized because the runtime reached a stuck-state or context guard. Summarize in plain prose what you learned from the tool results above. Do NOT emit any tool calls, function-call markup, DSML invocations, or SEARCH/REPLACE edit blocks; they will be discarded. Just plain text.";
@@ -51,8 +107,6 @@ impl ForceSummaryReason {
 /// iterations, meaning the model should stop starting new multi-step tasks
 /// and instead produce a final summary.
 pub fn should_force_summary(iteration: usize, max_iterations: usize) -> bool {
-    // Floor at 1 so single-iteration tasks don't get force-summarized
-    // before their first (and only) attempt.
     iteration >= max_iterations.saturating_sub(2).max(1)
 }
 
@@ -89,9 +143,7 @@ pub(super) struct ForceSummaryAfterLimitContext<'a> {
 }
 
 /// Make one final no-tools summarization call and append the result to the
-/// turn content. This is the hard runtime stop after the normal loop budget is
-/// exhausted; callers should still let the standard completion controller emit
-/// diagnostics and `Complete`.
+/// turn content.
 pub(super) async fn force_summary_after_iter_limit(
     context: ForceSummaryAfterLimitContext<'_>,
 ) -> String {
@@ -175,6 +227,43 @@ fn strip_hallucinated_tool_markup(content: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::engine::intent_router::IntentRouter;
+
+    #[test]
+    fn greeting_uses_quiet_direct_profile() {
+        let route = IntentRouter::new().route("你好");
+
+        assert_eq!(
+            MainLoopProfile::from_turn(&route, &[]),
+            MainLoopProfile::QuietDirect
+        );
+    }
+
+    #[test]
+    fn code_change_uses_standard_profile() {
+        let route = IntentRouter::new().route("帮我做一个天气预报网页");
+
+        assert_eq!(
+            MainLoopProfile::from_turn(&route, &[]),
+            MainLoopProfile::Standard
+        );
+    }
+
+    #[test]
+    fn direct_validation_request_uses_standard_profile() {
+        let route = IntentRouter::new().route("运行 cargo test -q");
+        let required = vec!["cargo test -q".to_string()];
+
+        assert_eq!(
+            MainLoopProfile::from_turn(&route, &required),
+            MainLoopProfile::Standard
+        );
+    }
+
+    #[test]
+    fn standard_profile_respects_configured_reasonix_cap_without_extra_repair_rounds() {
+        assert_eq!(MainLoopProfile::Standard.max_loop_iterations(50, 9), 50);
+    }
 
     #[test]
     fn force_summary_in_last_two_iterations() {
