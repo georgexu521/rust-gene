@@ -589,6 +589,21 @@ impl ConversationLoop {
             replace_last_assistant_message(&mut messages, &correction);
         }
 
+        // Phase 1: 从 DB 恢复对话历史，使进程重启后不丢失上下文
+        if let Some(ref store) = self.session_store {
+            if let Ok(restored) = store.restore_history(&self.session_id) {
+                if !restored.is_empty() {
+                    // messages = [system_prompt, user_message]
+                    // 重建为 [system_prompt, ...history..., user_message]
+                    let system_msg = messages.remove(0);
+                    let mut combined = vec![system_msg];
+                    combined.extend(restored);
+                    combined.append(&mut messages);
+                    messages = combined;
+                }
+            }
+        }
+
         let setup = TurnSetupController::prepare(TurnSetupContext {
             conversation: self,
             messages: &messages,
