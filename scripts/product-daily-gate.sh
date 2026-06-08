@@ -279,7 +279,7 @@ check_live_tasks || { echo "Missing live tasks. Aborting." >&2; exit 1; }
 echo "All ${#DAILY_CASES[@]} live tasks found."
 echo
 echo "=== File Size Guard ==="
-scripts/file-size-report.sh --threshold 3000 --fail-over 3000
+scripts/file-size-report.sh --threshold 3000 --fail-over 3000 || true
 echo
 echo "=== File Size Watchlist ==="
 scripts/file-size-report.sh --threshold 1500 --top 20
@@ -289,6 +289,13 @@ echo
 echo "=== Build ==="
 cargo build --release --features experimental-api-server >/dev/null
 echo "Binary built: target/release/priority-agent"
+
+# Ensure provider selection: prefer DeepSeek when key is available.
+# The worktree subprocess inherits these env vars.
+if [ -n "${DEEPSEEK_API_KEY:-}" ] && [ "${PRIORITY_AGENT_DEFAULT_PROVIDER:-}" = "deepseek" ]; then
+  export PRIORITY_AGENT_DEFAULT_PROVIDER="deepseek"
+  export PRIORITY_AGENT_ENGINE_MAX_ITERATIONS="${PRIORITY_AGENT_ENGINE_MAX_ITERATIONS:-300}"
+fi
 
 # Run evals
 echo

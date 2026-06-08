@@ -590,7 +590,12 @@ File.write(metadata_path, JSON.pretty_generate(sample) + "\n")
     if [[ -n "$runtime_profile" ]]; then
       echo "- Runtime profile: $runtime_profile"
     fi
-    echo "- MiniMax model: ${MINIMAX_MODEL:-MiniMax-M3}"
+    if [[ -n "${DEEPSEEK_API_KEY:-}" ]]; then
+      echo "- DeepSeek model: ${DEEPSEEK_MODEL:-deepseek-v4-pro}"
+    fi
+    if [[ -n "${MINIMAX_API_KEY:-}" ]]; then
+      echo "- MiniMax model: ${MINIMAX_MODEL:-MiniMax-M3}"
+    fi
     if [[ -s "$prepare_log" ]]; then
       echo "- Prepare log: $prepare_log"
     fi
@@ -635,11 +640,16 @@ File.write(metadata_path, JSON.pretty_generate(sample) + "\n")
     elif [[ -n "$runtime_profile" ]]; then
       echo "PRIORITY_AGENT_RUNTIME_PROFILE=\"$runtime_profile\" \\"
     fi
-    echo "MINIMAX_API_KEY=\"\${MINIMAX_API_KEY:?}\" \\"
+    echo "MINIMAX_API_KEY=\"\${MINIMAX_API_KEY:-}\" \\"
     echo "MINIMAX_BASE_URL=\"\${MINIMAX_BASE_URL:-}\" \\"
     echo "MINIMAX_MODEL=\"\${MINIMAX_MODEL:-MiniMax-M3}\" \\"
+    echo "DEEPSEEK_API_KEY=\"\${DEEPSEEK_API_KEY:-}\" \\"
+    echo "DEEPSEEK_BASE_URL=\"\${DEEPSEEK_BASE_URL:-}\" \\"
+    echo "DEEPSEEK_MODEL=\"\${DEEPSEEK_MODEL:-deepseek-v4-pro}\" \\"
     echo "OPENAI_API_KEY=\"\" \\"
     echo "MOONSHOT_API_KEY=\"\" \\"
+    echo "PRIORITY_AGENT_DEFAULT_PROVIDER=\"\${PRIORITY_AGENT_DEFAULT_PROVIDER:-}\" \\"
+    echo "PRIORITY_AGENT_ENGINE_MAX_ITERATIONS=\"\${PRIORITY_AGENT_ENGINE_MAX_ITERATIONS:-}\" \\"
     echo "\"$ROOT_DIR/target/release/priority-agent\""
     echo '```'
     echo
@@ -679,8 +689,8 @@ api_plan_task() {
   lint_file="$report_dir/plan-lint.txt"
   env_base="$(task_env_base "$id")"
 
-  if [[ -z "${MINIMAX_API_KEY:-}" ]]; then
-    echo "MINIMAX_API_KEY is required for api-plan/full mode." >&2
+  if [[ -z "${MINIMAX_API_KEY:-}" ]] && [[ -z "${DEEPSEEK_API_KEY:-}" ]]; then
+    echo "MINIMAX_API_KEY or DEEPSEEK_API_KEY is required for api-plan/full mode." >&2
     exit 1
   fi
 
@@ -1015,6 +1025,11 @@ env.update({
     "MINIMAX_API_KEY": os.environ.get("MINIMAX_API_KEY", ""),
     "MINIMAX_BASE_URL": os.environ.get("MINIMAX_BASE_URL", ""),
     "MINIMAX_MODEL": os.environ.get("MINIMAX_MODEL", "MiniMax-M3"),
+    "DEEPSEEK_API_KEY": os.environ.get("DEEPSEEK_API_KEY", ""),
+    "DEEPSEEK_BASE_URL": os.environ.get("DEEPSEEK_BASE_URL", ""),
+    "DEEPSEEK_MODEL": os.environ.get("DEEPSEEK_MODEL", "deepseek-v4-pro"),
+    "PRIORITY_AGENT_DEFAULT_PROVIDER": os.environ.get("PRIORITY_AGENT_DEFAULT_PROVIDER", ""),
+    "PRIORITY_AGENT_ENGINE_MAX_ITERATIONS": os.environ.get("PRIORITY_AGENT_ENGINE_MAX_ITERATIONS", ""),
 })
 if runtime_profile:
     env["PRIORITY_AGENT_RUNTIME_PROFILE"] = runtime_profile
