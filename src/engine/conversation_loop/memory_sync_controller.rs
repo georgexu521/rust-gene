@@ -128,6 +128,25 @@ impl MemorySyncController {
                 });
             }
         }
+
+        // ── Background prune: async compress old tool outputs after turn ──
+        if crate::engine::message_compression::background_prune_enabled() {
+            let mut messages = context.messages.to_vec();
+            tokio::spawn(async move {
+                let report = crate::engine::message_compression::background_prune_tool_outputs(
+                    &mut messages,
+                );
+                if report.pruned_count > 0 {
+                    debug!(
+                        "Background prune: {} old tool outputs compressed ({} chars before, {} after, {} evidence preserved)",
+                        report.pruned_count,
+                        report.chars_before,
+                        report.chars_after,
+                        report.evidence_preserved,
+                    );
+                }
+            });
+        }
     }
 
     fn turn_used_memory_tool(messages: &[Message]) -> bool {

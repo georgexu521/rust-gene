@@ -114,6 +114,79 @@ fn selective_compression_enabled() -> bool {
     )
 }
 
+/// 后台异步裁剪：在每次 turn 结束后扫描旧 tool output，
+/// 将非 evidence 的旧输出压缩为结构化摘要。
+/// 保护：最近 2 轮 + required validation evidence + 失败输出的关键错误行。
+/// 借鉴 OpenCode 的 `prune()` 后台裁剪模式。
+pub fn background_prune_tool_outputs(
+    messages: &mut Vec<Message>,
+) -> BackgroundPruneReport {
+    let mut report = BackgroundPruneReport::default();
+    if !background_prune_enabled() {
+        return report;
+    }
+
+    let preserve_boundary = find_preserve_boundary(messages, 2);
+    for i in 0..preserve_boundary.min(messages.len()) {
+        if let Message::Tool {
+            content,
+            tool_call_id,
+        } = &messages[i]
+        {
+            if content.len() <= 500 {
+                continue;
+            }
+            // 保护: required validation evidence
+            if is_validation_evidence(content) {
+                report.evidence_preserved += 1;
+                continue;
+            }
+            // 保护: 失败输出的关键错误行已在 compress_tool_output 中保留
+            let summary = compress_tool_output(tool_call_id, content);
+            report.pruned_count += 1;
+            report.chars_before += content.len();
+            report.chars_after += summary.len();
+            messages[i] = Message::Tool {
+                tool_call_id: tool_call_id.clone(),
+                content: summary,
+            };
+        }
+    }
+
+    report
+}
+
+/// 检查 tool output 是否是 required validation 证据。
+/// 保护: [exit status:], cargo test, rg, 所有 required command 的输出。
+fn is_validation_evidence(content: &str) -> bool {
+    let lower = content.to_ascii_lowercase();
+    content.contains("[exit status:")
+        || content.contains("required command")
+        || lower.contains("cargo test")
+        || lower.contains("cargo check")
+        || lower.contains("cargo build")
+        || (lower.contains("rg ") && lower.contains("fixtures/"))
+}
+
+pub fn background_prune_enabled() -> bool {
+    matches!(
+        std::env::var("PRIORITY_AGENT_BACKGROUND_PRUNE")
+            .unwrap_or_default()
+            .trim()
+            .to_ascii_lowercase()
+            .as_str(),
+        "1" | "true" | "yes" | "on"
+    )
+}
+
+#[derive(Debug, Default)]
+pub struct BackgroundPruneReport {
+    pub pruned_count: usize,
+    pub evidence_preserved: usize,
+    pub chars_before: usize,
+    pub chars_after: usize,
+}
+
 #[derive(Debug, Default)]
 pub struct SelectiveCompressionReport {
     pub compressed_count: usize,
