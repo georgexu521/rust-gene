@@ -7,6 +7,7 @@ impl TraceEvent {
             TraceEvent::IntentRouted { .. } => "intent",
             TraceEvent::RouteCandidateEvaluated { .. } => "route.candidate",
             TraceEvent::RouteCompetitionSummary { .. } => "route.competition",
+            TraceEvent::ContextTokenBreakdown { .. } => "context.tokens",
             TraceEvent::ResourcePolicySelected { .. } => "resource.policy",
             TraceEvent::TaskContextBuilt { .. } => "task.context",
             TraceEvent::TaskContractMaterialized { .. } => "task.contract",

@@ -322,6 +322,7 @@ fn control_loop_phase_for_event(event: &TraceEvent) -> Option<&'static str> {
         | TraceEvent::IntentRouted { .. }
         | TraceEvent::RouteCandidateEvaluated { .. }
         | TraceEvent::RouteCompetitionSummary { .. }
+        | TraceEvent::ContextTokenBreakdown { .. }
         | TraceEvent::ResourcePolicySelected { .. }
         | TraceEvent::TaskContextBuilt { .. }
         | TraceEvent::TaskContractMaterialized { .. }

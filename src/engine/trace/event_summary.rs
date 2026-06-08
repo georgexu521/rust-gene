@@ -10,6 +10,7 @@ impl TraceEvent {
             | TraceEvent::IntentRouted { .. }
             | TraceEvent::RouteCandidateEvaluated { .. }
             | TraceEvent::RouteCompetitionSummary { .. }
+            | TraceEvent::ContextTokenBreakdown { .. }
             | TraceEvent::ResourcePolicySelected { .. }
             | TraceEvent::TaskContextBuilt { .. }
             | TraceEvent::TaskContractMaterialized { .. }

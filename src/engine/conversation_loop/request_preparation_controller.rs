@@ -108,6 +108,7 @@ impl RequestPreparationController {
         }
         let zone_envelope_stats = Self::normalize_context_zone_envelope(&mut request_messages);
         Self::record_context_zones(&request_messages, trace, &zone_envelope_stats);
+        Self::record_token_breakdown(&request_messages, trace);
         let canonical_tools = crate::engine::cache_stability::canonicalize_provider_tools(tools);
         Self::record_cache_stability_snapshot(&request_messages, &canonical_tools, trace);
 
@@ -752,6 +753,62 @@ impl RequestPreparationController {
             zone_source_messages: envelope_stats.source_messages,
             zone_duplicate_blocks_removed: envelope_stats.duplicate_blocks_removed,
             zone_provenance_markers: envelope_stats.provenance_markers,
+        });
+    }
+
+    fn record_token_breakdown(
+        request_messages: &[Message],
+        trace: &TraceCollector,
+    ) {
+        let mut system_chars = 0usize;
+        let mut history_chars = 0usize;
+        let mut tool_result_chars = 0usize;
+        let mut dynamic_zone_chars = 0usize;
+        let mut last_user_chars = 0usize;
+
+        let total = request_messages.len();
+        for (i, msg) in request_messages.iter().enumerate() {
+            let chars: usize = match msg {
+                Message::System { content } | Message::User { content } => content.chars().count(),
+                Message::Assistant { content, .. } => content.chars().count(),
+                Message::Tool { content, .. } => content.chars().count(),
+            };
+            if i < total.saturating_sub(1) && matches!(msg, Message::Tool { .. }) {
+                tool_result_chars += chars;
+            } else if i < total.saturating_sub(1) {
+                history_chars += chars;
+            }
+            if matches!(msg, Message::System { .. }) {
+                system_chars += chars;
+            }
+            if i == total.saturating_sub(1) {
+                last_user_chars = chars;
+            }
+            let content_str = match msg {
+                Message::System { content } | Message::User { content } => content.as_str(),
+                Message::Assistant { content, .. } => content.as_str(),
+                Message::Tool { content, .. } => content.as_str(),
+            };
+            if content_str.contains("<task-state>")
+                || content_str.contains("<task-guidance>")
+                || content_str.contains("<relevant-memory>")
+                || content_str.contains("<task-contract>")
+            {
+                dynamic_zone_chars += chars;
+            }
+        }
+
+        trace.record(TraceEvent::ContextTokenBreakdown {
+            total_chars: request_messages.iter().map(|m| match m {
+                Message::System { content } | Message::User { content } => content.chars().count(),
+                Message::Assistant { content, .. } => content.chars().count(),
+                Message::Tool { content, .. } => content.chars().count(),
+            }).sum(),
+            system_chars,
+            history_chars,
+            tool_result_chars,
+            dynamic_zone_chars,
+            last_user_chars,
         });
     }
 

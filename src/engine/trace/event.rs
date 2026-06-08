@@ -32,6 +32,15 @@ pub enum TraceEvent {
         candidate_count: usize,
         delta: f32,
     },
+    /// Token breakdown per request: distribution of tokens by source type.
+    ContextTokenBreakdown {
+        total_chars: usize,
+        system_chars: usize,
+        history_chars: usize,
+        tool_result_chars: usize,
+        dynamic_zone_chars: usize,
+        last_user_chars: usize,
+    },
     ResourcePolicySelected {
         latency: String,
         target_ms: u64,
