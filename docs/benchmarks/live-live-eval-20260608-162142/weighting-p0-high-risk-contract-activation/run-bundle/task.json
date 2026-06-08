@@ -1,0 +1,29 @@
+{
+  "schema": "agent_run_bundle.v1",
+  "task_id": "weighting-p0-high-risk-contract-activation",
+  "run_id": "live-eval-20260608-162142",
+  "generated_at": "2026-06-08T08:23:56.372616+00:00",
+  "goal_summary": "seeded_code_change",
+  "mode": "agent-run",
+  "final_status": "failed",
+  "terminal_status": "completed",
+  "stop_reason": "no_issue",
+  "modified_files": "2",
+  "validation_status": "ok",
+  "verification_status": "passed",
+  "closeout_status": "passed",
+  "scores": {
+    "outcome": "65",
+    "process": "85",
+    "efficiency": "100",
+    "agent": "78",
+    "penalties": "run_failed,runtime_spine_failed,runtime_spine_not_passing"
+  },
+  "artifacts": {
+    "source_report": "docs/benchmarks/live-live-eval-20260608-162142/weighting-p0-high-risk-contract-activation/report.md",
+    "source_events": "docs/benchmarks/live-live-eval-20260608-162142/weighting-p0-high-risk-contract-activation/agent-events.jsonl",
+    "steps": "docs/benchmarks/live-live-eval-20260608-162142/weighting-p0-high-risk-contract-activation/run-bundle/steps.jsonl",
+    "events": "docs/benchmarks/live-live-eval-20260608-162142/weighting-p0-high-risk-contract-activation/run-bundle/events.jsonl",
+    "final_report": "docs/benchmarks/live-live-eval-20260608-162142/weighting-p0-high-risk-contract-activation/run-bundle/final_report.md"
+  }
+}

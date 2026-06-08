@@ -97,18 +97,20 @@ pub fn inject_task_guidance(messages: &mut Vec<Message>, trace: &TraceCollector)
             tool,
             action_score,
             uncertainty_reduction,
+            risk,
             reason,
             ..
         } = event
         {
-            let mut action = format!(
-                "\"{}\" score={} uncertainty_reduction={}",
-                compact_fact(tool, 40),
-                action_score,
-                uncertainty_reduction
-            );
+            let mut action = format!("\"{}\" score={}", compact_fact(tool, 40), action_score);
+            if *risk >= 7 {
+                action.push_str(" high_risk");
+            }
+            if *uncertainty_reduction <= 2 {
+                action.push_str(" low_evidence");
+            }
             if !reason.trim().is_empty() {
-                action.push_str(&format!(" reason=\"{}\"", compact_fact(reason, 80)));
+                action.push_str(&format!(" \"{}\"", compact_fact(reason, 80)));
             }
             Some(action)
         } else {
@@ -116,7 +118,28 @@ pub fn inject_task_guidance(messages: &mut Vec<Message>, trace: &TraceCollector)
         }
     });
 
-    let mut lines: Vec<String> = Vec::with_capacity(4);
+    // 记忆信号：最近一次写入决策 + 召回统计
+    let memory_signal = events.iter().rev().find_map(|event| {
+        if let TraceEvent::MemoryWriteScored {
+            ref status,
+            score,
+            ref reason,
+            ..
+        } = event
+        {
+            let label = match status.as_str() {
+                "rejected" => format!("rejected({:.2})", score),
+                "proposed" => format!("proposed({:.2})", score),
+                "accepted" => format!("accepted({:.2})", score),
+                _ => format!("{}({:.2})", status, score),
+            };
+            Some(format!("memory_write={} {}", label, compact_fact(reason, 60)))
+        } else {
+            None
+        }
+    });
+
+    let mut lines: Vec<String> = Vec::with_capacity(6);
     if let Some(s) = stage {
         lines.push(format!("stage={}", s));
     }
@@ -128,6 +151,14 @@ pub fn inject_task_guidance(messages: &mut Vec<Message>, trace: &TraceCollector)
     }
     if let Some(action) = recent_action {
         lines.push(format!("recent_action={}", action));
+    }
+    if let Some(mem) = memory_signal {
+        lines.push(format!("memory={}", mem));
+    }
+
+    // 严格 ≤4 行：优先保留 stage + top_plan_step + risk，截断尾部
+    if lines.len() > 4 {
+        lines.truncate(4);
     }
 
     if lines.is_empty() {
@@ -248,7 +279,7 @@ mod tests {
         assert!(content.contains("stage=Implementation"));
         assert!(content.contains("top_plan_step=\"implement weighted trace recording\" importance=0.91 share=0.62 source=workflow_contract"));
         assert!(content.contains("risk=elevated (mutating code)"));
-        assert!(content.contains("recent_action=\"file_read\" score=6 uncertainty_reduction=2"));
+        assert!(content.contains("recent_action=\"file_read\" score=6 low_evidence \"low uncertainty reduction\""));
 
         if let Some(value) = previous {
             std::env::set_var("PRIORITY_AGENT_TASK_GUIDANCE", value);
