@@ -1,8 +1,12 @@
-//! 源码级权重计算引擎
+//! 源码级权重计算引擎（MAINTENANCE-ONLY）
 //!
 //! 核心原则：权重规则硬编码在 Rust 源码中，不是提示词。
 //! LLM 可以参与打分，但最终排序由规则引擎裁决。
 //!
+//! 🟡 维护状态：仅供 legacy 工作流使用（LegacyWorkflowGateController）。
+//! 不添加新功能，不调整系数。核心加权逻辑已迁移至 workflow_contract.rs。
+//! 保留原因：legacy 路径活跃（turn_entry_gate_controller.rs:104），不能删除。
+//! 参见 docs/WEIGHTING_SYSTEM_AUDIT_2026-06-08.md 第 3 节和第 4 节。
 //! 评分模型：
 //!   RawScore = Risk + Impact + Complexity + BlockerValue - DependencyPenalty - DriftPenalty
 //!   每项范围 [-20, +20]，RawScore 范围 [-120, +120]

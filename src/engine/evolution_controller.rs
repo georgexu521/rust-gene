@@ -1,3 +1,11 @@
+//! Evolution controller (MAINTENANCE-ONLY)
+//!
+//! Gates whether the agent can auto-evolve prompts, tools, workflows, or core code.
+//!
+//! 🟡 维护状态：gated 功能，cooldown 5 轮。当前不活跃，保留用于 future
+//! auto-evolution 实验。不调整系数，不添加新 triger 类型。
+//! 参见 docs/WEIGHTING_SYSTEM_AUDIT_2026-06-08.md 第 3 节。
+
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 

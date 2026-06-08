@@ -1,8 +1,13 @@
-//! Runtime-owned action decision scoring.
+//! Runtime-owned action decision scoring（CORE — 活跃维护）
 //!
 //! V1 scores tool calls deterministically from the current route, task stage,
 //! and tool semantics. The model can still reason freely; the runtime records a
 //! compact decision object at the action boundary.
+//!
+//! 🟢 活跃维护：ActionReview 硬门（deny/revise/ask-user）和 task-guidance
+//! 注入依赖此模块。不调整 6 维系数（value/risk/uncertainty/cost/reverse/scope）
+//! 除非 calibration cases 证明需要。
+//! 参见 docs/WEIGHTING_SYSTEM_AUDIT_2026-06-08.md 第 1 节。
 
 use crate::engine::intent_router::{RiskLevel, WorkflowKind};
 use crate::engine::task_context::AgentTaskStage;

@@ -1,8 +1,13 @@
-//! Gated candidate-action scoring.
+//! Gated candidate-action scoring（MAINTENANCE-ONLY）
 //!
 //! This module intentionally does not force every turn through candidate JSON.
 //! It provides the small runtime contract used when the agent is stuck,
 //! repeatedly revised, or about to take a risky low-value action.
+//!
+//! 🟡 维护状态：默认关闭（model_led_weighting_enabled() → false）。
+//! Shadow 模式已关闭以节省 token/CPU。Gated 模式保留用于 future
+//! repeated-revision / uncertainty-loop 场景，但当前未激活。
+//! 参见 docs/WEIGHTING_SYSTEM_AUDIT_2026-06-08.md 第 3 节。
 //! Candidate order and model-provided scores remain authoritative for semantic
 //! selection; runtime scores are advisory calibration evidence.
 
