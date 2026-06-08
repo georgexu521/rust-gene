@@ -1,0 +1,1 @@
+{"observation": "Result: OK\nApplied file_patch successfully: 1 operation(s), 1 file(s)", "permission_result": "missing", "raw_event_type": "tool_execution_start", "schema": "agent_run_step.v1", "selected_action": "file_patch", "stage_after": "missing", "stage_before": "missing", "step": 1, "tool_name": "file_patch", "tool_result_status": "ok"}

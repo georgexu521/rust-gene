@@ -1,0 +1,27 @@
+{
+  "status": "ok",
+  "model": "deepseek-v4-flash",
+  "base_url": "https://api.deepseek.com",
+  "timeout_secs": 45,
+  "duration_ms": 3811,
+  "steps": [
+    {
+      "name": "plain_chat",
+      "status": "ok",
+      "duration_ms": 1202,
+      "detail": "content_chars=18"
+    },
+    {
+      "name": "tool_call",
+      "status": "ok",
+      "duration_ms": 1404,
+      "detail": "tool_call_id=call_00_eIcyLsSMbhu51yaToGnc5790"
+    },
+    {
+      "name": "tool_result_continuation",
+      "status": "ok",
+      "duration_ms": 1204,
+      "detail": "content_chars=39"
+    }
+  ]
+}

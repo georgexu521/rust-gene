@@ -1,0 +1,4 @@
+
+thread 'tokio-rt-worker' (4941541) panicked at src/engine/trace/event_summary_workflow.rs:384:14:
+internal error: entered unreachable code: workflow trace summary called for non-workflow event
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace

@@ -1,0 +1,16 @@
+{
+  "status": 0,
+  "termination_reason": "process_exit",
+  "started_at_epoch": 1780915776.7514849,
+  "elapsed_secs": 35.395,
+  "idle_for_secs": 0.025,
+  "no_effective_progress_for_secs": 0.025,
+  "first_activity_after_start_secs": 0.109,
+  "first_effective_action_after_start_secs": 35.369,
+  "provider_family": "minimax",
+  "provider_model": "MiniMax-M3",
+  "streaming_tool_mode": "non_streaming",
+  "wall_timeout_secs": 0,
+  "idle_timeout_secs": 0,
+  "no_effective_progress_timeout_secs": 0
+}
