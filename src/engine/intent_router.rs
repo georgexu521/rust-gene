@@ -108,6 +108,17 @@ impl IntentRoute {
 #[derive(Debug, Default, Clone)]
 pub struct IntentRouter;
 
+fn route_diagnostics_enabled() -> bool {
+    matches!(
+        std::env::var("PRIORITY_AGENT_ROUTE_DIAGNOSTICS")
+            .unwrap_or_default()
+            .trim()
+            .to_ascii_lowercase()
+            .as_str(),
+        "1" | "true" | "yes" | "on"
+    )
+}
+
 impl IntentRouter {
     pub fn new() -> Self {
         Self
@@ -461,6 +472,61 @@ impl IntentRouter {
         let feedback = LearningFeedback::from_events(events);
         feedback.apply(&mut route);
         route
+    }
+
+    /// Record all route candidates that matched heuristics (shadow diagnostics).
+    /// Gated by `PRIORITY_AGENT_ROUTE_DIAGNOSTICS=1`. Does not change routing.
+    pub fn record_route_candidates(
+        &self,
+        user_message: &str,
+        trace: &crate::engine::trace::TraceCollector,
+    ) {
+        if !route_diagnostics_enabled() {
+            return;
+        }
+        let text = user_message.trim();
+        let lower = text.to_ascii_lowercase();
+        let zh = text;
+
+        let signals: Vec<(&str, bool)> = vec![
+            ("live_coding_code_change", is_live_coding_code_change_request(&lower)),
+            ("live_coding_audit", is_live_coding_audit_request(&lower)),
+            ("memory", contains_any(&lower, &["/memory", "remember", "memory", "recall"]) || contains_any(zh, &["记忆", "记住", "回忆"])),
+            ("code_change", is_code_change_request(&lower, zh)),
+            ("code_creation", is_natural_code_creation_request(&lower, zh)),
+            ("debug", is_debug_request(&lower, zh)),
+            ("read_only", is_read_only_request(&lower, zh)),
+            ("file_mutation", is_file_mutation_request(&lower, zh)),
+            ("local_inspection", is_local_inspection_request(&lower, zh)),
+            ("file_read", is_file_read_request(&lower, zh)),
+            ("calculation", is_calculation_request(&lower, zh)),
+            ("terminal_op", is_terminal_operation_request(&lower, zh)),
+            ("dependency_install", is_dependency_install_request(&lower, zh)),
+            ("mcp_auth", is_mcp_auth_request(&lower, zh)),
+            ("delegation", contains_any(&lower, &["delegate", "subagent", "委派", "分派"])),
+            ("research", contains_any(&lower, &["search", "research", "find", "查找", "搜索"])),
+            ("planning", contains_any(&lower, &["plan", "design", "architect", "规划", "设计", "方案"])),
+        ];
+
+        let matching: Vec<(&str, bool)> = signals.into_iter().filter(|(_, hit)| *hit).collect();
+        for (signal_name, _) in &matching {
+            trace.record(crate::engine::trace::TraceEvent::RouteCandidateEvaluated {
+                intent: signal_name.to_string(),
+                confidence: 0.5, // placeholder: full confidence scoring is P1 follow-up
+                matched_signals: vec![signal_name.to_string()],
+                reason: format!("heuristic {} matched for '{}'", signal_name, &text.chars().take(60).collect::<String>()),
+            });
+        }
+        if matching.len() >= 2 {
+            trace.record(crate::engine::trace::TraceEvent::RouteCompetitionSummary {
+                selected_intent: String::new(), // filled by caller after route() returns
+                selected_confidence: 0.0,
+                runner_up_intent: matching.get(1).map(|(n, _)| n.to_string()).unwrap_or_default(),
+                runner_up_confidence: 0.5,
+                candidate_count: matching.len(),
+                delta: 0.0,
+            });
+        }
     }
 
     fn direct(&self, reason: impl Into<String>, confidence: f32) -> IntentRoute {

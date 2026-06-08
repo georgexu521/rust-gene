@@ -101,7 +101,7 @@ async fn prepare_skips_memory_prefetch_without_memory_manager() {
     assert!(matches!(
         prepared.request.messages.last(),
         Some(Message::User { content })
-            if content.contains("Model-led action weighting")
+            if content.contains("remembered context should not be injected")
                 && !content.contains("memory.match:")
     ));
     assert_eq!(runtime_diet.retrieval_items, 0);

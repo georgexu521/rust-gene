@@ -320,6 +320,8 @@ fn control_loop_phase_for_event(event: &TraceEvent) -> Option<&'static str> {
     match event {
         TraceEvent::UserPromptSubmitted { .. }
         | TraceEvent::IntentRouted { .. }
+        | TraceEvent::RouteCandidateEvaluated { .. }
+        | TraceEvent::RouteCompetitionSummary { .. }
         | TraceEvent::ResourcePolicySelected { .. }
         | TraceEvent::TaskContextBuilt { .. }
         | TraceEvent::TaskContractMaterialized { .. }

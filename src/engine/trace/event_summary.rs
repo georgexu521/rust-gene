@@ -8,6 +8,8 @@ impl TraceEvent {
         match self {
             TraceEvent::UserPromptSubmitted { .. }
             | TraceEvent::IntentRouted { .. }
+            | TraceEvent::RouteCandidateEvaluated { .. }
+            | TraceEvent::RouteCompetitionSummary { .. }
             | TraceEvent::ResourcePolicySelected { .. }
             | TraceEvent::TaskContextBuilt { .. }
             | TraceEvent::TaskContractMaterialized { .. }

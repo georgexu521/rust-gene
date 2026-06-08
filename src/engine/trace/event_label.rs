@@ -5,6 +5,8 @@ impl TraceEvent {
         match self {
             TraceEvent::UserPromptSubmitted { .. } => "prompt",
             TraceEvent::IntentRouted { .. } => "intent",
+            TraceEvent::RouteCandidateEvaluated { .. } => "route.candidate",
+            TraceEvent::RouteCompetitionSummary { .. } => "route.competition",
             TraceEvent::ResourcePolicySelected { .. } => "resource.policy",
             TraceEvent::TaskContextBuilt { .. } => "task.context",
             TraceEvent::TaskContractMaterialized { .. } => "task.contract",

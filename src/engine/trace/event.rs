@@ -16,6 +16,22 @@ pub enum TraceEvent {
         risk: String,
         reason: String,
     },
+    /// Route candidate that matched but was NOT selected (shadow diagnostics).
+    RouteCandidateEvaluated {
+        intent: String,
+        confidence: f32,
+        matched_signals: Vec<String>,
+        reason: String,
+    },
+    /// Summary of route competition: selected candidate + runner-up + delta.
+    RouteCompetitionSummary {
+        selected_intent: String,
+        selected_confidence: f32,
+        runner_up_intent: String,
+        runner_up_confidence: f32,
+        candidate_count: usize,
+        delta: f32,
+    },
     ResourcePolicySelected {
         latency: String,
         target_ms: u64,
