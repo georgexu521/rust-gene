@@ -9,6 +9,9 @@ pub(super) struct TurnLoopState {
     pub(super) pseudo_tool_retry_used: bool,
     pub(super) filesystem_grounding_retry_used: bool,
     pub(super) continuation_retry_used: bool,
+    /// Post-tool empty nudge: when the model returns empty content after
+    /// having already executed tool calls, inject one "keep going" nudge.
+    pub(super) post_tool_empty_retry_used: bool,
     pub(super) companion_context_keys: HashSet<String>,
     pub(super) failed_tool_fingerprints: HashMap<String, usize>,
     pub(super) failed_tool_names: HashMap<String, usize>,

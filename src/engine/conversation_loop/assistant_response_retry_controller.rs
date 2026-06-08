@@ -17,6 +17,7 @@ pub(super) struct AssistantResponseRetryRequest<'a> {
     pub(super) pseudo_tool_retry_used: bool,
     pub(super) filesystem_grounding_retry_used: bool,
     pub(super) continuation_retry_used: bool,
+    pub(super) post_tool_empty_retry_used: bool,
 }
 
 pub(super) struct AssistantResponseRetryDecision {
@@ -26,6 +27,7 @@ pub(super) struct AssistantResponseRetryDecision {
     pub(super) mark_pseudo_tool_retry_used: bool,
     pub(super) mark_filesystem_grounding_retry_used: bool,
     pub(super) mark_continuation_retry_used: bool,
+    pub(super) mark_post_tool_empty_retry_used: bool,
 }
 
 pub(super) struct AssistantResponseRetryApplicationContext<'a> {
@@ -33,6 +35,7 @@ pub(super) struct AssistantResponseRetryApplicationContext<'a> {
     pub(super) pseudo_tool_retry_used: &'a mut bool,
     pub(super) filesystem_grounding_retry_used: &'a mut bool,
     pub(super) continuation_retry_used: &'a mut bool,
+    pub(super) post_tool_empty_retry_used: &'a mut bool,
     pub(super) trace: &'a TraceCollector,
     pub(super) messages: &'a mut Vec<Message>,
 }
@@ -46,6 +49,7 @@ pub(super) struct NoToolAssistantResponseContext<'a> {
     pub(super) pseudo_tool_retry_used: &'a mut bool,
     pub(super) filesystem_grounding_retry_used: &'a mut bool,
     pub(super) continuation_retry_used: &'a mut bool,
+    pub(super) post_tool_empty_retry_used: &'a mut bool,
     pub(super) provider: &'a dyn LlmProvider,
     pub(super) tools: &'a [Tool],
     pub(super) tx: Option<&'a mpsc::Sender<StreamEvent>>,
@@ -64,6 +68,13 @@ impl AssistantResponseRetryController {
     pub(super) fn evaluate(
         request: AssistantResponseRetryRequest<'_>,
     ) -> Option<AssistantResponseRetryDecision> {
+        // Post-tool empty response nudge: when the model returns empty after
+        // having executed tool calls, inject a "keep going" correction.
+        // Borrowed from Hermes' `_post_tool_empty_retried` pattern.
+        let needs_post_tool_empty_nudge = !request.post_tool_empty_retry_used
+            && request.tool_calls_made
+            && request.content.trim().is_empty();
+
         let needs_bash_tool_retry = pseudo_tool_text::contains_unexecuted_tool_command(
             request.content,
             request.exposed_tool_names,
@@ -81,8 +92,9 @@ impl AssistantResponseRetryController {
         let needs_continuation_retry =
             request.tool_calls_made && is_continuation_only_response(request.content);
 
-        let should_retry = (!request.pseudo_tool_retry_used
-            && (needs_bash_tool_retry || needs_filesystem_tool_retry))
+        let should_retry = needs_post_tool_empty_nudge
+            || (!request.pseudo_tool_retry_used
+                && (needs_bash_tool_retry || needs_filesystem_tool_retry))
             || (!request.filesystem_grounding_retry_used && needs_filesystem_grounding_retry)
             || (!request.continuation_retry_used && needs_continuation_retry);
         if !should_retry {
@@ -94,7 +106,14 @@ impl AssistantResponseRetryController {
             correction,
             mark_filesystem_grounding_retry_used,
             mark_continuation_retry_used,
-        ) = if needs_filesystem_grounding_retry {
+            mark_post_tool_empty_retry_used,
+        ) = if needs_post_tool_empty_nudge {
+            (
+                "assistant returned empty after executing tool calls; nudging to continue processing".to_string(),
+                "You just executed tool calls but returned an empty response. Please process the tool results above and continue with the task.",
+                false, false, true,
+            )
+        } else if needs_filesystem_grounding_retry {
             (
                 format!(
                     "assistant included unsupported filesystem claim(s): {}; retrying with evidence-grounded correction",
@@ -103,8 +122,7 @@ impl AssistantResponseRetryController {
                 "Your previous answer added filesystem metadata that was not explicitly supported by tool output. \
 Re-answer from the evidence already gathered. Do not state size, item count, creation time, or exact contents unless the tool output directly contains that fact. \
 If the user did not ask for those metadata fields, omit them.",
-                true,
-                false,
+                true, false, false,
             )
         } else if needs_filesystem_tool_retry {
             (
@@ -113,8 +131,7 @@ If the user did not ask for those metadata fields, omit them.",
 The user asked for current local filesystem state, so do not answer from memory or inference. \
 Inspect the requested path with file_read or glob now, then answer only from that tool output. \
 Do not invent size, item count, creation time, or contents that are not present in tool output.",
-                    false,
-                    false,
+                    false, false, false,
                 )
         } else if needs_continuation_retry {
             (
@@ -122,8 +139,7 @@ Do not invent size, item count, creation time, or contents that are not present 
                     "Your previous response said you would continue investigating, but it did not call a tool and it did not answer the user. \
 Use the tool results already gathered. If the answer is knowable, provide the final answer now in the user's requested format. \
 Only call a tool if one specific missing fact is required. Do not reply with planning prose such as \"I'll check\" or \"continuing\" without a tool call.",
-                    false,
-                    true,
+                    false, true, false,
                 )
         } else {
             (
@@ -132,8 +148,7 @@ Only call a tool if one specific missing fact is required. Do not reply with pla
 The user asked for current local/runtime state, so do not answer from an unexecuted command and do not claim bash is unavailable. \
 If a command appears in a code block or your answer asks the user to run a shell command manually, execute it with the bash tool now. \
 Only report a tool as unavailable when it is not exposed in the current tool list.",
-                    false,
-                    false,
+                    false, false, false,
                 )
         };
 
@@ -145,9 +160,11 @@ Only report a tool as unavailable when it is not exposed in the current tool lis
                 correction
             )),
             mark_pseudo_tool_retry_used: !mark_filesystem_grounding_retry_used
-                && !mark_continuation_retry_used,
+                && !mark_continuation_retry_used
+                && !mark_post_tool_empty_retry_used,
             mark_filesystem_grounding_retry_used,
             mark_continuation_retry_used,
+            mark_post_tool_empty_retry_used,
         })
     }
 
@@ -190,12 +207,14 @@ Only report a tool as unavailable when it is not exposed in the current tool lis
             pseudo_tool_retry_used: *context.pseudo_tool_retry_used,
             filesystem_grounding_retry_used: *context.filesystem_grounding_retry_used,
             continuation_retry_used: *context.continuation_retry_used,
+            post_tool_empty_retry_used: *context.post_tool_empty_retry_used,
         }) {
             Self::apply_decision(AssistantResponseRetryApplicationContext {
                 decision: retry_decision,
                 pseudo_tool_retry_used: context.pseudo_tool_retry_used,
                 filesystem_grounding_retry_used: context.filesystem_grounding_retry_used,
                 continuation_retry_used: context.continuation_retry_used,
+                post_tool_empty_retry_used: context.post_tool_empty_retry_used,
                 trace: context.trace,
                 messages: context.messages,
             });
@@ -283,6 +302,7 @@ mod tests {
             pseudo_tool_retry_used: false,
             filesystem_grounding_retry_used: false,
             continuation_retry_used: false,
+            post_tool_empty_retry_used: false,
         })
         .expect("bash command should trigger retry");
 
@@ -308,6 +328,7 @@ mod tests {
             pseudo_tool_retry_used: false,
             filesystem_grounding_retry_used: false,
             continuation_retry_used: false,
+            post_tool_empty_retry_used: false,
         })
         .expect("local filesystem answer without tool should trigger retry");
 
@@ -329,6 +350,7 @@ mod tests {
             pseudo_tool_retry_used: false,
             filesystem_grounding_retry_used: false,
             continuation_retry_used: false,
+            post_tool_empty_retry_used: false,
         })
         .expect("unsupported metadata should trigger grounding retry");
 
@@ -352,6 +374,7 @@ mod tests {
             pseudo_tool_retry_used: false,
             filesystem_grounding_retry_used: false,
             continuation_retry_used: false,
+            post_tool_empty_retry_used: false,
         })
         .expect("continuation placeholder should trigger a closeout retry");
 
@@ -372,6 +395,7 @@ mod tests {
             pseudo_tool_retry_used: false,
             filesystem_grounding_retry_used: false,
             continuation_retry_used: false,
+            post_tool_empty_retry_used: false,
         })
         .expect("Chinese fill-in placeholder should trigger a closeout retry");
 
@@ -391,6 +415,7 @@ mod tests {
             pseudo_tool_retry_used: true,
             filesystem_grounding_retry_used: false,
             continuation_retry_used: false,
+            post_tool_empty_retry_used: false,
         });
 
         assert!(decision.is_none());
@@ -402,6 +427,7 @@ mod tests {
         let mut pseudo_tool_retry_used = false;
         let mut filesystem_grounding_retry_used = false;
         let mut continuation_retry_used = false;
+        let mut post_tool_empty_retry_used = false;
         let mut messages = Vec::new();
         let decision = AssistantResponseRetryController::evaluate(AssistantResponseRetryRequest {
             content: "```bash\npython3 app.py\n```",
@@ -412,6 +438,7 @@ mod tests {
             pseudo_tool_retry_used,
             filesystem_grounding_retry_used,
             continuation_retry_used,
+            post_tool_empty_retry_used,
         })
         .expect("bash command should trigger retry");
 
@@ -421,6 +448,7 @@ mod tests {
                 pseudo_tool_retry_used: &mut pseudo_tool_retry_used,
                 filesystem_grounding_retry_used: &mut filesystem_grounding_retry_used,
                 continuation_retry_used: &mut continuation_retry_used,
+                post_tool_empty_retry_used: &mut post_tool_empty_retry_used,
                 trace: &trace,
                 messages: &mut messages,
             },
@@ -491,6 +519,7 @@ mod tests {
         let mut pseudo_tool_retry_used = false;
         let mut filesystem_grounding_retry_used = false;
         let mut continuation_retry_used = false;
+        let mut post_tool_empty_retry_used = false;
         let mut messages = Vec::new();
 
         let flow = AssistantResponseRetryController::handle_no_tool_response(
@@ -503,6 +532,7 @@ mod tests {
                 pseudo_tool_retry_used: &mut pseudo_tool_retry_used,
                 filesystem_grounding_retry_used: &mut filesystem_grounding_retry_used,
                 continuation_retry_used: &mut continuation_retry_used,
+                post_tool_empty_retry_used: &mut post_tool_empty_retry_used,
                 provider: &provider,
                 tools: &tools,
                 tx: None,
@@ -540,6 +570,7 @@ mod tests {
         let mut pseudo_tool_retry_used = false;
         let mut filesystem_grounding_retry_used = false;
         let mut continuation_retry_used = false;
+        let mut post_tool_empty_retry_used = false;
         let mut messages = Vec::new();
 
         let flow = AssistantResponseRetryController::handle_no_tool_response(
@@ -552,6 +583,7 @@ mod tests {
                 pseudo_tool_retry_used: &mut pseudo_tool_retry_used,
                 filesystem_grounding_retry_used: &mut filesystem_grounding_retry_used,
                 continuation_retry_used: &mut continuation_retry_used,
+                post_tool_empty_retry_used: &mut post_tool_empty_retry_used,
                 provider: &provider,
                 tools: &tools,
                 tx: Some(&tx),
