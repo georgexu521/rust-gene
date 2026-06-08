@@ -103,7 +103,7 @@ fn compress_tool_output(call_id: &str, content: &str) -> String {
     )
 }
 
-fn selective_compression_enabled() -> bool {
+pub fn selective_compression_enabled() -> bool {
     matches!(
         std::env::var("PRIORITY_AGENT_SELECTIVE_COMPRESSION")
             .unwrap_or_default()

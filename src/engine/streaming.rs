@@ -1028,11 +1028,12 @@ impl StreamingQueryEngine {
             // 1. 添加用户消息到历史
             {
                 let mut hist = history.lock().await;
-                hist.push(Message::user(&user_msg));
 
                 // 持久化用户消息
                 if let (Some(ref store), Some(ref sid)) = (&session_store, &session_id) {
-                    if store.message_count(sid).unwrap_or_default() == 0 {
+                    let msg_count = store.message_count(sid).unwrap_or_default();
+                    if msg_count == 0 {
+                        // 新会话: 设置标题
                         if let Ok(Some(session)) = store.get_session(sid) {
                             if session.title.trim().is_empty()
                                 || matches!(session.title.as_str(), "CLI Session" | "New Session")
@@ -1041,11 +1042,31 @@ impl StreamingQueryEngine {
                                 let _ = store.update_session_title(sid, &title);
                             }
                         }
+                    } else if hist.is_empty() {
+                        // 恢复会话: 从 DB 加载已有的对话历史
+                        match store.restore_history(sid) {
+                            Ok(restored) if !restored.is_empty() => {
+                                debug!(
+                                    "Restored {} messages from session {} history",
+                                    restored.len(),
+                                    sid,
+                                );
+                                *hist = restored;
+                            }
+                            Ok(_) => {
+                                debug!("Session {} exists but has no stored messages", sid);
+                            }
+                            Err(e) => {
+                                warn!("Failed to restore session {} history: {}", sid, e);
+                            }
+                        }
                     }
                     if let Err(e) = store.add_message(sid, "user", &user_msg, None, None) {
                         warn!("Failed to persist user message: {}", e);
                     }
                 }
+
+                hist.push(Message::user(&user_msg));
             }
             let _ = tx
                 .send(StreamEvent::RuntimeDiagnostic {
@@ -1388,12 +1409,21 @@ impl StreamingQueryEngine {
                     let assistant_msg = Message::assistant(&assistant_content);
                     hist.push(assistant_msg.clone());
 
-                    // 持久化助手消息
+                    // 持久化助手消息 + 压缩后的完整历史
                     if let (Some(ref store), Some(ref sid)) = (&session_store, &session_id) {
                         if let Err(e) =
                             store.add_message(sid, "assistant", &assistant_content, None, None)
                         {
                             warn!("Failed to persist assistant message: {}", e);
+                        }
+                        // After compression may have modified messages, sync full history to DB.
+                        // This ensures restarted sessions see the compressed state.
+                        if crate::engine::message_compression::background_prune_enabled()
+                            || crate::engine::message_compression::selective_compression_enabled()
+                        {
+                            if let Err(e) = store.replace_session_messages(sid, &hist) {
+                                warn!("Failed to sync compressed history to DB: {}", e);
+                            }
                         }
                     }
                 } else if assistant_tool_calls_made {
