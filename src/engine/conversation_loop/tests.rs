@@ -351,7 +351,7 @@ async fn test_truncate_tool_result_keeps_small_output_unchanged() {
 }
 
 #[tokio::test]
-async fn test_truncate_tool_result_includes_head_and_tail_markers() {
+async fn test_truncate_tool_result_uses_default_tail_preview() {
     let mut result = ToolResult::success(format!(
         "{}\n{}\n{}",
         "A".repeat(40_000),
@@ -366,9 +366,17 @@ async fn test_truncate_tool_result_includes_head_and_tail_markers() {
         std::path::Path::new("."),
     )
     .await;
-    assert!(result.content.contains("--- First"));
     assert!(result.content.contains("--- Last"));
     assert!(result.content.contains("Output truncated"));
+    assert_eq!(
+        result
+            .data
+            .as_ref()
+            .and_then(|data| data.get("output_truncation"))
+            .and_then(|data| data.get("preview_direction"))
+            .and_then(|value| value.as_str()),
+        Some("Tail")
+    );
 }
 
 #[test]

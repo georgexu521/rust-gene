@@ -116,7 +116,8 @@ context snapshots, and closeout events.
 - `src/engine/query_engine.rs`: high-level query engine orchestration.
 - `src/engine/streaming.rs`: streaming request/response path.
 - `src/engine/conversation_loop/mod.rs`: main agent loop coordinator.
-- `src/engine/conversation_loop/main_loop_profile.rs`: quiet-direct vs standard main-loop profile selection.
+- `src/engine/conversation_loop/turn_loop_policy.rs`: quiet-direct vs
+  standard main-loop profile selection plus force-summary fallback policy.
 - `src/engine/conversation_loop/turn_iteration_controller.rs`: per-iteration
   loop contract; no valid tool calls finish the turn, while empty responses get
   bounded retry and tool loops are left to the iteration budget/storm guard.
@@ -148,7 +149,10 @@ context snapshots, and closeout events.
 - `src/engine/turn_ingress.rs`: desktop ingress classifier for explicit side questions and normal main-loop tasks.
 - `src/engine/task_context.rs`: task state and task context bundle.
 - `src/engine/task_contract.rs`: executor contract, context pack, validation requirements.
-- `src/engine/conversation_loop/tool_exposure_plan.rs`: route-scoped and stage-scoped tool exposure; programming `Understand` can expose `file_write` for new files while `file_edit`/`file_patch` stay edit-stage tools.
+- `src/engine/conversation_loop/turn_iteration_setup_controller.rs`:
+  route-scoped and stage-scoped tool exposure; programming `Understand` can
+  expose `file_write` for new files while `file_edit`/`file_patch` stay
+  edit-stage tools.
 - `src/engine/action_decision.rs`: deterministic tool action scoring.
 - `src/engine/candidate_action.rs`: model-proposed candidate action parsing, shadow/gated ranking, and model factor calibration.
 - `src/engine/action_review.rs`: action review before execution.

@@ -893,7 +893,6 @@ mod tests {
     use crate::test_utils::env_guard::EnvVarGuard;
     use std::path::PathBuf;
     use std::time::{Duration, Instant};
-
     fn audit_route() -> IntentRoute {
         IntentRoute {
             intent: IntentKind::CodeChange,
@@ -1365,7 +1364,6 @@ mod tests {
             "test -x .venv/bin/python".to_string(),
             ". .venv/bin/activate && python -m core_terminal_demo --self-test | rg '^core-terminal-demo-ok$'".to_string(),
         ];
-
         let evaluation = CloseoutEvaluator::evaluate(
             &code_workflow,
             &bundle,
@@ -1373,7 +1371,6 @@ mod tests {
             &required_commands,
         );
         let closeout = evaluation.closeout.expect("closeout");
-
         assert_eq!(
             evaluation.runtime_validation_label.as_deref(),
             Some("passed:2/2")
@@ -1406,7 +1403,6 @@ mod tests {
         let code_workflow = CodeChangeWorkflowRunner::new(&bundle);
         let evidence_ledger = EvidenceLedger::new();
         let required_commands = vec!["cargo test -q memory".to_string()];
-
         let evaluation = CloseoutEvaluator::evaluate(
             &code_workflow,
             &bundle,
@@ -1414,7 +1410,6 @@ mod tests {
             &required_commands,
         );
         let closeout = evaluation.closeout.expect("closeout");
-
         assert_eq!(
             evaluation.verification_proof.status,
             VerificationProofStatus::NotRun
@@ -1457,7 +1452,6 @@ mod tests {
             &crate::tools::ToolResult::success("Ran 3 tests in 1.0s\n\nOK"),
         );
         let required_commands = vec!["python3 -m unittest test_app.py".to_string()];
-
         let evaluation = CloseoutEvaluator::evaluate(
             &code_workflow,
             &bundle,
@@ -1465,7 +1459,6 @@ mod tests {
             &required_commands,
         );
         let closeout = evaluation.closeout.expect("closeout");
-
         assert_eq!(closeout.status, StageValidationStatus::Passed);
         assert!(closeout
             .changed_files
@@ -1485,12 +1478,10 @@ mod tests {
     fn verified_change_closeout_records_trace_only_when_ready() {
         let trace =
             TraceCollector::new(crate::engine::trace::TurnTrace::new("session", 1, "change"));
-
         assert!(
             !VerifiedChangeCloseoutController::should_break_for_verified_change(&trace, false,)
         );
         assert!(VerifiedChangeCloseoutController::should_break_for_verified_change(&trace, true,));
-
         let finished = trace.finish(crate::engine::trace::TurnStatus::Completed);
         let matching_events = finished
             .events

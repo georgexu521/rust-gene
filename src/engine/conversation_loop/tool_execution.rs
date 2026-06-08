@@ -433,12 +433,20 @@ mod tests {
         .await;
         assert!(result.content.contains("Output truncated"));
         assert!(!result.content.contains("tool-results"));
-        assert!(result.content.contains("--- First"));
         assert!(result.content.contains("--- Last"));
+        assert_eq!(
+            result
+                .data
+                .as_ref()
+                .and_then(|data| data.get("output_truncation"))
+                .and_then(|data| data.get("preview_direction"))
+                .and_then(|value| value.as_str()),
+            Some("Tail")
+        );
     }
 
     #[tokio::test]
-    async fn test_truncate_tool_result_preserves_head_and_tail() {
+    async fn test_truncate_tool_result_stores_full_output_with_tail_preview() {
         let content = format!(
             "{}\nHIGH_SIGNAL_MIDDLE\n{}",
             "A".repeat(20_000),
@@ -455,8 +463,16 @@ mod tests {
         .await;
         assert!(result.content.contains("Output truncated"));
         assert!(result.content.contains("tool-output://"));
-        assert!(result.content.contains("First"));
         assert!(result.content.contains("Last"));
+        assert_eq!(
+            result
+                .data
+                .as_ref()
+                .and_then(|data| data.get("output_truncation"))
+                .and_then(|data| data.get("preview_direction"))
+                .and_then(|value| value.as_str()),
+            Some("Tail")
+        );
     }
 
     #[tokio::test]
