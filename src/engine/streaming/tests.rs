@@ -438,7 +438,7 @@ fn lazy_session_binding_records_current_model() {
     let registry = Arc::new(ToolRegistry::new());
     let engine = StreamingQueryEngine::new(provider, registry, "mock-model");
     let store = Arc::new(crate::session_store::SessionStore::in_memory().unwrap());
-    assert!(engine.session_store.set(Some(store.clone())).is_ok());
+    assert!(engine.config.session_store.set(Some(store.clone())).is_ok());
 
     let (_bound_store, session_id) = engine.session_binding().expect("session binding");
     let session = store

@@ -38,6 +38,7 @@ pub(super) enum SessionStepSource {
 }
 
 impl SessionStepResult {
+    #[allow(clippy::too_many_arguments)]
     fn new(
         assistant_text: String,
         tool_calls: Vec<ToolCall>,

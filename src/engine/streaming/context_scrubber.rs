@@ -11,8 +11,14 @@
 const SCRUBBED_TAG_PAIRS: &[(&str, &str)] = &[
     ("<relevant-memory>", "</relevant-memory>"),
     ("<memory-context>", "</memory-context>"),
-    ("<relevant-memory-instructions>", "</relevant-memory-instructions>"),
-    ("<memory-context-instructions>", "</memory-context-instructions>"),
+    (
+        "<relevant-memory-instructions>",
+        "</relevant-memory-instructions>",
+    ),
+    (
+        "<memory-context-instructions>",
+        "</memory-context-instructions>",
+    ),
     ("<memory-instructions>", "</memory-instructions>"),
 ];
 
@@ -45,6 +51,7 @@ impl ContextScrubber {
         }
     }
 
+    #[allow(dead_code)]
     pub fn reset(&mut self) {
         self.in_span = false;
         self.buf.clear();

@@ -224,14 +224,9 @@ impl MemoryManager {
         let mut prior_results = Vec::new();
         for pass in 0..depth.min(3) {
             let prompt = dialectic_pass_prompt(pass, prior_results.last().map(String::as_str));
-            let selected = rerank_memory_matches_dialectic(
-                user_message,
-                &candidates,
-                provider,
-                model,
-                prompt,
-            )
-            .await;
+            let selected =
+                rerank_memory_matches_dialectic(user_message, &candidates, provider, model, prompt)
+                    .await;
             if let Some(ref result) = selected {
                 prior_results.push(result.clone());
             }

@@ -149,21 +149,30 @@ impl SessionStore {
     ) -> SqlResult<usize> {
         let conn = self.conn();
         let tx = conn.unchecked_transaction()?;
-        tx.execute("DELETE FROM messages WHERE session_id = ?1", params![session_id])?;
+        tx.execute(
+            "DELETE FROM messages WHERE session_id = ?1",
+            params![session_id],
+        )?;
         let mut count = 0usize;
         for msg in messages {
             let (role, content, tool_calls, tool_call_id) = match msg {
                 Message::System { content } => ("system", content.as_str(), None, None),
                 Message::User { content } => ("user", content.as_str(), None, None),
-                Message::Assistant { content, tool_calls } => (
+                Message::Assistant {
+                    content,
+                    tool_calls,
+                } => (
                     "assistant",
                     content.as_str(),
-                    tool_calls.as_ref().and_then(|tc| serde_json::to_value(tc).ok()),
+                    tool_calls
+                        .as_ref()
+                        .and_then(|tc| serde_json::to_value(tc).ok()),
                     None,
                 ),
-                Message::Tool { tool_call_id: id, content } => {
-                    ("tool", content.as_str(), None, Some(id.as_str()))
-                }
+                Message::Tool {
+                    tool_call_id: id,
+                    content,
+                } => ("tool", content.as_str(), None, Some(id.as_str())),
             };
             tx.execute(
                 "INSERT INTO messages (session_id, role, content, tool_calls, tool_call_id) VALUES (?1, ?2, ?3, ?4, ?5)",
@@ -172,7 +181,10 @@ impl SessionStore {
             count += 1;
         }
         tx.commit()?;
-        debug!("Replaced {} messages for session {} after compression", count, session_id);
+        debug!(
+            "Replaced {} messages for session {} after compression",
+            count, session_id
+        );
         Ok(count)
     }
 
@@ -196,9 +208,7 @@ impl MessageRecord {
             "system" => Message::system(&self.content),
             "user" => Message::user(&self.content),
             "assistant" => {
-                let tool_calls = self
-                    .tool_calls
-                    .and_then(|v| serde_json::from_value(v).ok());
+                let tool_calls = self.tool_calls.and_then(|v| serde_json::from_value(v).ok());
                 Message::Assistant {
                     content: self.content,
                     tool_calls,

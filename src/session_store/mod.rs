@@ -336,6 +336,7 @@ impl SessionStore {
     // ==================== Session Jobs (Slice D) ====================
 
     /// Record or update a shell job in the session_jobs table.
+    #[allow(clippy::too_many_arguments)]
     pub fn record_session_job(
         &self,
         session_id: &str,

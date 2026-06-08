@@ -179,6 +179,9 @@ Only report a tool as unavailable when it is not exposed in the current tool lis
         if decision.mark_pseudo_tool_retry_used {
             *context.pseudo_tool_retry_used = true;
         }
+        if decision.mark_post_tool_empty_retry_used {
+            *context.post_tool_empty_retry_used = true;
+        }
         context.trace.record(TraceEvent::WorkflowFallback {
             error: decision.fallback_error,
         });

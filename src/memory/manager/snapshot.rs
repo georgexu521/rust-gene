@@ -25,8 +25,10 @@ impl MemoryManager {
         // They are merged into the frozen_memory snapshot with labels.
         let agents_path = base_dir.join("AGENTS.md");
         let claude_path = base_dir.join("CLAUDE.md");
-        self.frozen_agents = load_compat_memory_file(&agents_path, &self.memory_path, base_dir, "AGENTS.md");
-        self.frozen_claude = load_compat_memory_file(&claude_path, &self.memory_path, base_dir, "CLAUDE.md");
+        self.frozen_agents =
+            load_compat_memory_file(&agents_path, &self.memory_path, base_dir, "AGENTS.md");
+        self.frozen_claude =
+            load_compat_memory_file(&claude_path, &self.memory_path, base_dir, "CLAUDE.md");
         self.frozen_memory_files = load_memory_files(&self.memory_dir);
         info!("Memory snapshot frozen for this session");
     }
@@ -34,12 +36,16 @@ impl MemoryManager {
     /// 会话开始时冻结快照（异步版本 — 推荐在异步上下文中使用）
     pub async fn freeze_snapshot_async(&mut self) {
         let base_dir = self.memory_path.parent().unwrap_or_else(|| Path::new("."));
-        self.frozen_memory = load_and_resolve_memory_file_async(&self.memory_path, base_dir, "MEMORY.md").await;
-        self.frozen_user = load_and_resolve_memory_file_async(&self.user_path, base_dir, "USER.md").await;
+        self.frozen_memory =
+            load_and_resolve_memory_file_async(&self.memory_path, base_dir, "MEMORY.md").await;
+        self.frozen_user =
+            load_and_resolve_memory_file_async(&self.user_path, base_dir, "USER.md").await;
         let agents_path = base_dir.join("AGENTS.md");
         let claude_path = base_dir.join("CLAUDE.md");
-        self.frozen_agents = load_compat_memory_file(&agents_path, &self.memory_path, base_dir, "AGENTS.md");
-        self.frozen_claude = load_compat_memory_file(&claude_path, &self.memory_path, base_dir, "CLAUDE.md");
+        self.frozen_agents =
+            load_compat_memory_file(&agents_path, &self.memory_path, base_dir, "AGENTS.md");
+        self.frozen_claude =
+            load_compat_memory_file(&claude_path, &self.memory_path, base_dir, "CLAUDE.md");
         self.frozen_memory_files = load_memory_files(&self.memory_dir);
         info!("Memory snapshot frozen for this session (async)");
     }

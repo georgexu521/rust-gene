@@ -658,7 +658,7 @@ impl TraceEvent {
                 reason,
             } => format!(
                 "memory write scored: id={} kind={} status={} score={:.2} threshold={:.2} explicit={} duplication={:.2} reason={}",
-                short_id(&candidate_id), kind, status, score, threshold, explicit, duplication, reason
+                short_id(candidate_id), kind, status, score, threshold, explicit, duplication, reason
             ),
             TraceEvent::MemoryKeepScored {
                 record_id,
@@ -670,7 +670,7 @@ impl TraceEvent {
                 reason,
             } => format!(
                 "memory keep scored: id={} kind={} action={} score={:.2} contradiction={:.2} redundancy={:.2} reason={}",
-                short_id(&record_id), kind, action, score, contradiction_risk, redundancy, reason
+                short_id(record_id), kind, action, score, contradiction_risk, redundancy, reason
             ),
             TraceEvent::PermissionRequested {
                 tool,

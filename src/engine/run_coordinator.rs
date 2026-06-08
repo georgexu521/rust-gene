@@ -147,15 +147,15 @@ pub fn admit_session_input_with_metadata(
             if existing_hash == prompt_hash {
                 return Ok(PromptAdmissionStatus::AlreadyAdmitted { state });
             }
-            return Ok(PromptAdmissionStatus::Conflict {
+            Ok(PromptAdmissionStatus::Conflict {
                 existing_hash,
                 new_hash: prompt_hash,
-            });
+            })
         }
         Ok((None, state)) => {
             // Existing row without hash may have been created pre-v12, treat as
             // already admitted with unknown hash.
-            return Ok(PromptAdmissionStatus::AlreadyAdmitted { state });
+            Ok(PromptAdmissionStatus::AlreadyAdmitted { state })
         }
         Err(rusqlite::Error::QueryReturnedNoRows) => {
             // Fresh admission.
@@ -173,7 +173,7 @@ pub fn admit_session_input_with_metadata(
                     metadata,
                 ],
             )?;
-            return Ok(PromptAdmissionStatus::Admitted);
+            Ok(PromptAdmissionStatus::Admitted)
         }
         Err(e) => Err(e),
     }
@@ -377,10 +377,10 @@ pub fn cleanup_session_inputs(
     conn: &rusqlite::Connection,
     session_id: &str,
 ) -> Result<usize, rusqlite::Error> {
-    Ok(conn.execute(
+    conn.execute(
         "DELETE FROM session_inputs WHERE session_id = ?1 AND promoted_at IS NOT NULL",
         [session_id],
-    )?)
+    )
 }
 
 fn preview_input(content: &str) -> String {

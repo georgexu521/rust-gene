@@ -46,9 +46,7 @@ pub fn detect_contradictions(
         .filter(|r| {
             matches!(
                 r.kind,
-                MemoryKind::ProjectFact
-                    | MemoryKind::Decision
-                    | MemoryKind::WorkflowConvention
+                MemoryKind::ProjectFact | MemoryKind::Decision | MemoryKind::WorkflowConvention
             )
         })
         .take(500)
@@ -73,10 +71,7 @@ pub fn detect_contradictions(
 
             let set_a: HashSet<&String> = kw_a.iter().collect();
             let set_b: HashSet<&String> = kw_b.iter().collect();
-            let shared: Vec<String> = set_a
-                .intersection(&set_b)
-                .map(|s| s.to_string())
-                .collect();
+            let shared: Vec<String> = set_a.intersection(&set_b).map(|s| s.to_string()).collect();
 
             let union_size = set_a.union(&set_b).count();
             let keyword_overlap = if union_size == 0 {
@@ -143,13 +138,41 @@ fn extract_keywords(content: &str) -> Vec<String> {
 fn is_stop_word(word: &str) -> bool {
     matches!(
         word,
-        "the" | "and" | "for" | "with" | "that" | "this"
-            | "from" | "have" | "are" | "was" | "not"
-            | "but" | "can" | "has" | "all" | "will"
-            | "when" | "been" | "its" | "what" | "use"
-            | "using" | "should" | "would" | "could"
-            | "which" | "each" | "also" | "into" | "just"
-            | "preference" | "project" | "memory" | "user" | "agent"
+        "the"
+            | "and"
+            | "for"
+            | "with"
+            | "that"
+            | "this"
+            | "from"
+            | "have"
+            | "are"
+            | "was"
+            | "not"
+            | "but"
+            | "can"
+            | "has"
+            | "all"
+            | "will"
+            | "when"
+            | "been"
+            | "its"
+            | "what"
+            | "use"
+            | "using"
+            | "should"
+            | "would"
+            | "could"
+            | "which"
+            | "each"
+            | "also"
+            | "into"
+            | "just"
+            | "preference"
+            | "project"
+            | "memory"
+            | "user"
+            | "agent"
     )
 }
 
@@ -237,7 +260,11 @@ mod tests {
     fn no_contradiction_on_consistent_content() {
         let records = vec![
             make_record("a", "run cargo test before commit", MemoryKind::ProjectFact),
-            make_record("b", "always run cargo test before committing", MemoryKind::ProjectFact),
+            make_record(
+                "b",
+                "always run cargo test before committing",
+                MemoryKind::ProjectFact,
+            ),
         ];
 
         let pairs = detect_contradictions(&records, 0.2, 5);
@@ -251,7 +278,11 @@ mod tests {
     fn skips_unrelated_topics() {
         let records = vec![
             make_record("a", "use tabs for Go projects", MemoryKind::ProjectFact),
-            make_record("b", "strain database should support CSV export", MemoryKind::ProjectFact),
+            make_record(
+                "b",
+                "strain database should support CSV export",
+                MemoryKind::ProjectFact,
+            ),
         ];
 
         let pairs = detect_contradictions(&records, 0.2, 5);

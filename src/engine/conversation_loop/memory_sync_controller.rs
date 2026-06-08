@@ -104,14 +104,17 @@ impl MemorySyncController {
         let had_memory_tool = Self::turn_used_memory_tool(context.messages);
         let should_review = memory.advance_nudge(had_memory_tool);
         if should_review {
-            debug!("Memory nudge triggered background review ({} turns without memory tool)",
-                memory.nudge_interval());
+            debug!(
+                "Memory nudge triggered background review ({} turns without memory tool)",
+                memory.nudge_interval()
+            );
             let user_msg = Self::latest_user_message(context.messages).to_string();
             let assistant_text =
                 Self::assistant_memory_text(context.final_content, context.tool_results_text);
             if let Some(provider) = context.provider.clone() {
                 let model = context.model.to_string();
-                let memory_arc = context.memory_manager
+                let memory_arc = context
+                    .memory_manager
                     .expect("memory_manager is Some when should_review is true")
                     .clone();
                 tokio::spawn(async move {
@@ -121,14 +124,14 @@ impl MemorySyncController {
                         &assistant_text,
                         provider.as_ref(),
                         &model,
-                    ).await;
+                    )
+                    .await;
                 });
                 context.trace.record(TraceEvent::MemorySynced {
                     mode: "background_review_nudge".to_string(),
                 });
             }
         }
-
     }
 
     fn turn_used_memory_tool(messages: &[Message]) -> bool {
@@ -139,7 +142,9 @@ impl MemorySyncController {
             } = msg
             {
                 calls.iter().any(|tc| {
-                    tc.name == "memory_save" || tc.name == "memory_load" || tc.name == "memory_clear"
+                    tc.name == "memory_save"
+                        || tc.name == "memory_load"
+                        || tc.name == "memory_clear"
                 })
             } else {
                 false

@@ -832,7 +832,7 @@ pub async fn handle_compact_status(app: &TuiApp) -> String {
         .unwrap_or("unknown");
 
     // Check compact boundaries from session store (v7 migration)
-    let boundary_info = engine.session_binding().and_then(|(store, _)| {
+    let boundary_info = engine.session_binding().map(|(store, _)| {
         let conn = store.shared_conn();
         let conn = conn.lock().unwrap();
         let count: i64 = conn
@@ -856,7 +856,7 @@ pub async fn handle_compact_status(app: &TuiApp) -> String {
                 |row| row.get(0),
             )
             .ok();
-        Some((count, last_strategy, last_trigger))
+        (count, last_strategy, last_trigger)
     });
 
     let mut lines = vec![

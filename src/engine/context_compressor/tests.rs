@@ -695,7 +695,7 @@ async fn llm_summary_request_reuses_main_agent_stable_prefix() {
         Message::assistant("First answer"),
         Message::user("Second task"),
     ];
-    let summary = compressor.llm_summarize_middle(&messages).await;
+    let summary = compressor.llm_summarize_middle(&messages, None).await;
 
     assert!(summary.is_some());
     let requests = provider.requests.lock().unwrap();
@@ -726,7 +726,7 @@ async fn llm_summary_prefix_from_messages_skips_dynamic_context_zones() {
     ]);
 
     let summary = compressor
-        .llm_summarize_middle(&[Message::user("large tail")])
+        .llm_summarize_middle(&[Message::user("large tail")], None)
         .await;
 
     assert!(summary.is_some());

@@ -259,6 +259,7 @@ impl CostTracker {
         );
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn record_api_call_with_session_cache_shape_and_metadata(
         &mut self,
         session_id: Option<&str>,

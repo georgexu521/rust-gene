@@ -26,7 +26,7 @@ pub fn task_guidance_enabled() -> bool {
 /// 组装并注入 task-guidance 到请求消息。
 ///
 /// 从 trace 事件中提取当前 stage、top plan step、风险等级、最近动作分数。
-pub fn inject_task_guidance(messages: &mut Vec<Message>, trace: &TraceCollector) {
+pub fn inject_task_guidance(messages: &mut [Message], trace: &TraceCollector) {
     if !task_guidance_enabled() {
         return;
     }
@@ -133,7 +133,11 @@ pub fn inject_task_guidance(messages: &mut Vec<Message>, trace: &TraceCollector)
                 "accepted" => format!("accepted({:.2})", score),
                 _ => format!("{}({:.2})", status, score),
             };
-            Some(format!("memory_write={} {}", label, compact_fact(reason, 60)))
+            Some(format!(
+                "memory_write={} {}",
+                label,
+                compact_fact(reason, 60)
+            ))
         } else {
             None
         }
@@ -279,7 +283,9 @@ mod tests {
         assert!(content.contains("stage=Implementation"));
         assert!(content.contains("top_plan_step=\"implement weighted trace recording\" importance=0.91 share=0.62 source=workflow_contract"));
         assert!(content.contains("risk=elevated (mutating code)"));
-        assert!(content.contains("recent_action=\"file_read\" score=6 low_evidence \"low uncertainty reduction\""));
+        assert!(content.contains(
+            "recent_action=\"file_read\" score=6 low_evidence \"low uncertainty reduction\""
+        ));
 
         if let Some(value) = previous {
             std::env::set_var("PRIORITY_AGENT_TASK_GUIDANCE", value);

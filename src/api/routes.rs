@@ -646,8 +646,8 @@ async fn session_context_handler(
             trigger,
             before_tokens,
             after_tokens,
-            messages_before: messages_before as usize,
-            messages_after: messages_after as usize,
+            messages_before,
+            messages_after,
             preserved_tail_count: preserved_tail_count as usize,
         })
     } else {

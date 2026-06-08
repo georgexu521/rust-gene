@@ -26,7 +26,6 @@ mod legacy_workflow_gate_controller;
 mod main_loop_profile;
 mod memory_snapshot_controller;
 mod memory_sync_controller;
-mod task_guidance_controller;
 #[cfg(test)]
 mod patch_recovery;
 #[cfg(test)]
@@ -56,6 +55,7 @@ mod session_goal_controller;
 mod session_processor;
 mod step_executor;
 mod task_context_trace_controller;
+mod task_guidance_controller;
 mod text_sanitizer;
 mod tool_batch_result_processor;
 mod tool_call_lifecycle;

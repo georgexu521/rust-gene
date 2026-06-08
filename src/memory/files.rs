@@ -645,10 +645,8 @@ mod import_tests {
     use super::*;
 
     fn temp_dir() -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "priority-agent-import-test-{}",
-            std::process::id()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("priority-agent-import-test-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir
@@ -660,10 +658,8 @@ mod import_tests {
         std::fs::write(dir.join("doc.md"), "hello from doc.md").unwrap();
         std::fs::write(dir.join("MAIN.md"), "before\n@doc.md\nafter").unwrap();
 
-        let result = resolve_memory_imports(
-            &std::fs::read_to_string(dir.join("MAIN.md")).unwrap(),
-            &dir,
-        );
+        let result =
+            resolve_memory_imports(&std::fs::read_to_string(dir.join("MAIN.md")).unwrap(), &dir);
         assert!(result.contains("before"));
         assert!(result.contains("hello from doc.md"));
         assert!(result.contains("after"));
@@ -675,7 +671,8 @@ mod import_tests {
     #[test]
     fn skips_non_path_mentions() {
         let dir = temp_dir();
-        let content = "I like @username\n@some-tag\nreal @docs/file.md\nnot an import\nalso not @import here";
+        let content =
+            "I like @username\n@some-tag\nreal @docs/file.md\nnot an import\nalso not @import here";
         std::fs::write(dir.join("MAIN.md"), content).unwrap();
 
         let result = resolve_memory_imports(content, &dir);

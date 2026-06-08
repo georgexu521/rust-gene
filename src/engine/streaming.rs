@@ -19,6 +19,9 @@ mod context_scrubber;
 mod fallback;
 mod turn_messages;
 
+pub mod config;
+pub use config::StreamingConfig;
+
 use context_scrubber::ContextScrubber;
 use fallback::{ErrorType, FallbackState};
 use turn_messages::{
@@ -237,68 +240,8 @@ pub struct ContextUsageReport {
 
 /// 流式查询引擎
 pub struct StreamingQueryEngine {
-    /// LLM 提供商
-    provider: Arc<RwLock<Arc<dyn LlmProvider>>>,
-    /// 工具注册表
-    tool_registry: Arc<ToolRegistry>,
-    /// 模型名称
-    model: Arc<RwLock<String>>,
-    /// 系统提示词
-    system_prompt: String,
-    /// 最大工具调用迭代次数
-    max_iterations: usize,
-    /// Agent 管理器（按需用于子 Agent 创建）
-    agent_manager: std::sync::OnceLock<Arc<crate::agent::AgentManager>>,
-    /// QueryEngine dependency used to lazily construct AgentManager.
-    agent_manager_query_engine: Option<Arc<super::QueryEngine>>,
-    /// 任务管理器（可选，用于 task_tool 等）
-    task_manager: Option<Arc<crate::task_manager::TaskManager>>,
-    /// MCP 管理器（可选，用于调用外部 MCP 工具）
-    mcp_manager: Option<Arc<crate::engine::mcp::McpManager>>,
-    /// LSP 管理器（可选，用于 lsp_tool 等）
-    lsp_manager: Option<Arc<crate::engine::lsp::LspManager>>,
-    /// Worktree 管理器（可选，用于 worktree_tool 等）
-    worktree_manager: Option<Arc<crate::engine::worktree::WorktreeManager>>,
-    /// Optional working directory override for desktop/worktree runs.
-    working_dir_override: Option<PathBuf>,
-    /// 记忆管理器（lazy init，首次 memory 操作时创建）
-    memory_manager:
-        std::sync::OnceLock<Option<Arc<tokio::sync::Mutex<crate::memory::MemoryManager>>>>,
-    /// 对话历史（多轮对话支持）
-    conversation_history: Arc<tokio::sync::Mutex<Vec<Message>>>,
-    /// 上下文压缩器
-    compressor: Arc<tokio::sync::Mutex<crate::engine::context_compressor::ContextCompressor>>,
-    /// 会话存储（lazy init，首次 query 时创建）
-    session_store: std::sync::OnceLock<Option<Arc<crate::session_store::SessionStore>>>,
-    /// 禁止 session_store 自动初始化（测试用）
-    disable_session_auto_init: bool,
-    /// Recent runtime traces for `/trace`.
-    trace_store: Arc<crate::engine::trace::TraceStore>,
-    /// Current session goal shown in `/goal` and `/quick`.
-    goal_manager: Arc<crate::engine::session_goal::SessionGoalManager>,
-    /// 当前会话 ID（可运行时切换）
-    session_id: Arc<RwLock<Option<String>>>,
-    /// 成本追踪器
-    cost_tracker: Arc<tokio::sync::Mutex<crate::cost_tracker::CostTracker>>,
-    /// 当前权限模式（可在运行时通过 TUI 命令切换）
-    permission_mode: Arc<RwLock<crate::permissions::PermissionMode>>,
-    /// 当前 CLI 会话内临时权限规则
-    session_permission_rules: Arc<RwLock<crate::permissions::PermissionRules>>,
-    /// Whether existing memory may be used for request context in this session.
-    memory_use: std::sync::atomic::AtomicBool,
-    /// Whether this session may generate future memory proposals/sync output.
-    memory_generate: std::sync::atomic::AtomicBool,
-    /// Dynamic memory recall mode for this session.
-    memory_recall_mode: Arc<RwLock<String>>,
-    /// 是否启用 LLM 驱动的记忆提取（可运行时切换）
-    llm_memory_extraction: std::sync::atomic::AtomicBool,
-    /// 工具授权通道（用于交互式 MCP 授权）
-    approval_channel: Option<Arc<crate::engine::conversation_loop::ToolApprovalChannel>>,
-    /// Fallback 模型名称（当主模型失败时使用）
-    fallback_model: Option<String>,
-    /// Read-before-edit guard — cleared on context fold so stale
-    /// read-tracking doesn't survive across compacted history.
-    read_tracker: Option<Arc<crate::engine::read_tracker::ReadTracker>>,
+    /// 配置
+    config: StreamingConfig,
 }
 
 impl StreamingQueryEngine {
@@ -308,62 +251,20 @@ impl StreamingQueryEngine {
         tool_registry: Arc<ToolRegistry>,
         model: impl Into<String>,
     ) -> Self {
-        let provider_clone = provider.clone();
-        let model = model.into();
-        let profile =
-            crate::engine::model_context::ModelContextProfile::detect(provider.base_url(), &model);
         Self {
-            provider: Arc::new(RwLock::new(provider)),
-            tool_registry,
-            model: Arc::new(RwLock::new(model.clone())),
-            system_prompt: super::default_system_prompt(),
-            max_iterations: 50, // Match Reasonix DEFAULT_MAX_ITER_PER_TURN
-            agent_manager: std::sync::OnceLock::new(),
-            agent_manager_query_engine: None,
-            task_manager: None,
-            mcp_manager: None,
-            lsp_manager: None,
-            worktree_manager: None,
-            working_dir_override: None,
-            memory_manager: std::sync::OnceLock::new(),
-            conversation_history: Arc::new(tokio::sync::Mutex::new(Vec::new())),
-            compressor: Arc::new(tokio::sync::Mutex::new(
-                crate::engine::context_compressor::ContextCompressor::from_model_context_profile(
-                    &profile,
-                )
-                .with_llm_provider(provider_clone, &model),
-            )),
-            session_store: std::sync::OnceLock::new(),
-            disable_session_auto_init: false,
-            trace_store: Arc::new(crate::engine::trace::TraceStore::default()),
-            goal_manager: Arc::new(crate::engine::session_goal::SessionGoalManager::new()),
-            session_id: Arc::new(RwLock::new(None)),
-            cost_tracker: Arc::new(tokio::sync::Mutex::new(
-                crate::cost_tracker::CostTracker::new(),
-            )),
-            permission_mode: Arc::new(RwLock::new(crate::permissions::PermissionMode::AutoAll)),
-            session_permission_rules: Arc::new(RwLock::new(
-                crate::permissions::PermissionRules::new(),
-            )),
-            memory_use: std::sync::atomic::AtomicBool::new(true),
-            memory_generate: std::sync::atomic::AtomicBool::new(true),
-            memory_recall_mode: Arc::new(RwLock::new("balanced".to_string())),
-            llm_memory_extraction: std::sync::atomic::AtomicBool::new(false),
-            approval_channel: None,
-            fallback_model: std::env::var("PRIORITY_AGENT_FALLBACK_MODEL").ok(),
-            read_tracker: None,
+            config: StreamingConfig::new(provider, tool_registry, model),
         }
     }
 
     /// 设置任务管理器
     pub fn with_task_manager(mut self, manager: Arc<crate::task_manager::TaskManager>) -> Self {
-        self.task_manager = Some(manager);
+        self.config.task_manager = Some(manager);
         self
     }
 
     /// 获取成本追踪器的引用
     pub fn cost_tracker(&self) -> &Arc<tokio::sync::Mutex<crate::cost_tracker::CostTracker>> {
-        &self.cost_tracker
+        &self.config.cost_tracker
     }
 
     /// 设置会话存储（覆盖 lazy init）
@@ -372,23 +273,23 @@ impl StreamingQueryEngine {
         store: Arc<crate::session_store::SessionStore>,
         session_id: String,
     ) -> Self {
-        let _ = self.session_store.set(Some(store));
-        *self.session_id.write() = Some(session_id);
+        let _ = self.config.session_store.set(Some(store));
+        *self.config.session_id.write() = Some(session_id);
         self
     }
 
     /// 禁止 session_store 自动初始化（测试用）
     pub fn with_disable_session_auto_init(mut self) -> Self {
-        self.disable_session_auto_init = true;
+        self.config.disable_session_auto_init = true;
         self
     }
 
     pub fn trace_store(&self) -> Arc<crate::engine::trace::TraceStore> {
-        self.trace_store.clone()
+        self.config.trace_store.clone()
     }
 
     pub fn goal_manager(&self) -> Arc<crate::engine::session_goal::SessionGoalManager> {
-        self.goal_manager.clone()
+        self.config.goal_manager.clone()
     }
 
     /// 返回当前持久化会话绑定。
@@ -396,8 +297,9 @@ impl StreamingQueryEngine {
     /// UI 层用这个绑定复用同一个 SessionStore/session_id，避免一轮对话
     /// 同时写入 CLI 会话和引擎会话两套历史。
     pub fn session_binding(&self) -> Option<(Arc<crate::session_store::SessionStore>, String)> {
-        if self.disable_session_auto_init {
+        if self.config.disable_session_auto_init {
             return self
+                .config
                 .session_store
                 .get()
                 .and_then(|opt| {
@@ -409,6 +311,7 @@ impl StreamingQueryEngine {
                 .flatten();
         }
         let store = self
+            .config
             .session_store
             .get_or_init(|| {
                 let db_path = crate::session_store::SessionStore::default_path();
@@ -425,11 +328,11 @@ impl StreamingQueryEngine {
             })
             .as_ref()?;
         // Ensure we have a session id; create one if missing
-        if self.session_id.read().is_none() {
+        if self.config.session_id.read().is_none() {
             let sid = format!("session-{}", uuid::Uuid::new_v4());
             let model = self.model_name();
             let _ = store.create_session(&sid, "Session", &model);
-            *self.session_id.write() = Some(sid);
+            *self.config.session_id.write() = Some(sid);
         }
         let session_id = self.current_session_id()?;
         Some((store.clone(), session_id))
@@ -437,18 +340,18 @@ impl StreamingQueryEngine {
 
     /// 当前持久化会话 ID。
     pub fn current_session_id(&self) -> Option<String> {
-        self.session_id.read().clone()
+        self.config.session_id.read().clone()
     }
 
     /// 切换当前持久化会话 ID。
     pub fn set_session_id(&self, session_id: impl Into<String>) {
-        *self.session_id.write() = Some(session_id.into());
+        *self.config.session_id.write() = Some(session_id.into());
     }
 
     /// 设置记忆快照（在 system prompt 中注入冻结的记忆）
     pub fn with_memory_snapshot(mut self, snapshot: String) -> Self {
         if !snapshot.is_empty() {
-            self.system_prompt = format!("{}\n{}", snapshot, self.system_prompt);
+            self.config.system_prompt = format!("{}\n{}", snapshot, self.config.system_prompt);
         }
         self
     }
@@ -456,7 +359,7 @@ impl StreamingQueryEngine {
     /// 设置最大上下文长度
     pub fn with_max_context(mut self, tokens: u64) -> Self {
         let model = self.model_name();
-        self.compressor = Arc::new(tokio::sync::Mutex::new(
+        self.config.compressor = Arc::new(tokio::sync::Mutex::new(
             crate::engine::context_compressor::ContextCompressor::new(tokens)
                 .with_llm_provider(self.provider(), &model),
         ));
@@ -467,18 +370,18 @@ impl StreamingQueryEngine {
     pub async fn clear_history(&self) {
         self.flush_memory_for_current_history(crate::memory::MemoryFlushReason::Clear)
             .await;
-        let mut history = self.conversation_history.lock().await;
+        let mut history = self.config.conversation_history.lock().await;
         history.clear();
     }
 
     /// 获取对话历史
     pub async fn get_history(&self) -> Vec<Message> {
-        self.conversation_history.lock().await.clone()
+        self.config.conversation_history.lock().await.clone()
     }
 
     /// 设置对话历史
     pub async fn set_history(&self, messages: Vec<Message>) {
-        let mut history = self.conversation_history.lock().await;
+        let mut history = self.config.conversation_history.lock().await;
         *history = messages;
     }
 
@@ -497,8 +400,8 @@ impl StreamingQueryEngine {
             crate::engine::context_compressor::estimate_messages_tokens(&history_before);
         let before_messages = history_before.len();
         let compressed = {
-            let mut compressor = self.compressor.lock().await;
-            compressor.set_llm_summary_stable_prefix(self.system_prompt.clone());
+            let mut compressor = self.config.compressor.lock().await;
+            compressor.set_llm_summary_stable_prefix(self.config.system_prompt.clone());
             if compressor.compaction_circuit_open() {
                 return Some(
                     compressor.record_compaction_decision(CompactionAttemptInput::new(
@@ -529,7 +432,7 @@ impl StreamingQueryEngine {
 
         let after_tokens = crate::engine::context_compressor::estimate_messages_tokens(&compressed);
         let (compaction_record, runtime_record) = {
-            let mut compressor = self.compressor.lock().await;
+            let mut compressor = self.config.compressor.lock().await;
             let decision = if after_tokens < before_tokens {
                 CompactionDecision::Compacted
             } else {
@@ -583,7 +486,7 @@ impl StreamingQueryEngine {
         }
         // ReadTracker must be cleared on fold — the model's byte-level
         // view of the elided history is gone, so prior reads are stale.
-        if let Some(ref tracker) = self.read_tracker {
+        if let Some(ref tracker) = self.config.read_tracker {
             tracker.reset();
         }
     }
@@ -608,21 +511,21 @@ impl StreamingQueryEngine {
 
     /// 设置模型
     pub fn with_model(mut self, model: impl Into<String>) -> Self {
-        self.model = Arc::new(RwLock::new(model.into()));
+        self.config.model = Arc::new(RwLock::new(model.into()));
         self
     }
 
     pub fn provider(&self) -> Arc<dyn LlmProvider> {
-        self.provider.read().clone()
+        self.config.provider.read().clone()
     }
 
     pub fn set_provider(&self, provider: Arc<dyn LlmProvider>, model: impl Into<String>) {
-        *self.provider.write() = provider.clone();
+        *self.config.provider.write() = provider.clone();
         self.set_model(model);
         let model = self.model_name();
         let profile =
             crate::engine::model_context::ModelContextProfile::detect(provider.base_url(), &model);
-        if let Ok(mut compressor) = self.compressor.try_lock() {
+        if let Ok(mut compressor) = self.config.compressor.try_lock() {
             *compressor =
                 crate::engine::context_compressor::ContextCompressor::from_model_context_profile(
                     &profile,
@@ -633,47 +536,47 @@ impl StreamingQueryEngine {
 
     /// 运行时切换模型；下一次请求立即生效。
     pub fn set_model(&self, model: impl Into<String>) {
-        *self.model.write() = model.into();
+        *self.config.model.write() = model.into();
     }
 
     /// 设置系统提示词
     pub fn with_system_prompt(mut self, prompt: impl Into<String>) -> Self {
-        self.system_prompt = prompt.into();
+        self.config.system_prompt = prompt.into();
         self
     }
 
     /// 设置最大迭代次数
     pub fn with_max_iterations(mut self, max: usize) -> Self {
-        self.max_iterations = max;
+        self.config.max_iterations = max;
         self
     }
 
     /// 设置 Agent 管理器
     pub fn with_agent_manager(self, manager: Arc<crate::agent::AgentManager>) -> Self {
-        let _ = self.agent_manager.set(manager);
+        let _ = self.config.agent_manager.set(manager);
         self
     }
 
     /// 设置 AgentManager 的 lazy 构造依赖。
     pub fn with_agent_query_engine(mut self, query_engine: Arc<super::QueryEngine>) -> Self {
-        self.agent_manager_query_engine = Some(query_engine);
+        self.config.agent_manager_query_engine = Some(query_engine);
         self
     }
 
     /// 设置 MCP 管理器
     pub fn with_mcp_manager(mut self, manager: Arc<crate::engine::mcp::McpManager>) -> Self {
-        self.mcp_manager = Some(manager);
+        self.config.mcp_manager = Some(manager);
         self
     }
 
     /// 获取 MCP 管理器
     pub fn mcp_manager(&self) -> Option<Arc<crate::engine::mcp::McpManager>> {
-        self.mcp_manager.clone()
+        self.config.mcp_manager.clone()
     }
 
     /// 设置 LSP 管理器
     pub fn with_lsp_manager(mut self, manager: Arc<crate::engine::lsp::LspManager>) -> Self {
-        self.lsp_manager = Some(manager);
+        self.config.lsp_manager = Some(manager);
         self
     }
 
@@ -682,12 +585,12 @@ impl StreamingQueryEngine {
         mut self,
         manager: Arc<crate::engine::worktree::WorktreeManager>,
     ) -> Self {
-        self.worktree_manager = Some(manager);
+        self.config.worktree_manager = Some(manager);
         self
     }
 
     pub fn with_working_dir(mut self, working_dir: impl Into<PathBuf>) -> Self {
-        self.working_dir_override = Some(working_dir.into());
+        self.config.working_dir_override = Some(working_dir.into());
         self
     }
 
@@ -696,50 +599,56 @@ impl StreamingQueryEngine {
         self,
         manager: Arc<tokio::sync::Mutex<crate::memory::MemoryManager>>,
     ) -> Self {
-        let _ = self.memory_manager.set(Some(manager));
+        let _ = self.config.memory_manager.set(Some(manager));
         self
     }
 
     /// 设置权限模式
     pub fn with_permission_mode(mut self, mode: crate::permissions::PermissionMode) -> Self {
-        self.permission_mode = Arc::new(RwLock::new(mode));
+        self.config.permission_mode = Arc::new(RwLock::new(mode));
         self
     }
 
     /// 设置是否启用 LLM 驱动的记忆提取
     pub fn with_llm_memory_extraction(self, enabled: bool) -> Self {
-        self.llm_memory_extraction
+        self.config
+            .llm_memory_extraction
             .store(enabled, std::sync::atomic::Ordering::Relaxed);
         self
     }
 
     /// Set memory use on/off at runtime (Phase 1)
     pub fn set_memory_use(&self, enabled: bool) {
-        self.memory_use
+        self.config
+            .memory_use
             .store(enabled, std::sync::atomic::Ordering::Relaxed);
     }
 
     /// Set whether this session can generate future memory proposals.
     pub fn set_memory_generate(&self, enabled: bool) {
-        self.memory_generate
+        self.config
+            .memory_generate
             .store(enabled, std::sync::atomic::Ordering::Relaxed);
     }
 
     pub fn memory_use_enabled(&self) -> bool {
-        self.memory_use.load(std::sync::atomic::Ordering::Relaxed)
+        self.config
+            .memory_use
+            .load(std::sync::atomic::Ordering::Relaxed)
     }
 
     pub fn memory_generate_enabled(&self) -> bool {
-        self.memory_generate
+        self.config
+            .memory_generate
             .load(std::sync::atomic::Ordering::Relaxed)
     }
 
     pub fn set_memory_recall_mode(&self, mode: impl Into<String>) {
-        *self.memory_recall_mode.write() = mode.into();
+        *self.config.memory_recall_mode.write() = mode.into();
     }
 
     pub fn memory_recall_mode(&self) -> String {
-        self.memory_recall_mode.read().clone()
+        self.config.memory_recall_mode.read().clone()
     }
 
     /// 设置工具授权通道
@@ -747,7 +656,7 @@ impl StreamingQueryEngine {
         mut self,
         channel: Arc<crate::engine::conversation_loop::ToolApprovalChannel>,
     ) -> Self {
-        self.approval_channel = Some(channel);
+        self.config.approval_channel = Some(channel);
         self
     }
 
@@ -757,36 +666,36 @@ impl StreamingQueryEngine {
         mut self,
         tracker: Arc<crate::engine::read_tracker::ReadTracker>,
     ) -> Self {
-        self.read_tracker = Some(tracker);
+        self.config.read_tracker = Some(tracker);
         self
     }
 
     /// Get a reference to the ReadTracker, if attached.
     pub fn read_tracker(&self) -> Option<&Arc<crate::engine::read_tracker::ReadTracker>> {
-        self.read_tracker.as_ref()
+        self.config.read_tracker.as_ref()
     }
 
     pub fn with_fallback_model(mut self, model: impl Into<String>) -> Self {
-        self.fallback_model = Some(model.into());
+        self.config.fallback_model = Some(model.into());
         self
     }
 
     /// 获取 fallback 模型名称
     pub fn fallback_model(&self) -> Option<&str> {
-        self.fallback_model.as_deref()
+        self.config.fallback_model.as_deref()
     }
 
     /// 运行时更新权限模式（供 TUI 命令调用）
     pub fn set_permission_mode(&self, mode: crate::permissions::PermissionMode) {
-        *self.permission_mode.write() = mode;
+        *self.config.permission_mode.write() = mode;
     }
 
     pub fn permission_mode(&self) -> crate::permissions::PermissionMode {
-        *self.permission_mode.read()
+        *self.config.permission_mode.read()
     }
 
     pub fn add_session_permission_rule(&self, decision: &str, pattern: &str) {
-        let mut rules = self.session_permission_rules.write();
+        let mut rules = self.config.session_permission_rules.write();
         let rule =
             crate::permissions::SourcedRule::new(pattern, crate::permissions::RuleSource::User);
         let target = match decision {
@@ -801,7 +710,7 @@ impl StreamingQueryEngine {
     }
 
     pub fn remove_session_permission_rule(&self, decision: &str, pattern: &str) {
-        let mut rules = self.session_permission_rules.write();
+        let mut rules = self.config.session_permission_rules.write();
         let target = match decision {
             "allow" => &mut rules.always_allow,
             "deny" => &mut rules.always_deny,
@@ -815,12 +724,13 @@ impl StreamingQueryEngine {
     }
 
     pub fn session_permission_rules(&self) -> crate::permissions::PermissionRules {
-        self.session_permission_rules.read().clone()
+        self.config.session_permission_rules.read().clone()
     }
 
     /// 获取已初始化的记忆管理器，不触发初始化。
     pub fn memory_manager(&self) -> Option<Arc<tokio::sync::Mutex<crate::memory::MemoryManager>>> {
-        self.memory_manager
+        self.config
+            .memory_manager
             .get()
             .and_then(|manager| manager.as_ref().cloned())
     }
@@ -829,7 +739,8 @@ impl StreamingQueryEngine {
     pub fn memory_manager_or_init(
         &self,
     ) -> Option<Arc<tokio::sync::Mutex<crate::memory::MemoryManager>>> {
-        self.memory_manager
+        self.config
+            .memory_manager
             .get_or_init(|| {
                 let mut mgr = crate::memory::MemoryManager::new();
                 mgr.freeze_snapshot();
@@ -842,17 +753,17 @@ impl StreamingQueryEngine {
     pub fn compressor(
         &self,
     ) -> Option<Arc<tokio::sync::Mutex<crate::engine::context_compressor::ContextCompressor>>> {
-        Some(self.compressor.clone())
+        Some(self.config.compressor.clone())
     }
 
     /// 获取任务管理器
     pub fn task_manager(&self) -> Option<Arc<crate::task_manager::TaskManager>> {
-        self.task_manager.clone()
+        self.config.task_manager.clone()
     }
 
     /// 获取 Agent 管理器
     pub fn agent_manager(&self) -> Option<Arc<crate::agent::AgentManager>> {
-        self.agent_manager.get().cloned()
+        self.config.agent_manager.get().cloned()
     }
 
     /// 获取或按需初始化 Agent 管理器。
@@ -860,9 +771,10 @@ impl StreamingQueryEngine {
         if let Some(manager) = self.agent_manager() {
             return Some(manager);
         }
-        let query_engine = self.agent_manager_query_engine.as_ref()?.clone();
+        let query_engine = self.config.agent_manager_query_engine.as_ref()?.clone();
         Some(
-            self.agent_manager
+            self.config
+                .agent_manager
                 .get_or_init(|| {
                     Arc::new(crate::agent::AgentManager::new().with_query_engine(query_engine))
                 })
@@ -874,12 +786,12 @@ impl StreamingQueryEngine {
     pub fn approval_channel(
         &self,
     ) -> Option<Arc<crate::engine::conversation_loop::ToolApprovalChannel>> {
-        self.approval_channel.clone()
+        self.config.approval_channel.clone()
     }
 
     /// 获取工具注册表
     pub fn tool_registry(&self) -> &Arc<ToolRegistry> {
-        &self.tool_registry
+        &self.config.tool_registry
     }
 
     pub async fn context_usage_report(&self) -> ContextUsageReport {
@@ -892,20 +804,20 @@ impl StreamingQueryEngine {
                 _ => None,
             })
             .unwrap_or("");
-        let assembler = if let Some(ref working_dir) = self.working_dir_override {
+        let assembler = if let Some(ref working_dir) = self.config.working_dir_override {
             crate::engine::prompt_context::PromptContextAssembler::new(
-                &self.system_prompt,
+                &self.config.system_prompt,
                 working_dir,
             )
         } else {
             crate::engine::prompt_context::PromptContextAssembler::from_current_dir(
-                &self.system_prompt,
+                &self.config.system_prompt,
             )
         };
         let prompt = assembler.report_for_turn(last_user, &history);
         let history_tokens = crate::engine::context_compressor::estimate_messages_tokens(&history);
         let (tool_count, tool_schema_tokens, tool_schema_fingerprint) =
-            estimate_registry_tool_schema_tokens(&self.tool_registry);
+            estimate_registry_tool_schema_tokens(&self.config.tool_registry);
         let (memory_snapshot_tokens, relevant_memories) =
             if let Some(mem_mutex) = self.memory_manager() {
                 let mem = mem_mutex.lock().await;
@@ -917,7 +829,7 @@ impl StreamingQueryEngine {
                 (0, Vec::new())
             };
         let max_context_tokens = {
-            let comp = self.compressor.lock().await;
+            let comp = self.config.compressor.lock().await;
             comp.stats().max_context_tokens
         };
         let total_estimated_tokens =
@@ -943,7 +855,7 @@ impl StreamingQueryEngine {
 
     /// 获取当前模型名
     pub fn model_name(&self) -> String {
-        self.model.read().clone()
+        self.config.model.read().clone()
     }
 
     /// 获取当前 Provider 的 base URL（用于状态展示）
@@ -972,13 +884,13 @@ impl StreamingQueryEngine {
         let (tx, rx) = mpsc::channel(100);
 
         // 准备共享资源
-        let history = self.conversation_history.clone();
-        let compressor = self.compressor.clone();
+        let history = self.config.conversation_history.clone();
+        let compressor = self.config.compressor.clone();
         let binding = self.session_binding();
         let session_store: Option<Arc<crate::session_store::SessionStore>> =
             binding.as_ref().map(|(s, _)| s.clone());
         let session_id = binding.as_ref().map(|(_, id)| id.clone());
-        let trace_store = self.trace_store.clone();
+        let trace_store = self.config.trace_store.clone();
         let route = crate::engine::intent_router::IntentRouter::new().route(&user_msg);
         let agent_manager = if route_wants_agent_manager(&route) {
             self.agent_manager_or_init()
@@ -993,34 +905,35 @@ impl StreamingQueryEngine {
 
         let mut engine = StreamingEngineInner {
             provider: self.provider(),
-            tool_registry: self.tool_registry.clone(),
+            tool_registry: self.config.tool_registry.clone(),
             model: self.model_name(),
-            system_prompt: self.system_prompt.clone(),
-            max_iterations: self.max_iterations,
+            system_prompt: self.config.system_prompt.clone(),
+            max_iterations: self.config.max_iterations,
             agent_manager,
-            task_manager: self.task_manager.clone(),
-            mcp_manager: self.mcp_manager.clone(),
-            lsp_manager: self.lsp_manager.clone(),
-            worktree_manager: self.worktree_manager.clone(),
-            working_dir_override: self.working_dir_override.clone(),
+            task_manager: self.config.task_manager.clone(),
+            mcp_manager: self.config.mcp_manager.clone(),
+            lsp_manager: self.config.lsp_manager.clone(),
+            worktree_manager: self.config.worktree_manager.clone(),
+            working_dir_override: self.config.working_dir_override.clone(),
             memory_manager,
-            compressor: self.compressor.clone(),
+            compressor: self.config.compressor.clone(),
             session_store: binding.as_ref().map(|(s, _)| s.clone()),
             session_id: binding.as_ref().map(|(_, id)| id.clone()),
             trace_store: trace_store.clone(),
-            goal_manager: self.goal_manager.clone(),
-            cost_tracker: self.cost_tracker.clone(),
+            goal_manager: self.config.goal_manager.clone(),
+            cost_tracker: self.config.cost_tracker.clone(),
             permission_mode: self.permission_mode(),
-            session_permission_rules: self.session_permission_rules.clone(),
+            session_permission_rules: self.config.session_permission_rules.clone(),
             memory_use_enabled: self.memory_use_enabled(),
             memory_generate_enabled: self.memory_generate_enabled(),
             memory_recall_mode: self.memory_recall_mode(),
             llm_memory_extraction: self.memory_generate_enabled()
                 && self
+                    .config
                     .llm_memory_extraction
                     .load(std::sync::atomic::Ordering::Relaxed),
-            approval_channel: self.approval_channel.clone(),
-            fallback_model: self.fallback_model.clone(),
+            approval_channel: self.config.approval_channel.clone(),
+            fallback_model: self.config.fallback_model.clone(),
             fallback_state: None,
         };
 
@@ -1417,8 +1330,7 @@ impl StreamingQueryEngine {
                             warn!("Failed to persist assistant message: {}", e);
                         }
                         // Sync compressed history to DB so restarted sessions see compressed state.
-                        if crate::engine::message_compression::selective_compression_enabled()
-                        {
+                        if crate::engine::message_compression::selective_compression_enabled() {
                             if let Err(e) = store.replace_session_messages(sid, &hist) {
                                 warn!("Failed to sync compressed history to DB: {}", e);
                             }

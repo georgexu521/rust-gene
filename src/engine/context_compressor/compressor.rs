@@ -388,11 +388,11 @@ impl ContextCompressor {
             && self.consecutive_llm_failures < self.max_consecutive_llm_failures
         {
             self.llm_compression_attempts += 1;
-            let prev_summary = self
-                .accumulated_summary
-                .as_ref()
-                .map(|s| s.to_text());
-            match self.llm_summarize_middle(messages, prev_summary.as_deref()).await {
+            let prev_summary = self.accumulated_summary.as_ref().map(|s| s.to_text());
+            match self
+                .llm_summarize_middle(messages, prev_summary.as_deref())
+                .await
+            {
                 Some(summary_text) => {
                     self.consecutive_llm_failures = 0;
                     let compressed = self.compress_with_summary_for_strategy(
@@ -1082,7 +1082,9 @@ impl ContextCompressor {
                 prev
             ));
         } else {
-            prompt_parts.push("Create a new anchored summary from the conversation history above.".to_string());
+            prompt_parts.push(
+                "Create a new anchored summary from the conversation history above.".to_string(),
+            );
         }
 
         prompt_parts.push(
