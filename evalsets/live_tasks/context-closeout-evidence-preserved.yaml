@@ -1,0 +1,69 @@
+id: context-closeout-evidence-preserved
+title: routing P2 closeout evidence visible after tool output compression
+type: audit
+eval_intent: seeded_code_change
+complexity: medium
+risk: medium
+runtime_profile: minimum_viable_agent
+
+repo:
+  fixture: priority-agent
+  base_ref: "HEAD"
+  prepare_commands:
+    - |
+      mkdir -p fixtures/context_evidence
+      printf 'version = "1.0.0"\n' > fixtures/context_evidence/config.txt
+
+prompt: |
+  把 fixtures/context_evidence/config.txt 里的 version 从 "1.0.0" 改成 "2.0.0"。
+  改完后用 `rg -F 'version = "2.0.0"' fixtures/context_evidence/config.txt` 验证。
+  验证结果要出现在 closeout evidence 中。
+
+allowed_tools:
+  - file_read
+  - file_edit
+  - bash
+  - grep
+
+forbidden_tools:
+  - file_write
+  - git_push
+  - agent
+  - mcp
+
+expected_behavior:
+  - Agent 完成修改并通过 rg 验证。
+  - closeout evidence 中包含 rg 命令的实际输出（matched line）。
+  - 不会因为"证据不足"而 not_verified。
+
+behavior_assertions: []
+
+runtime_spine_assertions:
+  required_phases:
+    - context
+    - decision
+    - tool_execution
+    - state_update
+    - verification
+    - closeout
+  required_events:
+    - action_decision
+    - stop_check
+  verification_proof: true
+
+acceptance:
+  required_commands:
+    - rg -F 'version = "2.0.0"' fixtures/context_evidence/config.txt
+  diff_constraints:
+    max_files_changed: 1
+    forbidden_paths:
+      - target/
+      - .git/
+  human_review:
+    - Does closeout include the rg command output as evidence?
+    - Is the verification not just a verbal claim?
+
+scoring:
+  edit_correctness: 0.30
+  evidence_quality: 0.40
+  closeout_truth: 0.30

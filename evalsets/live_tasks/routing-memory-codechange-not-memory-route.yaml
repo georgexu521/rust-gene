@@ -1,0 +1,67 @@
+id: routing-memory-codechange-not-memory-route
+title: routing P2 memory-related code fix does not go to Memory route
+type: audit
+eval_intent: seeded_code_change
+complexity: medium
+risk: medium
+runtime_profile: minimum_viable_agent
+
+repo:
+  fixture: priority-agent
+  base_ref: "HEAD"
+  prepare_commands:
+    - |
+      mkdir -p fixtures/routing_mem_fix
+      printf 'MEMORY_LIMIT = 100\n' > fixtures/routing_mem_fix/config.rs
+
+prompt: |
+  fixtures/routing_mem_fix/config.rs 里的 MEMORY_LIMIT 应该改成 200。
+  修改并验证。
+
+allowed_tools:
+  - file_read
+  - file_edit
+  - bash
+  - grep
+
+forbidden_tools:
+  - file_write
+  - memory_save
+  - memory_load
+  - git_push
+  - agent
+  - mcp
+
+expected_behavior:
+  - 虽然 prompt 包含 "memory" 关键词，但这是代码修改任务。
+  - route.intent 应为 CodeChange 或 BugFix，不是 Memory。
+  - 不应走 memory 路由。
+
+behavior_assertions: []
+
+runtime_spine_assertions:
+  required_phases:
+    - context
+    - decision
+    - tool_execution
+    - state_update
+    - closeout
+  required_events:
+    - action_decision
+    - stop_check
+
+acceptance:
+  required_commands:
+    - rg -F 'MEMORY_LIMIT = 200' fixtures/routing_mem_fix/config.rs
+  diff_constraints:
+    max_files_changed: 1
+    forbidden_paths:
+      - target/
+      - .git/
+  human_review:
+    - Did the route classify this as code change, not Memory?
+
+scoring:
+  route_correctness: 0.50
+  edit_scope: 0.30
+  verification: 0.20

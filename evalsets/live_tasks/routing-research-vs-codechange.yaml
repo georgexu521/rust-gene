@@ -1,0 +1,67 @@
+id: routing-research-vs-codechange
+title: routing P2 search-like keyword in code eval does not route to Research
+type: audit
+eval_intent: seeded_code_change
+complexity: medium
+risk: medium
+runtime_profile: minimum_viable_agent
+
+repo:
+  fixture: priority-agent
+  base_ref: "HEAD"
+  prepare_commands:
+    - |
+      mkdir -p fixtures/routing_search_code
+      printf 'fn search() { /* TODO */ }\n' > fixtures/routing_search_code/src/lib.rs
+
+prompt: |
+  fixtures/routing_search_code/src/lib.rs 里的 search 函数需要改成二分查找实现。
+  修改并验证 cargo check 通过。
+
+allowed_tools:
+  - file_read
+  - file_edit
+  - bash
+  - grep
+
+forbidden_tools:
+  - web_search
+  - web_fetch
+  - git_push
+  - agent
+  - mcp
+
+expected_behavior:
+  - 虽然 prompt 包含 "search" 和 "查找"，但这是代码修改任务。
+  - route.intent 应为 CodeChange，不是 Research。
+  - LLM 应能改代码，不应走 web search 路由。
+
+behavior_assertions: []
+
+runtime_spine_assertions:
+  required_phases:
+    - context
+    - decision
+    - tool_execution
+    - state_update
+    - closeout
+  required_events:
+    - action_decision
+    - stop_check
+
+acceptance:
+  required_commands: []
+  harness_commands:
+    - test -f fixtures/routing_search_code/src/lib.rs
+  diff_constraints:
+    max_files_changed: 1
+    forbidden_paths:
+      - target/
+      - .git/
+  human_review:
+    - Did the route avoid classifying this as Research?
+
+scoring:
+  route_correctness: 0.50
+  edit_scope: 0.30
+  verification: 0.20

@@ -1,0 +1,70 @@
+id: context-cache-dynamic-tail-tracked
+title: routing P2 dynamic tail growth observable in trace
+type: audit
+eval_intent: audit_or_regression_check
+complexity: medium
+risk: low
+runtime_profile: standard
+
+repo:
+  fixture: priority-agent
+  base_ref: "HEAD"
+  prepare_commands:
+    - |
+      mkdir -p fixtures/context_tail
+      for i in $(seq 1 3); do
+        printf 'data-{}\n' "$i" > "fixtures/context_tail/file_${i}.txt"
+      done
+
+prompt: |
+  依次读取 fixtures/context_tail/file_1.txt、file_2.txt、file_3.txt，报告内容。
+  每次读取后简要说明读了什么，然后再读下一个。不要修改任何文件。
+
+allowed_tools:
+  - file_read
+  - bash
+  - grep
+
+forbidden_tools:
+  - file_edit
+  - file_write
+  - git_push
+  - agent
+  - mcp
+
+expected_behavior:
+  - Agent 依次读取 3 个文件并报告内容。
+  - 每读取一个文件，context size 增长。
+  - trace 中包含 cache stability snapshot，能看出 dynamic tail 增长。
+  - 不修改任何文件。
+
+behavior_assertions: []
+
+runtime_spine_assertions:
+  required_phases:
+    - context
+    - tool_execution
+    - closeout
+  required_events:
+    - action_decision
+    - stop_check
+
+acceptance:
+  required_commands: []
+  harness_commands:
+    - test -f fixtures/context_tail/file_1.txt
+    - test -f fixtures/context_tail/file_2.txt
+    - test -f fixtures/context_tail/file_3.txt
+  diff_constraints:
+    max_files_changed: 0
+    forbidden_paths:
+      - target/
+      - .git/
+  human_review:
+    - Did trace show dynamic tail growth across tool calls?
+    - Was CacheStabilitySnapshot recorded?
+
+scoring:
+  task_completion: 0.40
+  trace_coverage: 0.35
+  no_mutation: 0.25

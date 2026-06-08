@@ -1,0 +1,68 @@
+id: routing-followup-unfinished-codechange
+title: routing P2 unfinished code change weak follow-up inherits project route
+type: audit
+eval_intent: seeded_code_change
+complexity: low
+risk: low
+runtime_profile: minimum_viable_agent
+
+repo:
+  fixture: priority-agent
+  base_ref: "HEAD"
+  prepare_commands:
+    - |
+      mkdir -p fixtures/routing_followup
+      printf 'fn main() {}\n' > fixtures/routing_followup/src/main.rs
+
+prompt: |
+  第一轮（已完成）：帮我检查 fixtures/routing_followup/src/main.rs 能不能编译。
+  现在：还有那个文件也改一下。
+
+allowed_tools:
+  - file_read
+  - file_edit
+  - bash
+  - grep
+
+forbidden_tools:
+  - file_write
+  - git_push
+  - agent
+  - mcp
+
+expected_behavior:
+  - 弱 follow-up "还有那个文件也改一下" 继承上一轮 code-change route。
+  - route.retrieval 至少为 Project，不降到 Light。
+  - route.reason 包含 "route continuation" 字样。
+  - LLM 有足够的工具面继续改代码。
+
+behavior_assertions: []
+
+runtime_spine_assertions:
+  required_phases:
+    - context
+    - decision
+    - tool_execution
+    - state_update
+    - closeout
+  required_events:
+    - action_decision
+    - stop_check
+
+acceptance:
+  required_commands: []
+  harness_commands:
+    - test -f fixtures/routing_followup/src/main.rs
+  diff_constraints:
+    max_files_changed: 2
+    forbidden_paths:
+      - target/
+      - .git/
+  human_review:
+    - Did the route inherit CodeChange for the follow-up?
+    - Did LLM have enough context to understand "那个文件"?
+
+scoring:
+  route_correctness: 0.40
+  tool_surface: 0.30
+  followup_understanding: 0.30
