@@ -1,0 +1,15 @@
+[2026-06-08T15:47:19+0800] agent-run still running elapsed=30s idle_for=25s stdout_bytes=0 stderr_bytes=0 output_bytes=0 events_bytes=794
+[2026-06-08T15:47:50+0800] agent-run still running elapsed=60s idle_for=0s stdout_bytes=0 stderr_bytes=0 output_bytes=0 events_bytes=148383
+[2026-06-08T15:48:20+0800] agent-run still running elapsed=90s idle_for=0s stdout_bytes=0 stderr_bytes=0 output_bytes=0 events_bytes=249845
+[2026-06-08T15:48:50+0800] agent-run still running elapsed=121s idle_for=0s stdout_bytes=0 stderr_bytes=0 output_bytes=0 events_bytes=315207
+[2026-06-08T15:49:21+0800] agent-run still running elapsed=151s idle_for=5s stdout_bytes=0 stderr_bytes=0 output_bytes=0 events_bytes=351769
+[2026-06-08T15:49:51+0800] agent-run still running elapsed=181s idle_for=20s stdout_bytes=0 stderr_bytes=0 output_bytes=0 events_bytes=356549
+[2026-06-08T15:50:21+0800] agent-run still running elapsed=212s idle_for=50s stdout_bytes=0 stderr_bytes=0 output_bytes=0 events_bytes=356549
+[2026-06-08T15:50:51+0800] agent-run still running elapsed=242s idle_for=80s stdout_bytes=0 stderr_bytes=0 output_bytes=0 events_bytes=356549
+[2026-06-08T15:51:22+0800] agent-run still running elapsed=272s idle_for=111s stdout_bytes=0 stderr_bytes=0 output_bytes=0 events_bytes=356549
+[2026-06-08T15:51:52+0800] agent-run still running elapsed=302s idle_for=5s stdout_bytes=0 stderr_bytes=0 output_bytes=0 events_bytes=370696
+[2026-06-08T15:52:22+0800] agent-run still running elapsed=333s idle_for=20s stdout_bytes=0 stderr_bytes=0 output_bytes=0 events_bytes=373787
+[2026-06-08T15:52:53+0800] agent-run still running elapsed=363s idle_for=50s stdout_bytes=0 stderr_bytes=0 output_bytes=0 events_bytes=373787
+[2026-06-08T15:53:23+0800] agent-run still running elapsed=393s idle_for=5s stdout_bytes=0 stderr_bytes=0 output_bytes=0 events_bytes=403204
+[2026-06-08T15:53:53+0800] agent-run still running elapsed=424s idle_for=0s stdout_bytes=0 stderr_bytes=0 output_bytes=0 events_bytes=427403
+[2026-06-08T15:54:24+0800] agent-run still running elapsed=454s idle_for=0s stdout_bytes=0 stderr_bytes=0 output_bytes=0 events_bytes=500251

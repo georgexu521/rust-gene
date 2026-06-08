@@ -1,0 +1,29 @@
+{
+  "schema": "agent_run_bundle.v1",
+  "task_id": "weighting-p0-premature-edit-revise",
+  "run_id": "live-eval-20260608-154042",
+  "generated_at": "2026-06-08T07:46:08.145272+00:00",
+  "goal_summary": "seeded_code_change",
+  "mode": "agent-run",
+  "final_status": "failed",
+  "terminal_status": "completed",
+  "stop_reason": "no_issue",
+  "modified_files": "1",
+  "validation_status": "ok",
+  "verification_status": "passed",
+  "closeout_status": "passed",
+  "scores": {
+    "outcome": "65",
+    "process": "85",
+    "efficiency": "100",
+    "agent": "78",
+    "penalties": "run_failed,runtime_spine_failed,runtime_spine_not_passing"
+  },
+  "artifacts": {
+    "source_report": "docs/benchmarks/live-live-eval-20260608-154042/weighting-p0-premature-edit-revise/report.md",
+    "source_events": "docs/benchmarks/live-live-eval-20260608-154042/weighting-p0-premature-edit-revise/agent-events.jsonl",
+    "steps": "docs/benchmarks/live-live-eval-20260608-154042/weighting-p0-premature-edit-revise/run-bundle/steps.jsonl",
+    "events": "docs/benchmarks/live-live-eval-20260608-154042/weighting-p0-premature-edit-revise/run-bundle/events.jsonl",
+    "final_report": "docs/benchmarks/live-live-eval-20260608-154042/weighting-p0-premature-edit-revise/run-bundle/final_report.md"
+  }
+}
