@@ -552,14 +552,43 @@ impl RequestPreparationController {
         let content = content.clone();
 
         let mut memory = memory_manager.lock().await;
-        let retrieval_context = memory
-            .prefetch_retrieval_context_with_llm_rerank(
-                &content,
-                provider,
-                context.model,
-                context.retrieval_policy,
-            )
-            .await;
+        let dialectic_depth =
+            if context.retrieval_policy.allows_memory_context() {
+                // Use dialectic multi-pass for Memory/Project policies where
+                // deeper reasoning about memory relevance is valuable.
+                // Light policy stays at depth 1 (single pass, no extra LLM cost).
+                let depth_env = std::env::var("PRIORITY_AGENT_MEMORY_DIALECTIC_DEPTH")
+                    .ok()
+                    .and_then(|v| v.parse::<usize>().ok())
+                    .unwrap_or(0);
+                if depth_env > 0 {
+                    depth_env
+                } else {
+                    1 // default: single pass (same as current behavior)
+                }
+            } else {
+                0 // disabled
+            };
+        let retrieval_context = if dialectic_depth > 1 {
+            memory
+                .prefetch_retrieval_context_dialectic(
+                    &content,
+                    provider,
+                    context.model,
+                    context.retrieval_policy,
+                    dialectic_depth,
+                )
+                .await
+        } else {
+            memory
+                .prefetch_retrieval_context_with_llm_rerank(
+                    &content,
+                    provider,
+                    context.model,
+                    context.retrieval_policy,
+                )
+                .await
+        };
         let Some(ctx) = retrieval_context else {
             if mva_runtime_profile_enabled() {
                 context.trace.record(TraceEvent::MemoryBoundaryEvaluated {

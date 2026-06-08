@@ -202,6 +202,21 @@ impl MemoryManager {
         report.records_needing_revalidation = record_report.records_needing_revalidation;
         report.records_archived = record_report.records_archived;
 
+        // 矛盾检测：在维护过程中主动发现可能冲突的记忆记录
+        let contradictions = self.contradictions(0.3, 10);
+        if !contradictions.is_empty() {
+            debug!(
+                "Memory maintenance: detected {} potential contradictions among records",
+                contradictions.len()
+            );
+            for pair in &contradictions {
+                debug!(
+                    "  contradiction score={:.2}: {} vs {} (shared: {:?})",
+                    pair.contradiction_score, pair.record_a, pair.record_b, pair.shared_keywords
+                );
+            }
+        }
+
         report
     }
 

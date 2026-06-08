@@ -7,10 +7,9 @@
 use super::manager::MemoryManager;
 use super::provider::{
     MemoryProvider, MemoryProviderCallOutcome, MemoryProviderCapabilities,
-    MemoryProviderLifecycleReport, MemoryTurn, NoNetworkMemoryProvider,
+    MemoryProviderLifecycleReport, NoNetworkMemoryProvider,
 };
-use super::types::{MemoryRecord, MemoryScope};
-use crate::services::api::Message;
+use super::types::MemoryScope;
 use std::sync::Arc;
 
 impl MemoryManager {
@@ -96,81 +95,5 @@ impl MemoryManager {
         scope: &MemoryScope,
     ) -> (Vec<String>, Vec<MemoryProviderCallOutcome>) {
         self.provider_registry.system_prompt_blocks(scope).await
-    }
-
-    pub async fn provider_prefetch(
-        &self,
-        query: &str,
-        scope: &MemoryScope,
-    ) -> (Vec<MemoryRecord>, Vec<MemoryProviderCallOutcome>) {
-        self.provider_registry.prefetch_all(query, scope).await
-    }
-
-    pub async fn provider_search(
-        &self,
-        query: &str,
-        scope: &MemoryScope,
-        max_results: usize,
-    ) -> (Vec<MemoryRecord>, Vec<MemoryProviderCallOutcome>) {
-        self.provider_registry
-            .search_all(query, scope, max_results)
-            .await
-    }
-
-    pub async fn queue_memory_provider_prefetch(
-        &self,
-        query: &str,
-        scope: &MemoryScope,
-    ) -> Vec<MemoryProviderCallOutcome> {
-        self.provider_registry
-            .queue_prefetch_all(query, scope)
-            .await
-    }
-
-    pub async fn sync_memory_providers_turn(
-        &self,
-        user: &str,
-        assistant: &str,
-        scope: &MemoryScope,
-    ) -> Vec<MemoryProviderCallOutcome> {
-        let turn = MemoryTurn {
-            user: user.to_string(),
-            assistant: assistant.to_string(),
-        };
-        self.provider_registry.sync_turn_all(&turn, scope).await
-    }
-
-    pub async fn notify_memory_providers_session_end(
-        &self,
-        transcript: &[Message],
-        scope: &MemoryScope,
-    ) -> Vec<MemoryProviderCallOutcome> {
-        self.provider_registry
-            .on_session_end_all(transcript, scope)
-            .await
-    }
-
-    pub async fn notify_memory_providers_pre_compress(
-        &self,
-        messages: &[Message],
-        scope: &MemoryScope,
-    ) -> (Vec<MemoryRecord>, Vec<MemoryProviderCallOutcome>) {
-        self.provider_registry
-            .on_pre_compress_all(messages, scope)
-            .await
-    }
-
-    pub async fn notify_memory_providers_write(
-        &self,
-        record: &MemoryRecord,
-        scope: &MemoryScope,
-    ) -> Vec<MemoryProviderCallOutcome> {
-        self.provider_registry
-            .on_memory_write_all(record, scope)
-            .await
-    }
-
-    pub async fn shutdown_memory_providers(&self) -> Vec<MemoryProviderCallOutcome> {
-        self.provider_registry.shutdown_all().await
     }
 }
