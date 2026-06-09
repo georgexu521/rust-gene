@@ -531,6 +531,17 @@ impl ApiRequestController {
                                     Some("api_context_error"),
                                     "reactive context compacted after provider limit error",
                                 );
+                                // Write compaction event to session_events for durable replay.
+                                let writer = crate::session_store::SessionEventWriter::new(
+                                    store.shared_conn(),
+                                    &context.conversation.session_id,
+                                );
+                                let _ = writer.compaction(
+                                    record.strategy.label(),
+                                    "api_context_error",
+                                    record.tokens_before,
+                                    record.tokens_after,
+                                );
                             }
                             let mut provenance = compaction_record
                                 .as_ref()

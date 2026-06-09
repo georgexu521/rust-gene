@@ -101,6 +101,17 @@ impl PreflightCompressionController {
                     Some("preflight"),
                     "preflight context compacted",
                 );
+                // Write compaction event to session_events for durable replay.
+                let writer = crate::session_store::SessionEventWriter::new(
+                    store.shared_conn(),
+                    context.session_id,
+                );
+                let _ = writer.compaction(
+                    record.strategy.label(),
+                    "preflight",
+                    record.tokens_before,
+                    record.tokens_after,
+                );
             }
             let after_tokens = estimate_messages_tokens(context.messages);
             let mut provenance = compaction_record

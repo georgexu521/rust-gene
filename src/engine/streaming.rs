@@ -473,6 +473,15 @@ impl StreamingQueryEngine {
                     Some("manual compact"),
                     "manual compact requested",
                 );
+                // Write compaction event to session_events for durable replay.
+                let writer =
+                    crate::session_store::SessionEventWriter::new(store.shared_conn(), session_id);
+                let _ = writer.compaction(
+                    record.strategy.label(),
+                    "manual compact",
+                    record.tokens_before,
+                    record.tokens_after,
+                );
             }
         }
         self.clear_post_compact_transient_state();
@@ -1075,6 +1084,17 @@ impl StreamingQueryEngine {
                                 record,
                                 Some("streaming_history_preflight"),
                                 "streaming history compacted before request",
+                            );
+                            // Write compaction event to session_events for durable replay.
+                            let writer = crate::session_store::SessionEventWriter::new(
+                                store.shared_conn(),
+                                sid,
+                            );
+                            let _ = writer.compaction(
+                                record.strategy.label(),
+                                "streaming_history_preflight",
+                                record.tokens_before,
+                                record.tokens_after,
                             );
                         }
                     }
