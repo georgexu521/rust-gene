@@ -89,6 +89,29 @@ pub struct ModelChoice {
     pub active: bool,
 }
 
+/// 侧边栏面板类型
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SidebarPanel {
+    Sessions,
+    Context,
+}
+
+impl SidebarPanel {
+    pub fn next(self) -> Self {
+        match self {
+            Self::Sessions => Self::Context,
+            Self::Context => Self::Sessions,
+        }
+    }
+
+    pub fn label(&self) -> &'static str {
+        match self {
+            Self::Sessions => "Sessions",
+            Self::Context => "Context",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProviderChoice {
     pub name: String,
@@ -256,6 +279,8 @@ pub struct TuiApp {
     pub filtering_sidebar: bool,
     /// 快捷键帮助搜索筛选
     pub shortcut_help_filter: String,
+    /// 侧边栏面板类型
+    pub sidebar_panel: SidebarPanel,
     /// 打字机效果当前显示位置（字符数）
     pub typewriter_position: usize,
     /// LSP 管理器
@@ -460,6 +485,7 @@ impl TuiApp {
             confirm_delete_session_id: None,
             filtering_sidebar: false,
             shortcut_help_filter: String::new(),
+            sidebar_panel: SidebarPanel::Sessions,
             typewriter_position: 0,
             tick_count: 0,
             lsp_manager,

@@ -753,8 +753,15 @@ fn tool_viewer_line_style(raw: &str, app: &TuiApp) -> Style {
     }
 }
 
-/// 渲染会话侧边栏（带搜索、pin、元数据）
+/// 渲染会话侧边栏（带搜索、pin、元数据、面板切换）
 pub fn render_sidebar(f: &mut Frame, app: &TuiApp, area: Rect) {
+    match app.sidebar_panel {
+        crate::tui::app::SidebarPanel::Sessions => render_sessions_panel(f, app, area),
+        crate::tui::app::SidebarPanel::Context => render_context_panel(f, app, area),
+    }
+}
+
+fn render_sessions_panel(f: &mut Frame, app: &TuiApp, area: Rect) {
     use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph};
 
     let block = Block::default()
@@ -871,6 +878,32 @@ pub fn render_sidebar(f: &mut Frame, app: &TuiApp, area: Rect) {
 
     let list = List::new(items);
     f.render_widget(list, search_chunks[1]);
+}
+
+fn render_context_panel(f: &mut Frame, app: &TuiApp, area: Rect) {
+    use ratatui::widgets::{Block, Borders, Paragraph};
+
+    let panel_label = app.sidebar_panel.label();
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(app.theme.tokens.tone.info))
+        .title(format!(" {} (Ctrl+Tab) ", panel_label))
+        .style(Style::default().bg(app.theme.tokens.surface.bg));
+
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+
+    let msgs = app.messages.len();
+
+    let text =
+        format!("Active session\nMessages: {msgs}\n\nCtrl+Tab: Sessions\nb: toggle sidebar",);
+
+    f.render_widget(
+        Paragraph::new(text)
+            .style(Style::default().fg(app.theme.tokens.fg.body))
+            .wrap(ratatui::widgets::Wrap { trim: true }),
+        inner,
+    );
 }
 
 fn build_session_item<'a>(

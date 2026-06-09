@@ -640,6 +640,11 @@ async fn handle_key_event(key: KeyEvent, app: &mut TuiApp) -> anyhow::Result<boo
             app.sidebar_visible = !app.sidebar_visible;
             return Ok(false);
         }
+        // Sidebar panel switching (Ctrl+Tab)
+        if key.code == KeyCode::Tab && key.modifiers.contains(KeyModifiers::CONTROL) {
+            app.sidebar_panel = app.sidebar_panel.next();
+            return Ok(false);
+        }
         // Sidebar navigation (only when sidebar is visible)
         if app.sidebar_visible {
             let sessions = app.session_manager.list_sessions(50).unwrap_or_default();
