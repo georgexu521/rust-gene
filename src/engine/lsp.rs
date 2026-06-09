@@ -15,6 +15,18 @@ use tracing::{debug, info, warn};
 /// 诊断缓存最大条目数
 const MAX_DIAGNOSTIC_CACHE_SIZE: usize = 1000;
 
+/// Entry in the built-in LSP server registry.
+///
+/// Maps file extensions to language server binaries.  Used for
+/// auto-detection and file-extension routing.
+#[derive(Debug, Clone)]
+pub struct LspRegistryEntry {
+    pub language: String,
+    pub extensions: Vec<String>,
+    pub command: String,
+    pub args: Vec<String>,
+}
+
 /// LSP 服务器配置
 #[derive(Debug, Clone)]
 pub struct LspServerConfig {
@@ -837,6 +849,85 @@ impl LspManager {
     /// 检查服务器是否已注册
     pub fn is_registered(&self, name: &str) -> bool {
         self.clients.contains_key(name)
+    }
+
+    /// LSP server registry: maps file extensions to server names.
+    ///
+    /// Used by `client_for_path()` and `diagnostics_for_path()` to route
+    /// diagnostics requests to the correct language server.
+    pub fn registry_entries() -> Vec<LspRegistryEntry> {
+        vec![
+            LspRegistryEntry {
+                language: "Rust".into(),
+                extensions: vec!["rs".into()],
+                command: "rust-analyzer".into(),
+                args: vec![],
+            },
+            LspRegistryEntry {
+                language: "TypeScript".into(),
+                extensions: vec!["ts".into(), "tsx".into(), "js".into(), "jsx".into()],
+                command: "typescript-language-server".into(),
+                args: vec!["--stdio".into()],
+            },
+            LspRegistryEntry {
+                language: "Go".into(),
+                extensions: vec!["go".into()],
+                command: "gopls".into(),
+                args: vec![],
+            },
+            LspRegistryEntry {
+                language: "Python".into(),
+                extensions: vec!["py".into()],
+                command: "pylsp".into(),
+                args: vec![],
+            },
+            LspRegistryEntry {
+                language: "Bash".into(),
+                extensions: vec!["sh".into(), "bash".into()],
+                command: "bash-language-server".into(),
+                args: vec!["start".into()],
+            },
+            LspRegistryEntry {
+                language: "YAML".into(),
+                extensions: vec!["yml".into(), "yaml".into()],
+                command: "yaml-language-server".into(),
+                args: vec!["--stdio".into()],
+            },
+            LspRegistryEntry {
+                language: "JSON".into(),
+                extensions: vec!["json".into()],
+                command: "vscode-json-language-server".into(),
+                args: vec!["--stdio".into()],
+            },
+        ]
+    }
+
+    /// Find the LSP client that handles a given file path.
+    pub fn client_for_path(&self, path: &std::path::Path) -> Option<&Arc<LspClient>> {
+        let ext = path.extension()?.to_str()?.to_lowercase();
+        for entry in Self::registry_entries() {
+            if entry.extensions.iter().any(|e| e == &ext) {
+                // Look for a registered client whose name starts with the language.
+                let name = entry.language.to_lowercase();
+                for (client_name, client) in &self.clients {
+                    if client_name.to_lowercase().contains(&name) {
+                        return Some(client);
+                    }
+                }
+            }
+        }
+        // Fallback to first available client.
+        self.clients.values().next()
+    }
+
+    /// Get diagnostics for a file path via the appropriate language server.
+    pub async fn diagnostics_for_path(&self, path: &std::path::Path) -> Vec<LspDiagnostic> {
+        let uri = path_to_uri(path);
+        if let Some(client) = self.client_for_path(path) {
+            client.get_diagnostics(&uri).await
+        } else {
+            Vec::new()
+        }
     }
 
     /// 获取所有已注册服务器的状态

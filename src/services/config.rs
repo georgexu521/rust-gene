@@ -120,6 +120,9 @@ pub struct AppConfig {
     /// Hooks configuration
     #[serde(default)]
     pub hooks: HooksConfig,
+    /// LSP (Language Server Protocol) configuration
+    #[serde(default)]
+    pub lsp: LspConfig,
 }
 
 impl AppConfig {
@@ -815,6 +818,34 @@ pub struct HooksConfig {
 
 fn default_hook_timeout_ms() -> u64 {
     5000
+}
+
+/// LSP (Language Server Protocol) configuration.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct LspConfig {
+    /// Master switch. When false, no LSP servers are started.
+    #[serde(default)]
+    pub enabled: bool,
+    /// Auto-detect language servers from project files (Cargo.toml, etc.).
+    #[serde(default = "default_true")]
+    pub auto_detect: bool,
+    /// Prevent automatic download/install of LSP server binaries.
+    #[serde(default = "default_true")]
+    pub disable_downloads: bool,
+}
+
+impl Default for LspConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            auto_detect: true,
+            disable_downloads: true,
+        }
+    }
+}
+
+fn default_true() -> bool {
+    true
 }
 
 impl Default for StorageConfig {
