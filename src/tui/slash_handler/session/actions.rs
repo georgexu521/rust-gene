@@ -834,7 +834,7 @@ pub async fn handle_compact_status(app: &TuiApp) -> String {
     // Check compact boundaries from session store (v7 migration)
     let boundary_info = engine.session_binding().map(|(store, _)| {
         let conn = store.shared_conn();
-        let conn = conn.lock().unwrap();
+        let conn = conn.lock().expect("session actions sqlite conn lock poisoned");
         let count: i64 = conn
             .query_row(
                 "SELECT COUNT(*) FROM compact_boundaries WHERE session_id = ?1",

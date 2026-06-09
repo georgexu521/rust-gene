@@ -146,7 +146,7 @@ impl TaskAnalyzer {
             b.total_weight
                 .value()
                 .partial_cmp(&a.total_weight.value())
-                .unwrap()
+                .expect("task weights must be comparable (non-NaN)")
         });
 
         // 只返回前3条关键路径
@@ -168,7 +168,7 @@ impl TaskAnalyzer {
                 a.local_weight
                     .value()
                     .partial_cmp(&b.local_weight.value())
-                    .unwrap()
+                    .expect("task weights must be comparable (non-NaN)")
             })
             .unwrap();
 

@@ -73,7 +73,10 @@ impl ApiSessionRunnerRegistry {
 
     /// Get the current run status for a session.
     pub fn status(&self, session_id: &str) -> ApiRunStatus {
-        let guard = self.states.lock().unwrap();
+        let guard = self
+            .states
+            .lock()
+            .expect("session runner states lock poisoned");
         guard
             .get(session_id)
             .map(|s| s.status.clone())
@@ -82,7 +85,10 @@ impl ApiSessionRunnerRegistry {
 
     /// Mark a session as running.  Returns false if already busy.
     pub fn start_run(&self, session_id: &str) -> bool {
-        let mut guard = self.states.lock().unwrap();
+        let mut guard = self
+            .states
+            .lock()
+            .expect("session runner states lock poisoned");
         let entry = guard
             .entry(session_id.to_string())
             .or_insert_with(SessionRunState::new);
@@ -101,7 +107,10 @@ impl ApiSessionRunnerRegistry {
 
     /// Mark a session as completed.
     pub fn finish_run(&self, session_id: &str, status: ApiRunStatus) {
-        let mut guard = self.states.lock().unwrap();
+        let mut guard = self
+            .states
+            .lock()
+            .expect("session runner states lock poisoned");
         if let Some(entry) = guard.get_mut(session_id) {
             entry.status = status;
             entry.idle_notify.notify_waiters();
@@ -110,7 +119,10 @@ impl ApiSessionRunnerRegistry {
 
     /// Update non-terminal status without waking idle waiters.
     pub fn set_status(&self, session_id: &str, status: ApiRunStatus) {
-        let mut guard = self.states.lock().unwrap();
+        let mut guard = self
+            .states
+            .lock()
+            .expect("session runner states lock poisoned");
         let entry = guard
             .entry(session_id.to_string())
             .or_insert_with(SessionRunState::new);
@@ -119,7 +131,10 @@ impl ApiSessionRunnerRegistry {
 
     /// Mark as queued.
     pub fn enqueue(&self, session_id: &str) {
-        let mut guard = self.states.lock().unwrap();
+        let mut guard = self
+            .states
+            .lock()
+            .expect("session runner states lock poisoned");
         let entry = guard
             .entry(session_id.to_string())
             .or_insert_with(SessionRunState::new);
@@ -140,7 +155,10 @@ impl ApiSessionRunnerRegistry {
     pub async fn wait_idle(&self, session_id: &str) {
         loop {
             let notify = {
-                let guard = self.states.lock().unwrap();
+                let guard = self
+                    .states
+                    .lock()
+                    .expect("session runner states lock poisoned");
                 if let Some(entry) = guard.get(session_id) {
                     match entry.status {
                         ApiRunStatus::Idle
@@ -159,7 +177,10 @@ impl ApiSessionRunnerRegistry {
 
     /// Request cancellation of the current run.
     pub fn request_cancel(&self, session_id: &str) -> bool {
-        let mut guard = self.states.lock().unwrap();
+        let mut guard = self
+            .states
+            .lock()
+            .expect("session runner states lock poisoned");
         if let Some(entry) = guard.get_mut(session_id) {
             match entry.status {
                 ApiRunStatus::Running | ApiRunStatus::WaitingPermission => {

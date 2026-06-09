@@ -233,7 +233,7 @@ pub(crate) fn count_test_passed(output: &str) -> u32 {
     let mut max = 0u32;
     for re in candidates.iter().flatten() {
         if let Some(caps) = re.captures(output) {
-            if let Ok(n) = caps.get(1).unwrap().as_str().parse::<u32>() {
+            if let Some(n) = caps.get(1).and_then(|m| m.as_str().parse::<u32>().ok()) {
                 max = max.max(n);
             }
         }
@@ -249,7 +249,7 @@ pub(crate) fn count_test_failed(output: &str) -> u32 {
     let mut max = 0u32;
     for re in candidates.iter().flatten() {
         if let Some(caps) = re.captures(output) {
-            if let Ok(n) = caps.get(1).unwrap().as_str().parse::<u32>() {
+            if let Some(n) = caps.get(1).and_then(|m| m.as_str().parse::<u32>().ok()) {
                 max = max.max(n);
             }
         }

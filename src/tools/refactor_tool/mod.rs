@@ -214,8 +214,17 @@ fn replace_word(content: &str, old: &str, new: &str) -> String {
             result.push_str(new);
             i += old.len();
         } else {
-            result.push(content[i..].chars().next().unwrap());
-            i += content[i..].chars().next().unwrap().len_utf8();
+            result.push(
+                content[i..]
+                    .chars()
+                    .next()
+                    .expect("non-empty char boundary"),
+            );
+            i += content[i..]
+                .chars()
+                .next()
+                .expect("non-empty char boundary")
+                .len_utf8();
         }
     }
 
@@ -253,7 +262,11 @@ fn count_replacements(content: &str, old: &str, new: &str) -> usize {
                 count += 1;
                 i += old.len();
             } else {
-                i += content[i..].chars().next().unwrap().len_utf8();
+                i += content[i..]
+                    .chars()
+                    .next()
+                    .expect("non-empty char boundary")
+                    .len_utf8();
             }
         }
         count

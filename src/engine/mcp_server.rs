@@ -307,7 +307,11 @@ impl McpServer {
                         "error": { "code": -32700, "message": "Parse error" }
                     });
                     stdout
-                        .write_all(serde_json::to_string(&error_resp).unwrap().as_bytes())
+                        .write_all(
+                            serde_json::to_string(&error_resp)
+                                .expect("MCP error response must serialize")
+                                .as_bytes(),
+                        )
                         .await?;
                     stdout.write_all(b"\n").await?;
                     stdout.flush().await?;

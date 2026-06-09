@@ -417,7 +417,7 @@ impl RemoteSessionManager {
         );
         let session = RemoteSession::new(id.clone(), config);
         {
-            let mut sessions = self.sessions.lock().unwrap();
+            let mut sessions = self.sessions.lock().expect("remote sessions lock poisoned");
             sessions.push(session.clone());
         }
         self.save_sessions().ok();
@@ -426,7 +426,7 @@ impl RemoteSessionManager {
 
     /// 列出所有会话
     pub fn list_sessions(&self) -> Vec<RemoteSession> {
-        let sessions = self.sessions.lock().unwrap();
+        let sessions = self.sessions.lock().expect("remote sessions lock poisoned");
         sessions.clone()
     }
 
@@ -474,14 +474,14 @@ impl RemoteSessionManager {
 
     /// 获取单个会话
     pub fn get_session(&self, id: &str) -> Option<RemoteSession> {
-        let sessions = self.sessions.lock().unwrap();
+        let sessions = self.sessions.lock().expect("remote sessions lock poisoned");
         sessions.iter().find(|s| s.id == id).cloned()
     }
 
     /// 删除会话
     pub fn remove_session(&self, id: &str) -> bool {
         {
-            let mut sessions = self.sessions.lock().unwrap();
+            let mut sessions = self.sessions.lock().expect("remote sessions lock poisoned");
             let len_before = sessions.len();
             sessions.retain(|s| s.id != id);
             if sessions.len() == len_before {
@@ -495,7 +495,7 @@ impl RemoteSessionManager {
     /// 更新会话状态
     pub fn update_session_status(&self, id: &str, status: RemoteSessionStatus) -> bool {
         {
-            let mut sessions = self.sessions.lock().unwrap();
+            let mut sessions = self.sessions.lock().expect("remote sessions lock poisoned");
             if let Some(session) = sessions.iter_mut().find(|s| s.id == id) {
                 session.status = status;
                 if status == RemoteSessionStatus::Connected {
@@ -513,7 +513,7 @@ impl RemoteSessionManager {
     /// 设置会话错误
     pub fn set_session_error(&self, id: &str, error: impl Into<String>) -> bool {
         {
-            let mut sessions = self.sessions.lock().unwrap();
+            let mut sessions = self.sessions.lock().expect("remote sessions lock poisoned");
             if let Some(session) = sessions.iter_mut().find(|s| s.id == id) {
                 session.status = RemoteSessionStatus::Error;
                 session.error_message = Some(error.into());
@@ -621,7 +621,7 @@ impl RemoteSessionManager {
     }
 
     fn save_sessions(&self) -> anyhow::Result<()> {
-        let sessions = self.sessions.lock().unwrap();
+        let sessions = self.sessions.lock().expect("remote sessions lock poisoned");
         if let Some(parent) = self.persistence_path.parent() {
             std::fs::create_dir_all(parent)?;
         }

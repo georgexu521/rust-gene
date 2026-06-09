@@ -126,7 +126,7 @@ impl TeammateMailbox {
         reply_to: Option<String>,
     ) -> MailboxMessage {
         let msg = {
-            let mut inner = self.inner.lock().unwrap();
+            let mut inner = self.inner.lock().expect("team inner lock poisoned");
             inner.next_id += 1;
             let id = format!("msg_{}_{}", self.self_id, inner.next_id);
             let msg = MailboxMessage {
@@ -158,7 +158,7 @@ impl TeammateMailbox {
 
     /// 接收发给本机的消息（未读）
     pub fn receive(&self, limit: usize) -> Vec<MailboxMessage> {
-        let inner = self.inner.lock().unwrap();
+        let inner = self.inner.lock().expect("team inner lock poisoned");
         inner
             .messages
             .iter()
@@ -170,7 +170,7 @@ impl TeammateMailbox {
 
     /// 接收指定发件人的消息
     pub fn receive_from(&self, from: &str, limit: usize) -> Vec<MailboxMessage> {
-        let inner = self.inner.lock().unwrap();
+        let inner = self.inner.lock().expect("team inner lock poisoned");
         inner
             .messages
             .iter()
@@ -182,14 +182,14 @@ impl TeammateMailbox {
 
     /// 获取单条消息
     pub fn get_message(&self, id: &str) -> Option<MailboxMessage> {
-        let inner = self.inner.lock().unwrap();
+        let inner = self.inner.lock().expect("team inner lock poisoned");
         inner.messages.iter().find(|m| m.id == id).cloned()
     }
 
     /// 标记消息已读
     pub fn mark_read(&self, id: &str) -> bool {
         let found = {
-            let mut inner = self.inner.lock().unwrap();
+            let mut inner = self.inner.lock().expect("team inner lock poisoned");
             if let Some(m) = inner.messages.iter_mut().find(|m| m.id == id) {
                 m.read = true;
                 true
@@ -206,7 +206,7 @@ impl TeammateMailbox {
     /// 标记所有消息已读
     pub fn mark_all_read(&self) -> usize {
         let count = {
-            let mut inner = self.inner.lock().unwrap();
+            let mut inner = self.inner.lock().expect("team inner lock poisoned");
             let mut count = 0;
             for m in &mut inner.messages {
                 if (m.to == self.self_id || m.to == "*") && !m.read {
@@ -224,7 +224,7 @@ impl TeammateMailbox {
 
     /// 未读消息统计
     pub fn unread_summary(&self) -> UnreadSummary {
-        let inner = self.inner.lock().unwrap();
+        let inner = self.inner.lock().expect("team inner lock poisoned");
         let unread: Vec<_> = inner
             .messages
             .iter()
@@ -249,7 +249,7 @@ impl TeammateMailbox {
 
     /// 列出最近消息（包含已读）
     pub fn list_messages(&self, limit: usize) -> Vec<MailboxMessage> {
-        let inner = self.inner.lock().unwrap();
+        let inner = self.inner.lock().expect("team inner lock poisoned");
         inner
             .messages
             .iter()
@@ -263,7 +263,7 @@ impl TeammateMailbox {
     /// 删除消息
     pub fn delete_message(&self, id: &str) -> bool {
         let removed = {
-            let mut inner = self.inner.lock().unwrap();
+            let mut inner = self.inner.lock().expect("team inner lock poisoned");
             let len_before = inner.messages.len();
             inner.messages.retain(|m| m.id != id);
             inner.messages.len() < len_before
@@ -315,7 +315,7 @@ impl TeammateMailbox {
         if let Some(parent) = self.persistence_path.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        let inner = self.inner.lock().unwrap();
+        let inner = self.inner.lock().expect("team inner lock poisoned");
         let mut file = std::fs::File::create(&self.persistence_path)?;
         for msg in &inner.messages {
             let line = serde_json::to_string(msg)?;

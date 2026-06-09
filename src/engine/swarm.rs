@@ -171,7 +171,7 @@ impl SwarmCoordinator {
 
             let handle = tokio::spawn(async move {
                 // 获取并发许可
-                let _permit = sem.acquire().await.unwrap();
+                let _permit = sem.acquire().await.expect("swarm semaphore closed");
 
                 // 更新状态为 Running
                 {

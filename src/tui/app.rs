@@ -843,7 +843,7 @@ impl TuiApp {
             return false;
         };
         let conn = store.shared_conn();
-        let conn = conn.lock().unwrap();
+        let conn = conn.lock().expect("tui app sqlite conn lock poisoned");
         crate::engine::run_coordinator::persist_session_input(
             &conn,
             &session_id,
@@ -857,7 +857,7 @@ impl TuiApp {
         let engine = self.streaming_engine.as_ref()?;
         let (store, session_id) = engine.session_binding()?;
         let conn = store.shared_conn();
-        let conn = conn.lock().unwrap();
+        let conn = conn.lock().expect("tui app sqlite conn lock poisoned");
         crate::engine::run_coordinator::promote_session_input(&conn, &session_id)
             .ok()
             .flatten()

@@ -256,7 +256,11 @@ impl ResultFusion {
         // 简单融合：选择最高置信度的结果
         let best = results
             .iter()
-            .max_by(|a, b| a.confidence.partial_cmp(&b.confidence).unwrap())
+            .max_by(|a, b| {
+                a.confidence
+                    .partial_cmp(&b.confidence)
+                    .expect("confidence values must be comparable")
+            })
             .cloned();
 
         FusedResult {

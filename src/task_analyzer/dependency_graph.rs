@@ -180,7 +180,9 @@ impl DependencyGraph {
 
             if let Some(dependents) = self.dependents.get(&task_id) {
                 for dependent in dependents {
-                    let degree = in_degree.get_mut(dependent).unwrap();
+                    let degree = in_degree
+                        .get_mut(dependent)
+                        .expect("dependent must exist in in_degree map");
                     *degree -= 1;
                     if *degree == 0 {
                         queue.push_back(dependent.clone());

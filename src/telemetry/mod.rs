@@ -140,7 +140,7 @@ impl TelemetryCollector {
             return;
         }
 
-        let mut data = self.inner.lock().unwrap();
+        let mut data = self.inner.lock().expect("telemetry inner lock poisoned");
         data.total_sessions += 1;
         data.last_updated_at_ms = now_ms();
 
@@ -187,12 +187,19 @@ impl TelemetryCollector {
 
     /// 获取汇总报告
     pub fn summary(&self) -> TelemetryData {
-        self.inner.lock().unwrap().clone()
+        self.inner
+            .lock()
+            .expect("telemetry inner lock poisoned")
+            .clone()
     }
 
     /// 导出为 JSON 字符串
     pub fn export_json(&self) -> anyhow::Result<String> {
-        let data = self.inner.lock().unwrap().clone();
+        let data = self
+            .inner
+            .lock()
+            .expect("telemetry inner lock poisoned")
+            .clone();
         Ok(serde_json::to_string_pretty(&data)?)
     }
 

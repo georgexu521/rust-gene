@@ -130,7 +130,7 @@ impl RuntimeControllerApiAgentRuntime {
         });
         let store = self.session_store.read().await;
         let conn = store.shared_conn();
-        let conn = conn.lock().unwrap();
+        let conn = conn.lock().expect("api state sqlite conn lock poisoned");
         Ok(
             crate::engine::run_coordinator::admit_session_input_with_metadata(
                 &conn,
@@ -152,7 +152,7 @@ impl RuntimeControllerApiAgentRuntime {
     ) -> anyhow::Result<()> {
         let store = self.session_store.read().await;
         let conn = store.shared_conn();
-        let conn = conn.lock().unwrap();
+        let conn = conn.lock().expect("api state sqlite conn lock poisoned");
         crate::engine::run_coordinator::mark_session_input_state_by_prompt_id(
             &conn, session_id, prompt_id, state, error,
         )?;
@@ -162,7 +162,7 @@ impl RuntimeControllerApiAgentRuntime {
     async fn cancel_session_inputs(&self, session_id: &str) -> anyhow::Result<usize> {
         let store = self.session_store.read().await;
         let conn = store.shared_conn();
-        let conn = conn.lock().unwrap();
+        let conn = conn.lock().expect("api state sqlite conn lock poisoned");
         Ok(conn.execute(
             "UPDATE session_inputs
              SET state = 'cancelled', error = 'cancelled_by_user'
@@ -176,7 +176,7 @@ impl RuntimeControllerApiAgentRuntime {
     ) -> anyhow::Result<Option<crate::engine::run_coordinator::PromotedSessionInput>> {
         let store = self.session_store.read().await;
         let conn = store.shared_conn();
-        let conn = conn.lock().unwrap();
+        let conn = conn.lock().expect("api state sqlite conn lock poisoned");
         let session_ids = crate::engine::run_coordinator::pending_session_ids(&conn, 1)?;
         let Some(session_id) = session_ids.first() else {
             return Ok(None);

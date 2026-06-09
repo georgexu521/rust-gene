@@ -27,7 +27,10 @@ impl SessionEventWriter {
 
     /// Write a single typed event with payload JSON.
     pub fn write_event(&self, event_type: &str, payload: &str) -> Result<(), rusqlite::Error> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self
+            .conn
+            .lock()
+            .expect("event store connection lock poisoned");
         let timestamp_ms = now_ms();
         let seq: i64 = conn
             .query_row(

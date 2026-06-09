@@ -582,7 +582,9 @@ impl TuiSessionManager {
             return Err(anyhow::anyhow!("No edits to rewind"));
         }
 
-        let last_edit = edits.pop().unwrap();
+        let last_edit = edits
+            .pop()
+            .expect("edits must be non-empty after is_empty check");
         let snap_path = last_edit.snapshot_path();
 
         if !snap_path.exists() {
@@ -656,7 +658,9 @@ impl TuiSessionManager {
             return Err(anyhow::anyhow!("No edits to redo"));
         }
 
-        let redo_edit = redo_edits.pop().unwrap();
+        let redo_edit = redo_edits
+            .pop()
+            .expect("redo edits must be non-empty after is_empty check");
         let redo_snap_path = redo_edit.snapshot_path();
         if !redo_snap_path.exists() {
             return Err(anyhow::anyhow!(

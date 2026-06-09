@@ -437,7 +437,10 @@ impl WorkflowPlanner {
         // 如果有读/搜步骤，合并为一个
         if has_read_steps {
             let combined_desc = if read_steps.len() == 1 {
-                read_steps.into_iter().next().unwrap()
+                read_steps
+                    .into_iter()
+                    .next()
+                    .expect("read_steps must be non-empty")
             } else {
                 format!("合并读取/搜索: {}", read_steps.join("; "))
             };

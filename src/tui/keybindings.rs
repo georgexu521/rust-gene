@@ -30,13 +30,19 @@ impl KeyBinding {
                     _ => return Err(format!("Unknown modifier: {}", part)),
                 }
             }
-            parts.last().unwrap().trim()
+            parts.last().expect("keybinding has no parts").trim()
         } else {
             parts[0].trim()
         };
 
-        let code = if key_part.len() == 1 && key_part.chars().next().unwrap().is_ascii_graphic() {
-            KeyCode::Char(key_part.chars().next().unwrap())
+        let code = if key_part.len() == 1
+            && key_part
+                .chars()
+                .next()
+                .expect("empty key part")
+                .is_ascii_graphic()
+        {
+            KeyCode::Char(key_part.chars().next().expect("empty key part"))
         } else {
             match key_part.to_ascii_lowercase().as_str() {
                 "enter" | "return" => KeyCode::Enter,
@@ -222,30 +228,34 @@ pub struct Keybindings {
 impl Default for Keybindings {
     fn default() -> Self {
         Self {
-            global_quit: KeyBinding::parse("ctrl+c").unwrap(),
-            global_quit_alt: KeyBinding::parse("ctrl+q").unwrap(),
-            chat_submit: KeyBinding::parse("enter").unwrap(),
-            chat_newline: KeyBinding::parse("shift+enter").unwrap(),
-            toggle_vim_mode: KeyBinding::parse("ctrl+v").unwrap(),
-            vim_scroll_up: KeyBinding::parse("k").unwrap(),
-            vim_scroll_down: KeyBinding::parse("j").unwrap(),
-            vim_scroll_top: KeyBinding::parse("g").unwrap(),
-            vim_scroll_bottom: KeyBinding::parse("G").unwrap(),
-            vim_insert: KeyBinding::parse("i").unwrap(),
-            vim_command: KeyBinding::parse(":").unwrap(),
-            plan_approve: KeyBinding::parse("y").unwrap(),
-            plan_reject: KeyBinding::parse("n").unwrap(),
-            plan_modify: KeyBinding::parse("m").unwrap(),
-            permission_approve: KeyBinding::parse("y").unwrap(),
-            permission_reject: KeyBinding::parse("n").unwrap(),
-            permission_view_diff: KeyBinding::parse("d").unwrap(),
-            settings_save: KeyBinding::parse("s").unwrap(),
-            settings_next_page: KeyBinding::parse("l").unwrap(),
-            settings_prev_page: KeyBinding::parse("h").unwrap(),
-            settings_next_item: KeyBinding::parse("j").unwrap(),
-            settings_prev_item: KeyBinding::parse("k").unwrap(),
-            settings_edit: KeyBinding::parse("enter").unwrap(),
-            settings_toggle_bool: KeyBinding::parse("space").unwrap(),
+            global_quit: KeyBinding::parse("ctrl+c").expect("invalid built-in keybinding: ctrl+c"),
+            global_quit_alt: KeyBinding::parse("ctrl+q")
+                .expect("invalid built-in keybinding: ctrl+q"),
+            chat_submit: KeyBinding::parse("enter").expect("invalid built-in keybinding: enter"),
+            chat_newline: KeyBinding::parse("shift+enter")
+                .expect("invalid built-in keybinding: shift+enter"),
+            toggle_vim_mode: KeyBinding::parse("ctrl+v")
+                .expect("invalid built-in keybinding: ctrl+v"),
+            vim_scroll_up: KeyBinding::parse("k").expect("invalid built-in keybinding: k"),
+            vim_scroll_down: KeyBinding::parse("j").expect("invalid built-in keybinding: j"),
+            vim_scroll_top: KeyBinding::parse("g").expect("invalid built-in keybinding: g"),
+            vim_scroll_bottom: KeyBinding::parse("G").expect("invalid built-in keybinding: G"),
+            vim_insert: KeyBinding::parse("i").expect("invalid built-in keybinding: i"),
+            vim_command: KeyBinding::parse(":").expect("invalid built-in keybinding: :"),
+            plan_approve: KeyBinding::parse("y").expect("invalid built-in keybinding: y"),
+            plan_reject: KeyBinding::parse("n").expect("invalid built-in keybinding: n"),
+            plan_modify: KeyBinding::parse("m").expect("invalid built-in keybinding: m"),
+            permission_approve: KeyBinding::parse("y").expect("invalid built-in keybinding: y"),
+            permission_reject: KeyBinding::parse("n").expect("invalid built-in keybinding: n"),
+            permission_view_diff: KeyBinding::parse("d").expect("invalid built-in keybinding: d"),
+            settings_save: KeyBinding::parse("s").expect("invalid built-in keybinding: s"),
+            settings_next_page: KeyBinding::parse("l").expect("invalid built-in keybinding: l"),
+            settings_prev_page: KeyBinding::parse("h").expect("invalid built-in keybinding: h"),
+            settings_next_item: KeyBinding::parse("j").expect("invalid built-in keybinding: j"),
+            settings_prev_item: KeyBinding::parse("k").expect("invalid built-in keybinding: k"),
+            settings_edit: KeyBinding::parse("enter").expect("invalid built-in keybinding: enter"),
+            settings_toggle_bool: KeyBinding::parse("space")
+                .expect("invalid built-in keybinding: space"),
         }
     }
 }

@@ -1232,7 +1232,10 @@ impl StreamingQueryEngine {
                             fb_state.fallback_attempts += 1;
 
                             // Fallback: 重新执行，stream 事件会继续发送到 tx
-                            let fb_model = engine.fallback_model.clone().unwrap();
+                            let fb_model = engine
+                                .fallback_model
+                                .clone()
+                                .expect("fallback model must be configured for retry");
                             let recovery_plan =
                                 crate::engine::recovery_plan::RecoveryPlan::fallback_model(
                                     "streaming_engine",

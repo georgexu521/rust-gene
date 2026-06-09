@@ -68,12 +68,14 @@ impl Tool for JsonQueryTool {
             "get" => {
                 let path = params["path"].as_str().unwrap_or("");
                 if path.is_empty() {
-                    return ToolResult::success(serde_json::to_string_pretty(&data).unwrap());
+                    return ToolResult::success(
+                        serde_json::to_string_pretty(&data).unwrap_or_default(),
+                    );
                 }
 
                 match get_value_by_path(&data, path) {
                     Some(value) => ToolResult::success_with_data(
-                        serde_json::to_string_pretty(&value).unwrap(),
+                        serde_json::to_string_pretty(&value).unwrap_or_default(),
                         json!({
                             "path": path,
                             "value": value
@@ -98,7 +100,7 @@ impl Tool for JsonQueryTool {
                 let mut modified = data.clone();
                 if set_value_by_path(&mut modified, path, new_value) {
                     ToolResult::success_with_data(
-                        serde_json::to_string_pretty(&modified).unwrap(),
+                        serde_json::to_string_pretty(&modified).unwrap_or_default(),
                         json!({
                             "path": path,
                             "modified": true
@@ -108,7 +110,9 @@ impl Tool for JsonQueryTool {
                     ToolResult::error(format!("Failed to set path '{}'", path))
                 }
             }
-            "format" => ToolResult::success(serde_json::to_string_pretty(&data).unwrap()),
+            "format" => {
+                ToolResult::success(serde_json::to_string_pretty(&data).unwrap_or_default())
+            }
             "validate" => ToolResult::success_with_data(
                 "Valid JSON".to_string(),
                 json!({

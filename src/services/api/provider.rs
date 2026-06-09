@@ -305,7 +305,7 @@ impl ProviderRegistry {
             if key.starts_with("PRIORITY_AGENT_PROVIDER_") {
                 let name = key
                     .strip_prefix("PRIORITY_AGENT_PROVIDER_")
-                    .unwrap()
+                    .expect("provider env key must have PRIORITY_AGENT_PROVIDER_ prefix")
                     .to_lowercase();
                 if !name.is_empty() && !value.is_empty() {
                     // 不记录原始 value，避免 API key 泄露到日志

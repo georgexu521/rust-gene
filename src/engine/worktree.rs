@@ -151,7 +151,9 @@ impl WorktreeManager {
                 continue;
             }
 
-            let wt = current.as_mut().unwrap();
+            let wt = current
+                .as_mut()
+                .expect("current worktree must be Some after push");
             if line.starts_with("commit ") {
                 wt.commit = Some(line.strip_prefix("commit ").unwrap_or(line).to_string());
             } else if line.starts_with("branch ") {
@@ -162,7 +164,11 @@ impl WorktreeManager {
                 wt.is_detached = true;
             } else if line.starts_with("worktree ") {
                 // 新的 worktree 开始
-                worktrees.push(current.take().unwrap());
+                worktrees.push(
+                    current
+                        .take()
+                        .expect("worktree entry must be Some before new worktree"),
+                );
                 current = Some(WorktreeInfo {
                     path: PathBuf::from(line.strip_prefix("worktree ").unwrap_or(line)),
                     commit: None,

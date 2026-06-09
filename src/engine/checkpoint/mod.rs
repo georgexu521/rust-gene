@@ -29,7 +29,9 @@ pub async fn get_checkpoint_manager(
 ) -> Arc<Mutex<CheckpointManager>> {
     let session_id = session_id.into();
     {
-        let managers = CHECKPOINT_MANAGERS.lock().unwrap();
+        let managers = CHECKPOINT_MANAGERS
+            .lock()
+            .expect("checkpoint managers lock poisoned");
         if let Some(mgr) = managers.get(&session_id) {
             return mgr.clone();
         }
@@ -37,7 +39,9 @@ pub async fn get_checkpoint_manager(
 
     let mgr = Arc::new(Mutex::new(CheckpointManager::new(&session_id).await));
     {
-        let mut managers = CHECKPOINT_MANAGERS.lock().unwrap();
+        let mut managers = CHECKPOINT_MANAGERS
+            .lock()
+            .expect("checkpoint managers lock poisoned");
         managers.insert(session_id, mgr.clone());
     }
     mgr

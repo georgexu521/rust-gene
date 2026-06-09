@@ -220,13 +220,19 @@ impl McpClient {
 
     /// 检查熔断器状态
     pub fn is_circuit_open(&self) -> bool {
-        let cb = self.circuit_breaker.lock().unwrap();
+        let cb = self
+            .circuit_breaker
+            .lock()
+            .expect("mcp circuit breaker lock poisoned");
         cb.is_open && cb.is_fully_open()
     }
 
     /// 获取熔断器状态描述
     pub fn circuit_breaker_status(&self) -> String {
-        let cb = self.circuit_breaker.lock().unwrap();
+        let cb = self
+            .circuit_breaker
+            .lock()
+            .expect("mcp circuit breaker lock poisoned");
         if cb.is_open {
             if cb.is_fully_open() {
                 format!(
@@ -281,7 +287,10 @@ impl McpClient {
     async fn ensure_connected(&self) -> anyhow::Result<()> {
         // 检查熔断器
         {
-            let cb = self.circuit_breaker.lock().unwrap();
+            let cb = self
+                .circuit_breaker
+                .lock()
+                .expect("mcp circuit breaker lock poisoned");
             if cb.is_open && cb.is_fully_open() {
                 anyhow::bail!("MCP server '{}' circuit breaker is open", self.config.name);
             }
