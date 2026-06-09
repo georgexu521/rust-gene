@@ -1,6 +1,6 @@
 # Quickstart
 
-Last updated: 2026-04-25
+Last updated: 2026-06-09
 
 ## Prerequisites
 
@@ -30,18 +30,32 @@ Set at least one provider key:
 ```bash
 # MiniMax
 export MINIMAX_API_KEY="..."
-export MINIMAX_MODEL="MiniMax-M2.7"
+export MINIMAX_MODEL="MiniMax-M3"
 
-# OpenAI
-export OPENAI_API_KEY="..."
-export OPENAI_MODEL="gpt-4o"
+# Kimi Code
+export KIMI_CODE_API_KEY="..."
+export KIMI_CODE_MODEL="kimi-for-coding"
+
+# DeepSeek
+export DEEPSEEK_API_KEY="..."
+export DEEPSEEK_MODEL="deepseek-v4-pro"
+
+# GLM / Z.AI
+export GLM_API_KEY="..."   # or ZAI_API_KEY
+export GLM_MODEL="glm-5.1"
 
 # Kimi / Moonshot
 export MOONSHOT_API_KEY="..."
 export MOONSHOT_MODEL="kimi-k2.5"
+
+# OpenAI-compatible fallback
+export OPENAI_API_KEY="..."
+export OPENAI_MODEL="gpt-4o"
 ```
 
-Priority order is MiniMax, then OpenAI, then Moonshot/Kimi.
+Provider order is MiniMax, Kimi Code, DeepSeek, GLM/Z.AI, Moonshot/Kimi, then
+OpenAI. Override with `PRIORITY_AGENT_DEFAULT_PROVIDER` when multiple keys are
+configured.
 
 ## Run
 
@@ -96,13 +110,14 @@ cargo run --features experimental-api-server -- --api --port 8787
 ## Verify
 
 ```bash
-cargo fmt --all -- --check
+cargo fmt --check
 cargo check --quiet
-env PRIORITY_AGENT_WORKFLOW_ENABLED=1 cargo test --quiet -- --test-threads=1
+cargo clippy --all-targets --all-features -- -D warnings
+cargo test --quiet
 ```
 
-The single-threaded test run avoids environment-variable interference between
-workflow tests.
+Use `--test-threads=1` for workflow-enabled or older broad suites when a slice
+mutates process environment variables.
 
 ## Troubleshooting
 
@@ -147,6 +162,7 @@ rm -rf ~/.local/share/priority-agent
 
 - `README.md`
 - `docs/PROJECT_STATUS.md`
-- `docs/CLAUDE_CODE_ALIGNMENT_PLAN.md`
-- `docs/REMAINING_CLOSURE_PLAN.md`
+- `docs/PROJECT_MAP.md`
+- `docs/README.md`
 - `AGENTS.md`
+- `CLAUDE.md`

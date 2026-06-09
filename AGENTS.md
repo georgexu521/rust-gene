@@ -76,7 +76,7 @@ cargo test -q prompt_context
 cargo test -q route_scoped_tools
 cargo test -q closeout
 cargo test -q
-cargo clippy --all-features -- -D warnings
+cargo clippy --all-targets --all-features -- -D warnings
 cargo check --features experimental-api-server -q
 ```
 

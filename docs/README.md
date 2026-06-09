@@ -1,6 +1,7 @@
 # Docs Index
 
-Priority Agent 文档导航。从这里出发，找到你需要的文档。
+Priority Agent 文档导航。从这里出发，找到你需要的文档。这个目录保留了大量
+历史计划；判断当前实现状态时，先看 canonical 文档，再看具体代码和测试。
 
 ## Canonical（权威当前文档）
 
@@ -22,9 +23,25 @@ Priority Agent 文档导航。从这里出发，找到你需要的文档。
 | [AGENT_LEARNING_NOTES_PROJECT_ALIGNMENT_2026-05-24.md](AGENT_LEARNING_NOTES_PROJECT_ALIGNMENT_2026-05-24.md) | Agent 学习笔记与项目对齐 |
 | [AGENT_TESTING_MATRIX_2026-05-08.md](AGENT_TESTING_MATRIX_2026-05-08.md) | Agent 测试矩阵 |
 
-## Active Plans（进行中的计划）
+## Recent Active Notes（近期活跃记录）
 
-近期计划文档，可能仍在执行或刚完成：
+这些文档是 2026-06-07 到 2026-06-09 附近的最近工作记录或下一步计划。它们有用，
+但仍要以 `PROJECT_STATUS.md` 和代码为准。
+
+| 文档 | 日期 | 用途 |
+|------|------|------|
+| [CONTROLLER_MERGE_PLAN.md](CONTROLLER_MERGE_PLAN.md) | 06-09 | `conversation_loop` 控制器合并结果和后续边界 |
+| [MESSAGE_PERSISTENCE_PLAN_2026-06-08.md](MESSAGE_PERSISTENCE_PLAN_2026-06-08.md) | 06-08 | 会话消息持久化计划 |
+| [LLM_COMPACTION_PLAN_2026-06-08.md](LLM_COMPACTION_PLAN_2026-06-08.md) | 06-08 | LLM compaction 计划 |
+| [ROUTING_AND_CONTEXT_ANALYSIS_2026-06-08.md](ROUTING_AND_CONTEXT_ANALYSIS_2026-06-08.md) | 06-08 | 路由与上下文分析 |
+| [WEIGHTING_SYSTEM_NEXT_PHASE_PLAN_2026-06-08.md](WEIGHTING_SYSTEM_NEXT_PHASE_PLAN_2026-06-08.md) | 06-08 | 权重系统下一阶段 |
+| [OPENCODE_PROGRAMMING_PARITY_NEXT_PLAN_2026-06-07.md](OPENCODE_PROGRAMMING_PARITY_NEXT_PLAN_2026-06-07.md) | 06-07 | opencode programming parity 下一步 |
+| [OPENCODE_THIRD_ALIGNMENT_PLAN_2026-06-07.md](OPENCODE_THIRD_ALIGNMENT_PLAN_2026-06-07.md) | 06-07 | opencode 第三轮对齐 |
+| [AGENT_PROMPT_ENTRYPOINT_ALIGNMENT_PLAN_2026-06-07.md](AGENT_PROMPT_ENTRYPOINT_ALIGNMENT_PLAN_2026-06-07.md) | 06-07 | prompt 入口对齐 |
+
+## Active Plans（仍可能相关的计划）
+
+这些是仍可能相关的计划或刚完成的计划；日期较早的计划不要直接当作当前状态：
 
 | 文档 | 日期 | 用途 |
 |------|------|------|
@@ -74,11 +91,22 @@ Priority Agent 文档导航。从这里出发，找到你需要的文档。
 | [`generated/`](generated/) | 自动生成的文档 |
 | [`proposal_assets/`](proposal_assets/) | 提案附件 |
 
+## Root Docs
+
+| 文档 | 用途 |
+|------|------|
+| [`../README.md`](../README.md) | 仓库入口、快速状态、架构摘要 |
+| [`../QUICKSTART.md`](../QUICKSTART.md) | 安装、provider 配置、运行和基础验证 |
+| [`../AGENTS.md`](../AGENTS.md) | prompt-injected runtime guidance |
+| [`../CLAUDE.md`](../CLAUDE.md) | Claude Code 兼容的紧凑项目说明 |
+| [`../TESTING.md`](../TESTING.md) | 测试命令手册 |
+| [`../QUALITY_GATES.md`](../QUALITY_GATES.md) | 发布和阶段门禁 |
+
 ## 阅读顺序建议
 
 **新加入项目**：`PROJECT_STATUS.md` → `PROJECT_MAP.md` → `PERSONAL_AGENT_PRODUCT_PRINCIPLES_2026-05-18.md`
 
-**了解当前开发方向**：`NEXT_DEVELOPMENT_PLAN_2026-05-09.md` → `CLAUDE_CODE_PARITY_IMPLEMENTATION_PLAN_2026-05-20.md`
+**了解当前开发方向**：`PROJECT_STATUS.md` → `CONTROLLER_MERGE_PLAN.md` → 最近的 06-07/06-08 active notes
 
 **理解 runtime 设计**：`LLM_RUNTIME_SIMPLIFICATION_PLAN_2026-05-08.md` → `RUNTIME_DIET_UPDATE_2026-06-02.md` → `UNIFIED_RUNTIME_ENTRYPOINTS_2026-06-01.md`
 

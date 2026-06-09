@@ -1,6 +1,6 @@
 # Unified Runtime Entrypoints
 
-Status: active guidance as of 2026-06-02.
+Status: active guidance as of 2026-06-09.
 
 ## Decision
 
@@ -8,6 +8,11 @@ Status: active guidance as of 2026-06-02.
 headless dogfood, and desktop full turns must all route through that runtime
 instead of maintaining separate tool-loop, retry, validation, or closeout
 logic.
+
+Persisted chat history restore also belongs to the canonical streaming runtime
+boundary. `ConversationLoop` receives the already-prepared turn history and
+must not independently reload SQLite session messages, otherwise resumed
+sessions can duplicate prior messages in the prompt.
 
 The desktop app is a thin entrypoint:
 

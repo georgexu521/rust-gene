@@ -22,24 +22,27 @@
 ```bash
 cd ~/Desktop/rust-agent
 
-# 运行当前 workflow-enabled 全量测试
-env PRIORITY_AGENT_WORKFLOW_ENABLED=1 cargo test --quiet -- --test-threads=1
+# 运行当前本地全量测试
+cargo test --quiet
 
-# 预期输出：
-# test result: ok. 1060 passed; 0 failed; 0 ignored
+# CI lint 口径
+cargo clippy --all-targets --all-features -- -D warnings
 ```
 
-### 当前推荐门禁（2026-05-05）
+### 当前推荐门禁（2026-06-09）
 
 ```bash
 # 编码工作流快速/标准门禁
 scripts/coding-workflow-gates.sh standard
 
-# 文档、all-features build、workflow-enabled 全量测试
+# 文档、all-features build、workflow-enabled broad test script
 bash scripts/validate_docs.sh
 
-# Clippy 发布门禁
-cargo clippy --all-features -- -D warnings
+# 本地提交前基础门禁
+cargo fmt --check
+cargo check -q
+cargo test -q
+cargo clippy --all-targets --all-features -- -D warnings
 ```
 
 ### Audit API 联调 Smoke Test
@@ -48,7 +51,7 @@ cargo clippy --all-features -- -D warnings
 
 ```bash
 cd ~/Desktop/rust-agent
-cargo run -- --api --port 8080
+cargo run --features experimental-api-server -- --api --port 8080
 ```
 
 再运行审计接口联调脚本：
@@ -72,6 +75,19 @@ cargo check
 
 # 编译发布版本
 cargo build --release
+```
+
+### 环境变量隔离
+
+部分旧 broad suite 会改进程环境变量。优先跑最窄的测试切片；如果启用
+`PRIORITY_AGENT_WORKFLOW_ENABLED=1` 或运行老的全量脚本，使用
+`--test-threads=1`。Memory/progress 相关测试优先使用这些路径覆盖，而不是改
+`HOME`：
+
+```bash
+PRIORITY_AGENT_MEMORY_ROOT=/tmp/priority-agent-memory-test
+PRIORITY_AGENT_MEMORY_PROPOSALS_PATH=/tmp/priority-agent-memory-proposals.jsonl
+PRIORITY_AGENT_PROJECT_PROGRESS_PATH=/tmp/priority-agent-project-progress.json
 ```
 
 ---
@@ -587,8 +603,10 @@ jobs:
     steps:
       - uses: actions/checkout@v3
       - uses: actions-rust-lang/setup-rust-toolchain@v1
-      - run: cargo test
-      - run: cargo build --release
+      - run: cargo fmt --check
+      - run: cargo check -q
+      - run: cargo test -q
+      - run: cargo clippy --all-targets --all-features -- -D warnings
 ```
 
 ### 本地预提交检查
@@ -598,7 +616,7 @@ jobs:
 cat > .git/hooks/pre-commit << 'EOF'
 #!/bin/bash
 cargo test || exit 1
-cargo clippy -- -D warnings || exit 1
+cargo clippy --all-targets --all-features -- -D warnings || exit 1
 EOF
 
 chmod +x .git/hooks/pre-commit
@@ -606,6 +624,6 @@ chmod +x .git/hooks/pre-commit
 
 ---
 
-**最后更新**: 2026-04-10
-**版本**: Phase 2 MVP
-**测试数量**: 68 个单元测试
+**最后更新**: 2026-06-09
+**版本**: current local command guide
+**测试数量**: 以 `cargo test -q` 实际输出为准

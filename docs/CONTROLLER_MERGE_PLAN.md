@@ -14,22 +14,22 @@
 
 | 口径 | 合并前 | 当前 | 变化 |
 |------|--------|------|------|
-| `conversation_loop` 下全部文件，含嵌套目录和测试 | 99 | 85 | -14 |
+| `conversation_loop` 下全部文件，含嵌套目录和测试 | 99 | 87 | -12 |
 | 排除 `*tests.rs` 后 | 93 | 79 | -14 |
-| 全部文件总行数 | 44,355 | 44,141 | -214 |
-| 非测试文件总行数 | 38,194 | 37,972 | -222 |
+| 全部文件总行数 | 44,355 | 44,120 | -235 |
+| 非测试文件总行数 | 38,194 | 36,747 | -1,447 |
 
 ## 当前最大文件
 
 | 文件 | 当前行数 | 判断 |
 |------|----------|------|
-| `tests.rs` | 3,011 | 测试集合，暂不纳入源文件 1,500 行约束 |
-| `closeout_controller.rs` | 1,499 | 已压回上限内，需要后续优先拆测试或 proof/report 子模块 |
+| `tests.rs` | 3,013 | 测试集合，暂不纳入源文件 1,500 行约束 |
 | `patch_recovery.rs` | 1,465 | test-only 修复覆盖，接近上限 |
 | `tool_result_controller.rs` | 1,425 | 工具结果热点，后续更适合拆小而不是继续合并 |
 | `permission_controller.rs` | 1,420 | 不应再合并权限恢复逻辑 |
 | `request_preparation_controller.rs` | 1,325 | 请求准备热点，保留独立 |
 | `tool_metadata.rs` | 1,322 | 元数据/渲染辅助热点，保留独立 |
+| `validation_runner.rs` | 1,292 | 验证执行热点，保留独立 |
 
 ## 已完成合并
 
@@ -94,6 +94,16 @@ cargo test -q conversation_loop -- --test-threads=1
 cargo test -q request_timeouts
 ```
 
+后续稳定化提交 `90cd9e11` 已通过：
+
+```bash
+cargo fmt --check
+cargo check -q
+cargo clippy --all-targets --all-features -- -D warnings
+git diff --check
+cargo test -q
+```
+
 仍建议提交前完整运行：
 
 ```bash
@@ -115,13 +125,11 @@ python3 -m py_compile scripts/live_eval_report_parser.py
 
 ## 后续建议
 
-1. 优先把 `closeout_controller.rs` 拆出测试或 proof/report 子模块，让它稳定低于
-   1,500 行，而不是只贴着上限。
-2. 后续如果继续降文件数，不要从权限、closeout proof、checkpoint、workflow runtime
+1. 后续如果继续降文件数，不要从权限、closeout proof、checkpoint、workflow runtime
    这些硬边界里拿文件数。
-3. 对 `tool_result_controller.rs`、`request_preparation_controller.rs`、
+2. 对 `tool_result_controller.rs`、`request_preparation_controller.rs`、
    `permission_controller.rs` 的下一步应该是拆分责任，而不是合并。
-4. 保持 `docs/CONTROLLER_INDEX.md` 和 `docs/PROJECT_MAP.md` 与实际模块名同步；这两个
+3. 保持 `docs/CONTROLLER_INDEX.md` 和 `docs/PROJECT_MAP.md` 与实际模块名同步；这两个
    文档会进入运行时项目上下文，过期路径会直接误导后续 agent。
 
 ## 不做清单

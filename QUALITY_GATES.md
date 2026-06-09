@@ -1,6 +1,6 @@
 # Quality Gates
 
-> Last updated: 2026-05-05
+> Last updated: 2026-06-09
 > Purpose: Define acceptance criteria for Phase transitions and releases
 
 ---
@@ -52,7 +52,7 @@
 
 ### G2: Clippy Gate
 
-**Command**: `cargo clippy --all-features -- -D warnings`
+**Command**: `cargo clippy --all-targets --all-features -- -D warnings`
 
 **Criteria**:
 - No new `error` level clippy warnings
@@ -144,8 +144,8 @@ All CI runs must pass:
 |--------|---------|----------|
 | Build | `cargo build --all-features` | Yes |
 | Test | `cargo test` | Yes |
-| Clippy | `cargo clippy -- -D warnings` | Yes |
-| Format | `cargo fmt -- --check` | No |
+| Clippy | `cargo clippy --all-targets --all-features -- -D warnings` | Yes |
+| Format | `cargo fmt --check` | No |
 | Docs | `cargo doc --no-deps` | No |
 
 ---
@@ -179,6 +179,6 @@ If quality gates fail repeatedly:
 |--------|--------|---------|
 | Test coverage | >80% | varies |
 | Compilation time | <60s | ~20s |
-| Test suite time | <120s | ~22s workflow-enabled full suite |
-| Clippy warnings | 0 | clean as of 2026-05-05 |
+| Test suite time | <120s | varies by selected gate |
+| Clippy warnings | 0 | clean as of 2026-06-09 with all targets/all features |
 | Doc warnings | 0 | varies |

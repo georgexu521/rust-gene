@@ -199,6 +199,9 @@ context snapshots, and closeout events.
 - `src/memory/persistence.rs`: local persistence primitives.
 - `src/memory/ranking.rs`: memory ranking and scoring.
 - `src/memory/reports.rs`: memory reports.
+- Memory test isolation: prefer `PRIORITY_AGENT_MEMORY_ROOT`,
+  `PRIORITY_AGENT_MEMORY_PROPOSALS_PATH`, and
+  `PRIORITY_AGENT_PROJECT_PROGRESS_PATH` over mutating `HOME`.
 - `src/engine/improvement.rs`: self-evolution guidance selection.
 - `src/engine/evolution_controller.rs`: evolution controller and proposals.
 - `src/engine/experience_ledger.rs`: runtime experience records.
@@ -216,7 +219,8 @@ context snapshots, and closeout events.
 - `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml -q`: Tauri shell compile gate.
 - `scripts/runtime-entrypoint-smoke.sh --dry-run --all`: list headless, CLI, TUI, and desktop entrypoint smoke gates.
 - `cargo test -q`: broad Rust tests when shared runtime contracts moved.
-- `cargo clippy --all-features -- -D warnings`: broad lint gate.
+- `cargo clippy --all-targets --all-features -- -D warnings`: broad lint gate
+  matching CI all-target coverage.
 
 ## Update Triggers
 

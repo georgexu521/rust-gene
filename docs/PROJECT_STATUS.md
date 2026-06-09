@@ -1,6 +1,50 @@
 # Project Status
 
-Last updated: 2026-06-06
+Last updated: 2026-06-09
+
+## 2026-06-09 Stabilization And Docs Audit
+
+The latest local stabilization commit is `90cd9e11`
+(`fix: stabilize history restore and CI gates`). It fixed these current
+runtime/test risks:
+
+- `StreamingQueryEngine` is the single owner for persisted chat history restore;
+  `ConversationLoop` no longer performs a second SQLite restore.
+- Selective message compression defaults back to enabled, preserving the
+  runtime-diet path where compaction can happen by message role/content instead
+  of only by hard collapse.
+- CI lint parity now uses
+  `cargo clippy --all-targets --all-features -- -D warnings`.
+- Full `cargo test -q` is clean after isolating memory/progress state with
+  `PRIORITY_AGENT_MEMORY_ROOT`,
+  `PRIORITY_AGENT_MEMORY_PROPOSALS_PATH`, and
+  `PRIORITY_AGENT_PROJECT_PROGRESS_PATH` instead of mutating `HOME`.
+- `src/tools/file_tool/tests.rs::test_file_write_and_read` now uses an isolated
+  temp path and unique session id.
+
+Latest verified local gates:
+
+```bash
+cargo fmt --check
+cargo check -q
+cargo clippy --all-targets --all-features -- -D warnings
+git diff --check
+cargo test -q
+```
+
+Docs/structure audit result:
+
+- Root entry docs have been refreshed around current provider order, validation
+  gates, prompt-injected `AGENTS.md`, and compact Claude Code compatibility
+  guidance.
+- `docs/README.md` is the docs navigation index. The docs tree is intentionally
+  dense but partitioned into current, active-note, reference, archive,
+  workflow, generated, and proposal-asset areas.
+- The top-level source layout is still coherent: `src/`, `apps/`, `tests/`,
+  `scripts/`, `docs/`, `evalsets/`, `fixtures/`, and `priority-core/` each have
+  a clear role. Generated local artifacts such as `.priority-agent/`,
+  `target/`, `__pycache__/`, and `.DS_Store` should stay ignored/cleaned rather
+  than reorganized into tracked source.
 
 ## Opencode Alignment — Implemented, Hardening In Progress
 
@@ -398,7 +442,7 @@ The recent closure plan is complete:
 | Memory namespace search and conflict hints | Complete | `934f7fe` |
 | MCP health-aware visibility and resource traces | Complete | `f0f4a95` |
 
-Latest deterministic local test baseline observed during the 2026-05-16 and
+Historical deterministic local test baseline observed during the 2026-05-16 and
 2026-05-17 core-coding-quality closure, file-patch evidence integration,
 file-patch encoded bytes history accuracy, terminal-task `/status` visibility,
 terminal-task summary metadata,
@@ -486,14 +530,14 @@ code-change-verification-repair-loop: status=ok,
 core-permission-rejection-recovery: status=ok,
   contract=entry=active:auto repair=not_needed
 ```
-Latest risk-signal controller checkpoint:
+Historical risk-signal controller checkpoint:
 - deterministic local tests: 1468 passed; 0 failed
 - `risk_signal_high` now upgrades workflow policy for concrete high-risk
   surfaces before editing
 - live-eval reports now include `risk_signal: entry=<level> runtime=<level>`
   and a `risk` summary column
 
-Latest agent-runtime alignment checkpoint:
+Historical agent-runtime alignment checkpoint:
 
 ```text
 2026-05-24 combined runtime-spine cleanup validation:
@@ -630,7 +674,7 @@ cargo clippy --all-features -- -D warnings
 bash scripts/workflow-production-gates.sh
 ```
 
-Latest expanded live-eval checkpoint:
+Historical expanded live-eval checkpoint:
 
 ```text
 batch6-harnesssplit-20260511-155208 resume-session-picker: ok
@@ -1098,12 +1142,12 @@ Latest maintenance note:
   tool-result continuation must work, but the continuation probe no longer
   requires the model to repeat an exact Closeout phrase before live evals can
   start.
-- Latest validation for the companion-context slice: `cargo fmt --check`,
+- Historical validation for the companion-context slice: `cargo fmt --check`,
   `cargo test -q companion_context`, `cargo test -q shell_compatibility_hint`,
   `cargo test -q agent_mode`, `cargo check -q`, `cargo test -q`,
   `cargo clippy --all-features -- -D warnings`,
   `cargo check --features experimental-api-server -q`, and `git diff --check`.
-- Latest validation for the focused lookup-budget slice:
+- Historical validation for the focused lookup-budget slice:
   `cargo fmt --check`, `cargo test -q focused_repair_prompt`,
   `cargo test -q file_edit_failure_correction`, `cargo check -q`,
   `cargo test -q`, `cargo clippy --all-features -- -D warnings`,
@@ -1132,22 +1176,23 @@ Latest maintenance note:
   `bash scripts/live-eval-summary-smoke.sh`, `cargo test -q memory`,
   `cargo test -q retrieval_context`, `cargo test -q skills`,
   `bash scripts/coding-workflow-gates.sh standard`, and `cargo check -q`.
-- The latest six-case live capability suite is
+- Historical six-case live capability suite:
   `docs/benchmarks/live-capability-evidence-20260509-173239/summary.md` with
   `6/6` passed real code-change tasks. During this pass, stale live-eval
   fixtures were refreshed for the extracted repair controller and learning
   slash-handler modules, and skill-promotion evidence detection was widened so
   `skill-promotion-gate` is counted as a skill-specific task.
-- `conversation_loop/mod.rs` is down to 3159 lines after moving turn setup,
+- `conversation_loop/mod.rs` is down to 722 lines after moving turn setup,
   entry gates, loop bootstrap, iteration sequencing, tool-round sequencing,
   post-change closeout, retrieval helpers, workflow-runtime helpers, and
   tool-context helpers into dedicated conversation-loop modules, then moving
   route-scoped tool exposure tests out of the main module.
-- `cargo clippy --all-features -- -D warnings` was last recorded clean on
-  2026-05-16 after the tool-context helper split.
-- `scripts/validate_docs.sh` counted 74 registered tool entries and 130 command
-  constants, then passed all required docs, all-features build, and the
-  workflow-enabled full test suite.
+- `cargo clippy --all-targets --all-features -- -D warnings` was last recorded
+  clean on 2026-06-09 after the history-restore and CI gate stabilization
+  fixes.
+- Historical `scripts/validate_docs.sh` run counted 74 registered tool entries
+  and 130 command constants, then passed all required docs, all-features build,
+  and the workflow-enabled full test suite.
 - `/resume` now resolves recent conversations by number, id prefix, title/model
   keyword, or message search, and restored sessions show a recent context
   preview.
@@ -1157,7 +1202,7 @@ Latest maintenance note:
 - Live eval task parsing no longer depends on PyYAML for prepare/collect paths,
   and the dashboard-summary seeded fixture now preserves the summary entrypoint
   while stubbing only `summary_task()`.
-- The latest dashboard-summary agent-run,
+- Historical dashboard-summary agent-run,
   `checkpoint-function-anchor-20260509-120047`, produced a real diff, passed
   required commands, passed verification/stage validation, and ended with
   `failure_owner=none`.

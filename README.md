@@ -13,12 +13,13 @@ full-screen terminal interface.
 
 Current project status is tracked in [docs/PROJECT_STATUS.md](docs/PROJECT_STATUS.md).
 
-Latest verified baseline (2026-05-05):
+Latest local baseline recorded on 2026-06-09:
 
-- `cargo check --quiet`
-- `env PRIORITY_AGENT_WORKFLOW_ENABLED=1 cargo test --quiet -- --test-threads=1`
-- `cargo clippy --all-features -- -D warnings`
-- Result: `1060 passed; 0 failed`
+- `cargo fmt --check`
+- `cargo check -q`
+- `cargo clippy --all-targets --all-features -- -D warnings`
+- `git diff --check`
+- `cargo test -q`
 
 ## Quick Start
 
@@ -46,7 +47,8 @@ make install
 
 ## API Keys
 
-Priority Agent chooses providers in this order when configured:
+Priority Agent chooses configured providers in this order unless
+`PRIORITY_AGENT_DEFAULT_PROVIDER` is set:
 
 ```bash
 export MINIMAX_API_KEY="..."
@@ -67,8 +69,10 @@ export MOONSHOT_MODEL="kimi-k2.5"     # optional
 export OPENAI_API_KEY="..."
 export OPENAI_MODEL="gpt-4o"          # optional fallback
 
-export PRIORITY_AGENT_DEFAULT_PROVIDER="minimax" # optional override when multiple keys are set
+export PRIORITY_AGENT_DEFAULT_PROVIDER="minimax" # optional override
 ```
+
+Default order: MiniMax, Kimi Code, DeepSeek, GLM/Z.AI, Moonshot/Kimi, OpenAI.
 
 ## Usage
 
@@ -173,7 +177,7 @@ cargo fmt
 cargo check --quiet
 cargo test --quiet
 env PRIORITY_AGENT_WORKFLOW_ENABLED=1 cargo test --quiet -- --test-threads=1
-cargo clippy --all-features -- -D warnings
+cargo clippy --all-targets --all-features -- -D warnings
 ```
 
 Some tests mutate process environment variables. Use `--test-threads=1` for the
@@ -183,11 +187,11 @@ full workflow-enabled suite to avoid cross-test environment interference.
 
 - [docs/PROJECT_STATUS.md](docs/PROJECT_STATUS.md): current state and remaining
   priorities.
-- [docs/CLAUDE_CODE_ALIGNMENT_PLAN.md](docs/CLAUDE_CODE_ALIGNMENT_PLAN.md):
-  Claude Code alignment plan and phase status.
-- [docs/REMAINING_CLOSURE_PLAN.md](docs/REMAINING_CLOSURE_PLAN.md): completed
-  closure plan for recovery, learning, drift, memory, and MCP health.
-- [AGENTS.md](AGENTS.md): detailed development guide and architecture notes.
+- [docs/PROJECT_MAP.md](docs/PROJECT_MAP.md): compact runtime and code
+  navigation map.
+- [docs/README.md](docs/README.md): docs index and reading order.
+- [AGENTS.md](AGENTS.md): prompt-injected project runtime guidance.
+- [CLAUDE.md](CLAUDE.md): compact Claude Code compatibility orientation.
 - [QUICKSTART.md](QUICKSTART.md): setup-oriented guide.
 
 ## License
