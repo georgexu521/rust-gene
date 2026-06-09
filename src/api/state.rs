@@ -185,8 +185,13 @@ impl RuntimeControllerApiAgentRuntime {
     }
 
     fn spawn_queue_drain(&self) {
+        if !self.run_coordinator.wake() {
+            // Another drain is already queued or running.
+            return;
+        }
         let runtime = self.clone();
         tokio::spawn(async move {
+            runtime.run_coordinator.accept_wake();
             if let Err(err) = runtime.drain_pending_inputs().await {
                 tracing::warn!("API queued prompt drain failed: {}", err);
             }

@@ -48,17 +48,22 @@ impl InputDelivery {
 /// Minimal session run coordinator.
 ///
 /// Tracks whether a run is active for a given session and allows
-/// follow-up inputs to be queued.
+/// follow-up inputs to be queued.  Wake semantics prevent concurrent
+/// drain spawns while ensuring a finished run always triggers queue
+/// processing.
 #[derive(Debug, Clone, Default)]
 pub struct SessionRunCoordinator {
     /// Whether a run is currently active.
     active: Arc<AtomicBool>,
+    /// Whether a wake/drain has been requested but not yet processed.
+    wake_requested: Arc<AtomicBool>,
 }
 
 impl SessionRunCoordinator {
     pub fn new() -> Self {
         Self {
             active: Arc::new(AtomicBool::new(false)),
+            wake_requested: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -77,6 +82,26 @@ impl SessionRunCoordinator {
     /// Whether a run is currently active.
     pub fn is_active(&self) -> bool {
         self.active.load(Ordering::SeqCst)
+    }
+
+    /// Request a queue drain. Returns `true` if the caller should start
+    /// the drain loop (i.e. no drain is currently in progress). Multiple
+    /// wakes collapse into a single drain.
+    pub fn wake(&self) -> bool {
+        self.wake_requested
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .is_ok()
+    }
+
+    /// Mark the current wake as being processed. Call this before entering
+    /// the drain loop.
+    pub fn accept_wake(&self) {
+        self.wake_requested.store(false, Ordering::SeqCst);
+    }
+
+    /// Whether a wake is pending.
+    pub fn is_wake_pending(&self) -> bool {
+        self.wake_requested.load(Ordering::SeqCst)
     }
 
     /// Queue a new user input. Returns the delivery mode that should be used.

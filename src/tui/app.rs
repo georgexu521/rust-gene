@@ -1043,11 +1043,14 @@ impl TuiApp {
                 self.runtime_facade_state.set_querying(false).await;
                 self.stream_started_at = None;
                 self.current_tool_anchor_id = None;
-                if let Some(next_input) = self.promote_queued_session_input() {
-                    self.add_system_message(
-                        "Running queued message from this session.".to_string(),
-                    );
-                    self.send_message(next_input).await;
+                if self.run_coordinator.wake() {
+                    self.run_coordinator.accept_wake();
+                    if let Some(next_input) = self.promote_queued_session_input() {
+                        self.add_system_message(
+                            "Running queued message from this session.".to_string(),
+                        );
+                        self.send_message(next_input).await;
+                    }
                 }
             }
         }
