@@ -480,7 +480,7 @@ impl TuiSessionManager {
                 timestamp: Some(message.created_at),
             })
             .collect();
-        let (events, warnings) = match self.load_session_events(session_id) {
+        let (events, mut warnings) = match self.load_session_events(session_id) {
             Ok(events) => (events, Vec::new()),
             Err(err) => (
                 Vec::new(),
@@ -505,19 +505,45 @@ impl TuiSessionManager {
             })
             .collect();
 
-        // Session parts (lightweight projection)
-        let parts = self
-            .store
-            .get_session_parts(session_id)
-            .unwrap_or_default()
-            .into_iter()
-            .map(|part| crate::session_store::export::ExportPart {
-                kind: part.kind,
-                tool_name: part.tool_name,
-                status: part.status,
-                message_id: part.message_id,
-            })
-            .collect();
+        // Session parts (lightweight projection) — query once and reuse.
+        let (parts, unresolved_settlement) = match self.store.get_session_parts(session_id) {
+            Ok(all_parts) => {
+                let parts = all_parts
+                    .iter()
+                    .cloned()
+                    .map(|part| crate::session_store::export::ExportPart {
+                        part_id: part.part_id,
+                        kind: part.kind,
+                        tool_name: part.tool_name,
+                        status: part.status,
+                        message_id: part.message_id,
+                    })
+                    .collect();
+                let unresolved_settlement = all_parts
+                    .into_iter()
+                    .filter(|part| {
+                        (part.kind == "tool" || part.kind == "shell")
+                            && matches!(part.status.as_deref(), Some("running" | "pending"))
+                    })
+                    .map(|part| {
+                        format!(
+                            "{}:{}:{}",
+                            part.part_id,
+                            part.tool_name.as_deref().unwrap_or("unknown"),
+                            part.status.as_deref().unwrap_or("unknown")
+                        )
+                    })
+                    .collect();
+                (parts, unresolved_settlement)
+            }
+            Err(err) => {
+                warnings.push(format!(
+                    "Session parts could not be loaded; parts-derived metadata may be incomplete: {}",
+                    err
+                ));
+                (Vec::new(), Vec::new())
+            }
+        };
 
         // Extract closeout status and compaction count from events
         let mut closeout_status = None;
@@ -539,26 +565,6 @@ impl TuiSessionManager {
             }
         }
 
-        // Unresolved settlement: tools still running/pending
-        let unresolved_settlement: Vec<String> = self
-            .store
-            .get_session_parts(session_id)
-            .unwrap_or_default()
-            .into_iter()
-            .filter(|part| {
-                (part.kind == "tool" || part.kind == "shell")
-                    && matches!(part.status.as_deref(), Some("running" | "pending"))
-            })
-            .map(|part| {
-                format!(
-                    "{}:{}:{}",
-                    part.part_id,
-                    part.tool_name.as_deref().unwrap_or("unknown"),
-                    part.status.as_deref().unwrap_or("unknown")
-                )
-            })
-            .collect();
-
         // Tool output index (if available)
         let tool_outputs = {
             let output_store = crate::tool_output_store::ToolOutputStore::new();
@@ -571,7 +577,10 @@ impl TuiSessionManager {
                         original_bytes: meta.original_bytes,
                     })
                     .collect(),
-                Err(_) => Vec::new(),
+                Err(err) => {
+                    warnings.push(format!("Tool output index could not be loaded: {}", err));
+                    Vec::new()
+                }
             }
         };
 

@@ -1044,8 +1044,8 @@ impl TuiApp {
                 self.stream_started_at = None;
                 self.current_tool_anchor_id = None;
                 if self.run_coordinator.wake() {
-                    self.run_coordinator.accept_wake();
                     if let Some(next_input) = self.promote_queued_session_input() {
+                        self.run_coordinator.accept_wake();
                         self.add_system_message(
                             "Running queued message from this session.".to_string(),
                         );

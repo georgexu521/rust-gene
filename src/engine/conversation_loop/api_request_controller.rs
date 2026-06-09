@@ -536,12 +536,18 @@ impl ApiRequestController {
                                     store.shared_conn(),
                                     &context.conversation.session_id,
                                 );
-                                let _ = writer.compaction(
+                                if let Err(err) = writer.compaction(
                                     record.strategy.label(),
                                     "api_context_error",
                                     record.tokens_before,
                                     record.tokens_after,
-                                );
+                                ) {
+                                    tracing::warn!(
+                                        "Failed to write compaction event for session {}: {}",
+                                        context.conversation.session_id,
+                                        err
+                                    );
+                                }
                             }
                             let mut provenance = compaction_record
                                 .as_ref()

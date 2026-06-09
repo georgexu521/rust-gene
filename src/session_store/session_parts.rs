@@ -1616,9 +1616,10 @@ mod tests {
     }
 
     #[test]
-    fn settlement_recovery_writes_failed_event_for_dangling_tools() {
-        // Simulate a session where a tool was started but never completed
-        // (e.g. due to crash or provider interruption).
+    fn project_detects_running_tool_after_interruption_and_failed_event_updates_status() {
+        // Tests that the projection correctly shows Running after a tool_started
+        // event without a matching completed/failed event, and that injecting a
+        // tool_failed event updates the projection to Failed.
         let conn = test_conn();
         let events = vec![
             row(
@@ -1650,12 +1651,14 @@ mod tests {
             "tool should be running after interruption"
         );
 
-        // Recovery: scan for running tools and write failed events
+        // Simulate recovery by writing a tool_failed event
         let writer = crate::session_store::SessionEventWriter::new(
             std::sync::Arc::new(std::sync::Mutex::new(conn)),
             "sess-1",
         );
-        let _ = writer.tool_failed("c1", "Tool execution interrupted before settlement");
+        writer
+            .tool_failed("c1", "Tool execution interrupted before settlement")
+            .unwrap();
 
         // After recovery, re-project should show failed status
         let conn2 = writer.connection();
@@ -1671,7 +1674,7 @@ mod tests {
                     ..
                 }
             ),
-            "tool should be failed after recovery"
+            "tool should be failed after recovery event"
         );
     }
 

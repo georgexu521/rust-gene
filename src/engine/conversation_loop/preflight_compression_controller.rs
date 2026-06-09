@@ -106,12 +106,18 @@ impl PreflightCompressionController {
                     store.shared_conn(),
                     context.session_id,
                 );
-                let _ = writer.compaction(
+                if let Err(err) = writer.compaction(
                     record.strategy.label(),
                     "preflight",
                     record.tokens_before,
                     record.tokens_after,
-                );
+                ) {
+                    tracing::warn!(
+                        "Failed to write compaction event for session {}: {}",
+                        context.session_id,
+                        err
+                    );
+                }
             }
             let after_tokens = estimate_messages_tokens(context.messages);
             let mut provenance = compaction_record

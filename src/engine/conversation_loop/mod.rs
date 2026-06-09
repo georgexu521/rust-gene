@@ -564,6 +564,11 @@ impl ConversationLoop {
         let Some(ref store) = self.session_store else {
             return;
         };
+        // Ensure projection is fresh before reading; session_events is the
+        // source of truth, session_parts is a derived table.
+        if let Err(err) = store.refresh_session_parts(&self.session_id) {
+            tracing::warn!("Failed to refresh session_parts before recovery: {}", err);
+        }
         let parts = match store.get_session_parts(&self.session_id) {
             Ok(parts) => parts,
             Err(err) => {
@@ -571,44 +576,51 @@ impl ConversationLoop {
                 return;
             }
         };
-        let unsettled: Vec<_> = parts
-            .into_iter()
-            .filter(|part| {
-                (part.kind == "tool" || part.kind == "shell")
-                    && matches!(part.status.as_deref(), Some("running" | "pending"))
-            })
-            .collect();
-        if unsettled.is_empty() {
-            return;
-        }
         let writer =
             crate::session_store::SessionEventWriter::new(store.shared_conn(), &self.session_id);
-        let unsettled_count = unsettled.len();
-        for part in &unsettled {
-            let tool_call_id = part
-                .tool_call_id
-                .clone()
-                .unwrap_or_else(|| part.part_id.clone());
-            let tool_name = part
-                .tool_name
-                .clone()
-                .unwrap_or_else(|| "unknown".to_string());
-            let error = format!(
-                "Tool execution interrupted before settlement ({}:{})",
-                tool_name, tool_call_id
-            );
-            if let Err(err) = writer.tool_failed(&tool_call_id, &error) {
-                tracing::warn!("Failed to write recovery tool_failed event: {}", err);
-            }
+        let count = write_settlement_recovery_events(&parts, &writer);
+        if count > 0 {
+            trace.record(crate::engine::trace::TraceEvent::WorkflowFallback {
+                error: format!(
+                    "durable_recovery: settled {} interrupted tool(s) from previous turn",
+                    count
+                ),
+            });
         }
-        trace.record(crate::engine::trace::TraceEvent::WorkflowFallback {
-            error: format!(
-                "durable_recovery: settled {} interrupted tool(s) from previous turn",
-                unsettled_count
-            ),
-        });
     }
+}
 
+/// Write `tool_failed` events for any tool/shell parts that are still in a
+/// running or pending state. Returns the number of events written.
+fn write_settlement_recovery_events(
+    parts: &[crate::session_store::PersistedSessionPart],
+    writer: &crate::session_store::SessionEventWriter,
+) -> usize {
+    let unsettled: Vec<_> = parts
+        .iter()
+        .filter(|part| {
+            (part.kind == "tool" || part.kind == "shell")
+                && matches!(part.status.as_deref(), Some("running" | "pending"))
+        })
+        .collect();
+    for part in &unsettled {
+        let tool_call_id = part
+            .tool_call_id
+            .as_deref()
+            .unwrap_or(&part.part_id);
+        let tool_name = part.tool_name.as_deref().unwrap_or("unknown");
+        let error = format!(
+            "Tool execution interrupted before settlement ({}:{})",
+            tool_name, tool_call_id
+        );
+        if let Err(err) = writer.tool_failed(tool_call_id, &error) {
+            tracing::warn!("Failed to write recovery tool_failed event: {}", err);
+        }
+    }
+    unsettled.len()
+}
+
+impl ConversationLoop {
     /// 运行对话循环（非流式）
     pub async fn run(&self, messages: Vec<Message>) -> Result<LoopResult> {
         self.run_inner(messages, None::<&mpsc::Sender<StreamEvent>>)

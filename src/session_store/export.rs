@@ -59,6 +59,7 @@ pub struct ExportMessage {
 /// A session part in the export (lightweight projection).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExportPart {
+    pub part_id: String,
     pub kind: String,
     pub tool_name: Option<String>,
     pub status: Option<String>,
@@ -374,6 +375,7 @@ mod tests {
                 },
             ],
             parts: vec![ExportPart {
+                part_id: "tool_c1".into(),
                 kind: "tool".into(),
                 tool_name: Some("bash".into()),
                 status: Some("completed".into()),

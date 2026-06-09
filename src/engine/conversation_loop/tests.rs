@@ -3011,3 +3011,134 @@ async fn runtime_diet_report_records_tool_result_budget_for_tool_turn() {
     assert_eq!(artifacts, 0);
     assert!(crate::engine::trace::format_trace_summary(&trace, 80).contains("tool_results="));
 }
+
+#[test]
+fn write_settlement_recovery_detects_dangling_tools_and_writes_failed_events() {
+    use crate::session_store::SessionEventWriter;
+    use rusqlite::Connection;
+
+    let conn = Connection::open_in_memory().unwrap();
+    conn.execute_batch(
+        "CREATE TABLE session_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            session_id TEXT NOT NULL,
+            seq INTEGER NOT NULL,
+            event_type TEXT NOT NULL,
+            timestamp_ms INTEGER NOT NULL,
+            payload TEXT NOT NULL DEFAULT '{}'
+        );
+        CREATE INDEX IF NOT EXISTS idx_session_events_session ON session_events(session_id, seq);",
+    )
+    .unwrap();
+
+    let parts = vec![
+        crate::session_store::PersistedSessionPart {
+            id: 1,
+            session_id: "sess-1".into(),
+            part_index: 0,
+            part_id: "tool_c1".into(),
+            kind: "tool".into(),
+            tool_call_id: Some("c1".into()),
+            tool_name: Some("bash".into()),
+            status: Some("running".into()),
+            payload: serde_json::json!({}),
+            projected_to_seq: 2,
+            updated_at: "2026-06-10T00:00:00Z".into(),
+            message_id: None,
+        },
+        crate::session_store::PersistedSessionPart {
+            id: 2,
+            session_id: "sess-1".into(),
+            part_index: 1,
+            part_id: "shell_c2".into(),
+            kind: "shell".into(),
+            tool_call_id: Some("c2".into()),
+            tool_name: Some("bash".into()),
+            status: Some("pending".into()),
+            payload: serde_json::json!({}),
+            projected_to_seq: 3,
+            updated_at: "2026-06-10T00:00:00Z".into(),
+            message_id: None,
+        },
+        crate::session_store::PersistedSessionPart {
+            id: 3,
+            session_id: "sess-1".into(),
+            part_index: 2,
+            part_id: "tool_c3".into(),
+            kind: "tool".into(),
+            tool_call_id: Some("c3".into()),
+            tool_name: Some("file_read".into()),
+            status: Some("completed".into()),
+            payload: serde_json::json!({}),
+            projected_to_seq: 4,
+            updated_at: "2026-06-10T00:00:00Z".into(),
+            message_id: None,
+        },
+    ];
+
+    let writer =
+        SessionEventWriter::new(std::sync::Arc::new(std::sync::Mutex::new(conn)), "sess-1");
+    let count = write_settlement_recovery_events(&parts, &writer);
+    assert_eq!(count, 2, "should detect running and pending tools");
+
+    // Verify events were written
+    let conn_arc = writer.connection();
+    let conn_guard = conn_arc.lock().unwrap();
+    let events: Vec<_> = conn_guard
+        .prepare("SELECT event_type, payload FROM session_events WHERE session_id = 'sess-1' ORDER BY seq")
+        .unwrap()
+        .query_map([], |row: &rusqlite::Row| {
+            let event_type: String = row.get(0)?;
+            let payload: String = row.get(1)?;
+            Ok((event_type, payload))
+        })
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+
+    assert_eq!(events.len(), 2);
+    assert_eq!(events[0].0, "tool_failed");
+    assert!(events[0].1.contains("c1"));
+    assert!(events[0].1.contains("interrupted before settlement"));
+    assert_eq!(events[1].0, "tool_failed");
+    assert!(events[1].1.contains("c2"));
+}
+
+#[test]
+fn write_settlement_recovery_skips_already_settled_tools() {
+    use crate::session_store::SessionEventWriter;
+    use rusqlite::Connection;
+
+    let conn = Connection::open_in_memory().unwrap();
+    conn.execute_batch(
+        "CREATE TABLE session_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            session_id TEXT NOT NULL,
+            seq INTEGER NOT NULL,
+            event_type TEXT NOT NULL,
+            timestamp_ms INTEGER NOT NULL,
+            payload TEXT NOT NULL DEFAULT '{}'
+        );",
+    )
+    .unwrap();
+
+    let parts = vec![crate::session_store::PersistedSessionPart {
+        id: 1,
+        session_id: "sess-1".into(),
+        part_index: 0,
+        part_id: "tool_c1".into(),
+        kind: "tool".into(),
+        tool_call_id: Some("c1".into()),
+        tool_name: Some("bash".into()),
+        status: Some("completed".into()),
+        payload: serde_json::json!({}),
+        projected_to_seq: 2,
+        updated_at: "2026-06-10T00:00:00Z".into(),
+        message_id: None,
+    }];
+
+    let writer =
+        SessionEventWriter::new(std::sync::Arc::new(std::sync::Mutex::new(conn)), "sess-1");
+    let count = write_settlement_recovery_events(&parts, &writer);
+    assert_eq!(count, 0, "completed tools should not be recovered");
+}
