@@ -198,30 +198,6 @@ pub async fn handle_new(app: &mut TuiApp) -> String {
     }
 }
 
-pub fn handle_export(app: &TuiApp) -> String {
-    if let Some(id) = app.session_manager.current_session_id() {
-        match app.session_manager.export_session(id) {
-            Ok(json) => {
-                let filename = format!("session_{}.json", &id[..8.min(id.len())]);
-                let path = dirs::home_dir()
-                    .unwrap_or_else(|| std::path::PathBuf::from("."))
-                    .join(".priority-agent")
-                    .join(&filename);
-                if let Some(parent) = path.parent() {
-                    std::fs::create_dir_all(parent).ok();
-                }
-                match std::fs::write(&path, &json) {
-                    Ok(_) => format!("Session exported to: {}", path.display()),
-                    Err(e) => format!("Failed to write export file: {}", e),
-                }
-            }
-            Err(e) => format!("Failed to export session: {}", e),
-        }
-    } else {
-        "No active session to export.".to_string()
-    }
-}
-
 pub fn handle_search(app: &TuiApp, args: &str) -> String {
     if args.is_empty() {
         "Usage: /search <query> - Search through all session messages".to_string()

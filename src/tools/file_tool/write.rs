@@ -230,6 +230,24 @@ impl Tool for FileWriteTool {
                 let checkpoint_json = checkpoint_metadata_json(Some(&checkpoint));
                 let file_change_json = file_change.unwrap_or(serde_json::Value::Null);
                 let text_format = text_write_format_json(encoding, has_bom, line_ending);
+                let diagnostics_before = if existed_before {
+                    collect_file_edit_diagnostics(
+                        &context,
+                        &path,
+                        before_content.unwrap_or_default(),
+                    )
+                    .await
+                } else {
+                    serde_json::Value::Null
+                };
+                let diagnostics =
+                    collect_file_edit_diagnostics(&context, &path, content_body).await;
+                let diagnostics_delta = if diagnostics_before.is_null() {
+                    file_edit_diagnostics_delta(&serde_json::json!({}), &diagnostics)
+                } else {
+                    file_edit_diagnostics_delta(&diagnostics_before, &diagnostics)
+                };
+                let diagnostics_line = file_edit_diagnostics_content_line(&diagnostics);
                 let edit_preview = edit_preview_json(
                     &identity,
                     existed_before,
@@ -243,8 +261,13 @@ impl Tool for FileWriteTool {
                     bytes_written as u64,
                     "write_complete",
                 );
+                let mut content = format!("File {} successfully: {}", action, path_str);
+                if let Some(line) = diagnostics_line {
+                    content.push('\n');
+                    content.push_str(&line);
+                }
                 ToolResult::success_with_data(
-                    format!("File {} successfully: {}", action, path_str),
+                    content,
                     json!({
                         "path": path_str,
                         "resolved_path": identity.resolved_path,
@@ -256,6 +279,10 @@ impl Tool for FileWriteTool {
                         "diff": edit_diff_summary_json(&diff_summary),
                         "text_format": text_format,
                         "edit_preview": edit_preview,
+                        "diagnostics_before": diagnostics_before,
+                        "diagnostics": diagnostics.clone(),
+                        "diagnostics_after": diagnostics.clone(),
+                        "diagnostics_delta": diagnostics_delta,
                         "mutation_result": serde_json::to_value(
                             mutation_result::file_write_result(
                                 path_str,

@@ -38,6 +38,8 @@ pub struct LspServerConfig {
     pub args: Vec<String>,
     /// 工作区根目录
     pub root_uri: String,
+    /// Extra environment variables for the server process.
+    pub env: HashMap<String, String>,
 }
 
 /// LSP 诊断信息
@@ -175,6 +177,7 @@ impl LspClient {
 
         let mut child = tokio::process::Command::new(&self.config.command)
             .args(&self.config.args)
+            .envs(&self.config.env)
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
@@ -728,6 +731,29 @@ impl LspManager {
 
     /// 自动检测并添加语言服务器
     pub fn detect_servers(&mut self, working_dir: &Path) {
+        self.detect_servers_with_config(
+            working_dir,
+            &crate::services::config::LspConfig {
+                enabled: true,
+                ..Default::default()
+            },
+        );
+    }
+
+    pub fn detect_servers_with_config(
+        &mut self,
+        working_dir: &Path,
+        config: &crate::services::config::LspConfig,
+    ) {
+        if !config.enabled {
+            debug!("LSP disabled by config; skipping server detection");
+            return;
+        }
+        if !config.auto_detect {
+            debug!("LSP auto-detection disabled by config");
+            return;
+        }
+
         let root_uri = format!(
             "file://{}",
             working_dir
@@ -738,34 +764,25 @@ impl LspManager {
 
         // Rust
         if working_dir.join("Cargo.toml").exists() {
-            self.add_server(LspServerConfig {
-                name: "rust-analyzer".to_string(),
-                command: "rust-analyzer".to_string(),
-                args: vec![],
-                root_uri: root_uri.clone(),
-            });
+            self.add_detected_server("rust-analyzer", "rust-analyzer", vec![], &root_uri, config);
             info!("Auto-detected rust-analyzer for Rust project");
         }
 
         // TypeScript / JavaScript
         if working_dir.join("package.json").exists() {
-            self.add_server(LspServerConfig {
-                name: "typescript-language-server".to_string(),
-                command: "typescript-language-server".to_string(),
-                args: vec!["--stdio".to_string()],
-                root_uri: root_uri.clone(),
-            });
+            self.add_detected_server(
+                "typescript-language-server",
+                "typescript-language-server",
+                vec!["--stdio".to_string()],
+                &root_uri,
+                config,
+            );
             info!("Auto-detected typescript-language-server for TS/JS project");
         }
 
         // Go
         if working_dir.join("go.mod").exists() {
-            self.add_server(LspServerConfig {
-                name: "gopls".to_string(),
-                command: "gopls".to_string(),
-                args: vec![],
-                root_uri: root_uri.clone(),
-            });
+            self.add_detected_server("gopls", "gopls", vec![], &root_uri, config);
             info!("Auto-detected gopls for Go project");
         }
 
@@ -782,14 +799,44 @@ impl LspManager {
                 })
                 .unwrap_or(false)
         {
-            self.add_server(LspServerConfig {
-                name: "pylsp".to_string(),
-                command: "pylsp".to_string(),
-                args: vec![],
-                root_uri: root_uri.clone(),
-            });
+            self.add_detected_server("pylsp", "pylsp", vec![], &root_uri, config);
             info!("Auto-detected pylsp for Python project");
         }
+    }
+
+    fn add_detected_server(
+        &mut self,
+        name: &str,
+        command: &str,
+        args: Vec<String>,
+        root_uri: &str,
+        config: &crate::services::config::LspConfig,
+    ) {
+        let override_config = config.servers.get(name);
+        if override_config.is_some_and(|entry| entry.disabled) {
+            info!("LSP server {} disabled by config", name);
+            return;
+        }
+
+        self.add_server(LspServerConfig {
+            name: name.to_string(),
+            command: override_config
+                .and_then(|entry| entry.command.clone())
+                .unwrap_or_else(|| command.to_string()),
+            args: override_config
+                .map(|entry| {
+                    if entry.args.is_empty() {
+                        args.clone()
+                    } else {
+                        entry.args.clone()
+                    }
+                })
+                .unwrap_or(args),
+            root_uri: root_uri.to_string(),
+            env: override_config
+                .map(|entry| entry.env.clone())
+                .unwrap_or_default(),
+        });
     }
 
     /// 获取指定客户端
@@ -819,6 +866,21 @@ impl LspManager {
                 warn!("Failed to shutdown LSP client {}: {}", name, e);
             }
         }
+    }
+
+    pub async fn stop_server(&self, name: &str) -> anyhow::Result<()> {
+        let Some(client) = self.clients.get(name) else {
+            anyhow::bail!("Server '{}' is not registered", name);
+        };
+        client.shutdown().await
+    }
+
+    pub async fn restart_server(&self, name: &str) -> anyhow::Result<()> {
+        let Some(client) = self.clients.get(name) else {
+            anyhow::bail!("Server '{}' is not registered", name);
+        };
+        client.shutdown().await?;
+        client.initialize().await
     }
 
     /// 动态注册 LSP 服务器
@@ -1026,6 +1088,7 @@ mod tests {
             command: "rust-analyzer".to_string(),
             args: vec![],
             root_uri: "file:///project".to_string(),
+            env: HashMap::new(),
         };
         assert_eq!(config.name, "rust-analyzer");
     }
@@ -1043,6 +1106,7 @@ mod tests {
             command: "does-not-start".to_string(),
             args: vec![],
             root_uri: "file:///project".to_string(),
+            env: HashMap::new(),
         });
 
         assert!(!client.is_initialized().await);

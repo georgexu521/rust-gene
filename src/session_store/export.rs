@@ -60,7 +60,31 @@ pub struct ExportMessage {
 pub struct SessionExport {
     pub meta: SessionExportMeta,
     pub messages: Vec<ExportMessage>,
+    pub reverts: Vec<ExportRevert>,
+    pub diagnostics: Vec<ExportDiagnosticRecord>,
     pub tool_stats: serde_json::Value,
+}
+
+/// Revert metadata included in richer exports.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExportRevert {
+    pub operation: String,
+    pub status: String,
+    pub paths: Vec<String>,
+    pub diff_summary: Option<String>,
+    pub unreverted: bool,
+    pub created_at: String,
+}
+
+/// Optional diagnostic summary included in exports.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExportDiagnosticRecord {
+    pub source: String,
+    pub status: String,
+    pub path: Option<String>,
+    pub error_count: usize,
+    pub warning_count: usize,
+    pub detail: Option<String>,
 }
 
 /// Minimal input for building an export.
@@ -70,6 +94,9 @@ pub struct SessionExportInput {
     pub model: Option<String>,
     pub messages: Vec<ExportMessage>,
     pub changed_files: Vec<String>,
+    pub reverts: Vec<ExportRevert>,
+    pub diagnostics: Vec<ExportDiagnosticRecord>,
+    pub tool_stats: serde_json::Value,
 }
 
 /// Build a session export.
@@ -104,7 +131,9 @@ pub fn build_export(
             agent_version: env!("CARGO_PKG_VERSION").to_string(),
         },
         messages,
-        tool_stats: serde_json::json!({}),
+        reverts: input.reverts,
+        diagnostics: input.diagnostics,
+        tool_stats: input.tool_stats,
     }
 }
 
@@ -147,12 +176,16 @@ fn serialize_markdown(export: &SessionExport) -> anyhow::Result<String> {
          - **Model**: {}\n\
          - **Messages**: {}\n\
          - **Changed files**: {}\n\
+         - **Reverts**: {}\n\
+         - **Diagnostics records**: {}\n\
          - **Privacy**: {}\n\
          - **Exported at**: {}\n\n",
         export.meta.session_id,
         export.meta.model.as_deref().unwrap_or("unknown"),
         export.meta.message_count,
         export.meta.changed_files.join(", "),
+        export.reverts.len(),
+        export.diagnostics.len(),
         export.meta.privacy,
         export.meta.exported_at,
     ));
@@ -163,6 +196,37 @@ fn serialize_markdown(export: &SessionExport) -> anyhow::Result<String> {
         if !msg.content.is_empty() {
             out.push_str(&format!("{}\n\n", msg.content));
         }
+    }
+
+    if !export.reverts.is_empty() {
+        out.push_str("## Reverts\n\n");
+        for revert in &export.reverts {
+            out.push_str(&format!(
+                "- {} [{}] paths={} unreverted={} {}\n",
+                revert.operation,
+                revert.status,
+                revert.paths.join(", "),
+                revert.unreverted,
+                revert.diff_summary.as_deref().unwrap_or("")
+            ));
+        }
+        out.push('\n');
+    }
+
+    if !export.diagnostics.is_empty() {
+        out.push_str("## Diagnostics\n\n");
+        for diagnostic in &export.diagnostics {
+            out.push_str(&format!(
+                "- {} [{}] path={} errors={} warnings={} {}\n",
+                diagnostic.source,
+                diagnostic.status,
+                diagnostic.path.as_deref().unwrap_or("none"),
+                diagnostic.error_count,
+                diagnostic.warning_count,
+                diagnostic.detail.as_deref().unwrap_or("")
+            ));
+        }
+        out.push('\n');
     }
 
     Ok(out)
@@ -219,6 +283,9 @@ mod tests {
                 },
             ],
             changed_files: vec!["src/main.rs".into()],
+            reverts: vec![],
+            diagnostics: vec![],
+            tool_stats: serde_json::json!({}),
         }
     }
 

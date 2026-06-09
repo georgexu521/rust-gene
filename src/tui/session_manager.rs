@@ -4,6 +4,8 @@
 
 use crate::session_store::{PersistedSessionPart, SessionEventRow, SessionRecord, SessionStore};
 use crate::state::{MessageItem, MessageRole};
+use serde_json::Value;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 use tracing::{debug, info};
@@ -426,20 +428,81 @@ impl TuiSessionManager {
 
     /// 导出会话到 JSON
     pub fn export_session(&self, session_id: &str) -> anyhow::Result<String> {
+        let export = self.build_session_export(
+            session_id,
+            crate::session_store::export::SessionExportPrivacy::Full,
+            crate::session_store::export::SessionExportFormat::Json,
+        )?;
+        crate::session_store::export::serialize(
+            &export,
+            crate::session_store::export::SessionExportFormat::Json,
+        )
+    }
+
+    pub fn write_session_export(
+        &self,
+        session_id: &str,
+        format: crate::session_store::export::SessionExportFormat,
+        privacy: crate::session_store::export::SessionExportPrivacy,
+    ) -> anyhow::Result<std::path::PathBuf> {
+        let export = self.build_session_export(session_id, privacy, format)?;
+        crate::session_store::export::write_export(
+            &export,
+            &crate::session_store::export::default_export_dir(),
+            format,
+        )
+    }
+
+    fn build_session_export(
+        &self,
+        session_id: &str,
+        privacy: crate::session_store::export::SessionExportPrivacy,
+        format: crate::session_store::export::SessionExportFormat,
+    ) -> anyhow::Result<crate::session_store::export::SessionExport> {
         let session = self
             .store
             .get_session(session_id)?
             .ok_or_else(|| anyhow::anyhow!("Session not found"))?;
 
         let messages = self.store.get_messages(session_id)?;
+        let messages = messages
+            .into_iter()
+            .map(|message| crate::session_store::export::ExportMessage {
+                role: message.role,
+                content: message.content,
+                timestamp: Some(message.created_at),
+            })
+            .collect();
+        let events = self.load_session_events(session_id).unwrap_or_default();
+        let export_events = summarize_export_events(&events);
+        let reverts = self
+            .store
+            .list_session_reverts(session_id, 50)?
+            .into_iter()
+            .map(|revert| crate::session_store::export::ExportRevert {
+                operation: revert.operation,
+                status: revert.status,
+                paths: revert.paths,
+                diff_summary: revert.diff_summary,
+                unreverted: revert.unreverted,
+                created_at: revert.created_at,
+            })
+            .collect();
 
-        let export = serde_json::json!({
-            "session": session,
-            "messages": messages,
-            "exported_at": chrono::Utc::now().to_rfc3339(),
-        });
-
-        Ok(serde_json::to_string_pretty(&export)?)
+        Ok(crate::session_store::export::build_export(
+            crate::session_store::export::SessionExportInput {
+                session_id: session.id,
+                title: Some(session.title),
+                model: Some(session.model),
+                messages,
+                changed_files: export_events.changed_files,
+                reverts,
+                diagnostics: export_events.diagnostics,
+                tool_stats: export_events.tool_stats,
+            },
+            privacy,
+            format,
+        ))
     }
 
     /// 获取数据库统计
@@ -872,6 +935,136 @@ fn compact_preview_line(input: &str, max_chars: usize) -> String {
         out.push(ch);
     }
     out
+}
+
+struct ExportEventSummary {
+    changed_files: Vec<String>,
+    diagnostics: Vec<crate::session_store::export::ExportDiagnosticRecord>,
+    tool_stats: Value,
+}
+
+fn summarize_export_events(events: &[SessionEventRow]) -> ExportEventSummary {
+    let mut call_tools = BTreeMap::<String, String>::new();
+    let mut tool_calls = BTreeMap::<String, usize>::new();
+    let mut tool_successes = BTreeMap::<String, usize>::new();
+    let mut tool_failures = BTreeMap::<String, usize>::new();
+    let mut counted_calls = BTreeSet::<String>::new();
+    let mut counted_successes = BTreeSet::<String>::new();
+    let mut counted_failures = BTreeSet::<String>::new();
+    let mut changed_files = BTreeSet::<String>::new();
+    let mut diagnostics = Vec::new();
+
+    for event in events {
+        let payload = serde_json::from_str::<Value>(&event.payload).unwrap_or(Value::Null);
+        match event.event_type.as_str() {
+            "tool_called" | "tool_started" => {
+                if let (Some(id), Some(name)) = (
+                    payload.get("tool_call_id").and_then(Value::as_str),
+                    payload.get("tool_name").and_then(Value::as_str),
+                ) {
+                    call_tools.insert(id.to_string(), name.to_string());
+                    if counted_calls.insert(id.to_string()) {
+                        *tool_calls.entry(name.to_string()).or_default() += 1;
+                    }
+                }
+            }
+            "tool_input_completed" => {
+                let Some(call_id) = payload.get("tool_call_id").and_then(Value::as_str) else {
+                    continue;
+                };
+                let Some(tool) = call_tools.get(call_id) else {
+                    continue;
+                };
+                if !matches!(tool.as_str(), "file_write" | "file_edit" | "file_patch") {
+                    continue;
+                }
+                if let Some(input) = payload
+                    .get("input_args")
+                    .and_then(Value::as_str)
+                    .and_then(|raw| serde_json::from_str::<Value>(raw).ok())
+                {
+                    collect_changed_paths_from_tool_input(&input, &mut changed_files);
+                }
+            }
+            "tool_succeeded" | "tool_result_completed" => {
+                if let Some((call_id, tool)) = tool_call_and_name_for_event(&payload, &call_tools) {
+                    if !counted_successes.insert(call_id) {
+                        continue;
+                    }
+                    *tool_successes.entry(tool).or_default() += 1;
+                }
+            }
+            "tool_failed" => {
+                if let Some((call_id, tool)) = tool_call_and_name_for_event(&payload, &call_tools) {
+                    if !counted_failures.insert(call_id) {
+                        continue;
+                    }
+                    *tool_failures.entry(tool).or_default() += 1;
+                }
+            }
+            "runtime_diagnostic" => {
+                diagnostics.push(crate::session_store::export::ExportDiagnosticRecord {
+                    source: "runtime".to_string(),
+                    status: "recorded".to_string(),
+                    path: None,
+                    error_count: 0,
+                    warning_count: 0,
+                    detail: payload
+                        .get("schema")
+                        .and_then(Value::as_str)
+                        .map(str::to_string),
+                });
+            }
+            _ => {}
+        }
+    }
+
+    ExportEventSummary {
+        changed_files: changed_files.into_iter().collect(),
+        diagnostics,
+        tool_stats: serde_json::json!({
+            "calls": tool_calls,
+            "successes": tool_successes,
+            "failures": tool_failures,
+        }),
+    }
+}
+
+fn tool_call_and_name_for_event(
+    payload: &Value,
+    call_tools: &BTreeMap<String, String>,
+) -> Option<(String, String)> {
+    let call_id = payload.get("tool_call_id").and_then(Value::as_str)?;
+    let tool = payload
+        .get("tool_name")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .or_else(|| call_tools.get(call_id).cloned())?;
+    Some((call_id.to_string(), tool))
+}
+
+fn collect_changed_paths_from_tool_input(input: &Value, changed_files: &mut BTreeSet<String>) {
+    if let Some(path) = input.get("path").and_then(Value::as_str) {
+        if !path.trim().is_empty() {
+            changed_files.insert(path.trim().to_string());
+        }
+    }
+    if let Some(paths) = input.get("written_paths").and_then(Value::as_array) {
+        for path in paths.iter().filter_map(Value::as_str) {
+            if !path.trim().is_empty() {
+                changed_files.insert(path.trim().to_string());
+            }
+        }
+    }
+    if let Some(operations) = input.get("operations").and_then(Value::as_array) {
+        for operation in operations {
+            if let Some(path) = operation.get("path").and_then(Value::as_str) {
+                if !path.trim().is_empty() {
+                    changed_files.insert(path.trim().to_string());
+                }
+            }
+        }
+    }
 }
 
 #[cfg(test)]

@@ -248,6 +248,13 @@ export type DesktopDiagnosticsResponse = {
   items: DesktopDiagnostic[];
 };
 
+export type DesktopExportResult = {
+  session_id: string;
+  path: string;
+  format: string;
+  privacy: string;
+};
+
 export type ProviderSetupInfo = {
   shell_profile_path: string;
   provider_env_vars: string[];
@@ -284,6 +291,8 @@ export type DesktopFileContextDetail = {
   relative_path: string;
   size_bytes: number;
   line_count: number;
+  line_start?: number | null;
+  line_end?: number | null;
   preview: string;
   truncated: boolean;
 };
@@ -302,6 +311,9 @@ export type DesktopRunContext =
       type: "file";
       label: string;
       path: string;
+      line_start?: number | null;
+      line_end?: number | null;
+      selection_text?: string | null;
       detail?: DesktopRunContextDetail | null;
     };
 
@@ -714,6 +726,27 @@ export function desktopDiagnostics(): Promise<DesktopDiagnosticsResponse> {
   }
 
   return invoke("desktop_diagnostics");
+}
+
+export function exportSession(
+  sessionId?: string | null,
+  format: "json" | "markdown" = "markdown",
+  privacy: "full" | "redacted" | "summary" = "redacted",
+): Promise<DesktopExportResult> {
+  if (!isTauriRuntime()) {
+    return Promise.resolve({
+      session_id: sessionId || "preview-session",
+      path: `${webPreviewSettings.selected_project}/session-preview.md`,
+      format,
+      privacy,
+    });
+  }
+
+  return invoke("export_session", {
+    sessionId: sessionId || null,
+    format,
+    privacy,
+  });
 }
 
 export function desktopRunContextDetail(

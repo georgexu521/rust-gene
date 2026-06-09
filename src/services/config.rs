@@ -336,6 +336,27 @@ pub const CONFIG_KEY_SPECS: &[ConfigKeySpec] = &[
         secret: false,
         description: "Tool-output retention window in days",
     },
+    ConfigKeySpec {
+        key: "lsp.enabled",
+        value_type: "bool",
+        mutable: true,
+        secret: false,
+        description: "Enable optional LSP diagnostics",
+    },
+    ConfigKeySpec {
+        key: "lsp.auto_detect",
+        value_type: "bool",
+        mutable: true,
+        secret: false,
+        description: "Auto-detect language servers from project files",
+    },
+    ConfigKeySpec {
+        key: "lsp.disable_downloads",
+        value_type: "bool",
+        mutable: true,
+        secret: false,
+        description: "Prevent automatic LSP server downloads",
+    },
 ];
 
 pub fn config_scope_paths(working_dir: &Path) -> ConfigScopePaths {
@@ -365,7 +386,7 @@ pub fn config_schema_json() -> Value {
 
 pub fn format_config_summary(config: &AppConfig) -> String {
     format!(
-        "Config:\n  api.base_url = {}\n  api.model = {}\n  api.temperature = {}\n  api.max_tokens = {}\n  ui.theme = {}\n  ui.show_token_usage = {}\n  storage.persistence_enabled = {}\n  features.mcp_enabled = {}\n  features.skills_enabled = {}\n  features.web_search = {}\n  features.plugin_trust_mode = {}\n  engine.max_iterations = {}\n  memory.external_provider.enabled = {}\n  memory.external_provider.mode = {}\n  memory.external_provider.provider_type = {}\n  memory.external_provider.records_path = {}\n  tool_output.max_bytes = {}\n  tool_output.max_lines = {}\n  tool_output.preview_direction = {}\n  tool_output.retention_days = {}",
+        "Config:\n  api.base_url = {}\n  api.model = {}\n  api.temperature = {}\n  api.max_tokens = {}\n  ui.theme = {}\n  ui.show_token_usage = {}\n  storage.persistence_enabled = {}\n  features.mcp_enabled = {}\n  features.skills_enabled = {}\n  features.web_search = {}\n  features.plugin_trust_mode = {}\n  engine.max_iterations = {}\n  memory.external_provider.enabled = {}\n  memory.external_provider.mode = {}\n  memory.external_provider.provider_type = {}\n  memory.external_provider.records_path = {}\n  tool_output.max_bytes = {}\n  tool_output.max_lines = {}\n  tool_output.preview_direction = {}\n  tool_output.retention_days = {}\n  lsp.enabled = {}\n  lsp.auto_detect = {}\n  lsp.disable_downloads = {}",
         config.api.base_url,
         config.api.model,
         config.api.temperature,
@@ -392,6 +413,9 @@ pub fn format_config_summary(config: &AppConfig) -> String {
         config.tool_output.max_lines,
         config.tool_output.preview_direction,
         config.tool_output.retention_days,
+        config.lsp.enabled,
+        config.lsp.auto_detect,
+        config.lsp.disable_downloads,
     )
 }
 
@@ -435,6 +459,9 @@ pub fn get_config_value(config: &AppConfig, key: &str) -> Option<String> {
         "tool_output.max_lines" => Some(config.tool_output.max_lines.to_string()),
         "tool_output.preview_direction" => Some(config.tool_output.preview_direction.clone()),
         "tool_output.retention_days" => Some(config.tool_output.retention_days.to_string()),
+        "lsp.enabled" => Some(config.lsp.enabled.to_string()),
+        "lsp.auto_detect" => Some(config.lsp.auto_detect.to_string()),
+        "lsp.disable_downloads" => Some(config.lsp.disable_downloads.to_string()),
         _ => None,
     }
 }
@@ -510,6 +537,9 @@ pub fn set_config_value(config: &mut AppConfig, key: &str, value: &str) -> Resul
                 .parse::<u32>()
                 .map_err(|_| format!("Invalid integer for {}: {}", key, value))?;
         }
+        "lsp.enabled" => config.lsp.enabled = parse_bool(value)?,
+        "lsp.auto_detect" => config.lsp.auto_detect = parse_bool(value)?,
+        "lsp.disable_downloads" => config.lsp.disable_downloads = parse_bool(value)?,
         _ => return Err(format!("Unknown config key: {}", key)),
     }
     Ok(())

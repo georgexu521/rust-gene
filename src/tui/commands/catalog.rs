@@ -17,6 +17,7 @@ pub fn is_suggested_command(name: &str) -> bool {
 pub(crate) const USABLE_COMMANDS: &[&str] = &[
     "/tool-output",
     "/panel",
+    "/agent",
     "/agents",
     "/tasks",
     "/teammate",
@@ -145,6 +146,14 @@ pub const CMD_AGENTS: CommandDef = CommandDef::new(
     "Info",
     "/agents [worktree review|merge|cleanup <agent_id>]",
     "List active/known agents and manage isolated worktrees",
+);
+
+pub const CMD_AGENT: CommandDef = CommandDef::new(
+    "/agent",
+    &[],
+    "Action",
+    "/agent [list|<profile>|switch <mode>|run <profile> <prompt>]",
+    "List, select, or run product agent profiles",
 );
 
 pub const CMD_CHECKPOINTS: CommandDef = CommandDef::new(
@@ -868,6 +877,14 @@ pub const CMD_CREDENTIALS: CommandDef = CommandDef::new(
     "Credential status summary",
 );
 
+pub const CMD_PRODUCT_READY: CommandDef = CommandDef::new(
+    "/product-ready",
+    &[],
+    "Info",
+    "/product-ready",
+    "Show product readiness checks",
+);
+
 pub const CMD_HEALTH: CommandDef =
     CommandDef::new("/health", &[], "Info", "/health", "Health check");
 
@@ -1106,6 +1123,7 @@ pub const ALL_COMMANDS: &[&CommandDef] = &[
     &CMD_TOOL_OUTPUT,
     &CMD_PANEL,
     &CMD_TASKS,
+    &CMD_AGENT,
     &CMD_AGENTS,
     &CMD_CHECKPOINTS,
     &CMD_RESTORE,
@@ -1198,6 +1216,7 @@ pub const ALL_COMMANDS: &[&CommandDef] = &[
     &CMD_KEY,
     &CMD_CONNECT,
     &CMD_CREDENTIALS,
+    &CMD_PRODUCT_READY,
     &CMD_HEALTH,
     &CMD_PING,
     &CMD_UPTIME,

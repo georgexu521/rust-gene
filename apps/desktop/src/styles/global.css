@@ -548,6 +548,11 @@ h1 {
   background: transparent;
 }
 
+.title-icon-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
 .topbar-icon-button {
   width: 30px;
   height: 30px;
@@ -3696,6 +3701,16 @@ h1 {
   border-radius: 6px;
   color: #8b1d1d;
   background: #fff4f4;
+}
+
+.export-banner {
+  margin: -18px 48px 24px;
+  padding: 10px 12px;
+  border: 1px solid #b7d9bd;
+  border-radius: 6px;
+  color: #256238;
+  background: #f1fbf3;
+  font-size: 13px;
 }
 
 @media (max-width: 760px) {

@@ -40,6 +40,15 @@ export function ContextDetailDrawer({ context, onClose, onRemove }: ContextDetai
               {detail.size_bytes.toLocaleString()} bytes · {detail.line_count.toLocaleString()} lines
             </p>
           </section>
+          {detail.line_start ? (
+            <section>
+              <h3>Selected range</h3>
+              <p>
+                {detail.line_start}
+                {detail.line_end && detail.line_end !== detail.line_start ? `-${detail.line_end}` : ""}
+              </p>
+            </section>
+          ) : null}
           <section>
             <h3>File preview{detail.truncated ? " (truncated)" : ""}</h3>
             <pre className="context-detail-diff">{detail.preview || "No file preview available."}</pre>

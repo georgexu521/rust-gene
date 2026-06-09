@@ -7,7 +7,7 @@ pub(super) fn collect_desktop_diagnostics(
     settings_path: &Path,
     diagnostic_logs_path: &Path,
 ) -> Vec<DesktopDiagnostic> {
-    vec![
+    let mut diagnostics = vec![
         provider_key_diagnostic(),
         shell_diagnostic(),
         command_diagnostic("git", "Git command", "git"),
@@ -17,7 +17,9 @@ pub(super) fn collect_desktop_diagnostics(
         project_access_diagnostic(selected_project),
         settings_access_diagnostic(settings_path),
         diagnostic_logs_access_diagnostic(diagnostic_logs_path),
-    ]
+    ];
+    diagnostics.extend(product_readiness_diagnostics());
+    diagnostics
 }
 
 pub(super) fn provider_setup_info_value() -> ProviderSetupInfo {
@@ -28,6 +30,49 @@ pub(super) fn provider_setup_info_value() -> ProviderSetupInfo {
             .flat_map(|spec| spec.key_env_vars.iter().copied())
             .collect(),
         example: "export MINIMAX_API_KEY=\"your-key-here\"",
+    }
+}
+
+fn product_readiness_diagnostics() -> Vec<DesktopDiagnostic> {
+    priority_agent::engine::product_readiness::collect_readiness_checks()
+        .into_iter()
+        .map(|check| {
+            let status = match check.status {
+                priority_agent::engine::product_readiness::ReadinessStatus::Ready => {
+                    DiagnosticStatus::Ok
+                }
+                priority_agent::engine::product_readiness::ReadinessStatus::Warn => {
+                    DiagnosticStatus::Warning
+                }
+                priority_agent::engine::product_readiness::ReadinessStatus::Blocked => {
+                    DiagnosticStatus::Error
+                }
+            };
+            let detail = if let Some(remediation) = check.remediation {
+                format!("{} Remediation: {}", check.detail, remediation)
+            } else {
+                check.detail
+            };
+            let (id, label) = product_readiness_identity(&check.name);
+            DesktopDiagnostic {
+                id,
+                label,
+                status,
+                detail,
+            }
+        })
+        .collect()
+}
+
+fn product_readiness_identity(name: &str) -> (&'static str, &'static str) {
+    match name {
+        "provider" => ("product_ready_provider", "Product readiness: provider"),
+        "session_store" => ("product_ready_session_store", "Product readiness: sessions"),
+        "export" => ("product_ready_export", "Product readiness: export"),
+        "lsp" => ("product_ready_lsp", "Product readiness: LSP"),
+        "permissions" => ("product_ready_permissions", "Product readiness: permissions"),
+        "runtime" => ("product_ready_runtime", "Product readiness: runtime"),
+        _ => ("product_ready_other", "Product readiness"),
     }
 }
 

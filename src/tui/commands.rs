@@ -539,6 +539,7 @@ pub fn default_command_registry() -> CommandRegistry {
     registry.register(&CMD_TOOL_OUTPUT);
     registry.register(&CMD_PANEL);
     registry.register(&CMD_TASKS);
+    registry.register(&CMD_AGENT);
     registry.register(&CMD_AGENTS);
     registry.register(&CMD_CHECKPOINTS);
     registry.register(&CMD_RESTORE);
@@ -637,6 +638,9 @@ pub fn default_command_registry() -> CommandRegistry {
     registry.register(&CMD_LOGIN);
     registry.register(&CMD_LOGOUT);
     registry.register(&CMD_KEY);
+    registry.register(&CMD_CONNECT);
+    registry.register(&CMD_CREDENTIALS);
+    registry.register(&CMD_PRODUCT_READY);
     registry.register(&CMD_HEALTH);
     registry.register(&CMD_PING);
     registry.register(&CMD_UPTIME);

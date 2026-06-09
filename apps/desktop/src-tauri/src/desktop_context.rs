@@ -9,6 +9,9 @@ pub(crate) struct DesktopRunContext {
     pub(crate) context_type: String,
     pub(crate) label: Option<String>,
     pub(crate) path: Option<String>,
+    pub(crate) line_start: Option<usize>,
+    pub(crate) line_end: Option<usize>,
+    pub(crate) selection_text: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -29,6 +32,10 @@ pub(crate) struct ResolvedDesktopRunContext {
     pub(crate) size_bytes: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) line_count: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) line_start: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) line_end: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) preview: Option<String>,
     pub(crate) truncated: bool,
@@ -175,7 +182,8 @@ pub(crate) fn resolve_file_context(
         std::fs::read(&file_path).map_err(|err| format!("Failed to read file context: {}", err))?;
     let text = String::from_utf8_lossy(&bytes).to_string();
     let line_count = text.lines().count();
-    let (preview, truncated) = truncate_chars(&text, 12_000);
+    let selection = selected_file_context_preview(context, &text);
+    let (preview, truncated) = truncate_chars(&selection.preview, 12_000);
     let relative_path = file_path
         .strip_prefix(&project_root)
         .unwrap_or(&file_path)
@@ -210,9 +218,55 @@ pub(crate) fn resolve_file_context(
         relative_path: Some(relative_path),
         size_bytes: Some(bytes.len() as u64),
         line_count: Some(line_count),
+        line_start: selection.line_start,
+        line_end: selection.line_end,
         preview: Some(preview),
         truncated,
     })
+}
+
+struct FileContextSelection {
+    preview: String,
+    line_start: Option<usize>,
+    line_end: Option<usize>,
+}
+
+fn selected_file_context_preview(context: &DesktopRunContext, text: &str) -> FileContextSelection {
+    if let Some(selection_text) = context
+        .selection_text
+        .as_deref()
+        .filter(|selection| !selection.trim().is_empty())
+    {
+        return FileContextSelection {
+            preview: selection_text.to_string(),
+            line_start: context.line_start,
+            line_end: context.line_end,
+        };
+    }
+
+    let Some(start) = context.line_start.filter(|line| *line > 0) else {
+        return FileContextSelection {
+            preview: text.to_string(),
+            line_start: None,
+            line_end: None,
+        };
+    };
+    let end = context.line_end.unwrap_or(start).max(start);
+    let selected = text
+        .lines()
+        .enumerate()
+        .filter_map(|(index, line)| {
+            let line_no = index + 1;
+            (line_no >= start && line_no <= end).then_some(line)
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    FileContextSelection {
+        preview: selected,
+        line_start: Some(start),
+        line_end: Some(end),
+    }
 }
 
 fn format_desktop_context_block(context: &ResolvedDesktopRunContext) -> String {
@@ -225,13 +279,20 @@ fn format_desktop_context_block(context: &ResolvedDesktopRunContext) -> String {
             .unwrap_or("No file preview available.");
         let truncated = if context.truncated { "true" } else { "false" };
 
+        let selected_range = match (context.line_start, context.line_end) {
+            (Some(start), Some(end)) => format!("Selected range: {}-{}\n", start, end),
+            (Some(start), None) => format!("Selected range: {}\n", start),
+            _ => String::new(),
+        };
+
         return format!(
-            "<desktop_context type=\"{}\" label=\"{}\">\nPath: {}\nSize bytes: {}\nLines: {}\nPreview truncated: {}\n```text\n{}\n```\n</desktop_context>",
+            "<desktop_context type=\"{}\" label=\"{}\">\nPath: {}\nSize bytes: {}\nLines: {}\n{}Preview truncated: {}\n```text\n{}\n```\n</desktop_context>",
             escape_context_attr(&context.context_type),
             escape_context_attr(&context.label),
             relative_path,
             context.size_bytes.unwrap_or_default(),
             context.line_count.unwrap_or_default(),
+            selected_range,
             truncated,
             preview
         );
@@ -339,5 +400,4 @@ fn escape_context_attr(value: &str) -> String {
         .replace('<', "&lt;")
         .replace('>', "&gt;")
 }
-
 

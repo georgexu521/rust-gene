@@ -459,6 +459,7 @@ impl Tool for LSPTool {
                     command: command.to_string(),
                     args,
                     root_uri,
+                    env: std::collections::HashMap::new(),
                 };
 
                 // 需要可变引用，但 ToolContext 不提供

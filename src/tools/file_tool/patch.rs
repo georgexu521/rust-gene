@@ -6,11 +6,13 @@ use super::text_codec::{
     write_text_file, TextFileEncoding, TextFileSnapshot,
 };
 use super::{
-    acquire_file_mutation_lock, check_file_size_limit, edit_diff_summary, edit_diff_summary_json,
-    edit_preview_json, file_path_identity, file_read_state_guidance, high_risk_file_target_result,
-    is_file_modified_since_read, is_unc_or_network_path, mark_file_read_with_state,
-    mutation_result, path_identity_json, read_before_edit_status, resolve_path, FileEditTool,
-    FilePathIdentity, ReadBeforeEditStatus, MAX_EDITABLE_FILE_SIZE_BYTES,
+    acquire_file_mutation_lock, check_file_size_limit, collect_file_edit_diagnostics,
+    edit_diff_summary, edit_diff_summary_json, edit_preview_json,
+    file_edit_diagnostics_content_line, file_edit_diagnostics_delta, file_path_identity,
+    file_read_state_guidance, high_risk_file_target_result, is_file_modified_since_read,
+    is_unc_or_network_path, mark_file_read_with_state, mutation_result, path_identity_json,
+    read_before_edit_status, resolve_path, FileEditTool, FilePathIdentity, ReadBeforeEditStatus,
+    MAX_EDITABLE_FILE_SIZE_BYTES,
 };
 use crate::engine::checkpoint::RestoreResult;
 use crate::tools::{Tool, ToolContext, ToolOperationKind, ToolPermissionLevel, ToolResult};
@@ -193,6 +195,8 @@ impl Tool for FilePatchTool {
             }
         };
 
+        let diagnostics_before = collect_patch_diagnostics_before(&context, &prepared).await;
+
         let mut written_paths = Vec::new();
         let mut bytes_written = Vec::with_capacity(prepared.len());
         for patch in &prepared {
@@ -245,6 +249,13 @@ impl Tool for FilePatchTool {
                 new_mtime,
             );
         }
+
+        let diagnostics_after = collect_patch_diagnostics_after(&context, &prepared).await;
+        let diagnostics_delta = diagnostics_before
+            .iter()
+            .zip(diagnostics_after.iter())
+            .map(|(before, after)| file_edit_diagnostics_delta(before, after))
+            .collect::<Vec<_>>();
 
         let mut file_changes = Vec::new();
         for (patch, bytes_written) in prepared.iter().zip(bytes_written.iter().copied()) {
@@ -302,8 +313,28 @@ impl Tool for FilePatchTool {
                     "text_format": text_format,
                     "diff": edit_diff_summary_json(&patch.diff),
                     "edit_preview": edit_preview,
+                    "diagnostics_before": diagnostics_before
+                        .get(index)
+                        .cloned()
+                        .unwrap_or(serde_json::Value::Null),
+                    "diagnostics": diagnostics_after
+                        .get(index)
+                        .cloned()
+                        .unwrap_or(serde_json::Value::Null),
+                    "diagnostics_after": diagnostics_after
+                        .get(index)
+                        .cloned()
+                        .unwrap_or(serde_json::Value::Null),
+                    "diagnostics_delta": diagnostics_delta
+                        .get(index)
+                        .cloned()
+                        .unwrap_or(serde_json::Value::Null),
                 })
             })
+            .collect::<Vec<_>>();
+        let diagnostics_lines = diagnostics_after
+            .iter()
+            .filter_map(file_edit_diagnostics_content_line)
             .collect::<Vec<_>>();
         let combined_diff = prepared
             .iter()
@@ -311,17 +342,27 @@ impl Tool for FilePatchTool {
             .collect::<Vec<_>>()
             .join("\n\n");
 
+        let mut content = format!(
+            "Applied file_patch successfully: {} operation(s), {} file(s)",
+            prepared.len(),
+            prepared.len()
+        );
+        if !diagnostics_lines.is_empty() {
+            content.push('\n');
+            content.push_str(&diagnostics_lines.join("\n"));
+        }
+
         ToolResult::success_with_data(
-            format!(
-                "Applied file_patch successfully: {} operation(s), {} file(s)",
-                prepared.len(),
-                prepared.len()
-            ),
+            content,
             json!({
                 "operation_count": prepared.len(),
                 "files": files,
                 "checkpoint": checkpoint_json,
                 "file_changes": file_changes,
+                "diagnostics": {
+                    "files": diagnostics_after,
+                    "delta": diagnostics_delta,
+                },
                 "diff": {
                     "unified_diff": combined_diff,
                     "file_count": prepared.len(),
@@ -373,6 +414,34 @@ impl Tool for FilePatchTool {
     fn permission_level(&self) -> ToolPermissionLevel {
         ToolPermissionLevel::MediumRisk
     }
+}
+
+async fn collect_patch_diagnostics_before(
+    context: &ToolContext,
+    prepared: &[PreparedPatch],
+) -> Vec<Value> {
+    let mut diagnostics = Vec::with_capacity(prepared.len());
+    for patch in prepared {
+        let value = if let Some(before_content) = patch.before_content.as_deref() {
+            collect_file_edit_diagnostics(context, &patch.path, before_content).await
+        } else {
+            serde_json::Value::Null
+        };
+        diagnostics.push(value);
+    }
+    diagnostics
+}
+
+async fn collect_patch_diagnostics_after(
+    context: &ToolContext,
+    prepared: &[PreparedPatch],
+) -> Vec<Value> {
+    let mut diagnostics = Vec::with_capacity(prepared.len());
+    for patch in prepared {
+        diagnostics
+            .push(collect_file_edit_diagnostics(context, &patch.path, &patch.after_content).await);
+    }
+    diagnostics
 }
 
 async fn restore_patch_checkpoint(context: &ToolContext, checkpoint_id: &str) -> Value {

@@ -900,7 +900,7 @@ impl TuiApp {
             }
             "/tasks" => slash::handle_tasks(self).await,
             "/agents" => slash::handle_agents(self, args).await,
-            "/agent" => slash::handle_agent_list(self, args),
+            "/agent" => slash::handle_agent_list(self, args).await,
             "/doctor" => slash::handle_doctor(self, args).await,
             "/audit" => slash::handle_audit(self, args).await,
             "/permissions" | "/perm" => slash::handle_permissions(self, args),
@@ -921,7 +921,7 @@ impl TuiApp {
             "/mcp" => slash::handle_mcp(self, args).await,
             "/voice" => slash::handle_voice(),
             "/telemetry" => slash::handle_telemetry(),
-            "/lsp" => slash::handle_lsp(self, args),
+            "/lsp" => slash::handle_lsp(self, args).await,
             "/npm" => slash::handle_npm(self, args).await,
             // Phase 10 Batch 2: hooks, profiling, prompt, migrate, focus, pause, install, skeleton, branch, color
             "/hooks" => slash::handle_hooks(self),
@@ -992,6 +992,7 @@ impl TuiApp {
             "/key" => slash::handle_key(self, args),
             "/connect" => slash::handle_connect(self, args),
             "/credentials" => slash::handle_credentials(self, args),
+            "/product-ready" => crate::engine::product_readiness::readiness_report(),
             "/health" => slash::handle_health(self),
             "/ping" => slash::handle_ping(self),
             "/uptime" => slash::handle_uptime(self),

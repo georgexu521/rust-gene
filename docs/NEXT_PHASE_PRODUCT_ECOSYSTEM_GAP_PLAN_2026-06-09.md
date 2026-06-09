@@ -26,6 +26,39 @@ stay gex's local, personal, evidence-driven coding partner. Do not copy broad
 opencode defaults when they conflict with checkpoint, permission, validation, or
 privacy boundaries.
 
+## 0.1 Implementation Review Update
+
+Status after the 2026-06-09 implementation follow-up:
+
+- Phase A is partially landed: `provider_catalog` and credential status power
+  `/connect` and `/credentials`; provider catalog env aliases now match the
+  runtime registry for Kimi/Moonshot and GLM/ZAI/ZHIPUAI/BIGMODEL.
+- Phase B is partially landed: `LspConfig` is part of
+  `AppConfig`, bootstrap respects `lsp.enabled`, detected servers can receive
+  command/args/env overrides, and `/lsp stop|restart <name>` calls the manager
+  instead of returning a no-op hint. `file_edit`, `file_write`, and `file_patch`
+  now expose optional LSP diagnostic metadata/delta when initialized servers are
+  available.
+- Phase C local export/share is landed across TUI and desktop: `/export
+  [json|md] [full|redacted|summary]`, `/share local ...`, and desktop redacted
+  markdown export use `session_store::export` instead of shelling out. Export
+  payloads now include messages, changed-file hints from session events, recent
+  reverts, diagnostics records, and tool stats.
+- Phase D is partially landed: `/agent list`, `/agent <profile>`, `/agent
+  switch <mode>`, and `/agent run <profile> <prompt>` are wired. Desktop agent
+  picker/job projection remains future work.
+- Phase E is partially landed in desktop: file/diff context cards can be
+  attached and injected with bounded provenance, and file contexts now support
+  line-range/selection metadata for IDE handoff. CLI helper and actual IDE
+  extension remain future work.
+- Phase F is partially landed: `/product-ready` exposes readiness checks and
+  desktop diagnostics include the same product-readiness DTO. `/doctor product`
+  alias and richer provider-health recency remain future work.
+
+Remaining implementation gaps should now focus on desktop agent selection/job
+projection, CLI/IDE context handoff commands, richer structured diagnostic
+mirroring in session events, and broad product soak/polish.
+
 ## 1. External Reference Points
 
 Current opencode product capabilities to use as comparison anchors:
@@ -84,18 +117,19 @@ Current code:
   registration.
 - `LspManager::detect_servers()` detects Rust, TypeScript, Go, and Python
   projects.
-- `src/tui/slash_handler/agents/lsp.rs` exposes `/lsp list`, but `restart` and
-  `stop` are currently status text only.
-- LSP manager is injected into TUI state, but LSP diagnostics are not a stable
-  post-edit/tool observation surface.
+- `src/tui/slash_handler/agents/lsp.rs` exposes `/lsp list`, `restart`, and
+  `stop`; stop/restart now call manager methods.
+- LSP manager is injected into TUI state, and file mutation tools expose
+  optional diagnostic metadata when initialized LSP clients are available.
 
 Gap:
 
-- No configurable LSP registry in `AppConfig`.
-- No enabled/disabled policy equivalent to `lsp = true|false|{...}`.
+- LSP config exists in `AppConfig`, but richer extension-based routing from
+  per-server config is still incomplete.
 - No file-extension-driven lazy start from file read/edit.
-- No first-class "diagnostics after write/edit" result attached to file tool
-  metadata and visible in desktop/TUI.
+- LSP diagnostic metadata is still opportunistic: it only uses already
+  initialized clients and should be mirrored more directly into durable session
+  events.
 - No safe auto-download policy; external server installation should remain
   opt-in for this project.
 
@@ -108,17 +142,18 @@ Current code:
 - `src/tui/session_manager.rs` supports session export and resume selection.
 - Desktop has recent sessions, search, resume, rename, archive, delete, and
   persisted active session settings.
-- TUI `/share` exports local JSON to `~/.priority-agent/share_*.json`.
-- One `/export [json|md]` path in `src/tui/slash_handler/session/actions.rs`
-  still shells out to `echo` as a placeholder.
+- TUI `/export` and `/share local` write local JSON/Markdown exports through
+  `session_store::export` with full/redacted/summary privacy tiers.
 
 Gap:
 
-- Share is not a product concept yet; it is local export with a share-like name.
-- Export is split across handlers and formats are inconsistent.
-- Privacy/redaction policy for session export is not explicit enough.
-- There is no desktop "copy export path / open export folder / markdown export"
-  flow.
+- Public/network share is intentionally still disabled; current share means
+  local private export only.
+- Desktop redacted markdown export is wired to the shared export path, but
+  open-export-folder/copy-path controls are still missing.
+- Export payload now includes changed-file hints, diagnostics record slots,
+  reverts, and tool stats; it still needs richer structured diagnostic mirroring
+  from session events.
 
 ### Multi-session / agents
 
@@ -266,7 +301,8 @@ Code changes:
 - Implement real `/lsp restart <name>` and `/lsp stop <name>`.
 - Add file-extension routing:
   - `manager.client_for_path(path)`
-  - `manager.sync_file_for_diagnostics(path, content)`
+  - `manager.sync_file_for_diagnostics(path, content)` or the existing
+    file-tool diagnostic sync helper
   - `manager.diagnostics_for_path(path)`
 - Attach optional diagnostics to file mutation metadata after `file_write`,
   `file_edit`, and `file_patch`.
@@ -292,6 +328,9 @@ Acceptance:
 - After editing a Rust file with LSP enabled, metadata can include diagnostic
   count and source.
 - Failed or missing language server never weakens validation closeout.
+- Current implementation note: `file_edit`, `file_write`, and `file_patch`
+  expose `diagnostics`, `diagnostics_after`, and `diagnostics_delta`; this is
+  still optional evidence and requires initialized LSP clients.
 
 Narrow gates:
 
@@ -343,6 +382,10 @@ Acceptance:
 - `/share local` is explicit about local/private export.
 - Export includes redaction metadata.
 - Desktop and TUI use the same export code path.
+- Current implementation note: TUI `/export` and `/share local` plus desktop
+  title-bar export use `session_store::export`; payloads include changed-file
+  hints, reverts, diagnostics record slots, and tool stats. Open-export-folder
+  and any public/network share mode remain future work.
 
 Narrow gates:
 
@@ -389,6 +432,9 @@ Acceptance:
 - Starting an explore/review subagent shows progress and output contract.
 - Parallel runs are visible as jobs, not just hidden transcript events.
 - Permission mode is enforced per profile.
+- Current implementation note: TUI `/agent switch` maps switchable product
+  profiles onto `AgentMode`; `/agent run` delegates to the existing sub-agent
+  tool. Desktop selector and richer job projection remain open.
 
 Narrow gates:
 
@@ -436,6 +482,10 @@ Acceptance:
 - The runtime prompt receives bounded file context with path/range provenance.
 - Attaching context does not bypass file-read or permission semantics for later
   edits.
+- Current implementation note: desktop `file` contexts now accept
+  `line_start`, `line_end`, and `selection_text`, and the context drawer shows
+  selected range metadata. TUI `@file#Lx-Ly`, CLI helper, and IDE extension are
+  still open.
 
 Narrow gates:
 
@@ -451,7 +501,8 @@ checkable.
 
 Code changes:
 
-- Add `/product-ready` or extend `/doctor product`.
+- Extend the existing `/product-ready` report into the canonical product
+  readiness DTO.
   - provider configured;
   - provider health recent;
   - selected model;
@@ -461,7 +512,10 @@ Code changes:
   - export path writable;
   - permissions mode known;
   - runtime facade available.
-- Add desktop readiness panel using the same DTO.
+- Add `/doctor product` as an alias if the doctor surface becomes the primary
+  diagnostics entry.
+- Add a desktop readiness panel using the same DTO instead of duplicating status
+  logic in React/Tauri.
 - Keep this as a diagnostic view, not an always-on prompt rule.
 
 Candidate files:
@@ -477,6 +531,9 @@ Acceptance:
 - Product readiness gives a clear READY/BLOCKED/WARN status.
 - It points to exact remediation actions.
 - No secrets are printed.
+- Current implementation note: desktop diagnostics now include product
+  readiness checks from the same Rust DTO used by `/product-ready`; `/doctor
+  product` is still open.
 
 Narrow gates:
 
@@ -533,4 +590,3 @@ When the code slices land, update:
   must show permission mode, worktree/session, and proof status.
 - Session export can leak private code and prompts. Default to local redacted
   export; full export should be explicit.
-

@@ -99,13 +99,28 @@ fn check_export_path() -> ReadinessCheck {
 }
 
 fn check_lsp_status() -> ReadinessCheck {
-    // LSP is off by default, which is fine.
-    ReadinessCheck {
-        name: "lsp".into(),
-        status: ReadinessStatus::Warn,
-        detail: "LSP is disabled by default. Enable with /config lsp.enabled true for optional diagnostics."
-            .into(),
-        remediation: Some("Run /config lsp.enabled true if you want language server support.".into()),
+    let config = crate::services::config::AppConfig::load().unwrap_or_default();
+    if config.lsp.enabled {
+        ReadinessCheck {
+            name: "lsp".into(),
+            status: ReadinessStatus::Ready,
+            detail: format!(
+                "LSP is enabled (auto_detect={}, downloads_disabled={}).",
+                config.lsp.auto_detect, config.lsp.disable_downloads
+            ),
+            remediation: None,
+        }
+    } else {
+        ReadinessCheck {
+            name: "lsp".into(),
+            status: ReadinessStatus::Warn,
+            detail:
+                "LSP is disabled by default; validation commands remain authoritative.".into(),
+            remediation: Some(
+                "Run /config set lsp.enabled true if you want optional language-server diagnostics."
+                    .into(),
+            ),
+        }
     }
 }
 

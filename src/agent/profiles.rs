@@ -548,7 +548,6 @@ fn builtin_profiles() -> Vec<AgentProfile> {
 /// Built-in product profiles exposed to the user via /agent and the
 /// desktop agent picker.  These are opinionated defaults that can be
 /// overridden by project `.agents/` or user `~/.priority-agent/agents/`.
-
 pub fn product_profiles() -> Vec<AgentProfile> {
     vec![
         AgentProfile {

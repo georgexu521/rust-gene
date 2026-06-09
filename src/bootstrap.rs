@@ -213,7 +213,7 @@ pub async fn init_components(
 
     // LSP 管理器
     let mut lsp_manager = crate::engine::lsp::LspManager::new();
-    lsp_manager.detect_servers(working_dir);
+    lsp_manager.detect_servers_with_config(working_dir, &app_config.lsp);
     let lsp_manager = Arc::new(lsp_manager);
     info!(
         "LspManager initialized with {} servers",

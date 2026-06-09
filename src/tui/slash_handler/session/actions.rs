@@ -612,28 +612,30 @@ pub fn handle_stop(app: &mut TuiApp, _args: &str) -> String {
     }
 }
 
-/// /share - 分享当前会话
-pub fn handle_share(app: &mut TuiApp, _args: &str) -> String {
-    if let Some(id) = app.session_manager.current_session_id() {
-        match app.session_manager.export_session(id) {
-            Ok(json) => {
-                let path = dirs::home_dir()
-                    .unwrap_or_else(|| std::path::PathBuf::from("."))
-                    .join(".priority-agent")
-                    .join(format!("share_{}.json", &id[..8.min(id.len())]));
-                if let Some(parent) = path.parent() {
-                    std::fs::create_dir_all(parent).ok();
-                }
-                match std::fs::write(&path, &json) {
-                    Ok(_) => format!("Session exported to: {}", path.display()),
-                    Err(e) => format!("Failed to write: {}", e),
-                }
-            }
-            Err(e) => format!("Failed to export: {}", e),
-        }
-    } else {
-        "No active session to share.".to_string()
+/// /share - local-only session export.
+pub fn handle_share(app: &mut TuiApp, args: &str) -> String {
+    let args = args.trim();
+    if args == "status" {
+        return "Share mode: local-only. Public/network share is disabled.".to_string();
     }
+    if args == "disabled" {
+        return "Public/network share is disabled. Use /share local [json|md] [redacted|full|summary]."
+            .to_string();
+    }
+
+    let mut parts = args.split_whitespace().collect::<Vec<_>>();
+    if parts.first() == Some(&"local") {
+        parts.remove(0);
+    } else if !parts.is_empty() {
+        return "Usage: /share local [json|md] [redacted|full|summary]".to_string();
+    }
+
+    write_current_session_export(
+        app,
+        parts.first().copied().unwrap_or("json"),
+        parts.get(1).copied().unwrap_or("redacted"),
+        "Local share export",
+    )
 }
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -642,30 +644,55 @@ pub fn handle_share(app: &mut TuiApp, _args: &str) -> String {
 
 /// /export - Export data
 pub async fn handle_export_data(app: &mut TuiApp, args: &str) -> String {
-    let tool = crate::tools::BashTool;
-    let ctx = app.build_tool_context().await;
+    let parts = args.split_whitespace().collect::<Vec<_>>();
+    write_current_session_export(
+        app,
+        parts.first().copied().unwrap_or("json"),
+        parts.get(1).copied().unwrap_or("full"),
+        "Session export",
+    )
+}
 
-    let format = if args.is_empty() { "json" } else { args };
-    let session_id = app
-        .session_manager
-        .current_session_id()
-        .unwrap_or("unknown");
-
-    let cmd = match format {
-        "json" => format!("echo 'Session {}' > /tmp/export.json && cat /tmp/export.json", &session_id[..8.min(session_id.len())]),
-        "md" => format!("echo '# Session Export' > /tmp/export.md && echo 'Session: {}' >> /tmp/export.md && cat /tmp/export.md", &session_id[..8.min(session_id.len())]),
-        _ => return "Usage: /export [json|md]".to_string(),
+fn write_current_session_export(app: &TuiApp, format: &str, privacy: &str, label: &str) -> String {
+    let Some(session_id) = app.session_manager.current_session_id() else {
+        return "No active session to export.".to_string();
     };
 
-    let params = serde_json::json!({
-        "command": cmd,
-        "description": "Export session data"
-    });
-    let result = tool.execute(params, ctx).await;
-    if result.success {
-        result.content
-    } else {
-        result.error.unwrap_or_default()
+    let Some(format) = parse_export_format(format) else {
+        return "Usage: /export [json|md] [full|redacted|summary]".to_string();
+    };
+    let Some(privacy) = parse_export_privacy(privacy) else {
+        return "Usage: /export [json|md] [full|redacted|summary]".to_string();
+    };
+
+    match app
+        .session_manager
+        .write_session_export(session_id, format, privacy)
+    {
+        Ok(path) => format!(
+            "{label} written to: {}\nPrivacy: {}\nFormat: {:?}",
+            path.display(),
+            privacy.label(),
+            format
+        ),
+        Err(err) => format!("Failed to export session: {err}"),
+    }
+}
+
+fn parse_export_format(value: &str) -> Option<crate::session_store::export::SessionExportFormat> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "" | "json" => Some(crate::session_store::export::SessionExportFormat::Json),
+        "md" | "markdown" => Some(crate::session_store::export::SessionExportFormat::Markdown),
+        _ => None,
+    }
+}
+
+fn parse_export_privacy(value: &str) -> Option<crate::session_store::export::SessionExportPrivacy> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "" | "full" => Some(crate::session_store::export::SessionExportPrivacy::Full),
+        "redacted" => Some(crate::session_store::export::SessionExportPrivacy::Redacted),
+        "summary" => Some(crate::session_store::export::SessionExportPrivacy::Summary),
+        _ => None,
     }
 }
 

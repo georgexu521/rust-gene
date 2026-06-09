@@ -1,6 +1,7 @@
 import { FormEvent, useEffect, useRef, useState, type ReactNode } from "react";
 import {
   Activity,
+  Download,
   Folder,
   Gauge,
   GitBranch,
@@ -41,6 +42,7 @@ import {
   desktopRunContextDetail,
   desktopSettings,
   desktopWorkbenchSnapshot,
+  exportSession,
   listRecentSessions,
   newConversation,
   onDesktopRunEvent,
@@ -116,6 +118,7 @@ export function App() {
   const [activeTraceId, setActiveTraceId] = useState<string | null>(null);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isEnvironmentOpen, setIsEnvironmentOpen] = useState(false);
+  const [exportNotice, setExportNotice] = useState<string | null>(null);
   const [lastArchivedSession, setLastArchivedSession] = useState<RecentSession | null>(null);
   const [pendingDeleteSession, setPendingDeleteSession] = useState<RecentSession | null>(null);
   const [runState, setRunState] = useState(initialRunViewState);
@@ -333,6 +336,15 @@ export function App() {
     try {
       await compactContext();
       await refreshContextSnapshot();
+    } catch (err) {
+      setRunState((current) => withError(current, err));
+    }
+  }
+
+  async function handleExportSession() {
+    try {
+      const result = await exportSession(runState.selectedSessionId, "markdown", "redacted");
+      setExportNotice(`Exported ${result.privacy} ${result.format}: ${result.path}`);
     } catch (err) {
       setRunState((current) => withError(current, err));
     }
@@ -730,6 +742,15 @@ export function App() {
             <div className="topbar-title-row">
               <h1>{conversationTitle}</h1>
               <button
+                aria-label="Export current session"
+                className="title-icon-button"
+                type="button"
+                disabled={!runState.selectedSessionId}
+                onClick={() => void handleExportSession()}
+              >
+                <Download aria-hidden="true" size={17} />
+              </button>
+              <button
                 aria-label="More conversation actions"
                 className="title-icon-button"
                 type="button"
@@ -921,6 +942,7 @@ export function App() {
         />
 
         {runState.error ? <div className="error-banner">{runState.error}</div> : null}
+        {exportNotice ? <div className="export-banner">{exportNotice}</div> : null}
       </section>
 
       {pendingDeleteSession ? (

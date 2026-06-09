@@ -199,6 +199,14 @@ struct DesktopDiagnosticsResponse {
 }
 
 #[derive(Debug, Serialize)]
+struct DesktopExportResult {
+    session_id: String,
+    path: String,
+    format: String,
+    privacy: String,
+}
+
+#[derive(Debug, Serialize)]
 struct ProviderSetupInfo {
     shell_profile_path: String,
     provider_env_vars: Vec<&'static str>,
@@ -388,6 +396,69 @@ async fn desktop_diagnostics(
             &diagnostic_logs_path,
         ),
     })
+}
+
+#[tauri::command]
+async fn export_session(
+    session_id: Option<String>,
+    format: Option<String>,
+    privacy: Option<String>,
+    state: State<'_, DesktopAppState>,
+) -> Result<DesktopExportResult, String> {
+    let session_id = match session_id {
+        Some(id) if !id.trim().is_empty() => id,
+        _ => state
+            .active_session_id
+            .lock()
+            .await
+            .clone()
+            .ok_or_else(|| "No active session to export.".to_string())?,
+    };
+    let format = parse_desktop_export_format(format.as_deref())?;
+    let privacy = parse_desktop_export_privacy(privacy.as_deref())?;
+    let store = open_session_store()?;
+    let session = store
+        .get_session(&session_id)
+        .map_err(|err| err.to_string())?
+        .ok_or_else(|| format!("session not found: {session_id}"))?;
+    let manager = priority_agent::tui::session_manager::TuiSessionManager::from_store(
+        std::sync::Arc::new(store),
+        session_id.clone(),
+        session.title,
+        &session.model,
+    )
+    .map_err(|err| err.to_string())?;
+    let path = manager
+        .write_session_export(&session_id, format, privacy)
+        .map_err(|err| err.to_string())?;
+
+    Ok(DesktopExportResult {
+        session_id,
+        path: path.display().to_string(),
+        format: format!("{:?}", format).to_lowercase(),
+        privacy: privacy.label().to_string(),
+    })
+}
+
+fn parse_desktop_export_format(
+    value: Option<&str>,
+) -> Result<priority_agent::session_store::export::SessionExportFormat, String> {
+    match value.unwrap_or("markdown").trim().to_ascii_lowercase().as_str() {
+        "json" => Ok(priority_agent::session_store::export::SessionExportFormat::Json),
+        "md" | "markdown" => Ok(priority_agent::session_store::export::SessionExportFormat::Markdown),
+        other => Err(format!("Unsupported export format: {other}")),
+    }
+}
+
+fn parse_desktop_export_privacy(
+    value: Option<&str>,
+) -> Result<priority_agent::session_store::export::SessionExportPrivacy, String> {
+    match value.unwrap_or("redacted").trim().to_ascii_lowercase().as_str() {
+        "full" => Ok(priority_agent::session_store::export::SessionExportPrivacy::Full),
+        "redacted" => Ok(priority_agent::session_store::export::SessionExportPrivacy::Redacted),
+        "summary" => Ok(priority_agent::session_store::export::SessionExportPrivacy::Summary),
+        other => Err(format!("Unsupported export privacy: {other}")),
+    }
 }
 
 #[tauri::command]
@@ -1615,6 +1686,7 @@ pub fn run() {
             provider_model_status,
             set_provider_model,
             desktop_diagnostics,
+            export_session,
             provider_setup_info,
             open_settings_folder,
             open_diagnostics_folder,
