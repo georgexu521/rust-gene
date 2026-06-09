@@ -255,8 +255,7 @@ pub fn handle_agent_list(_app: &TuiApp, args: &str) -> String {
             };
             out.push_str(&format!(
                 "  {} — {} (risk={risk}, perm={perm}, tools={tools})\n",
-                p.name,
-                p.description,
+                p.name, p.description,
             ));
         }
         out.push_str("\nUse /agent <name> to see a profile's full detail.\n");

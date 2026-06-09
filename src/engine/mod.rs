@@ -23,8 +23,10 @@ pub mod context_manager;
 pub mod context_usage;
 pub mod conversation_loop;
 pub mod cron;
+pub mod desktop_context;
 pub mod destructive_scope;
 pub mod diagnostic_tracker;
+pub mod product_readiness;
 pub use diagnostic_tracker::{
     DiagnosticEntry, DiagnosticRange, DiagnosticSeverity, DiagnosticTracker,
 };
