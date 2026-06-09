@@ -246,6 +246,14 @@ pub struct TuiApp {
     pub sidebar_visible: bool,
     /// 侧边栏选中索引
     pub sidebar_selected: usize,
+    /// 侧边栏搜索筛选文本
+    pub sidebar_filter: String,
+    /// 已固定的会话 ID 列表（最多 9 个）
+    pub pinned_sessions: Vec<String>,
+    /// 侧边栏删除确认（二次按 D 才执行）
+    pub confirm_delete_session_id: Option<String>,
+    /// 是否正在侧边栏搜索模式
+    pub filtering_sidebar: bool,
     /// 打字机效果当前显示位置（字符数）
     pub typewriter_position: usize,
     /// LSP 管理器
@@ -445,6 +453,10 @@ impl TuiApp {
             collapsed_indices: std::collections::HashSet::new(),
             sidebar_visible: false,
             sidebar_selected: 0,
+            sidebar_filter: String::new(),
+            pinned_sessions: Vec::new(),
+            confirm_delete_session_id: None,
+            filtering_sidebar: false,
             typewriter_position: 0,
             tick_count: 0,
             lsp_manager,

@@ -2,7 +2,8 @@
 //!
 //! 管理当前会话的持久化和恢复
 
-use crate::session_store::{PersistedSessionPart, SessionEventRow, SessionRecord, SessionStore};
+pub use crate::session_store::SessionRecord;
+use crate::session_store::{PersistedSessionPart, SessionEventRow, SessionStore};
 use crate::state::{MessageItem, MessageRole};
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};

@@ -619,6 +619,87 @@ async fn handle_key_event(key: KeyEvent, app: &mut TuiApp) -> anyhow::Result<boo
             app.sidebar_visible = !app.sidebar_visible;
             return Ok(false);
         }
+        // Sidebar navigation (only when sidebar is visible)
+        if app.sidebar_visible {
+            let sessions = app.session_manager.list_sessions(50).unwrap_or_default();
+            let max = sessions.len().saturating_sub(1);
+            match key.code {
+                KeyCode::Char('j') | KeyCode::Down => {
+                    if app.sidebar_selected < max {
+                        app.sidebar_selected += 1;
+                    }
+                    return Ok(false);
+                }
+                KeyCode::Char('k') | KeyCode::Up => {
+                    app.sidebar_selected = app.sidebar_selected.saturating_sub(1);
+                    return Ok(false);
+                }
+                KeyCode::Enter => {
+                    if let Some(session) = sessions.get(app.sidebar_selected) {
+                        let id = session.id.clone();
+                        let _ = app.session_manager.switch_to_session(&id);
+                        app.sidebar_selected = 0;
+                    }
+                    return Ok(false);
+                }
+                KeyCode::Char('p') => {
+                    if let Some(session) = sessions.get(app.sidebar_selected) {
+                        let id = &session.id;
+                        if app.pinned_sessions.contains(id) {
+                            app.pinned_sessions.retain(|x| x != id);
+                        } else if app.pinned_sessions.len() < 9 {
+                            app.pinned_sessions.push(id.clone());
+                        }
+                    }
+                    return Ok(false);
+                }
+                KeyCode::Char('d') => {
+                    if let Some(session) = sessions.get(app.sidebar_selected) {
+                        if app.confirm_delete_session_id.as_deref() == Some(&session.id) {
+                            // Second press: confirm delete
+                            let _ = app.session_manager.delete_session(&session.id);
+                            app.confirm_delete_session_id = None;
+                            app.sidebar_selected = app.sidebar_selected.min(max.saturating_sub(1));
+                        } else {
+                            app.confirm_delete_session_id = Some(session.id.clone());
+                        }
+                    }
+                    return Ok(false);
+                }
+                KeyCode::Char('/') => {
+                    app.sidebar_filter.clear();
+                    app.filtering_sidebar = true;
+                    return Ok(false);
+                }
+                KeyCode::Esc => {
+                    if app.filtering_sidebar {
+                        app.sidebar_filter.clear();
+                        app.filtering_sidebar = false;
+                    }
+                    return Ok(false);
+                }
+                _ => {}
+            }
+            // Handle sidebar filter text input
+            if app.filtering_sidebar {
+                match key.code {
+                    KeyCode::Char(c) => {
+                        app.sidebar_filter.push(c);
+                        return Ok(false);
+                    }
+                    KeyCode::Backspace => {
+                        app.sidebar_filter.pop();
+                        return Ok(false);
+                    }
+                    KeyCode::Enter => {
+                        app.filtering_sidebar = false;
+                        app.sidebar_selected = 0;
+                        return Ok(false);
+                    }
+                    _ => {}
+                }
+            }
+        }
     }
 
     // 消息搜索模式特殊处理

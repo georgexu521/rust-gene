@@ -753,58 +753,191 @@ fn tool_viewer_line_style(raw: &str, app: &TuiApp) -> Style {
     }
 }
 
-/// 渲染会话侧边栏
+/// 渲染会话侧边栏（带搜索、pin、元数据）
 pub fn render_sidebar(f: &mut Frame, app: &TuiApp, area: Rect) {
-    use ratatui::widgets::{Block, Borders, List, ListItem};
+    use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph};
 
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(app.theme.tokens.tone.brand))
-        .title(" Sessions ")
+        .title(format!(
+            " Sessions {} ",
+            if app.sidebar_filter.is_empty() {
+                String::new()
+            } else {
+                format!("(filter: {})", app.sidebar_filter)
+            }
+        ))
         .style(Style::default().bg(app.theme.tokens.surface.bg));
 
     let inner = block.inner(area);
     f.render_widget(block, area);
 
-    let sessions = app.session_manager.list_sessions(20).unwrap_or_default();
+    // 搜索栏
+    let filter_text = if app.sidebar_filter.is_empty() {
+        "/ to filter"
+    } else {
+        &app.sidebar_filter
+    };
 
+    let search_chunks = ratatui::layout::Layout::default()
+        .direction(ratatui::layout::Direction::Vertical)
+        .constraints([
+            ratatui::layout::Constraint::Length(1),
+            ratatui::layout::Constraint::Min(1),
+        ])
+        .split(inner);
+
+    let search_para = Paragraph::new(Line::from(Span::styled(
+        format!(" {filter_text} "),
+        Style::default()
+            .fg(if app.sidebar_filter.is_empty() {
+                app.theme.tokens.fg.faint
+            } else {
+                app.theme.tokens.fg.body
+            })
+            .bg(app.theme.tokens.surface.bg_elev),
+    )));
+    f.render_widget(search_para, search_chunks[0]);
+
+    // 获取会话列表
+    let all_sessions = app.session_manager.list_sessions(50).unwrap_or_default();
+
+    // 分离已固定和未固定的会话
     let current_id = app.session_manager.current_session_id().unwrap_or("");
+    let mut pinned: Vec<&crate::session_store::SessionRecord> = Vec::new();
+    let mut unpinned: Vec<&crate::session_store::SessionRecord> = Vec::new();
 
-    let items: Vec<ListItem> = sessions
-        .iter()
-        .enumerate()
-        .map(|(i, session)| {
-            let is_current = session.id == current_id;
-            let is_selected = i == app.sidebar_selected;
+    for s in &all_sessions {
+        if app.pinned_sessions.contains(&s.id) {
+            pinned.push(s);
+        } else {
+            unpinned.push(s);
+        }
+    }
 
-            let title = if session.title.is_empty() {
-                format!("Session {}", &session.id[..8.min(session.id.len())])
-            } else {
-                session.title.clone()
-            };
+    // 应用搜索筛选
+    if !app.sidebar_filter.is_empty() {
+        let filter = app.sidebar_filter.to_lowercase();
+        pinned.retain(|s| s.title.to_lowercase().contains(&filter));
+        unpinned.retain(|s| s.title.to_lowercase().contains(&filter));
+    }
 
-            let style = if is_current {
-                Style::default()
-                    .fg(app.theme.tokens.tone.ok)
-                    .add_modifier(Modifier::BOLD)
-            } else if is_selected {
-                Style::default()
-                    .fg(app.theme.tokens.fg.strong)
-                    .add_modifier(Modifier::BOLD)
-            } else {
-                Style::default().fg(app.theme.tokens.fg.body)
-            };
+    let mut items: Vec<ListItem> = Vec::new();
 
-            let prefix = if is_current { "● " } else { "○ " };
-            ListItem::new(Line::from(vec![
-                Span::styled(prefix, style),
-                Span::styled(title, style),
-            ]))
-        })
-        .collect();
+    // 已固定分组
+    if !pinned.is_empty() {
+        items.push(ListItem::new(Line::from(Span::styled(
+            "─ Pinned ─".to_string(),
+            Style::default()
+                .fg(app.theme.tokens.tone.accent)
+                .add_modifier(Modifier::BOLD),
+        ))));
+        for (i, session) in pinned.iter().enumerate() {
+            items.push(build_session_item(
+                app,
+                session,
+                current_id,
+                i,
+                true,
+                pinned.len(),
+            ));
+        }
+    }
+
+    // 未固定分组
+    if !pinned.is_empty() && !unpinned.is_empty() {
+        items.push(ListItem::new(Line::from("")));
+    }
+
+    let pinned_count = pinned.len();
+    for (i, session) in unpinned.iter().enumerate() {
+        items.push(build_session_item(
+            app,
+            session,
+            current_id,
+            pinned_count + i,
+            false,
+            unpinned.len(),
+        ));
+    }
+
+    if items.is_empty() {
+        items.push(ListItem::new(Line::from(Span::styled(
+            "No sessions found",
+            Style::default().fg(app.theme.tokens.fg.faint),
+        ))));
+    }
 
     let list = List::new(items);
-    f.render_widget(list, inner);
+    f.render_widget(list, search_chunks[1]);
+}
+
+fn build_session_item<'a>(
+    app: &'a TuiApp,
+    session: &crate::session_store::SessionRecord,
+    current_id: &str,
+    index: usize,
+    is_pinned: bool,
+    _total: usize,
+) -> ratatui::widgets::ListItem<'a> {
+    let is_current = session.id == current_id;
+    let is_selected = index == app.sidebar_selected;
+
+    let base = if is_current {
+        Style::default()
+            .fg(app.theme.tokens.tone.ok)
+            .add_modifier(Modifier::BOLD)
+    } else if is_selected {
+        Style::default()
+            .fg(app.theme.tokens.fg.strong)
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(app.theme.tokens.fg.body)
+    };
+
+    let prefix = if is_current {
+        "●"
+    } else if is_pinned {
+        "◆"
+    } else {
+        "○"
+    };
+
+    let title = if session.title.is_empty() {
+        format!("Session {}", &session.id[..8.min(session.id.len())])
+    } else {
+        session.title.clone()
+    };
+
+    // 截断标题以适应侧边栏
+    let max_title = 18usize;
+    let display_title = if title.len() > max_title {
+        format!("{}…", &title[..max_title])
+    } else {
+        title
+    };
+
+    // 元数据：模型 + 消息数
+    let model_short: String = session
+        .model
+        .split('-')
+        .next()
+        .unwrap_or(&session.model)
+        .chars()
+        .take(6)
+        .collect();
+    let msg_count = app.session_manager.message_count(&session.id).unwrap_or(0);
+
+    let meta = format!(" {:>6}  {:>3} msgs", model_short, msg_count);
+
+    let line = Line::from(vec![
+        Span::styled(format!("{} ", prefix), base),
+        Span::styled(display_title, base),
+        Span::styled(meta, Style::default().fg(app.theme.tokens.fg.faint)),
+    ]);
+
+    ratatui::widgets::ListItem::new(line)
 }
 
 /// 渲染消息搜索弹窗
