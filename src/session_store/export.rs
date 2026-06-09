@@ -56,14 +56,36 @@ pub struct ExportMessage {
     pub timestamp: Option<String>,
 }
 
+/// A session part in the export (lightweight projection).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExportPart {
+    pub kind: String,
+    pub tool_name: Option<String>,
+    pub status: Option<String>,
+    pub message_id: Option<String>,
+}
+
 /// The complete export payload.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionExport {
     pub meta: SessionExportMeta,
     pub messages: Vec<ExportMessage>,
+    pub parts: Vec<ExportPart>,
     pub reverts: Vec<ExportRevert>,
     pub diagnostics: Vec<ExportDiagnosticRecord>,
     pub tool_stats: serde_json::Value,
+    pub closeout_status: Option<String>,
+    pub compaction_count: usize,
+    pub unresolved_settlement: Vec<String>,
+    pub tool_outputs: Vec<ExportToolOutput>,
+}
+
+/// Tool output metadata in the export.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExportToolOutput {
+    pub id: String,
+    pub tool_name: String,
+    pub original_bytes: u64,
 }
 
 /// Revert metadata included in richer exports.
@@ -94,11 +116,16 @@ pub struct SessionExportInput {
     pub title: Option<String>,
     pub model: Option<String>,
     pub messages: Vec<ExportMessage>,
+    pub parts: Vec<ExportPart>,
     pub changed_files: Vec<String>,
     pub reverts: Vec<ExportRevert>,
     pub diagnostics: Vec<ExportDiagnosticRecord>,
     pub tool_stats: serde_json::Value,
     pub warnings: Vec<String>,
+    pub closeout_status: Option<String>,
+    pub compaction_count: usize,
+    pub unresolved_settlement: Vec<String>,
+    pub tool_outputs: Vec<ExportToolOutput>,
 }
 
 /// Build a session export.
@@ -153,6 +180,18 @@ pub fn build_export(
         SessionExportPrivacy::Full | SessionExportPrivacy::Redacted => input.tool_stats,
         SessionExportPrivacy::Summary => serde_json::json!({}),
     };
+    let parts = match privacy {
+        SessionExportPrivacy::Full | SessionExportPrivacy::Redacted => input.parts,
+        SessionExportPrivacy::Summary => vec![],
+    };
+    let tool_outputs = match privacy {
+        SessionExportPrivacy::Full | SessionExportPrivacy::Redacted => input.tool_outputs,
+        SessionExportPrivacy::Summary => vec![],
+    };
+    let unresolved_settlement = match privacy {
+        SessionExportPrivacy::Full => input.unresolved_settlement,
+        SessionExportPrivacy::Redacted | SessionExportPrivacy::Summary => vec![],
+    };
 
     SessionExport {
         meta: SessionExportMeta {
@@ -168,9 +207,14 @@ pub fn build_export(
             agent_version: env!("CARGO_PKG_VERSION").to_string(),
         },
         messages,
+        parts,
         reverts,
         diagnostics,
         tool_stats,
+        closeout_status: input.closeout_status,
+        compaction_count: input.compaction_count,
+        unresolved_settlement,
+        tool_outputs,
     }
 }
 
@@ -329,6 +373,12 @@ mod tests {
                     timestamp: None,
                 },
             ],
+            parts: vec![ExportPart {
+                kind: "tool".into(),
+                tool_name: Some("bash".into()),
+                status: Some("completed".into()),
+                message_id: None,
+            }],
             changed_files: vec!["src/main.rs".into()],
             reverts: vec![ExportRevert {
                 operation: "checkpoint_revert".into(),
@@ -348,6 +398,14 @@ mod tests {
             }],
             tool_stats: serde_json::json!({"calls": {"file_write": 1}}),
             warnings: vec![],
+            closeout_status: Some("passed".into()),
+            compaction_count: 0,
+            unresolved_settlement: vec![],
+            tool_outputs: vec![ExportToolOutput {
+                id: "tool-output-1".into(),
+                tool_name: "bash".into(),
+                original_bytes: 1024,
+            }],
         }
     }
 

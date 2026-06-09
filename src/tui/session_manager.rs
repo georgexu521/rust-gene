@@ -505,17 +505,92 @@ impl TuiSessionManager {
             })
             .collect();
 
+        // Session parts (lightweight projection)
+        let parts = self
+            .store
+            .get_session_parts(session_id)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|part| crate::session_store::export::ExportPart {
+                kind: part.kind,
+                tool_name: part.tool_name,
+                status: part.status,
+                message_id: part.message_id,
+            })
+            .collect();
+
+        // Extract closeout status and compaction count from events
+        let mut closeout_status = None;
+        let mut compaction_count = 0;
+        for event in &events {
+            match event.event_type.as_str() {
+                "closeout" => {
+                    if let Ok(payload) = serde_json::from_str::<serde_json::Value>(&event.payload) {
+                        closeout_status = payload
+                            .get("status")
+                            .and_then(|v| v.as_str())
+                            .map(String::from);
+                    }
+                }
+                "compaction" => {
+                    compaction_count += 1;
+                }
+                _ => {}
+            }
+        }
+
+        // Unresolved settlement: tools still running/pending
+        let unresolved_settlement: Vec<String> = self
+            .store
+            .get_session_parts(session_id)
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|part| {
+                (part.kind == "tool" || part.kind == "shell")
+                    && matches!(part.status.as_deref(), Some("running" | "pending"))
+            })
+            .map(|part| {
+                format!(
+                    "{}:{}:{}",
+                    part.part_id,
+                    part.tool_name.as_deref().unwrap_or("unknown"),
+                    part.status.as_deref().unwrap_or("unknown")
+                )
+            })
+            .collect();
+
+        // Tool output index (if available)
+        let tool_outputs = {
+            let output_store = crate::tool_output_store::ToolOutputStore::new();
+            match output_store.list_for_session(session_id) {
+                Ok(list) => list
+                    .into_iter()
+                    .map(|meta| crate::session_store::export::ExportToolOutput {
+                        id: meta.id,
+                        tool_name: meta.tool_name,
+                        original_bytes: meta.original_bytes,
+                    })
+                    .collect(),
+                Err(_) => Vec::new(),
+            }
+        };
+
         Ok(crate::session_store::export::build_export(
             crate::session_store::export::SessionExportInput {
                 session_id: session.id,
                 title: Some(session.title),
                 model: Some(session.model),
                 messages,
+                parts,
                 changed_files: export_events.changed_files,
                 reverts,
                 diagnostics: export_events.diagnostics,
                 tool_stats: export_events.tool_stats,
                 warnings,
+                closeout_status,
+                compaction_count,
+                unresolved_settlement,
+                tool_outputs,
             },
             privacy,
             format,
