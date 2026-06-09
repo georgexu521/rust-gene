@@ -735,7 +735,6 @@ mod tests {
     #[test]
     fn escape_normalized_rejects_doubled_backslash() {
         // Real code literal: \\n in raw string output
-        let content = "foo\\\\nbar\n";
         let target = "foo\\\\nbar";
         // unescape_tool_string_once should return None because "\\\\" triggers bail-out
         assert!(unescape_tool_string_once(target).is_none());

@@ -1899,8 +1899,6 @@ async fn test_file_edit_insert_allows_intentional_bulk_anchor() {
 
 #[tokio::test]
 async fn test_file_edit_checkpoint_created() {
-    let mut env = crate::test_utils::env_guard::EnvVarGuard::acquire().await;
-    env.remove("PRIORITY_AGENT_TEST_FAIL_CHECKPOINT");
     let tool = FileEditTool;
     let path = "/tmp/test_priority_agent_edit_checkpoint.txt";
     let original = "original content\n";
@@ -1955,13 +1953,16 @@ async fn test_file_edit_checkpoint_created() {
 
 #[tokio::test]
 async fn test_file_edit_refuses_when_checkpoint_creation_fails() {
-    let mut env = crate::test_utils::env_guard::EnvVarGuard::acquire().await;
     let tool = FileEditTool;
     let path = "/tmp/test_priority_agent_edit_checkpoint_failure.txt";
     tokio::fs::write(path, "before\n").await.unwrap();
     read_test_file_for_edit(path, "test-session-checkpoint-failure").await;
 
-    env.set("PRIORITY_AGENT_TEST_FAIL_CHECKPOINT", "1");
+    let mut context = ToolContext::new(".", "test-session-checkpoint-failure");
+    context.metadata.insert(
+        "priority_agent_test_fail_checkpoint".to_string(),
+        "1".to_string(),
+    );
     let result = tool
         .execute(
             json!({
@@ -1969,7 +1970,7 @@ async fn test_file_edit_refuses_when_checkpoint_creation_fails() {
                 "old_string": "before",
                 "new_string": "after"
             }),
-            ToolContext::new(".", "test-session-checkpoint-failure"),
+            context,
         )
         .await;
 
@@ -1992,7 +1993,6 @@ async fn test_file_edit_refuses_when_checkpoint_creation_fails() {
 
 #[tokio::test]
 async fn test_file_write_refuses_when_checkpoint_creation_fails() {
-    let mut env = crate::test_utils::env_guard::EnvVarGuard::acquire().await;
     let tool = FileWriteTool;
     let path = "/tmp/test_priority_agent_write_checkpoint_failure.txt";
     let session_id = "test-session-write-checkpoint-failure";
@@ -2003,14 +2003,18 @@ async fn test_file_write_refuses_when_checkpoint_creation_fails() {
         &canonicalize_or_normalize(Path::new(path)).to_string_lossy(),
     );
 
-    env.set("PRIORITY_AGENT_TEST_FAIL_CHECKPOINT", "1");
+    let mut context = ToolContext::new(".", session_id);
+    context.metadata.insert(
+        "priority_agent_test_fail_checkpoint".to_string(),
+        "1".to_string(),
+    );
     let result = tool
         .execute(
             json!({
                 "path": path,
                 "content": "after\n"
             }),
-            ToolContext::new(".", session_id),
+            context,
         )
         .await;
 

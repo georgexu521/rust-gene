@@ -225,8 +225,7 @@ fn resolve_path_arg(raw: &str, workspace_root: &std::path::Path) -> Option<PathO
         if path.is_absolute() {
             Some(path.to_path_buf())
         } else {
-            let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-            let resolved = cwd.join(path);
+            let resolved = workspace_root.join(path);
             Some(std::fs::canonicalize(&resolved).unwrap_or(resolved))
         }
     };
@@ -334,5 +333,29 @@ mod tests {
         let expanded = expand_tilde("~/projects/foo");
         assert!(!expanded.starts_with('~'));
         assert!(expanded.contains("projects"));
+    }
+
+    #[test]
+    fn relative_path_resolves_against_workspace_root() {
+        let base = std::env::temp_dir().join(format!(
+            "priority-agent-shell-parser-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let src = base.join("src");
+        std::fs::create_dir_all(&src).unwrap();
+        let file = src.join("main.rs");
+        std::fs::write(&file, "fn main() {}\n").unwrap();
+        let canonical_file = std::fs::canonicalize(&file).unwrap();
+
+        let obs = ShellAstObservation::parse("cat src/main.rs", &base);
+        let path = obs
+            .path_args
+            .iter()
+            .find(|path| path.raw == "src/main.rs")
+            .expect("relative path should be observed");
+        assert_eq!(path.resolved.as_deref(), Some(canonical_file.as_path()));
+        assert!(!path.is_external);
+
+        let _ = std::fs::remove_dir_all(&base);
     }
 }

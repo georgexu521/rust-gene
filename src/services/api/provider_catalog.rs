@@ -123,13 +123,10 @@ pub fn builtin_catalog() -> Vec<ProviderCatalogEntry> {
             model_env_vars: vec!["GLM_MODEL".into()],
             default_base_url: "https://open.bigmodel.cn/api/paas/v4".into(),
             default_model: "glm-5.1".into(),
-            supported_models: vec![
-                "glm-5.1".into(),
-                "glm-4.7".into(),
-                "glm-4.6".into(),
-            ],
+            supported_models: vec!["glm-5.1".into(), "glm-4.7".into(), "glm-4.6".into()],
             docs_url: Some("https://open.bigmodel.cn".into()),
-            setup_hint: "Set GLM_API_KEY (or ZHIPUAI_API_KEY) to your API key from open.bigmodel.cn".into(),
+            setup_hint:
+                "Set GLM_API_KEY (or ZHIPUAI_API_KEY) to your API key from open.bigmodel.cn".into(),
         },
         ProviderCatalogEntry {
             id: "kimi".into(),
@@ -140,12 +137,10 @@ pub fn builtin_catalog() -> Vec<ProviderCatalogEntry> {
             model_env_vars: vec!["KIMI_MODEL".into()],
             default_base_url: "https://api.moonshot.cn/v1".into(),
             default_model: "kimi-k2.5".into(),
-            supported_models: vec![
-                "kimi-k2.5".into(),
-                "kimi-k2.5-thinking".into(),
-            ],
+            supported_models: vec!["kimi-k2.5".into(), "kimi-k2.5-thinking".into()],
             docs_url: Some("https://platform.moonshot.cn".into()),
-            setup_hint: "Set MOONSHOT_API_KEY to your Kimi API key from platform.moonshot.cn".into(),
+            setup_hint: "Set MOONSHOT_API_KEY to your Kimi API key from platform.moonshot.cn"
+                .into(),
         },
         ProviderCatalogEntry {
             id: "openai".into(),
@@ -156,10 +151,7 @@ pub fn builtin_catalog() -> Vec<ProviderCatalogEntry> {
             model_env_vars: vec!["OPENAI_MODEL".into()],
             default_base_url: "https://api.openai.com/v1".into(),
             default_model: "gpt-4o".into(),
-            supported_models: vec![
-                "gpt-4o".into(),
-                "gpt-4o-mini".into(),
-            ],
+            supported_models: vec!["gpt-4o".into(), "gpt-4o-mini".into()],
             docs_url: Some("https://platform.openai.com".into()),
             setup_hint: "Set OPENAI_API_KEY to your API key from platform.openai.com".into(),
         },
@@ -178,7 +170,9 @@ pub fn is_configured(id: &str) -> bool {
         None => return false,
     };
     entry.key_env_vars.iter().any(|v| {
-        std::env::var(v).map(|val| !val.trim().is_empty()).unwrap_or(false)
+        std::env::var(v)
+            .map(|val| !val.trim().is_empty())
+            .unwrap_or(false)
     })
 }
 

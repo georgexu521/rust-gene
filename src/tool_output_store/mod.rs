@@ -461,8 +461,9 @@ pub fn truncated_preview_with_policy(
         "[Output truncated: {} bytes -> {}]\n\
          Full output stored at: {}\n\
          Do NOT paste the full log back into context.\n\
-         To inspect: use grep to search for specific terms, or file_read with offset/limit \
-         for targeted sections.\n\
+         To inspect: use /tool-output, the API/UI paging surface, or another \
+         tool-output page read for targeted ranges. file_read applies only to \
+         bash artifact file paths, not tool-output URIs.\n\
          Policy: max_bytes={}, max_lines={}, preview={:?}\n\n\
          --- {} ---\n{}",
         original_len,

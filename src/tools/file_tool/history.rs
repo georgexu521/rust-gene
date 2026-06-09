@@ -30,7 +30,11 @@ pub(crate) async fn create_files_checkpoint(
     paths: &[PathBuf],
 ) -> Option<Checkpoint> {
     #[cfg(test)]
-    if std::env::var("PRIORITY_AGENT_TEST_FAIL_CHECKPOINT").as_deref() == Ok("1") {
+    if context
+        .metadata
+        .get("priority_agent_test_fail_checkpoint")
+        .is_some_and(|value| value == "1")
+    {
         warn!("Simulating checkpoint failure for {}", tool_name);
         return None;
     }
