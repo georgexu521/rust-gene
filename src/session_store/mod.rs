@@ -24,6 +24,7 @@ mod session_ops;
 pub mod session_parts;
 mod todo_store;
 mod trace_store;
+pub mod export;
 
 pub use records::*;
 pub use todo_store::{PersistedTodoItem, TodoItem};
