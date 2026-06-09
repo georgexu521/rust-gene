@@ -207,6 +207,48 @@ pub fn render_permission_approval(
         "file_write" | "file_edit" | "bash"
     );
     if has_diff_preview {
+        // Risk facts from audit record
+        if let Some(audit) = &req.audit {
+            if !audit.risk_facts.is_empty() {
+                lines.push(Line::from(""));
+                lines.push(Line::from(Span::styled(
+                    "Risk Details",
+                    Style::default().add_modifier(Modifier::BOLD),
+                )));
+                for fact in audit.risk_facts.iter().take(5) {
+                    let icon = if fact.contains("external")
+                        || fact.contains("destructive")
+                        || fact.contains("network")
+                    {
+                        "⚠"
+                    } else {
+                        "•"
+                    };
+                    lines.push(Line::from(Span::styled(
+                        format!("  {icon} {fact}"),
+                        Style::default().fg(if icon == "⚠" {
+                            tokens.tone.warn
+                        } else {
+                            tokens.fg.faint
+                        }),
+                    )));
+                }
+            }
+            if !audit.matched_rules.is_empty() {
+                lines.push(Line::from(""));
+                lines.push(Line::from(Span::styled(
+                    "Matched Rules",
+                    Style::default().add_modifier(Modifier::BOLD),
+                )));
+                for rule in audit.matched_rules.iter().take(3) {
+                    lines.push(Line::from(Span::styled(
+                        format!("  • {rule}"),
+                        Style::default().fg(tokens.fg.faint),
+                    )));
+                }
+            }
+        }
+
         lines.push(Line::from(vec![
             Span::styled(
                 "d",
