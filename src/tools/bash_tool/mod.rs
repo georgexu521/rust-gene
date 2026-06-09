@@ -8,6 +8,7 @@ pub mod command_classifier;
 mod execution_backend;
 mod pty;
 pub mod shell_parser;
+pub mod streaming;
 
 use crate::engine::context_ledger::{record_bash_read, BashReadLedgerInput};
 use crate::tools::{
@@ -475,7 +476,6 @@ fn shell_result_data(input: ShellResultData<'_>) -> (String, serde_json::Value) 
             input.combined_output.len()
         ));
     }
-    content_preview = append_shell_compatibility_hint(content_preview);
 
     let output_path = should_write_shell_output_artifact(input.combined_output, content_truncated)
         .then(|| {
@@ -487,6 +487,16 @@ fn shell_result_data(input: ShellResultData<'_>) -> (String, serde_json::Value) 
             )
         })
         .flatten();
+    // Add the artifact path hint to the content preview so the LLM can
+    // find the full output without relying solely on structured JSON data.
+    if let Some(ref p) = output_path {
+        content_preview.push_str(&format!(
+            "\n\nFull output saved to: {p}\n\
+             Use grep to search or file_read with offset/limit to inspect specific sections.\n\
+             Do NOT read the entire file into context.",
+        ));
+    }
+    content_preview = append_shell_compatibility_hint(content_preview);
     let (stdout_preview, stdout_truncated) = preview_text(input.stdout, STREAM_PREVIEW_CHARS);
     let (stderr_preview, stderr_truncated) = preview_text(input.stderr, STREAM_PREVIEW_CHARS);
     let classification = classification_data(input.command);

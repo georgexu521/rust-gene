@@ -76,10 +76,15 @@ pub(crate) fn safe_suffix_by_bytes(s: &str, max_bytes: usize) -> &str {
 #[allow(dead_code)] // API-ready: callers will integrate in follow-up
 pub(crate) const DEFAULT_MAX_RESULT_TOKENS: usize = 4096;
 
+/// Token-aware result truncation applied as a supplementary pass on top
+/// of the regular ToolOutputStore preview.  This keeps the stored artifact
+/// complete while limiting the model-facing text to a conservative token
+/// budget (default: 4096 tokens).
+const MODEL_FACING_TOKEN_BUDGET: usize = 4096;
+
 /// Truncate a tool result string to fit within `max_tokens` tokens.
 /// Uses a conservative estimate: 1 token ≈ 3 chars for CJK safety.
 /// Preserves head + tail with a truncation marker.
-#[allow(dead_code)] // API-ready: callers will integrate in follow-up
 pub(crate) fn shrink_tool_result_by_tokens(content: &str, max_tokens: usize) -> String {
     if max_tokens == 0 {
         return content.to_string();
@@ -229,6 +234,11 @@ pub(crate) async fn truncate_tool_result(
                     &policy,
                 );
                 result.content = preview;
+                // Apply token-aware shrinking as a supplementary pass.
+                // The stored artifact stays complete; only the model-facing
+                // preview is limited.
+                result.content =
+                    shrink_tool_result_by_tokens(&result.content, MODEL_FACING_TOKEN_BUDGET);
                 merge_tool_result_data(
                     result,
                     "output_truncation",

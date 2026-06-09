@@ -458,7 +458,13 @@ pub fn truncated_preview_with_policy(
         }
     };
     format!(
-        "[Output truncated: {} bytes -> {}]\nFull output: {}\nUse paged tool-output reads for more; do not paste the full log back into context.\nPolicy: max_bytes={}, max_lines={}, preview={:?}\n\n--- {} ---\n{}",
+        "[Output truncated: {} bytes -> {}]\n\
+         Full output stored at: {}\n\
+         Do NOT paste the full log back into context.\n\
+         To inspect: use grep to search for specific terms, or file_read with offset/limit \
+         for targeted sections.\n\
+         Policy: max_bytes={}, max_lines={}, preview={:?}\n\n\
+         --- {} ---\n{}",
         original_len,
         meta.uri(),
         meta.uri(),
