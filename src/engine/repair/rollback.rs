@@ -134,9 +134,9 @@ mod tests {
 
     #[test]
     fn rollback_guard_skipped_when_env_off() {
-        std::env::set_var("PRIORITY_AGENT_GIT_ROLLBACK", "off");
+        let mut env = crate::test_utils::env_guard::EnvVarGuard::acquire_blocking();
+        env.set("PRIORITY_AGENT_GIT_ROLLBACK", "off");
         let guard = GitRollbackGuard::checkpoint(Path::new("."));
         assert!(matches!(guard, GitRollbackGuard::Skipped));
-        std::env::remove_var("PRIORITY_AGENT_GIT_ROLLBACK");
     }
 }

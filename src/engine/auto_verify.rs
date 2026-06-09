@@ -872,8 +872,10 @@ warning: unused variable: `foo`
 
     #[test]
     fn test_changed_python_files_detects_standalone_script() {
-        let root =
-            std::env::temp_dir().join(format!("priority-agent-auto-verify-{}", std::process::id()));
+        let root = std::env::temp_dir().join(format!(
+            "priority-agent-auto-verify-{}",
+            uuid::Uuid::new_v4()
+        ));
         std::fs::create_dir_all(&root).unwrap();
         let script = root.join("snake.py");
         std::fs::write(&script, "print('ok')\n").unwrap();
@@ -899,7 +901,7 @@ warning: unused variable: `foo`
     fn test_resolve_workspace_targets_handles_relative_member_paths() {
         let root = std::env::temp_dir().join(format!(
             "priority-agent-workspace-targets-{}",
-            std::process::id()
+            uuid::Uuid::new_v4()
         ));
         let member = root.join("crates/demo");
         std::fs::create_dir_all(member.join("src")).unwrap();

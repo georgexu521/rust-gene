@@ -253,15 +253,7 @@ fn flatten_properties(prefix: &str, properties: &Map<String, Value>, out: &mut M
         } else {
             format!("{prefix}.{name}")
         };
-        if schema
-            .get("properties")
-            .and_then(Value::as_object)
-            .is_some()
-        {
-            let nested = schema
-                .get("properties")
-                .and_then(Value::as_object)
-                .expect("checked above");
+        if let Some(nested) = schema.get("properties").and_then(Value::as_object) {
             flatten_properties(&key, nested, out);
         } else {
             out.insert(key, schema.clone());

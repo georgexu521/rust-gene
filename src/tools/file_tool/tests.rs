@@ -1290,7 +1290,7 @@ async fn test_file_edit_stale_read_uses_resolved_path_key() {
     let session_id = "test-session-edit-stale-resolved-path";
     let root = std::env::temp_dir().join(format!(
         "test_priority_agent_edit_stale_resolved_path_{}",
-        std::process::id()
+        uuid::Uuid::new_v4()
     ));
     let nested = root.join("nested");
     let path = nested.join("target.txt");

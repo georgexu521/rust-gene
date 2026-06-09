@@ -259,10 +259,11 @@ fn emit_required_validation_heartbeat_elapsed(
 ) {
     if elapsed >= std::time::Duration::from_secs(30) {
         let command_preview = safe_prefix_by_bytes(command, 160).to_string();
-        eprintln!(
-            "[required validation still running after {}s] {}",
-            elapsed.as_secs(),
-            command_preview
+        tracing::warn!(
+            command_preview = %command_preview,
+            elapsed_secs = elapsed.as_secs(),
+            "required validation still running after {}s",
+            elapsed.as_secs()
         );
         if let Some(trace) = trace {
             trace.record(TraceEvent::RequiredValidationHeartbeat {

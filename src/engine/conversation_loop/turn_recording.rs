@@ -415,7 +415,7 @@ mod tests {
     async fn promotes_stop_failure_candidate_memory() {
         let base = std::env::temp_dir().join(format!(
             "priority-agent-turn-recording-memory-{}",
-            std::process::id()
+            uuid::Uuid::new_v4()
         ));
         let _ = std::fs::remove_dir_all(&base);
         std::fs::create_dir_all(&base).unwrap();

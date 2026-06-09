@@ -624,7 +624,8 @@ mod tests {
 
     #[test]
     fn test_budget_tracker() {
-        std::env::set_var("PRIORITY_AGENT_SOCRATIC_MAX_ROUNDS", "3");
+        let mut env = crate::test_utils::env_guard::EnvVarGuard::acquire_blocking();
+        env.set("PRIORITY_AGENT_SOCRATIC_MAX_ROUNDS", "3");
         let bt = BudgetTracker::from_env();
         assert_eq!(bt.max_rounds, 3);
         assert!(bt.can_proceed());
@@ -634,8 +635,6 @@ mod tests {
         bt.consume(100);
         bt.consume(100);
         assert!(!bt.can_proceed());
-
-        std::env::remove_var("PRIORITY_AGENT_SOCRATIC_MAX_ROUNDS");
     }
 
     #[test]

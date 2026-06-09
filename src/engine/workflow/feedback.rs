@@ -333,7 +333,7 @@ mod tests {
     fn temp_feedback_engine() -> FeedbackEngine {
         let temp = std::env::temp_dir().join(format!(
             "workflow_feedback_test_{}.json",
-            std::process::id()
+            uuid::Uuid::new_v4()
         ));
         FeedbackEngine::load_at(temp)
     }

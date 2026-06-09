@@ -604,7 +604,7 @@ mod tests {
         let temp_dir = std::env::temp_dir();
         let test_file = temp_dir.join(format!(
             "test_session_read_state_{}.txt",
-            std::process::id()
+            uuid::Uuid::new_v4()
         ));
 
         {

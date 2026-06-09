@@ -2,17 +2,16 @@ use super::*;
 use crate::services::api::{
     ChatRequest as LlmChatRequest, ChatResponse as LlmChatResponse, LlmProvider, Usage,
 };
+use crate::test_utils::env_guard::EnvVarGuard;
 use async_openai::types::ChatCompletionResponseStream;
 use axum::{
     body::{to_bytes, Body},
     http::{header, Request, StatusCode},
 };
-use once_cell::sync::Lazy;
 use serde_json::json;
 use std::{sync::Arc, time::Instant};
 use tower::util::ServiceExt;
 
-static ENV_LOCK: Lazy<tokio::sync::Mutex<()>> = Lazy::new(|| tokio::sync::Mutex::new(()));
 const TEST_BRIDGE_TOKEN: &str = "test-bridge-token";
 
 struct MockProvider;
@@ -112,8 +111,8 @@ async fn json_request_response(
 
 #[tokio::test]
 async fn provider_chat_route_is_explicit_non_agent_lane() {
-    let _env_guard = ENV_LOCK.lock().await;
-    unsafe { std::env::set_var("PRIORITY_AGENT_BRIDGE_TOKEN", TEST_BRIDGE_TOKEN) };
+    let mut env = EnvVarGuard::acquire().await;
+    env.set("PRIORITY_AGENT_BRIDGE_TOKEN", TEST_BRIDGE_TOKEN);
     let state = api_test_state();
     let app = create_routes(state);
     let (status, value) = json_request_response(
@@ -143,8 +142,8 @@ async fn provider_chat_route_is_explicit_non_agent_lane() {
 
 #[tokio::test]
 async fn legacy_chat_route_points_to_provider_chat_replacement() {
-    let _env_guard = ENV_LOCK.lock().await;
-    unsafe { std::env::set_var("PRIORITY_AGENT_BRIDGE_TOKEN", TEST_BRIDGE_TOKEN) };
+    let mut env = EnvVarGuard::acquire().await;
+    env.set("PRIORITY_AGENT_BRIDGE_TOKEN", TEST_BRIDGE_TOKEN);
     let state = api_test_state();
     let app = create_routes(state);
     let (status, value) = json_request_response(
@@ -167,8 +166,8 @@ async fn legacy_chat_route_points_to_provider_chat_replacement() {
 
 #[tokio::test]
 async fn provider_status_has_required_fields() {
-    let _env_guard = ENV_LOCK.lock().await;
-    unsafe { std::env::set_var("PRIORITY_AGENT_BRIDGE_TOKEN", TEST_BRIDGE_TOKEN) };
+    let mut env = EnvVarGuard::acquire().await;
+    env.set("PRIORITY_AGENT_BRIDGE_TOKEN", TEST_BRIDGE_TOKEN);
     let state = api_test_state();
     let app = create_routes(state);
     let value = json_get_response(&app, "/api/provider/status").await;
@@ -191,8 +190,8 @@ async fn provider_status_has_required_fields() {
 
 #[tokio::test]
 async fn diagnostics_has_policy_and_profile_fields() {
-    let _env_guard = ENV_LOCK.lock().await;
-    unsafe { std::env::set_var("PRIORITY_AGENT_BRIDGE_TOKEN", TEST_BRIDGE_TOKEN) };
+    let mut env = EnvVarGuard::acquire().await;
+    env.set("PRIORITY_AGENT_BRIDGE_TOKEN", TEST_BRIDGE_TOKEN);
     let state = api_test_state();
     let app = create_routes(state);
     let value = json_get_response(&app, "/api/diagnostics/latest?session_id=test").await;
@@ -207,8 +206,8 @@ async fn diagnostics_has_policy_and_profile_fields() {
 
 #[tokio::test]
 async fn session_parts_returns_cursor_shape() {
-    let _env_guard = ENV_LOCK.lock().await;
-    unsafe { std::env::set_var("PRIORITY_AGENT_BRIDGE_TOKEN", TEST_BRIDGE_TOKEN) };
+    let mut env = EnvVarGuard::acquire().await;
+    env.set("PRIORITY_AGENT_BRIDGE_TOKEN", TEST_BRIDGE_TOKEN);
     let state = api_test_state();
     {
         let store = state.session_store.read().await;
@@ -225,8 +224,8 @@ async fn session_parts_returns_cursor_shape() {
 
 #[tokio::test]
 async fn session_reverts_reads_durable_parts() {
-    let _env_guard = ENV_LOCK.lock().await;
-    unsafe { std::env::set_var("PRIORITY_AGENT_BRIDGE_TOKEN", TEST_BRIDGE_TOKEN) };
+    let mut env = EnvVarGuard::acquire().await;
+    env.set("PRIORITY_AGENT_BRIDGE_TOKEN", TEST_BRIDGE_TOKEN);
     let state = api_test_state();
     {
         let store = state.session_store.read().await;
@@ -241,8 +240,8 @@ async fn session_reverts_reads_durable_parts() {
 
 #[tokio::test]
 async fn tool_outputs_returns_session_scoped_index() {
-    let _env_guard = ENV_LOCK.lock().await;
-    unsafe { std::env::set_var("PRIORITY_AGENT_BRIDGE_TOKEN", TEST_BRIDGE_TOKEN) };
+    let mut env = EnvVarGuard::acquire().await;
+    env.set("PRIORITY_AGENT_BRIDGE_TOKEN", TEST_BRIDGE_TOKEN);
     let state = api_test_state();
     let app = create_routes(state);
     let value = json_get_response(&app, "/api/sessions/test/tool-outputs").await;
@@ -252,8 +251,8 @@ async fn tool_outputs_returns_session_scoped_index() {
 
 #[tokio::test]
 async fn session_events_returns_cursor_shape() {
-    let _env_guard = ENV_LOCK.lock().await;
-    unsafe { std::env::set_var("PRIORITY_AGENT_BRIDGE_TOKEN", TEST_BRIDGE_TOKEN) };
+    let mut env = EnvVarGuard::acquire().await;
+    env.set("PRIORITY_AGENT_BRIDGE_TOKEN", TEST_BRIDGE_TOKEN);
     let state = api_test_state();
     {
         let store = state.session_store.read().await;
@@ -268,8 +267,8 @@ async fn session_events_returns_cursor_shape() {
 
 #[tokio::test]
 async fn session_prompt_returns_typed_full_agent_not_implemented_response() {
-    let _env_guard = ENV_LOCK.lock().await;
-    unsafe { std::env::set_var("PRIORITY_AGENT_BRIDGE_TOKEN", TEST_BRIDGE_TOKEN) };
+    let mut env = EnvVarGuard::acquire().await;
+    env.set("PRIORITY_AGENT_BRIDGE_TOKEN", TEST_BRIDGE_TOKEN);
     let state = api_test_state();
     let app = create_routes(state);
     let (status, value) = json_request_response(
@@ -345,8 +344,8 @@ fn successful_fake_runtime(
 
 #[tokio::test]
 async fn session_prompt_with_runtime_returns_accepted_true() {
-    let _env_guard = ENV_LOCK.lock().await;
-    unsafe { std::env::set_var("PRIORITY_AGENT_BRIDGE_TOKEN", TEST_BRIDGE_TOKEN) };
+    let mut env = EnvVarGuard::acquire().await;
+    env.set("PRIORITY_AGENT_BRIDGE_TOKEN", TEST_BRIDGE_TOKEN);
     let mut state = api_test_state();
     Arc::get_mut(&mut state).unwrap().agent_runtime = Some(Arc::new(successful_fake_runtime(
         Some("run"),
@@ -381,8 +380,8 @@ async fn session_prompt_with_runtime_returns_accepted_true() {
 
 #[tokio::test]
 async fn session_prompt_without_runtime_still_returns_501() {
-    let _env_guard = ENV_LOCK.lock().await;
-    unsafe { std::env::set_var("PRIORITY_AGENT_BRIDGE_TOKEN", TEST_BRIDGE_TOKEN) };
+    let mut env = EnvVarGuard::acquire().await;
+    env.set("PRIORITY_AGENT_BRIDGE_TOKEN", TEST_BRIDGE_TOKEN);
     let state = api_test_state();
     assert!(state.agent_runtime.is_none());
     let app = create_routes(state);
@@ -406,8 +405,8 @@ async fn session_prompt_without_runtime_still_returns_501() {
 
 #[tokio::test]
 async fn session_prompt_accepts_queue_delivery_as_admission_contract() {
-    let _env_guard = ENV_LOCK.lock().await;
-    unsafe { std::env::set_var("PRIORITY_AGENT_BRIDGE_TOKEN", TEST_BRIDGE_TOKEN) };
+    let mut env = EnvVarGuard::acquire().await;
+    env.set("PRIORITY_AGENT_BRIDGE_TOKEN", TEST_BRIDGE_TOKEN);
     let mut state = api_test_state();
     let mut fake = successful_fake_runtime(Some("queue"), Some("queue-1"));
     fake.response_status = "queued".to_string();
@@ -432,8 +431,8 @@ async fn session_prompt_accepts_queue_delivery_as_admission_contract() {
 
 #[tokio::test]
 async fn session_prompt_maps_idempotency_conflict_to_409() {
-    let _env_guard = ENV_LOCK.lock().await;
-    unsafe { std::env::set_var("PRIORITY_AGENT_BRIDGE_TOKEN", TEST_BRIDGE_TOKEN) };
+    let mut env = EnvVarGuard::acquire().await;
+    env.set("PRIORITY_AGENT_BRIDGE_TOKEN", TEST_BRIDGE_TOKEN);
     let mut state = api_test_state();
     let mut fake = successful_fake_runtime(Some("run"), Some("idem-1"));
     fake.response_accepted = false;
@@ -461,8 +460,8 @@ async fn session_prompt_maps_idempotency_conflict_to_409() {
 
 #[tokio::test]
 async fn session_prompt_rejects_unknown_delivery_modes() {
-    let _env_guard = ENV_LOCK.lock().await;
-    unsafe { std::env::set_var("PRIORITY_AGENT_BRIDGE_TOKEN", TEST_BRIDGE_TOKEN) };
+    let mut env = EnvVarGuard::acquire().await;
+    env.set("PRIORITY_AGENT_BRIDGE_TOKEN", TEST_BRIDGE_TOKEN);
     let app = create_routes(api_test_state());
     let (status, value) = json_request_response(
         &app,
@@ -484,8 +483,8 @@ async fn session_prompt_rejects_unknown_delivery_modes() {
 
 #[tokio::test]
 async fn session_prompt_rejects_reserved_idempotency_keys() {
-    let _env_guard = ENV_LOCK.lock().await;
-    unsafe { std::env::set_var("PRIORITY_AGENT_BRIDGE_TOKEN", TEST_BRIDGE_TOKEN) };
+    let mut env = EnvVarGuard::acquire().await;
+    env.set("PRIORITY_AGENT_BRIDGE_TOKEN", TEST_BRIDGE_TOKEN);
     let app = create_routes(api_test_state());
     let (status, value) = json_request_response(
         &app,
@@ -507,8 +506,8 @@ async fn session_prompt_rejects_reserved_idempotency_keys() {
 
 #[tokio::test]
 async fn session_prompt_rejects_unimplemented_streaming_mode() {
-    let _env_guard = ENV_LOCK.lock().await;
-    unsafe { std::env::set_var("PRIORITY_AGENT_BRIDGE_TOKEN", TEST_BRIDGE_TOKEN) };
+    let mut env = EnvVarGuard::acquire().await;
+    env.set("PRIORITY_AGENT_BRIDGE_TOKEN", TEST_BRIDGE_TOKEN);
     let app = create_routes(api_test_state());
     let (status, value) = json_request_response(
         &app,
@@ -530,8 +529,8 @@ async fn session_prompt_rejects_unimplemented_streaming_mode() {
 
 #[tokio::test]
 async fn session_prompt_rejects_unknown_agent_mode() {
-    let _env_guard = ENV_LOCK.lock().await;
-    unsafe { std::env::set_var("PRIORITY_AGENT_BRIDGE_TOKEN", TEST_BRIDGE_TOKEN) };
+    let mut env = EnvVarGuard::acquire().await;
+    env.set("PRIORITY_AGENT_BRIDGE_TOKEN", TEST_BRIDGE_TOKEN);
     let app = create_routes(api_test_state());
     let (status, value) = json_request_response(
         &app,

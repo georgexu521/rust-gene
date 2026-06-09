@@ -222,17 +222,16 @@ mod tests {
     use crate::services::api::{
         ChatRequest as LlmChatRequest, ChatResponse as LlmChatResponse, LlmProvider, Usage,
     };
+    use crate::test_utils::env_guard::EnvVarGuard;
     use async_openai::types::ChatCompletionResponseStream;
     use axum::{
         body::{to_bytes, Body},
         http::{Request, StatusCode},
     };
-    use once_cell::sync::Lazy;
     use std::sync::Arc;
     use std::time::Instant;
     use tower::util::ServiceExt;
 
-    static ENV_LOCK: Lazy<tokio::sync::Mutex<()>> = Lazy::new(|| tokio::sync::Mutex::new(()));
     const TEST_BRIDGE_TOKEN: &str = "test-bridge-token";
 
     struct MockProvider;
@@ -325,8 +324,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_provider_status_endpoint_returns_product_dto_page() {
-        let _env_guard = ENV_LOCK.lock().await;
-        unsafe { std::env::set_var("PRIORITY_AGENT_BRIDGE_TOKEN", TEST_BRIDGE_TOKEN) };
+        let mut env = EnvVarGuard::acquire().await;
+        env.set("PRIORITY_AGENT_BRIDGE_TOKEN", TEST_BRIDGE_TOKEN);
         let provider = Arc::new(MockProvider);
         let state = Arc::new(crate::api::state::ApiState {
             provider,

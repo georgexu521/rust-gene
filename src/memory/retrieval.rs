@@ -630,9 +630,12 @@ mod tests {
     use std::path::PathBuf;
 
     fn temp_base(name: &str) -> PathBuf {
-        let unique = format!("priority-agent-memory-test-{}-{}", name, std::process::id());
+        let unique = format!(
+            "priority-agent-memory-test-{}-{}",
+            name,
+            uuid::Uuid::new_v4()
+        );
         let base = std::env::temp_dir().join(unique);
-        let _ = std::fs::remove_dir_all(&base);
         std::fs::create_dir_all(&base).unwrap();
         base
     }

@@ -2,16 +2,15 @@ use super::*;
 use crate::services::api::{
     ChatRequest as LlmChatRequest, ChatResponse as LlmChatResponse, LlmProvider, Usage,
 };
+use crate::test_utils::env_guard::EnvVarGuard;
 use async_openai::types::ChatCompletionResponseStream;
 use axum::{
     body::{to_bytes, Body},
     http::{header, Request, StatusCode},
 };
-use once_cell::sync::Lazy;
 use std::{sync::Arc, time::Instant};
 use tower::util::ServiceExt;
 
-static ENV_LOCK: Lazy<tokio::sync::Mutex<()>> = Lazy::new(|| tokio::sync::Mutex::new(()));
 const TEST_BRIDGE_TOKEN: &str = "test-bridge-token";
 
 struct MockProvider;
@@ -94,8 +93,8 @@ async fn get_json(app: axum::Router, uri: &str) -> serde_json::Value {
 
 #[tokio::test]
 async fn test_audit_summary_contains_structured_coding_quality() {
-    let _env_guard = ENV_LOCK.lock().await;
-    unsafe { std::env::set_var("PRIORITY_AGENT_BRIDGE_TOKEN", TEST_BRIDGE_TOKEN) };
+    let mut env = EnvVarGuard::acquire().await;
+    env.set("PRIORITY_AGENT_BRIDGE_TOKEN", TEST_BRIDGE_TOKEN);
     let state = api_test_state();
 
     {
@@ -118,8 +117,8 @@ async fn test_audit_summary_contains_structured_coding_quality() {
 
 #[tokio::test]
 async fn test_workflow_weekly_metrics_endpoint() {
-    let _env_guard = ENV_LOCK.lock().await;
-    unsafe { std::env::set_var("PRIORITY_AGENT_BRIDGE_TOKEN", TEST_BRIDGE_TOKEN) };
+    let mut env = EnvVarGuard::acquire().await;
+    env.set("PRIORITY_AGENT_BRIDGE_TOKEN", TEST_BRIDGE_TOKEN);
 
     let value = get_json(
         create_routes(api_test_state()),
@@ -135,8 +134,8 @@ async fn test_workflow_weekly_metrics_endpoint() {
 
 #[tokio::test]
 async fn test_workflow_weekly_calibration_endpoint() {
-    let _env_guard = ENV_LOCK.lock().await;
-    unsafe { std::env::set_var("PRIORITY_AGENT_BRIDGE_TOKEN", TEST_BRIDGE_TOKEN) };
+    let mut env = EnvVarGuard::acquire().await;
+    env.set("PRIORITY_AGENT_BRIDGE_TOKEN", TEST_BRIDGE_TOKEN);
 
     let value = get_json(
         create_routes(api_test_state()),
