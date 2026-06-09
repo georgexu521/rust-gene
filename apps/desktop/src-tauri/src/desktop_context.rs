@@ -145,6 +145,8 @@ pub(crate) fn resolve_current_diff_context(
         relative_path: None,
         size_bytes: None,
         line_count: None,
+        line_start: None,
+        line_end: None,
         preview: None,
         truncated,
     })
@@ -182,7 +184,7 @@ pub(crate) fn resolve_file_context(
         std::fs::read(&file_path).map_err(|err| format!("Failed to read file context: {}", err))?;
     let text = String::from_utf8_lossy(&bytes).to_string();
     let line_count = text.lines().count();
-    let selection = selected_file_context_preview(context, &text);
+    let selection = selected_file_context_preview(context, &text)?;
     let (preview, truncated) = truncate_chars(&selection.preview, 12_000);
     let relative_path = file_path
         .strip_prefix(&project_root)
@@ -231,42 +233,82 @@ struct FileContextSelection {
     line_end: Option<usize>,
 }
 
-fn selected_file_context_preview(context: &DesktopRunContext, text: &str) -> FileContextSelection {
+fn selected_file_context_preview(
+    context: &DesktopRunContext,
+    text: &str,
+) -> Result<FileContextSelection, String> {
     if let Some(selection_text) = context
         .selection_text
         .as_deref()
         .filter(|selection| !selection.trim().is_empty())
     {
-        return FileContextSelection {
+        if let Some(start) = context.line_start.filter(|line| *line > 0) {
+            let end = context.line_end.unwrap_or(start).max(start);
+            let selected = select_file_lines(text, start, end)?;
+            if normalize_selection_text(selection_text) != normalize_selection_text(&selected) {
+                return Err(format!(
+                    "Provided selection_text does not match file lines {}-{}.",
+                    start, end
+                ));
+            }
+            return Ok(FileContextSelection {
+                preview: selected,
+                line_start: Some(start),
+                line_end: Some(end),
+            });
+        }
+
+        if !text.contains(selection_text) {
+            return Err("Provided selection_text was not found in the selected file.".to_string());
+        }
+        return Ok(FileContextSelection {
             preview: selection_text.to_string(),
-            line_start: context.line_start,
-            line_end: context.line_end,
-        };
+            line_start: None,
+            line_end: None,
+        });
     }
 
     let Some(start) = context.line_start.filter(|line| *line > 0) else {
-        return FileContextSelection {
+        return Ok(FileContextSelection {
             preview: text.to_string(),
             line_start: None,
             line_end: None,
-        };
+        });
     };
     let end = context.line_end.unwrap_or(start).max(start);
-    let selected = text
+    let selected = select_file_lines(text, start, end)?;
+
+    Ok(FileContextSelection {
+        preview: selected,
+        line_start: Some(start),
+        line_end: Some(end),
+    })
+}
+
+fn select_file_lines(text: &str, start: usize, end: usize) -> Result<String, String> {
+    let selected_lines = text
         .lines()
         .enumerate()
         .filter_map(|(index, line)| {
             let line_no = index + 1;
             (line_no >= start && line_no <= end).then_some(line)
         })
-        .collect::<Vec<_>>()
-        .join("\n");
-
-    FileContextSelection {
-        preview: selected,
-        line_start: Some(start),
-        line_end: Some(end),
+        .collect::<Vec<_>>();
+    if selected_lines.is_empty() {
+        return Err(format!(
+            "Selected range {}-{} is outside the selected file.",
+            start, end
+        ));
     }
+    Ok(selected_lines.join("\n"))
+}
+
+fn normalize_selection_text(value: &str) -> String {
+    value
+        .replace("\r\n", "\n")
+        .replace('\r', "\n")
+        .trim_end_matches('\n')
+        .to_string()
 }
 
 fn format_desktop_context_block(context: &ResolvedDesktopRunContext) -> String {
@@ -401,3 +443,46 @@ fn escape_context_attr(value: &str) -> String {
         .replace('>', "&gt;")
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn file_context(line_start: Option<usize>, line_end: Option<usize>, selection_text: Option<&str>) -> DesktopRunContext {
+        DesktopRunContext {
+            context_type: "file".to_string(),
+            label: None,
+            path: Some("src/main.rs".to_string()),
+            line_start,
+            line_end,
+            selection_text: selection_text.map(str::to_string),
+        }
+    }
+
+    #[test]
+    fn selected_preview_uses_file_lines_for_verified_range() {
+        let context = file_context(Some(2), Some(3), Some("beta\ngamma\n"));
+        let selection = selected_file_context_preview(&context, "alpha\nbeta\ngamma\n").unwrap();
+
+        assert_eq!(selection.preview, "beta\ngamma");
+        assert_eq!(selection.line_start, Some(2));
+        assert_eq!(selection.line_end, Some(3));
+    }
+
+    #[test]
+    fn selected_preview_rejects_mismatched_selection_text() {
+        let context = file_context(Some(2), Some(2), Some("not beta"));
+        let err = selected_file_context_preview(&context, "alpha\nbeta\ngamma\n")
+            .expect_err("selection should be rejected");
+
+        assert!(err.contains("does not match"));
+    }
+
+    #[test]
+    fn selected_preview_rejects_selection_text_outside_file() {
+        let context = file_context(None, None, Some("not in file"));
+        let err = selected_file_context_preview(&context, "alpha\nbeta\ngamma\n")
+            .expect_err("selection should be rejected");
+
+        assert!(err.contains("not found"));
+    }
+}

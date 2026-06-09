@@ -371,6 +371,16 @@ pub fn find_profile(project_root: impl AsRef<Path>, name: &str) -> Option<AgentP
         .find(|profile| profile.name.eq_ignore_ascii_case(name))
 }
 
+pub fn find_product_profile(name: &str) -> Option<AgentProfile> {
+    product_profiles()
+        .into_iter()
+        .find(|profile| profile.name.eq_ignore_ascii_case(name))
+}
+
+pub fn find_runnable_profile(project_root: impl AsRef<Path>, name: &str) -> Option<AgentProfile> {
+    find_profile(project_root, name).or_else(|| find_product_profile(name))
+}
+
 pub fn load_definitions(project_root: impl AsRef<Path>) -> Vec<AgentDefinition> {
     load_profiles(project_root)
         .into_iter()
@@ -712,6 +722,23 @@ mod tests {
             implementer.output_contract,
             Some(AgentOutputContract::PatchSummary)
         );
+    }
+
+    #[test]
+    fn product_profiles_are_runnable_by_name() {
+        assert!(find_profile(".", "build").is_none());
+        let build = find_runnable_profile(".", "build").unwrap();
+        assert_eq!(build.name, "build");
+        assert_eq!(build.role, AgentRole::Specialist);
+        assert_eq!(build.risk_policy, Some(AgentRiskPolicy::CodeChange));
+
+        let review = find_runnable_profile(".", "REVIEW").unwrap();
+        assert_eq!(review.name, "review");
+        assert_eq!(review.output_contract, Some(AgentOutputContract::Findings));
+        assert!(!review
+            .allowed_tools
+            .iter()
+            .any(|tool| tool == "file_edit" || tool == "file_write"));
     }
 
     #[test]

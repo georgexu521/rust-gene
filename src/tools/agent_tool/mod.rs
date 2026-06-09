@@ -1330,9 +1330,9 @@ impl Tool for AgentTool {
         let requested_timeout_secs = params["timeout_secs"].as_u64();
         let max_turns = params["max_turns"].as_u64().unwrap_or(10) as usize;
         let max_cost_usd = params["max_cost_usd"].as_f64();
-        let profile = params["profile"]
-            .as_str()
-            .and_then(|name| crate::agent::profiles::find_profile(&context.working_dir, name));
+        let profile = params["profile"].as_str().and_then(|name| {
+            crate::agent::profiles::find_runnable_profile(&context.working_dir, name)
+        });
         let mut definition = profile.as_ref().map(AgentDefinition::from_profile);
         let timeout_secs = requested_timeout_secs
             .or_else(|| profile.as_ref().and_then(|profile| profile.timeout_secs))

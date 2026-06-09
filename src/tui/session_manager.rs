@@ -473,7 +473,16 @@ impl TuiSessionManager {
                 timestamp: Some(message.created_at),
             })
             .collect();
-        let events = self.load_session_events(session_id).unwrap_or_default();
+        let (events, warnings) = match self.load_session_events(session_id) {
+            Ok(events) => (events, Vec::new()),
+            Err(err) => (
+                Vec::new(),
+                vec![format!(
+                    "Session events could not be loaded; event-derived metadata may be incomplete: {}",
+                    err
+                )],
+            ),
+        };
         let export_events = summarize_export_events(&events);
         let reverts = self
             .store
@@ -499,6 +508,7 @@ impl TuiSessionManager {
                 reverts,
                 diagnostics: export_events.diagnostics,
                 tool_stats: export_events.tool_stats,
+                warnings,
             },
             privacy,
             format,

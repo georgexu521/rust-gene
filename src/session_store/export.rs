@@ -41,6 +41,7 @@ pub struct SessionExportMeta {
     pub model: Option<String>,
     pub message_count: usize,
     pub changed_files: Vec<String>,
+    pub warnings: Vec<String>,
     pub privacy: String,
     pub export_format: String,
     pub exported_at: String,
@@ -97,6 +98,7 @@ pub struct SessionExportInput {
     pub reverts: Vec<ExportRevert>,
     pub diagnostics: Vec<ExportDiagnosticRecord>,
     pub tool_stats: serde_json::Value,
+    pub warnings: Vec<String>,
 }
 
 /// Build a session export.
@@ -117,6 +119,40 @@ pub fn build_export(
             .collect(),
         SessionExportPrivacy::Summary => vec![],
     };
+    let changed_files = match privacy {
+        SessionExportPrivacy::Full => input.changed_files,
+        SessionExportPrivacy::Redacted | SessionExportPrivacy::Summary => vec![],
+    };
+    let reverts = match privacy {
+        SessionExportPrivacy::Full => input.reverts,
+        SessionExportPrivacy::Redacted => input
+            .reverts
+            .into_iter()
+            .map(|revert| ExportRevert {
+                paths: vec![],
+                diff_summary: None,
+                ..revert
+            })
+            .collect(),
+        SessionExportPrivacy::Summary => vec![],
+    };
+    let diagnostics = match privacy {
+        SessionExportPrivacy::Full => input.diagnostics,
+        SessionExportPrivacy::Redacted => input
+            .diagnostics
+            .into_iter()
+            .map(|diagnostic| ExportDiagnosticRecord {
+                path: None,
+                detail: None,
+                ..diagnostic
+            })
+            .collect(),
+        SessionExportPrivacy::Summary => vec![],
+    };
+    let tool_stats = match privacy {
+        SessionExportPrivacy::Full | SessionExportPrivacy::Redacted => input.tool_stats,
+        SessionExportPrivacy::Summary => serde_json::json!({}),
+    };
 
     SessionExport {
         meta: SessionExportMeta {
@@ -124,16 +160,17 @@ pub fn build_export(
             title: input.title,
             model: input.model,
             message_count: messages.len(),
-            changed_files: input.changed_files,
+            changed_files,
+            warnings: input.warnings,
             privacy: privacy.label().to_string(),
             export_format: format!("{:?}", format).to_lowercase(),
             exported_at: chrono::Local::now().to_rfc3339(),
             agent_version: env!("CARGO_PKG_VERSION").to_string(),
         },
         messages,
-        reverts: input.reverts,
-        diagnostics: input.diagnostics,
-        tool_stats: input.tool_stats,
+        reverts,
+        diagnostics,
+        tool_stats,
     }
 }
 
@@ -178,6 +215,7 @@ fn serialize_markdown(export: &SessionExport) -> anyhow::Result<String> {
          - **Changed files**: {}\n\
          - **Reverts**: {}\n\
          - **Diagnostics records**: {}\n\
+         - **Warnings**: {}\n\
          - **Privacy**: {}\n\
          - **Exported at**: {}\n\n",
         export.meta.session_id,
@@ -186,6 +224,7 @@ fn serialize_markdown(export: &SessionExport) -> anyhow::Result<String> {
         export.meta.changed_files.join(", "),
         export.reverts.len(),
         export.diagnostics.len(),
+        export.meta.warnings.len(),
         export.meta.privacy,
         export.meta.exported_at,
     ));
@@ -225,6 +264,14 @@ fn serialize_markdown(export: &SessionExport) -> anyhow::Result<String> {
                 diagnostic.warning_count,
                 diagnostic.detail.as_deref().unwrap_or("")
             ));
+        }
+        out.push('\n');
+    }
+
+    if !export.meta.warnings.is_empty() {
+        out.push_str("## Export Warnings\n\n");
+        for warning in &export.meta.warnings {
+            out.push_str(&format!("- {}\n", warning));
         }
         out.push('\n');
     }
@@ -283,9 +330,24 @@ mod tests {
                 },
             ],
             changed_files: vec!["src/main.rs".into()],
-            reverts: vec![],
-            diagnostics: vec![],
-            tool_stats: serde_json::json!({}),
+            reverts: vec![ExportRevert {
+                operation: "checkpoint_revert".into(),
+                status: "completed".into(),
+                paths: vec!["src/private.rs".into()],
+                diff_summary: Some("secret diff summary".into()),
+                unreverted: false,
+                created_at: "2026-06-09T00:00:00Z".into(),
+            }],
+            diagnostics: vec![ExportDiagnosticRecord {
+                source: "lsp".into(),
+                status: "recorded".into(),
+                path: Some("src/private.rs".into()),
+                error_count: 1,
+                warning_count: 2,
+                detail: Some("private diagnostic detail".into()),
+            }],
+            tool_stats: serde_json::json!({"calls": {"file_write": 1}}),
+            warnings: vec![],
         }
     }
 
@@ -315,6 +377,27 @@ mod tests {
         let assistant = &export.messages[1];
         assert!(!assistant.content.contains("API_KEY"));
         assert!(assistant.content.contains("normal reply"));
+        assert!(export.meta.changed_files.is_empty());
+        assert!(export.reverts[0].paths.is_empty());
+        assert!(export.reverts[0].diff_summary.is_none());
+        assert!(export.diagnostics[0].path.is_none());
+        assert!(export.diagnostics[0].detail.is_none());
+        assert_eq!(export.tool_stats["calls"]["file_write"], 1);
+    }
+
+    #[test]
+    fn redacted_markdown_hides_metadata_paths_and_details() {
+        let input = sample_input();
+        let export = build_export(
+            input,
+            SessionExportPrivacy::Redacted,
+            SessionExportFormat::Markdown,
+        );
+        let md = serialize_markdown(&export).expect("md serialize");
+        assert!(!md.contains("src/main.rs"));
+        assert!(!md.contains("src/private.rs"));
+        assert!(!md.contains("secret diff summary"));
+        assert!(!md.contains("private diagnostic detail"));
     }
 
     #[test]
@@ -326,6 +409,10 @@ mod tests {
             SessionExportFormat::Json,
         );
         assert_eq!(export.messages.len(), 0);
+        assert!(export.meta.changed_files.is_empty());
+        assert!(export.reverts.is_empty());
+        assert!(export.diagnostics.is_empty());
+        assert_eq!(export.tool_stats, serde_json::json!({}));
     }
 
     #[test]

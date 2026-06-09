@@ -346,18 +346,20 @@ async fn handle_agent_run(app: &TuiApp, args: &str) -> String {
     };
 
     let profiles = crate::agent::profiles::product_profiles();
-    if !profiles.iter().any(|p| p.name == profile) {
+    let Some(product_profile) = profiles
+        .into_iter()
+        .find(|p| p.name.eq_ignore_ascii_case(profile))
+    else {
         return format!(
             "Unknown agent profile '{}'. Run /agent list to see available profiles.",
             profile
         );
-    }
+    };
 
     let params = serde_json::json!({
-        "profile": profile,
+        "profile": product_profile.name,
         "description": prompt.chars().take(120).collect::<String>(),
         "prompt": prompt,
-        "timeout_secs": 300,
     });
     let tool = crate::tools::AgentTool;
     let result = tool.execute(params, app.build_tool_context().await).await;
