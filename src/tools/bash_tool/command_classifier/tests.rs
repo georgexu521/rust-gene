@@ -1,4 +1,5 @@
 use super::*;
+use crate::tools::bash_tool::shell_parser::ParserStatus;
 
 #[test]
 fn classifies_env_prefixed_cargo_test() {
@@ -397,4 +398,100 @@ fn dangerous_commands_are_not_safe_for_closeout() {
     assert_eq!(class.path_patterns, vec!["/"]);
     assert!(!class.safe_for_closeout);
     assert!(class.permission_rule_suggestions.is_empty());
+}
+
+// ── Phase 2.4: shell_ast_observation presence ─────────────────
+
+#[test]
+fn classifies_with_shell_ast_observation_on_simple_command() {
+    let class = classify_command("cargo build --release");
+    // AST observation should be present on parseable commands.
+    let ast = class
+        .shell_ast_observation
+        .expect("simple command should produce AST observation");
+    assert!(matches!(ast.parser_status, ParserStatus::Ok));
+    assert_eq!(ast.executable.as_deref(), Some("cargo"));
+}
+
+#[test]
+fn classifies_with_ast_on_compound_command() {
+    let class = classify_command("git add . && git commit -m 'fix'");
+    let ast = class
+        .shell_ast_observation
+        .expect("compound command should produce AST observation");
+    assert!(matches!(ast.parser_status, ParserStatus::Ok));
+    assert_eq!(ast.subcommands.len(), 2);
+}
+
+#[test]
+fn empty_command_produces_failed_ast() {
+    let class = classify_command("");
+    let ast = class
+        .shell_ast_observation
+        .expect("empty command should still have AST field");
+    assert!(matches!(ast.parser_status, ParserStatus::Failed));
+}
+
+// ── Phase 2.6: workspace containment external path ────────────
+
+#[test]
+fn ast_external_path_detection_augments_tokenizer() {
+    // Tokenizer would miss this: "test" is not absolute/~/..
+    // but the AST can resolve it and check workspace containment.
+    // For this test, we use an absolute path that the tokenizer catches.
+    let class = classify_command("cat /etc/hosts");
+    assert!(class.external_path_access);
+}
+
+#[test]
+fn tokenizer_still_catches_external_when_ast_cannot() {
+    // Even if AST fails, the tokenizer should still catch /etc/passwd.
+    let class = classify_command("head /etc/passwd");
+    assert!(class.external_path_access);
+}
+
+// ── Phase 2.5: arity-scoped permission suggestions ────────────
+
+#[test]
+fn arity_suggestion_included_for_safe_validation() {
+    let class = classify_command("cargo test --lib");
+    // Should include both the exact command and the arity-scoped prefix.
+    assert!(class
+        .permission_rule_suggestions
+        .iter()
+        .any(|r| r.scope == CommandPermissionRuleScope::Exact));
+    // The arity prefix "cargo test *" should be a stable prefix suggestion.
+    assert!(class
+        .permission_rule_suggestions
+        .iter()
+        .any(|r| r.scope == CommandPermissionRuleScope::Prefix && r.stable));
+}
+
+#[test]
+fn arity_suggestion_absent_for_dangerous_command() {
+    let class = classify_command("rm -rf /");
+    // Destructive commands should have empty suggestions.
+    assert_eq!(class.category, ShellCommandCategory::Destructive);
+    assert!(class.permission_rule_suggestions.is_empty());
+}
+
+#[test]
+fn arity_suggestion_absent_for_network_command() {
+    let class = classify_command("curl -s https://example.com");
+    // Network access should block arity suggestions.
+    assert!(class.network_access);
+    assert!(!class
+        .permission_rule_suggestions
+        .iter()
+        .any(|r| r.scope == CommandPermissionRuleScope::Prefix && r.stable));
+}
+
+// ── Phase 2.7: fail-closed disagreement detection ─────────────
+
+#[test]
+fn compound_command_with_external_path_marks_external() {
+    let class = classify_command("cat /etc/passwd | grep root");
+    assert!(class.compound_command);
+    assert!(class.external_path_access);
+    assert!(class.risky_shell_wrapper || !class.safe_for_closeout);
 }

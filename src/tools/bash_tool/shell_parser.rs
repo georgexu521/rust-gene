@@ -8,10 +8,11 @@
 //! the parser returns `ParserStatus::Failed` and the existing tokenizer
 //! remains authoritative.
 
+use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
 /// Outcome of the tree-sitter parse attempt.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ParserStatus {
     /// AST was built successfully and observations were collected.
     Ok,
@@ -23,7 +24,7 @@ pub enum ParserStatus {
 }
 
 /// Structured facts extracted from a shell command AST.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ShellAstObservation {
     /// Whether the AST parse succeeded.
     pub parser_status: ParserStatus,
@@ -51,7 +52,7 @@ pub struct ShellAstObservation {
 }
 
 /// A single subcommand extracted from a compound shell command.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ParsedCommand {
     /// Command name.
     pub name: String,
@@ -60,7 +61,7 @@ pub struct ParsedCommand {
 }
 
 /// A resolved file path reference from a command argument.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PathObservation {
     /// Raw argument text.
     pub raw: String,

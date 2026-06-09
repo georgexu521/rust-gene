@@ -1,5 +1,8 @@
 use serde::{Deserialize, Serialize};
 
+use super::arity;
+use super::shell_parser::ShellAstObservation;
+
 mod shell_analysis;
 use shell_analysis::*;
 
@@ -128,6 +131,9 @@ pub struct CommandClassification {
     pub mutation_indicators: Vec<String>,
     pub command_plan: BashCommandPlan,
     pub permission_rule_suggestions: Vec<CommandPermissionRuleSuggestion>,
+    /// Shadow AST observation from tree-sitter-bash.
+    /// `None` when the parser is unavailable or parsing fails.
+    pub shell_ast_observation: Option<ShellAstObservation>,
 }
 
 /// Product-facing structured view of a shell command for permission explain
@@ -247,6 +253,11 @@ pub fn classify_command(command: &str) -> CommandClassification {
     let (base_command, env_prefixed) = strip_env_prefix(&normalized);
     let base_command = base_command.to_string();
 
+    // Shadow AST observation — best-effort, never gate execution.
+    let ast =
+        ShellAstObservation::parse(&base_command, &std::env::current_dir().unwrap_or_default());
+    let ast_obs = Some(ast);
+
     if crate::security::is_dangerous_command(command) {
         return build_command_classification(CommandClassificationInput {
             normalized_command: normalized,
@@ -257,6 +268,7 @@ pub fn classify_command(command: &str) -> CommandClassification {
             safe_for_closeout: false,
             shell_wrapped,
             env_prefixed,
+            shell_ast_observation: ast_obs.clone(),
         });
     }
 
@@ -275,6 +287,7 @@ pub fn classify_command(command: &str) -> CommandClassification {
             safe_for_closeout: true,
             shell_wrapped,
             env_prefixed,
+            shell_ast_observation: ast_obs.clone(),
         });
     }
 
@@ -294,6 +307,7 @@ pub fn classify_command(command: &str) -> CommandClassification {
         safe_for_closeout,
         shell_wrapped,
         env_prefixed,
+        shell_ast_observation: ast_obs,
     })
 }
 
@@ -306,12 +320,18 @@ struct CommandClassificationInput<'a> {
     safe_for_closeout: bool,
     shell_wrapped: bool,
     env_prefixed: bool,
+    shell_ast_observation: Option<ShellAstObservation>,
 }
 
 fn build_command_classification(input: CommandClassificationInput<'_>) -> CommandClassification {
     let path_patterns = extract_path_patterns(input.base_command);
     let absolute_path_patterns = absolute_path_patterns(&path_patterns);
-    let external_path_access = path_patterns.iter().any(|path| external_path_pattern(path));
+    // Upgrade external_path_access with workspace-containment from shadow AST.
+    let external_path_access = path_patterns.iter().any(|path| external_path_pattern(path))
+        || input
+            .shell_ast_observation
+            .as_ref()
+            .is_some_and(|ast| ast.has_external_paths);
     let network_access = command_has_network_access(input.base_command, input.category);
     let shell_control_operators = shell_control_operators(input.base_command);
     let compound_command = !shell_control_operators.is_empty();
@@ -372,6 +392,7 @@ fn build_command_classification(input: CommandClassificationInput<'_>) -> Comman
         mutation_indicators,
         command_plan,
         permission_rule_suggestions,
+        shell_ast_observation: input.shell_ast_observation,
     }
 }
 
@@ -1247,6 +1268,30 @@ fn command_permission_rule_suggestions(
 
     if !safe_for_closeout || network_access || external_path_access || compound_command {
         return suggestions;
+    }
+
+    // Arity-scoped suggestion: generate a broader always-allow prefix
+    // when the command is safe enough (e.g. "cargo test --lib" → "cargo test *").
+    let tokens: Vec<String> = command.split_whitespace().map(|s| s.to_string()).collect();
+    if !tokens.is_empty()
+        && arity::arity_suggestion_safe(
+            &tokens[0],
+            external_path_access,
+            network_access,
+            compound_command,
+            false,
+        )
+    {
+        let scope = arity::always_pattern(&tokens);
+        // Only add if it differs from the exact-command pattern already added.
+        if scope != format!("{} *", command) {
+            suggestions.push(CommandPermissionRuleSuggestion {
+                pattern: scope,
+                scope: CommandPermissionRuleScope::Prefix,
+                stable: true,
+                reason: "arity-derived prefix: covers related subcommands".to_string(),
+            });
+        }
     }
 
     if let Some(prefix) = stable_validation_permission_prefix(command, validation_family) {

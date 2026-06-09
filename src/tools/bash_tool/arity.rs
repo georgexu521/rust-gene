@@ -216,7 +216,7 @@ pub fn arity_prefix(tokens: &[String]) -> Vec<String> {
     for len in (1..=tokens.len()).rev() {
         let prefix = tokens[..len].join(" ");
         if let Some(&arity) = ARITY.get(prefix.as_str()) {
-            return tokens[..arity].to_vec();
+            return tokens[..arity.min(tokens.len())].to_vec();
         }
     }
     tokens.first().map(|t| vec![t.clone()]).unwrap_or_default()
@@ -349,6 +349,13 @@ mod tests {
         assert!(arity_suggestion_safe("git", false, false, false, false));
     }
 
+    #[test]
+    fn arity_does_not_panic_on_fewer_tokens_than_dict_arity() {
+        // "npm test" is 2 tokens but dict has arity=3 for "npm test"
+        let t = tokens("npm test");
+        let prefix = arity_prefix(&t);
+        assert_eq!(prefix.len(), 2);
+    }
     #[test]
     fn file_ops_detect_mutation_commands() {
         assert!(is_file_operation("rm"));
