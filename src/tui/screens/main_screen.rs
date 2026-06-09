@@ -764,21 +764,44 @@ pub fn render_sidebar(f: &mut Frame, app: &TuiApp, area: Rect) {
 fn render_sessions_panel(f: &mut Frame, app: &TuiApp, area: Rect) {
     use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph};
 
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(app.theme.tokens.tone.brand))
-        .title(format!(
+    let title = if let Some(ref id) = app.renaming_session_id {
+        format!(" Rename: {} ", &id[..8.min(id.len())])
+    } else {
+        format!(
             " Sessions {} ",
             if app.sidebar_filter.is_empty() {
                 String::new()
             } else {
                 format!("(filter: {})", app.sidebar_filter)
             }
-        ))
+        )
+    };
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(app.theme.tokens.tone.brand))
+        .title(title)
         .style(Style::default().bg(app.theme.tokens.surface.bg));
 
     let inner = block.inner(area);
     f.render_widget(block, area);
+
+    // Rename input bar
+    if app.renaming_session_id.is_some() {
+        let rename_para = Paragraph::new(Line::from(vec![
+            Span::styled(" › ", Style::default().fg(app.theme.tokens.tone.brand)),
+            Span::styled(
+                &app.rename_buffer,
+                Style::default().fg(app.theme.tokens.fg.body),
+            ),
+        ]))
+        .style(Style::default().bg(app.theme.tokens.surface.bg_elev));
+        f.render_widget(rename_para, inner);
+        // Set cursor at end of rename buffer
+        let cursor_x = inner.x + 3 + app.rename_buffer.chars().count() as u16;
+        f.set_cursor_position((cursor_x.min(inner.x + inner.width - 1), inner.y));
+        return;
+    }
 
     // 搜索栏
     let filter_text = if app.sidebar_filter.is_empty() {

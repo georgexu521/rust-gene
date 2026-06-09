@@ -138,6 +138,14 @@ impl CommandRegistry {
         self.commands.get(name)
     }
 
+    /// 迭代所有已注册的命令（去重后的主名称）。
+    pub fn commands(&self) -> impl Iterator<Item = &CommandDef> {
+        let mut seen = HashSet::new();
+        self.commands
+            .values()
+            .filter(move |cmd| seen.insert(cmd.name))
+    }
+
     /// 生成帮助文本
     pub fn help_text(&self) -> String {
         let mut result = String::from("Commands:\n");

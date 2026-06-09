@@ -201,6 +201,9 @@ impl SessionStore {
         runner.register(std::sync::Arc::new(
             crate::migrations::v15_add_session_jobs::V15AddSessionJobs,
         ));
+        runner.register(std::sync::Arc::new(
+            crate::migrations::v16_add_session_part_message_id::V16AddSessionPartMessageId,
+        ));
         runner.run(&conn)?;
 
         info!("SessionStore opened at {:?}", path);
@@ -262,6 +265,9 @@ impl SessionStore {
         ));
         runner.register(std::sync::Arc::new(
             crate::migrations::v15_add_session_jobs::V15AddSessionJobs,
+        ));
+        runner.register(std::sync::Arc::new(
+            crate::migrations::v16_add_session_part_message_id::V16AddSessionPartMessageId,
         ));
         runner.run(&conn)?;
 

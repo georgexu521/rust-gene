@@ -125,13 +125,19 @@ impl TuiSessionManager {
         &self.current_session_title
     }
 
-    /// 更新会话标题
+    /// 更新当前会话标题
     pub fn update_title(&mut self, title: impl Into<String>) -> anyhow::Result<()> {
         let title = title.into();
         if let Some(ref id) = self.current_session_id {
             self.store.update_session_title(id, &title)?;
             self.current_session_title = title;
         }
+        Ok(())
+    }
+
+    /// 更新指定会话标题
+    pub fn update_session_title(&self, session_id: &str, title: &str) -> anyhow::Result<()> {
+        self.store.update_session_title(session_id, title)?;
         Ok(())
     }
 

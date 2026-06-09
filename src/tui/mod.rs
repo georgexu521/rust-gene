@@ -653,6 +653,36 @@ async fn handle_key_event(key: KeyEvent, app: &mut TuiApp) -> anyhow::Result<boo
         }
         // Sidebar navigation (only when sidebar is visible)
         if app.sidebar_visible {
+            // Rename mode takes precedence over navigation
+            if app.renaming_session_id.is_some() {
+                match key.code {
+                    KeyCode::Enter => {
+                        if let Some(ref id) = app.renaming_session_id.take() {
+                            let new_title = app.rename_buffer.trim().to_string();
+                            if !new_title.is_empty() {
+                                let _ = app.session_manager.update_session_title(id, &new_title);
+                            }
+                            app.rename_buffer.clear();
+                        }
+                        return Ok(false);
+                    }
+                    KeyCode::Esc => {
+                        app.renaming_session_id = None;
+                        app.rename_buffer.clear();
+                        return Ok(false);
+                    }
+                    KeyCode::Char(c) => {
+                        app.rename_buffer.push(c);
+                        return Ok(false);
+                    }
+                    KeyCode::Backspace => {
+                        app.rename_buffer.pop();
+                        return Ok(false);
+                    }
+                    _ => {}
+                }
+            }
+
             let sessions = app.visible_sidebar_sessions(50);
             let max = sessions.len().saturating_sub(1);
             match key.code {
@@ -669,7 +699,7 @@ async fn handle_key_event(key: KeyEvent, app: &mut TuiApp) -> anyhow::Result<boo
                 KeyCode::Enter => {
                     if let Some(session) = sessions.get(app.sidebar_selected) {
                         let id = session.id.clone();
-                        let _ = app.session_manager.switch_to_session(&id);
+                        let _ = app.restore_session(&id).await;
                         app.sidebar_selected = 0;
                     }
                     return Ok(false);
@@ -695,6 +725,13 @@ async fn handle_key_event(key: KeyEvent, app: &mut TuiApp) -> anyhow::Result<boo
                         } else {
                             app.confirm_delete_session_id = Some(session.id.clone());
                         }
+                    }
+                    return Ok(false);
+                }
+                KeyCode::Char('r') => {
+                    if let Some(session) = sessions.get(app.sidebar_selected) {
+                        app.renaming_session_id = Some(session.id.clone());
+                        app.rename_buffer = session.title.clone();
                     }
                     return Ok(false);
                 }

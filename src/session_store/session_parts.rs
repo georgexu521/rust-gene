@@ -16,12 +16,21 @@ use serde::{Deserialize, Serialize};
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum SessionPart {
     /// Assistant text content.
-    AssistantText { part_id: String, content: String },
+    AssistantText {
+        part_id: String,
+        message_id: Option<String>,
+        content: String,
+    },
     /// Reasoning / thinking content from the model.
-    Reasoning { part_id: String, content: String },
+    Reasoning {
+        part_id: String,
+        message_id: Option<String>,
+        content: String,
+    },
     /// A tool call lifecycle: input → called → result.
     Tool {
         part_id: String,
+        message_id: Option<String>,
         tool_call_id: String,
         tool_name: String,
         status: ToolPartStatus,
@@ -35,6 +44,7 @@ pub enum SessionPart {
     /// Shell output (large, may reference tool-output:// URI).
     Shell {
         part_id: String,
+        message_id: Option<String>,
         tool_call_id: String,
         command: Option<String>,
         status: ToolPartStatus,
@@ -43,6 +53,7 @@ pub enum SessionPart {
     /// Permission request / response.
     Permission {
         part_id: String,
+        message_id: Option<String>,
         tool_name: String,
         decided: bool,
         allowed: Option<bool>,
@@ -50,6 +61,7 @@ pub enum SessionPart {
     /// Compaction boundary.
     Compaction {
         part_id: String,
+        message_id: Option<String>,
         strategy: String,
         trigger: String,
         before_tokens: u64,
@@ -58,6 +70,7 @@ pub enum SessionPart {
     /// Closeout / verification.
     Closeout {
         part_id: String,
+        message_id: Option<String>,
         status: String,
         evidence_summary: Option<String>,
     },
@@ -87,7 +100,6 @@ pub enum ToolPartStatus {
     Completed,
     Failed,
     TimedOut,
-    Cancelled,
 }
 
 impl ToolPartStatus {
@@ -98,7 +110,6 @@ impl ToolPartStatus {
             Self::Completed => "completed",
             Self::Failed => "failed",
             Self::TimedOut => "timed_out",
-            Self::Cancelled => "cancelled",
         }
     }
 }
@@ -128,6 +139,7 @@ pub fn project_session_parts(events: &[super::SessionEventRow]) -> Vec<SessionPa
                     _ => parts.push(SessionPart::AssistantText {
                         part_id: format!("text_{}", event.seq),
                         content: text.to_string(),
+                        message_id: None,
                     }),
                 }
             }
@@ -149,6 +161,7 @@ pub fn project_session_parts(events: &[super::SessionEventRow]) -> Vec<SessionPa
                         parts.push(SessionPart::AssistantText {
                             part_id: format!("text_{}", event.seq),
                             content: full_text.to_string(),
+                            message_id: None,
                         });
                     }
                 }
@@ -163,6 +176,7 @@ pub fn project_session_parts(events: &[super::SessionEventRow]) -> Vec<SessionPa
                     _ => parts.push(SessionPart::Reasoning {
                         part_id: format!("reasoning_{}", event.seq),
                         content: text.to_string(),
+                        message_id: None,
                     }),
                 }
             }
@@ -183,6 +197,7 @@ pub fn project_session_parts(events: &[super::SessionEventRow]) -> Vec<SessionPa
                         parts.push(SessionPart::Reasoning {
                             part_id: format!("reasoning_{}", event.seq),
                             content: full_text.to_string(),
+                            message_id: None,
                         });
                     }
                 }
@@ -200,6 +215,7 @@ pub fn project_session_parts(events: &[super::SessionEventRow]) -> Vec<SessionPa
                     input_replay_source: None,
                     result_replay_source: None,
                     error: None,
+                    message_id: None,
                 });
             }
             "tool_args_delta" => {
@@ -235,6 +251,7 @@ pub fn project_session_parts(events: &[super::SessionEventRow]) -> Vec<SessionPa
                         input_replay_source: Some("delta".to_string()),
                         result_replay_source: None,
                         error: None,
+                        message_id: None,
                     });
                 }
             }
@@ -270,6 +287,7 @@ pub fn project_session_parts(events: &[super::SessionEventRow]) -> Vec<SessionPa
                         input_replay_source: Some(replay_source),
                         result_replay_source: None,
                         error: None,
+                        message_id: None,
                     });
                 }
             }
@@ -303,6 +321,7 @@ pub fn project_session_parts(events: &[super::SessionEventRow]) -> Vec<SessionPa
                         input_replay_source: None,
                         result_replay_source: None,
                         error: None,
+                        message_id: None,
                     });
                 }
             }
@@ -335,6 +354,7 @@ pub fn project_session_parts(events: &[super::SessionEventRow]) -> Vec<SessionPa
                         input_replay_source: None,
                         result_replay_source: Some("preview_event".to_string()),
                         error: None,
+                        message_id: None,
                     });
                 }
             }
@@ -378,6 +398,7 @@ pub fn project_session_parts(events: &[super::SessionEventRow]) -> Vec<SessionPa
                         input_replay_source: None,
                         result_replay_source: Some(replay_source),
                         error: None,
+                        message_id: None,
                     });
                 }
             }
@@ -408,6 +429,7 @@ pub fn project_session_parts(events: &[super::SessionEventRow]) -> Vec<SessionPa
                         input_replay_source: None,
                         result_replay_source: None,
                         error: payload["error"].as_str().map(|s| s.to_string()),
+                        message_id: None,
                     });
                 }
             }
@@ -422,12 +444,14 @@ pub fn project_session_parts(events: &[super::SessionEventRow]) -> Vec<SessionPa
                         command: payload["command"].as_str().map(str::to_string),
                         status: ToolPartStatus::Completed,
                         output_uri: payload["output_uri"].as_str().map(str::to_string),
+                        message_id: None,
                     });
                 }
                 "closeout" => parts.push(SessionPart::Closeout {
                     part_id: format!("closeout_{}", event.seq),
                     status: payload["status"].as_str().unwrap_or("unknown").to_string(),
                     evidence_summary: payload["evidence_summary"].as_str().map(|s| s.to_string()),
+                    message_id: None,
                 }),
                 "compaction" => parts.push(SessionPart::Compaction {
                     part_id: format!("compaction_{}", event.seq),
@@ -435,12 +459,14 @@ pub fn project_session_parts(events: &[super::SessionEventRow]) -> Vec<SessionPa
                     trigger: payload["trigger"].as_str().unwrap_or("").to_string(),
                     before_tokens: payload["before_tokens"].as_u64().unwrap_or(0),
                     after_tokens: payload["after_tokens"].as_u64().unwrap_or(0),
+                    message_id: None,
                 }),
                 "permission_requested" => parts.push(SessionPart::Permission {
                     part_id: format!("perm_{}", event.seq),
                     tool_name: payload["tool_name"].as_str().unwrap_or("").to_string(),
                     decided: false,
                     allowed: None,
+                    message_id: None,
                 }),
                 "revert" => parts.push(SessionPart::Revert {
                     part_id: format!("revert_{}", event.seq),
@@ -497,6 +523,7 @@ pub struct PersistedSessionPart {
     pub payload: serde_json::Value,
     pub projected_to_seq: i64,
     pub updated_at: String,
+    pub message_id: Option<String>,
 }
 
 pub fn refresh_session_parts(
@@ -514,11 +541,11 @@ pub fn refresh_session_parts(
         let payload = serde_json::to_value(part).unwrap_or_else(|_| serde_json::json!({}));
         let kind = payload["kind"].as_str().unwrap_or("unknown").to_string();
         let part_id = part_id(part);
-        let (tool_call_id, tool_name, status) = part_projection_fields(part);
+        let (tool_call_id, tool_name, status, message_id) = part_projection_fields(part);
         conn.execute(
             "INSERT INTO session_parts
-             (session_id, part_index, part_id, kind, tool_call_id, tool_name, status, payload, projected_to_seq)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+             (session_id, part_index, part_id, kind, tool_call_id, tool_name, status, payload, projected_to_seq, message_id)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
             rusqlite::params![
                 session_id,
                 index as i64,
@@ -529,6 +556,7 @@ pub fn refresh_session_parts(
                 status,
                 payload.to_string(),
                 projected_to_seq,
+                message_id,
             ],
         )?;
     }
@@ -617,6 +645,7 @@ fn apply_event_to_session_parts(
                 input_replay_source: None,
                 result_replay_source: None,
                 error: None,
+                message_id: None,
             };
             insert_session_part(conn, session_id, part_id, part, event.seq)
         }
@@ -690,6 +719,7 @@ fn apply_event_to_session_parts(
                         input_replay_source: None,
                         result_replay_source: None,
                         error: None,
+                        message_id: None,
                     };
                     insert_session_part(conn, session_id, part_id, part, event.seq)?;
                 }
@@ -790,6 +820,7 @@ fn apply_event_to_session_parts(
                 part_id: part_id.clone(),
                 status: payload["status"].as_str().unwrap_or("unknown").to_string(),
                 evidence_summary: payload["evidence_summary"].as_str().map(|s| s.to_string()),
+                message_id: None,
             };
             insert_session_part(conn, session_id, part_id, part, event.seq)
         }
@@ -801,6 +832,7 @@ fn apply_event_to_session_parts(
                 trigger: payload["trigger"].as_str().unwrap_or("").to_string(),
                 before_tokens: payload["before_tokens"].as_u64().unwrap_or(0),
                 after_tokens: payload["after_tokens"].as_u64().unwrap_or(0),
+                message_id: None,
             };
             insert_session_part(conn, session_id, part_id, part, event.seq)
         }
@@ -811,6 +843,7 @@ fn apply_event_to_session_parts(
                 tool_name: payload["tool_name"].as_str().unwrap_or("").to_string(),
                 decided: false,
                 allowed: None,
+                message_id: None,
             };
             insert_session_part(conn, session_id, part_id, part, event.seq)
         }
@@ -823,6 +856,7 @@ fn apply_event_to_session_parts(
                 command: payload["command"].as_str().map(str::to_string),
                 status: ToolPartStatus::Completed,
                 output_uri: payload["output_uri"].as_str().map(str::to_string),
+                message_id: None,
             };
             insert_session_part(conn, session_id, part_id, part, event.seq)
         }
@@ -881,7 +915,7 @@ pub fn query_session_parts_after(
     limit: usize,
 ) -> Result<Vec<PersistedSessionPart>, rusqlite::Error> {
     let mut stmt = conn.prepare(
-        "SELECT id, session_id, part_index, part_id, kind, tool_call_id, tool_name, status, payload, projected_to_seq, updated_at
+        "SELECT id, session_id, part_index, part_id, kind, tool_call_id, tool_name, status, payload, projected_to_seq, updated_at, message_id
          FROM session_parts
          WHERE session_id = ?1 AND part_index > ?2
          ORDER BY part_index ASC
@@ -976,10 +1010,12 @@ fn replace_text_with_completed(
                 "reasoning" => SessionPart::Reasoning {
                     part_id: part_id.clone(),
                     content: full_text.to_string(),
+                    message_id: None,
                 },
                 _ => SessionPart::AssistantText {
                     part_id: part_id.clone(),
                     content: full_text.to_string(),
+                    message_id: None,
                 },
             };
             insert_session_part(conn, session_id, part_id, part, seq)?;
@@ -1000,10 +1036,12 @@ fn insert_text_part(
         "reasoning" => SessionPart::Reasoning {
             part_id: part_id.clone(),
             content: text.to_string(),
+            message_id: None,
         },
         _ => SessionPart::AssistantText {
             part_id: part_id.clone(),
             content: text.to_string(),
+            message_id: None,
         },
     };
     insert_session_part(conn, session_id, part_id, part, seq)
@@ -1047,6 +1085,7 @@ fn ensure_tool_part(
         input_replay_source: None,
         result_replay_source: None,
         error: None,
+        message_id: None,
     };
     insert_session_part(conn, session_id, part_id, part, seq)
 }
@@ -1122,11 +1161,11 @@ fn insert_session_part(
     let part_index = next_part_index(conn, session_id)?;
     let payload = serde_json::to_value(&part).unwrap_or_else(|_| serde_json::json!({}));
     let kind = payload["kind"].as_str().unwrap_or("unknown").to_string();
-    let (tool_call_id, tool_name, status) = part_projection_fields(&part);
+    let (tool_call_id, tool_name, status, message_id) = part_projection_fields(&part);
     conn.execute(
         "INSERT INTO session_parts
-         (session_id, part_index, part_id, kind, tool_call_id, tool_name, status, payload, projected_to_seq)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+         (session_id, part_index, part_id, kind, tool_call_id, tool_name, status, payload, projected_to_seq, message_id)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
         rusqlite::params![
             session_id,
             part_index,
@@ -1137,6 +1176,7 @@ fn insert_session_part(
             status,
             payload.to_string(),
             seq,
+            message_id,
         ],
     )?;
     Ok(())
@@ -1164,6 +1204,7 @@ fn map_persisted_part(row: &rusqlite::Row<'_>) -> rusqlite::Result<PersistedSess
         payload: serde_json::from_str(&payload_text).unwrap_or_else(|_| serde_json::json!({})),
         projected_to_seq: row.get(9)?,
         updated_at: row.get(10)?,
+        message_id: row.get(11)?,
     })
 }
 
@@ -1172,7 +1213,7 @@ pub fn query_persisted_session_parts(
     session_id: &str,
 ) -> Result<Vec<PersistedSessionPart>, rusqlite::Error> {
     let mut stmt = conn.prepare(
-        "SELECT id, session_id, part_index, part_id, kind, tool_call_id, tool_name, status, payload, projected_to_seq, updated_at
+        "SELECT id, session_id, part_index, part_id, kind, tool_call_id, tool_name, status, payload, projected_to_seq, updated_at, message_id
          FROM session_parts
          WHERE session_id = ?1
          ORDER BY part_index ASC",
@@ -1194,35 +1235,57 @@ fn part_id(part: &SessionPart) -> &str {
     }
 }
 
-fn part_projection_fields(part: &SessionPart) -> (Option<String>, Option<String>, Option<String>) {
+fn part_projection_fields(
+    part: &SessionPart,
+) -> (
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+) {
     match part {
         SessionPart::Tool {
             tool_call_id,
             tool_name,
             status,
+            message_id,
             ..
         } => (
             Some(tool_call_id.clone()),
             Some(tool_name.clone()),
             Some(status.label().to_string()),
+            message_id.clone(),
         ),
         SessionPart::Shell {
             tool_call_id,
             status,
+            message_id,
             ..
         } => (
             Some(tool_call_id.clone()),
             Some("shell".to_string()),
             Some(status.label().to_string()),
+            message_id.clone(),
         ),
-        SessionPart::Permission { tool_name, .. } => {
-            (None, Some(tool_name.clone()), Some("waiting".to_string()))
-        }
-        SessionPart::Closeout { status, .. } => (None, None, Some(status.clone())),
+        SessionPart::Permission {
+            tool_name,
+            message_id,
+            ..
+        } => (
+            None,
+            Some(tool_name.clone()),
+            Some("waiting".to_string()),
+            message_id.clone(),
+        ),
+        SessionPart::Closeout {
+            status, message_id, ..
+        } => (None, None, Some(status.clone()), message_id.clone()),
         SessionPart::Revert { status, .. } => {
-            (None, Some("revert".to_string()), Some(status.clone()))
+            (None, Some("revert".to_string()), Some(status.clone()), None)
         }
-        _ => (None, None, None),
+        SessionPart::AssistantText { message_id, .. }
+        | SessionPart::Reasoning { message_id, .. }
+        | SessionPart::Compaction { message_id, .. } => (None, None, None, message_id.clone()),
     }
 }
 
@@ -1330,13 +1393,13 @@ mod tests {
         assert_eq!(parts.len(), 3);
         assert!(matches!(
             &parts[0],
-            SessionPart::AssistantText { part_id, content }
+            SessionPart::AssistantText { part_id, content, .. }
                 if part_id == "text_1" && content == "before"
         ));
         assert!(matches!(&parts[1], SessionPart::Tool { .. }));
         assert!(matches!(
             &parts[2],
-            SessionPart::AssistantText { part_id, content }
+            SessionPart::AssistantText { part_id, content, .. }
                 if part_id == "text_4" && content == "after"
         ));
     }
@@ -1526,7 +1589,8 @@ mod tests {
                 status TEXT,
                 payload TEXT NOT NULL DEFAULT '{}',
                 projected_to_seq INTEGER NOT NULL DEFAULT 0,
-                updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+                updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+                message_id TEXT
             );
             CREATE UNIQUE INDEX IF NOT EXISTS idx_session_parts_session_part
                 ON session_parts(session_id, part_id);",

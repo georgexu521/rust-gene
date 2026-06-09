@@ -80,10 +80,26 @@ pub fn render_command_palette(f: &mut Frame, app: &TuiApp, area: Rect) {
             format!("No command matched '{}'.", app.command_palette_query),
             Style::default().fg(app.theme.tokens.fg.faint),
         )));
-        lines.push(Line::from(Span::styled(
-            "Try: /quick /doctor /permissions /session /model /provider",
-            Style::default().fg(app.theme.tokens.fg.faint),
-        )));
+        // Did you mean suggestions
+        let suggestions = did_you_mean_commands(&app.command_palette_query, app);
+        if !suggestions.is_empty() {
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled(
+                "Did you mean...",
+                Style::default()
+                    .fg(app.theme.tokens.fg.strong)
+                    .add_modifier(Modifier::BOLD),
+            )));
+            for sugg in suggestions.iter().take(3) {
+                lines.push(Line::from(vec![
+                    Span::styled("  › ", Style::default().fg(app.theme.tokens.tone.info)),
+                    Span::styled(
+                        sugg.clone(),
+                        Style::default().fg(app.theme.tokens.tone.brand),
+                    ),
+                ]));
+            }
+        }
     } else if items.is_empty() {
         lines.push(Line::from(Span::styled(
             "No commands registered.",
@@ -93,7 +109,9 @@ pub fn render_command_palette(f: &mut Frame, app: &TuiApp, area: Rect) {
         let mut last_category = "";
         for (idx, cmd) in items.iter().enumerate() {
             let display_category = if app.command_palette_query.is_empty() {
-                if app.is_contextual_palette_command(cmd.name) {
+                if app.recent_palette_commands.iter().any(|r| r == cmd.name) {
+                    "Recently Used"
+                } else if app.is_contextual_palette_command(cmd.name) {
                     "Context"
                 } else if crate::tui::commands::is_suggested_command(cmd.name) {
                     "Suggested"
@@ -135,16 +153,37 @@ pub fn render_command_palette(f: &mut Frame, app: &TuiApp, area: Rect) {
             } else {
                 format!(" {}", cmd.maturity.badge())
             };
-            lines.push(Line::from(vec![
-                Span::styled(marker, Style::default().fg(app.theme.tokens.tone.info)),
-                Span::styled(format!("{:<18}", cmd.name), style),
-                Span::styled(
-                    cmd.description,
-                    Style::default().fg(app.theme.tokens.fg.faint),
-                ),
-                Span::styled(alias, Style::default().fg(app.theme.tokens.fg.faint)),
-                Span::styled(maturity, Style::default().fg(app.theme.tokens.tone.warn)),
-            ]));
+
+            // Highlight matching characters in command name
+            let name_spans = if app.command_palette_query.is_empty() {
+                vec![Span::styled(format!("{:<18}", cmd.name), style)]
+            } else {
+                highlight_matches(
+                    cmd.name,
+                    &app.command_palette_query,
+                    style,
+                    app.theme.tokens.tone.accent,
+                )
+            };
+
+            let mut spans = vec![Span::styled(
+                marker,
+                Style::default().fg(app.theme.tokens.tone.info),
+            )];
+            spans.extend(name_spans);
+            spans.push(Span::styled(
+                cmd.description,
+                Style::default().fg(app.theme.tokens.fg.faint),
+            ));
+            spans.push(Span::styled(
+                alias,
+                Style::default().fg(app.theme.tokens.fg.faint),
+            ));
+            spans.push(Span::styled(
+                maturity,
+                Style::default().fg(app.theme.tokens.tone.warn),
+            ));
+            lines.push(Line::from(spans));
         }
     }
 
@@ -315,12 +354,43 @@ pub fn render_shortcut_help(f: &mut Frame, app: &TuiApp, area: Rect) {
         )),
     ];
 
+    // Context-aware filtering by AppMode
+    let mut current_section = String::new();
+    let mode_sections: &[&str] = match app.mode {
+        AppMode::VimNormal => &["Vim / Navigation"],
+        AppMode::PermissionApproval => &["Approvals"],
+        AppMode::DiffViewer => &["Diff Viewer"],
+        AppMode::CommandPalette => &["Core"],
+        _ => &["Core", "Vim / Navigation", "Approvals", "Diff Viewer"],
+    };
+    let mut context_filtered: Vec<Line> = Vec::new();
+    for line in all_lines {
+        let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
+        if text.is_empty() {
+            if !current_section.is_empty() {
+                context_filtered.push(line);
+            }
+            continue;
+        }
+        let is_header = line
+            .spans
+            .first()
+            .map(|s| s.style.add_modifier == Modifier::BOLD)
+            .unwrap_or(false);
+        if is_header {
+            current_section = text.clone();
+        }
+        if mode_sections.contains(&current_section.as_str()) || text == "Press any key to close." {
+            context_filtered.push(line);
+        }
+    }
+
     // Filter lines if shortcut_help_filter is non-empty
     let filter = app.shortcut_help_filter.to_lowercase();
     let filtered: Vec<Line> = if filter.is_empty() {
-        all_lines
+        context_filtered
     } else {
-        all_lines
+        context_filtered
             .into_iter()
             .filter(|line| {
                 // Always keep section headers and separators
@@ -343,6 +413,117 @@ pub fn render_shortcut_help(f: &mut Frame, app: &TuiApp, area: Rect) {
             .block(block),
         popup_area,
     );
+}
+
+/// Highlight matching characters in a command name.
+fn highlight_matches(
+    name: &str,
+    query: &str,
+    base_style: Style,
+    accent: ratatui::style::Color,
+) -> Vec<Span<'static>> {
+    let query_lower = query.to_ascii_lowercase();
+    let name_lower = name.to_ascii_lowercase();
+    let mut matched = vec![false; name.chars().count()];
+
+    let mut q_idx = 0usize;
+    for (i, nc) in name_lower.chars().enumerate() {
+        if let Some(qc) = query_lower.chars().nth(q_idx) {
+            if nc == qc {
+                matched[i] = true;
+                q_idx += 1;
+                if q_idx >= query_lower.chars().count() {
+                    break;
+                }
+            }
+        }
+    }
+
+    let mut spans = Vec::new();
+    let mut current = String::new();
+    let mut in_match = false;
+
+    for (i, ch) in name.chars().enumerate() {
+        let is_match = *matched.get(i).unwrap_or(&false);
+        if is_match != in_match && !current.is_empty() {
+            spans.push(Span::styled(
+                current.clone(),
+                if in_match {
+                    base_style.fg(accent).add_modifier(Modifier::BOLD)
+                } else {
+                    base_style
+                },
+            ));
+            current.clear();
+        }
+        in_match = is_match;
+        current.push(ch);
+    }
+
+    if !current.is_empty() {
+        spans.push(Span::styled(
+            current,
+            if in_match {
+                base_style.fg(accent).add_modifier(Modifier::BOLD)
+            } else {
+                base_style
+            },
+        ));
+    }
+
+    spans
+}
+
+/// Compute edit distance and return the closest command names.
+fn did_you_mean_commands(query: &str, app: &TuiApp) -> Vec<String> {
+    let query_lower = query
+        .to_ascii_lowercase()
+        .trim_start_matches('/')
+        .to_string();
+    let mut candidates: Vec<(&str, usize)> = app
+        .command_registry
+        .commands()
+        .map(|cmd| {
+            let name = cmd.name.trim_start_matches('/');
+            let dist = levenshtein(name, &query_lower);
+            (cmd.name, dist)
+        })
+        .collect();
+    candidates.sort_by_key(|&(_, dist)| dist);
+    candidates
+        .into_iter()
+        .take(3)
+        .map(|(name, _)| name.to_string())
+        .collect()
+}
+
+/// Simple Levenshtein distance for strings.
+fn levenshtein(a: &str, b: &str) -> usize {
+    let a_chars: Vec<char> = a.chars().collect();
+    let b_chars: Vec<char> = b.chars().collect();
+    let n = a_chars.len();
+    let m = b_chars.len();
+    if n == 0 {
+        return m;
+    }
+    if m == 0 {
+        return n;
+    }
+    let mut prev = (0..=m).collect::<Vec<_>>();
+    let mut curr = vec![0usize; m + 1];
+    for i in 1..=n {
+        curr[0] = i;
+        for j in 1..=m {
+            let cost = if a_chars[i - 1] == b_chars[j - 1] {
+                0
+            } else {
+                1
+            };
+            curr[j] = (curr[j - 1] + 1).min(prev[j] + 1).min(prev[j - 1] + cost);
+        }
+        std::mem::swap(&mut prev, &mut curr);
+    }
+    prev[m]
 }
 
 pub fn render_model_select(f: &mut Frame, app: &TuiApp, area: Rect) {

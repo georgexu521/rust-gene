@@ -188,7 +188,7 @@ pub struct TuiApp {
     /// Session run coordinator (Phase 4)
     pub run_coordinator: crate::engine::run_coordinator::SessionRunCoordinator,
     /// 命令注册表
-    command_registry: CommandRegistry,
+    pub command_registry: CommandRegistry,
     /// 滚动位置
     pub scroll_offset: usize,
     /// 是否自动贴底（用户手动上滚后变为 false，滚到底或新消息时恢复）
@@ -275,6 +275,10 @@ pub struct TuiApp {
     pub pinned_sessions: Vec<String>,
     /// 侧边栏删除确认（二次按 D 才执行）
     pub confirm_delete_session_id: Option<String>,
+    /// 侧边栏重命名会话 ID
+    pub renaming_session_id: Option<String>,
+    /// 侧边栏重命名输入缓冲
+    pub rename_buffer: String,
     /// 是否正在侧边栏搜索模式
     pub filtering_sidebar: bool,
     /// 快捷键帮助搜索筛选
@@ -512,6 +516,8 @@ impl TuiApp {
             sidebar_filter: String::new(),
             pinned_sessions: Vec::new(),
             confirm_delete_session_id: None,
+            renaming_session_id: None,
+            rename_buffer: String::new(),
             filtering_sidebar: false,
             shortcut_help_filter: String::new(),
             filtering_shortcut_help: false,

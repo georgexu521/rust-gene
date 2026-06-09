@@ -400,7 +400,8 @@ mod tests {
                 status TEXT,
                 payload TEXT NOT NULL DEFAULT '{}',
                 projected_to_seq INTEGER NOT NULL DEFAULT 0,
-                updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+                updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+                message_id TEXT
             );
             CREATE UNIQUE INDEX IF NOT EXISTS idx_session_parts_session_part
                 ON session_parts(session_id, part_id);",
