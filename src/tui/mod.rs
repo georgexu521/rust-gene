@@ -360,6 +360,27 @@ async fn handle_key_event(key: KeyEvent, app: &mut TuiApp) -> anyhow::Result<boo
     }
 
     if app.mode == app::AppMode::ShortcutHelp {
+        // Filter mode: / starts filter, ESC clears, typing filters
+        if key.code == KeyCode::Char('/') && app.shortcut_help_filter.is_empty() {
+            return Ok(false);
+        }
+        if !app.shortcut_help_filter.is_empty() {
+            match key.code {
+                KeyCode::Esc => {
+                    app.shortcut_help_filter.clear();
+                    return Ok(false);
+                }
+                KeyCode::Backspace => {
+                    app.shortcut_help_filter.pop();
+                    return Ok(false);
+                }
+                KeyCode::Char(c) => {
+                    app.shortcut_help_filter.push(c);
+                    return Ok(false);
+                }
+                _ => {}
+            }
+        }
         app.close_shortcut_help();
         return Ok(false);
     }

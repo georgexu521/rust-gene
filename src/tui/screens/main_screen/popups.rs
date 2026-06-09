@@ -74,18 +74,18 @@ pub fn render_command_palette(f: &mut Frame, app: &TuiApp, area: Rect) {
     ];
 
     let items = app.command_palette_items();
-    if items.is_empty() {
-        let empty_message = if app.command_palette_query.is_empty() {
-            "No commands registered.".to_string()
-        } else {
-            format!("No command matched '{}'.", app.command_palette_query)
-        };
+    if items.is_empty() && !app.command_palette_query.is_empty() {
         lines.push(Line::from(Span::styled(
-            empty_message,
+            format!("No command matched '{}'.", app.command_palette_query),
             Style::default().fg(app.theme.tokens.fg.faint),
         )));
         lines.push(Line::from(Span::styled(
-            "Try a command name, category, alias, or description.",
+            "Try: /quick /doctor /permissions /session /model /provider",
+            Style::default().fg(app.theme.tokens.fg.faint),
+        )));
+    } else if items.is_empty() {
+        lines.push(Line::from(Span::styled(
+            "No commands registered.",
             Style::default().fg(app.theme.tokens.fg.faint),
         )));
     } else {
@@ -224,13 +224,18 @@ pub fn render_command_palette(f: &mut Frame, app: &TuiApp, area: Rect) {
 
 pub fn render_shortcut_help(f: &mut Frame, app: &TuiApp, area: Rect) {
     let popup_area = centered_rect(68, 58, area);
+    let title = if app.shortcut_help_filter.is_empty() {
+        " Shortcuts (? to close, / to filter) ".to_string()
+    } else {
+        format!(" Shortcuts (filter: {}) ", app.shortcut_help_filter)
+    };
     let block = Block::default()
-        .title(" Shortcuts ")
+        .title(title)
         .borders(Borders::ALL)
         .border_style(Style::default().fg(app.theme.tokens.tone.info))
         .style(Style::default().bg(Color::Black));
     let kb = &app.keybindings;
-    let lines = vec![
+    let all_lines = vec![
         Line::from(""),
         Line::from(vec![Span::styled(
             "Core",
@@ -249,7 +254,7 @@ pub fn render_shortcut_help(f: &mut Frame, app: &TuiApp, area: Rect) {
         Line::from(format!("  {}       quit", kb.global_quit)),
         Line::from(""),
         Line::from(vec![Span::styled(
-            "Navigation",
+            "Vim / Navigation",
             Style::default()
                 .fg(app.theme.tokens.fg.strong)
                 .add_modifier(Modifier::BOLD),
@@ -258,6 +263,7 @@ pub fn render_shortcut_help(f: &mut Frame, app: &TuiApp, area: Rect) {
         Line::from("  pageup/down  half-page scroll"),
         Line::from(format!("  {}       toggle vim mode", kb.toggle_vim_mode)),
         Line::from("  vim: j/k scroll, g top, G bottom, / search, b sidebar"),
+        Line::from("  vim: Enter switch session, P pin, D delete, R rename"),
         Line::from(""),
         Line::from(vec![Span::styled(
             "Approvals",
@@ -277,6 +283,19 @@ pub fn render_shortcut_help(f: &mut Frame, app: &TuiApp, area: Rect) {
             "  {}            view diff or preview",
             kb.permission_view_diff
         )),
+        Line::from("  s/p/a/x       session/project/global allow/deny"),
+        Line::from("  esc           cancel without saving a rule"),
+        Line::from(""),
+        Line::from(vec![Span::styled(
+            "Diff Viewer",
+            Style::default()
+                .fg(app.theme.tokens.fg.strong)
+                .add_modifier(Modifier::BOLD),
+        )]),
+        Line::from("  n/p           next/prev hunk"),
+        Line::from("  Tab           next file"),
+        Line::from("  Esc/q         close diff"),
+        Line::from("  ↑/↓/PgUp/PgDn scroll/page"),
         Line::from(""),
         Line::from(Span::styled(
             "Press any key to close.",
@@ -284,9 +303,30 @@ pub fn render_shortcut_help(f: &mut Frame, app: &TuiApp, area: Rect) {
         )),
     ];
 
+    // Filter lines if shortcut_help_filter is non-empty
+    let filter = app.shortcut_help_filter.to_lowercase();
+    let filtered: Vec<Line> = if filter.is_empty() {
+        all_lines
+    } else {
+        all_lines
+            .into_iter()
+            .filter(|line| {
+                // Always keep section headers and separators
+                let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
+                text.is_empty()
+                    || text.to_lowercase().contains(&filter)
+                    || line
+                        .spans
+                        .first()
+                        .map(|s| s.style.add_modifier == Modifier::BOLD)
+                        .unwrap_or(false)
+            })
+            .collect()
+    };
+
     f.render_widget(Clear, popup_area);
     f.render_widget(
-        Paragraph::new(Text::from(lines))
+        Paragraph::new(Text::from(filtered))
             .wrap(Wrap { trim: true })
             .block(block),
         popup_area,

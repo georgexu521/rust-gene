@@ -254,6 +254,8 @@ pub struct TuiApp {
     pub confirm_delete_session_id: Option<String>,
     /// 是否正在侧边栏搜索模式
     pub filtering_sidebar: bool,
+    /// 快捷键帮助搜索筛选
+    pub shortcut_help_filter: String,
     /// 打字机效果当前显示位置（字符数）
     pub typewriter_position: usize,
     /// LSP 管理器
@@ -457,6 +459,7 @@ impl TuiApp {
             pinned_sessions: Vec::new(),
             confirm_delete_session_id: None,
             filtering_sidebar: false,
+            shortcut_help_filter: String::new(),
             typewriter_position: 0,
             tick_count: 0,
             lsp_manager,
