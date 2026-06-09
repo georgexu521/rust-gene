@@ -298,7 +298,7 @@ fn draw_ui(f: &mut Frame, app: &TuiApp) {
             screens::main_screen::render_input_area(f, app, main_chunks[1]);
             screens::main_screen::render_status_bar(f, app, main_chunks[2]);
 
-            components::diff_viewer::render_diff_viewer(
+            let (total_lines, hunk_count) = components::diff_viewer::render_diff_viewer(
                 f,
                 &app.diff_content,
                 &app.diff_title,
@@ -306,6 +306,7 @@ fn draw_ui(f: &mut Frame, app: &TuiApp) {
                 f.area(),
                 &app.theme,
             );
+            let _ = (total_lines, hunk_count); // consumed by status bar updates
         }
         app::AppMode::ToolViewer => {
             let main_chunks = Layout::default()
@@ -475,6 +476,30 @@ async fn handle_key_event(key: KeyEvent, app: &mut TuiApp) -> anyhow::Result<boo
             }
             KeyCode::PageDown => {
                 app.diff_scroll_offset = app.diff_scroll_offset.saturating_add(10);
+            }
+            KeyCode::Char('n') => {
+                if let Some(line) = components::diff_viewer::find_next_hunk_line(
+                    &app.diff_content,
+                    app.diff_scroll_offset,
+                ) {
+                    app.diff_scroll_offset = line as u16;
+                }
+            }
+            KeyCode::Char('p') => {
+                if let Some(line) = components::diff_viewer::find_prev_hunk_line(
+                    &app.diff_content,
+                    app.diff_scroll_offset,
+                ) {
+                    app.diff_scroll_offset = line as u16;
+                }
+            }
+            KeyCode::Tab => {
+                if let Some(line) = components::diff_viewer::find_next_file_line(
+                    &app.diff_content,
+                    app.diff_scroll_offset,
+                ) {
+                    app.diff_scroll_offset = line as u16;
+                }
             }
             _ => {}
         }
