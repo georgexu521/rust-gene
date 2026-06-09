@@ -167,7 +167,14 @@ fn exact_replace_preflight_error(
             json!("copy_exact_fuzzy_match")
         };
         let message = if fuzzy.is_empty() {
-            "Could not find old_string in file. Make sure it matches exactly (including whitespace).".to_string()
+            "Could not find old_string in the file. It must match exactly, including whitespace, indentation, and line endings.\n\n\
+             Common issues:\n\
+             - Line number prefixes from file_read output (e.g. '12 | ')\n\
+             - Smart quotes vs straight quotes\n\
+             - Escaped characters (literal \\n vs actual newline)\n\
+             - Trailing whitespace differences\n\n\
+             Tip: try file_read to verify the exact text, or use line_start/line_end for precise replacement."
+                .to_string()
         } else {
             format!(
                 "old_string not found exactly, but fuzzy matches found:\n{}\n\nPlease adjust old_string to match one of these occurrences precisely.",
@@ -812,8 +819,19 @@ impl FileEditTool {
                         details
                     ));
                 }
-                EditCandidateOutcome::Mismatch { .. }
-                | EditCandidateOutcome::AutoApplied { .. } => {}
+                EditCandidateOutcome::Mismatch { detail } => {
+                    return Err(format!(
+                        "Could not find old_string in the file. {}\n\n\
+                         Common issues:\n\
+                         - Line number prefixes from file_read output (e.g. '12 | ')\n\
+                         - Smart quotes vs straight quotes\n\
+                         - Escaped characters (literal \\n vs actual newline)\n\
+                         - Trailing whitespace differences\n\n\
+                         Tip: file_read the target file to verify exact content, or use line_start/line_end.",
+                        detail
+                    ));
+                }
+                EditCandidateOutcome::AutoApplied { .. } => {}
             }
         }
 
@@ -822,7 +840,9 @@ impl FileEditTool {
             let fuzzy = fuzzy_find_occurrences(&content, old_string);
             if fuzzy.is_empty() {
                 return Err(
-                    "Could not find old_string in file. Make sure it matches exactly (including whitespace)."
+                    "Could not find old_string in the file. It must match exactly, including whitespace, indentation, and line endings.\n\n\
+                     Common issues: line number prefixes, smart quotes, escape sequences, trailing whitespace.\n\
+                     Tip: file_read to verify, or use line_start/line_end for precise replacement."
                         .to_string(),
                 );
             }

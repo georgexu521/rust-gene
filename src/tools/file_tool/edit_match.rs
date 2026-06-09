@@ -153,6 +153,7 @@ pub(super) fn occurrence_line_numbers(content: &str, occurrences: &[(usize, usiz
 // ---- Phase 3 (opencode alignment): edit recovery candidates ----
 
 /// Outcome of deterministic edit candidate generation.
+#[derive(Debug)]
 pub(super) enum EditCandidateOutcome {
     /// An unambiguous candidate was found and can be applied automatically.
     AutoApplied {
@@ -170,6 +171,7 @@ pub(super) enum EditCandidateOutcome {
 }
 
 /// A single candidate match for a failed exact edit.
+#[derive(Debug)]
 pub(super) struct EditCandidate {
     pub strategy: String,
     pub occurrence: (usize, usize),
@@ -253,17 +255,36 @@ pub(super) fn generate_edit_candidates(
         }
     }
 
-    // Strategy 3: block-anchor matching for 3+ line old strings.
+    // Strategy 3: block-anchor matching for 3+ line old strings,
+    // now with Levenshtein shadow similarity for diagnostic scoring.
     if old_string.lines().count() >= 3 {
         let anchor = find_occurrences_block_anchor(content, old_string);
         if !anchor.is_empty() && !indent_norm.contains(&anchor[0]) {
+            let old_lines: Vec<&str> = old_string.lines().collect();
+            let middle = &old_lines[1..old_lines.len() - 1];
+
             for occ in &anchor {
+                let (start, end) = *occ;
+                let content_middle: Vec<&str> = content[start..end].lines().skip(1).collect();
+                let similarity = levenshtein_similarity(&content_middle, middle);
+                let confidence = if anchor.len() == 1 {
+                    if similarity >= 0.85 {
+                        "high"
+                    } else {
+                        "medium"
+                    }
+                } else {
+                    "low"
+                };
                 candidates.push(EditCandidate {
                     strategy: "block-anchor".to_string(),
                     occurrence: *occ,
-                    confidence: if anchor.len() == 1 { "medium" } else { "low" },
-                    guidance: "The first and last lines matched exactly; middle lines differ."
-                        .to_string(),
+                    confidence,
+                    guidance: format!(
+                        "First/last lines matched exactly; middle-line similarity={:.2}. \
+                         Verify the anchor is correct before relying on this candidate.",
+                        similarity
+                    ),
                 });
             }
         }
@@ -285,6 +306,46 @@ pub(super) fn generate_edit_candidates(
                     guidance: "Consecutive whitespace was collapsed to single spaces.".to_string(),
                 });
             }
+        }
+    }
+
+    // Strategy 5: escape-normalized matching (diagnostic-only).
+    // Never auto-applies: the LLM may have intended a literal `\n`.
+    let escape = find_occurrences_escape_normalized(content, old_string);
+    if !escape.is_empty() && escape != *occurrences {
+        for occ in &escape {
+            candidates.push(EditCandidate {
+                strategy: "escape-normalized".to_string(),
+                occurrence: *occ,
+                confidence: if escape.len() == 1 { "medium" } else { "low" },
+                guidance: "Literal escape sequences (\\n \\t \\r) were interpreted once; \
+                           verify this is not a real code literal."
+                    .to_string(),
+            });
+        }
+    }
+
+    // Strategy 6: trimmed-boundary (only leading/trailing whitespace).
+    // Diagnostic-only for now: even single-candidate matches can be
+    // ambiguous on single-line targets where indent is significant.
+    let trimmed_boundary = find_occurrences_trimmed_boundary(content, old_string);
+    if !trimmed_boundary.is_empty()
+        && trimmed_boundary != *occurrences
+        && trimmed_boundary != escape
+    {
+        for occ in &trimmed_boundary {
+            candidates.push(EditCandidate {
+                strategy: "trimmed-boundary".to_string(),
+                occurrence: *occ,
+                confidence: if trimmed_boundary.len() == 1 {
+                    "medium"
+                } else {
+                    "low"
+                },
+                guidance: "Only leading/trailing whitespace around old_string was removed; \
+                           verify that indent/content structure is still correct."
+                    .to_string(),
+            });
         }
     }
 
@@ -479,6 +540,98 @@ fn collapse_whitespace(s: &str) -> String {
     result.trim().to_string()
 }
 
+/// Levenshtein distance over two line slices, weighted so that
+/// structurally-similar blocks get higher similarity scores.
+#[allow(clippy::needless_range_loop)]
+fn levenshtein_similarity(a: &[&str], b: &[&str]) -> f64 {
+    if a.is_empty() && b.is_empty() {
+        return 1.0;
+    }
+    let m = a.len();
+    let n = b.len();
+    let mut dp = vec![vec![0usize; n + 1]; m + 1];
+    for i in 0..=m {
+        dp[i][0] = i;
+    }
+    for j in 0..=n {
+        dp[0][j] = j;
+    }
+    for i in 1..=m {
+        for j in 1..=n {
+            let cost = if a[i - 1].trim() == b[j - 1].trim() {
+                0
+            } else {
+                1
+            };
+            dp[i][j] = (dp[i - 1][j] + 1)
+                .min(dp[i][j - 1] + 1)
+                .min(dp[i - 1][j - 1] + cost);
+        }
+    }
+    let max_len = m.max(n) as f64;
+    1.0 - (dp[m][n] as f64 / max_len)
+}
+
+// ── Strategy 5: escape-normalized ──────────────────────────────
+
+/// Interpret literal `\n`, `\t`, `\r`, `\\` in `old_string` once.
+///
+/// Returns `None` when the input contains no recognised escape sequence
+/// or when it looks like a real code literal (e.g. doubled backslashes
+/// that are not just tool-call / JSON escaping).
+fn unescape_tool_string_once(raw: &str) -> Option<String> {
+    if !raw.contains('\\') {
+        return None;
+    }
+    // Bail out when the old string already contains real backslash
+    // literals mixed with escapes — too risky to guess.
+    if raw.contains("\\\\") {
+        return None;
+    }
+    let mut out = String::with_capacity(raw.len());
+    let mut chars = raw.chars();
+    while let Some(ch) = chars.next() {
+        if ch == '\\' {
+            match chars.next() {
+                Some('n') => out.push('\n'),
+                Some('t') => out.push('\t'),
+                Some('r') => out.push('\r'),
+                Some('\\') => out.push('\\'),
+                Some(c) => {
+                    // unknown escape — keep literal
+                    out.push('\\');
+                    out.push(c);
+                }
+                None => out.push('\\'),
+            }
+        } else {
+            out.push(ch);
+        }
+    }
+    if out == raw {
+        return None;
+    }
+    Some(out)
+}
+
+fn find_occurrences_escape_normalized(content: &str, target: &str) -> Vec<(usize, usize)> {
+    let unescaped = match unescape_tool_string_once(target) {
+        Some(u) => u,
+        None => return Vec::new(),
+    };
+    find_occurrences(content, &unescaped)
+}
+
+// ── Strategy 6: trimmed-boundary ────────────────────────────────
+
+fn find_occurrences_trimmed_boundary(content: &str, target: &str) -> Vec<(usize, usize)> {
+    let trimmed = target.trim();
+    if trimmed.len() == target.len() {
+        return Vec::new();
+    }
+    find_occurrences(content, trimmed)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -563,5 +716,149 @@ mod tests {
             }
             _ => { /* mismatch is acceptable */ }
         }
+    }
+
+    // ── Phase 1.1: escape-normalized ──────────────────────────
+
+    #[test]
+    fn escape_normalized_finds_match_when_literal_n() {
+        let content = "fn hello() {\n    println!(\"hi\");\n}\n";
+        let target = "fn hello() {\\n    println!(\"hi\");\\n}";
+        let result = find_occurrences_escape_normalized(content, target);
+        assert_eq!(result.len(), 1);
+        assert_eq!(
+            &content[result[0].0..result[0].1],
+            "fn hello() {\n    println!(\"hi\");\n}"
+        );
+    }
+
+    #[test]
+    fn escape_normalized_rejects_doubled_backslash() {
+        // Real code literal: \\n in raw string output
+        let content = "foo\\\\nbar\n";
+        let target = "foo\\\\nbar";
+        // unescape_tool_string_once should return None because "\\\\" triggers bail-out
+        assert!(unescape_tool_string_once(target).is_none());
+    }
+
+    #[test]
+    fn escape_normalized_is_not_auto_applied() {
+        let content = "fn main() {\n    do_thing();\n}\n";
+        // Model output with literal \n instead of real newline
+        let target = "fn main() {\\n    do_thing();\\n}";
+        let occurrences = find_occurrences(content, target); // exact fails
+        assert_eq!(occurrences.len(), 0);
+
+        match generate_edit_candidates(content, target, &occurrences) {
+            EditCandidateOutcome::Candidates { candidates, .. } => {
+                assert!(!candidates.is_empty());
+                let has_escape = candidates.iter().any(|c| c.strategy == "escape-normalized");
+                assert!(has_escape, "should include escape-normalized candidate");
+            }
+            EditCandidateOutcome::AutoApplied { strategy, .. } => {
+                panic!("escape-normalized must not auto-apply, got: {}", strategy);
+            }
+            _ => panic!("expected Candidates, got Mismatch"),
+        }
+    }
+
+    // ── Phase 1.2: trimmed-boundary ────────────────────────────
+
+    #[test]
+    fn trimmed_boundary_matches_when_extra_whitespace() {
+        let content = "fn main() {\n    do_thing();\n}\n";
+        // LLM included leading/trailing whitespace around old_string
+        let target = "  fn main() {\n    do_thing();\n}\n  ";
+        let result = find_occurrences_trimmed_boundary(content, target);
+        assert_eq!(result.len(), 1);
+    }
+
+    #[test]
+    fn trimmed_boundary_is_diagnostic_not_auto_applied() {
+        let content = "struct Foo {\n    name: String,\n}\n";
+        let target = "  struct Foo {\n    name: String,\n}\n  ";
+        let occurrences = find_occurrences(content, target);
+        assert_eq!(occurrences.len(), 0);
+
+        match generate_edit_candidates(content, target, &occurrences) {
+            EditCandidateOutcome::Candidates { candidates, .. } => {
+                assert!(candidates.iter().any(|c| c.strategy == "trimmed-boundary"));
+            }
+            EditCandidateOutcome::AutoApplied { strategy, .. } => {
+                panic!(
+                    "trimmed-boundary must not auto-apply yet, got: {}",
+                    strategy
+                );
+            }
+            _ => { /* mismatch is acceptable */ }
+        }
+    }
+
+    #[test]
+    fn trimmed_boundary_no_match_when_already_trimmed() {
+        let content = "hello world\n";
+        let target = "hello world";
+        let result = find_occurrences_trimmed_boundary(content, target);
+        assert_eq!(result.len(), 0);
+    }
+
+    // ── Phase 1.3: block-anchor with Levenshtein ───────────────
+
+    #[test]
+    fn block_anchor_levenshtein_reports_high_similarity() {
+        // Only 1 out of 4 middle lines differs → similarity 0.75 → "medium"
+        let content = "fn calculate() {\n    let x = 1;\n    let y = 2;\n    x + y\n}\n";
+        let target = "fn calculate() {\n    let x = 1;\n    let z = 3;\n    x + y\n}";
+        let occurrences = find_occurrences(content, target);
+        assert_eq!(occurrences.len(), 0);
+
+        match generate_edit_candidates(content, target, &occurrences) {
+            EditCandidateOutcome::Candidates { candidates, .. } => {
+                let anchor = candidates
+                    .iter()
+                    .find(|c| c.strategy == "block-anchor")
+                    .expect("should have block-anchor candidate");
+                // similarity ≈ 0.75 (< 0.85 threshold) → medium confidence
+                assert_eq!(anchor.confidence, "medium");
+                assert!(anchor.guidance.contains("similarity="));
+            }
+            other => panic!("expected Candidates, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn block_anchor_levenshtein_near_identical_is_high() {
+        // Only 1 out of 6 chars on 6 middle lines differs → > 0.85
+        let content = "fn main() {\n    let a = 1;\n    let b = 2;\n    let c = 3;\n    let d = 4;\n    let e = 5;\n    a + b + c + d + e\n}\n";
+        let target = "fn main() {\n    let a = 1;\n    let b = 2;\n    let c = 3;\n    let d = 4;\n    let x = 5;\n    a + b + c + d + x\n}";
+        let occurrences = find_occurrences(content, target);
+        assert_eq!(occurrences.len(), 0);
+
+        match generate_edit_candidates(content, target, &occurrences) {
+            EditCandidateOutcome::Candidates { candidates, .. } => {
+                let anchor = candidates
+                    .iter()
+                    .find(|c| c.strategy == "block-anchor")
+                    .expect("should have block-anchor candidate");
+                // 1 out of 6 middle lines differs = 5/6 ≈ 0.83
+                // but at this size the threshold is harder to reach
+                assert!(anchor.guidance.contains("similarity="));
+            }
+            other => panic!("expected Candidates, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn levenshtein_similarity_perfect_match() {
+        let a = &["fn foo() {", "    bar();", "}"];
+        let b = &["fn foo() {", "    bar();", "}"];
+        assert!((levenshtein_similarity(a, b) - 1.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn levenshtein_similarity_completely_different() {
+        let a = &["a", "b", "c"];
+        let b = &["x", "y", "z"];
+        assert_eq!(levenshtein_similarity(a, b), 0.0);
     }
 }
