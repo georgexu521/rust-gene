@@ -556,6 +556,59 @@ impl ConversationLoop {
             .with_trace_collector(trace.clone())
     }
 
+    /// Durable settlement recovery: scan session_parts for tools that are still
+    /// running/pending from a previous turn (e.g. after a crash or provider
+    /// interruption) and write `tool_failed` events so the projection never
+    /// leaves them dangling.
+    fn recover_unsettled_tools(&self, trace: &TraceCollector) {
+        let Some(ref store) = self.session_store else {
+            return;
+        };
+        let parts = match store.get_session_parts(&self.session_id) {
+            Ok(parts) => parts,
+            Err(err) => {
+                tracing::warn!("Failed to read session_parts for recovery: {}", err);
+                return;
+            }
+        };
+        let unsettled: Vec<_> = parts
+            .into_iter()
+            .filter(|part| {
+                (part.kind == "tool" || part.kind == "shell")
+                    && matches!(part.status.as_deref(), Some("running" | "pending"))
+            })
+            .collect();
+        if unsettled.is_empty() {
+            return;
+        }
+        let writer =
+            crate::session_store::SessionEventWriter::new(store.shared_conn(), &self.session_id);
+        let unsettled_count = unsettled.len();
+        for part in &unsettled {
+            let tool_call_id = part
+                .tool_call_id
+                .clone()
+                .unwrap_or_else(|| part.part_id.clone());
+            let tool_name = part
+                .tool_name
+                .clone()
+                .unwrap_or_else(|| "unknown".to_string());
+            let error = format!(
+                "Tool execution interrupted before settlement ({}:{})",
+                tool_name, tool_call_id
+            );
+            if let Err(err) = writer.tool_failed(&tool_call_id, &error) {
+                tracing::warn!("Failed to write recovery tool_failed event: {}", err);
+            }
+        }
+        trace.record(crate::engine::trace::TraceEvent::WorkflowFallback {
+            error: format!(
+                "durable_recovery: settled {} interrupted tool(s) from previous turn",
+                unsettled_count
+            ),
+        });
+    }
+
     /// 运行对话循环（非流式）
     pub async fn run(&self, messages: Vec<Message>) -> Result<LoopResult> {
         self.run_inner(messages, None::<&mpsc::Sender<StreamEvent>>)
@@ -622,6 +675,11 @@ impl ConversationLoop {
         let mut task_bundle = turn_context_bootstrap.task_bundle;
         let mut code_workflow = turn_context_bootstrap.code_workflow;
         let mut turn_state = turn_context_bootstrap.turn_state;
+
+        // Durable settlement recovery: before starting a new turn, ensure any
+        // tools left running from a previous turn are marked as failed.
+        self.recover_unsettled_tools(&trace);
+
         match TurnEntryGateController::run(TurnEntryGateContext {
             conversation: self,
             last_user_preview: last_user_preview.as_str(),
