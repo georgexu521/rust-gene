@@ -15,6 +15,7 @@ mod agent_store;
 mod compact_store;
 pub mod event_mirror;
 mod event_store;
+pub mod export;
 mod learning_store;
 mod message_ops;
 mod records;
@@ -24,7 +25,6 @@ mod session_ops;
 pub mod session_parts;
 mod todo_store;
 mod trace_store;
-pub mod export;
 
 pub use records::*;
 pub use todo_store::{PersistedTodoItem, TodoItem};

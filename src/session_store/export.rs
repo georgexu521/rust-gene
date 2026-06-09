@@ -136,7 +136,11 @@ fn serialize_markdown(export: &SessionExport) -> anyhow::Result<String> {
     let mut out = String::new();
     out.push_str(&format!(
         "# Session Export: {}\n\n",
-        export.meta.title.as_deref().unwrap_or(&export.meta.session_id)
+        export
+            .meta
+            .title
+            .as_deref()
+            .unwrap_or(&export.meta.session_id)
     ));
     out.push_str(&format!(
         "- **Session ID**: {}\n\
@@ -235,7 +239,11 @@ mod tests {
     #[test]
     fn redacted_export_strips_secrets() {
         let input = sample_input();
-        let export = build_export(input, SessionExportPrivacy::Redacted, SessionExportFormat::Json);
+        let export = build_export(
+            input,
+            SessionExportPrivacy::Redacted,
+            SessionExportFormat::Json,
+        );
         assert_eq!(export.messages.len(), 2);
         let assistant = &export.messages[1];
         assert!(!assistant.content.contains("API_KEY"));
@@ -245,14 +253,22 @@ mod tests {
     #[test]
     fn summary_export_has_no_messages() {
         let input = sample_input();
-        let export = build_export(input, SessionExportPrivacy::Summary, SessionExportFormat::Json);
+        let export = build_export(
+            input,
+            SessionExportPrivacy::Summary,
+            SessionExportFormat::Json,
+        );
         assert_eq!(export.messages.len(), 0);
     }
 
     #[test]
     fn markdown_export_includes_metadata() {
         let input = sample_input();
-        let export = build_export(input, SessionExportPrivacy::Full, SessionExportFormat::Markdown);
+        let export = build_export(
+            input,
+            SessionExportPrivacy::Full,
+            SessionExportFormat::Markdown,
+        );
         let md = serialize_markdown(&export).expect("md serialize");
         assert!(md.contains("# Session Export"));
         assert!(md.contains("Test Session"));
