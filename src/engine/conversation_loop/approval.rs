@@ -35,6 +35,105 @@ impl ToolApprovalRequest {
     }
 }
 
+pub fn diff_preview_for_tool_call(tool_call: &ToolCall) -> Option<String> {
+    let args = &tool_call.arguments;
+    let mut lines = match tool_call.name.as_str() {
+        "file_write" => {
+            let path = args.get("path").and_then(|value| value.as_str())?;
+            let content = args
+                .get("content")
+                .and_then(|value| value.as_str())
+                .unwrap_or("");
+            let mut lines = vec![
+                "--- /dev/null".to_string(),
+                format!("+++ b/{path}"),
+                format!("@@ -0,0 +1,{} @@", content.lines().count()),
+            ];
+            lines.extend(content.lines().map(|line| format!("+{line}")));
+            lines
+        }
+        "file_edit" => {
+            let path = args.get("path").and_then(|value| value.as_str())?;
+            let old_string = args
+                .get("old_string")
+                .and_then(|value| value.as_str())
+                .unwrap_or("");
+            let new_string = args
+                .get("new_string")
+                .and_then(|value| value.as_str())
+                .unwrap_or("");
+            let mut lines = vec![format!("File: {path}")];
+            if let Some(after) = args.get("insert_after").and_then(|value| value.as_str()) {
+                lines.push(format!(" insert after: {}", truncate_chars(after, 80)));
+                lines.extend(new_string.lines().map(|line| format!("+{line}")));
+            } else if let Some(before) = args.get("insert_before").and_then(|value| value.as_str())
+            {
+                lines.push(format!(" insert before: {}", truncate_chars(before, 80)));
+                lines.extend(new_string.lines().map(|line| format!("+{line}")));
+            } else {
+                lines.extend(old_string.lines().map(|line| format!("-{line}")));
+                lines.extend(new_string.lines().map(|line| format!("+{line}")));
+            }
+            lines
+        }
+        "file_patch" => {
+            let operations = args
+                .get("operations")
+                .and_then(|value| value.as_array())
+                .cloned()
+                .unwrap_or_default();
+            let mut lines = vec![format!("Patch operations: {}", operations.len())];
+            for (index, operation) in operations.iter().enumerate() {
+                let path = operation
+                    .get("path")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or("unknown");
+                lines.push(format!("{}. {path}", index + 1));
+                if let Some(replacements) = operation.get("replacements").and_then(|v| v.as_array())
+                {
+                    for replacement in replacements.iter().take(2) {
+                        if let Some(old) = replacement.get("old_string").and_then(|v| v.as_str()) {
+                            lines.push(format!("-{}", truncate_chars(old, 80)));
+                        }
+                        if let Some(new) = replacement.get("new_string").and_then(|v| v.as_str()) {
+                            lines.push(format!("+{}", truncate_chars(new, 80)));
+                        }
+                    }
+                }
+            }
+            lines
+        }
+        "bash" => {
+            let command = args.get("command").and_then(|value| value.as_str())?;
+            let working_dir = args
+                .get("working_dir")
+                .and_then(|value| value.as_str())
+                .unwrap_or("current directory");
+            vec![
+                format!("Command: {}", truncate_chars(command, 120)),
+                format!("Working directory: {working_dir}"),
+            ]
+        }
+        _ => return None,
+    };
+
+    const MAX_LINES: usize = 10;
+    let truncated = lines.len() > MAX_LINES;
+    lines.truncate(MAX_LINES);
+    if truncated {
+        lines.push("...".to_string());
+    }
+    Some(lines.join("\n"))
+}
+
+fn truncate_chars(value: &str, max_chars: usize) -> String {
+    let mut out = value.chars().take(max_chars).collect::<String>();
+    if value.chars().count() > max_chars {
+        out.push_str("...");
+    }
+    out
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ToolApprovalResponse {
     pub approved: bool,
@@ -191,4 +290,51 @@ fn approval_timeout() -> Duration {
         .map(|value| value.clamp(30, 1800))
         .unwrap_or(DEFAULT_APPROVAL_TIMEOUT_SECS);
     Duration::from_secs(secs)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn call(name: &str, arguments: serde_json::Value) -> ToolCall {
+        ToolCall {
+            id: "call_1".to_string(),
+            name: name.to_string(),
+            arguments,
+        }
+    }
+
+    #[test]
+    fn diff_preview_for_file_write_includes_unified_preview() {
+        let preview = diff_preview_for_tool_call(&call(
+            "file_write",
+            json!({
+                "path": "src/main.rs",
+                "content": "fn main() {}\n"
+            }),
+        ))
+        .unwrap();
+
+        assert!(preview.contains("--- /dev/null"));
+        assert!(preview.contains("+++ b/src/main.rs"));
+        assert!(preview.contains("+fn main() {}"));
+    }
+
+    #[test]
+    fn diff_preview_for_file_edit_is_unicode_safe() {
+        let preview = diff_preview_for_tool_call(&call(
+            "file_edit",
+            json!({
+                "path": "src/main.rs",
+                "old_string": "旧旧旧旧旧旧旧旧旧旧旧旧旧旧旧旧旧旧旧旧",
+                "new_string": "新新新新新新新新新新新新新新新新新新新新"
+            }),
+        ))
+        .unwrap();
+
+        assert!(preview.contains("File: src/main.rs"));
+        assert!(preview.contains("-旧"));
+        assert!(preview.contains("+新"));
+    }
 }

@@ -383,3 +383,34 @@ fn render_permission_approval_shows_file_write_scope_and_preview() {
     assert!(rendered.contains("fn main() {}"));
     assert!(rendered.contains("allow project"));
 }
+
+#[test]
+fn truncate_chars_with_ellipsis_handles_unicode_boundaries() {
+    assert_eq!(truncate_chars_with_ellipsis("项目标题很长", 4), "项目标题…");
+    assert_eq!(truncate_chars_with_ellipsis("short", 10), "short");
+}
+
+#[test]
+fn render_permission_approval_handles_unicode_diff_preview() {
+    let req = crate::engine::conversation_loop::ToolApprovalRequest {
+        tool_call: crate::services::api::ToolCall {
+            id: "call_unicode".to_string(),
+            name: "file_write".to_string(),
+            arguments: serde_json::json!({
+                "path": "src/main.rs",
+                "content": "中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文"
+            }),
+        },
+        prompt: "Permission explanation: decision=Ask, risk=medium, reason=file write".to_string(),
+        review: None,
+        audit: None,
+        diff_preview: Some(
+            "+中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文中文"
+                .to_string(),
+        ),
+    };
+
+    let rendered = render_permission_approval_text(&req);
+
+    assert!(rendered.contains("Change Preview"));
+}

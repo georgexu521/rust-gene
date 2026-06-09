@@ -360,14 +360,20 @@ async fn handle_key_event(key: KeyEvent, app: &mut TuiApp) -> anyhow::Result<boo
     }
 
     if app.mode == app::AppMode::ShortcutHelp {
-        // Filter mode: / starts filter, ESC clears, typing filters
-        if key.code == KeyCode::Char('/') && app.shortcut_help_filter.is_empty() {
+        if key.code == KeyCode::Char('/') && !app.filtering_shortcut_help {
+            app.shortcut_help_filter.clear();
+            app.filtering_shortcut_help = true;
             return Ok(false);
         }
-        if !app.shortcut_help_filter.is_empty() {
+        if app.filtering_shortcut_help {
             match key.code {
                 KeyCode::Esc => {
                     app.shortcut_help_filter.clear();
+                    app.filtering_shortcut_help = false;
+                    return Ok(false);
+                }
+                KeyCode::Enter => {
+                    app.filtering_shortcut_help = false;
                     return Ok(false);
                 }
                 KeyCode::Backspace => {
@@ -647,7 +653,7 @@ async fn handle_key_event(key: KeyEvent, app: &mut TuiApp) -> anyhow::Result<boo
         }
         // Sidebar navigation (only when sidebar is visible)
         if app.sidebar_visible {
-            let sessions = app.session_manager.list_sessions(50).unwrap_or_default();
+            let sessions = app.visible_sidebar_sessions(50);
             let max = sessions.len().saturating_sub(1);
             match key.code {
                 KeyCode::Char('j') | KeyCode::Down => {
@@ -695,12 +701,14 @@ async fn handle_key_event(key: KeyEvent, app: &mut TuiApp) -> anyhow::Result<boo
                 KeyCode::Char('/') => {
                     app.sidebar_filter.clear();
                     app.filtering_sidebar = true;
+                    app.sidebar_selected = 0;
                     return Ok(false);
                 }
                 KeyCode::Esc => {
                     if app.filtering_sidebar {
                         app.sidebar_filter.clear();
                         app.filtering_sidebar = false;
+                        app.sidebar_selected = 0;
                     }
                     return Ok(false);
                 }
@@ -711,10 +719,12 @@ async fn handle_key_event(key: KeyEvent, app: &mut TuiApp) -> anyhow::Result<boo
                 match key.code {
                     KeyCode::Char(c) => {
                         app.sidebar_filter.push(c);
+                        app.sidebar_selected = 0;
                         return Ok(false);
                     }
                     KeyCode::Backspace => {
                         app.sidebar_filter.pop();
+                        app.sidebar_selected = 0;
                         return Ok(false);
                     }
                     KeyCode::Enter => {
@@ -1164,4 +1174,64 @@ pub fn titled_block(title: &str) -> Block<'_> {
         .borders(Borders::ALL)
         .title(title)
         .border_style(Style::default().fg(Color::DarkGray))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+    fn key(code: KeyCode) -> KeyEvent {
+        KeyEvent::new(code, KeyModifiers::NONE)
+    }
+
+    #[tokio::test]
+    async fn shortcut_help_slash_enters_filter_mode() {
+        let mut app = TuiApp::new();
+        app.open_shortcut_help();
+
+        handle_key_event(key(KeyCode::Char('/')), &mut app)
+            .await
+            .unwrap();
+        assert_eq!(app.mode, app::AppMode::ShortcutHelp);
+        assert!(app.filtering_shortcut_help);
+
+        handle_key_event(key(KeyCode::Char('d')), &mut app)
+            .await
+            .unwrap();
+        assert_eq!(app.shortcut_help_filter, "d");
+        assert_eq!(app.mode, app::AppMode::ShortcutHelp);
+    }
+
+    #[tokio::test]
+    async fn sidebar_enter_uses_filtered_visible_sessions() {
+        let mut app = TuiApp::new();
+        app.session_manager = crate::tui::session_manager::TuiSessionManager::in_memory().unwrap();
+        let _alpha = app
+            .session_manager
+            .start_session("Alpha Session", "model")
+            .unwrap();
+        let beta = app
+            .session_manager
+            .start_session("Beta Session", "model")
+            .unwrap();
+        let _gamma = app
+            .session_manager
+            .start_session("Gamma Session", "model")
+            .unwrap();
+
+        app.mode = app::AppMode::VimNormal;
+        app.sidebar_visible = true;
+        app.sidebar_filter = "Beta".to_string();
+        app.sidebar_selected = 0;
+
+        handle_key_event(key(KeyCode::Enter), &mut app)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            app.session_manager.current_session_id(),
+            Some(beta.as_str())
+        );
+    }
 }

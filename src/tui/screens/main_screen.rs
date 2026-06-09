@@ -807,65 +807,48 @@ fn render_sessions_panel(f: &mut Frame, app: &TuiApp, area: Rect) {
     )));
     f.render_widget(search_para, search_chunks[0]);
 
-    // 获取会话列表
-    let all_sessions = app.session_manager.list_sessions(50).unwrap_or_default();
-
-    // 分离已固定和未固定的会话
+    let visible_sessions = app.visible_sidebar_sessions(50);
     let current_id = app.session_manager.current_session_id().unwrap_or("");
-    let mut pinned: Vec<&crate::session_store::SessionRecord> = Vec::new();
-    let mut unpinned: Vec<&crate::session_store::SessionRecord> = Vec::new();
-
-    for s in &all_sessions {
-        if app.pinned_sessions.contains(&s.id) {
-            pinned.push(s);
-        } else {
-            unpinned.push(s);
-        }
-    }
-
-    // 应用搜索筛选
-    if !app.sidebar_filter.is_empty() {
-        let filter = app.sidebar_filter.to_lowercase();
-        pinned.retain(|s| s.title.to_lowercase().contains(&filter));
-        unpinned.retain(|s| s.title.to_lowercase().contains(&filter));
-    }
+    let pinned_count = visible_sessions
+        .iter()
+        .filter(|session| app.pinned_sessions.contains(&session.id))
+        .count();
 
     let mut items: Vec<ListItem> = Vec::new();
 
     // 已固定分组
-    if !pinned.is_empty() {
+    if pinned_count > 0 {
         items.push(ListItem::new(Line::from(Span::styled(
             "─ Pinned ─".to_string(),
             Style::default()
                 .fg(app.theme.tokens.tone.accent)
                 .add_modifier(Modifier::BOLD),
         ))));
-        for (i, session) in pinned.iter().enumerate() {
+        for (i, session) in visible_sessions.iter().take(pinned_count).enumerate() {
             items.push(build_session_item(
                 app,
                 session,
                 current_id,
                 i,
                 true,
-                pinned.len(),
+                visible_sessions.len(),
             ));
         }
     }
 
     // 未固定分组
-    if !pinned.is_empty() && !unpinned.is_empty() {
+    if pinned_count > 0 && pinned_count < visible_sessions.len() {
         items.push(ListItem::new(Line::from("")));
     }
 
-    let pinned_count = pinned.len();
-    for (i, session) in unpinned.iter().enumerate() {
+    for (i, session) in visible_sessions.iter().skip(pinned_count).enumerate() {
         items.push(build_session_item(
             app,
             session,
             current_id,
             pinned_count + i,
             false,
-            unpinned.len(),
+            visible_sessions.len(),
         ));
     }
 
@@ -945,11 +928,7 @@ fn build_session_item<'a>(
 
     // 截断标题以适应侧边栏
     let max_title = 18usize;
-    let display_title = if title.len() > max_title {
-        format!("{}…", &title[..max_title])
-    } else {
-        title
-    };
+    let display_title = truncate_chars_with_ellipsis(&title, max_title);
 
     // 元数据：模型 + 消息数
     let model_short: String = session
@@ -971,6 +950,14 @@ fn build_session_item<'a>(
     ]);
 
     ratatui::widgets::ListItem::new(line)
+}
+
+pub(super) fn truncate_chars_with_ellipsis(value: &str, max_chars: usize) -> String {
+    let mut out = value.chars().take(max_chars).collect::<String>();
+    if value.chars().count() > max_chars {
+        out.push('…');
+    }
+    out
 }
 
 /// 渲染消息搜索弹窗

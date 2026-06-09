@@ -1,4 +1,4 @@
-use super::approval::{ToolApprovalChannel, ToolApprovalRequest};
+use super::approval::{diff_preview_for_tool_call, ToolApprovalChannel, ToolApprovalRequest};
 use super::permission_recovery::{
     permission_denial_state_json, permission_denied_message, record_permission_denial,
     recovery_feedback,
@@ -390,7 +390,7 @@ impl PermissionController {
                     .record
                     .as_ref()
                     .map(|record| record.review.clone()),
-                diff_preview: None,
+                diff_preview: diff_preview_for_tool_call(tool_call),
             };
             let mut approval_response = None;
             match channel.submit(request).await {

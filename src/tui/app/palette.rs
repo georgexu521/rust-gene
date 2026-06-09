@@ -127,10 +127,14 @@ impl TuiApp {
     }
 
     pub fn open_shortcut_help(&mut self) {
+        self.shortcut_help_filter.clear();
+        self.filtering_shortcut_help = false;
         self.mode = AppMode::ShortcutHelp;
     }
 
     pub fn close_shortcut_help(&mut self) {
+        self.shortcut_help_filter.clear();
+        self.filtering_shortcut_help = false;
         self.mode = if self.vim_mode {
             AppMode::VimNormal
         } else {

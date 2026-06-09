@@ -265,11 +265,7 @@ pub fn render_permission_approval(
                     } else {
                         Style::default().fg(tokens.fg.faint)
                     };
-                    let truncated = if line_text.len() > 55 {
-                        format!("{}…", &line_text[..55])
-                    } else {
-                        line_text.to_string()
-                    };
+                    let truncated = super::truncate_chars_with_ellipsis(line_text, 55);
                     lines.push(Line::from(Span::styled(format!("  {truncated}"), style)));
                 }
             }

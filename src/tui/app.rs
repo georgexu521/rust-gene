@@ -279,6 +279,8 @@ pub struct TuiApp {
     pub filtering_sidebar: bool,
     /// 快捷键帮助搜索筛选
     pub shortcut_help_filter: String,
+    /// 是否正在快捷键帮助搜索模式
+    pub filtering_shortcut_help: bool,
     /// 侧边栏面板类型
     pub sidebar_panel: SidebarPanel,
     /// 打字机效果当前显示位置（字符数）
@@ -340,6 +342,33 @@ fn parse_on_off(value: &str) -> Option<bool> {
 }
 
 impl TuiApp {
+    pub fn visible_sidebar_sessions(
+        &self,
+        limit: usize,
+    ) -> Vec<crate::session_store::SessionRecord> {
+        let sessions = self
+            .session_manager
+            .list_sessions(limit.min(i64::MAX as usize) as i64)
+            .unwrap_or_default();
+        let filter = self.sidebar_filter.to_lowercase();
+        let mut pinned = Vec::new();
+        let mut unpinned = Vec::new();
+
+        for session in sessions {
+            if !filter.is_empty() && !session.title.to_lowercase().contains(&filter) {
+                continue;
+            }
+            if self.pinned_sessions.contains(&session.id) {
+                pinned.push(session);
+            } else {
+                unpinned.push(session);
+            }
+        }
+
+        pinned.extend(unpinned);
+        pinned
+    }
+
     pub fn new() -> Self {
         Self::create(None, None, None)
     }
@@ -485,6 +514,7 @@ impl TuiApp {
             confirm_delete_session_id: None,
             filtering_sidebar: false,
             shortcut_help_filter: String::new(),
+            filtering_shortcut_help: false,
             sidebar_panel: SidebarPanel::Sessions,
             typewriter_position: 0,
             tick_count: 0,
