@@ -201,8 +201,22 @@ pub fn render_diff_viewer(
     let mut lines = Vec::new();
     let mut old_line: usize = 0;
     let mut new_line: usize = 0;
+    let mut current_file_ext = String::new();
 
     for raw_line in diff_text.lines() {
+        // Track file extension from +++ b/path lines
+        if raw_line.starts_with("+++ b/") || raw_line.starts_with("+++ a/") {
+            let path = raw_line
+                .trim_start_matches("+++ b/")
+                .trim_start_matches("+++ a/");
+            if let Some(ext) = std::path::Path::new(path)
+                .extension()
+                .and_then(|e| e.to_str())
+            {
+                current_file_ext = ext.to_string();
+            }
+        }
+
         // Track line numbers
         if raw_line.starts_with("@@") {
             let parts: Vec<&str> = raw_line.split_whitespace().collect();
@@ -252,7 +266,14 @@ pub fn render_diff_viewer(
             (Some(o), Some(n))
         };
 
-        let line = build_diff_line(raw_line, old_num, new_num, inner_width, theme);
+        let line = build_diff_line(
+            raw_line,
+            old_num,
+            new_num,
+            inner_width,
+            theme,
+            &current_file_ext,
+        );
         lines.push(line);
     }
 
@@ -294,8 +315,9 @@ fn build_diff_line(
     new_line: Option<usize>,
     _inner_width: u16,
     theme: &crate::tui::theme::Theme,
+    current_file_ext: &str,
 ) -> Line<'static> {
-    let style = if raw.starts_with("+++") || raw.starts_with("---") {
+    let base_style = if raw.starts_with("+++") || raw.starts_with("---") {
         Style::default().fg(theme.tokens.tone.warn)
     } else if raw.starts_with("@@") {
         Style::default()
@@ -333,9 +355,74 @@ fn build_diff_line(
         Style::default().fg(theme.tokens.fg.faint),
     ));
 
-    spans.push(Span::styled(raw.to_string(), style));
+    // Syntax-highlight code lines (add/remove/context)
+    let is_code_line = raw.starts_with('+')
+        || raw.starts_with('-')
+        || !raw.starts_with("diff ")
+            && !raw.starts_with("@@")
+            && !raw.starts_with("index ")
+            && !raw.starts_with("+++")
+            && !raw.starts_with("---");
+    if is_code_line && !current_file_ext.is_empty() {
+        let prefix = if raw.starts_with('+') || raw.starts_with('-') {
+            &raw[..1]
+        } else {
+            ""
+        };
+        let code = if prefix.is_empty() { raw } else { &raw[1..] };
+        spans.push(Span::styled(prefix.to_string(), base_style));
+        if !code.is_empty() {
+            let highlighted = highlight_code(code, current_file_ext, base_style);
+            spans.extend(highlighted);
+        }
+    } else {
+        spans.push(Span::styled(raw.to_string(), base_style));
+    }
 
     Line::from(spans)
+}
+
+/// Highlight a code snippet using syntect, blended with the diff base style.
+fn highlight_code(code: &str, ext: &str, base_style: Style) -> Vec<Span<'static>> {
+    use once_cell::sync::Lazy;
+    use syntect::easy::HighlightLines;
+    use syntect::highlighting::ThemeSet;
+    use syntect::parsing::SyntaxSet;
+    use syntect::util::LinesWithEndings;
+
+    static SYNTAX_SET: Lazy<SyntaxSet> = Lazy::new(SyntaxSet::load_defaults_newlines);
+    static THEME_SET: Lazy<ThemeSet> = Lazy::new(ThemeSet::load_defaults);
+
+    let syntax = SYNTAX_SET
+        .find_syntax_by_extension(ext)
+        .unwrap_or_else(|| SYNTAX_SET.find_syntax_plain_text());
+    let tm_theme = &THEME_SET.themes["base16-ocean.dark"];
+    let mut highlighter = HighlightLines::new(syntax, tm_theme);
+
+    let mut spans = Vec::new();
+    for line in LinesWithEndings::from(code) {
+        if let Ok(highlighted) = highlighter.highlight_line(line, &SYNTAX_SET) {
+            for (style, text) in highlighted {
+                let syntect_color = style.foreground;
+                let blended = if syntect_color == syntect::highlighting::Color::WHITE {
+                    base_style
+                } else {
+                    base_style.fg(ratatui::style::Color::Rgb(
+                        syntect_color.r,
+                        syntect_color.g,
+                        syntect_color.b,
+                    ))
+                };
+                spans.push(Span::styled(text.to_string(), blended));
+            }
+        } else {
+            spans.push(Span::styled(code.to_string(), base_style));
+        }
+    }
+    if spans.is_empty() && !code.is_empty() {
+        spans.push(Span::styled(code.to_string(), base_style));
+    }
+    spans
 }
 
 fn build_footer_line(
