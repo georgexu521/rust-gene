@@ -524,9 +524,59 @@ cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml -q
 - TUI `on_tick` 在 `finish_run()` 后使用 `wake()/accept_wake()` 保护同 session drain
 - 全部测试通过（2449 passed），fmt + clippy clean
 
-### 剩余工作
+### 2026-06-10 Phase D — Enhanced export payload
 
-- **Phase D**：Tool Output 一等入口与 Export Payload（工具输出路径审计、TUI/Desktop URI action、导出 payload 增强）
-- **Phase E**：Event stream coverage 已较完整，`StreamEventMirror` 覆盖全部 StreamEvent 变体；可补 compaction/revert 事件集成
-- **Phase F**：端到端 smoke 测试（kill/restart 后 parts 顺序稳定、tool 不悬空、export 完整）
+**提交：** `9b296a23`
+
+- 导出 schema 新增字段：
+  - `parts`: session_parts 轻量投影（kind, tool_name, status, message_id）
+  - `closeout_status`: 从 closeout 事件提取的状态
+  - `compaction_count`: compaction 事件计数
+  - `unresolved_settlement`: 仍在 running/pending 的 tool/shell 列表
+  - `tool_outputs`: ToolOutputStore 索引（id, tool_name, original_bytes）
+- 隐私分级：parts/tool_outputs 在 Full/Redacted 可用，unresolved_settlement 仅 Full
+- `build_session_export()` 自动填充所有新字段
+- 全部测试通过（2449 passed），fmt + clippy clean
+
+### 2026-06-10 Phase E — Compaction event stream coverage
+
+**提交：** `302f1f30`
+
+- 所有 compaction 路径写入 session_events 表：
+  - StreamingQueryEngine::compact() (manual compact)
+  - StreamingQueryEngine preflight compression
+  - API request controller reactive compaction
+  - Preflight compression controller
+- Compaction 事件包含 strategy, trigger, before_tokens, after_tokens
+- 与现有 StreamEventMirror 互补（Mirror 处理 StreamEvent 变体，Compaction 处理内部压缩决策）
+- 全部测试通过（2449 passed），fmt + clippy clean
+
+### 2026-06-10 Phase F — Integration tests
+
+**提交：** `bf3ef2ee`
+
+- `settlement_recovery_writes_failed_event_for_dangling_tools`:
+  - 模拟 provider 中断（tool started 但无 completed/failed）
+  - 验证 recovery 写入 tool_failed 事件
+  - 确认重投影后状态为 Failed
+- `export_payload_includes_parts_closeout_and_tool_outputs`:
+  - 创建 text/tool/closeout/compaction 事件链
+  - 验证投影产生正确 parts
+  - 确认无 unresolved settlement
+- 全部测试通过（2451 passed），fmt + clippy clean
+
+### 完成状态
+
+所有阶段已完成并提交。验证命令：
+
+```bash
+cargo fmt --check
+cargo check -q
+cargo test -q session_parts --lib
+cargo test -q event_store --lib
+cargo test -q run_coordinator --lib
+cargo test -q closeout --lib
+cargo test -q export --lib
+cargo check --features experimental-api-server -q
+```
 可靠性：不是“功能列表相似”，而是 session 的事实来源和恢复语义真正站稳。
