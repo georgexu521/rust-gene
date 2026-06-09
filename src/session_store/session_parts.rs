@@ -1312,6 +1312,7 @@ fn reverted_after_marker(payload: &serde_json::Value) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::session_store::event_store::query_session_events;
     use crate::session_store::SessionEventRow;
     use rusqlite::Connection;
 
@@ -1612,5 +1613,128 @@ mod tests {
             ],
         )
         .unwrap();
+    }
+
+    #[test]
+    fn settlement_recovery_writes_failed_event_for_dangling_tools() {
+        // Simulate a session where a tool was started but never completed
+        // (e.g. due to crash or provider interruption).
+        let conn = test_conn();
+        let events = vec![
+            row(
+                1,
+                "tool_called",
+                r#"{"tool_call_id":"c1","tool_name":"bash"}"#,
+            ),
+            row(
+                2,
+                "tool_started",
+                r#"{"tool_call_id":"c1","tool_name":"bash"}"#,
+            ),
+            // No tool_succeeded/tool_failed — simulating interruption
+        ];
+        for event in &events {
+            insert_event(&conn, event);
+        }
+
+        let parts = project_session_parts(&events);
+        assert_eq!(parts.len(), 1);
+        assert!(
+            matches!(
+                &parts[0],
+                SessionPart::Tool {
+                    status: ToolPartStatus::Running,
+                    ..
+                }
+            ),
+            "tool should be running after interruption"
+        );
+
+        // Recovery: scan for running tools and write failed events
+        let writer = crate::session_store::SessionEventWriter::new(
+            std::sync::Arc::new(std::sync::Mutex::new(conn)),
+            "sess-1",
+        );
+        let _ = writer.tool_failed("c1", "Tool execution interrupted before settlement");
+
+        // After recovery, re-project should show failed status
+        let conn2 = writer.connection();
+        let conn2_guard = conn2.lock().unwrap();
+        let recovered_events = query_session_events(&conn2_guard, "sess-1", None).unwrap();
+        let recovered_parts = project_session_parts(&recovered_events);
+        assert_eq!(recovered_parts.len(), 1);
+        assert!(
+            matches!(
+                &recovered_parts[0],
+                SessionPart::Tool {
+                    status: ToolPartStatus::Failed,
+                    ..
+                }
+            ),
+            "tool should be failed after recovery"
+        );
+    }
+
+    #[test]
+    fn export_payload_includes_parts_closeout_and_tool_outputs() {
+        let conn = test_conn();
+        let events = vec![
+            row(1, "assistant_text_delta", r#"{"text":"Hello"}"#),
+            row(
+                2,
+                "tool_called",
+                r#"{"tool_call_id":"c1","tool_name":"bash"}"#,
+            ),
+            row(
+                3,
+                "tool_succeeded",
+                r#"{"tool_call_id":"c1","result_preview":"ok"}"#,
+            ),
+            row(
+                4,
+                "closeout",
+                r#"{"status":"passed","evidence_summary":"tests ok"}"#,
+            ),
+            row(
+                5,
+                "compaction",
+                r#"{"strategy":"snip","trigger":"memory","before_tokens":1000,"after_tokens":500}"#,
+            ),
+        ];
+        for event in &events {
+            insert_event(&conn, event);
+        }
+
+        let parts = project_session_parts(&events);
+        assert_eq!(parts.len(), 4); // text + tool + closeout + compaction
+
+        // Verify closeout part
+        let closeout_parts: Vec<_> = parts
+            .iter()
+            .filter(|p| matches!(p, SessionPart::Closeout { .. }))
+            .collect();
+        assert_eq!(closeout_parts.len(), 1);
+
+        // Verify compaction part
+        let compaction_parts: Vec<_> = parts
+            .iter()
+            .filter(|p| matches!(p, SessionPart::Compaction { .. }))
+            .collect();
+        assert_eq!(compaction_parts.len(), 1);
+
+        // Verify no unresolved settlement (all tools completed)
+        let unresolved: Vec<_> = parts
+            .iter()
+            .filter(|p| {
+                matches!(
+                    p,
+                    SessionPart::Tool {
+                        status: ToolPartStatus::Running | ToolPartStatus::Pending,
+                        ..
+                    }
+                )
+            })
+            .collect();
+        assert!(unresolved.is_empty(), "all tools should be settled");
     }
 }
