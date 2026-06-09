@@ -645,9 +645,10 @@ mod import_tests {
     use super::*;
 
     fn temp_dir() -> PathBuf {
-        let dir =
-            std::env::temp_dir().join(format!("priority-agent-import-test-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
+        let dir = std::env::temp_dir().join(format!(
+            "priority-agent-import-test-{}",
+            uuid::Uuid::new_v4()
+        ));
         std::fs::create_dir_all(&dir).unwrap();
         dir
     }

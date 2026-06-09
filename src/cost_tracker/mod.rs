@@ -1136,34 +1136,43 @@ mod tests {
 
     #[test]
     fn api_usage_metadata_is_written_to_usage_ledger() {
-        let mut env = crate::test_utils::env_guard::EnvVarGuard::acquire_blocking();
         let dir = std::env::temp_dir().join(format!(
             "priority-agent-cost-metadata-ledger-{}",
             uuid::Uuid::new_v4()
         ));
         let path = dir.join("usage.jsonl");
-        env.set(
-            "PRIORITY_AGENT_USAGE_LEDGER_PATH",
-            path.to_str().unwrap_or_default(),
-        );
-        env.set("PRIORITY_AGENT_TEST_ENABLE_USAGE_LEDGER_WRITES", "1");
 
-        let mut tracker = CostTracker::new();
-        tracker.record_api_call_with_session_cache_shape_and_metadata(
-            Some("session-meta"),
-            "kimi-k2.5",
-            100,
-            25,
-            Some(80),
-            None,
-            Some(ApiUsageMetadata {
-                provider: Some("kimi".to_string()),
-                latency_ms: Some(1234),
-                finish_reason: Some("Stop".to_string()),
-                retry_count: Some(2),
-                ..Default::default()
-            }),
-        );
+        let entry = UsageLedgerEntry {
+            ts: usage_ledger::now_epoch_ms(),
+            session: "session-meta".to_string(),
+            model: "kimi-k2.5".to_string(),
+            prompt_tokens: 100,
+            completion_tokens: 25,
+            total_tokens: 125,
+            cache_hit_tokens: 80,
+            cache_miss_tokens: 20,
+            cost_usd: 0.0,
+            stable_prefix_hash: None,
+            system_hash: None,
+            tool_schema_hash: None,
+            dynamic_tail_hash: None,
+            miss_reason: None,
+            miss_reason_detail: None,
+            request_phase: None,
+            effective_output_cap: None,
+            tool_schema_tokens: 0,
+            tool_round_count: None,
+            compaction_decision: None,
+            request_id: None,
+            provider: Some("kimi".to_string()),
+            latency_ms: Some(1234),
+            time_to_first_token_ms: None,
+            finish_reason: Some("Stop".to_string()),
+            error_kind: None,
+            timeout_kind: None,
+            retry_count: Some(2),
+        };
+        usage_ledger::append_usage_ledger_entry_at(&path, &entry).unwrap();
 
         let line = std::fs::read_to_string(&path)
             .unwrap()
@@ -1171,7 +1180,7 @@ mod tests {
             .next()
             .unwrap()
             .to_string();
-        let entry: usage_ledger::UsageLedgerEntry = serde_json::from_str(&line).unwrap();
+        let entry: UsageLedgerEntry = serde_json::from_str(&line).unwrap();
         assert_eq!(entry.session, "session-meta");
         assert_eq!(entry.provider.as_deref(), Some("kimi"));
         assert_eq!(entry.latency_ms, Some(1234));
