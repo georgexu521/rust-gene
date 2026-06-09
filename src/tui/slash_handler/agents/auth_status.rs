@@ -148,6 +148,66 @@ pub fn handle_logout(_app: &mut TuiApp, _args: &str) -> String {
         None => "No active login session.".to_string(),
     }
 }
+
+/// /connect <provider> — guided provider setup with catalog DTO.
+pub fn handle_connect(_app: &mut TuiApp, args: &str) -> String {
+    let id = args.trim().to_ascii_lowercase();
+    if id.is_empty() || id == "list" {
+        let mut out = String::from("Available providers:\n\n");
+        for status in crate::services::api::credentials::status_all() {
+            let marker = if status.configured { "✓" } else { "○" };
+            out.push_str(&format!(
+                "  {} {} — {} (use /connect {})\n",
+                marker,
+                status.provider_label,
+                if status.configured {
+                    "configured"
+                } else {
+                    "not configured"
+                },
+                status.provider_id,
+            ));
+        }
+        if out.contains("○") {
+            out.push_str("\nRun /connect <provider> for setup instructions.\n");
+        }
+        return out;
+    }
+
+    match crate::services::api::credentials::connect_message(&id) {
+        Some(msg) => msg,
+        None => format!(
+            "Unknown provider '{}'. Run /connect list to see available providers.",
+            id
+        ),
+    }
+}
+
+/// /credentials — credential status summary.
+pub fn handle_credentials(_app: &mut TuiApp, args: &str) -> String {
+    let id = args.trim().to_ascii_lowercase();
+    if id.is_empty() {
+        return crate::services::api::credentials::status_summary();
+    }
+    match crate::services::api::credentials::status_for(&id) {
+        Some(s) => {
+            format!(
+                "Provider: {} ({})\n\
+                 Configured: {}\n\
+                 Env var: {}\n\
+                 Setup: {}\n\
+                 Shell line: {}",
+                s.provider_label,
+                s.provider_id,
+                if s.configured { "yes" } else { "no" },
+                s.active_env_var.as_deref().unwrap_or("none"),
+                s.setup_hint,
+                s.export_line,
+            )
+        }
+        None => format!("Unknown provider '{}'.", id),
+    }
+}
 /// /key - API key management
 pub fn handle_key(_app: &mut TuiApp, args: &str) -> String {
     if args.is_empty() {

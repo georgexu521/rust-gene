@@ -3,6 +3,7 @@
 //! 支持多个 LLM 提供商：Kimi、OpenAI
 
 pub(crate) mod content_sanitizer;
+pub mod credentials;
 pub mod kimi;
 pub mod minimax;
 pub mod openai;

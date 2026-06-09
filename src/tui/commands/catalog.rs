@@ -852,6 +852,22 @@ pub const CMD_KEY: CommandDef = CommandDef::new(
     "API key management",
 );
 
+pub const CMD_CONNECT: CommandDef = CommandDef::new(
+    "/connect",
+    &[],
+    "Config",
+    "/connect [provider|list]",
+    "Guided provider setup with catalog",
+);
+
+pub const CMD_CREDENTIALS: CommandDef = CommandDef::new(
+    "/credentials",
+    &["/creds"],
+    "Config",
+    "/credentials [provider]",
+    "Credential status summary",
+);
+
 pub const CMD_HEALTH: CommandDef =
     CommandDef::new("/health", &[], "Info", "/health", "Health check");
 
@@ -1180,6 +1196,8 @@ pub const ALL_COMMANDS: &[&CommandDef] = &[
     &CMD_LOGIN,
     &CMD_LOGOUT,
     &CMD_KEY,
+    &CMD_CONNECT,
+    &CMD_CREDENTIALS,
     &CMD_HEALTH,
     &CMD_PING,
     &CMD_UPTIME,

@@ -989,6 +989,8 @@ impl TuiApp {
             "/login" => slash::handle_login(self, args),
             "/logout" => slash::handle_logout(self, args),
             "/key" => slash::handle_key(self, args),
+            "/connect" => slash::handle_connect(self, args),
+            "/credentials" => slash::handle_credentials(self, args),
             "/health" => slash::handle_health(self),
             "/ping" => slash::handle_ping(self),
             "/uptime" => slash::handle_uptime(self),
