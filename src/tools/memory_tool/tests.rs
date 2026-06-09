@@ -1,5 +1,6 @@
 use super::*;
-use std::sync::{Mutex, OnceLock};
+use std::sync::OnceLock;
+use tokio::sync::Mutex;
 
 fn env_lock() -> &'static Mutex<()> {
     static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
@@ -456,12 +457,12 @@ async fn memory_save_records_write_scoring_trace() {
 
 #[tokio::test]
 async fn memory_doctor_records_keep_scoring_trace() {
-    let _guard = env_lock().lock().unwrap();
+    let _guard = env_lock().lock().await;
     let dir = tempfile::tempdir().expect("tempdir");
-    let previous_home = std::env::var("HOME").ok();
-    std::env::set_var("HOME", dir.path());
-    let base = dir.path().join(".priority-agent");
-    std::fs::create_dir_all(&base).expect("create memory dir");
+    let previous_memory_root = std::env::var("PRIORITY_AGENT_MEMORY_ROOT").ok();
+    std::env::set_var("PRIORITY_AGENT_MEMORY_ROOT", dir.path());
+    let base = dir.path();
+    std::fs::create_dir_all(base).expect("create memory dir");
     std::fs::write(
         base.join("MEMORY.md"),
         "Project convention: run cargo test -q before verified closeout.\n",
@@ -491,9 +492,9 @@ async fn memory_doctor_records_keep_scoring_trace() {
             } if record_id == "MEMORY.md" && kind == "project" && *score > 0.0
         )
     }));
-    if let Some(home) = previous_home {
-        std::env::set_var("HOME", home);
+    if let Some(memory_root) = previous_memory_root {
+        std::env::set_var("PRIORITY_AGENT_MEMORY_ROOT", memory_root);
     } else {
-        std::env::remove_var("HOME");
+        std::env::remove_var("PRIORITY_AGENT_MEMORY_ROOT");
     }
 }

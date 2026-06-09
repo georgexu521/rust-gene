@@ -78,14 +78,19 @@ async fn file_read_empty_directory_is_explicit() {
 async fn test_file_write_and_read() {
     let write_tool = FileWriteTool;
     let read_tool = FileReadTool;
-    let _ = tokio::fs::remove_file("/tmp/test_priority_agent_file.txt").await;
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("test_priority_agent_file.txt");
+    let session_id = format!(
+        "test-session-file-write-read-{}",
+        uuid::Uuid::new_v4().simple()
+    );
 
     let test_content = "Hello, World!";
     let params = json!({
-        "path": "/tmp/test_priority_agent_file.txt",
+        "path": path,
         "content": test_content
     });
-    let context = ToolContext::new(".", "test-session");
+    let context = ToolContext::new(".", &session_id);
 
     // 写入
     let write_result = write_tool.execute(params, context.clone()).await;
@@ -93,14 +98,11 @@ async fn test_file_write_and_read() {
 
     // 读取
     let read_params = json!({
-        "path": "/tmp/test_priority_agent_file.txt"
+        "path": path
     });
     let read_result = read_tool.execute(read_params, context).await;
     assert!(read_result.success);
     assert!(read_result.content.contains("Hello, World!"));
-
-    // 清理
-    let _ = tokio::fs::remove_file("/tmp/test_priority_agent_file.txt").await;
 }
 
 #[tokio::test]

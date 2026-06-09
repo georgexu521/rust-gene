@@ -221,9 +221,13 @@ pub struct MemoryManager {
 
 impl MemoryManager {
     pub fn new() -> Self {
-        let base = dirs::home_dir()
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join(".priority-agent");
+        let base = std::env::var_os("PRIORITY_AGENT_MEMORY_ROOT")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| {
+                dirs::home_dir()
+                    .unwrap_or_else(|| PathBuf::from("."))
+                    .join(".priority-agent")
+            });
 
         let mut manager = Self::with_base_dir(base);
         match crate::services::config::AppConfig::load() {

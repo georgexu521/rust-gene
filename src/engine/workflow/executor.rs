@@ -297,8 +297,7 @@ mod tests {
     fn make_plan_with_weights(steps: Vec<(String, u32, Vec<usize>)>) -> Plan {
         let plan_steps = steps
             .into_iter()
-            .enumerate()
-            .map(|(_, (desc, weight, deps))| PlanStep {
+            .map(|(desc, weight, deps)| PlanStep {
                 description: desc,
                 tool: None,
                 status: StepStatus::Pending,

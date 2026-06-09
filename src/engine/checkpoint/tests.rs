@@ -1,6 +1,5 @@
 use super::types::*;
 use std::collections::HashSet;
-use std::path::PathBuf;
 use tempfile::TempDir;
 use uuid::Uuid;
 
@@ -16,7 +15,7 @@ async fn test_checkpoint_create_and_restore() {
     mgr.checkpoints_dir = cp_dir.clone();
 
     let cp = mgr
-        .create_checkpoint("file_write", None, None, &[test_file.clone()])
+        .create_checkpoint("file_write", None, None, std::slice::from_ref(&test_file))
         .await
         .unwrap();
 
@@ -49,7 +48,7 @@ async fn test_checkpoint_new_file_then_restore_removes_it() {
     mgr.checkpoints_dir = temp.path().join("checkpoints").join("test_session2");
 
     let cp = mgr
-        .create_checkpoint("file_write", None, None, &[test_file.clone()])
+        .create_checkpoint("file_write", None, None, std::slice::from_ref(&test_file))
         .await
         .unwrap();
 
@@ -85,7 +84,7 @@ async fn test_file_change_record_restores_latest_change() {
             "file_edit",
             None,
             Some("call_1".to_string()),
-            &[test_file.clone()],
+            std::slice::from_ref(&test_file),
         )
         .await
         .unwrap();
@@ -132,7 +131,7 @@ async fn test_file_change_history_persists_and_removes_new_file() {
     mgr.sequence_counter = 0;
 
     let cp = mgr
-        .create_checkpoint("file_write", None, None, &[test_file.clone()])
+        .create_checkpoint("file_write", None, None, std::slice::from_ref(&test_file))
         .await
         .unwrap();
     std::fs::write(&test_file, "created").unwrap();
@@ -195,7 +194,7 @@ async fn test_restore_latest_tool_round_restores_all_round_changes() {
             "file_edit",
             None,
             Some("call_1".to_string()),
-            &[first.clone()],
+            std::slice::from_ref(&first),
         )
         .await
         .unwrap();
@@ -222,7 +221,7 @@ async fn test_restore_latest_tool_round_restores_all_round_changes() {
             "file_edit",
             None,
             Some("call_2".to_string()),
-            &[second.clone()],
+            std::slice::from_ref(&second),
         )
         .await
         .unwrap();
@@ -273,7 +272,7 @@ async fn test_file_change_rounds_group_by_assistant_message() {
             "file_edit",
             message_id.clone(),
             Some("call_1".to_string()),
-            &[first.clone()],
+            std::slice::from_ref(&first),
         )
         .await
         .unwrap();
@@ -300,7 +299,7 @@ async fn test_file_change_rounds_group_by_assistant_message() {
             "file_edit",
             message_id.clone(),
             Some("call_2".to_string()),
-            &[second.clone()],
+            std::slice::from_ref(&second),
         )
         .await
         .unwrap();
@@ -344,7 +343,7 @@ async fn test_checkpoint_pruning() {
     for i in 0..5 {
         std::fs::write(&test_file, format!("content {}", i)).unwrap();
         let cp = mgr
-            .create_checkpoint("file_write", None, None, &[test_file.clone()])
+            .create_checkpoint("file_write", None, None, std::slice::from_ref(&test_file))
             .await
             .unwrap();
         ids.push(cp.id);
@@ -366,14 +365,14 @@ async fn test_diff_checkpoints() {
     mgr.checkpoints_dir = temp.path().join("checkpoints").join("test_session4");
 
     let cp1 = mgr
-        .create_checkpoint("file_write", None, None, &[test_file.clone()])
+        .create_checkpoint("file_write", None, None, std::slice::from_ref(&test_file))
         .await
         .unwrap();
 
     std::fs::write(&test_file, "line 1\nline 2 modified\n").unwrap();
 
     let cp2 = mgr
-        .create_checkpoint("file_write", None, None, &[test_file.clone()])
+        .create_checkpoint("file_write", None, None, std::slice::from_ref(&test_file))
         .await
         .unwrap();
 
@@ -398,7 +397,7 @@ async fn checkpoint_persists_after_simulated_write_failure() {
     mgr.checkpoints_dir = test_dir.clone();
 
     let cp = mgr
-        .create_checkpoint("file_write", None, None, &[test_file.clone()])
+        .create_checkpoint("file_write", None, None, std::slice::from_ref(&test_file))
         .await
         .unwrap();
     assert!(cp.id.starts_with("cp_"));

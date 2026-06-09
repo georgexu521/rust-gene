@@ -57,6 +57,9 @@ impl MemoryProposalReviewStore {
         if let Ok(path) = std::env::var("PRIORITY_AGENT_MEMORY_PROPOSALS_PATH") {
             return PathBuf::from(path);
         }
+        if let Some(root) = std::env::var_os("PRIORITY_AGENT_MEMORY_ROOT") {
+            return PathBuf::from(root).join("memory_proposals.jsonl");
+        }
         dirs::home_dir()
             .unwrap_or_else(|| PathBuf::from("."))
             .join(".priority-agent")

@@ -1296,7 +1296,7 @@ mod tests {
         );
 
         assert!(format_active_guidance_records_for_prompt_in_project(
-            &[record.clone()],
+            std::slice::from_ref(&record),
             "run bash validation",
             Some(&project_a)
         )

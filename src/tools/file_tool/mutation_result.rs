@@ -757,7 +757,7 @@ mod tests {
         assert_eq!(parsed.files[0].bytes_written, 42);
         assert_eq!(parsed.diff.additions, 3);
         assert_eq!(parsed.diff.deletions, 1);
-        assert_eq!(parsed.diff.truncated, false);
+        assert!(!parsed.diff.truncated);
         assert_eq!(
             parsed.checkpoint.as_ref().unwrap().checkpoint_id,
             "cp_1_def"
@@ -830,8 +830,8 @@ mod tests {
         );
 
         let diag = result.diagnostics.as_ref().unwrap();
-        assert_eq!(diag.available, true);
-        assert_eq!(diag.checked, true);
+        assert!(diag.available);
+        assert!(diag.checked);
         assert_eq!(diag.error_count, 1);
         assert_eq!(diag.warning_count, 2);
         assert!(diag.first_error.is_some());

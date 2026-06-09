@@ -403,10 +403,12 @@ mod tests {
 
     #[test]
     fn test_step_type_history_failure_rate() {
-        let mut h = StepTypeHistory::default();
-        h.total = 10;
-        h.failed = 3;
-        h.needs_refactor = 2;
+        let h = StepTypeHistory {
+            total: 10,
+            failed: 3,
+            needs_refactor: 2,
+            ..Default::default()
+        };
         assert!((h.failure_rate() - 0.5).abs() < 0.01);
         assert!(h.is_problematic());
     }

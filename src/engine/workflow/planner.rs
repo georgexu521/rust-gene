@@ -1076,8 +1076,7 @@ mod tests {
 
     #[test]
     fn test_needs_recursive_split_simple_plan() {
-        let plan =
-            Plan::new("简单任务", "修一个 bug").add_step("修改一行代码", Some("file_edit".into()));
+        let plan = Plan::new("简单任务", "修一个 bug").add_step("修改一行代码", Some("file_edit"));
         assert!(
             !WorkflowPlanner::needs_recursive_split(&plan),
             "Simple plan should not split"

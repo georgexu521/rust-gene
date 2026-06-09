@@ -147,6 +147,43 @@ impl LlmProvider for RecordingToolProvider {
     }
 }
 
+struct RecordingTextProvider {
+    requests: StdMutex<Vec<crate::services::api::ChatRequest>>,
+}
+
+#[async_trait]
+impl LlmProvider for RecordingTextProvider {
+    async fn chat(
+        &self,
+        request: crate::services::api::ChatRequest,
+    ) -> anyhow::Result<crate::services::api::ChatResponse> {
+        self.requests.lock().unwrap().push(request);
+        Ok(crate::services::api::ChatResponse {
+            content: "Done.".to_string(),
+            tool_calls: None,
+            usage: None,
+            tool_call_repair: None,
+        })
+    }
+
+    async fn chat_stream(
+        &self,
+        _request: crate::services::api::ChatRequest,
+    ) -> anyhow::Result<async_openai::types::ChatCompletionResponseStream> {
+        Err(anyhow::anyhow!(
+            "stream not used for MiniMax-compatible text turns"
+        ))
+    }
+
+    fn base_url(&self) -> &str {
+        "https://api.minimaxi.com/v1"
+    }
+
+    fn default_model(&self) -> &str {
+        "MiniMax-M2.7"
+    }
+}
+
 #[test]
 fn test_stream_event_creation() {
     let event = StreamEvent::TextChunk("Hello".to_string());
@@ -187,6 +224,67 @@ fn test_runtime_provider_switch_updates_provider_and_model() {
     assert_eq!(engine.provider_base_url(), "mock://b");
     assert_eq!(engine.model_name(), "model-b");
     assert_eq!(engine.provider().default_model(), "model-b");
+}
+
+#[tokio::test]
+async fn streaming_restore_injects_persisted_history_once() {
+    let store = Arc::new(crate::session_store::SessionStore::in_memory().unwrap());
+    store
+        .create_session("restore-once", "Restore Once", "MiniMax-M2.7")
+        .unwrap();
+    store
+        .add_message("restore-once", "user", "previous turn", None, None)
+        .unwrap();
+    store
+        .add_message("restore-once", "assistant", "previous answer", None, None)
+        .unwrap();
+
+    let provider = Arc::new(RecordingTextProvider {
+        requests: StdMutex::new(Vec::new()),
+    });
+    let engine = StreamingQueryEngine::new(
+        provider.clone(),
+        Arc::new(ToolRegistry::new()),
+        "MiniMax-M2.7",
+    )
+    .with_session_store(store, "restore-once".to_string());
+
+    let mut stream = engine.query_stream("current turn").await;
+    while let Some(event) = stream.next().await {
+        match event {
+            StreamEvent::Complete => break,
+            StreamEvent::Error(error) => panic!("stream failed: {error}"),
+            _ => {}
+        }
+    }
+
+    let requests = provider.requests.lock().unwrap();
+    let request = requests.first().expect("provider request");
+    let user_messages = request
+        .messages
+        .iter()
+        .filter_map(|message| match message {
+            Message::User { content } => Some(content.as_str()),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        user_messages
+            .iter()
+            .filter(|content| content.contains("previous turn"))
+            .count(),
+        1,
+        "persisted user history should be injected once: {user_messages:?}"
+    );
+    assert_eq!(
+        user_messages
+            .iter()
+            .filter(|content| content.contains("current turn"))
+            .count(),
+        1,
+        "current user turn should be injected once: {user_messages:?}"
+    );
 }
 
 #[tokio::test]
@@ -323,7 +421,7 @@ async fn streaming_engine_uses_working_dir_for_relative_tool_paths() {
 async fn reactive_context_retry_compacts_history_before_rebuild() {
     let history = Arc::new(tokio::sync::Mutex::new(vec![
         Message::user("please inspect the large output"),
-        Message::assistant(&"tool output ".repeat(500)),
+        Message::assistant("tool output ".repeat(500)),
         Message::user("continue"),
     ]));
     let compressor = Arc::new(tokio::sync::Mutex::new(
@@ -376,7 +474,7 @@ async fn manual_compact_records_attempt_and_updates_history() {
     engine
         .set_history(vec![
             Message::user("please inspect the large output"),
-            Message::assistant(&"tool output ".repeat(500)),
+            Message::assistant("tool output ".repeat(500)),
             Message::user("continue"),
         ])
         .await;
@@ -489,7 +587,7 @@ async fn context_long_session_manual_compact_persists_boundary_for_restore() {
     engine
         .set_history(vec![
             Message::user("read README, inspect src/lib.rs, and run cargo test"),
-            Message::assistant(&"README contents and src/lib.rs details. ".repeat(220)),
+            Message::assistant("README contents and src/lib.rs details. ".repeat(220)),
             Message::user("edit config and continue"),
             Message::assistant("Edited config. cargo test passed."),
             Message::user("what did the README say earlier?"),

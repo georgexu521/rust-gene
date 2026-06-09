@@ -7,7 +7,7 @@
 //! - 压缩后保留 command、exit code、关键行
 //!
 //! 由 `PRIORITY_AGENT_SELECTIVE_COMPRESSION` 环境变量控制。
-//! 默认关闭。建议在 P3 Phase A token 数据支持后再启用。
+//! 默认开启；设置为 0/false/no/off 可关闭。
 
 use crate::services::api::Message;
 
@@ -129,13 +129,13 @@ pub fn selective_compression_enabled() -> bool {
 }
 
 fn selective_compression_enabled_from(value: Option<String>) -> bool {
-    matches!(
+    !matches!(
         value
-            .unwrap_or_default()
+            .unwrap_or_else(|| "1".to_string())
             .trim()
             .to_ascii_lowercase()
             .as_str(),
-        "1" | "true" | "yes" | "on"
+        "0" | "false" | "no" | "off"
     )
 }
 
@@ -291,8 +291,8 @@ mod tests {
     }
 
     #[test]
-    fn disabled_by_default_and_enabled_explicitly() {
-        assert!(!selective_compression_enabled_from(None));
+    fn enabled_by_default_and_disabled_explicitly() {
+        assert!(selective_compression_enabled_from(None));
         assert!(!selective_compression_enabled_from(Some("0".to_string())));
         assert!(!selective_compression_enabled_from(Some(
             "false".to_string()

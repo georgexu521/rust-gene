@@ -213,7 +213,7 @@ mod tests {
         replace_todos(
             &conn,
             &sid,
-            &vec![TodoItem {
+            &[TodoItem {
                 content: "old".to_string(),
                 status: "pending".to_string(),
                 priority: "".to_string(),
@@ -224,7 +224,7 @@ mod tests {
         replace_todos(
             &conn,
             &sid,
-            &vec![TodoItem {
+            &[TodoItem {
                 content: "new".to_string(),
                 status: "in_progress".to_string(),
                 priority: "high".to_string(),
@@ -243,7 +243,7 @@ mod tests {
         replace_todos(
             &conn,
             &sid,
-            &vec![TodoItem {
+            &[TodoItem {
                 content: "temp".to_string(),
                 status: "pending".to_string(),
                 priority: "".to_string(),
@@ -279,7 +279,7 @@ mod tests {
         replace_todos(
             &conn,
             &sid,
-            &vec![TodoItem {
+            &[TodoItem {
                 content: "x".to_string(),
                 status: "pending".to_string(),
                 priority: "".to_string(),

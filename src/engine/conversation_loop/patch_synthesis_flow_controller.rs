@@ -802,10 +802,12 @@ mod tests {
     #[test]
     fn code_write_forbidden_recovery_updates_trace_prompt_and_state() {
         let trace = trace();
-        let mut state = FocusedRepairRuntimeState::default();
-        state.action_checkpoint_active = true;
-        state.action_checkpoint_lookup_count = 2;
-        state.action_checkpoint_no_change_rounds = 2;
+        let mut state = FocusedRepairRuntimeState {
+            action_checkpoint_active: true,
+            action_checkpoint_lookup_count: 2,
+            action_checkpoint_no_change_rounds: 2,
+            ..Default::default()
+        };
         let mut messages = Vec::new();
         let mut tool_results_text = String::new();
 

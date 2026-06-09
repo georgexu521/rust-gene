@@ -1,4 +1,5 @@
 //! Shared test fixtures for integration tests.
+#![allow(dead_code)]
 
 use async_openai::types::{
     ChatChoiceStream, ChatCompletionMessageToolCallChunk, ChatCompletionResponseStream,

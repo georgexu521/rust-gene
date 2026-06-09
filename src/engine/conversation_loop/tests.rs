@@ -2856,20 +2856,22 @@ async fn quiet_direct_turn_stays_in_main_loop_without_tools_or_dynamic_context()
     assert_eq!(result.iterations, 1);
     assert!(!result.tool_calls_made);
 
-    let requests = provider.requests.lock().unwrap();
-    assert_eq!(requests.len(), 1);
-    assert_eq!(requests[0].tools.as_ref().map(Vec::len), Some(0));
-    assert!(requests[0].tool_choice.is_none());
-    assert!(requests[0].messages.iter().all(|message| {
-        !matches!(
-            message,
-            Message::System { content }
-                if content.contains("<task-state>")
-                    || content.contains("<task-contract>")
-                    || content.contains("Project map source: docs/PROJECT_MAP.md")
-                    || content.contains("<memory-context>")
-        )
-    }));
+    {
+        let requests = provider.requests.lock().unwrap();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].tools.as_ref().map(Vec::len), Some(0));
+        assert!(requests[0].tool_choice.is_none());
+        assert!(requests[0].messages.iter().all(|message| {
+            !matches!(
+                message,
+                Message::System { content }
+                    if content.contains("<task-state>")
+                        || content.contains("<task-contract>")
+                        || content.contains("Project map source: docs/PROJECT_MAP.md")
+                        || content.contains("<memory-context>")
+            )
+        }));
+    }
 
     drop(tx);
     let mut saw_start = false;

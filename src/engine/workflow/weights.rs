@@ -850,7 +850,7 @@ mod tests {
         assert_eq!(WeightEngine::sigmoid_normalize(-120.0), 0);
         // 中间分数应该在 50 左右
         let mid = WeightEngine::sigmoid_normalize(0.0);
-        assert!(mid >= 45 && mid <= 55);
+        assert!((45..=55).contains(&mid));
     }
 
     #[test]

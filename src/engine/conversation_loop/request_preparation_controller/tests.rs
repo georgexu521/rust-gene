@@ -42,7 +42,7 @@ async fn prepare_wraps_focused_prompt_as_dynamic_recent_observation() {
     assert_eq!(prepared.request.model, "test-model");
     assert_eq!(prepared.request.temperature, Some(0.73));
     // Dynamic zones are now in the user message, so msg count may be 1
-    assert!(prepared.request.messages.len() >= 1);
+    assert!(!prepared.request.messages.is_empty());
     assert!(matches!(
         prepared.request.messages.last(),
         Some(Message::User { content })
@@ -97,7 +97,7 @@ async fn prepare_skips_memory_prefetch_without_memory_manager() {
     })
     .await;
 
-    assert!(prepared.request.messages.len() >= 1);
+    assert!(!prepared.request.messages.is_empty());
     assert!(matches!(
         prepared.request.messages.last(),
         Some(Message::User { content })
@@ -208,7 +208,7 @@ async fn prepare_injects_context_ledger_hint_before_user_message() {
     })
     .await;
 
-    assert!(prepared.request.messages.len() >= 1);
+    assert!(!prepared.request.messages.is_empty());
     let last = prepared.request.messages.last().unwrap();
     assert!(matches!(last, Message::User { content }
         if content.contains("Context ledger")
@@ -252,7 +252,7 @@ async fn prepare_records_relevant_material_without_counting_it_as_stable_prefix(
     })
     .await;
 
-    assert!(prepared.request.messages.len() >= 1);
+    assert!(!prepared.request.messages.is_empty());
     let trace = trace.finish(crate::engine::trace::TurnStatus::Completed);
     assert!(trace.events.iter().any(|event| matches!(
         event,
@@ -973,7 +973,7 @@ async fn prepare_treats_self_evolution_guidance_as_dynamic_context() {
     })
     .await;
 
-    assert!(prepared.request.messages.len() >= 1);
+    assert!(!prepared.request.messages.is_empty());
     assert!(matches!(
         &prepared.request.messages[0],
         Message::User { content }

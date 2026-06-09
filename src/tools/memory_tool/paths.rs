@@ -1,6 +1,9 @@
 use std::path::PathBuf;
 
 pub(super) fn memory_root() -> PathBuf {
+    if let Some(root) = std::env::var_os("PRIORITY_AGENT_MEMORY_ROOT") {
+        return PathBuf::from(root);
+    }
     dirs::home_dir()
         .unwrap_or_else(|| PathBuf::from("."))
         .join(".priority-agent")

@@ -608,11 +608,7 @@ mod tests {
 
         // 验证 plan 的每个步骤都有权重（P-02 集成验证）
         for (i, step) in result.plan.steps.iter().enumerate() {
-            assert!(
-                step.weight > 0 || step.weight == 0,
-                "Step {} should have weight computed",
-                i
-            );
+            assert!(step.weight <= 100, "Step {} should have weight computed", i);
         }
     }
 
