@@ -832,6 +832,29 @@ pub struct LspConfig {
     /// Prevent automatic download/install of LSP server binaries.
     #[serde(default = "default_true")]
     pub disable_downloads: bool,
+    /// Per-server overrides. Key is the server name (e.g. "rust-analyzer").
+    #[serde(default)]
+    pub servers: std::collections::HashMap<String, LspServerConfigEntry>,
+}
+
+/// Per-server LSP configuration.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct LspServerConfigEntry {
+    /// Override the server binary command.
+    #[serde(default)]
+    pub command: Option<String>,
+    /// Additional arguments for the server binary.
+    #[serde(default)]
+    pub args: Vec<String>,
+    /// File extensions this server handles (e.g. ["rs"]).
+    #[serde(default)]
+    pub extensions: Vec<String>,
+    /// Extra environment variables.
+    #[serde(default)]
+    pub env: std::collections::HashMap<String, String>,
+    /// Disable this specific server even when auto-detected.
+    #[serde(default)]
+    pub disabled: bool,
 }
 
 impl Default for LspConfig {
@@ -840,6 +863,7 @@ impl Default for LspConfig {
             enabled: false,
             auto_detect: true,
             disable_downloads: true,
+            servers: std::collections::HashMap::new(),
         }
     }
 }
