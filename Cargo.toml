@@ -87,6 +87,7 @@ tree-sitter = "0.24"
 tree-sitter-rust = "0.23"
 tree-sitter-typescript = "0.23"
 tree-sitter-python = "0.23"
+tree-sitter-bash = "0.23"
 
 # TUI 升级依赖
 unicode-width = "0.2"
@@ -165,6 +166,7 @@ tree-sitter = { workspace = true }
 tree-sitter-rust = { workspace = true }
 tree-sitter-typescript = { workspace = true }
 tree-sitter-python = { workspace = true }
+tree-sitter-bash = { workspace = true }
 md5 = "0.7"
 diffy = "0.4"
 unicode-width = { workspace = true }

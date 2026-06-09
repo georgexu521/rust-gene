@@ -2,10 +2,12 @@
 //!
 //! 对应 Claude Code 中的 BashTool
 
+pub mod arity;
 mod background;
 pub mod command_classifier;
 mod execution_backend;
 mod pty;
+pub mod shell_parser;
 
 use crate::engine::context_ledger::{record_bash_read, BashReadLedgerInput};
 use crate::tools::{
