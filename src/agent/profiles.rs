@@ -543,6 +543,112 @@ fn builtin_profiles() -> Vec<AgentProfile> {
     ]
 }
 
+// ── Product-facing agent profiles ──────────────────────────────
+
+/// Built-in product profiles exposed to the user via /agent and the
+/// desktop agent picker.  These are opinionated defaults that can be
+/// overridden by project `.agents/` or user `~/.priority-agent/agents/`.
+
+pub fn product_profiles() -> Vec<AgentProfile> {
+    vec![
+        AgentProfile {
+            name: "build".into(),
+            description: "Full coding mode — read, edit, shell, and validation".into(),
+            role: AgentRole::Specialist,
+            system_prompt: String::new(),
+            allowed_tools: Vec::new(),
+            disallowed_tools: Vec::new(),
+            context: Some(AgentContextMode::InheritedSummary),
+            permission_mode: Some(AgentPermissionMode::Bubble),
+            risk_policy: Some(AgentRiskPolicy::CodeChange),
+            output_contract: Some(AgentOutputContract::PatchSummary),
+            model: None,
+            effort: None,
+            mcp_servers: Vec::new(),
+            memory: Some(AgentMemoryPolicy::Session),
+            timeout_secs: Some(300),
+            max_turns: Some(25),
+            max_cost_usd: None,
+        },
+        AgentProfile {
+            name: "plan".into(),
+            description: "Read-only planner — explore, search, and ask questions".into(),
+            role: AgentRole::Plan,
+            system_prompt: String::new(),
+            allowed_tools: vec!["file_read".into(), "glob".into(), "grep".into(), "project_list".into(), "ask_user".into(), "todo_write".into()],
+            disallowed_tools: vec!["file_edit".into(), "file_write".into()],
+            context: Some(AgentContextMode::InheritedSummary),
+            permission_mode: Some(AgentPermissionMode::ReadOnly),
+            risk_policy: Some(AgentRiskPolicy::ReadOnly),
+            output_contract: Some(AgentOutputContract::Findings),
+            model: None,
+            effort: None,
+            mcp_servers: Vec::new(),
+            memory: Some(AgentMemoryPolicy::Session),
+            timeout_secs: Some(120),
+            max_turns: Some(10),
+            max_cost_usd: None,
+        },
+        AgentProfile {
+            name: "explore".into(),
+            description: "Read/search only — glob, grep, read, LSP, and web fetch".into(),
+            role: AgentRole::Guide,
+            system_prompt: String::new(),
+            allowed_tools: vec!["file_read".into(), "glob".into(), "grep".into(), "project_list".into(), "ask_user".into(), "web_search".into(), "web_fetch".into(), "lsp".into()],
+            disallowed_tools: vec!["file_edit".into(), "file_write".into(), "bash".into()],
+            context: Some(AgentContextMode::InheritedSummary),
+            permission_mode: Some(AgentPermissionMode::ReadOnly),
+            risk_policy: Some(AgentRiskPolicy::ReadOnly),
+            output_contract: Some(AgentOutputContract::Findings),
+            model: None,
+            effort: None,
+            mcp_servers: Vec::new(),
+            memory: Some(AgentMemoryPolicy::None),
+            timeout_secs: Some(120),
+            max_turns: Some(10),
+            max_cost_usd: None,
+        },
+        AgentProfile {
+            name: "review".into(),
+            description: "Diff reviewer — read changed files, report findings, no edits".into(),
+            role: AgentRole::Advisor,
+            system_prompt: String::new(),
+            allowed_tools: vec!["file_read".into(), "git_diff".into(), "git_status".into(), "git_log".into(), "grep".into(), "glob".into(), "project_list".into(), "ask_user".into(), "lsp".into()],
+            disallowed_tools: vec!["file_edit".into(), "file_write".into(), "bash".into()],
+            context: Some(AgentContextMode::InheritedSummary),
+            permission_mode: Some(AgentPermissionMode::ReadOnly),
+            risk_policy: Some(AgentRiskPolicy::VerifyOnly),
+            output_contract: Some(AgentOutputContract::Findings),
+            model: None,
+            effort: None,
+            mcp_servers: Vec::new(),
+            memory: Some(AgentMemoryPolicy::None),
+            timeout_secs: Some(120),
+            max_turns: Some(10),
+            max_cost_usd: None,
+        },
+        AgentProfile {
+            name: "verify".into(),
+            description: "Validator — run tests, check closeout, summarize proof".into(),
+            role: AgentRole::Verification,
+            system_prompt: String::new(),
+            allowed_tools: vec!["file_read".into(), "grep".into(), "bash".into(), "git_diff".into(), "git_status".into(), "project_list".into(), "ask_user".into()],
+            disallowed_tools: vec!["file_edit".into(), "file_write".into(), "agent".into()],
+            context: Some(AgentContextMode::InheritedSummary),
+            permission_mode: Some(AgentPermissionMode::Bubble),
+            risk_policy: Some(AgentRiskPolicy::VerifyOnly),
+            output_contract: Some(AgentOutputContract::VerificationReport),
+            model: None,
+            effort: None,
+            mcp_servers: Vec::new(),
+            memory: Some(AgentMemoryPolicy::None),
+            timeout_secs: Some(300),
+            max_turns: Some(15),
+            max_cost_usd: None,
+        },
+    ]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

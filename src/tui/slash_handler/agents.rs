@@ -14,7 +14,7 @@ mod lsp;
 mod npm;
 #[cfg(test)]
 use agent_listing::format_agent_task_state_lines;
-pub use agent_listing::handle_agents;
+pub use agent_listing::{handle_agent_list, handle_agents};
 pub use auth_status::*;
 use doctor_formatting::{
     evaluate_product_readiness, exposure_label, format_effective_config_summary,

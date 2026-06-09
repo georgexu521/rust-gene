@@ -900,6 +900,7 @@ impl TuiApp {
             }
             "/tasks" => slash::handle_tasks(self).await,
             "/agents" => slash::handle_agents(self, args).await,
+            "/agent" => slash::handle_agent_list(self, args),
             "/doctor" => slash::handle_doctor(self, args).await,
             "/audit" => slash::handle_audit(self, args).await,
             "/permissions" | "/perm" => slash::handle_permissions(self, args),

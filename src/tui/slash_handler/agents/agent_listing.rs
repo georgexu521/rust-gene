@@ -220,3 +220,78 @@ async fn handle_agent_worktree_command(app: &TuiApp, args: &str) -> String {
 fn agent_worktree_usage() -> String {
     "Usage:\n  /agents\n  /agents worktree review <agent_id>\n  /agents worktree merge <agent_id> --yes [--cleanup] [--delete-branch] [--force] [--allow-dirty-parent]\n  /agents worktree cleanup <agent_id> --yes [--force] [--delete-branch]".to_string()
 }
+
+/// /agent — product-facing agent profile listing and selection.
+pub fn handle_agent_list(_app: &TuiApp, args: &str) -> String {
+    let parts: Vec<&str> = args.split_whitespace().collect();
+
+    if parts.is_empty() || parts[0] == "list" {
+        let profiles = crate::agent::profiles::product_profiles();
+        if profiles.is_empty() {
+            return "No built-in agent profiles available.".to_string();
+        }
+        let mut out = String::from("Available agent profiles:\n\n");
+        for p in &profiles {
+            let risk = match p
+                .risk_policy
+                .unwrap_or(crate::agent::profiles::AgentRiskPolicy::ReadOnly)
+            {
+                crate::agent::profiles::AgentRiskPolicy::CodeChange => "write",
+                crate::agent::profiles::AgentRiskPolicy::ReadOnly => "read",
+                crate::agent::profiles::AgentRiskPolicy::VerifyOnly => "verify",
+            };
+            let perm = match p
+                .permission_mode
+                .unwrap_or(crate::agent::profiles::AgentPermissionMode::ReadOnly)
+            {
+                crate::agent::profiles::AgentPermissionMode::ReadOnly => "read-only",
+                crate::agent::profiles::AgentPermissionMode::Bubble => "bubble",
+                crate::agent::profiles::AgentPermissionMode::IsolatedWrite => "isolated",
+            };
+            let tools = if p.allowed_tools.is_empty() {
+                "all".to_string()
+            } else {
+                format!("{} tools", p.allowed_tools.len())
+            };
+            out.push_str(&format!(
+                "  {} — {} (risk={risk}, perm={perm}, tools={tools})\n",
+                p.name,
+                p.description,
+            ));
+        }
+        out.push_str("\nUse /agent <name> to see a profile's full detail.\n");
+        return out;
+    }
+
+    let name = parts[0];
+    let profiles = crate::agent::profiles::product_profiles();
+    if let Some(p) = profiles.into_iter().find(|p| p.name == name) {
+        let mut out = format!("Agent profile: {}\n\n", p.name);
+        out.push_str(&format!("  Description: {}\n", p.description));
+        out.push_str(&format!(
+            "  Permission: {:?}\n",
+            p.permission_mode
+                .unwrap_or(crate::agent::profiles::AgentPermissionMode::ReadOnly)
+        ));
+        out.push_str(&format!(
+            "  Context: {:?}\n",
+            p.context
+                .unwrap_or(crate::agent::profiles::AgentContextMode::InheritedSummary)
+        ));
+        if !p.allowed_tools.is_empty() {
+            out.push_str(&format!("  Tools: {}\n", p.allowed_tools.join(", ")));
+        }
+        out.push_str(&format!(
+            "  Max turns: {}\n",
+            p.max_turns
+                .map(|t| t.to_string())
+                .unwrap_or_else(|| "unlimited".into())
+        ));
+        return out;
+    }
+
+    format!(
+        "Unknown agent profile '{}'. Run /agent list to see available profiles.",
+        name
+    )
+}
