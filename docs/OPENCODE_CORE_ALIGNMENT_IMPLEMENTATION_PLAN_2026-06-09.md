@@ -487,4 +487,46 @@ cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml -q
    - reload smoke 扩展到 compaction/revert/closeout。
 
 这三块做完后，再推进 wake/drain 和 export payload，项目会更接近 opencode 的核心
+
+---
+
+## 13. 实施记录
+
+### 2026-06-10 Phase A — SessionPart metadata fix + TUI resume
+
+**提交：** `8e91c1b1`
+
+- 新增 v16 migration：`message_id TEXT` 列 + 索引
+- `SessionPart` 所有 variant 添加 `message_id: Option<String>`
+- `PersistedSessionPart` DTO 及所有 DB 读写路径更新
+- 移除死代码 `ToolPartStatus::Cancelled`（零引用）
+- 修复 TUI sidebar Enter 调用 `restore_session()` 而不是裸 `switch_to_session()`
+- 全部测试通过（2449 passed），fmt + clippy clean
+
+### 2026-06-10 Phase B — Durable settlement recovery
+
+**提交：** `843e308f`
+
+- `ConversationLoop::recover_unsettled_tools()` 扫描 session_parts 中仍为 running/pending 的 tool/shell
+- 在 turn 开始前写入 `tool_failed` 事件，错误信息含 "interrupted before settlement"
+- 确保 crash / provider interrupt 后重启不会留下永久 running tool
+- 全部测试通过（2448-2449 passed），fmt + clippy clean
+
+### 2026-06-10 Phase C — Run Coordinator wake/drain contract
+
+**提交：** `4b69617e`
+
+- `SessionRunCoordinator` 扩展 wake 语义：
+  - `wake()` — CAS 设置 wake 标志，返回 true 表示应由调用方启动 drain
+  - `accept_wake()` — 清除标志，进入 drain loop
+  - `is_wake_pending()` — 查询待处理 wake
+- API `spawn_queue_drain()` 使用 `wake()` 防止并发 drain spawn
+- TUI `on_tick` 在 `finish_run()` 后使用 `wake()/accept_wake()` 保护同 session drain
+- 全部测试通过（2449 passed），fmt + clippy clean
+
+### 剩余工作
+
+- **Phase D**：Tool Output 一等入口与 Export Payload（工具输出路径审计、TUI/Desktop URI action、导出 payload 增强）
+- **Phase E**：Event stream coverage 已较完整，`StreamEventMirror` 覆盖全部 StreamEvent 变体；可补 compaction/revert 事件集成
+- **Phase F**：端到端 smoke 测试（kill/restart 后 parts 顺序稳定、tool 不悬空、export 完整）
 可靠性：不是“功能列表相似”，而是 session 的事实来源和恢复语义真正站稳。
