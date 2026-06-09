@@ -909,6 +909,7 @@ mod tests {
                     saved_config_path: None,
                     recovery_hint: Some("Ask the user before retrying.".to_string()),
                 }),
+                diff_preview: None,
             });
 
         let panel = render_runtime_panel(&app, RuntimePanelKind::Approval).await;

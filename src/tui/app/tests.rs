@@ -461,6 +461,7 @@ fn test_contextual_palette_prioritizes_pending_permission_actions() {
         prompt: "Allow?".to_string(),
         review: None,
         audit: None,
+        diff_preview: None,
     });
 
     let commands = app.contextual_palette_commands();
@@ -567,6 +568,7 @@ async fn test_permissions_slash_includes_pending_approval_panel() {
         prompt: "Approve shell command?".to_string(),
         review: None,
         audit: None,
+        diff_preview: None,
     });
 
     app.handle_slash_command("/permissions").await;
@@ -609,6 +611,7 @@ fn test_command_palette_render_prioritizes_contextual_permission_actions() {
         prompt: "Allow?".to_string(),
         review: None,
         audit: None,
+        diff_preview: None,
     });
     app.open_command_palette();
 
@@ -766,6 +769,7 @@ fn test_session_permission_rule_is_added_when_approving_for_session() {
         prompt: "Approve MCP?".to_string(),
         review: None,
         audit: None,
+        diff_preview: None,
     });
     app.permission_response_tx = Some(tx);
     app.mode = AppMode::PermissionApproval;
@@ -809,6 +813,7 @@ fn test_bash_session_permission_rule_uses_command_scope() {
         prompt: "Approve bash?".to_string(),
         review: None,
         audit: None,
+        diff_preview: None,
     });
     app.permission_response_tx = Some(tx);
     app.mode = AppMode::PermissionApproval;
@@ -950,6 +955,7 @@ fn test_respond_to_permission() {
         prompt: "Approve bash?".to_string(),
         review: None,
         audit: None,
+        diff_preview: None,
     });
     app.permission_response_tx = Some(tx);
     app.mode = AppMode::PermissionApproval;
@@ -983,6 +989,7 @@ fn test_compute_permission_diff_file_write() {
         prompt: "Approve file write?".to_string(),
         review: None,
         audit: None,
+        diff_preview: None,
     });
 
     let (title, diff) = app.compute_permission_diff().unwrap();
@@ -1009,6 +1016,7 @@ fn test_compute_permission_diff_file_edit_replace() {
         prompt: "Approve file edit?".to_string(),
         review: None,
         audit: None,
+        diff_preview: None,
     });
 
     let (title, diff) = app.compute_permission_diff().unwrap();
@@ -1036,6 +1044,7 @@ fn test_compute_permission_diff_file_edit_insert() {
         prompt: "Approve file edit?".to_string(),
         review: None,
         audit: None,
+        diff_preview: None,
     });
 
     let (title, diff) = app.compute_permission_diff().unwrap();
@@ -1061,6 +1070,7 @@ fn test_compute_permission_diff_bash() {
         prompt: "Approve bash?".to_string(),
         review: None,
         audit: None,
+        diff_preview: None,
     });
 
     let (title, diff) = app.compute_permission_diff().unwrap();
@@ -1108,6 +1118,7 @@ fn test_compute_permission_diff_unsupported_tool() {
         prompt: "Approve grep?".to_string(),
         review: None,
         audit: None,
+        diff_preview: None,
     });
 
     assert!(app.compute_permission_diff().is_none());

@@ -15,6 +15,8 @@ pub struct ToolApprovalRequest {
     pub prompt: String,
     pub review: Option<crate::engine::human_review::HumanReviewRequest>,
     pub audit: Option<crate::engine::human_review::HumanReviewAuditRecord>,
+    /// Optional diff preview for file_write/file_edit permissions (first ~10 lines).
+    pub diff_preview: Option<String>,
 }
 
 impl ToolApprovalRequest {

@@ -5,7 +5,7 @@
 use crate::{
     state::{MessageItem, MessageRole},
     tui::{
-        app::TuiApp,
+        app::{SidebarPanel, TuiApp},
         components::message,
         tool_view::{ToolRunStatus, ToolRunView},
     },
@@ -756,8 +756,8 @@ fn tool_viewer_line_style(raw: &str, app: &TuiApp) -> Style {
 /// 渲染会话侧边栏（带搜索、pin、元数据、面板切换）
 pub fn render_sidebar(f: &mut Frame, app: &TuiApp, area: Rect) {
     match app.sidebar_panel {
-        crate::tui::app::SidebarPanel::Sessions => render_sessions_panel(f, app, area),
-        crate::tui::app::SidebarPanel::Context => render_context_panel(f, app, area),
+        SidebarPanel::Sessions => render_sessions_panel(f, app, area),
+        SidebarPanel::Context => render_context_panel(f, app, area),
     }
 }
 

@@ -115,6 +115,7 @@ impl ReflectionGateController {
                         ),
                     ),
                     audit: None,
+                    diff_preview: None,
                 })
                 .await
             {

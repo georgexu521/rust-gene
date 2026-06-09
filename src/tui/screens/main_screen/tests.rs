@@ -337,6 +337,7 @@ fn render_permission_approval_shows_bash_risk_and_decisions() {
             .to_string(),
         review: None,
         audit: None,
+        diff_preview: None,
     };
 
     let rendered = render_permission_approval_text(&req);
@@ -369,6 +370,7 @@ fn render_permission_approval_shows_file_write_scope_and_preview() {
         prompt: "Permission explanation: decision=Ask, risk=medium, reason=file write".to_string(),
         review: None,
         audit: None,
+        diff_preview: None,
     };
 
     let rendered = render_permission_approval_text(&req);

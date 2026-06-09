@@ -390,6 +390,7 @@ impl PermissionController {
                     .record
                     .as_ref()
                     .map(|record| record.review.clone()),
+                diff_preview: None,
             };
             let mut approval_response = None;
             match channel.submit(request).await {

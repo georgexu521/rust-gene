@@ -249,6 +249,32 @@ pub fn render_permission_approval(
             }
         }
 
+        // Inline diff preview
+        if let Some(ref diff) = req.diff_preview {
+            if !diff.is_empty() {
+                lines.push(Line::from(""));
+                lines.push(Line::from(Span::styled(
+                    "Change Preview",
+                    Style::default().add_modifier(Modifier::BOLD),
+                )));
+                for line_text in diff.lines().take(6) {
+                    let style = if line_text.starts_with('+') {
+                        Style::default().fg(tokens.tone.ok)
+                    } else if line_text.starts_with('-') {
+                        Style::default().fg(tokens.tone.err)
+                    } else {
+                        Style::default().fg(tokens.fg.faint)
+                    };
+                    let truncated = if line_text.len() > 55 {
+                        format!("{}…", &line_text[..55])
+                    } else {
+                        line_text.to_string()
+                    };
+                    lines.push(Line::from(Span::styled(format!("  {truncated}"), style)));
+                }
+            }
+        }
+
         lines.push(Line::from(vec![
             Span::styled(
                 "d",

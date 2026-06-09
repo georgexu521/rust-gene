@@ -1,4 +1,5 @@
 use super::{centered_rect, TuiApp};
+use crate::tui::app::AppMode;
 use ratatui::{
     layout::Rect,
     style::{Color, Modifier, Style},
@@ -224,8 +225,19 @@ pub fn render_command_palette(f: &mut Frame, app: &TuiApp, area: Rect) {
 
 pub fn render_shortcut_help(f: &mut Frame, app: &TuiApp, area: Rect) {
     let popup_area = centered_rect(68, 58, area);
+    let mode_label = match app.mode {
+        AppMode::VimNormal => "Vim",
+        AppMode::PermissionApproval => "Approval",
+        AppMode::DiffViewer => "Diff",
+        AppMode::CommandPalette => "Palette",
+        _ => "",
+    };
     let title = if app.shortcut_help_filter.is_empty() {
-        " Shortcuts (? to close, / to filter) ".to_string()
+        if mode_label.is_empty() {
+            " Shortcuts (? to close, / to filter) ".to_string()
+        } else {
+            format!(" {mode_label} Shortcuts (? to close, / to filter) ")
+        }
     } else {
         format!(" Shortcuts (filter: {}) ", app.shortcut_help_filter)
     };
