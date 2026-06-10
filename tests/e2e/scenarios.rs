@@ -2,8 +2,8 @@
 //!
 //! These tests verify complete flows: user prompt → tool call → observation → closeout.
 
-use priority_agent::services::api::LlmProvider;
 use super::mock_provider::MockProvider;
+use priority_agent::services::api::LlmProvider;
 
 #[test]
 fn e2e_smoke_mock_provider_compiles() {

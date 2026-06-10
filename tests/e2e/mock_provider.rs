@@ -30,10 +30,7 @@ impl MockProvider {
 
 #[async_trait]
 impl LlmProvider for MockProvider {
-    async fn chat(
-        &self,
-        _request: ChatRequest,
-    ) -> anyhow::Result<ChatResponse> {
+    async fn chat(&self, _request: ChatRequest) -> anyhow::Result<ChatResponse> {
         let mut responses = self.responses.lock().unwrap();
         if responses.is_empty() {
             anyhow::bail!("MockProvider out of responses");
