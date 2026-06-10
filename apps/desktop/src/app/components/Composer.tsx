@@ -16,6 +16,8 @@ import {
   DetailLevelId,
   PermissionModeId,
   PermissionModeOption,
+  AgentModeId,
+  AgentModeOption,
   DesktopRunContext,
   ProviderModelStatus,
 } from "../../runtime/desktopApi";
@@ -28,21 +30,24 @@ type ComposerProps = {
   providerStatus: ProviderModelStatus | null;
   detailLevel?: DetailLevelId | null;
   permissionMode?: PermissionModeId | null;
-  permissionOptions: PermissionModeOption[];
+  agentMode?: AgentModeId | null;
+  agentModeOptions?: AgentModeOption[] | null;
+  permissionOptions?: PermissionModeOption[] | null;
   isEmptyState?: boolean;
-  isRunning: boolean;
+  isRunning?: boolean;
   onComposerChange: (value: string) => void;
-  onAddContext: (context: DesktopRunContext) => void;
-  onAddFileContext: () => void;
-  onOpenContext: (context: DesktopRunContext) => void;
-  onRemoveContext: (type: DesktopRunContext["type"]) => void;
+  onOpenContext: () => void;
   onBrowseProject: () => void;
   onSelectProject: (path: string) => void;
   onSelectRecentProject: (path: string) => void;
-  onDetailLevelChange: (level: DetailLevelId) => void;
-  onPermissionModeChange: (mode: PermissionModeId) => void;
-  onProviderModelChange: (providerId: string, model: string) => void;
-  onSubmit: (event: FormEvent<HTMLFormElement>) => void;
+  onDetailLevelChange?: (level: DetailLevelId) => void;
+  onPermissionModeChange?: (mode: PermissionModeId) => void;
+  onAgentModeChange?: (mode: AgentModeId) => void;
+  onProviderModelChange: () => void;
+  onAddContext: (context: DesktopRunContext) => void;
+  onAddFileContext: (path: string) => void;
+  onRemoveContext: (id: string) => void;
+  onSubmit: (message: string) => void;
 };
 
 export function Composer({
@@ -54,6 +59,8 @@ export function Composer({
   detailLevel,
   permissionMode,
   permissionOptions,
+  agentMode,
+  agentModeOptions,
   isEmptyState = false,
   isRunning,
   onComposerChange,
@@ -63,6 +70,7 @@ export function Composer({
   onSelectRecentProject,
   onDetailLevelChange,
   onPermissionModeChange,
+  onAgentModeChange,
   onProviderModelChange,
   onAddContext,
   onAddFileContext,
@@ -383,6 +391,28 @@ export function Composer({
                     </button>
                   ))}
                 </div>
+                {agentModeOptions && agentModeOptions.length > 0 ? (
+                  <>
+                    <div className="composer-popover-title secondary">Agent</div>
+                    <div className="composer-option-list compact">
+                      {agentModeOptions.map((option) => (
+                        <button
+                          aria-label={`Use agent ${option.label}`}
+                          className={option.id === agentMode ? "active" : ""}
+                          key={option.id}
+                          type="button"
+                          onClick={() => onAgentModeChange(option.id)}
+                        >
+                          <span>
+                            <strong>{option.label}</strong>
+                            <small>{option.description}</small>
+                          </span>
+                          {option.id === agentMode ? <Check aria-hidden="true" size={15} /> : null}
+                        </button>
+                      ))}
+                    </div>
+                  </>
+                ) : null}
                 <p>Current mode: {modeLabel}. Current permission: {permissionLabel}.</p>
               </div>
             ) : null}

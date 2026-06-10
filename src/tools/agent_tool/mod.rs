@@ -182,7 +182,7 @@ impl AgentTool {
     }
 
     #[allow(dead_code)]
-    pub fn with_profiles(profiles: &[crate::agent::profiles::AgentProfile]) -> Self {
+    pub fn with_profiles(_profiles: &[crate::agent::profiles::AgentProfile]) -> Self {
         Self {
             description: description::build_tool_description(std::path::Path::new(".")),
         }

@@ -211,6 +211,7 @@ export type DesktopSettings = {
   active_session_id?: string | null;
   permission_mode: PermissionModeId;
   detail_level: DetailLevelId;
+  agent_mode: AgentModeId;
   provider_name?: string | null;
   model?: string | null;
   settings_path: string;
@@ -226,6 +227,14 @@ export type DesktopStartupState = {
 };
 
 export type DetailLevelId = "coding" | "daily";
+
+export type AgentModeId = "auto" | "build" | "plan" | "explore" | "review";
+
+export type AgentModeOption = {
+  id: AgentModeId;
+  label: string;
+  description: string;
+};
 
 export type PermissionModeId = "default" | "auto_low_risk" | "auto" | "read_only";
 
@@ -383,6 +392,7 @@ let webPreviewSettings: DesktopSettings = {
   active_session_id: "web-preview",
   permission_mode: "auto",
   detail_level: "coding",
+  agent_mode: "auto",
   provider_name: "minimax",
   model: "MiniMax-M3",
   settings_path: "web-preview",
@@ -668,6 +678,29 @@ export function setDetailLevel(level: DetailLevelId): Promise<DesktopSettings> {
   }
 
   return invoke("set_detail_level", { level });
+}
+
+export function setAgentMode(mode: AgentModeId): Promise<DesktopSettings> {
+  if (!isTauriRuntime()) {
+    webPreviewSettings = { ...webPreviewSettings, agent_mode: mode };
+    return Promise.resolve(webPreviewSettings);
+  }
+
+  return invoke("set_agent_mode", { mode });
+}
+
+export function agentModeOptions(): Promise<AgentModeOption[]> {
+  if (!isTauriRuntime()) {
+    return Promise.resolve([
+      { id: "auto", label: "Auto", description: "Let the agent choose the right mode" },
+      { id: "build", label: "Build", description: "Full coding — read, edit, shell, validation" },
+      { id: "plan", label: "Plan", description: "Explore and plan — no file changes" },
+      { id: "explore", label: "Explore", description: "Read and search — no edits" },
+      { id: "review", label: "Review", description: "Diff analysis and findings — no edits" },
+    ]);
+  }
+
+  return invoke("agent_mode_options");
 }
 
 export function permissionModeOptions(): Promise<PermissionModeOption[]> {

@@ -23,6 +23,7 @@ import {
   DesktopWorkbenchSnapshot,
   DiagnosticStatus,
   DetailLevelId,
+  AgentModeId,
   DesktopHealth,
   DesktopRunContext,
   ProviderModelStatus,
@@ -30,6 +31,7 @@ import {
   DesktopSettings,
   PermissionModeId,
   PermissionModeOption,
+  AgentModeOption,
   ProviderSetupInfo,
   RecentSession,
   answerPermission,
@@ -50,6 +52,8 @@ import {
   openSettingsFolder,
   openShellProfile,
   permissionModeOptions,
+  setAgentMode,
+  agentModeOptions,
   pickProjectDirectory,
   pickProjectFile,
   providerModelStatus,
@@ -99,6 +103,7 @@ export function App() {
   const [health, setHealth] = useState<DesktopHealth | null>(null);
   const [settings, setSettings] = useState<DesktopSettings | null>(null);
   const [permissionOptions, setPermissionOptions] = useState<PermissionModeOption[]>([]);
+  const [agentModeOpts, setAgentModeOpts] = useState<AgentModeOption[]>([]);
   const [providerSetup, setProviderSetup] = useState<ProviderSetupInfo | null>(null);
   const [providerStatus, setProviderStatus] = useState<ProviderModelStatus | null>(null);
   const [projectPath, setProjectPath] = useState("");
@@ -164,6 +169,7 @@ export function App() {
       diagnosticsResult,
       providerSetupResult,
       permissionOptionsResult,
+      agentModeOptionsResult,
       providerStatusResult,
     ] = await Promise.allSettled([
       desktopHealth(),
@@ -172,6 +178,7 @@ export function App() {
       desktopDiagnostics(),
       providerSetupInfo(),
       permissionModeOptions(),
+      agentModeOptions(),
       providerModelStatus(),
     ]);
 
@@ -182,6 +189,7 @@ export function App() {
       diagnosticsResult,
       providerSetupResult,
       permissionOptionsResult,
+      agentModeOptionsResult,
       providerStatusResult,
     ]
       .filter((result): result is PromiseRejectedResult => result.status === "rejected")
@@ -199,6 +207,9 @@ export function App() {
     }
     if (permissionOptionsResult.status === "fulfilled") {
       setPermissionOptions(permissionOptionsResult.value);
+    }
+    if (agentModeOptionsResult.status === "fulfilled") {
+      setAgentModeOpts(agentModeOptionsResult.value);
     }
     if (providerSetupResult.status === "fulfilled") {
       setProviderSetup(providerSetupResult.value);
@@ -371,6 +382,14 @@ export function App() {
   async function handleDetailLevelChange(level: DetailLevelId) {
     try {
       setSettings(await setDetailLevel(level));
+    } catch (err) {
+      setRunState((current) => withError(current, err));
+    }
+  }
+
+  async function handleAgentModeChange(mode: AgentModeId) {
+    try {
+      setSettings(await setAgentMode(mode));
     } catch (err) {
       setRunState((current) => withError(current, err));
     }
@@ -922,6 +941,8 @@ export function App() {
           providerStatus={providerStatus}
           detailLevel={settings?.detail_level}
           permissionMode={settings?.permission_mode}
+          agentMode={settings?.agent_mode}
+          agentModeOptions={agentModeOpts}
           permissionOptions={permissionOptions}
           isEmptyState={isEmptyConversation}
           isRunning={runState.isRunning}
@@ -935,6 +956,7 @@ export function App() {
           onSelectRecentProject={(path) => void handleSelectRecentProject(path)}
           onDetailLevelChange={(level) => void handleDetailLevelChange(level)}
           onPermissionModeChange={(mode) => void handlePermissionModeChange(mode)}
+          onAgentModeChange={(mode) => void handleAgentModeChange(mode)}
           onProviderModelChange={(providerId, model) =>
             void handleProviderModelChange(providerId, model)
           }

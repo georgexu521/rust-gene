@@ -24,6 +24,7 @@ struct DesktopAppState {
     active_session_id: Mutex<Option<String>>,
     permission_mode: Mutex<Option<String>>,
     detail_level: Mutex<Option<String>>,
+    agent_mode: Mutex<Option<String>>,
     provider_name: Mutex<Option<String>>,
     model: Mutex<Option<String>>,
     recent_projects: Mutex<Vec<PathBuf>>,
@@ -155,6 +156,7 @@ struct DesktopSettingsResponse {
     active_session_id: Option<String>,
     permission_mode: String,
     detail_level: String,
+    agent_mode: String,
     provider_name: Option<String>,
     model: Option<String>,
     settings_path: String,
@@ -283,6 +285,12 @@ async fn desktop_settings(
         .to_string(),
         detail_level: normalized_detail_level_label(state.detail_level.lock().await.as_deref())
             .to_string(),
+        agent_mode: state
+            .agent_mode
+            .lock()
+            .await
+            .clone()
+            .unwrap_or_else(|| "auto".to_string()),
         provider_name: state.provider_name.lock().await.clone(),
         model: state.model.lock().await.clone(),
         settings_path: state.settings_path.display().to_string(),
@@ -326,6 +334,65 @@ async fn set_detail_level(
     }
     persist_current_settings(&state).await?;
     desktop_settings(state).await
+}
+
+#[tauri::command]
+async fn set_agent_mode(
+    mode: String,
+    state: State<'_, DesktopAppState>,
+) -> Result<DesktopSettingsResponse, String> {
+    let normalized = mode.trim().to_ascii_lowercase();
+    if !matches!(normalized.as_str(), "auto" | "build" | "plan" | "explore" | "review") {
+        return Err(format!(
+            "Invalid agent mode '{}'. Valid modes: auto, build, plan, explore, review.",
+            mode
+        ));
+    }
+    {
+        let mut agent_mode = state.agent_mode.lock().await;
+        *agent_mode = Some(normalized);
+    }
+    persist_current_settings(&state).await?;
+    desktop_settings(state).await
+}
+
+#[tauri::command]
+fn agent_mode_options() -> Vec<AgentModeOption> {
+    use priority_agent::engine::agent_mode::AgentMode;
+    vec![
+        AgentModeOption {
+            id: "auto".to_string(),
+            label: "Auto".to_string(),
+            description: "Let the agent choose the right mode".to_string(),
+        },
+        AgentModeOption {
+            id: "build".to_string(),
+            label: "Build".to_string(),
+            description: "Full coding — read, edit, shell, validation".to_string(),
+        },
+        AgentModeOption {
+            id: "plan".to_string(),
+            label: "Plan".to_string(),
+            description: "Explore and plan — no file changes".to_string(),
+        },
+        AgentModeOption {
+            id: "explore".to_string(),
+            label: "Explore".to_string(),
+            description: "Read and search — no edits".to_string(),
+        },
+        AgentModeOption {
+            id: "review".to_string(),
+            label: "Review".to_string(),
+            description: "Diff analysis and findings — no edits".to_string(),
+        },
+    ]
+}
+
+#[derive(Debug, Serialize)]
+struct AgentModeOption {
+    id: String,
+    label: String,
+    description: String,
 }
 
 #[tauri::command]
@@ -938,6 +1005,8 @@ async fn send_message(
     contexts: Vec<DesktopRunContext>,
     state: State<'_, DesktopAppState>,
 ) -> Result<(), String> {
+    let agent_mode = state.agent_mode.lock().await.clone();
+    // ... rest of function
     let diagnostic_logs_path = state.diagnostic_logs_path.clone();
     let _ = append_desktop_log(
         &diagnostic_logs_path,
@@ -1682,7 +1751,9 @@ pub fn run() {
             desktop_settings,
             set_permission_mode,
             set_detail_level,
+            set_agent_mode,
             permission_mode_options,
+            agent_mode_options,
             provider_model_status,
             set_provider_model,
             desktop_diagnostics,
