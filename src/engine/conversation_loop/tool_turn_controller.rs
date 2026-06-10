@@ -13,6 +13,7 @@ pub(super) struct ToolTurnAppendContext<'a> {
     pub(super) messages: &'a mut Vec<Message>,
     pub(super) session_id: Option<&'a str>,
     pub(super) working_dir: &'a Path,
+    pub(super) store: Option<&'a crate::session_store::SessionStore>,
 }
 
 pub(super) struct ToolTurnController;
@@ -31,6 +32,7 @@ impl ToolTurnController {
             context.messages,
             context.session_id,
             context.working_dir,
+            context.store,
         )
         .await;
         let result_budget = ContextBudgetController::observe_tool_result(&normalized);
@@ -72,6 +74,7 @@ mod tests {
                 messages: &mut messages,
                 session_id: Some("session-test"),
                 working_dir: std::path::Path::new("."),
+                store: None,
             },
         )
         .await;

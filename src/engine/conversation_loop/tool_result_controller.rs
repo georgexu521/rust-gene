@@ -262,6 +262,7 @@ pub(super) async fn append_provider_tool_result(
     messages: &mut Vec<Message>,
     session_id: Option<&str>,
     working_dir: &Path,
+    store: Option<&crate::session_store::SessionStore>,
 ) -> NormalizedToolResult {
     let normalized =
         ToolResultNormalizer::normalize_after_execution(tool_call, result, session_id, working_dir)
@@ -269,10 +270,12 @@ pub(super) async fn append_provider_tool_result(
     normalized.record_evidence(evidence_ledger, tool_call, result);
     tool_results_text.push_str(&normalized.ui_content);
     tool_results_text.push('\n');
-    messages.push(Message::tool(
-        tool_call.id.clone(),
-        normalized.model_content.clone(),
-    ));
+    let tool_msg = Message::tool(tool_call.id.clone(), normalized.model_content.clone());
+    messages.push(tool_msg.clone());
+    // Persist tool result so resume/export see it.
+    if let (Some(s), Some(sid)) = (store, session_id) {
+        let _ = crate::session_store::message_ops::persist_runtime_message(s, sid, &tool_msg);
+    }
     normalized
 }
 

@@ -173,6 +173,7 @@ impl PatchSynthesisExecutor {
                     messages: context.messages,
                     session_id: Some(context.session_id),
                     working_dir: &context.working_dir,
+                    store: None,
                 },
             )
             .await;

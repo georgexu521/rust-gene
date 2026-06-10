@@ -17,7 +17,7 @@ pub mod event_mirror;
 mod event_store;
 pub mod export;
 mod learning_store;
-mod message_ops;
+pub mod message_ops;
 mod records;
 mod revert_store;
 mod search;

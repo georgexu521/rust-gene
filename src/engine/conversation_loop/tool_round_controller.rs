@@ -69,6 +69,14 @@ impl ToolRoundController {
         } = context;
 
         messages.push(Message::assistant_with_tools(content, tool_calls.to_vec()));
+        // Persist the tool-call assistant message so resume/export see it.
+        if let Some(ref store) = context.conversation.session_store {
+            let _ = crate::session_store::message_ops::persist_runtime_message(
+                store,
+                &context.conversation.session_id,
+                messages.last().unwrap(),
+            );
+        }
         let has_changes_before_tools = is_programming_workflow
             && WorkflowChangeTracker::has_changes_since(runtime.baseline_git_status_files);
         let action_checkpoint_active_before_batch =
@@ -121,6 +129,7 @@ impl ToolRoundController {
             action_checkpoint_active: action_checkpoint_active_before_batch,
             destructive_scope: runtime.destructive_scope,
             baseline_git_status_files: runtime.baseline_git_status_files,
+            store: conversation.session_store.as_deref(),
         })
         .await
     }

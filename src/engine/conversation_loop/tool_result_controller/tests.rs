@@ -23,6 +23,7 @@ async fn appends_provider_tool_result_and_records_evidence() {
         &mut messages,
         Some("session-test"),
         std::path::Path::new("."),
+        None,
     )
     .await;
 

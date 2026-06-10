@@ -222,3 +222,84 @@ impl MessageRecord {
         }
     }
 }
+
+pub fn persist_runtime_message(
+    store: &SessionStore,
+    session_id: &str,
+    msg: &crate::services::api::Message,
+) -> SqlResult<()> {
+    match msg {
+        crate::services::api::Message::Assistant {
+            content,
+            tool_calls,
+        } => {
+            let tc_json = tool_calls
+                .as_ref()
+                .map(|tc| serde_json::to_value(tc).ok())
+                .flatten();
+            store.add_message(session_id, "assistant", content, tc_json.as_ref(), None)?;
+        }
+        crate::services::api::Message::Tool {
+            content,
+            tool_call_id,
+        } => {
+            let tc_id = Some(tool_call_id.as_str());
+            store.add_message(session_id, "tool", content, None, tc_id)?;
+        }
+        // User messages are handled by streaming.rs.
+        // System messages should not be persisted by this helper.
+        _ => {}
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::services::api::{Message, ToolCall};
+
+    fn test_store() -> SessionStore {
+        SessionStore::in_memory().expect("in-memory store")
+    }
+
+    #[test]
+    fn persist_assistant_with_tool_calls() {
+        let store = test_store();
+        store.create_session("s1", "test", "test-model").unwrap();
+        let tc = ToolCall {
+            id: "call_1".to_string(),
+            name: "file_read".to_string(),
+            arguments: serde_json::json!({"path": "/tmp/test.txt"}),
+        };
+        let msg = Message::assistant_with_tools("I'll read that file", vec![tc]);
+        persist_runtime_message(&store, "s1", &msg).unwrap();
+
+        let records = store.get_messages("s1").unwrap();
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].role, "assistant");
+        assert!(records[0].content.contains("I'll read that file"));
+        assert!(records[0].tool_calls.is_some());
+    }
+
+    #[test]
+    fn persist_tool_result() {
+        let store = test_store();
+        store.create_session("s1", "test", "test-model").unwrap();
+        let msg = Message::tool("call_1", "file content here");
+        persist_runtime_message(&store, "s1", &msg).unwrap();
+
+        let records = store.get_messages("s1").unwrap();
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].role, "tool");
+        assert_eq!(records[0].tool_call_id.as_deref(), Some("call_1"));
+    }
+
+    #[test]
+    fn skip_system_and_user() {
+        let store = test_store();
+        store.create_session("s1", "test", "test-model").unwrap();
+        persist_runtime_message(&store, "s1", &Message::system("system prompt")).unwrap();
+        persist_runtime_message(&store, "s1", &Message::user("hello")).unwrap();
+        assert!(store.get_messages("s1").unwrap().is_empty());
+    }
+}

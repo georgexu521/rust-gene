@@ -33,6 +33,7 @@ pub(super) struct ToolBatchProcessingContext<'a> {
     pub(super) action_checkpoint_active: bool,
     pub(super) destructive_scope: &'a DestructiveScopeContract,
     pub(super) baseline_git_status_files: &'a HashSet<PathBuf>,
+    pub(super) store: Option<&'a crate::session_store::SessionStore>,
 }
 
 pub(super) struct ToolBatchProcessingOutcome {
@@ -76,6 +77,7 @@ impl ToolBatchResultProcessor {
             action_checkpoint_active,
             destructive_scope,
             baseline_git_status_files,
+            store,
         } = context;
 
         let mut outcome = ToolBatchProcessingOutcome {
@@ -114,6 +116,7 @@ impl ToolBatchResultProcessor {
                     messages: &mut *messages,
                     session_id: Some(session_id),
                     working_dir,
+                    store,
                 },
             )
             .await;
@@ -506,6 +509,7 @@ mod tests {
             action_checkpoint_active: false,
             destructive_scope: &destructive_scope,
             baseline_git_status_files: &baseline,
+            store: None,
         })
         .await;
 
@@ -567,6 +571,7 @@ mod tests {
             action_checkpoint_active: true,
             destructive_scope: &destructive_scope,
             baseline_git_status_files: &baseline,
+            store: None,
         })
         .await;
 
@@ -628,6 +633,7 @@ mod tests {
             action_checkpoint_active: false,
             destructive_scope: &destructive_scope,
             baseline_git_status_files: &baseline,
+            store: None,
         })
         .await;
 
@@ -693,6 +699,7 @@ mod tests {
             action_checkpoint_active: false,
             destructive_scope: &destructive_scope,
             baseline_git_status_files: &baseline,
+            store: None,
         })
         .await;
         assert!(first_outcome
@@ -728,6 +735,7 @@ mod tests {
             action_checkpoint_active: false,
             destructive_scope: &destructive_scope,
             baseline_git_status_files: &baseline,
+            store: None,
         })
         .await;
 
@@ -791,6 +799,7 @@ mod tests {
             action_checkpoint_active: false,
             destructive_scope: &destructive_scope,
             baseline_git_status_files: &baseline,
+            store: None,
         })
         .await;
 
@@ -865,6 +874,7 @@ mod tests {
             action_checkpoint_active: false,
             destructive_scope: &destructive_scope,
             baseline_git_status_files: &baseline,
+            store: None,
         })
         .await;
 
