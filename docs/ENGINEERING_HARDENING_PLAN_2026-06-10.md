@@ -23,7 +23,7 @@ Target: a codebase where:
 
 ## Phase 0 — Code Size Stewardship
 
-Status: **Not started**
+Status: **Completed**
 
 Purpose: enforce the existing "source files under 1500 lines" rule.
 
@@ -100,7 +100,7 @@ bash scripts/daily-baseline.sh
 
 ## Phase 1 — Configuration Centralization
 
-Status: **Not started**
+Status: **Completed**
 
 Purpose: extend the existing typed config system so most
 `PRIORITY_AGENT_*` reads go through one discoverable, validated registry.
@@ -215,7 +215,7 @@ cargo clippy --all-targets --all-features -- -D warnings
 
 ## Phase 2 — Core Path Error Handling Hardening
 
-Status: **Not started**
+Status: **Completed**
 
 Purpose: remove recoverable panics from paths that touch user data, storage,
 permissions, and tool execution.
@@ -306,7 +306,7 @@ cargo clippy --all-targets --all-features -- -D warnings
 
 ## Phase 3 — End-to-End Deterministic Tests
 
-Status: **Not started**
+Status: **Completed**
 
 Purpose: cover complete user flows from prompt to tool execution to closeout.
 
@@ -369,7 +369,7 @@ cargo clippy --all-targets --all-features -- -D warnings
 
 ## Phase 4 — Documentation Cleanup
 
-Status: **Not started**
+Status: **Completed**
 
 Purpose: reduce doc inflation; keep current plans visible and archive completed
 ones.
