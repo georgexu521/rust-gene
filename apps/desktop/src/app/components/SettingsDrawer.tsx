@@ -18,6 +18,7 @@ import {
   PermissionModeOption,
   ProviderSetupInfo,
 } from "../../runtime/desktopApi";
+import { saveProviderCredential as saveCred } from "../../runtime/desktopApi";
 
 type SettingsDrawerProps = {
   isOpen: boolean;
@@ -345,6 +346,26 @@ function ProviderSetupGuide({
   onOpenShellProfile,
   onRefresh,
 }: ProviderSetupGuideProps) {
+  const [apiKey, setApiKey] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [saveMsg, setSaveMsg] = useState("");
+
+  const handleSave = async () => {
+    if (!apiKey.trim()) return;
+    setSaving(true);
+    setSaveMsg("");
+    try {
+      const result = await saveCred("minimax", apiKey.trim());
+      setSaveMsg(result);
+      setApiKey("");
+      onRefresh();
+    } catch (err) {
+      setSaveMsg(String(err));
+    } finally {
+      setSaving(false);
+    }
+  };
+
   if (!needsSetup) {
     return (
       <div className="provider-guide ok">
@@ -358,8 +379,25 @@ function ProviderSetupGuide({
     <div className="provider-guide warning">
       <div className="provider-guide-title">Provider key required</div>
       <p>
-        Add one provider key to your shell profile, then restart the desktop app
-        or reload the environment before refreshing diagnostics.
+        Paste your API key below to save it directly, or follow the shell
+        profile steps.
+      </p>
+      <div className="settings-actions" style={{ marginBottom: "0.75rem" }}>
+        <input
+          type="password"
+          placeholder="Paste your API key here"
+          value={apiKey}
+          onChange={(e) => setApiKey(e.target.value)}
+          style={{ flex: 1, padding: "0.4rem 0.5rem", fontSize: "0.85rem" }}
+        />
+        <button type="button" onClick={handleSave} disabled={saving || !apiKey.trim()}>
+          {saving ? "Saving..." : "Save key"}
+        </button>
+      </div>
+      {saveMsg ? <p className="settings-copy">{saveMsg}</p> : null}
+      <p style={{ marginTop: "1rem" }}>
+        Alternatively, add one provider key to your shell profile, then restart
+        the desktop app.
       </p>
       <ol>
         <li>Open the shell profile file.</li>

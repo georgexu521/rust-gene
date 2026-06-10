@@ -565,6 +565,12 @@ async fn open_shell_profile() -> Result<(), String> {
 }
 
 #[tauri::command]
+async fn save_provider_credential(provider_id: String, key: String) -> Result<String, String> {
+    priority_agent::services::api::credentials::save_credential(&provider_id, &key)?;
+    Ok(format!("Saved key for {}", provider_id))
+}
+
+#[tauri::command]
 async fn record_native_smoke_result(
     result: String,
     state: State<'_, DesktopAppState>,
@@ -1762,6 +1768,7 @@ pub fn run() {
             open_settings_folder,
             open_diagnostics_folder,
             open_shell_profile,
+            save_provider_credential,
             record_native_smoke_result,
             select_project,
             new_conversation,
