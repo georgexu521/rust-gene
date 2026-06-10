@@ -1101,11 +1101,21 @@ impl Tool for AgentTool {
     }
 
     fn description(&self) -> &str {
-        "Spawn an isolated sub-agent for a self-contained task. \
-         It is an independent, parallel worker with a forked tool set; write tools are excluded by default. \
-         Use for background research, code exploration, verification, or work that can run in parallel. \
-         Do not use when delegation blocks the current next step, needs tight coordination, or is a trivial answer. \
-         Profiles: explorer, verifier, planner, implementer, debugger. Set timeout_secs; overdue agents return partial results."
+        "Launch a new agent to handle complex, multistep tasks autonomously. \
+         When using the agent tool, you must specify a role parameter to select which agent type to use. \
+         \
+         When NOT to use the agent tool: if you want to read a specific file, use file_read or glob; \
+         if you are searching for a specific class definition, use grep; \
+         if you are searching within 2-3 files, use file_read instead. \
+         If no available role is a good fit, use other tools directly. \
+         \
+         Usage notes: \
+         1. Launch multiple agents concurrently whenever possible, to maximize performance; use a single message with multiple tool uses. \
+         2. Once you have delegated work to an agent, do not duplicate that work yourself. Continue with non-overlapping tasks or wait for the result. \
+         3. The result returned by the agent is not visible to the user. To show the user the result, send a text message with a concise summary. \
+         4. Each agent starts with a fresh context. Provide a highly detailed prompt describing what the agent should do autonomously and what it should return. \
+         5. Tell the agent whether to write code or only do research (file reads, searches), since it cannot see the user's original request. \
+         6. Profiles: explorer (read-only codebase exploration), verifier (adversarial verification), planner (architecture), implementer (isolated code changes)."
     }
 
     fn parameters(&self) -> serde_json::Value {

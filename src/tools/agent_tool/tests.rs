@@ -17,11 +17,12 @@ fn completed_agent_result(agent_id: &str) -> ManagerAgentResult {
 #[test]
 fn agent_tool_contract_discourages_blocking_delegation() {
     let tool = AgentTool;
-    assert!(tool.description().contains("independent, parallel"));
-    assert!(tool.description().contains("blocks the current next step"));
-    assert!(tool
-        .description()
-        .contains("explorer, verifier, planner, implementer"));
+    assert!(tool.description().contains("concurrently"));
+    assert!(tool.description().contains("When NOT to use"));
+    assert!(tool.description().contains("explorer"));
+    assert!(tool.description().contains("verifier"));
+    assert!(tool.description().contains("planner"));
+    assert!(tool.description().contains("implementer"));
     assert!(
         tool.parameters()["properties"]["allowed_tools"]["description"]
             .as_str()
