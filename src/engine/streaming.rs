@@ -475,7 +475,10 @@ impl StreamingQueryEngine {
                 // so resume/export see the compacted history, not the pre-compaction one.
                 if let Err(e) = store.rewrite_session_messages_after_compact(
                     session_id,
-                    &compacted_for_db.into_iter().map(crate::session_store::MessageInsert::from).collect::<Vec<_>>(),
+                    &compacted_for_db
+                        .into_iter()
+                        .map(crate::session_store::MessageInsert::from)
+                        .collect::<Vec<_>>(),
                 ) {
                     tracing::warn!(
                         "Failed to rewrite compacted messages for session {}: {}",

@@ -316,3 +316,175 @@ fn applied_guidance_panel_and_effect_panel_show_operational_state() {
     assert!(effect.contains("owner=framework"));
     assert!(effect.contains("regressed validation"));
 }
+
+#[test]
+fn compact_inline_truncates_and_joins() {
+    assert_eq!(compact_inline("hello world", 100), "hello world");
+    assert_eq!(
+        compact_inline("line1\nline2\nline3", 100),
+        "line1 line2 line3"
+    );
+    let long = "a".repeat(200);
+    let result = compact_inline(&long, 10);
+    assert!(result.ends_with("..."));
+    assert!(result.len() <= 13); // 10 chars + "..."
+}
+
+#[test]
+fn count_debug_values_counts_distinct() {
+    let items = vec!["a", "b", "a", "c", "b", "a"];
+    let counts: Vec<(String, usize)> = count_debug_values::<&&str>(items.iter());
+    assert_eq!(counts.len(), 3);
+    let a = counts.iter().find(|c| c.0 == "\"a\"").unwrap();
+    assert_eq!(a.1, 3);
+}
+
+#[test]
+fn format_counts_empty_returns_none() {
+    assert_eq!(format_counts(&[]), "none");
+}
+
+#[test]
+fn format_counts_formats_entries() {
+    let counts = vec![("foo".to_string(), 5), ("bar".to_string(), 2)];
+    let result = format_counts(&counts);
+    assert!(result.contains("foo=5"));
+    assert!(result.contains("bar=2"));
+}
+
+#[test]
+fn is_evolution_learning_event_matches_keywords() {
+    use crate::session_store::LearningEventRecord;
+    let base = LearningEventRecord {
+        id: 1,
+        session_id: "s1".into(),
+        kind: "improvement_proposal".into(),
+        source: "evolution".into(),
+        summary: "test".into(),
+        confidence: 0.9,
+        payload: serde_json::json!({}),
+        created_at: "2026-01-01".into(),
+    };
+    assert!(is_evolution_learning_event(&base));
+
+    let skill = LearningEventRecord {
+        kind: "skill_promotion".into(),
+        ..base.clone()
+    };
+    assert!(is_evolution_learning_event(&skill));
+
+    let evo = LearningEventRecord {
+        kind: "evolution_status".into(),
+        ..base.clone()
+    };
+    assert!(is_evolution_learning_event(&evo));
+
+    let other = LearningEventRecord {
+        kind: "tool_execution".into(),
+        ..base
+    };
+    assert!(!is_evolution_learning_event(&other));
+}
+
+#[test]
+fn format_learning_event_detail_includes_fields() {
+    use crate::session_store::LearningEventRecord;
+    let event = LearningEventRecord {
+        id: 42,
+        session_id: "s1".into(),
+        kind: "improvement".into(),
+        source: "closeout".into(),
+        summary: "test summary".into(),
+        confidence: 0.8,
+        payload: serde_json::json!({"key": "value"}),
+        created_at: "2026-01-01T00:00:00Z".into(),
+    };
+    let detail = format_learning_event_detail(&event);
+    assert!(detail.contains("Learning Event #42"));
+    assert!(detail.contains("Kind: improvement"));
+    assert!(detail.contains("Source: closeout"));
+}
+
+#[test]
+fn format_experience_event_includes_fields() {
+    use crate::session_store::LearningEventRecord;
+    let event = LearningEventRecord {
+        id: 7,
+        session_id: "s1".into(),
+        kind: "experience".into(),
+        source: "evaluation".into(),
+        summary: "test".into(),
+        confidence: 0.5,
+        payload: serde_json::json!({"experience": {"workflow": "code-change", "outcome": "success", "tool_calls": 3}}),
+        created_at: "2026-01-01T00:00:00Z".into(),
+    };
+    let detail = format_experience_event(&event);
+    assert!(detail.contains("Experience #7"));
+    assert!(detail.contains("Kind: experience"));
+}
+
+// ── latest_*_label tests ─────────────────────────────────
+
+use crate::engine::trace::TurnTrace;
+
+fn empty_trace() -> TurnTrace {
+    TurnTrace::new("session-test".to_string(), 1, "test")
+}
+
+#[test]
+fn latest_resource_policy_label_returns_none_for_empty_trace() {
+    assert_eq!(latest_resource_policy_label(&empty_trace()), None);
+}
+
+#[test]
+fn latest_contract_state_label_returns_default_for_empty() {
+    let label = latest_contract_state_label(&empty_trace());
+    assert!(label.contains("standalone") || label.contains("none"));
+}
+
+#[test]
+fn latest_closeout_label_returns_none_for_empty_trace() {
+    assert_eq!(latest_closeout_label(&empty_trace()), None);
+}
+
+#[test]
+fn latest_acceptance_label_returns_none_for_empty_trace() {
+    assert_eq!(latest_acceptance_label(&empty_trace()), None);
+}
+
+#[test]
+fn latest_retrieval_context_label_returns_none_for_empty() {
+    assert_eq!(latest_retrieval_context_label(&empty_trace()), None);
+}
+
+#[test]
+fn latest_reflection_label_returns_none_for_empty() {
+    assert_eq!(latest_reflection_label(&empty_trace()), None);
+}
+
+#[test]
+fn latest_stage_validation_label_returns_none_for_empty() {
+    assert_eq!(latest_stage_validation_label(&empty_trace()), None);
+}
+
+#[test]
+fn latest_workflow_plan_label_returns_none_for_empty() {
+    assert_eq!(latest_workflow_plan_label(&empty_trace()), None);
+}
+
+#[test]
+fn latest_guided_debugging_label_returns_none_for_empty() {
+    assert_eq!(latest_guided_debugging_label(&empty_trace()), None);
+}
+
+#[test]
+fn goal_drift_count_label_returns_none_for_empty() {
+    let label = goal_drift_count_label(&empty_trace());
+    assert_eq!(label, "none");
+}
+
+#[test]
+fn format_goal_drift_report_has_header() {
+    let report = format_goal_drift_report(&empty_trace(), 10);
+    assert!(report.contains("Goal Drift"));
+}

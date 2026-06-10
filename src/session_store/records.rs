@@ -24,14 +24,13 @@ pub struct MessageInsert {
 impl From<crate::services::api::Message> for MessageInsert {
     fn from(msg: crate::services::api::Message) -> Self {
         match msg {
-            crate::services::api::Message::System { content } | crate::services::api::Message::User { content } => {
-                MessageInsert {
-                    role: "user".to_string(),
-                    content,
-                    tool_calls: None,
-                    tool_call_id: None,
-                }
-            }
+            crate::services::api::Message::System { content }
+            | crate::services::api::Message::User { content } => MessageInsert {
+                role: "user".to_string(),
+                content,
+                tool_calls: None,
+                tool_call_id: None,
+            },
             crate::services::api::Message::Assistant {
                 content,
                 tool_calls,
