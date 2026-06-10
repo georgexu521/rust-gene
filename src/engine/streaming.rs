@@ -1032,12 +1032,11 @@ impl StreamingQueryEngine {
                         if let (Some(mem_mutex), Some(ref sid)) =
                             (&engine.memory_manager, &engine.session_id)
                         {
-                            let pre_compress_history = hist.clone();
                             let mut mem = mem_mutex.lock().await;
                             mem.flush_session_with_reason_async(
                                 sid.clone(),
                                 crate::memory::MemoryFlushReason::PreCompress,
-                                &pre_compress_history,
+                                &hist,
                             )
                             .await;
                         }
