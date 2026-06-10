@@ -1,6 +1,12 @@
 # LLM Runtime Simplification Plan
 
 Date: 2026-05-08
+Last Updated: 2026-06-10
+
+Status: **All phases (0–15) and the 2026-06-02 addendum are implemented and validated.**
+The current active line of work is **opencode core alignment** (session-store
+source-of-truth, settlement recovery, export payload, compaction events), which is
+described in `docs/OPENCODE_CORE_ALIGNMENT_IMPLEMENTATION_PLAN_2026-06-09.md`.
 
 ## Goal
 
@@ -34,70 +40,47 @@ it harder to tell which phase is next.
 Append new work as Phase 9 and later. Leave completed Phase 0-8 records in this
 file as the audit trail.
 
-## Current Findings
+## Current Findings (Historical)
 
-### 1. The base system prompt is still too instructional
+> The findings below describe the pre-simplification state (2026-05-08). They
+> are preserved as an audit trail. All items have been addressed by the
+> completed phases.
 
-`src/engine/mod.rs:80-204` injects a large set of behavioral rules, workflow
-guidance, tool instructions, examples, and safety notes into the model context.
-Some of these rules are valuable, but too many are process details:
+### 1. ~~The base system prompt is still too instructional~~ → Phase 1 resolved
 
-- `src/engine/mod.rs:90-118` asks the model to internally handle task
-  completeness, weighting, acceptance criteria, guided reasoning, and residual
-  risks.
-- `src/engine/mod.rs:120-176` repeats tool usage instructions that could be
-  encoded in tool descriptions, tool exposure, and runtime rejection messages.
-- `src/engine/mod.rs:178-184` contains important destructive-scope guidance,
-  but this should be enforced by runtime checks rather than only prompt text.
+~~`src/engine/mod.rs:80-204` injects a large set of behavioral rules, workflow
+  guidance, tool instructions, examples, and safety notes into the model context.~~
 
-Risk: the model spends attention on framework compliance instead of the user's
-literal task, and prompt-only rules fail silently when the model drifts.
+Resolved: base prompt reduced from 7,687 chars to ~2,732 chars. Tool usage
+instructions moved into tool schemas and runtime rejection messages.
 
-### 2. Workflow judgment can inject another process layer
+### 2. ~~Workflow judgment can inject another process layer~~ → Phase 7 resolved
 
-`src/engine/workflow_contract.rs:778-824` converts workflow judgment into a
-turn-context block containing task type, complexity, risk, questions,
-assumptions, prioritized plan, weights, and acceptance criteria.
+~~`src/engine/workflow_contract.rs` converts workflow judgment into a turn-context
+  block containing task type, complexity, risk, questions, assumptions, plan,
+  weights, and acceptance criteria.~~
 
-`src/engine/workflow_contract.rs:859-944` asks a model to generate a structured
-JSON judgment with priority, weight factors, assumptions, plan, and acceptance
-contracts.
+Resolved: legacy workflow is gated behind `PRIORITY_AGENT_LEGACY_WORKFLOW_ENABLED=1`.
+Unmatched requests stay Direct. The workflow stack is feature-gated in normal
+interactive mode.
 
-This is appropriate for broad or risky work, but it is too heavy for common
-tasks such as:
+### 3. ~~Code-change policy is lightweight in name, but closeout is still on by default~~ → Phase 5/14 resolved
 
-- delete this one file
-- create a small standalone script
-- explain a local error
-- make a tiny local edit
+~~`src/engine/code_change_workflow.rs` sets `require_final_closeout: true` even
+  for low-risk turns, producing verbose output.~~
 
-Risk: the model receives a second "manager" prompt before doing the actual
-task, and the generated structure can become the task instead of support for
-the task.
+Resolved: `CloseoutVisibility` now defaults to `Concise` or `Hidden` for
+low/medium-risk successful turns. Full closeout appears only for high-risk,
+failed, partial, or explicit debug/eval mode.
 
-### 3. Code-change policy is lightweight in name, but closeout is still on by default
+### 4. ~~Tool exposure is still broad for normal turns~~ → Phase 2/12/15 resolved
 
-`src/engine/code_change_workflow.rs:119-170` already distinguishes strict,
-medium, low, and non-programming workflows. That is the right direction.
+~~`ToolRegistryProfile::Core` exposes a large general-purpose surface.~~
 
-However, both medium- and low-risk programming workflows still set
-`require_final_closeout: true` at `src/engine/code_change_workflow.rs:143` and
-`src/engine/code_change_workflow.rs:154`.
-
-`src/engine/code_change_workflow.rs:500-665` then formats closeout with
-validation, acceptance, and residual-risk sections even when the user wanted a
-simple result.
-
-Risk: ordinary coding turns produce process-heavy output. Worse, status can
-look authoritative even when the underlying evidence is thin.
-
-### 4. Tool exposure is still broad for normal turns
-
-The registry now has `ToolRegistryProfile::Core` and `Full`
-(`src/tools/mod.rs:817-985`), which is useful. But Core still exposes a large
-general-purpose surface: tasks, agent, web, memory, todo, cost/config/context,
-git, notebook, REPL, PowerShell, MCP, LSP, symbol query, worktree, workbench,
-refactor, project list, skills, and ask.
+Resolved: route-scoped tool exposure (`route_scoped_tools`) and role-specific
+profiles (explorer, planner, verifier, implementer) now show only relevant
+tools per turn. Deterministic budget tests enforce limits (e.g. scoped file
+mutation <= 4 tools, code creation <= 12 tools).
 
 `ConversationLoop::get_tools` filters only by availability, allowed tools, and
 permission exposure (`src/engine/conversation_loop/mod.rs:5465-5485`). It does
@@ -1302,14 +1285,18 @@ Validated on 2026-05-08:
 
 Follow-up implementation phases in this plan are complete. The 2026-06-02
 runtime-diet addendum below records the next live-use simplification pass.
-Future work should be chosen from validation gaps found during live use,
-release-hardening gates, or a newly reviewed plan.
 
 The completed plan now has project-instruction diet, explicit loading
 semantics, route/sample measurement gates, core tool contracts, role-scoped
 subagent surfaces, gated auxiliary context, and concise default closeout.
-Future work should use these gates to catch prompt or tool-surface bloat while
-changing more surfaces.
+
+**Active work (2026-06-09 → 2026-06-10):** opencode core alignment
+(`docs/OPENCODE_CORE_ALIGNMENT_IMPLEMENTATION_PLAN_2026-06-09.md`).
+This is a separate but related effort focused on session-store correctness:
+source-of-truth event stream, tool settlement recovery, enhanced export payload,
+compaction events, and wake/drain coordination. It is **not** part of the
+runtime-simplification plan, but it uses the same runtime-guardrails approach
+(e.g. deterministic recovery, runtime-enforced gate, testable closeout).
 
 ## Addendum - 2026-06-02 Runtime Diet
 

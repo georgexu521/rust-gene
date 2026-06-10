@@ -604,10 +604,7 @@ fn write_settlement_recovery_events(
         })
         .collect();
     for part in &unsettled {
-        let tool_call_id = part
-            .tool_call_id
-            .as_deref()
-            .unwrap_or(&part.part_id);
+        let tool_call_id = part.tool_call_id.as_deref().unwrap_or(&part.part_id);
         let tool_name = part.tool_name.as_deref().unwrap_or("unknown");
         let error = format!(
             "Tool execution interrupted before settlement ({}:{})",
