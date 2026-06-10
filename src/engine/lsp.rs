@@ -8,8 +8,8 @@ use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use std::sync::RwLock as StdRwLock;
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::{Mutex, RwLock};
 use tracing::{debug, info, warn};
 
@@ -1024,7 +1024,9 @@ impl LspManager {
         for entry in Self::registry_entries() {
             if entry.extensions.iter().any(|e| e == &ext) {
                 let lang_name = entry.language.to_lowercase();
-                let already = clients.keys().any(|k| k.to_lowercase().contains(&lang_name));
+                let already = clients
+                    .keys()
+                    .any(|k| k.to_lowercase().contains(&lang_name));
                 if already {
                     return; // Already have a server for this language.
                 }
@@ -1066,7 +1068,10 @@ impl LspManager {
                         info!("Lazy-started LSP server: {}", lang);
                     }
                 });
-                self.clients.write().unwrap().insert(entry.language.clone(), client);
+                self.clients
+                    .write()
+                    .unwrap()
+                    .insert(entry.language.clone(), client);
                 info!(
                     "Lazy-starting LSP server for {} (extension .{})",
                     entry.language, ext

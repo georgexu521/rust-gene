@@ -394,6 +394,9 @@ pub async fn handle_tasks(app: &TuiApp) -> String {
     .await
 }
 pub async fn handle_doctor(app: &TuiApp, args: &str) -> String {
+    if args.trim() == "product" {
+        return crate::engine::product_readiness::readiness_report();
+    }
     let working_dir = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
     let mut report = crate::diagnostics::run_full_diagnostics(&working_dir).await;
 

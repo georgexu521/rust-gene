@@ -18,6 +18,7 @@ enum StartupMode {
     Tui,
     EvalRun,
     ProviderHealth,
+    ContextAttach,
 }
 
 fn detect_startup_mode(args: &[String]) -> StartupMode {
@@ -29,6 +30,7 @@ fn detect_startup_mode(args: &[String]) -> StartupMode {
         Some("--tui") => StartupMode::Tui,
         Some("--eval-run") => StartupMode::EvalRun,
         Some("--provider-health") => StartupMode::ProviderHealth,
+        Some("--context") => StartupMode::ContextAttach,
         _ => StartupMode::Cli,
     }
 }
@@ -53,6 +55,8 @@ fn print_help() {
     println!("           Run one non-interactive evaluation task");
     println!("  --provider-health [--output <PATH>] [--timeout <SECS>]");
     println!("           Probe provider chat, tool-call, and tool-result continuation");
+    println!("  --context attach --file <PATH> [--range <L1:L2>]");
+    println!("           Write IDE context handoff file for desktop/tui pickup");
     println!("  (none)   Default: start Priority Agent");
     println!();
     println!("Examples:");
@@ -67,6 +71,38 @@ fn arg_value(args: &[String], flag: &str) -> Option<String> {
         .position(|arg| arg == flag)
         .and_then(|idx| args.get(idx + 1))
         .cloned()
+}
+
+fn run_context_attach(args: &[String]) -> Result<(), String> {
+    let sub = args.get(2).map(|s| s.as_str()).unwrap_or("");
+    if sub != "attach" {
+        let bin = args.first().map(|s| s.as_str()).unwrap_or("priority-agent");
+        eprintln!("Usage: {bin} --context attach --file <PATH> [--range <L1:L2>]");
+        return Ok(());
+    }
+    let file_path =
+        arg_value(args, "--file").ok_or_else(|| "--file <PATH> is required".to_string())?;
+    let range = arg_value(args, "--range");
+    let file = std::path::Path::new(&file_path);
+    if !file.exists() {
+        return Err(format!("file not found: {}", file_path));
+    }
+    let content =
+        std::fs::read_to_string(file).map_err(|e| format!("cannot read {}: {}", file_path, e))?;
+    let context = serde_json::json!({
+        "source": "cli-attach",
+        "timestamp": chrono::Utc::now().to_rfc3339(),
+        "file": file.canonicalize().unwrap_or_else(|_| file.to_path_buf()).display().to_string(),
+        "range": range,
+        "content_preview": &content[..content.len().min(2000)],
+    });
+    let dir = std::path::PathBuf::from(".priority-agent");
+    std::fs::create_dir_all(&dir).map_err(|e| format!("cannot create .priority-agent: {}", e))?;
+    let path = dir.join("context.json");
+    let json = serde_json::to_string_pretty(&context).map_err(|e| e.to_string())?;
+    std::fs::write(&path, json).map_err(|e| format!("cannot write context: {}", e))?;
+    println!("Context written to {}", path.display());
+    Ok(())
 }
 
 fn write_eval_event(
@@ -522,7 +558,8 @@ async fn main() {
         | StartupMode::Cli
         | StartupMode::Tui
         | StartupMode::EvalRun
-        | StartupMode::ProviderHealth => "warn",
+        | StartupMode::ProviderHealth
+        | StartupMode::ContextAttach => "warn",
     };
     tracing_subscriber::fmt()
         .with_env_filter(
@@ -644,6 +681,12 @@ async fn main() {
             if let Err(e) = run_provider_health_command(&args).await {
                 error!("Provider health failed: {}", e);
                 eprintln!("Provider health failed: {}", e);
+                std::process::exit(1);
+            }
+        }
+        StartupMode::ContextAttach => {
+            if let Err(e) = run_context_attach(&args) {
+                eprintln!("{}", e);
                 std::process::exit(1);
             }
         }
