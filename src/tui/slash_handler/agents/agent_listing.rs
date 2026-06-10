@@ -361,7 +361,7 @@ async fn handle_agent_run(app: &TuiApp, args: &str) -> String {
         "description": prompt.chars().take(120).collect::<String>(),
         "prompt": prompt,
     });
-    let tool = crate::tools::AgentTool;
+    let tool = crate::tools::AgentTool::new();
     let result = tool.execute(params, app.build_tool_context().await).await;
     if result.success {
         result.content

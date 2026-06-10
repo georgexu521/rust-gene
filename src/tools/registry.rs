@@ -218,7 +218,7 @@ impl ToolRegistry {
             registry.register(PowerShellTool);
 
             // Agent & communication tools
-            registry.register(AgentTool);
+            registry.register(AgentTool::new());
             registry.register(SendMessageTool);
             registry.register(ShareTool);
             registry.register(SleepTool);

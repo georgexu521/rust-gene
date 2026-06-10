@@ -16,7 +16,7 @@ fn completed_agent_result(agent_id: &str) -> ManagerAgentResult {
 
 #[test]
 fn agent_tool_contract_discourages_blocking_delegation() {
-    let tool = AgentTool;
+    let tool = AgentTool::new();
     assert!(tool.description().contains("concurrently"));
     assert!(tool.description().contains("When NOT to use"));
     assert!(tool.description().contains("explorer"));
@@ -224,7 +224,7 @@ fn cancelled_agent_task_state_preserves_cleanup_metadata() {
 
 #[test]
 fn agent_tool_schema_exposes_lifecycle_actions() {
-    let tool = AgentTool;
+    let tool = AgentTool::new();
     let params = tool.parameters();
 
     assert_eq!(
@@ -273,7 +273,7 @@ async fn agent_list_reads_durable_progress_without_manager() {
         })
         .unwrap();
 
-    let result = AgentTool
+    let result = AgentTool::new()
         .execute(
             json!({"action": "list"}),
             ToolContext::new(".", "s1").with_session_store(store),
@@ -315,7 +315,7 @@ async fn agent_read_does_not_require_manager() {
         })
         .unwrap();
 
-    let result = AgentTool
+    let result = AgentTool::new()
         .execute(
             json!({"agent_id": "agent_1", "action": "read"}),
             ToolContext::new(".", "s1").with_session_store(store),
@@ -394,7 +394,7 @@ fn resolved_subagent_tools_apply_definition_scope() {
 
 #[tokio::test]
 async fn test_agent_tool_without_manager() {
-    let tool = AgentTool;
+    let tool = AgentTool::new();
     let ctx = ToolContext::new(".", "test");
     let result = tool
         .execute(
@@ -414,7 +414,7 @@ async fn test_agent_tool_without_manager() {
 
 #[tokio::test]
 async fn test_agent_tool_validation() {
-    let tool = AgentTool;
+    let tool = AgentTool::new();
     let ctx = ToolContext::new(".", "test");
 
     // Empty description
@@ -444,7 +444,7 @@ async fn test_agent_tool_validation() {
 
 #[tokio::test]
 async fn test_agent_tool_resume_not_found() {
-    let tool = AgentTool;
+    let tool = AgentTool::new();
     let ctx = ToolContext::new(".", "test");
     let result = tool
         .execute(
@@ -459,7 +459,7 @@ async fn test_agent_tool_resume_not_found() {
 
 #[tokio::test]
 async fn test_agent_tool_subtasks_validation() {
-    let tool = AgentTool;
+    let tool = AgentTool::new();
     let ctx = ToolContext::new(".", "test");
 
     // Empty subtasks
