@@ -114,7 +114,7 @@ fn test_tui_reuses_engine_session_binding() {
         .with_session_store(store, "engine-session".to_string()),
     );
 
-    let app = TuiApp::with_engine(engine, None, None);
+    let app = TuiApp::with_engine(Some(engine), None, None);
 
     assert_eq!(
         app.session_manager.current_session_id(),
@@ -134,7 +134,7 @@ fn test_tui_persists_when_engine_has_no_session_binding() {
         .with_disable_session_auto_init(),
     );
 
-    let app = TuiApp::with_engine(engine, None, None);
+    let app = TuiApp::with_engine(Some(engine), None, None);
 
     assert!(app.should_persist_messages_from_tui());
 }
@@ -149,7 +149,7 @@ async fn test_tui_persists_streaming_assistant_when_engine_has_no_session_bindin
         )
         .with_disable_session_auto_init(),
     );
-    let mut app = TuiApp::with_engine(engine, None, None);
+    let mut app = TuiApp::with_engine(Some(engine), None, None);
     let session_id = app
         .session_manager
         .current_session_id()
@@ -755,7 +755,7 @@ fn test_session_permission_rule_is_added_when_approving_for_session() {
         Arc::new(crate::tools::ToolRegistry::new()),
         "gpt-4o",
     ));
-    let mut app = TuiApp::with_engine(engine.clone(), None, None);
+    let mut app = TuiApp::with_engine(Some(engine.clone()), None, None);
     let (tx, mut rx) = tokio::sync::oneshot::channel();
     app.pending_permission_request = Some(crate::engine::conversation_loop::ToolApprovalRequest {
         tool_call: crate::services::api::ToolCall {
@@ -802,7 +802,7 @@ fn test_bash_session_permission_rule_uses_command_scope() {
         Arc::new(crate::tools::ToolRegistry::new()),
         "gpt-4o",
     ));
-    let mut app = TuiApp::with_engine(engine.clone(), None, None);
+    let mut app = TuiApp::with_engine(Some(engine.clone()), None, None);
     let (tx, mut rx) = tokio::sync::oneshot::channel();
     app.pending_permission_request = Some(crate::engine::conversation_loop::ToolApprovalRequest {
         tool_call: crate::services::api::ToolCall {

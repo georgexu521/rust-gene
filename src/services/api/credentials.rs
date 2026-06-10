@@ -104,10 +104,7 @@ pub fn save_credential(provider_id: &str, key: &str) -> Result<(), String> {
     });
 
     lines.push(format!("{}={}", key_env_var, key));
-    lines.push(format!(
-        "PRIORITY_AGENT_DEFAULT_PROVIDER={}",
-        provider_id
-    ));
+    lines.push(format!("PRIORITY_AGENT_DEFAULT_PROVIDER={}", provider_id));
 
     let content = lines.join("\n") + "\n";
     std::fs::write(&path, content.as_bytes())
@@ -321,7 +318,7 @@ mod tests {
         // Save a credential
         save_credential("minimax", "sk-test-key-123").unwrap();
 
-        let content = std::fs::read_to_string(&env_path).unwrap_or_default();
+        let _content = std::fs::read_to_string(&env_path).unwrap_or_default();
         // But note: credential_env_path() uses dirs::home_dir(), which won't
         // pick up our test HOME override on all platforms. The important
         // contract is that set_env_for_session makes the key available.

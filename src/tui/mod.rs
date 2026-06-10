@@ -36,7 +36,7 @@ use tracing::{debug, info};
 
 /// 主交互式 CLI 运行函数
 pub async fn run_tui(
-    engine: Arc<StreamingQueryEngine>,
+    engine: Option<Arc<StreamingQueryEngine>>,
     lsp_manager: Option<Arc<LspManager>>,
     worktree_manager: Option<Arc<WorktreeManager>>,
 ) -> anyhow::Result<()> {

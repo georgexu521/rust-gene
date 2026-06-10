@@ -458,12 +458,20 @@ async fn run_provider_health_command(args: &[String]) -> anyhow::Result<()> {
 }
 
 /// 统一初始化应用组件，失败时打印错误并退出进程
-async fn init_app_or_exit(working_dir: &std::path::Path) -> bootstrap::AppComponents {
+async fn init_app_or_exit(
+    working_dir: &std::path::Path,
+    mode: StartupMode,
+) -> Option<bootstrap::AppComponents> {
     match bootstrap::init_app(working_dir).await {
-        Ok(components) => components,
+        Ok(components) => Some(components),
         Err(e) => {
             let msg = e.to_string();
             if msg.contains("No LLM provider configured") {
+                // Only CLI and TUI should reach onboarding; API/eval still exit.
+                if matches!(mode, StartupMode::Cli | StartupMode::Tui) {
+                    eprintln!("No provider configured — starting onboarding.");
+                    return None;
+                }
                 error!("Provider init failed: {}", e);
                 eprintln!("Failed to initialize LLM provider: {}", e);
                 eprintln!(
@@ -589,7 +597,11 @@ async fn main() {
                 std::process::exit(1);
             }
             info!("Starting Priority Agent CLI...");
-            let components = init_app_or_exit(&working_dir).await;
+            let components = init_app_or_exit(&working_dir, startup_mode).await;
+            let Some(components) = components else {
+                eprintln!("No provider configured. Run /connect <provider> <key>");
+                std::process::exit(1);
+            };
             if let Err(e) = shell::run_shell(components.streaming_engine).await {
                 error!("Priority Agent CLI failed: {}", e);
                 std::process::exit(1);
@@ -602,20 +614,26 @@ async fn main() {
                 std::process::exit(1);
             }
             info!("Starting full-screen terminal interface...");
-            let components = init_app_or_exit(&working_dir).await;
-            if let Err(e) = tui::run_tui(
-                components.streaming_engine,
-                Some(components.lsp_manager),
-                Some(components.worktree_manager),
-            )
-            .await
-            {
+            let components = init_app_or_exit(&working_dir, startup_mode).await;
+            let (engine, lsp, worktree) = match components {
+                Some(c) => (
+                    Some(c.streaming_engine.clone()),
+                    Some(c.lsp_manager.clone()),
+                    Some(c.worktree_manager.clone()),
+                ),
+                None => (None, None, None),
+            };
+            if let Err(e) = tui::run_tui(engine, lsp, worktree).await {
                 error!("Legacy TUI failed: {}", e);
                 std::process::exit(1);
             }
         }
         StartupMode::EvalRun => {
-            let components = init_app_or_exit(&working_dir).await;
+            let components = init_app_or_exit(&working_dir, startup_mode).await;
+            let Some(components) = components else {
+                eprintln!("Evaluation requires a configured provider.");
+                std::process::exit(1);
+            };
             if let Err(e) = run_eval_task(&args, &components).await {
                 error!("Evaluation run failed: {}", e);
                 eprintln!("Evaluation run failed: {}", e);

@@ -165,7 +165,8 @@ impl TuiApp {
         let current = self.current_model_label();
 
         // Use the catalog's supported models, falling back to current-only for unknown providers.
-        let catalog_id = crate::services::api::provider_catalog::provider_id_for_label(&provider_label);
+        let catalog_id =
+            crate::services::api::provider_catalog::provider_id_for_label(&provider_label);
         let model_names: Vec<String> = catalog_id
             .map(|id| crate::services::api::provider_catalog::supported_models(&id))
             .unwrap_or_else(|| vec![current.clone()]);

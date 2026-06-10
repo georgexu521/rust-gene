@@ -379,11 +379,11 @@ impl TuiApp {
 
     /// 创建带流式引擎的 TuiApp
     pub fn with_engine(
-        engine: Arc<StreamingQueryEngine>,
+        engine: Option<Arc<StreamingQueryEngine>>,
         lsp_manager: Option<Arc<crate::engine::lsp::LspManager>>,
         worktree_manager: Option<Arc<crate::engine::worktree::WorktreeManager>>,
     ) -> Self {
-        Self::create(Some(engine), lsp_manager, worktree_manager)
+        Self::create(engine, lsp_manager, worktree_manager)
     }
 
     fn create(
