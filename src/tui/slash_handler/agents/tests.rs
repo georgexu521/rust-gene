@@ -330,3 +330,12 @@ fn mcp_repair_plan_separates_explicit_and_auto_safe_repairs() {
     assert!(plan.contains("circuit repair: /mcp repair jira"));
     assert_eq!(mcp_circuit_repair_targets(&diagnostics), vec!["jira"]);
 }
+
+#[test]
+fn handle_telemetry_includes_status_fields() {
+    let output = super::handle_telemetry();
+    assert!(output.contains("Telemetry Status"));
+    assert!(output.contains("Consent:"));
+    assert!(output.contains("Enabled:"));
+    assert!(output.contains("Recorded sessions:"));
+}
