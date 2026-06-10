@@ -1,6 +1,7 @@
 # Priority Agent Engineering Hardening Plan
 
 Date: 2026-06-10
+Last Updated: 2026-06-10
 Status: **Active**
 Previous Plan: `docs/LLM_RUNTIME_SIMPLIFICATION_PLAN_2026-05-08.md` (completed)
 
@@ -8,12 +9,13 @@ Previous Plan: `docs/LLM_RUNTIME_SIMPLIFICATION_PLAN_2026-05-08.md` (completed)
 
 Keep Priority Agent maintainable as it grows. The runtime simplification plan
 fixed prompt bloat and workflow over-control. The opencode core alignment plan
-fixed session-store correctness. This plan fixes the remaining engineering
-debt that slows down future development.
+defined the next session-store reliability work. This plan fixes the remaining
+engineering debt that slows down future development.
 
 Target: a codebase where:
 - Files stay under the 1500-line limit the team already agreed on.
-- Configuration is discoverable and typed, not scattered in `env::var` calls.
+- Configuration is discoverable and typed through the existing
+  `services::config::AppConfig`, not scattered in `env::var` calls.
 - Core paths (storage, permissions, tool execution) fail gracefully with
   context-rich errors instead of panicking.
 - Tests cover complete user flows, not just unit-level behavior.
@@ -27,15 +29,16 @@ Purpose: enforce the existing "source files under 1500 lines" rule.
 
 ### Current State
 
-Five production files exceed 1500 lines:
+Four production files currently exceed 1500 lines. One more file is close
+enough to treat as a warning:
 
-| File | Lines | Nature | Split Strategy |
-|---|---|---|---|
-| `src/session_store/session_parts.rs` | 1743 | Projection logic + tests | Extract `projection.rs` submodule |
-| `src/api/routes.rs` | 1726 | API route handlers | Group by domain: `routes/session.rs`, `routes/export.rs`, etc. |
-| `src/tui/session_manager.rs` | 1580 | TUI session logic + export builder | Extract `export_builder.rs` |
-| `src/engine/streaming.rs` | 1511 | Streaming engine + compaction events | Extract `compaction_events.rs` |
-| `src/engine/scenario_matrix.rs` | 1488 | Close to limit | Monitor; split if grows further |
+| File | Lines | Status | Nature | Split Strategy |
+|---|---:|---|---|---|
+| `src/session_store/session_parts.rs` | 1743 | Over limit | Projection logic + tests | Extract `projection.rs` and `tests.rs` submodules |
+| `src/api/routes.rs` | 1726 | Over limit | API route handlers | Group by domain: `routes/session.rs`, `routes/export.rs`, `routes/tool_output.rs`, etc. |
+| `src/tui/session_manager.rs` | 1580 | Over limit | TUI session logic + export builder | Extract `export_builder.rs` and narrow reload/export helpers |
+| `src/engine/streaming.rs` | 1511 | Over limit | Streaming engine + compaction events | Extract `compaction_events.rs` without changing streaming semantics |
+| `src/engine/scenario_matrix.rs` | 1488 | Warning | Close to limit | Monitor; split only if new work pushes it over 1500 |
 
 ### Tasks
 
@@ -78,7 +81,9 @@ Five production files exceed 1500 lines:
 
 ### Acceptance
 
-- All five listed files are <= 1500 lines.
+- All four over-limit files are <= 1500 lines.
+- `src/engine/scenario_matrix.rs` remains <= 1500 lines or gets a focused
+  split if it grows.
 - `scripts/daily-baseline.sh` file-size-report gate passes.
 - `cargo test -q` still passes (2453+ tests).
 - No public API breakage for downstream consumers.
@@ -97,12 +102,30 @@ bash scripts/daily-baseline.sh
 
 Status: **Not started**
 
-Purpose: replace 540 scattered `env::var` calls with a typed, validated `Config`
-struct.
+Purpose: extend the existing typed config system so most
+`PRIORITY_AGENT_*` reads go through one discoverable, validated registry.
 
 ### Current State
 
-`env::var` and `env::var_os` appear 540 times across the codebase. Examples:
+The project already has a config system in `src/services/config.rs`:
+
+- `AppConfig::load()` merges defaults, config file, and
+  `PRIORITY_AGENT_*` environment overrides.
+- `CONFIG_KEY_SPECS` documents some mutable config keys.
+- `validate_config()` already exists for several config domains.
+
+The remaining problem is not "no config system"; it is incomplete adoption.
+There are still many direct environment reads:
+
+- About 288 production-ish `std::env::var` / `var_os` / `vars` reads in
+  `src/` and `apps/` after excluding standalone test files.
+- About 505 production-ish `std::env::*` references if `current_dir`,
+  `temp_dir`, `set_var`, and platform environment inspection are included.
+- Direct reads are valid for OS/platform facts (`HOME`, `USER`, `SHELL`,
+  `current_dir`, test env guards), but `PRIORITY_AGENT_*` runtime knobs should
+  be centralized unless explicitly allowlisted.
+
+Examples:
 
 - `PRIORITY_AGENT_TURN_TIMEOUT_SECS` parsed in `src/engine/streaming.rs:33`
 - `PRIORITY_AGENT_AGENTS_MD_FULL` read in `src/instructions/mod.rs:108`
@@ -117,47 +140,68 @@ Problems:
 
 ### Tasks
 
-1. **Audit existing `env::var` usage**
-   - Generate a list of all env vars read by the application (not tests).
-   - Categorize: required vs optional, numeric vs path vs boolean vs string.
-   - Identify duplicates and conflicts.
+1. **Audit existing env usage**
+   - Generate a list of env vars read by the application, excluding tests and
+     OS facts.
+   - Categorize: config knob, provider secret, platform fact, test helper,
+     debug-only escape hatch.
+   - Identify duplicates, conflicting defaults, and stale names.
 
-2. **Design `AppConfig` struct**
-   - Use `serde` + a config file format (TOML or JSON) for base configuration.
-   - Allow env var overrides with consistent prefix `PRIORITY_AGENT_*`.
-   - Group by domain: `provider`, `memory`, `session`, `tool`, `tui`, `debug`.
-   - Include validation methods (e.g. `timeout >= 60`, `path exists`).
+2. **Extend the existing `services::config` module**
+   - Do not create a parallel `src/config/mod.rs`.
+   - Add an `EnvKeySpec` registry for every supported `PRIORITY_AGENT_*` key:
+     name, type, default, config path, secret flag, deprecated flag,
+     owner/domain, and description.
+   - Expand `CONFIG_KEY_SPECS` or link it to the env registry so `/config`,
+     diagnostics, and docs all use the same source of truth.
+   - Extend `validate_config()` to cover numeric ranges, path policy, mutually
+     exclusive options, and provider-secret diagnostics.
 
-3. **Implement `src/config/mod.rs`**
-   - Define `AppConfig` with typed fields.
-   - Implement `load()` that merges file → env → defaults.
-   - Add `validate()` returning `Result<(), ConfigError>`.
+3. **Add typed accessors for high-risk domains**
+   - `AppConfig::turn_timeout()`
+   - `AppConfig::tool_output_policy()`
+   - `AppConfig::memory_paths()`
+   - `AppConfig::permission_policy()`
+   - `AppConfig::runtime_flags()`
 
 4. **Migrate core paths first**
    - Start with `engine/streaming.rs`, `session_store/`, `permissions/`.
    - Pass `&AppConfig` into constructors instead of reading env inline.
-   - Keep backward compatibility: if config file is missing, fall back to
-     current env-only behavior with a deprecation warning.
+   - Keep backward compatibility: existing env vars continue to override config
+     file values, but reads happen through `AppConfig`.
 
 5. **Add config tests**
    - Default values match current behavior.
    - Env overrides work.
    - Invalid values produce clear errors.
-   - Unknown env vars are warned, not silently ignored.
+   - Deprecated aliases warn and still map correctly during the migration
+     window.
+   - Unknown `PRIORITY_AGENT_*` env vars are surfaced in diagnostics, not
+     silently ignored.
+
+6. **Add a no-new-raw-env guard**
+   - Add a script or test that fails on new raw
+     `std::env::var("PRIORITY_AGENT_...")` outside `src/services/config.rs`
+     and an explicit allowlist.
+   - Allow platform facts and test env guards.
 
 ### Likely Files
 
-- New: `src/config/mod.rs`, `src/config/tests.rs`
+- Modified: `src/services/config.rs`
 - Modified: `src/engine/streaming.rs`, `src/session_store/`, `src/permissions/`,
-  `src/instructions/mod.rs`, `src/main.rs`
+  `src/instructions/mod.rs`, `src/main.rs`, `src/bootstrap.rs`
+- New or modified: config/env audit script or test
 
 ### Acceptance
 
-- `grep -r 'env::var' src --include='*.rs' | grep -v 'tests.rs' | wc -l`
-  drops from current ~300 production reads to < 50 (tests and bootstrap only).
+- No new raw `std::env::var("PRIORITY_AGENT_...")` calls outside
+  `src/services/config.rs` and the allowlist.
+- Core runtime modules no longer parse `PRIORITY_AGENT_*` values inline.
+- Direct production-ish `PRIORITY_AGENT_*` reads drop by >= 70% in the first
+  migration pass; remaining reads are documented allowlist entries.
 - `cargo test -q config` passes with >= 10 tests.
 - `cargo check -q` passes.
-- Existing env var behavior unchanged unless config file is present.
+- Existing env var behavior stays backward compatible.
 
 ### Validation
 
@@ -173,17 +217,23 @@ cargo clippy --all-targets --all-features -- -D warnings
 
 Status: **Not started**
 
-Purpose: reduce `unwrap`/`expect` in paths that touch user data, storage, or
-permissions.
+Purpose: remove recoverable panics from paths that touch user data, storage,
+permissions, and tool execution.
 
 ### Current State
 
-`grep` shows 2519 occurrences of `unwrap()`/`expect(`/`panic!` across all `.rs`
-files. Many are in tests or truly invariant paths, but core modules have
-remaining hard panics:
+`rg` currently finds roughly 2500 `unwrap()` / `expect(` / `panic!` occurrences
+under `src/`, and about 1500 after excluding standalone `tests.rs` files.
+Those totals are useful for tracking, but they are not the main risk metric:
+many occurrences are inside inline `#[cfg(test)]` modules or assert-style test
+helpers.
 
-- `session_store/` — SQLite lock poisoning, query errors.
-- `permissions/` — policy file parse errors.
+The real hardening target is runtime code that can affect user data or agent
+continuity:
+
+- `session_store/` — SQLite lock poisoning, event writer lock handling,
+  query/projection errors.
+- `permissions/` — policy file parse errors and classifier parsing.
 - `engine/conversation_loop/` — channel send, mutex locks.
 - `tools/file_tool/` — filesystem operations.
 
@@ -192,26 +242,32 @@ mid-turn, losing user context.
 
 ### Tasks
 
-1. **Inventory core-path panics**
+1. **Inventory runtime panics, not test assertions**
    - List `unwrap`/`expect` in `session_store/`, `permissions/`,
      `engine/conversation_loop/`, `tools/file_tool/`.
-   - Classify: truly invariant (keep), recoverable (convert to `Result`),
-     test-only (ignore).
+   - Exclude `#[cfg(test)]` and standalone test files from the primary count.
+   - Classify: truly invariant, recoverable runtime error, poison/coordination
+     error, test-only assertion.
 
 2. **Adopt `anyhow::Context` for operation context**
    - `db.query_row(...).context("load session parts")?` instead of `.unwrap()`.
    - `fs::read_to_string(path).with_context(|| format!("read {}", path))?`.
 
-3. **Use `thiserror` for typed errors where callers branch**
+3. **Use `thiserror` only where callers branch**
    - `SessionStoreError`, `PermissionError`, `ToolExecutionError`.
    - Allow upstream code to match on `PermissionError::NotFound` vs
      `PermissionError::Denied`.
+   - Prefer `anyhow` at orchestration boundaries where no caller branches on
+     variants.
 
 4. **Add graceful degradation paths**
-   - If session part projection fails, log error and return empty parts rather
-     than panic.
+   - If session part projection fails, return a degraded/partial result with a
+     diagnostic. Do not silently return empty parts, because that hides data
+     corruption.
    - If permission policy file is unreadable, deny by default rather than crash.
    - If tool output write fails, return tool error to model so it can retry.
+   - If a lock is poisoned, convert to a contextual error where possible; only
+     panic for impossible invariants inside tests.
 
 5. **Add error-injection tests**
    - Simulate SQLite locked, disk full, malformed JSON.
@@ -227,8 +283,13 @@ mid-turn, losing user context.
 
 ### Acceptance
 
-- `grep -r 'unwrap()\|expect(' src/session_store src/permissions src/engine/conversation_loop src/tools/file_tool --include='*.rs' | grep -v 'tests.rs' | wc -l`
-  drops by >= 50%.
+- Runtime panic inventory exists and distinguishes tests from production paths.
+- Recoverable panics in storage, permissions, event writing, and file tools are
+  converted to contextual `Result` paths.
+- No session data, permission decision, or file mutation path can panic on
+  malformed input, missing files, SQLite busy/locked, or invalid JSON.
+- Targeted runtime `unwrap`/`expect` count in the audited modules drops by
+  >= 50%, excluding tests and documented invariants.
 - `cargo test -q error_handling` passes with >= 8 tests covering failure modes.
 - `cargo test -q` still passes (2453+ tests).
 - No behavioral change for happy path.
@@ -315,7 +376,7 @@ ones.
 
 ### Current State
 
-- 84 files in `docs/`
+- 85 files in `docs/`
 - 60 files in `docs/archive/`
 - Many files have similar names: `TUI_OPTIMIZATION_PLAN_2026-06-09.md`,
   `TUI_DEEP_OPTIMIZATION_PLAN_2026-06-09.md`, `NEXT_PHASE_PRODUCT_DEVELOPMENT_PLAN_2026-06-02.md`,
@@ -360,7 +421,7 @@ ones.
 
 ### Acceptance
 
-- `docs/*.md` count reduced from 84 to < 50.
+- `docs/*.md` count reduced from 85 to < 50.
 - All remaining docs have standard status headers.
 - No active plan is older than 60 days without an update.
 - `docs/README.md` accurately reflects current documentation tree.
@@ -372,21 +433,24 @@ bash scripts/doc_health_check.sh
 ls docs/*.md | wc -l  # should print < 50
 ```
 
-## Rollback Switches
+## Migration Switches
 
-- `PRIORITY_AGENT_LEGACY_CONFIG=1` — read env vars directly, skip config file
-  (for Phase 1 migration period).
-- `PRIORITY_AGENT_STRICT_UNWRAP=1` — panic on recoverable errors instead of
-  returning `Err` (for Phase 2 debugging only).
-- `PRIORITY_AGENT_SKIP_E2E=1` — skip end-to-end tests in CI if they become
-  flaky.
+- `PRIORITY_AGENT_LEGACY_CONFIG=1` — temporary compatibility switch during
+  Phase 1 only. It may keep existing env override behavior, but it must not
+  create a second long-term config path.
+- Do not add a "strict unwrap" switch. Recoverable runtime errors should stay
+  recoverable once hardened.
+- Do not add a broad CI skip for E2E tests. If an E2E scenario is flaky,
+  quarantine that named scenario with a tracked issue instead of disabling the
+  suite.
 
 ## Success Criteria
 
 The engineering hardening is successful when:
 
 1. All source files (except tests and generated code) are <= 1500 lines.
-2. Environment variable reads are centralized in a typed `Config` struct.
+2. `PRIORITY_AGENT_*` environment reads are centralized through the existing
+   `services::config::AppConfig` registry and typed accessors.
 3. Core paths fail gracefully with context-rich errors; no user-data loss on
    transient failures.
 4. End-to-end tests verify complete flows deterministically without provider

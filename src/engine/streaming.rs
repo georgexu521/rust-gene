@@ -29,31 +29,13 @@ use turn_messages::{
     route_wants_agent_manager, session_title_from_user_message,
 };
 
-fn turn_execution_timeout() -> std::time::Duration {
-    let secs = std::env::var("PRIORITY_AGENT_TURN_TIMEOUT_SECS")
-        .ok()
-        .and_then(|value| value.parse::<u64>().ok())
-        .unwrap_or(1800)
-        .clamp(60, 7200);
-    std::time::Duration::from_secs(secs)
-}
-
-fn session_end_memory_flush_timeout() -> std::time::Duration {
-    let secs = std::env::var("PRIORITY_AGENT_SESSION_END_MEMORY_FLUSH_TIMEOUT_SECS")
-        .ok()
-        .and_then(|value| value.parse::<u64>().ok())
-        .unwrap_or(5)
-        .clamp(1, 60);
-    std::time::Duration::from_secs(secs)
-}
-
 async fn flush_session_end_memory_best_effort(
     mem_mutex: Arc<tokio::sync::Mutex<crate::memory::MemoryManager>>,
     session_id: String,
     flush_history: Vec<Message>,
     tx: mpsc::Sender<StreamEvent>,
 ) {
-    let timeout = session_end_memory_flush_timeout();
+    let timeout = config::session_end_memory_flush_timeout();
     let timeout_ms = timeout.as_millis().min(u128::from(u64::MAX)) as u64;
     let _ = tx
         .send(StreamEvent::RuntimeDiagnostic {
@@ -1155,7 +1137,7 @@ impl StreamingQueryEngine {
             let mut assistant_content = String::new();
             let mut assistant_tool_calls_made = false;
 
-            let turn_timeout = turn_execution_timeout();
+            let turn_timeout = config::turn_execution_timeout();
             let _ = tx
                 .send(StreamEvent::RuntimeDiagnostic {
                     diagnostic: serde_json::json!({
@@ -1316,7 +1298,7 @@ impl StreamingQueryEngine {
                                 fallback_model: None, // 防止无限 fallback
                                 fallback_state: Some(fb_state),
                             };
-                            let turn_timeout = turn_execution_timeout();
+                            let turn_timeout = config::turn_execution_timeout();
                             match tokio::time::timeout(
                                 turn_timeout,
                                 fb_engine.run_query_with_messages(

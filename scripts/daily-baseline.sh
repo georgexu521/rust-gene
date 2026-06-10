@@ -58,6 +58,17 @@ gate "full-test"         cargo test --lib -q -- --test-threads=1
 # ---- Code size stewardship (Phase 8) ----
 gate "file-size-report"  bash scripts/file-size-report.sh --threshold 1200 --top 25
 
+# ---- File size hard limit (Phase 0) ----
+gate "file-size-hard-limit" bash -c '
+  OVER_LIMIT=$(find src -name "*.rs" -not -name "tests.rs" -exec wc -l {} + | awk "{if(\$1>1500 && \$2 != \"total\") print \$1, \$2}")
+  if [ -n "$OVER_LIMIT" ]; then
+    echo "Files exceeding 1500 lines:"
+    echo "$OVER_LIMIT"
+    exit 1
+  fi
+  echo "All production files are within 1500-line limit."
+'
+
 # ---- Script syntax ----
 gate "eval-script-syntax"  bash -n scripts/run_live_eval.sh
 gate "parser-syntax"       python3 -m py_compile scripts/live_eval_report_parser.py

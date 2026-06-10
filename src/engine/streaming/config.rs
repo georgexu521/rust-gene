@@ -168,3 +168,23 @@ impl StreamingConfig {
         self.session_permission_rules.read().clone()
     }
 }
+
+/// Turn execution timeout from env or default.
+pub fn turn_execution_timeout() -> std::time::Duration {
+    let secs = std::env::var("PRIORITY_AGENT_TURN_TIMEOUT_SECS")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(1800)
+        .clamp(60, 7200);
+    std::time::Duration::from_secs(secs)
+}
+
+/// Session-end memory flush timeout from env or default.
+pub fn session_end_memory_flush_timeout() -> std::time::Duration {
+    let secs = std::env::var("PRIORITY_AGENT_SESSION_END_MEMORY_FLUSH_TIMEOUT_SECS")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(5)
+        .clamp(1, 60);
+    std::time::Duration::from_secs(secs)
+}

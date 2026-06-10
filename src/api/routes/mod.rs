@@ -17,7 +17,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use super::dto;
-use super::provider_status::provider_product_statuses;
+
 use super::{ws_handler, ApiError, ApiState, MessageInfo};
 
 /// 创建 API 路由
@@ -107,19 +107,25 @@ pub fn create_routes(state: Arc<ApiState>) -> Router {
         )
         .route(
             "/api/sessions/:id/tool-outputs",
-            get(get_tool_outputs_handler),
+            get(tool_output::get_tool_outputs_handler),
         )
         .route(
             "/api/sessions/:id/tool-outputs/:output_id",
-            get(get_tool_output_page_handler),
+            get(tool_output::get_tool_output_page_handler),
         )
         // Provider status
-        .route("/api/provider/status", get(get_provider_status_handler))
+        .route(
+            "/api/provider/status",
+            get(tool_output::get_provider_status_handler),
+        )
         .route("/api/provider/catalog", get(get_provider_catalog_handler))
         // Session jobs
         .route("/api/sessions/:id/jobs", get(get_session_jobs_handler))
         // Diagnostic export
-        .route("/api/diagnostics/latest", get(get_diagnostics_handler))
+        .route(
+            "/api/diagnostics/latest",
+            get(tool_output::get_diagnostics_handler),
+        )
         .layer(middleware::from_fn(bridge_auth_middleware));
 
     // 公开路由（无需认证）
@@ -801,7 +807,7 @@ async fn call_tool_handler(
     State(state): State<Arc<ApiState>>,
     Json(req): Json<ToolCallRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
-    if !api_tool_call_allowed(&req.tool, &req.params) {
+    if !helpers::api_tool_call_allowed(&req.tool, &req.params) {
         return Err(ApiError::Forbidden(format!(
             "tool '{}' is not allowed via API for security reasons",
             req.tool
@@ -1098,54 +1104,9 @@ struct BridgeRunTriggerRequest {
     prompt: Option<String>,
 }
 
-fn sanitize_tenant_id(raw: &str) -> String {
-    let mut s = String::with_capacity(raw.len());
-    for ch in raw.chars() {
-        if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' {
-            s.push(ch);
-        } else {
-            s.push('_');
-        }
-    }
-    if s.is_empty() {
-        "default".to_string()
-    } else {
-        s
-    }
-}
-
-fn tenant_prefix(headers: &HeaderMap) -> String {
-    let tenant = headers
-        .get("x-tenant-id")
-        .and_then(|v| v.to_str().ok())
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .unwrap_or("default");
-    format!("tenant_{}_", sanitize_tenant_id(tenant))
-}
-
-fn truncate_chars(s: &str, max_chars: usize) -> String {
-    let mut out = String::new();
-    for (i, ch) in s.chars().enumerate() {
-        if i >= max_chars {
-            break;
-        }
-        out.push(ch);
-    }
-    out
-}
-
-fn parse_token_list(raw: &str) -> Vec<String> {
-    raw.split(|c: char| c == ',' || c == ';' || c.is_ascii_whitespace())
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .map(ToString::to_string)
-        .collect()
-}
-
 fn configured_bridge_tokens() -> Vec<String> {
     if let Ok(list) = std::env::var("PRIORITY_AGENT_BRIDGE_TOKENS") {
-        let parsed = parse_token_list(&list);
+        let parsed = helpers::parse_token_list(&list);
         if !parsed.is_empty() {
             return parsed;
         }
@@ -1166,7 +1127,7 @@ async fn v1_list_sessions_handler(
         .get("limit")
         .and_then(|s| s.parse().ok())
         .unwrap_or(20);
-    let prefix = tenant_prefix(&headers);
+    let prefix = helpers::tenant_prefix(&headers);
 
     // 先拉更大窗口再过滤，避免多租户混排导致当前租户会话被截断
     let sessions = state.list_sessions((limit.max(20) * 5).min(200)).await?;
@@ -1190,7 +1151,7 @@ async fn v1_get_session_handler(
     Path(id): Path<String>,
     State(state): State<Arc<ApiState>>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let prefix = tenant_prefix(&headers);
+    let prefix = helpers::tenant_prefix(&headers);
     if !id.starts_with(&prefix) {
         return Err(ApiError::NotFound("Session not found".to_string()));
     }
@@ -1203,7 +1164,7 @@ async fn v1_get_session_status_handler(
     Path(id): Path<String>,
     State(state): State<Arc<ApiState>>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let prefix = tenant_prefix(&headers);
+    let prefix = helpers::tenant_prefix(&headers);
     if !id.starts_with(&prefix) {
         return Err(ApiError::NotFound("Session not found".to_string()));
     }
@@ -1235,7 +1196,7 @@ async fn v1_get_session_messages_handler(
     Query(params): Query<HashMap<String, String>>,
     State(state): State<Arc<ApiState>>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let prefix = tenant_prefix(&headers);
+    let prefix = helpers::tenant_prefix(&headers);
     if !id.starts_with(&prefix) {
         return Err(ApiError::NotFound("Session not found".to_string()));
     }
@@ -1290,11 +1251,11 @@ async fn v1_create_session_handler(
     if req.prompt.trim().is_empty() {
         return Err(ApiError::BadRequest("prompt is required".to_string()));
     }
-    let prefix = tenant_prefix(&headers);
+    let prefix = helpers::tenant_prefix(&headers);
     let session_id = format!("{}{}", prefix, uuid::Uuid::new_v4().simple());
     let title = req
         .title
-        .unwrap_or_else(|| format!("Remote: {}", truncate_chars(req.prompt.trim(), 64)));
+        .unwrap_or_else(|| format!("Remote: {}", helpers::truncate_chars(req.prompt.trim(), 64)));
     let session = state
         .create_session_with_id(session_id.clone(), Some(title))
         .await?;
@@ -1313,7 +1274,7 @@ async fn v1_run_trigger_handler(
     State(state): State<Arc<ApiState>>,
     Json(req): Json<BridgeRunTriggerRequest>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let prefix = tenant_prefix(&headers);
+    let prefix = helpers::tenant_prefix(&headers);
     if !id.starts_with(&prefix) {
         return Err(ApiError::NotFound("Session not found".to_string()));
     }
@@ -1526,198 +1487,11 @@ async fn get_session_reverts_handler(
     }))
 }
 
-async fn get_tool_outputs_handler(Path(id): Path<String>) -> Result<impl IntoResponse, ApiError> {
-    let store = crate::tool_output_store::ToolOutputStore::new();
-    let metas = store
-        .list_for_session(&id)
-        .map_err(|e| ApiError::Internal(e.to_string()))?;
-    let outputs: Vec<dto::tool_output::ToolOutputIndexEntry> = metas
-        .into_iter()
-        .map(|m| {
-            let uri = m.uri();
-            dto::tool_output::ToolOutputIndexEntry {
-                id: m.id,
-                uri,
-                session_id: m.session_id,
-                tool_call_id: m.tool_call_id,
-                tool_name: m.tool_name,
-                mime: m.mime,
-                original_bytes: m.original_bytes,
-                created_at_ms: m.created_at_ms,
-            }
-        })
-        .collect();
-    Ok(Json(dto::tool_output::ToolOutputIndex {
-        session_id: id,
-        outputs,
-    }))
-}
-
-#[derive(Debug, Deserialize)]
-struct ToolOutputPageQuery {
-    offset: Option<u64>,
-    limit: Option<u64>,
-}
-
-async fn get_tool_output_page_handler(
-    Path((session_id, output_id)): Path<(String, String)>,
-    Query(query): Query<ToolOutputPageQuery>,
-) -> Result<impl IntoResponse, ApiError> {
-    let store = crate::tool_output_store::ToolOutputStore::new();
-    let page = store
-        .read_page(
-            &session_id,
-            &format!("tool-output://{output_id}"),
-            query.offset.unwrap_or(0),
-            query.limit.unwrap_or(65536),
-        )
-        .map_err(|e| ApiError::Internal(e.to_string()))?;
-    Ok(Json(dto::tool_output::ToolOutputPageDto {
-        content: page.content,
-        offset: page.offset,
-        limit: page.limit,
-        total_bytes: page.total_bytes,
-        has_more: page.has_more,
-    }))
-}
-
-async fn get_provider_status_handler(
-    State(state): State<Arc<ApiState>>,
-) -> Result<impl IntoResponse, ApiError> {
-    let configured_max_output = state.config.read().await.api.max_tokens.map(u64::from);
-    let latest_health = crate::diagnostics::provider_health::latest_provider_health_entry()
-        .map_err(|e| ApiError::Internal(e.to_string()))?;
-    let statuses = provider_product_statuses(&state, configured_max_output, latest_health.as_ref());
-    let record_count = statuses.len();
-    Ok(Json(dto::provider::ProviderStatusPage {
-        statuses,
-        record_count,
-        timeout_effective: dto::provider::ProviderTimeoutEffectiveDto::from_env(),
-    }))
-}
-
-#[derive(Debug, Deserialize)]
-struct DiagnosticQuery {
-    session_id: Option<String>,
-}
-
-async fn get_diagnostics_handler(
-    State(state): State<Arc<ApiState>>,
-    Query(query): Query<DiagnosticQuery>,
-) -> Result<impl IntoResponse, ApiError> {
-    let session_id = query.session_id.unwrap_or_else(|| "unknown".to_string());
-    let store = state.session_store.read().await;
-
-    // Build a lightweight diagnostic snapshot from what's available
-    let parts = store.get_session_parts(&session_id).unwrap_or_default();
-    let revert_events = parts.iter().filter(|p| p.kind == "revert").count();
-    let policy = crate::tool_output_store::ToolOutputPolicy::from_env();
-    let capabilities =
-        crate::services::api::provider_protocol::ProviderCapabilities::detect("auto", &state.model);
-    let profile = crate::services::api::provider_protocol::ProviderRuntimeProfile::snapshot(
-        &capabilities,
-        &state.model,
-        &state.model,
-    );
-
-    Ok(Json(dto::diagnostic::DiagnosticExportDto {
-        schema: "diagnostic.v1".to_string(),
-        session_id,
-        model: state.model.clone(),
-        provider: Some(state.model.clone()),
-        timestamp_ms: std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis() as u64,
-        status: "snapshot".to_string(),
-        turns: 0,
-        tool_rounds: 0,
-        changed_files: Vec::new(),
-        verification_proof_status: None,
-        evidence_category: None,
-        evidence_items: 0,
-        prompt_tokens: 0,
-        completion_tokens: 0,
-        cost_usd: 0.0,
-        latency_ms: None,
-        cache_miss_reason: None,
-        failure_owner: None,
-        failed_tool_names: Vec::new(),
-        revert_events,
-        provider_profile: Some(json!({
-            "provider_id": profile.provider_id,
-            "model_id": profile.model_id,
-            "protocol_family": profile.protocol_family.label(),
-            "request_timeout_secs": profile.request_timeout_secs,
-            "stream_idle_timeout_secs": profile.stream_idle_timeout_secs,
-        })),
-        tool_output_policy: Some(json!({
-            "max_bytes": policy.max_bytes,
-            "max_lines": policy.max_lines,
-            "preview_direction": format!("{:?}", policy.preview_direction),
-            "retention_days": policy.retention_days,
-        })),
-    }))
-}
+pub mod helpers;
+pub mod tool_output;
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use serde_json::json;
-
-    #[test]
-    fn test_sanitize_tenant_id() {
-        assert_eq!(sanitize_tenant_id("team-a"), "team-a");
-        assert_eq!(sanitize_tenant_id("A/B C"), "A_B_C");
-        assert_eq!(sanitize_tenant_id(""), "default");
-    }
-
-    #[test]
-    fn test_truncate_chars() {
-        assert_eq!(truncate_chars("hello", 3), "hel");
-        assert_eq!(truncate_chars("你好世界", 2), "你好");
-    }
-
-    #[test]
-    fn test_parse_token_list() {
-        let tokens = parse_token_list("a,b; c  d");
-        assert_eq!(tokens, vec!["a", "b", "c", "d"]);
-    }
-
-    #[test]
-    fn test_api_tool_allowlist_uses_registered_read_only_names() {
-        assert!(api_tool_call_allowed(
-            "file_read",
-            &json!({"path": "src/main.rs"})
-        ));
-        assert!(api_tool_call_allowed("git_status", &json!({})));
-        assert!(api_tool_call_allowed("git_diff", &json!({})));
-        assert!(api_tool_call_allowed(
-            "json_query",
-            &json!({"input": "{}", "query": "."})
-        ));
-        assert!(api_tool_call_allowed(
-            "task_output",
-            &json!({"task_id": "task_1"})
-        ));
-        assert!(api_tool_call_allowed(
-            "task_output",
-            &json!({"task_id": "task_1", "action": "get"})
-        ));
-
-        assert!(!api_tool_call_allowed("git_read", &json!({})));
-        assert!(!api_tool_call_allowed("json_tool", &json!({})));
-        assert!(!api_tool_call_allowed(
-            "browser",
-            &json!({"action": "evaluate_js"})
-        ));
-        assert!(!api_tool_call_allowed("bash", &json!({"command": "pwd"})));
-        assert!(!api_tool_call_allowed(
-            "task_output",
-            &json!({"task_id": "task_1", "action": "append", "line": "x"})
-        ));
-    }
-}
+mod tests;
 
 #[cfg(test)]
 mod basic_tests;
