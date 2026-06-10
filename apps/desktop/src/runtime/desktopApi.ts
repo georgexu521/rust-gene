@@ -995,6 +995,10 @@ export function saveProviderCredential(providerId: string, key: string): Promise
   return invoke("save_provider_credential", { providerId, key });
 }
 
+export function openFilePath(path: string): Promise<void> {
+  return invoke("open_file_path", { path });
+}
+
 export function listRecentSessions(limit = 20): Promise<RecentSession[]> {
   if (!isTauriRuntime()) {
     return Promise.resolve(webPreviewSessions.slice(0, limit));

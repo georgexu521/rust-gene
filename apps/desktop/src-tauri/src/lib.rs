@@ -553,7 +553,15 @@ async fn open_diagnostics_folder(state: State<'_, DesktopAppState>) -> Result<()
 }
 
 #[tauri::command]
-async fn open_shell_profile() -> Result<(), String> {
+async fn open_file_path(path: String) -> Result<(), String> {
+    let p = std::path::PathBuf::from(&path);
+    if let Some(parent) = p.parent() {
+        if parent.exists() {
+            return open_path(parent);
+        }
+    }
+    Err(format!("path does not exist: {}", path))
+}
     let profile = shell_profile_path();
     if !profile.exists() {
         if let Some(parent) = profile.parent() {
@@ -1768,6 +1776,7 @@ pub fn run() {
             open_settings_folder,
             open_diagnostics_folder,
             open_shell_profile,
+            open_file_path,
             save_provider_credential,
             record_native_smoke_result,
             select_project,

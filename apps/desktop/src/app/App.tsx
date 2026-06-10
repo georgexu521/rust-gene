@@ -45,6 +45,7 @@ import {
   desktopSettings,
   desktopWorkbenchSnapshot,
   exportSession,
+  openFilePath,
   listRecentSessions,
   newConversation,
   onDesktopRunEvent,
@@ -124,6 +125,7 @@ export function App() {
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isEnvironmentOpen, setIsEnvironmentOpen] = useState(false);
   const [exportNotice, setExportNotice] = useState<string | null>(null);
+  const [exportPath, setExportPath] = useState<string | null>(null);
   const [lastArchivedSession, setLastArchivedSession] = useState<RecentSession | null>(null);
   const [pendingDeleteSession, setPendingDeleteSession] = useState<RecentSession | null>(null);
   const [runState, setRunState] = useState(initialRunViewState);
@@ -356,6 +358,7 @@ export function App() {
     try {
       const result = await exportSession(runState.selectedSessionId, "markdown", "redacted");
       setExportNotice(`Exported ${result.privacy} ${result.format}: ${result.path}`);
+      setExportPath(result.path);
     } catch (err) {
       setRunState((current) => withError(current, err));
     }
@@ -964,7 +967,22 @@ export function App() {
         />
 
         {runState.error ? <div className="error-banner">{runState.error}</div> : null}
-        {exportNotice ? <div className="export-banner">{exportNotice}</div> : null}
+        {exportNotice ? (
+          <div className="export-banner">
+            <span>{exportNotice}</span>
+            {exportPath ? (
+              <button
+                type="button"
+                onClick={() => {
+                  openFilePath(exportPath).catch(console.error);
+                }}
+                style={{ marginLeft: "0.75rem", fontSize: "0.8rem" }}
+              >
+                Open folder
+              </button>
+            ) : null}
+          </div>
+        ) : null}
       </section>
 
       {pendingDeleteSession ? (
