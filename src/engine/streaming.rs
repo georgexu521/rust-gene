@@ -443,6 +443,7 @@ impl StreamingQueryEngine {
             (attempt, runtime_record)
         };
 
+        let compacted_for_db = compressed.clone();
         self.set_history(compressed).await;
         if compaction_record.decision == CompactionDecision::Compacted {
             let binding = self.session_binding();
@@ -468,6 +469,18 @@ impl StreamingQueryEngine {
                         "Failed to write compaction event for session {}: {}",
                         session_id,
                         err
+                    );
+                }
+                // Rewrite messages table to the compacted continuation surface
+                // so resume/export see the compacted history, not the pre-compaction one.
+                if let Err(e) = store.rewrite_session_messages_after_compact(
+                    session_id,
+                    &compacted_for_db.into_iter().map(crate::session_store::MessageInsert::from).collect::<Vec<_>>(),
+                ) {
+                    tracing::warn!(
+                        "Failed to rewrite compacted messages for session {}: {}",
+                        session_id,
+                        e
                     );
                 }
             }
