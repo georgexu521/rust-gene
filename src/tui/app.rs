@@ -386,6 +386,65 @@ impl TuiApp {
         Self::create(engine, lsp_manager, worktree_manager)
     }
 
+    pub fn activate_provider_runtime(&mut self, provider_id: &str) -> Result<String, String> {
+        let registry = crate::services::api::provider::ProviderRegistry::from_env();
+        let provider = registry
+            .get(provider_id)
+            .ok_or_else(|| format!("provider '{}' is not configured", provider_id))?;
+        let config = registry
+            .get_config(provider_id)
+            .ok_or_else(|| format!("provider '{}' is missing runtime config", provider_id))?;
+        let model = config.default_model.clone();
+
+        if let Some(engine) = &self.streaming_engine {
+            engine.set_provider(provider, model.clone());
+            return Ok(model);
+        }
+
+        let working_dir = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+        let app_config = crate::services::config::AppConfig::load().unwrap_or_default();
+        let engine_config = app_config.engine.clone();
+        let task_manager = crate::task_manager::GLOBAL_TASK_MANAGER.clone();
+        let tool_registry = Arc::new(crate::tools::ToolRegistry::default_registry());
+
+        let mut query_engine_builder =
+            crate::engine::QueryEngine::new(provider.clone(), tool_registry.clone(), &model)
+                .with_max_iterations(engine_config.max_iterations)
+                .with_task_manager(task_manager.clone());
+        if let Some(lsp) = &self.lsp_manager {
+            query_engine_builder = query_engine_builder.with_lsp_manager(lsp.clone());
+        }
+        if let Some(worktree) = &self.worktree_manager {
+            query_engine_builder = query_engine_builder.with_worktree_manager(worktree.clone());
+        }
+        let query_engine = Arc::new(query_engine_builder);
+
+        let llm_memory_extraction = std::env::var("PRIORITY_AGENT_LLM_MEMORY_EXTRACTION")
+            .ok()
+            .and_then(|value| parse_on_off(value.trim()))
+            .unwrap_or(app_config.features.llm_memory_extraction);
+        let mut streaming_engine_builder =
+            StreamingQueryEngine::new(provider, tool_registry, &model)
+                .with_max_iterations(engine_config.max_iterations)
+                .with_working_dir(&working_dir)
+                .with_task_manager(task_manager)
+                .with_llm_memory_extraction(llm_memory_extraction)
+                .with_agent_query_engine(query_engine);
+        if let Some(lsp) = &self.lsp_manager {
+            streaming_engine_builder = streaming_engine_builder.with_lsp_manager(lsp.clone());
+        }
+        if let Some(worktree) = &self.worktree_manager {
+            streaming_engine_builder =
+                streaming_engine_builder.with_worktree_manager(worktree.clone());
+        }
+        let approval_channel =
+            Arc::new(crate::engine::conversation_loop::ToolApprovalChannel::new());
+        streaming_engine_builder = streaming_engine_builder.with_approval_channel(approval_channel);
+
+        self.streaming_engine = Some(Arc::new(streaming_engine_builder));
+        Ok(model)
+    }
+
     fn create(
         engine: Option<Arc<StreamingQueryEngine>>,
         lsp_manager: Option<Arc<crate::engine::lsp::LspManager>>,

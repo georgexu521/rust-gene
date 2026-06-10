@@ -185,29 +185,35 @@ pub fn handle_connect(app: &mut TuiApp, args: &str) -> String {
         Some(key) => {
             // User provided a key — save it.
             match crate::services::api::credentials::save_credential(&id, key) {
-                Ok(()) => {
-                    // Refresh provider registry so the new key takes effect.
-                    if let Some(ref engine) = app.streaming_engine {
-                        let fresh = crate::services::api::provider::ProviderRegistry::from_env();
-                        if let Some(provider) = fresh.get(&id) {
-                            let config = fresh.get_config(&id).cloned();
-                            let model = config
-                                .as_ref()
-                                .map(|c| c.default_model.clone())
-                                .unwrap_or_else(|| app.current_model_label());
-                            engine.set_provider(provider, model);
-                        }
-                    }
+                crate::services::api::credentials::CredentialSaveOutcome::Verified => {
+                    let runtime_message = match app.activate_provider_runtime(&id) {
+                        Ok(model) => format!("Provider is active for this session with model {model}."),
+                        Err(err) => format!(
+                            "Provider key was saved, but runtime activation failed: {err}.\nRestart Priority Agent or run /provider switch {id} after checking /provider status."
+                        ),
+                    };
                     format!(
                         "Saved API key for {} to ~/.priority-agent/.env.\n\
-                         Provider is now available for this session.\n\
+                         {}\n\
                          Use /provider status to verify.",
+                        crate::services::api::provider_catalog::find(&id)
+                            .map(|e| e.label)
+                            .unwrap_or_else(|| id.to_string()),
+                        runtime_message
+                    )
+                }
+                crate::services::api::credentials::CredentialSaveOutcome::SavedUnverified => {
+                    format!(
+                        "Saved API key for {} to ~/.priority-agent/.env, but provider activation could not be verified.\n\
+                         Check the key and run /provider status before sending a request.",
                         crate::services::api::provider_catalog::find(&id)
                             .map(|e| e.label)
                             .unwrap_or_else(|| id.to_string())
                     )
                 }
-                Err(e) => format!("Failed to save key: {}", e),
+                crate::services::api::credentials::CredentialSaveOutcome::Rejected { reason } => {
+                    format!("Failed to save key: {}", reason)
+                }
             }
         }
         None => {

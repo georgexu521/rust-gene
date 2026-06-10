@@ -38,7 +38,23 @@ pub struct ApiComponents {
 
 /// 初始化 LLM Provider（由 ProviderRegistry 的确定性优先级和用户覆盖项选择）
 pub fn init_provider() -> Result<(Arc<dyn crate::services::api::LlmProvider>, String)> {
-    let registry = crate::services::api::provider::ProviderRegistry::from_env();
+    let app_config = crate::services::config::AppConfig::load().unwrap_or_default();
+    let mut registry = crate::services::api::provider::ProviderRegistry::from_env();
+    if std::env::var("PRIORITY_AGENT_DEFAULT_PROVIDER")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .is_none()
+    {
+        if let Some(saved_provider) = app_config
+            .api
+            .provider_name
+            .as_deref()
+            .map(str::trim)
+            .filter(|name| !name.is_empty())
+        {
+            registry.select(saved_provider.to_ascii_lowercase());
+        }
+    }
     let Some(provider) = registry.get_selected_provider() else {
         return Err(anyhow::anyhow!(
             "No LLM provider configured.\n\
@@ -50,10 +66,22 @@ pub fn init_provider() -> Result<(Arc<dyn crate::services::api::LlmProvider>, St
     };
 
     let selected = registry.selected().unwrap_or("unknown");
-    let model = registry
+    let default_model = registry
         .get_config(selected)
         .map(|config| config.default_model.clone())
         .unwrap_or_else(|| provider.default_model().to_string());
+    let model = if app_config
+        .api
+        .provider_name
+        .as_deref()
+        .map(|saved| saved.eq_ignore_ascii_case(selected))
+        .unwrap_or(false)
+        && !app_config.api.model.trim().is_empty()
+    {
+        app_config.api.model.clone()
+    } else {
+        default_model
+    };
     info!(
         "LLM provider ready: provider={}, base={}, model={}",
         selected,
@@ -318,6 +346,12 @@ mod tests {
 
     fn with_env_vars(vars: &[(&str, Option<&str>)], f: impl FnOnce()) {
         let mut env = EnvVarGuard::acquire_blocking();
+        let config_home = tempfile::tempdir().expect("temp config home");
+        env.set(
+            "XDG_CONFIG_HOME",
+            &config_home.path().to_string_lossy().to_string(),
+        );
+        env.set("HOME", &config_home.path().to_string_lossy().to_string());
         for spec in crate::services::api::provider::DEFAULT_PROVIDER_ENV_SPECS {
             for key in spec
                 .key_env_vars
@@ -329,6 +363,7 @@ mod tests {
             }
         }
         env.remove("PRIORITY_AGENT_DEFAULT_PROVIDER");
+        env.remove("PRIORITY_AGENT_API_PROVIDER_NAME");
         for (k, v) in vars {
             if let Some(val) = v {
                 env.set(k, val);
@@ -354,6 +389,45 @@ mod tests {
             || {
                 let (_provider, model) = init_provider().expect("provider should initialize");
                 assert_eq!(model, "MiniMax-M2.7");
+            },
+        );
+    }
+
+    #[test]
+    fn test_init_provider_honors_saved_provider_when_no_env_override() {
+        with_env_vars(
+            &[
+                ("MINIMAX_API_KEY", Some("mini-key")),
+                ("DEEPSEEK_API_KEY", Some("deepseek-key")),
+            ],
+            || {
+                let mut config = crate::services::config::AppConfig::default();
+                config.api.provider_name = Some("deepseek".to_string());
+                config.api.model = "deepseek-chat".to_string();
+                config.save().unwrap();
+
+                let (_provider, model) = init_provider().expect("provider should initialize");
+                assert_eq!(model, "deepseek-chat");
+            },
+        );
+    }
+
+    #[test]
+    fn test_init_provider_env_override_beats_saved_provider() {
+        with_env_vars(
+            &[
+                ("MINIMAX_API_KEY", Some("mini-key")),
+                ("DEEPSEEK_API_KEY", Some("deepseek-key")),
+                ("PRIORITY_AGENT_DEFAULT_PROVIDER", Some("minimax")),
+            ],
+            || {
+                let mut config = crate::services::config::AppConfig::default();
+                config.api.provider_name = Some("deepseek".to_string());
+                config.api.model = "deepseek-chat".to_string();
+                config.save().unwrap();
+
+                let (_provider, model) = init_provider().expect("provider should initialize");
+                assert_eq!(model, "MiniMax-M3");
             },
         );
     }

@@ -144,6 +144,7 @@ struct DesktopSettings {
     active_session_id: Option<String>,
     permission_mode: Option<String>,
     detail_level: Option<String>,
+    agent_mode: Option<String>,
     provider_name: Option<String>,
     model: Option<String>,
     recent_projects: Option<Vec<String>>,
@@ -358,7 +359,6 @@ async fn set_agent_mode(
 
 #[tauri::command]
 fn agent_mode_options() -> Vec<AgentModeOption> {
-    use priority_agent::engine::agent_mode::AgentMode;
     vec![
         AgentModeOption {
             id: "auto".to_string(),
@@ -562,6 +562,9 @@ async fn open_file_path(path: String) -> Result<(), String> {
     }
     Err(format!("path does not exist: {}", path))
 }
+
+#[tauri::command]
+async fn open_shell_profile() -> Result<(), String> {
     let profile = shell_profile_path();
     if !profile.exists() {
         if let Some(parent) = profile.parent() {
@@ -574,8 +577,20 @@ async fn open_file_path(path: String) -> Result<(), String> {
 
 #[tauri::command]
 async fn save_provider_credential(provider_id: String, key: String) -> Result<String, String> {
-    priority_agent::services::api::credentials::save_credential(&provider_id, &key)?;
-    Ok(format!("Saved key for {}", provider_id))
+    match priority_agent::services::api::credentials::save_credential(&provider_id, &key) {
+        priority_agent::services::api::credentials::CredentialSaveOutcome::Verified => {
+            Ok(format!("Saved and activated key for {}", provider_id))
+        }
+        priority_agent::services::api::credentials::CredentialSaveOutcome::SavedUnverified => {
+            Ok(format!(
+                "Saved key for {}, but provider activation could not be verified",
+                provider_id
+            ))
+        }
+        priority_agent::services::api::credentials::CredentialSaveOutcome::Rejected { reason } => {
+            Err(reason)
+        }
+    }
 }
 
 #[tauri::command]
@@ -1019,7 +1034,7 @@ async fn send_message(
     contexts: Vec<DesktopRunContext>,
     state: State<'_, DesktopAppState>,
 ) -> Result<(), String> {
-    let agent_mode = state.agent_mode.lock().await.clone();
+    let _agent_mode = state.agent_mode.lock().await.clone();
     // ... rest of function
     let diagnostic_logs_path = state.diagnostic_logs_path.clone();
     let _ = append_desktop_log(
@@ -1750,6 +1765,7 @@ pub fn run() {
                 detail_level: Mutex::new(Some(
                     normalized_detail_level_label(settings.detail_level.as_deref()).to_string(),
                 )),
+                agent_mode: Mutex::new(settings.agent_mode),
                 provider_name: Mutex::new(settings.provider_name),
                 model: Mutex::new(settings.model),
                 recent_projects: Mutex::new(recent_projects),

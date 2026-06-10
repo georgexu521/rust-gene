@@ -36,18 +36,18 @@ type ComposerProps = {
   isEmptyState?: boolean;
   isRunning?: boolean;
   onComposerChange: (value: string) => void;
-  onOpenContext: () => void;
+  onOpenContext: (context: DesktopRunContext) => void;
   onBrowseProject: () => void;
   onSelectProject: (path: string) => void;
   onSelectRecentProject: (path: string) => void;
   onDetailLevelChange?: (level: DetailLevelId) => void;
   onPermissionModeChange?: (mode: PermissionModeId) => void;
   onAgentModeChange?: (mode: AgentModeId) => void;
-  onProviderModelChange: () => void;
+  onProviderModelChange: (providerId: string, model: string) => void;
   onAddContext: (context: DesktopRunContext) => void;
-  onAddFileContext: (path: string) => void;
-  onRemoveContext: (id: string) => void;
-  onSubmit: (message: string) => void;
+  onAddFileContext: () => void;
+  onRemoveContext: (id: DesktopRunContext["type"]) => void;
+  onSubmit: (event: FormEvent<HTMLFormElement>) => void;
 };
 
 export function Composer({
@@ -58,7 +58,7 @@ export function Composer({
   providerStatus,
   detailLevel,
   permissionMode,
-  permissionOptions,
+  permissionOptions = [],
   agentMode,
   agentModeOptions,
   isEmptyState = false,
@@ -84,6 +84,7 @@ export function Composer({
   const [draftProjectPath, setDraftProjectPath] = useState(projectPath);
   const activeProvider = providerStatus?.active_provider || "";
   const activeModel = providerStatus?.active_model || "";
+  const permissionOptionList = permissionOptions || [];
   const projectSegments = projectPath.split("/").filter(Boolean);
   const activeProviderLabel =
     providerStatus?.providers.find((provider) => provider.id === activeProvider)?.label ||
@@ -361,7 +362,7 @@ export function Composer({
                       className={option.id === detailLevel ? "active" : ""}
                       key={option.id}
                       type="button"
-                      onClick={() => onDetailLevelChange(option.id)}
+                      onClick={() => onDetailLevelChange?.(option.id)}
                     >
                       <span>
                         <strong>{option.label}</strong>
@@ -373,13 +374,13 @@ export function Composer({
                 </div>
                 <div className="composer-popover-title secondary">Permission</div>
                 <div className="composer-option-list compact">
-                  {permissionOptions.map((option) => (
+                  {permissionOptionList.map((option) => (
                     <button
                       aria-label={`Use permission ${option.label}`}
                       className={option.id === permissionMode ? "active" : ""}
                       key={option.id}
                       type="button"
-                      onClick={() => onPermissionModeChange(option.id)}
+                      onClick={() => onPermissionModeChange?.(option.id)}
                     >
                       <span>
                         <strong>{option.label}</strong>
@@ -401,7 +402,7 @@ export function Composer({
                           className={option.id === agentMode ? "active" : ""}
                           key={option.id}
                           type="button"
-                          onClick={() => onAgentModeChange(option.id)}
+                          onClick={() => onAgentModeChange?.(option.id)}
                         >
                           <span>
                             <strong>{option.label}</strong>

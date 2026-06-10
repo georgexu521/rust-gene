@@ -918,6 +918,7 @@ export function App() {
           settings={settings}
           diagnostics={diagnostics}
           providerSetup={providerSetup}
+          providerStatus={providerStatus}
           permissionOptions={permissionOptions}
           onClose={() => setIsSettingsOpen(false)}
           onSelectRecentProject={(path) => void handleSelectRecentProject(path)}

@@ -38,6 +38,7 @@ pub(super) async fn persist_current_settings(
         normalized_permission_mode_label(state.permission_mode.lock().await.as_deref()).to_string();
     let detail_level =
         normalized_detail_level_label(state.detail_level.lock().await.as_deref()).to_string();
+    let agent_mode = state.agent_mode.lock().await.clone();
     let provider_name = state.provider_name.lock().await.clone();
     let model = state.model.lock().await.clone();
     let recent_projects = state
@@ -55,6 +56,7 @@ pub(super) async fn persist_current_settings(
             active_session_id,
             permission_mode: Some(permission_mode),
             detail_level: Some(detail_level),
+            agent_mode,
             provider_name,
             model,
             recent_projects: Some(recent_projects),

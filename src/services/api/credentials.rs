@@ -13,6 +13,9 @@ use super::provider_catalog;
 /// On all platforms: `~/.priority-agent/.env`.
 /// The directory is created if it does not exist.
 pub fn credential_env_path() -> PathBuf {
+    if let Some(path) = std::env::var_os("PRIORITY_AGENT_CREDENTIAL_ENV_PATH") {
+        return PathBuf::from(path);
+    }
     let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
     home.join(".priority-agent").join(".env")
 }
@@ -54,11 +57,11 @@ impl std::fmt::Display for CredentialLoadError {
 /// Outcome of saving a credential.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CredentialSaveOutcome {
-    /// Key was saved, env refreshed, registry can construct provider, probe succeeded.
+    /// Key was saved, env refreshed, and the registry can construct the provider.
     Verified,
-    /// Key saved but validation failed for transient reasons (network, timeout).
+    /// Key was saved, but the provider could not be constructed in this session.
     SavedUnverified,
-    /// Key was not saved because provider unknown, key blank, or auth failure.
+    /// Key was not saved because the provider is unknown, the key is blank, or writing failed.
     Rejected { reason: String },
 }
 
@@ -67,18 +70,26 @@ pub enum CredentialSaveOutcome {
 /// Writes the provider-specific key env var from the catalog (e.g.
 /// `MINIMAX_API_KEY=<redacted>`) and sets `PRIORITY_AGENT_DEFAULT_PROVIDER`.
 /// Preserves existing lines that are not the target variables.
-pub fn save_credential(provider_id: &str, key: &str) -> Result<(), String> {
-    let entry = provider_catalog::find(provider_id)
-        .ok_or_else(|| format!("unknown provider '{}'", provider_id))?;
+pub fn save_credential(provider_id: &str, key: &str) -> CredentialSaveOutcome {
+    let Some(entry) = provider_catalog::find(provider_id) else {
+        return CredentialSaveOutcome::Rejected {
+            reason: format!("unknown provider '{}'", provider_id),
+        };
+    };
     if key.trim().is_empty() {
-        return Err("key must not be empty".to_string());
+        return CredentialSaveOutcome::Rejected {
+            reason: "key must not be empty".to_string(),
+        };
     }
 
     let key_env_var = &entry.key_env_vars[0];
     let path = credential_env_path();
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|e| format!("cannot create credential dir: {}", e))?;
+        if let Err(err) = std::fs::create_dir_all(parent) {
+            return CredentialSaveOutcome::Rejected {
+                reason: format!("cannot create credential dir: {}", err),
+            };
+        }
     }
 
     // Read existing lines, replace matching variables
@@ -98,17 +109,18 @@ pub fn save_credential(provider_id: &str, key: &str) -> Result<(), String> {
         if trimmed.is_empty() || trimmed.starts_with('#') {
             return true;
         }
-        !target_vars
-            .iter()
-            .any(|var| trimmed.starts_with(&format!("{}=", var)))
+        !target_vars.iter().any(|var| line_assigns_var(trimmed, var))
     });
 
     lines.push(format!("{}={}", key_env_var, key));
     lines.push(format!("PRIORITY_AGENT_DEFAULT_PROVIDER={}", provider_id));
 
     let content = lines.join("\n") + "\n";
-    std::fs::write(&path, content.as_bytes())
-        .map_err(|e| format!("cannot write credential env: {}", e))?;
+    if let Err(err) = std::fs::write(&path, content.as_bytes()) {
+        return CredentialSaveOutcome::Rejected {
+            reason: format!("cannot write credential env: {}", err),
+        };
+    }
 
     // Restrict permissions on Unix
     #[cfg(unix)]
@@ -121,12 +133,25 @@ pub fn save_credential(provider_id: &str, key: &str) -> Result<(), String> {
     set_env_for_session(key_env_var, key);
     set_env_for_session("PRIORITY_AGENT_DEFAULT_PROVIDER", provider_id);
 
-    Ok(())
+    let registry = super::provider::ProviderRegistry::from_env();
+    if registry.get(provider_id).is_some() {
+        CredentialSaveOutcome::Verified
+    } else {
+        CredentialSaveOutcome::SavedUnverified
+    }
 }
 
 /// Set an env var in the current process for the duration of this session.
 pub fn set_env_for_session(var: &str, value: &str) {
     std::env::set_var(var, value);
+}
+
+fn line_assigns_var(trimmed_line: &str, var: &str) -> bool {
+    let assignment = trimmed_line
+        .strip_prefix("export ")
+        .unwrap_or(trimmed_line)
+        .trim_start();
+    assignment.starts_with(&format!("{}=", var))
 }
 
 /// Status of a provider's credentials.
@@ -311,18 +336,19 @@ mod tests {
     #[test]
     fn save_credential_writes_to_temp_env_file() {
         let tmp = tempfile::tempdir().unwrap();
-        let env_path = tmp.path().join(".env");
-        let home = tmp.path().to_string_lossy().to_string();
-        std::env::set_var("HOME", &home);
+        let env_path = tmp.path().join(".priority-agent").join(".env");
+        let mut env = crate::test_utils::env_guard::EnvVarGuard::acquire_blocking();
+        env.set(
+            "PRIORITY_AGENT_CREDENTIAL_ENV_PATH",
+            &env_path.display().to_string(),
+        );
 
-        // Save a credential
-        save_credential("minimax", "sk-test-key-123").unwrap();
+        let outcome = save_credential("minimax", "sk-test-key-123");
+        assert_eq!(outcome, CredentialSaveOutcome::Verified);
 
-        let _content = std::fs::read_to_string(&env_path).unwrap_or_default();
-        // But note: credential_env_path() uses dirs::home_dir(), which won't
-        // pick up our test HOME override on all platforms. The important
-        // contract is that set_env_for_session makes the key available.
-        // Just verify the env var was set in this process.
+        let content = std::fs::read_to_string(&env_path).unwrap();
+        assert!(content.contains("MINIMAX_API_KEY=sk-test-key-123"));
+        assert!(content.contains("PRIORITY_AGENT_DEFAULT_PROVIDER=minimax"));
         assert_eq!(
             std::env::var("MINIMAX_API_KEY").unwrap_or_default(),
             "sk-test-key-123"
@@ -331,23 +357,51 @@ mod tests {
             std::env::var("PRIORITY_AGENT_DEFAULT_PROVIDER").unwrap_or_default(),
             "minimax"
         );
+    }
 
-        std::env::remove_var("HOME");
-        std::env::remove_var("MINIMAX_API_KEY");
-        std::env::remove_var("PRIORITY_AGENT_DEFAULT_PROVIDER");
+    #[test]
+    fn save_credential_replaces_target_vars_and_preserves_unrelated_lines() {
+        let tmp = tempfile::tempdir().unwrap();
+        let env_path = tmp.path().join(".priority-agent").join(".env");
+        std::fs::create_dir_all(env_path.parent().unwrap()).unwrap();
+        std::fs::write(
+            &env_path,
+            "# keep me\nUNRELATED=value\nexport MINIMAX_API_KEY=old\nPRIORITY_AGENT_DEFAULT_PROVIDER=openai\n",
+        )
+        .unwrap();
+        let mut env = crate::test_utils::env_guard::EnvVarGuard::acquire_blocking();
+        env.set(
+            "PRIORITY_AGENT_CREDENTIAL_ENV_PATH",
+            &env_path.display().to_string(),
+        );
+
+        let outcome = save_credential("minimax", "new-key");
+        assert_eq!(outcome, CredentialSaveOutcome::Verified);
+
+        let content = std::fs::read_to_string(&env_path).unwrap();
+        assert!(content.contains("# keep me\n"));
+        assert!(content.contains("UNRELATED=value\n"));
+        assert!(content.contains("MINIMAX_API_KEY=new-key\n"));
+        assert!(content.contains("PRIORITY_AGENT_DEFAULT_PROVIDER=minimax\n"));
+        assert!(!content.contains("old"));
+        assert!(!content.contains("PRIORITY_AGENT_DEFAULT_PROVIDER=openai"));
     }
 
     #[test]
     fn save_credential_rejects_unknown_provider() {
         let result = save_credential("nonexistent", "key");
-        assert!(result.is_err());
-        assert!(result.unwrap_err().contains("unknown provider"));
+        assert!(matches!(
+            result,
+            CredentialSaveOutcome::Rejected { reason } if reason.contains("unknown provider")
+        ));
     }
 
     #[test]
     fn save_credential_rejects_empty_key() {
         let result = save_credential("minimax", "");
-        assert!(result.is_err());
-        assert!(result.unwrap_err().contains("must not be empty"));
+        assert!(matches!(
+            result,
+            CredentialSaveOutcome::Rejected { reason } if reason.contains("must not be empty")
+        ));
     }
 }

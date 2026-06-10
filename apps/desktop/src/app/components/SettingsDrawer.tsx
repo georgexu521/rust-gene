@@ -16,6 +16,7 @@ import {
   DesktopSettings,
   PermissionModeId,
   PermissionModeOption,
+  ProviderModelStatus,
   ProviderSetupInfo,
 } from "../../runtime/desktopApi";
 import { saveProviderCredential as saveCred } from "../../runtime/desktopApi";
@@ -28,6 +29,7 @@ type SettingsDrawerProps = {
   settings: DesktopSettings | null;
   diagnostics: DesktopDiagnostic[];
   providerSetup: ProviderSetupInfo | null;
+  providerStatus: ProviderModelStatus | null;
   permissionOptions: PermissionModeOption[];
   onClose: () => void;
   onSelectRecentProject: (path: string) => void;
@@ -49,6 +51,7 @@ export function SettingsDrawer({
   settings,
   diagnostics,
   providerSetup,
+  providerStatus,
   permissionOptions,
   onClose,
   onSelectRecentProject,
@@ -219,6 +222,7 @@ export function SettingsDrawer({
                 needsSetup={needsProviderSetup}
                 diagnostic={providerDiagnostic}
                 providerSetup={providerSetup}
+                providerStatus={providerStatus}
                 onOpenShellProfile={onOpenShellProfile}
                 onRefresh={onRefresh}
               />
@@ -335,6 +339,7 @@ type ProviderSetupGuideProps = {
   needsSetup: boolean;
   diagnostic?: DesktopDiagnostic;
   providerSetup: ProviderSetupInfo | null;
+  providerStatus: ProviderModelStatus | null;
   onOpenShellProfile: () => void;
   onRefresh: () => void;
 };
@@ -343,19 +348,27 @@ function ProviderSetupGuide({
   needsSetup,
   diagnostic,
   providerSetup,
+  providerStatus,
   onOpenShellProfile,
   onRefresh,
 }: ProviderSetupGuideProps) {
   const [apiKey, setApiKey] = useState("");
+  const [selectedProviderId, setSelectedProviderId] = useState("");
   const [saving, setSaving] = useState(false);
   const [saveMsg, setSaveMsg] = useState("");
+  const providerOptions = providerStatus?.providers || [];
+  const selectedProvider =
+    providerOptions.find((provider) => provider.id === selectedProviderId) ||
+    providerOptions.find((provider) => !provider.configured) ||
+    providerOptions[0];
+  const effectiveProviderId = selectedProvider?.id || selectedProviderId;
 
   const handleSave = async () => {
-    if (!apiKey.trim()) return;
+    if (!apiKey.trim() || !effectiveProviderId) return;
     setSaving(true);
     setSaveMsg("");
     try {
-      const result = await saveCred("minimax", apiKey.trim());
+      const result = await saveCred(effectiveProviderId, apiKey.trim());
       setSaveMsg(result);
       setApiKey("");
       onRefresh();
@@ -383,14 +396,35 @@ function ProviderSetupGuide({
         profile steps.
       </p>
       <div className="settings-actions" style={{ marginBottom: "0.75rem" }}>
+        <select
+          aria-label="Provider"
+          value={effectiveProviderId}
+          onChange={(event) => setSelectedProviderId(event.target.value)}
+          style={{ padding: "0.4rem 0.5rem", fontSize: "0.85rem" }}
+        >
+          {providerOptions.map((provider) => (
+            <option key={provider.id} value={provider.id}>
+              {provider.label}
+              {provider.configured ? " (configured)" : ""}
+            </option>
+          ))}
+        </select>
         <input
           type="password"
-          placeholder="Paste your API key here"
+          placeholder={
+            selectedProvider
+              ? `Paste ${selectedProvider.label} API key here`
+              : "Paste your API key here"
+          }
           value={apiKey}
           onChange={(e) => setApiKey(e.target.value)}
           style={{ flex: 1, padding: "0.4rem 0.5rem", fontSize: "0.85rem" }}
         />
-        <button type="button" onClick={handleSave} disabled={saving || !apiKey.trim()}>
+        <button
+          type="button"
+          onClick={handleSave}
+          disabled={saving || !apiKey.trim() || !effectiveProviderId}
+        >
           {saving ? "Saving..." : "Save key"}
         </button>
       </div>
