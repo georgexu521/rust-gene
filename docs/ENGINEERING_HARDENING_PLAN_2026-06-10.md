@@ -2,7 +2,7 @@
 
 Date: 2026-06-10
 Last Updated: 2026-06-10
-Status: **Active**
+Status: **In Progress — Phases 0-1 scaffold done, Phases 1-4 need deep work**
 Previous Plan: `docs/LLM_RUNTIME_SIMPLIFICATION_PLAN_2026-05-08.md` (completed)
 
 ## Goal
@@ -23,14 +23,22 @@ Target: a codebase where:
 
 ## Phase 0 — Code Size Stewardship
 
-Status: **Completed**
+Status: **Completed** (commit `75366750`)
 
 Purpose: enforce the existing "source files under 1500 lines" rule.
 
-### Current State
+### Completed Work
 
-Four production files currently exceed 1500 lines. One more file is close
-enough to treat as a warning:
+Four production files were split to bring them under the 1500-line limit:
+
+| File | Before | After | Split Strategy |
+|---|---|---|---|
+| `src/session_store/session_parts.rs` | 1743 | 1314 (mod) + 432 (tests) | Extracted tests to `tests.rs` |
+| `src/api/routes.rs` | 1726 | 1490 (mod) + 74 (helpers) + 149 (tool_output) | Split by domain |
+| `src/tui/session_manager.rs` | 1580 | 1042 (mod) + 129 (export_builder) + 63 (tests) | Extracted export builder + tests |
+| `src/engine/streaming.rs` | 1511 | 1493 | Moved timeout fns to `config.rs` |
+
+Added `file-size-hard-limit` gate to `scripts/daily-baseline.sh`.
 
 | File | Lines | Status | Nature | Split Strategy |
 |---|---:|---|---|---|
@@ -100,43 +108,36 @@ bash scripts/daily-baseline.sh
 
 ## Phase 1 — Configuration Centralization
 
-Status: **Completed**
+Status: **Infrastructure done, migration in progress** (commit `7e996269`)
 
 Purpose: extend the existing typed config system so most
 `PRIORITY_AGENT_*` reads go through one discoverable, validated registry.
 
-### Current State
+### Completed Infrastructure
 
-The project already has a config system in `src/services/config.rs`:
+- Added `EngineConfig` fields: `turn_timeout_secs`, `session_end_memory_flush_timeout_secs`,
+  `llm_request_timeout_secs`, `stream_idle_timeout_secs`, `fallback_model`,
+  `runtime_profile`, `closeout_visibility`, `self_correction_enabled`.
+- Added typed accessors on `AppConfig`: `turn_timeout()`, `session_end_memory_flush_timeout()`,
+  `llm_request_timeout()`, `stream_idle_timeout()`, `fallback_model()`, `runtime_profile()`,
+  `closeout_visibility()`.
+- Added `runtime_config()` global `OnceLock` accessor in `src/services/config.rs`.
+- Added regression tests for timeout clamping behavior.
 
-- `AppConfig::load()` merges defaults, config file, and
-  `PRIORITY_AGENT_*` environment overrides.
-- `CONFIG_KEY_SPECS` documents some mutable config keys.
-- `validate_config()` already exists for several config domains.
+### Remaining Work
 
-The remaining problem is not "no config system"; it is incomplete adoption.
-There are still many direct environment reads:
+Only 2 out of ~480 `PRIORITY_AGENT_*` env reads have been migrated:
+- `engine/streaming/config.rs` timeout functions → `runtime_config()`
+- `engine/conversation_loop/mod.rs` self_correction → `runtime_config()`
 
-- About 288 production-ish `std::env::var` / `var_os` / `vars` reads in
-  `src/` and `apps/` after excluding standalone test files.
-- About 505 production-ish `std::env::*` references if `current_dir`,
-  `temp_dir`, `set_var`, and platform environment inspection are included.
-- Direct reads are valid for OS/platform facts (`HOME`, `USER`, `SHELL`,
-  `current_dir`, test env guards), but `PRIORITY_AGENT_*` runtime knobs should
-  be centralized unless explicitly allowlisted.
-
-Examples:
-
-- `PRIORITY_AGENT_TURN_TIMEOUT_SECS` parsed in `src/engine/streaming.rs:33`
-- `PRIORITY_AGENT_AGENTS_MD_FULL` read in `src/instructions/mod.rs:108`
-- `PRIORITY_AGENT_LEGACY_WORKFLOW_ENABLED` referenced in multiple modules
-- Provider keys, memory paths, debug flags all read ad-hoc.
-
-Problems:
-- Typos in env var names are compile-time invisible.
-- Default values are duplicated or inconsistent.
-- No centralized validation (e.g. numeric ranges, path existence).
-- New developers cannot discover available options.
+~478 reads remain scattered across:
+- `src/api/dto/provider.rs` — timeout/secs/retry reads
+- `src/engine/conversation_loop/request_timeouts.rs` — request/idle timeouts
+- `src/instructions/mod.rs` — `AGENTS_MD_FULL`
+- `src/permissions/mod.rs` — `TRUSTED_DOMAINS`
+- `src/tools/` — bash backend, file edit, memory paths
+- `src/memory/` — memory root, proposals path
+- `src/tui/` — tool profile, route scoped tools, auto memory write
 
 ### Tasks
 
@@ -215,7 +216,7 @@ cargo clippy --all-targets --all-features -- -D warnings
 
 ## Phase 2 — Core Path Error Handling Hardening
 
-Status: **Completed**
+Status: **Started, ~2% complete** (commit `89ca9469`)
 
 Purpose: remove recoverable panics from paths that touch user data, storage,
 permissions, and tool execution.
@@ -224,18 +225,16 @@ permissions, and tool execution.
 
 `rg` currently finds roughly 2500 `unwrap()` / `expect(` / `panic!` occurrences
 under `src/`, and about 1500 after excluding standalone `tests.rs` files.
-Those totals are useful for tracking, but they are not the main risk metric:
-many occurrences are inside inline `#[cfg(test)]` modules or assert-style test
-helpers.
 
-The real hardening target is runtime code that can affect user data or agent
-continuity:
+Completed so far:
+- `session_store/event_store.rs` — `SessionEventWriter` lock: `expect(poisoned)` → `unwrap_or_else(into_inner)`
+- `engine/conversation_loop/permission_recovery.rs` — denial counters: `expect(poisoned)` → `unwrap_or_else(into_inner)`
 
-- `session_store/` — SQLite lock poisoning, event writer lock handling,
-  query/projection errors.
-- `permissions/` — policy file parse errors and classifier parsing.
-- `engine/conversation_loop/` — channel send, mutex locks.
-- `tools/file_tool/` — filesystem operations.
+Remaining targets (~150 runtime unwrap/expect in audited modules):
+- `session_store/` — 154 occurrences (mostly query/ projection `unwrap` on JSON parse)
+- `permissions/llm_classifier.rs` — 4 occurrences (parse_response `unwrap`)
+- `engine/conversation_loop/` — 162 occurrences (model step, repair, permission controller)
+- `tools/file_tool/` — 18 occurrences (mutation result serialization, edit match)
 
 Risk: a transient SQLite lock or a malformed config file can crash the agent
 mid-turn, losing user context.
@@ -306,49 +305,63 @@ cargo clippy --all-targets --all-features -- -D warnings
 
 ## Phase 3 — End-to-End Deterministic Tests
 
-Status: **Completed**
+Status: **Scaffold done, scenarios not yet written** (commit `05be4a81`)
 
 Purpose: cover complete user flows from prompt to tool execution to closeout.
 
-### Current State
+### Completed Infrastructure
 
-2453 tests pass, but most are unit tests. There is no deterministic test that
-verifies: "user asks to create a Python file → agent writes file → validation
-runs → closeout says done." Live evals catch these, but they are slow and
-non-deterministic (depend on provider, model, timing).
+- `tests/e2e/` directory created.
+- `MockProvider` implements `LlmProvider` trait via `async_trait`.
+- `e2e_smoke` test verifies MockProvider compiles and runs.
+
+### Remaining Work
+
+No scenario tests have been written yet. Need:
+- `test_file_read_flow`
+- `test_file_create_and_validate`
+- `test_edit_and_verify`
+- `test_tool_failure_recovery`
+- JSON fixtures for multi-turn scripted responses.
+
+2453 tests pass, but most are unit tests. There is still no deterministic test
+that verifies: "user asks to create a Python file → agent writes file →
+validation runs → closeout says done."
 
 ### Tasks
 
 1. **Design E2E test harness**
-   - `tests/e2e/` directory.
-   - Mock LLM provider that returns scripted responses.
-   - In-memory or temp-dir SQLite session store.
-   - No network calls, no real provider API keys.
+   - `tests/e2e/` directory. ✅
+   - Mock LLM provider that returns scripted responses. ✅
+   - In-memory or temp-dir SQLite session store. (TODO)
+   - No network calls, no real provider API keys. (TODO — need to wire harness)
 
 2. **Implement mock provider**
-   - `tests/e2e/mock_provider.rs` — implements `LlmProvider` trait.
-   - Reads response scripts from JSON fixtures.
-   - Supports multi-turn (each turn reads next response from script).
+   - `tests/e2e/mock_provider.rs` — implements `LlmProvider` trait. ✅
+   - Reads response scripts from JSON fixtures. (TODO)
+   - Supports multi-turn (each turn reads next response from script). (TODO)
 
 3. **Write scenario tests**
    - `test_file_read_flow`: user asks "read src/main.rs" → mock returns
-     `file_read` tool call → harness asserts file content appears in trace.
+     `file_read` tool call → harness asserts file content appears in trace. (TODO)
    - `test_file_create_and_validate`: user asks "create hello.py" → mock
      returns `file_write` → harness asserts file exists and `py_compile` was
-     invoked in closeout.
+     invoked in closeout. (TODO)
    - `test_edit_and_verify`: user asks "change foo to bar" → mock returns
-     `file_edit` → harness asserts diff is correct and closeout is concise.
+     `file_edit` → harness asserts diff is correct and closeout is concise. (TODO)
    - `test_tool_failure_recovery`: mock returns invalid tool call → harness
-     asserts error observation is recorded and model gets a retry.
+     asserts error observation is recorded and model gets a retry. (TODO)
 
 4. **Add to CI baseline**
-   - `cargo test -q e2e` runs in CI.
-   - Target runtime < 30 seconds for full suite.
+   - `cargo test -q e2e` runs in CI. (TODO)
+   - Target runtime < 30 seconds for full suite. (TODO)
 
 ### Likely Files
 
-- New: `tests/e2e/mod.rs`, `tests/e2e/mock_provider.rs`, `tests/e2e/scenarios.rs`
-- New fixtures: `tests/e2e/fixtures/read_scenario.json`, etc.
+- `tests/e2e/mod.rs` ✅
+- `tests/e2e/mock_provider.rs` ✅
+- `tests/e2e/scenarios.rs` (partial — only smoke test)
+- New fixtures: `tests/e2e/fixtures/*.json` (TODO)
 
 ### Acceptance
 
@@ -369,34 +382,51 @@ cargo clippy --all-targets --all-features -- -D warnings
 
 ## Phase 4 — Documentation Cleanup
 
-Status: **Completed**
+Status: **Partially done — 7 archived, ~20 more to go**
 
 Purpose: reduce doc inflation; keep current plans visible and archive completed
 ones.
 
+### Completed Work
+
+Archived 7 completed docs (commit `74e40e24`):
+- `AGENT_TESTING_MATRIX_2026-05-08.md`
+- `CLAUDE_CODE_GAP_MATRIX_2026-05-03.md`
+- `FLOW_STABILIZATION_TEST_PLAN_2026-05-27.md`
+- `FLOW_STABILIZATION_TEST_RUN_2026-05-27.md`
+- `NEXT_DEVELOPMENT_PLAN_2026-05-09.md`
+- `PROJECT_FLOW_AND_RUNTIME_ARCHITECTURE_2026-05-26.md`
+- `RUNTIME_SPINE_STABILITY_REVIEW_PLAN_2026-05-26.md`
+
 ### Current State
 
-- 85 files in `docs/`
-- 60 files in `docs/archive/`
-- Many files have similar names: `TUI_OPTIMIZATION_PLAN_2026-06-09.md`,
-  `TUI_DEEP_OPTIMIZATION_PLAN_2026-06-09.md`, `NEXT_PHASE_PRODUCT_DEVELOPMENT_PLAN_2026-06-02.md`,
-  `NEXT_PHASE_PRODUCT_ECOSYSTEM_GAP_PLAN_2026-06-09.md`.
-- Some files lack a clear status header (completed vs active vs draft).
+- 77 files in `docs/` (was 85)
+- 67 files in `docs/archive/` (was 60)
+- Many files still have similar names and lack clear status headers.
+
+### Remaining Work
+
+Still need to:
+1. Audit all 77 remaining docs for status, duplicates, and outdated content.
+2. Merge duplicate/overlapping plans (e.g. TUI optimization has 3+ docs).
+3. Standardize headers on all remaining docs.
+4. Add `scripts/doc_health_check.sh` gate.
+5. Reduce `docs/*.md` count from 77 to < 50.
 
 ### Tasks
 
 1. **Audit all `docs/*.md` files**
    - For each file: last updated date, status, relationship to other files.
-   - Identify duplicates, subsets, and outdated content.
+   - Identify duplicates, subsets, and outdated content. (TODO)
 
 2. **Archive completed plans older than 30 days**
    - Move to `docs/archive/` if status is "completed" and last updated before
-     2026-05-10.
-   - Update `docs/README.md` index to point to archive for historical plans.
+     2026-05-10. (Partially done — need more)
+   - Update `docs/README.md` index to point to archive for historical plans. (TODO)
 
 3. **Merge duplicate/overlapping plans**
    - Example: consolidate TUI optimization plans into one active document.
-   - Keep the most recent as canonical; archive others with a redirect note.
+   - Keep the most recent as canonical; archive others with a redirect note. (TODO)
 
 4. **Standardize headers**
    - Every current doc must have:
@@ -405,13 +435,13 @@ ones.
      Date: YYYY-MM-DD
      Status: Draft | Active | Completed | Archived
      Last Updated: YYYY-MM-DD
-     ```
+     ``` (TODO)
 
 5. **Add doc-health test**
    - `cargo test -q docs` or a shell script that checks:
      - No plan doc older than 60 days without a status.
      - `docs/*.md` count < 50.
-     - Every `.md` has required header fields.
+     - Every `.md` has required header fields. (TODO)
 
 ### Likely Files
 
@@ -421,7 +451,7 @@ ones.
 
 ### Acceptance
 
-- `docs/*.md` count reduced from 85 to < 50.
+- `docs/*.md` count reduced from 77 to < 50.
 - All remaining docs have standard status headers.
 - No active plan is older than 60 days without an update.
 - `docs/README.md` accurately reflects current documentation tree.
@@ -473,4 +503,21 @@ Rationale:
 - Phase 4 (docs) is lowest risk and can run in parallel once earlier phases
   stabilize.
 
-Target timeline: 2–3 weeks for full plan, assuming focused daily work.
+## Current Progress Summary
+
+| Phase | Status | What's Done | What's Remaining |
+|-------|--------|-------------|------------------|
+| **0** | ✅ Complete | Split 4 files, added file-size gate | — |
+| **1** | ⚠️ Infrastructure only | Added config fields + accessors + `runtime_config()` | Migrate ~478 remaining `env::var` reads |
+| **2** | ⚠️ Started (~2%) | Fixed 2 Mutex poison panics | Fix ~150 runtime unwrap/expect in core modules |
+| **3** | ⚠️ Scaffold only | MockProvider compiles, smoke test passes | Write 6+ scenario tests with fixtures |
+| **4** | ⚠️ Partial (7/20+) | Archived 7 docs | Audit 77 docs, merge duplicates, add health gate |
+
+### What "done" actually looks like
+
+- Phase 1: `grep -r 'env::var.*PRIORITY_AGENT_' src --include='*.rs' | wc -l` shows < 50 reads outside `services/config.rs`
+- Phase 2: `unwrap`/`expect` in audited modules down by >= 50% (currently ~150 → target < 75)
+- Phase 3: `cargo test -q e2e` runs 6+ scenario tests in < 30 seconds
+- Phase 4: `ls docs/*.md | wc -l` prints < 50
+
+Target timeline: **2–3 more weeks** for deep completion of Phases 1–4.
