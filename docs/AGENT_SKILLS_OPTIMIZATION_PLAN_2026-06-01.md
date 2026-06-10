@@ -1,5 +1,5 @@
 # Agent 通用技巧优化计划
-Status: Active
+Status: Active — 5/6 completed
 
 > 基于 Reasonix (DeepSeek) 与 Priority Agent 的深度对比，聚焦于**模型无关**的通用 agent 技巧差距。
 > 创建日期：2026-06-01

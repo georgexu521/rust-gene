@@ -1,8 +1,8 @@
 # Next Phase Product Ecosystem Gap Plan
-Status: Active
+Status: Completed
 
-> 2026-06-09
-> Scope: after the core opencode programming-gap work, close the larger product
+> 2026-06-09 → 2026-06-10
+> All 6 phases (A-F) implemented. Latest commits: `9d2935d2`
 > surface gaps without weakening Priority Agent's local, verifiable runtime.
 
 ## 0. Summary

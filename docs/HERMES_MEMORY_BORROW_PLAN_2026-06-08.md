@@ -1,5 +1,12 @@
 # Hermes Memory Borrow Plan — 2026-06-08
-Status: Active
+Status: Completed
+
+All 5 features implemented and verified in codebase:
+1. Memory Nudge — `advance_nudge()` in `src/memory/manager/mod.rs`
+2. Background Review Fork — `src/memory/background_review.rs`
+3. Streaming Context Scrubber — `src/engine/streaming/context_scrubber.rs`
+4. Dialogic Prefetch — `prefetch_retrieval_context_dialectic()` in `src/memory/retrieval.rs`
+5. Contradiction Detection — `src/memory/contradiction.rs`
 
 从 Hermes 借鉴 5 项记忆增强功能，每一节对照 Hermes 源码与 Priority Agent 现有代码，
 给出精确的实现路径和改动范围。

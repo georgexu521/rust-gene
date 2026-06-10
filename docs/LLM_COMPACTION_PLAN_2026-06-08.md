@@ -1,5 +1,5 @@
 # LLM Context Compaction Plan - 2026-06-08
-Status: Active
+Status: Active — Phase 0-2 partial, Phase 3-4 not started
 
 目标：学习 OpenCode 的主动上下文管理，但按 Priority Agent 的 runtime evidence
 边界实现，避免为了省 token 破坏 closeout verification。

@@ -1,5 +1,5 @@
 # Hermes Memory Feature Follow-up Plan
-Status: Active
+Status: Completed
 
 Date: 2026-05-27
 
