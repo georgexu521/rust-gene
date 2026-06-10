@@ -161,30 +161,23 @@ impl TuiApp {
     }
 
     pub fn model_choices(&self) -> Vec<ModelChoice> {
-        let provider = self.current_provider_label();
+        let provider_label = self.current_provider_label();
         let current = self.current_model_label();
-        let mut models = match provider.as_str() {
-            "MiniMax" => vec![
-                "MiniMax-M3",
-                "MiniMax-M2.7",
-                "MiniMax-M2.7-highspeed",
-                "MiniMax-M2.5",
-                "MiniMax-M2",
-            ],
-            "Kimi Code" => vec!["kimi-for-coding"],
-            "DeepSeek" => vec!["deepseek-v4-pro", "deepseek-v4-flash", "deepseek-chat"],
-            "GLM" => vec!["glm-5.1", "glm-4.7", "glm-4.6"],
-            "OpenAI" => vec!["gpt-4o", "gpt-4o-mini"],
-            "Kimi" => vec!["kimi-k2.5", "kimi-k2.5-thinking"],
-            _ => vec![current.as_str()],
-        };
+
+        // Use the catalog's supported models, falling back to current-only for unknown providers.
+        let catalog_id = crate::services::api::provider_catalog::provider_id_for_label(&provider_label);
+        let model_names: Vec<String> = catalog_id
+            .map(|id| crate::services::api::provider_catalog::supported_models(&id))
+            .unwrap_or_else(|| vec![current.clone()]);
+
+        let mut models: Vec<&str> = model_names.iter().map(|s| s.as_str()).collect();
         if !models.iter().any(|m| *m == current) {
             models.insert(0, current.as_str());
         }
         models
             .into_iter()
             .map(|model| ModelChoice {
-                provider: provider.clone(),
+                provider: provider_label.clone(),
                 model: model.to_string(),
                 note: if model == current {
                     "current".to_string()
@@ -392,6 +385,7 @@ impl TuiApp {
             engine.set_provider(provider, config.default_model.clone());
         }
         if let Ok(mut app_config) = crate::services::config::AppConfig::load() {
+            app_config.api.provider_name = Some(name.to_string());
             app_config.api.model = config.default_model.clone();
             app_config.api.base_url = config.base_url.clone().unwrap_or_default();
             if app_config.save().is_ok() {

@@ -150,9 +150,9 @@ pub fn handle_logout(_app: &mut TuiApp, _args: &str) -> String {
 }
 
 /// /connect <provider> — guided provider setup with catalog DTO.
-pub fn handle_connect(_app: &mut TuiApp, args: &str) -> String {
-    let id = args.trim().to_ascii_lowercase();
-    if id.is_empty() || id == "list" {
+pub fn handle_connect(app: &mut TuiApp, args: &str) -> String {
+    let trimmed = args.trim();
+    if trimmed.is_empty() || trimmed == "list" {
         let mut out = String::from("Available providers:\n\n");
         for status in crate::services::api::credentials::status_all() {
             let marker = if status.configured { "✓" } else { "○" };
@@ -169,17 +169,57 @@ pub fn handle_connect(_app: &mut TuiApp, args: &str) -> String {
             ));
         }
         if out.contains("○") {
-            out.push_str("\nRun /connect <provider> for setup instructions.\n");
+            out.push_str(
+                "\nRun /connect <provider> for setup instructions, or /connect <provider> <key> to save a key.\n",
+            );
         }
         return out;
     }
 
-    match crate::services::api::credentials::connect_message(&id) {
-        Some(msg) => msg,
-        None => format!(
-            "Unknown provider '{}'. Run /connect list to see available providers.",
-            id
-        ),
+    // Parse /connect <provider> [<key>]
+    let mut parts = trimmed.splitn(2, char::is_whitespace);
+    let id = parts.next().unwrap_or("").to_ascii_lowercase();
+    let key = parts.next().map(str::trim).filter(|k| !k.is_empty());
+
+    match key {
+        Some(key) => {
+            // User provided a key — save it.
+            match crate::services::api::credentials::save_credential(&id, key) {
+                Ok(()) => {
+                    // Refresh provider registry so the new key takes effect.
+                    if let Some(ref engine) = app.streaming_engine {
+                        let fresh = crate::services::api::provider::ProviderRegistry::from_env();
+                        if let Some(provider) = fresh.get(&id) {
+                            let config = fresh.get_config(&id).cloned();
+                            let model = config
+                                .as_ref()
+                                .map(|c| c.default_model.clone())
+                                .unwrap_or_else(|| app.current_model_label());
+                            engine.set_provider(provider, model);
+                        }
+                    }
+                    format!(
+                        "Saved API key for {} to ~/.priority-agent/.env.\n\
+                         Provider is now available for this session.\n\
+                         Use /provider status to verify.",
+                        crate::services::api::provider_catalog::find(&id)
+                            .map(|e| e.label)
+                            .unwrap_or_else(|| id.to_string())
+                    )
+                }
+                Err(e) => format!("Failed to save key: {}", e),
+            }
+        }
+        None => {
+            // No key — show setup instructions (existing behavior).
+            match crate::services::api::credentials::connect_message(&id) {
+                Some(msg) => msg,
+                None => format!(
+                    "Unknown provider '{}'. Run /connect list to see available providers.",
+                    id
+                ),
+            }
+        }
     }
 }
 

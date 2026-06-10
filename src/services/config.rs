@@ -857,6 +857,9 @@ pub struct ApiConfig {
     pub temperature: f32,
     /// 最大 token 数
     pub max_tokens: Option<u32>,
+    /// Selected provider name (persisted across sessions).
+    #[serde(default)]
+    pub provider_name: Option<String>,
 }
 
 impl Default for ApiConfig {
@@ -867,6 +870,7 @@ impl Default for ApiConfig {
             model: String::new(),
             temperature: 0.6,
             max_tokens: None,
+            provider_name: None,
         }
     }
 }

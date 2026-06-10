@@ -251,6 +251,14 @@ pub fn provider_status(id: &str) -> Option<ProviderStatus> {
 }
 
 /// Get the supported models for a provider id.
+/// Map a display label (e.g. "MiniMax", "DeepSeek") to the provider id.
+pub fn provider_id_for_label(label: &str) -> Option<String> {
+    builtin_catalog()
+        .into_iter()
+        .find(|e| e.label.eq_ignore_ascii_case(label))
+        .map(|e| e.id)
+}
+
 pub fn supported_models(id: &str) -> Vec<String> {
     find(id).map(|e| e.supported_models).unwrap_or_default()
 }

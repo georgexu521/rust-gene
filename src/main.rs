@@ -525,6 +525,11 @@ async fn main() {
 
     info!("Priority Agent starting...");
 
+    // Load product credential env (provider keys saved via /connect).
+    if let Err(e) = priority_agent::services::api::credentials::load_product_credential_env() {
+        debug!("product credential env not loaded: {}", e);
+    }
+
     // 加载 .env 文件（如果存在）
     if let Err(e) = dotenvy::dotenv() {
         debug!(".env file not loaded: {}", e);
