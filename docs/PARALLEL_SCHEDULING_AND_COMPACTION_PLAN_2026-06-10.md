@@ -1,242 +1,296 @@
-# Parallel Tool Scheduling + LLM Compaction Plan
+# Parallel Scheduling And Compaction Evidence Plan
 
 Date: 2026-06-10
 Status: Active
-Parents: `docs/AGENT_SKILLS_OPTIMIZATION_PLAN_2026-06-01.md`, `docs/LLM_COMPACTION_PLAN_2026-06-08.md`
+Parents: `docs/AGENT_SKILLS_OPTIMIZATION_PLAN_2026-06-01.md`,
+`docs/LLM_COMPACTION_PLAN_2026-06-08.md`
 
-## Part 1: True Parallel Tool Scheduling
+## Goal
 
-### Goal
+Improve two runtime surfaces without weakening ordering, permissions, or proof:
 
-Change tool execution from sequential batching to two-phase parallel scheduling:
-scan all tool calls first, run all read-only tools concurrently, then run
-mutating tools sequentially. This is the last remaining optimization from the
-AGENT_SKILLS_OPTIMIZATION plan (5/6 done).
+1. Make tool scheduling easier to reason about and test while preserving
+   model-requested order across mutating boundaries.
+2. Harden compaction evidence boundaries so LLM summaries remain continuation
+   context and never become runtime verification proof.
 
-### Current State
+The original draft was too aggressive in both areas. Current code already has
+substantial parallel tool infrastructure and LLM compaction prompt hardening.
+The next step is targeted hardening, not a broad scheduling or compaction
+rewrite.
 
-`src/engine/conversation_loop/tool_execution_controller.rs:608`
-(`execute_tools_parallel`) already has the building blocks:
-- `parallel_jobs` buffer for accumulating concurrent work
-- `serial_boundary_seen` flag that flushes on the first non-concurrent tool
-- `collect_read_only_results()` for awaiting parallel results
-- `tool_call_is_concurrency_safe()`, `tool_call_is_read_only()`,
-  `force_serial_tool_dispatch()`, `read_only_tool_concurrency()` for dispatch
+## Findings From Code Audit
 
-But the current loop processes tools in arrival order: it accumulates read-only
-tools until it hits a mutating tool, flushes the batch, runs the mutating tool,
-then repeats. This is **sequential batching**, not true two-phase scheduling.
+### Finding 1: Global two-phase scheduling is unsafe
 
-### opcode Reference
+`src/engine/conversation_loop/tool_execution_controller.rs` currently executes
+read-only tools in parallel windows and treats mutating or non-concurrency-safe
+tools as serial barriers.
 
-opencode (TypeScript) dispatches tool calls in two clear phases:
-1. Identify all independent (read-only) tools → spawn them in parallel
-2. Run dependent (mutating) tools sequentially
+That behavior is conservative for a reason. A tool call sequence like this must
+not be globally reordered:
 
-This is visible in the task tool description itself: "Launch multiple agents
-concurrently whenever possible, to maximize performance; use a single message
-with multiple tool uses."
-
-The same principle applies to tool scheduling: read-only ops (grep, glob,
-file_read) should never block each other.
-
-### Gap
-
-The current code has all the infrastructure but the loop control flow prevents
-true two-phase execution. The fix is local to `execute_tools_parallel`:
-
-**Current (sequential batching):**
-```
-for each tool_call:
-    if concurrency-safe → add to parallel buffer
-    else → flush buffer, run serial, continue
-flush remaining buffer
+```text
+file_write("src/lib.rs")
+file_read("src/lib.rs")
 ```
 
-**Target (two-phase):**
+The `file_read` is read-only, but it depends on the preceding write. A global
+"scan all read-only first, then run all mutating tools" scheduler would read the
+old file content and feed stale evidence back to the model.
+
+Safe target:
+
+```text
+segment 1: consecutive independent read-only tools -> run concurrently
+barrier: mutating / permissioned / non-concurrency-safe tool -> run serially
+segment 2: next consecutive independent read-only tools -> run concurrently
 ```
-phase 1: scan all tool_calls, categorize into read_only[] and mutating[]
-phase 2: run all read_only tools in parallel (respecting concurrency limit)
-phase 3: run all mutating tools sequentially
+
+This is closer to the current implementation than the original plan suggested.
+The implementation work should make this segmented contract explicit and better
+tested, not move every read-only call ahead of every mutating call.
+
+### Finding 2: Existing scheduling already has important side effects
+
+`execute_tools_parallel` is not a simple dispatcher. It also handles:
+
+- storm suppression before dispatch;
+- `ToolExecutionGate` review and resource policy checks;
+- action checkpoint restrictions;
+- pre-executed streaming results;
+- permission requests for mutating tools;
+- tool lifecycle state;
+- learning-event persistence;
+- trace and UI start/complete events;
+- result ordering for provider-visible tool results.
+
+A scheduling refactor must preserve all of these surfaces. It should not be
+described as a 40-line local rewrite unless tests prove the behavior stays
+equivalent.
+
+### Finding 3: LLM compaction prompt hardening is already partly implemented
+
+The original draft said the strict 8-section prompt was not integrated. Current
+code already has:
+
+- `SUMMARY_TEMPLATE` and `SUMMARY_PREFIX` in `src/engine/context_compressor.rs`;
+- `llm_summarize_middle()` gated by `PRIORITY_AGENT_LLM_COMPACTION`;
+- strict sections for Goal, Constraints, Progress, Key Decisions, Relevant
+  Files, Next Steps, Critical Context, and Tools & Patterns;
+- prompt rules saying summary is continuation context, not verification proof;
+- tests that set `PRIORITY_AGENT_LLM_COMPACTION=1`;
+- runtime continuity extraction tests that preserve changed files, validation,
+  terminal tasks, permissions, diagnostics, and agent state.
+
+The remaining work is not "add the prompt from scratch." It is to tighten tests
+and provenance so evidence safety is enforced across compaction boundaries.
+
+### Finding 4: Closeout should stay ledger-backed
+
+`closeout_controller` already evaluates closeout through `EvidenceLedger` and
+`VerificationProof`. That is the right boundary. The closeout layer should not
+parse compacted summary text or compact-boundary markers directly to decide
+verification.
+
+Safer target:
+
+- raw tool execution and validation results can enter `EvidenceLedger`;
+- compacted LLM summaries can be shown as narrative continuation context;
+- verification proof must be derived from ledger facts, not summary text.
+
+If a compacted summary mentions "Validation passed", that can guide the next
+turn, but it must not become `VerificationProofStatus::Verified` unless raw
+ledger evidence still exists.
+
+## Implementation Plan
+
+### Step 1: Document and test segmented tool scheduling
+
+File:
+
+- `src/engine/conversation_loop/tool_execution_controller.rs`
+- `src/engine/conversation_loop/tool_execution_controller/tests.rs`
+
+Make the current intended contract explicit:
+
+- read-only calls in the same dependency segment may run concurrently;
+- mutating, permissioned, denied, storm-suppressed, or non-concurrency-safe calls
+  are barriers;
+- read-only calls after a barrier must not start before the barrier completes;
+- provider-visible result order stays aligned to the original tool-call order;
+- pre-executed streaming results are only reused before a serial boundary, as
+  current code already does with `serial_boundary_seen`.
+
+This can be implemented as comments plus tests first. Only extract a helper if
+the tests show the current loop is too hard to reason about.
+
+Suggested helper, if useful:
+
+```rust
+enum ScheduledToolSegment {
+    ReadOnly(Vec<usize>),
+    Serial(usize),
+}
 ```
 
-### Implementation
+The helper should describe scheduling order only. It should not run gates,
+permissions, hooks, or tools.
 
-File: `src/engine/conversation_loop/tool_execution_controller.rs`
-
-- Add a `scan_tool_calls()` helper that iterates once and returns
-  `(Vec<ReadOnlyJob>, Vec<MutatingJob>)` without executing anything.
-- In `execute_tools_parallel`, call scan first, then run all read-only
-  jobs through `collect_read_only_results()`, then run mutating jobs
-  sequentially.
-- Preserve: storm detection, gate evaluation, pre-executed results,
-  serial boundary semantics for trace events.
-
-The change is ~40 lines of refactoring within a single function. No API changes,
-no new modules, no config flags.
-
-### Verification
+Verification:
 
 ```bash
 cargo test -q tool_execution_controller --lib
-cargo test -q tool_execution --lib
-cargo test -q tool_batch_result_processor --lib
 ```
 
----
+Required tests:
 
-## Part 2: LLM Compaction — Phase 2 Prompt Hardening
+- `read_only_read_only_runs_as_parallel_segment`
+- `mutating_tool_is_barrier_between_read_only_segments`
+- `read_only_after_file_write_does_not_precede_write`
+- `denied_tool_flushes_prior_parallel_segment`
+- `pre_executed_results_not_reused_after_serial_boundary`
+- `result_order_matches_original_tool_call_order`
 
-### Goal
+### Step 2: Add scheduling trace metadata without changing semantics
 
-Strengthen the LLM summary prompt contract so that compacted context preserves
-structured evidence and the closeout controller can distinguish between raw
-validation proof and compressed summaries.
+Files:
 
-### Current State
+- `src/engine/conversation_loop/tool_execution_controller.rs`
+- `src/engine/conversation_loop/tool_execution_controller/runtime_context.rs`
 
-From `docs/LLM_COMPACTION_PLAN_2026-06-08.md` Phase 2 (not done):
+If the tests pass and the contract is clear, add lightweight metadata to tool
+runtime output:
 
-The code already has:
-- `ContextCompressor::llm_summarize_middle()` — calls LLM for summary
-- `SUMMARY_TEMPLATE` and `SUMMARY_PREFIX` — existing prompt templates
-- `CompactionAttemptRecord`, `CompactionRuntimeRecord` — metadata
+- `segment_index`
+- `segment_kind = read_only_parallel | serial`
+- `barrier_reason = mutating | permission | denied | storm | non_concurrency_safe`
 
-But the prompt sent to the LLM does **not** use the 8-section strict contract.
-It's a loose prompt asking for a summary. The result is unpredictable — the LLM
-may or may not preserve tool names, exit codes, file paths, and diff status.
+This gives performance/debug visibility without changing dispatch behavior.
 
-### What opcode Does
+Verification:
 
-opencode's context compaction (from the research in AGENTS.md and project
-discussions) uses structured summary contracts. The compaction agent produces
-output in a rigid format that downstream code can parse:
-- What was attempted
-- What commands were run
-- What files were changed
-- What the results were
-- What remains to be done
-
-This structured output allows the runtime to distinguish between "this evidence
-came from a real tool execution" and "this was summarized by an LLM."
-
-### Gap
-
-Priority Agent's `LLM_COMPACTION_PLAN` Phase 2 lists the required strict prompt
-contract with 8 sections. This prompt exists in the plan document but was never
-integrated into `ContextCompressor::llm_summarize_middle()`.
-
-The closeout controller also trusts compacted history equally with raw history,
-which violates the evidence-aware compaction principle.
-
-### Implementation
-
-#### Step A: Add strict summary prompt
-
-File: `src/engine/context_compressor/compressor.rs`
-
-Replace or extend the current summary prompt with the structured contract:
-
-```text
-You are summarizing a section of a coding session. Preserve only what matters
-for future turns. Output a compact summary in this exact format:
-
-## Goal
-(one line: what the user asked for)
-
-## Changes
-- file: line-age description (omit if no changes)
-
-## Commands
-- command → exit_code (omit if none)
-
-## Validation
-- pass | fail | not_run
-
-## Errors
-- description (omit if none)
-
-## Status
-- done | in_progress | blocked
-
-## Next
-(one line: what the model should do next)
-
-## Evidence
-- source: key fact (tool name, diff status, command output summary)
+```bash
+cargo test -q tool_execution_controller --lib
+cargo test -q conversation_loop -- --test-threads=1
 ```
 
-#### Step B: Gate closeout on evidence source
+### Step 3: Tighten LLM compaction prompt tests
 
-File: `src/engine/conversation_loop/closeout_controller/mod.rs`
+Files:
 
-When evaluating closeout evidence, check whether it comes from a compacted
-boundary. If evidence is from a compacted summary (not raw tool execution),
-label it as `compacted_summary` rather than `verified`. The closeout can still
-accept it for narrative context but must not treat it as verification proof.
+- `src/engine/context_compressor/compressor.rs`
+- `src/engine/context_compressor/tests.rs`
 
-#### Step C: Wire env variable
+The prompt already exists. Add regression coverage that captures the actual LLM
+summary request and asserts it includes:
 
-File: `src/engine/context_compressor/compressor.rs`
+- all 8 required sections;
+- "summary is continuation context, NOT verification proof";
+- exact-path and exact-command preservation rules;
+- "Do not claim tests passed unless raw test output evidence remains";
+- previous-summary anchored update instructions when `previous_summary` exists;
+- no dynamic `<context_zones>` system message copied into the stable prefix.
 
-Respect `PRIORITY_AGENT_LLM_COMPACTION=1` from the plan. Currently the gate
-might use a different env name. Ensure it's consistently:
-- `0` / unset → LLM compaction off (default)
-- `1` → use the new strict prompt contract
+Do not change the env flag name. The current gate is
+`PRIORITY_AGENT_LLM_COMPACTION`, and tests already use it.
 
-### Verification
+Verification:
 
 ```bash
 cargo test -q context_compressor --lib
-cargo test -q closeout_controller --lib
-cargo test -q streaming --lib
 ```
 
----
+### Step 4: Enforce summary-not-proof through ledger tests
+
+Files:
+
+- `src/engine/evidence_ledger.rs`
+- `src/engine/conversation_loop/closeout_controller/tests.rs`
+
+Add a regression test that builds a compacted-summary-like message containing a
+claim such as `Validation passed: cargo test -q`, then evaluates closeout with
+an empty `EvidenceLedger`.
+
+Expected result:
+
+- verification proof is `not_run` or `not_applicable`, depending on task type;
+- closeout is not promoted to verified solely from summary text;
+- no `required validation passed` acceptance line appears.
+
+If current code already passes this because closeout only reads `EvidenceLedger`,
+keep the test as a guard. Avoid adding compact-boundary parsing to closeout.
+
+Verification:
+
+```bash
+cargo test -q closeout_controller --lib
+```
+
+### Step 5: Optional evidence provenance expansion
+
+Only if Step 4 reveals ambiguity, extend `EvidenceLedger` records with a small
+source/provenance marker:
+
+```text
+source_kind = raw_tool_result | runtime_validation | parent_verified | compacted_summary
+```
+
+Then teach verification proof to treat `compacted_summary` as context-only
+support, never direct proof.
+
+This is optional because the current architecture already keeps compacted
+summary text outside `EvidenceLedger`.
 
 ## Implementation Order
 
-```
-Part 1 (parallel scheduling) → Part 2 Step A (prompt) → Part 2 Step B (closeout gate) → Part 2 Step C (env flag)
-```
+1. Add segmented scheduling tests.
+2. Add scheduling metadata only if useful.
+3. Add LLM compaction prompt regression tests.
+4. Add summary-not-proof closeout regression test.
+5. Consider evidence provenance only if tests expose a real gap.
 
-Part 1 and Part 2 are independent. Part 1 should go first since it's a
-performance optimization with no behavioral change.
+Part 1 and Part 2 are independent, but both touch runtime proof and trace
+surfaces. Keep each change small and test-gated.
 
-## Total Files Changed
+## Files Likely Touched
 
-| File | Part | Change |
-|------|------|--------|
-| `tool_execution_controller.rs` | 1 | Two-phase scan-refactor (~40 lines) |
-| `context_compressor/compressor.rs` | 2A | New strict prompt template (~30 lines) |
-| `closeout_controller/mod.rs` | 2B | Evidence source check (~10 lines) |
-| `context_compressor/compressor.rs` | 2C | Env gate consistency (~5 lines) |
+| File | Change |
+|------|--------|
+| `src/engine/conversation_loop/tool_execution_controller.rs` | scheduling comments/helper/metadata |
+| `src/engine/conversation_loop/tool_execution_controller/tests.rs` | segmented scheduling tests |
+| `src/engine/conversation_loop/tool_execution_controller/runtime_context.rs` | optional segment metadata |
+| `src/engine/context_compressor/compressor.rs` | prompt wording only if tests reveal a gap |
+| `src/engine/context_compressor/tests.rs` | LLM prompt contract tests |
+| `src/engine/conversation_loop/closeout_controller/tests.rs` | summary-not-proof regression |
+| `src/engine/evidence_ledger.rs` | optional provenance only if needed |
 
 ## Validation
+
+Narrow gates:
+
+```bash
+cargo test -q tool_execution_controller --lib
+cargo test -q context_compressor --lib
+cargo test -q closeout_controller --lib
+cargo test -q conversation_loop -- --test-threads=1
+```
+
+Broader gate after code changes:
 
 ```bash
 cargo fmt --check
 cargo check -q
 cargo clippy --all-targets --all-features -- -D warnings
-
-# Part 1
-cargo test -q tool_execution_controller --lib
-cargo test -q tool_execution --lib
-cargo test -q tool_batch_result_processor --lib
-
-# Part 2
-cargo test -q context_compressor --lib
-cargo test -q closeout_controller --lib
-
-# Full
 cargo test -q
 bash scripts/daily-baseline.sh
 ```
 
 ## Non-Goals
 
-- No new compaction strategy or system — reuse existing ContextCompressor
-- No automatic compaction threshold change (keep 80%, not 60%)
-- No tool API changes — no new Tool trait methods
-- No config flag changes for parallel scheduling (reuse existing concurrency limit)
-- No LLM compaction enabled by default (keep PRIORITY_AGENT_LLM_COMPACTION=0)
+- No global reordering of all read-only tools ahead of mutating tools.
+- No new compaction strategy or parallel `llm_compaction.rs` state machine.
+- No automatic compaction threshold change.
+- No default enablement of LLM compaction.
+- No tool trait or provider API changes.
+- No closeout proof derived from compacted summary text.
