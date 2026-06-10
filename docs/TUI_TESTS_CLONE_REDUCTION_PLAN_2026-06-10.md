@@ -1,212 +1,245 @@
-# TUI Test Coverage + Hot Path Clone Reduction Plan
+# TUI Test Coverage And Clone Reduction Plan
 
 Date: 2026-06-10
 Status: Active
 
 ## Goal
 
-Two independent quality improvements:
-1. Add targeted tests for the most-impactful untested TUI business logic (6800+ lines)
-2. Eliminate the top clone patterns in the conversation loop hot path (560+ clones)
+Improve two separate quality surfaces without changing runtime behavior:
 
-Neither requires architectural changes. Both are safe, incremental wins.
+1. Add focused tests around TUI business logic that already has pure formatting,
+   parsing, and diagnostic helper seams.
+2. Reduce clone overhead in hot runtime paths only where the current ownership
+   contract makes the clone clearly unnecessary.
 
-## Issue 1: TUI Business Logic Tests
+These are incremental hardening tasks, not an architecture rewrite. Test
+coverage should land first; clone reduction should stay profiling-driven and
+avoid weakening trace, hook, provider, or async task boundaries.
 
-### Current State
+## Code Audit Findings
 
-Five files contain 6800+ lines of business logic with zero or near-zero tests:
+### Finding 1: TUI coverage is not zero, but it is uneven
 
-| File | Lines | Tests |
-|------|-------|-------|
-| `src/tui/slash_handler/learning.rs` | 1473 | 0 |
-| `src/tui/slash_handler/agents.rs` | 1440 | 332 (agents/tests.rs, narrow) |
-| `src/tui/slash_handler/session/actions.rs` | 1335 | 0 |
-| `src/tui/app.rs` | 1308 | ✅ has tests |
-| `src/tui/mod.rs` | 1274 | ✅ has tests |
+The earlier draft overstated the gap by saying `learning.rs` had no tests. The
+current tree already has:
 
-The good news: 10+ pure formatting/labeling functions in `learning.rs` take `&TurnTrace`
-or `&LearningEventRecord` and return `String`/`Option<String>`. These are trivially
-testable — zero TUI dependencies.
+| File | Lines | Current tests |
+|------|-------|---------------|
+| `src/tui/slash_handler/learning.rs` | 1473 | `learning/tests.rs` has 9 tests |
+| `src/tui/slash_handler/agents.rs` | 1440 | `agents/tests.rs` has 12 tests |
+| `src/tui/slash_handler/session/actions.rs` | 1335 | no local tests found |
+| `src/tui/app.rs` | 1308 | has split tests under `src/tui/app/` |
+| `src/tui/mod.rs` | 1274 | has module-level tests |
 
-### What To Test
+The real gap is narrower: existing tests cover memory proposal, improvement,
+agent doctor, exposure, and readiness behavior, but many pure label/formatter
+helpers in `learning.rs` and session action parser/diagnostic helpers in
+`actions.rs` remain untested.
 
-**Batch 1: Pure formatters (highest ROI, easiest)**
+### Finding 2: Keep tests near existing module seams
 
-| Function | File | Line |
-|----------|------|------|
-| `compact_inline` | learning.rs | 533 |
-| `goal_drift_count_label` | learning.rs | 469 |
-| `format_goal_drift_report` | learning.rs | 489 |
-| `count_debug_values` | learning.rs | 843 |
-| `format_counts` | learning.rs | 851 |
-| `is_evolution_learning_event` | learning.rs | 733 |
-| `format_learning_event_detail` | learning.rs | 575 |
-| `format_experience_event` | learning.rs | 862 |
-| `latest_resource_policy_label` | learning.rs | 147 |
-| `latest_contract_state_label` | learning.rs | 168 |
-| `latest_retrieval_context_label` | learning.rs | 232 |
-| `latest_reflection_label` | learning.rs | 257 |
-| `latest_stage_validation_label` | learning.rs | 276 |
-| `latest_workflow_plan_label` | learning.rs | 300 |
-| `latest_closeout_label` | learning.rs | 331 |
-| `latest_acceptance_label` | learning.rs | 364 |
-| `latest_guided_debugging_label` | learning.rs | 392 |
+`src/tui/slash_handler/learning/tests.rs` and
+`src/tui/slash_handler/agents/tests.rs` already exist. New tests should extend
+those files rather than creating a second parallel test module.
 
-Batch: ~17 pure functions, 50-80 lines of test code total.
+For `src/tui/slash_handler/session/actions.rs`, add a local `#[cfg(test)] mod
+tests` at the bottom of the file unless the session slash-handler tree gets a
+dedicated split test module first.
 
-**Batch 2: Session action helpers**
+### Finding 3: Some listed clone reductions need interface changes
 
-| Function | File | Line |
-|----------|------|------|
-| `parse_export_format` | actions.rs | 682 |
-| `parse_export_privacy` | actions.rs | 690 |
-| `diagnostic_failed_tool_names` | actions.rs | 490 |
-| `diagnostic_validation_status` | actions.rs | 505 |
-| `tool_run_looks_like_validation` | actions.rs | 535 |
+The original clone plan was too optimistic in three places:
 
-Batch: 5 pure functions with real validation logic.
+- `api_request_controller.rs`: many `request.model.clone()` calls populate
+  owned trace events, retry diagnostics, or JSON values. Binding
+  `let model = request.model.as_str()` does not remove those allocations when
+  the downstream type owns `String` or `serde_json::Value`.
+- `session_processor.rs`: `fallback_messages` and `fallback_tools` are cloned
+  before `provider.chat_stream(request)` because `chat_stream` consumes
+  `ChatRequest`. Deferring those clones is not a small move unless
+  `ChatRequest` or the provider interface changes.
+- `session_processor.rs`: wrapping parsed JSON args in `Arc<Value>` does not
+  remove all data clones because `Tool::execute` and hook `ToolCall` records
+  currently take owned `Value`.
 
-**Batch 3: Agent helpers**
+These can still be improved, but they should be treated as measured refactors,
+not quick mechanical substitutions.
 
-| Function | File |
-|----------|------|
-| `handle_voice` | agents.rs:1172 |
-| `handle_telemetry` | agents.rs:1205 |
-| `format_provider_status_summary` | doctor_formatting.rs |
-| `format_effective_config_summary` | doctor_formatting.rs |
+### Finding 4: There are safe clone targets, but they are smaller
 
-Batch: 4 extractable functions (no app state needed).
+Two low-risk clone surfaces remain worth addressing:
 
-**Total: ~26 functions, estimated 100-200 lines of test code.**
+- Avoid full-history clones for memory flushing in `src/engine/streaming.rs`
+  where a bounded helper-owned snapshot or tail snapshot is enough. Do not hold
+  the shared history lock across an async memory flush.
+- Reuse per-iteration owned labels in `api_request_controller.rs` only where the
+  same owned value is immediately duplicated for multiple local emissions and
+  tests can prove trace contents are unchanged.
 
-## Issue 2: Hot Path Clone Reduction
-
-### Current State
-
-560+ `.clone()` calls in `conversation_loop/`, 91 more in `streaming.rs`. The top
-offenders:
-
-| File | Clones | Category |
-|------|--------|----------|
-| `streaming.rs` | 91 | 60 Arc, 8 large Vec, 5 String |
-| `api_request_controller.rs` | 46 | 30 String, 3 ChatRequest, 2 Vec |
-| `session_processor.rs` | 43 | 15 String, 8 Value/Vec, 10 Arc |
-
-### What To Fix
-
-**Fix 1: Eliminate model-name string cloning in api_request_controller.rs**
-
-The model name is computed once (`model.clone()` or `self.model.clone()`) then
-re-cloned 10-16 times in trace events, diagnostic emissions, and retry observers.
-
-Fix: bind `let model = self.model.as_str()` at the top of the main request
-function. All downstream consumers already take `&str` or `impl Into<String>`
-— the clones are unnecessary.
-
-Lines affected: `api_request_controller.rs` 78, 145, 160, 179, 188, 202, 266,
-279, 299, 311, 360, 371, 384, 396, 410, 422.
-
-**Fix 2: Share parsed tool args with Arc in session_processor.rs**
-
-`parsed_args` is `serde_json::Value`, cloned 3 times for three closures in the
-same spawned task (pre-tool hook, execution, post-tool hook). For complex tools
-with large arguments, this clones potentially large JSON.
-
-Fix: wrap in `Arc<serde_json::Value>` after parsing, clone the `Arc` into each
-closure (ref-count bump, not data copy).
-
-Lines affected: `session_processor.rs` 428, 464, 484.
-
-**Fix 3: Defer fallback clones in session_processor.rs**
-
-`fallback_messages.clone()` and `fallback_tools.clone()` are taken BEFORE
-the streaming attempt. They're only used if streaming fails.
-
-Fix: move the clones inside the error handling branch.
-
-Lines affected: `session_processor.rs` 246-247.
-
-**Fix 4: Avoid full-history Vec clone in streaming.rs**
-
-`hist.clone()` at line 1382 clones the entire conversation history for a memory
-flush operation that only reads the last few messages.
-
-Fix: pass `&[Message]` to the flush function or extract only the needed tail.
-
-Lines affected: `streaming.rs` 1032, 1382.
-
-**Total: ~25 unnecessary clones eliminated with minimal refactoring.**
+If profiling shows large JSON tool args are a real cost, handle that as a
+second slice by changing hook/tool argument contracts intentionally.
 
 ## Implementation Plan
 
-### Step 1: TUI Pure Formatters — Tests Only
+### Step 1: Add missing learning formatter tests
 
-Files: `src/tui/slash_handler/learning.rs`, new `src/tui/slash_handler/learning/tests.rs`
+File:
 
-Add tests for the 17 `latest_*_label` functions and `compact_inline`/`count_debug_values`/`format_counts`. These all take pure data and return strings. Zero TUI state needed.
+- `src/tui/slash_handler/learning/tests.rs`
 
-Verification:
-```bash
-cargo test -q learning --lib
-```
+Add tests for the pure helpers that are not covered by the existing learning
+test file:
 
-### Step 2: TUI Session Actions — Tests Only
+| Function | File |
+|----------|------|
+| `compact_inline` | `learning.rs` |
+| `goal_drift_count_label` | `learning.rs` |
+| `format_goal_drift_report` | `learning.rs` |
+| `count_debug_values` | `learning.rs` |
+| `format_counts` | `learning.rs` |
+| `is_evolution_learning_event` | `learning.rs` |
+| `format_learning_event_detail` | `learning.rs` |
+| `format_experience_event` | `learning.rs` |
+| `latest_resource_policy_label` | `learning.rs` |
+| `latest_contract_state_label` | `learning.rs` |
+| `latest_retrieval_context_label` | `learning.rs` |
+| `latest_reflection_label` | `learning.rs` |
+| `latest_stage_validation_label` | `learning.rs` |
+| `latest_workflow_plan_label` | `learning.rs` |
+| `latest_closeout_label` | `learning.rs` |
+| `latest_acceptance_label` | `learning.rs` |
+| `latest_guided_debugging_label` | `learning.rs` |
 
-Files: `src/tui/slash_handler/session/actions.rs`
-
-Add tests for the 5 parser/validation helpers.
-
-Verification:
-```bash
-cargo test -q session_actions --lib
-```
-
-### Step 3: Eliminate model-name String clones
-
-File: `src/engine/conversation_loop/api_request_controller.rs`
-
-Replace `model.clone()` with `model.as_str()` references.
-
-Verification:
-```bash
-cargo test -q api_request_controller --lib
-```
-
-### Step 4: Share parsed_args with Arc
-
-File: `src/engine/conversation_loop/session_processor.rs`
-
-Wrap `parsed_args` in `Arc` after parsing, clone the Arc into closures.
+Keep the tests data-oriented. Build minimal `TurnTrace` or
+`LearningEventRecord` fixtures and assert stable user-visible strings.
 
 Verification:
+
 ```bash
-cargo test -q session_processor --lib
+cargo test -q tui::slash_handler::learning --lib
 ```
 
-### Step 5: Defer fallback clones
+### Step 2: Add session action parser and diagnostic tests
 
-File: `src/engine/conversation_loop/session_processor.rs`
+File:
 
-Move `fallback_messages` and `fallback_tools` clones into the error branch.
+- `src/tui/slash_handler/session/actions.rs`
+
+Add local tests for:
+
+| Function | Purpose |
+|----------|---------|
+| `parse_export_format` | accepted aliases and rejected unknown values |
+| `parse_export_privacy` | accepted privacy modes and rejected unknown values |
+| `diagnostic_failed_tool_names` | failed tool name extraction and de-duplication |
+| `diagnostic_validation_status` | validation pass/fail/unknown summary |
+| `tool_run_looks_like_validation` | command/name/content validation detection |
+
+This is the highest-value uncovered TUI surface because it backs user-visible
+diagnostic/export commands and currently has no local tests.
 
 Verification:
+
 ```bash
-cargo test -q session_processor --lib
+cargo test -q tui::slash_handler::session::actions --lib
 ```
 
-### Step 6: Avoid full-history Vec clone
+### Step 3: Extend existing agent tests only where gaps remain
 
-File: `src/engine/streaming.rs`
+Files:
 
-Change memory flush to accept `&[Message]` instead of cloning the full history.
+- `src/tui/slash_handler/agents/tests.rs`
+- `src/tui/slash_handler/agents/doctor_formatting.rs`
+
+`agents/tests.rs` already covers doctor readiness, route exposure, terminal task
+counts, prompt-cache diagnostics, and MCP repair formatting. Add only the gaps
+that are still untested:
+
+| Function | Coverage target |
+|----------|-----------------|
+| `handle_voice` | installed/missing command messaging stays clear |
+| `handle_telemetry` | telemetry command text remains stable |
+| `format_provider_status_summary` | provider/model status line is present |
+| `format_effective_config_summary` | effective config summary includes key runtime knobs |
 
 Verification:
+
 ```bash
-cargo test -q streaming --lib
+cargo test -q tui::slash_handler::agents --lib
 ```
+
+### Step 4: Profile clone hotspots before editing runtime ownership
+
+Files:
+
+- `src/engine/conversation_loop/api_request_controller.rs`
+- `src/engine/conversation_loop/session_processor.rs`
+- `src/engine/streaming.rs`
+
+Before changing clone-heavy code, record a small baseline:
+
+```bash
+rg -n "\.clone\(\)" src/engine/conversation_loop/api_request_controller.rs \
+  src/engine/conversation_loop/session_processor.rs src/engine/streaming.rs
+cargo test -q conversation_loop -- --test-threads=1
+cargo test -q streaming -- --test-threads=1
+```
+
+Use this baseline to separate cosmetic clone-count reductions from meaningful
+hot-path work.
+
+### Step 5: Remove only low-risk clones first
+
+Start with clones that do not cross API ownership boundaries:
+
+- In `src/engine/streaming.rs`, avoid cloning the full conversation history for
+  memory flush if a bounded helper-owned snapshot or tail snapshot is enough.
+  Preserve the existing rule that the history lock must not be held across the
+  async flush.
+- In `src/engine/conversation_loop/api_request_controller.rs`, reuse local
+  provider/model/request-shape labels only when the target still receives the
+  same owned value and trace/event payloads remain byte-for-byte equivalent.
+
+Do not change these in the first slice:
+
+- `Provider::chat_stream(ChatRequest)` ownership.
+- `Tool::execute(Value, ToolContext)` ownership.
+- hook `ToolCall { arguments: Value }` ownership.
+
+Those are broader interface changes and need separate tests.
+
+Verification:
+
+```bash
+cargo test -q conversation_loop -- --test-threads=1
+cargo test -q streaming -- --test-threads=1
+```
+
+### Step 6: Optional second slice for large tool args
+
+Only do this if profiling or a real session trace shows JSON argument cloning is
+material:
+
+- Introduce a borrowed or shared argument view for hook pre/post checks.
+- Keep provider-visible `ToolCall` serialization unchanged.
+- Keep `Tool::execute` behavior unchanged unless the whole tool trait is
+  intentionally migrated.
+
+This is not part of the first cleanup batch.
 
 ## Validation
+
+Narrow gates:
+
+```bash
+cargo test -q tui::slash_handler::learning --lib
+cargo test -q tui::slash_handler::session::actions --lib
+cargo test -q tui::slash_handler::agents --lib
+cargo test -q conversation_loop -- --test-threads=1
+cargo test -q streaming -- --test-threads=1
+```
+
+Broader gate after code changes:
 
 ```bash
 cargo fmt --check
@@ -218,7 +251,10 @@ bash scripts/daily-baseline.sh
 
 ## Expected Outcome
 
-- TUI: 26 new tests covering previously untested pure formatting/parsing logic
-- Clones: ~25 unnecessary `.clone()` calls eliminated in hot paths
-- No behavioral changes, no API breaks
-- Test suite grows from 2465 to ~2490 tests
+- TUI: focused tests for the main uncovered formatter/parser/diagnostic helpers,
+  added to existing module test seams.
+- Runtime: smaller, proven clone reductions without changing provider, hook, or
+  tool ownership contracts.
+- No user-visible behavior changes.
+- No weakening of trace, diagnostic, permission, validation, or session evidence
+  paths.
