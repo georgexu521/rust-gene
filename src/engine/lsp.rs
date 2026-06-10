@@ -9,6 +9,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
+use std::sync::RwLock as StdRwLock;
 use tokio::sync::{Mutex, RwLock};
 use tracing::{debug, info, warn};
 
@@ -712,36 +713,36 @@ impl LspClient {
 /// LSP 管理器 - 管理多个语言服务器
 pub struct LspManager {
     /// 已连接的服务器
-    clients: HashMap<String, Arc<LspClient>>,
+    clients: StdRwLock<HashMap<String, Arc<LspClient>>>,
 }
 
 impl LspManager {
     pub fn new() -> Self {
         Self {
-            clients: HashMap::new(),
+            clients: StdRwLock::new(HashMap::new()),
         }
     }
 
     /// 添加 LSP 服务器
-    pub fn add_server(&mut self, config: LspServerConfig) {
+    pub fn add_server(&self, config: LspServerConfig) {
         let name = config.name.clone();
         let client = Arc::new(LspClient::new(config));
-        self.clients.insert(name, client);
+        self.clients.write().unwrap().insert(name, client);
     }
 
     /// 自动检测并添加语言服务器
-    pub fn detect_servers(&mut self, working_dir: &Path) {
+    pub fn detect_servers(&self, working_dir: &Path) {
         self.detect_servers_with_config(
             working_dir,
             &crate::services::config::LspConfig {
                 enabled: true,
                 ..Default::default()
             },
-        );
+        )
     }
 
     pub fn detect_servers_with_config(
-        &mut self,
+        &self,
         working_dir: &Path,
         config: &crate::services::config::LspConfig,
     ) {
@@ -805,7 +806,7 @@ impl LspManager {
     }
 
     fn add_detected_server(
-        &mut self,
+        &self,
         name: &str,
         command: &str,
         args: Vec<String>,
@@ -841,27 +842,27 @@ impl LspManager {
 
     /// 获取指定客户端
     pub fn get_client(&self, name: &str) -> Option<Arc<LspClient>> {
-        self.clients.get(name).cloned()
+        self.clients.read().unwrap().get(name).cloned()
     }
 
     /// 获取第一个可用的客户端（用于自动选择）
     pub fn first_client(&self) -> Option<Arc<LspClient>> {
-        self.clients.values().next().cloned()
+        self.clients.read().unwrap().values().next().cloned()
     }
 
     /// 获取管理器中的服务器列表
     pub fn server_names(&self) -> Vec<String> {
-        self.clients.keys().cloned().collect()
+        self.clients.read().unwrap().keys().cloned().collect()
     }
 
     /// 获取客户端数量
     pub fn client_count(&self) -> usize {
-        self.clients.len()
+        self.clients.read().unwrap().len()
     }
 
     /// 关闭所有 LSP 客户端并清理子进程
     pub async fn shutdown(&self) {
-        for (name, client) in &self.clients {
+        for (name, client) in self.clients.read().unwrap().iter() {
             if let Err(e) = client.shutdown().await {
                 warn!("Failed to shutdown LSP client {}: {}", name, e);
             }
@@ -869,14 +870,16 @@ impl LspManager {
     }
 
     pub async fn stop_server(&self, name: &str) -> anyhow::Result<()> {
-        let Some(client) = self.clients.get(name) else {
+        let client = self.clients.read().unwrap().get(name).cloned();
+        let Some(client) = client else {
             anyhow::bail!("Server '{}' is not registered", name);
         };
         client.shutdown().await
     }
 
     pub async fn restart_server(&self, name: &str) -> anyhow::Result<()> {
-        let Some(client) = self.clients.get(name) else {
+        let client = self.clients.read().unwrap().get(name).cloned();
+        let Some(client) = client else {
             anyhow::bail!("Server '{}' is not registered", name);
         };
         client.shutdown().await?;
@@ -884,22 +887,22 @@ impl LspManager {
     }
 
     /// 动态注册 LSP 服务器
-    pub async fn register_server(&mut self, config: LspServerConfig) -> anyhow::Result<()> {
+    pub async fn register_server(&self, config: LspServerConfig) -> anyhow::Result<()> {
         let name = config.name.clone();
-        if self.clients.contains_key(&name) {
+        if self.clients.read().unwrap().contains_key(&name) {
             anyhow::bail!("Server '{}' is already registered", name);
         }
         let client = Arc::new(LspClient::new(config));
         // 尝试初始化连接
         client.initialize().await?;
-        self.clients.insert(name.clone(), client);
+        self.clients.write().unwrap().insert(name.clone(), client);
         info!("Dynamically registered LSP server: {}", name);
         Ok(())
     }
 
     /// 动态注销 LSP 服务器
-    pub async fn unregister_server(&mut self, name: &str) -> anyhow::Result<()> {
-        if let Some(client) = self.clients.remove(name) {
+    pub async fn unregister_server(&self, name: &str) -> anyhow::Result<()> {
+        if let Some(client) = self.clients.write().unwrap().remove(name) {
             client.shutdown().await?;
             info!("Unregistered LSP server: {}", name);
             Ok(())
@@ -910,7 +913,7 @@ impl LspManager {
 
     /// 检查服务器是否已注册
     pub fn is_registered(&self, name: &str) -> bool {
-        self.clients.contains_key(name)
+        self.clients.read().unwrap().contains_key(name)
     }
 
     /// LSP server registry: maps file extensions to server names.
@@ -965,21 +968,21 @@ impl LspManager {
     }
 
     /// Find the LSP client that handles a given file path.
-    pub fn client_for_path(&self, path: &std::path::Path) -> Option<&Arc<LspClient>> {
+    pub fn client_for_path(&self, path: &std::path::Path) -> Option<Arc<LspClient>> {
         let ext = path.extension()?.to_str()?.to_lowercase();
         for entry in Self::registry_entries() {
             if entry.extensions.iter().any(|e| e == &ext) {
-                // Look for a registered client whose name starts with the language.
                 let name = entry.language.to_lowercase();
-                for (client_name, client) in &self.clients {
+                let guard = self.clients.read().unwrap();
+                for (client_name, client) in guard.iter() {
                     if client_name.to_lowercase().contains(&name) {
-                        return Some(client);
+                        return Some(client.clone());
                     }
                 }
             }
         }
         // Fallback to first available client.
-        self.clients.values().next()
+        self.clients.read().unwrap().values().next().cloned()
     }
 
     /// Get diagnostics for a file path via the appropriate language server.
@@ -995,12 +998,82 @@ impl LspManager {
     /// 获取所有已注册服务器的状态
     pub fn server_status(&self) -> Vec<ServerStatus> {
         self.clients
+            .read()
+            .unwrap()
             .keys()
             .map(|name| ServerStatus {
                 name: name.clone(),
-                connected: true, // 如果在 clients 中，说明已连接
+                connected: true,
             })
             .collect()
+    }
+
+    /// Ensure an LSP server is running for the given file extension.
+    ///
+    /// If a matching registered server already exists, returns immediately.
+    /// Otherwise, attempts to auto-detect and start a server from the
+    /// built-in registry. Respects `lsp.enabled` and `lsp.auto_detect`.
+    pub fn ensure_server_for_extension(&self, path: &std::path::Path) {
+        let Some(ext) = path.extension().and_then(|e| e.to_str()) else {
+            return;
+        };
+        let ext = ext.to_lowercase();
+
+        // Check if a server for this extension is already registered.
+        let clients = self.clients.read().unwrap();
+        for entry in Self::registry_entries() {
+            if entry.extensions.iter().any(|e| e == &ext) {
+                let lang_name = entry.language.to_lowercase();
+                let already = clients.keys().any(|k| k.to_lowercase().contains(&lang_name));
+                if already {
+                    return; // Already have a server for this language.
+                }
+            }
+        }
+        drop(clients);
+
+        // Not running yet — try to start one.
+        let working_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        let _config = crate::services::config::LspConfig {
+            enabled: true,
+            auto_detect: true,
+            ..Default::default()
+        };
+        let root_uri = format!(
+            "file://{}",
+            working_dir
+                .canonicalize()
+                .unwrap_or_else(|_| working_dir.clone())
+                .display()
+        );
+
+        for entry in Self::registry_entries() {
+            if entry.extensions.iter().any(|e| e == &ext) {
+                let client = Arc::new(LspClient::new(LspServerConfig {
+                    name: format!("{}-lazy", entry.language),
+                    command: entry.command.clone(),
+                    args: entry.args.clone(),
+                    root_uri: root_uri.clone(),
+                    env: HashMap::new(),
+                }));
+                // Start initialisation in background — don't block the tool call.
+                let client_clone = client.clone();
+                let lang = entry.language.clone();
+                tokio::spawn(async move {
+                    if let Err(e) = client_clone.initialize().await {
+                        debug!("Failed to lazy-start LSP server for {}: {}", lang, e);
+                    } else {
+                        info!("Lazy-started LSP server: {}", lang);
+                    }
+                });
+                self.clients.write().unwrap().insert(entry.language.clone(), client);
+                info!(
+                    "Lazy-starting LSP server for {} (extension .{})",
+                    entry.language, ext
+                );
+                return;
+            }
+        }
     }
 
     /// 获取文件路径对应的诊断信息
@@ -1010,7 +1083,7 @@ impl LspManager {
         let uri = path_to_uri(std::path::Path::new(path));
 
         // 遍历所有客户端查找诊断
-        for client in self.clients.values() {
+        for client in self.clients.read().unwrap().values() {
             let diags = client.get_diagnostics(&uri).await;
             if !diags.is_empty() {
                 return diags;

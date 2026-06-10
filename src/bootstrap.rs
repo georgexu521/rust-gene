@@ -240,7 +240,7 @@ pub async fn init_components(
     cleanup_expired_tool_outputs(working_dir);
 
     // LSP 管理器
-    let mut lsp_manager = crate::engine::lsp::LspManager::new();
+    let lsp_manager = crate::engine::lsp::LspManager::new();
     lsp_manager.detect_servers_with_config(working_dir, &app_config.lsp);
     let lsp_manager = Arc::new(lsp_manager);
     info!(

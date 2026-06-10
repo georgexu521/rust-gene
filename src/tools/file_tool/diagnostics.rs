@@ -20,6 +20,11 @@ pub(super) async fn collect_file_edit_diagnostics(
         return file_edit_diagnostics_unavailable("lsp_unavailable");
     };
 
+    if lsp_manager.server_names().is_empty() {
+        // Try lazy-starting a server for this file extension.
+        lsp_manager.ensure_server_for_extension(path);
+    }
+
     let servers = lsp_manager.server_names();
     if servers.is_empty() {
         return file_edit_diagnostics_unavailable("no_lsp_clients");
