@@ -169,22 +169,12 @@ impl StreamingConfig {
     }
 }
 
-/// Turn execution timeout from env or default.
+/// Turn execution timeout from runtime config.
 pub fn turn_execution_timeout() -> std::time::Duration {
-    let secs = std::env::var("PRIORITY_AGENT_TURN_TIMEOUT_SECS")
-        .ok()
-        .and_then(|value| value.parse::<u64>().ok())
-        .unwrap_or(1800)
-        .clamp(60, 7200);
-    std::time::Duration::from_secs(secs)
+    crate::services::config::runtime_config().turn_timeout()
 }
 
-/// Session-end memory flush timeout from env or default.
+/// Session-end memory flush timeout from runtime config.
 pub fn session_end_memory_flush_timeout() -> std::time::Duration {
-    let secs = std::env::var("PRIORITY_AGENT_SESSION_END_MEMORY_FLUSH_TIMEOUT_SECS")
-        .ok()
-        .and_then(|value| value.parse::<u64>().ok())
-        .unwrap_or(5)
-        .clamp(1, 60);
-    std::time::Duration::from_secs(secs)
+    crate::services::config::runtime_config().session_end_memory_flush_timeout()
 }

@@ -143,6 +143,13 @@ impl AppConfig {
             .set_default("features.llm_memory_extraction", true)?
             .set_default("features.plugin_trust_mode", "warn")?
             .set_default("engine.max_iterations", 50)?
+            .set_default("engine.turn_timeout_secs", 1800)?
+            .set_default("engine.session_end_memory_flush_timeout_secs", 5)?
+            .set_default("engine.llm_request_timeout_secs", 120)?
+            .set_default("engine.stream_idle_timeout_secs", 30)?
+            .set_default("engine.runtime_profile", "standard")?
+            .set_default("engine.closeout_visibility", "concise")?
+            .set_default("engine.self_correction_enabled", true)?
             .set_default("memory.external_provider.enabled", false)?
             .set_default("memory.external_provider.mode", "off")?
             .set_default("memory.external_provider.provider_type", "none")?
@@ -439,6 +446,22 @@ pub fn get_config_value(config: &AppConfig, key: &str) -> Option<String> {
         "features.web_search" => Some(config.features.web_search.to_string()),
         "features.plugin_trust_mode" => Some(config.features.plugin_trust_mode.clone()),
         "engine.max_iterations" => Some(config.engine.max_iterations.to_string()),
+        "engine.turn_timeout_secs" => Some(config.engine.turn_timeout_secs.to_string()),
+        "engine.session_end_memory_flush_timeout_secs" => Some(
+            config
+                .engine
+                .session_end_memory_flush_timeout_secs
+                .to_string(),
+        ),
+        "engine.llm_request_timeout_secs" => {
+            Some(config.engine.llm_request_timeout_secs.to_string())
+        }
+        "engine.stream_idle_timeout_secs" => {
+            Some(config.engine.stream_idle_timeout_secs.to_string())
+        }
+        "engine.fallback_model" => config.engine.fallback_model.clone(),
+        "engine.runtime_profile" => Some(config.engine.runtime_profile.clone()),
+        "engine.closeout_visibility" => Some(config.engine.closeout_visibility.clone()),
         "memory.external_provider.enabled" => {
             Some(config.memory.external_provider.enabled.to_string())
         }
@@ -500,6 +523,39 @@ pub fn set_config_value(config: &mut AppConfig, key: &str, value: &str) -> Resul
             config.engine.max_iterations = value
                 .parse::<usize>()
                 .map_err(|_| format!("Invalid integer for {}: {}", key, value))?;
+        }
+        "engine.turn_timeout_secs" => {
+            config.engine.turn_timeout_secs = value
+                .parse::<u64>()
+                .map_err(|_| format!("Invalid integer for {}: {}", key, value))?;
+        }
+        "engine.session_end_memory_flush_timeout_secs" => {
+            config.engine.session_end_memory_flush_timeout_secs = value
+                .parse::<u64>()
+                .map_err(|_| format!("Invalid integer for {}: {}", key, value))?;
+        }
+        "engine.llm_request_timeout_secs" => {
+            config.engine.llm_request_timeout_secs = value
+                .parse::<u64>()
+                .map_err(|_| format!("Invalid integer for {}: {}", key, value))?;
+        }
+        "engine.stream_idle_timeout_secs" => {
+            config.engine.stream_idle_timeout_secs = value
+                .parse::<u64>()
+                .map_err(|_| format!("Invalid integer for {}: {}", key, value))?;
+        }
+        "engine.fallback_model" => {
+            config.engine.fallback_model = if value.eq_ignore_ascii_case("none") {
+                None
+            } else {
+                Some(value.to_string())
+            };
+        }
+        "engine.runtime_profile" => {
+            config.engine.runtime_profile = value.to_string();
+        }
+        "engine.closeout_visibility" => {
+            config.engine.closeout_visibility = value.to_string();
         }
         "memory.external_provider.enabled" => {
             config.memory.external_provider.enabled = parse_bool(value)?;
@@ -949,6 +1005,58 @@ pub struct EngineConfig {
     /// MCP 服务器配置
     #[serde(default)]
     pub mcp_servers: Vec<crate::engine::mcp::McpServerConfig>,
+    /// Turn 执行超时（秒）
+    #[serde(default = "default_turn_timeout")]
+    pub turn_timeout_secs: u64,
+    /// Session-end memory flush 超时（秒）
+    #[serde(default = "default_session_end_memory_flush_timeout")]
+    pub session_end_memory_flush_timeout_secs: u64,
+    /// LLM 请求超时（秒）
+    #[serde(default = "default_llm_request_timeout")]
+    pub llm_request_timeout_secs: u64,
+    /// Stream idle 超时（秒）
+    #[serde(default = "default_stream_idle_timeout")]
+    pub stream_idle_timeout_secs: u64,
+    /// Fallback 模型名称
+    #[serde(default)]
+    pub fallback_model: Option<String>,
+    /// 运行时 profile（light / standard / full）
+    #[serde(default = "default_runtime_profile")]
+    pub runtime_profile: String,
+    /// Closeout 可见性（hidden / concise / full）
+    #[serde(default = "default_closeout_visibility")]
+    pub closeout_visibility: String,
+    /// 启用自我修正（用户中断时替换最后一条 assistant 消息）
+    #[serde(default = "default_self_correction")]
+    pub self_correction_enabled: bool,
+}
+
+fn default_turn_timeout() -> u64 {
+    1800
+}
+
+fn default_session_end_memory_flush_timeout() -> u64 {
+    5
+}
+
+fn default_llm_request_timeout() -> u64 {
+    120
+}
+
+fn default_stream_idle_timeout() -> u64 {
+    30
+}
+
+fn default_runtime_profile() -> String {
+    "standard".to_string()
+}
+
+fn default_closeout_visibility() -> String {
+    "concise".to_string()
+}
+
+fn default_self_correction() -> bool {
+    true
 }
 
 impl Default for EngineConfig {
@@ -956,8 +1064,81 @@ impl Default for EngineConfig {
         Self {
             max_iterations: 50,
             mcp_servers: Vec::new(),
+            turn_timeout_secs: default_turn_timeout(),
+            session_end_memory_flush_timeout_secs: default_session_end_memory_flush_timeout(),
+            llm_request_timeout_secs: default_llm_request_timeout(),
+            stream_idle_timeout_secs: default_stream_idle_timeout(),
+            fallback_model: None,
+            runtime_profile: default_runtime_profile(),
+            closeout_visibility: default_closeout_visibility(),
+            self_correction_enabled: default_self_correction(),
         }
     }
+}
+
+impl AppConfig {
+    /// Turn execution timeout as Duration.
+    pub fn turn_timeout(&self) -> std::time::Duration {
+        std::time::Duration::from_secs(self.engine.turn_timeout_secs.clamp(60, 7200))
+    }
+
+    /// Session-end memory flush timeout as Duration.
+    pub fn session_end_memory_flush_timeout(&self) -> std::time::Duration {
+        std::time::Duration::from_secs(
+            self.engine
+                .session_end_memory_flush_timeout_secs
+                .clamp(1, 60),
+        )
+    }
+
+    /// LLM request timeout as Duration.
+    pub fn llm_request_timeout(&self) -> std::time::Duration {
+        std::time::Duration::from_secs(self.engine.llm_request_timeout_secs.max(10))
+    }
+
+    /// Stream idle timeout as Duration.
+    pub fn stream_idle_timeout(&self) -> std::time::Duration {
+        std::time::Duration::from_secs(self.engine.stream_idle_timeout_secs.max(5))
+    }
+
+    /// Fallback model name.
+    pub fn fallback_model(&self) -> Option<&str> {
+        self.engine.fallback_model.as_deref()
+    }
+
+    /// Runtime profile.
+    pub fn runtime_profile(&self) -> &str {
+        &self.engine.runtime_profile
+    }
+
+    /// Closeout visibility.
+    pub fn closeout_visibility(&self) -> &str {
+        &self.engine.closeout_visibility
+    }
+}
+
+/// Global runtime configuration cache.
+///
+/// Accessed via `runtime_config()`. Lazily loads `AppConfig` on first call.
+/// Use this to replace scattered `std::env::var("PRIORITY_AGENT_...")` reads.
+static RUNTIME_CONFIG: std::sync::OnceLock<AppConfig> = std::sync::OnceLock::new();
+
+/// Get the global runtime configuration snapshot.
+///
+/// # Panics
+/// Only panics on internal state corruption (should never happen).
+pub fn runtime_config() -> &'static AppConfig {
+    RUNTIME_CONFIG.get_or_init(|| {
+        AppConfig::load().unwrap_or_else(|err| {
+            tracing::warn!("Failed to load AppConfig, using defaults: {}", err);
+            AppConfig::default()
+        })
+    })
+}
+
+/// Explicitly initialize the runtime config (useful in tests).
+pub fn init_runtime_config(config: AppConfig) {
+    let _ = RUNTIME_CONFIG.set(config);
 }
 
 #[cfg(test)]
@@ -1123,5 +1304,28 @@ mod tests {
         assert!(text.contains("[redacted]"));
         assert!(!text.contains("secret-key"));
         assert!(text.contains("schema_version"));
+    }
+
+    #[test]
+    fn config_accessor_turn_timeout_clamps_range() {
+        let mut config = AppConfig::default();
+        config.engine.turn_timeout_secs = 30;
+        assert_eq!(config.turn_timeout().as_secs(), 60);
+
+        config.engine.turn_timeout_secs = 8000;
+        assert_eq!(config.turn_timeout().as_secs(), 7200);
+
+        config.engine.turn_timeout_secs = 300;
+        assert_eq!(config.turn_timeout().as_secs(), 300);
+    }
+
+    #[test]
+    fn config_accessor_session_end_flush_timeout_clamps_range() {
+        let mut config = AppConfig::default();
+        config.engine.session_end_memory_flush_timeout_secs = 0;
+        assert_eq!(config.session_end_memory_flush_timeout().as_secs(), 1);
+
+        config.engine.session_end_memory_flush_timeout_secs = 100;
+        assert_eq!(config.session_end_memory_flush_timeout().as_secs(), 60);
     }
 }

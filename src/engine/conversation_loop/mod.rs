@@ -155,10 +155,10 @@ use super::streaming::StreamEvent;
 ///
 /// Controlled by `PRIORITY_AGENT_SELF_CORRECTION` (default on, set to "0" to disable).
 pub fn replace_last_assistant_message(messages: &mut [Message], correction: &str) {
-    if std::env::var("PRIORITY_AGENT_SELF_CORRECTION")
-        .unwrap_or_else(|_| "1".to_string())
-        .trim()
-        == "0"
+    if crate::services::config::runtime_config()
+        .engine
+        .self_correction_enabled
+        == false
     {
         return;
     }
