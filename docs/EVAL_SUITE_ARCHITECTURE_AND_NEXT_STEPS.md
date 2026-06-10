@@ -1,4 +1,5 @@
 # Eval Task Suite Architecture & Next Steps
+Status: Active
 
 Date: 2026-06-05
 

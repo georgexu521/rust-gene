@@ -1,4 +1,5 @@
 # Behavior Assertion / No Effective Diff Repair Plan
+Status: Active
 
 Date: 2026-05-28
 Branch: `codex/behavior-assertion-repair-loop`

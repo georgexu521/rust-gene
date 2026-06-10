@@ -37,7 +37,8 @@ for f in "$DOCS_DIR"/*.md; do
         fi
     fi
     if ! grep -qE '^Status: ' "$f" 2>/dev/null; then
-        echo "WARN: $basename has no Status header"
+        echo "FAIL: $basename has no Status header"
+        failures=$((failures + 1))
     fi
 done
 

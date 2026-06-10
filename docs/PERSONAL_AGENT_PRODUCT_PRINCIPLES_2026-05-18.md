@@ -1,4 +1,5 @@
 # Personal Agent Product Principles
+Status: Active
 
 Date: 2026-05-18
 

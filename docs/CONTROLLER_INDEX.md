@@ -1,4 +1,5 @@
 # Controller Responsibility Index
+Status: Reference
 
 This index maps the active `src/engine/conversation_loop/` runtime modules to
 their current responsibility and primary caller. It intentionally tracks the

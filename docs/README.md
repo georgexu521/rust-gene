@@ -1,4 +1,5 @@
 # Docs Index
+Status: Index
 
 Priority Agent 文档导航。从这里出发，找到你需要的文档。这个目录保留了大量
 历史计划；判断当前实现状态时，先看 canonical 文档，再看具体代码和测试。

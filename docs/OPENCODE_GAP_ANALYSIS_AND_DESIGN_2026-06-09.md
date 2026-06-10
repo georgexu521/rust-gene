@@ -1,4 +1,5 @@
 # Opencode 对比分析与追赶设计
+Status: Active
 
 > 基于 2026-06-09 对 opencode-dev 源码（TypeScript）与 priority-agent（Rust）的系统对比
 > 聚焦三个 priority-agent 可向 opencode 学习的关键领域

@@ -1,4 +1,5 @@
 # Message Persistence Plan — 2026-06-08
+Status: Active
 
 将对话消息从纯内存管理升级为持久化优先。已有 SQLite 基础，不需要重写。
 

@@ -1,4 +1,5 @@
 # Release Candidate Stability Test Plan
+Status: Active
 
 Date: 2026-06-05
 

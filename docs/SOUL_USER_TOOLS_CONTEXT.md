@@ -1,4 +1,5 @@
 # Root Context Files
+Status: Reference
 
 Priority Agent supports three optional project-root context files beside
 `AGENTS.md`:

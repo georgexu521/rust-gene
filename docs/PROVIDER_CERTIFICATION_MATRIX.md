@@ -1,4 +1,5 @@
 # Provider Certification Matrix
+Status: Reference
 
 Product-auditable summary of provider-family behavior.  Each family is
 reasoned about through its known contracts rather than "tried and seen".

@@ -1,4 +1,5 @@
 # Opencode Core Alignment 下一阶段实施计划
+Status: Active
 
 > 2026-06-09 v1.1
 >

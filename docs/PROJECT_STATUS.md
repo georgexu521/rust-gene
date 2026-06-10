@@ -1,4 +1,5 @@
 # Project Status
+Status: Current
 
 Last updated: 2026-06-09
 

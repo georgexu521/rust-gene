@@ -1,4 +1,5 @@
 # Agentic Design Patterns Review
+Status: Reference
 
 Source: `/Users/georgexu/Downloads/agentic-design-patterns-main`
 

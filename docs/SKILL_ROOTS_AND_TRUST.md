@@ -1,4 +1,5 @@
 # Skill Roots And Trust
+Status: Reference
 
 Last updated: 2026-05-26
 

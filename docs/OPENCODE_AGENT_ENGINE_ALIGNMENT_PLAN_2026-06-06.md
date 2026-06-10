@@ -1,4 +1,5 @@
 # Opencode Agent Engine 对照与下一阶段优化计划
+Status: Active
 
 日期：2026-06-06
 

@@ -19,6 +19,10 @@ fn agent_tool_contract_discourages_blocking_delegation() {
     let tool = AgentTool::new();
     assert!(tool.description().contains("concurrently"));
     assert!(tool.description().contains("When NOT to use"));
+    assert!(tool.description().contains("profile parameter"));
+    assert!(!tool
+        .description()
+        .contains("role parameter to select which agent type"));
     assert!(tool.description().contains("explorer"));
     assert!(tool.description().contains("verifier"));
     assert!(tool.description().contains("planner"));

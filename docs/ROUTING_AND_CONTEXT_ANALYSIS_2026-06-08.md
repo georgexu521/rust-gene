@@ -1,4 +1,5 @@
 # Routing And Context Analysis - 2026-06-08
+Status: Reference
 
 Priority Agent 路由系统、上下文注入、缓存和压缩策略的当前状态分析，以及下一步
 改进方向。

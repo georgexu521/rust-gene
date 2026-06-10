@@ -1,4 +1,5 @@
 # Project Map
+Status: Reference
 
 Compact navigation map for `priority-agent`. This file is an agent entry point,
 not proof of current code. Read exact files before editing.

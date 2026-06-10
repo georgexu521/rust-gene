@@ -1,4 +1,5 @@
 # Closeout Hang 问题分析
+Status: Reference
 
 ## 问题现象
 

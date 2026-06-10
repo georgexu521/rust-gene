@@ -1,4 +1,5 @@
 # Next Phase Product Ecosystem Gap Plan
+Status: Active
 
 > 2026-06-09
 > Scope: after the core opencode programming-gap work, close the larger product

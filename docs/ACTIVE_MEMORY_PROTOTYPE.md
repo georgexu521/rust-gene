@@ -1,4 +1,5 @@
 # Active Memory Prototype
+Status: Prototype
 
 Last updated: 2026-05-26
 

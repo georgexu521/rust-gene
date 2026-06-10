@@ -1,4 +1,5 @@
 # Agent 实际编码能力测试
+Status: Active
 
 > 日期：2026-06-01
 > 模型：MiniMax M2.7

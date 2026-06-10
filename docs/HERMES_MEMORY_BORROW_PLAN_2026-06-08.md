@@ -1,4 +1,5 @@
 # Hermes Memory Borrow Plan — 2026-06-08
+Status: Active
 
 从 Hermes 借鉴 5 项记忆增强功能，每一节对照 Hermes 源码与 Priority Agent 现有代码，
 给出精确的实现路径和改动范围。
