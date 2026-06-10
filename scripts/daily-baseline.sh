@@ -69,6 +69,9 @@ gate "file-size-hard-limit" bash -c '
   echo "All production files are within 1500-line limit."
 '
 
+# ---- Documentation health (Phase 4) ----
+gate "doc-health" bash scripts/doc_health_check.sh
+
 # ---- Script syntax ----
 gate "eval-script-syntax"  bash -n scripts/run_live_eval.sh
 gate "parser-syntax"       python3 -m py_compile scripts/live_eval_report_parser.py
