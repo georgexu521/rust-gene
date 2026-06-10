@@ -741,12 +741,11 @@ impl ApiRequestController {
     }
 
     fn configured_fallback_model(current_model: &str) -> Option<String> {
-        let fallback = std::env::var("PRIORITY_AGENT_FALLBACK_MODEL").ok()?;
-        let fallback = fallback.trim();
-        if fallback.is_empty() || fallback == current_model {
+        let fallback = crate::services::config::runtime_config().fallback_model()?;
+        if fallback.trim().is_empty() || fallback.trim() == current_model {
             return None;
         }
-        Some(fallback.to_string())
+        Some(fallback.trim().to_string())
     }
 
     fn category_allows_fallback_model(category: &ErrorCategory) -> bool {
@@ -828,15 +827,7 @@ impl ApiRequestController {
 }
 
 fn streaming_tool_execution_shadow_mode() -> Option<String> {
-    match std::env::var("PRIORITY_AGENT_STREAMING_TOOL_EXECUTION")
-        .ok()?
-        .trim()
-        .to_ascii_lowercase()
-        .as_str()
-    {
-        "shadow" => Some("shadow".to_string()),
-        _ => None,
-    }
+    crate::services::config::runtime_config().streaming_tool_execution_shadow()
 }
 
 #[cfg(test)]

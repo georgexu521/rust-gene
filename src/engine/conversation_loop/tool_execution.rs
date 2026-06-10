@@ -17,8 +17,6 @@ pub(crate) const READ_ONLY_TOOLS: &[&str] = &[
     "read_mcp_resource",
 ];
 
-pub(crate) const DEFAULT_READ_ONLY_TOOL_CONCURRENCY: usize = 8;
-
 /// Maximum tool-call iterations per turn. Mirrors Reasonix's
 /// DEFAULT_MAX_ITER_PER_TURN = 50. Env override: PRIORITY_AGENT_MAX_ITER.
 #[allow(dead_code)]
@@ -27,9 +25,7 @@ pub(crate) const DEFAULT_MAX_ITERATIONS: usize = 50;
 /// Whether tool dispatch should be forced serial (mirrors Reasonix's
 /// REASONIX_TOOL_DISPATCH=serial). Default is parallel for read-only tools.
 pub(crate) fn force_serial_tool_dispatch() -> bool {
-    std::env::var("PRIORITY_AGENT_TOOL_DISPATCH")
-        .map(|v| v.trim().eq_ignore_ascii_case("serial"))
-        .unwrap_or(false)
+    crate::services::config::runtime_config().force_serial_tool_dispatch()
 }
 
 /// 工具结果磁盘缓存目录
@@ -42,11 +38,7 @@ pub(crate) fn tool_result_cache_dir() -> std::path::PathBuf {
 }
 
 pub(crate) fn read_only_tool_concurrency() -> usize {
-    std::env::var("PRIORITY_AGENT_READ_ONLY_TOOL_CONCURRENCY")
-        .ok()
-        .and_then(|s| s.parse::<usize>().ok())
-        .filter(|n| *n > 0)
-        .unwrap_or(DEFAULT_READ_ONLY_TOOL_CONCURRENCY)
+    crate::services::config::runtime_config().read_only_tool_concurrency()
 }
 
 pub(crate) fn safe_prefix_by_bytes(s: &str, max_bytes: usize) -> &str {

@@ -19,8 +19,6 @@ use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 use tracing::warn;
 
-const DEFAULT_CLOSEOUT_BACKGROUND_TIMEOUT_SECS: u64 = 5;
-
 pub(super) struct FinalCloseoutContext<'a> {
     pub(super) trace: &'a TraceCollector,
     pub(super) code_workflow: &'a CodeChangeWorkflowRunner,
@@ -45,12 +43,7 @@ pub(super) struct CloseoutEvaluation {
 }
 
 fn closeout_background_timeout() -> Duration {
-    let secs = std::env::var("PRIORITY_AGENT_CLOSEOUT_BACKGROUND_TIMEOUT_SECS")
-        .ok()
-        .and_then(|value| value.parse::<u64>().ok())
-        .unwrap_or(DEFAULT_CLOSEOUT_BACKGROUND_TIMEOUT_SECS)
-        .clamp(1, 60);
-    Duration::from_secs(secs)
+    crate::services::config::runtime_config().closeout_background_timeout()
 }
 
 async fn run_closeout_background_stage<T, F>(
@@ -698,14 +691,7 @@ fn should_prepare_mva_direct_closeout(context: &FinalCloseoutContext<'_>) -> boo
 }
 
 fn structured_closeout_runtime_profile_enabled() -> bool {
-    matches!(
-        std::env::var("PRIORITY_AGENT_RUNTIME_PROFILE")
-            .unwrap_or_default()
-            .trim()
-            .to_ascii_lowercase()
-            .as_str(),
-        "minimum_viable_agent" | "mva" | "project_partner_alignment"
-    )
+    crate::services::config::runtime_config().is_structured_closeout_profile()
 }
 
 fn mva_direct_closeout(

@@ -315,21 +315,11 @@ Do not answer in prose unless no safe patch exists."#;
     }
 
     pub(super) fn patch_synthesis_enabled() -> bool {
-        !matches!(
-            std::env::var("PRIORITY_AGENT_PATCH_SYNTHESIS")
-                .ok()
-                .as_deref(),
-            Some("0") | Some("false") | Some("FALSE") | Some("no") | Some("NO")
-        )
+        crate::services::config::runtime_config().patch_synthesis_enabled()
     }
 
     pub(super) fn deterministic_patch_synthesis_enabled() -> bool {
-        !matches!(
-            std::env::var("PRIORITY_AGENT_DETERMINISTIC_PATCH_SYNTHESIS")
-                .ok()
-                .as_deref(),
-            Some("0") | Some("false") | Some("FALSE") | Some("no") | Some("NO")
-        )
+        crate::services::config::runtime_config().deterministic_patch_synthesis_enabled()
     }
 
     pub(super) fn patch_synthesis_evidence(messages: &[Message]) -> String {

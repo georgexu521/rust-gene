@@ -13,14 +13,7 @@ use crate::services::api::Message;
 
 /// 是否启用了 task-guidance 注入。
 pub fn task_guidance_enabled() -> bool {
-    matches!(
-        std::env::var("PRIORITY_AGENT_TASK_GUIDANCE")
-            .unwrap_or_default()
-            .trim()
-            .to_ascii_lowercase()
-            .as_str(),
-        "1" | "true" | "yes" | "on"
-    )
+    crate::services::config::runtime_config().task_guidance_enabled()
 }
 
 /// 组装并注入 task-guidance 到请求消息。

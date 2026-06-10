@@ -9,18 +9,7 @@ use std::path::Path;
 use tokio::io::AsyncReadExt;
 
 fn required_validation_timeout() -> Option<std::time::Duration> {
-    let value = std::env::var("PRIORITY_AGENT_REQUIRED_VALIDATION_TIMEOUT_SECS").ok()?;
-    let value = value.trim();
-    if value.is_empty()
-        || matches!(
-            value.to_ascii_lowercase().as_str(),
-            "0" | "none" | "off" | "false" | "unlimited"
-        )
-    {
-        return None;
-    }
-    let secs = value.parse::<u64>().ok()?.max(30);
-    Some(std::time::Duration::from_secs(secs))
+    crate::services::config::runtime_config().required_validation_timeout()
 }
 
 fn required_validation_preflight_timeout() -> Option<std::time::Duration> {

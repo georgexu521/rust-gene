@@ -146,10 +146,22 @@ impl AppConfig {
             .set_default("engine.turn_timeout_secs", 1800)?
             .set_default("engine.session_end_memory_flush_timeout_secs", 5)?
             .set_default("engine.llm_request_timeout_secs", 120)?
-            .set_default("engine.stream_idle_timeout_secs", 30)?
+            .set_default("engine.stream_idle_timeout_secs", 120)?
             .set_default("engine.runtime_profile", "standard")?
             .set_default("engine.closeout_visibility", "concise")?
             .set_default("engine.self_correction_enabled", true)?
+            .set_default("engine.approval_timeout_secs", 300)?
+            .set_default("engine.closeout_background_timeout_secs", 5)?
+            .set_default("engine.patch_synthesis_enabled", true)?
+            .set_default("engine.deterministic_patch_synthesis_enabled", true)?
+            .set_default("engine.streaming_tool_execution", "off")?
+            .set_default("engine.auto_memory_write", "review_only")?
+            .set_default("engine.memory_dialectic_depth", 0)?
+            .set_default("engine.tool_dispatch_serial", false)?
+            .set_default("engine.read_only_tool_concurrency", 8)?
+            .set_default("engine.tool_profile", "standard")?
+            .set_default("engine.workflow_contract", "auto")?
+            .set_default("engine.task_guidance_enabled", false)?
             .set_default("memory.external_provider.enabled", false)?
             .set_default("memory.external_provider.mode", "off")?
             .set_default("memory.external_provider.provider_type", "none")?
@@ -485,6 +497,35 @@ pub fn get_config_value(config: &AppConfig, key: &str) -> Option<String> {
         "lsp.enabled" => Some(config.lsp.enabled.to_string()),
         "lsp.auto_detect" => Some(config.lsp.auto_detect.to_string()),
         "lsp.disable_downloads" => Some(config.lsp.disable_downloads.to_string()),
+        "engine.approval_timeout_secs" => Some(config.engine.approval_timeout_secs.to_string()),
+        "engine.closeout_background_timeout_secs" => {
+            Some(config.engine.closeout_background_timeout_secs.to_string())
+        }
+        "engine.patch_synthesis_enabled" => Some(config.engine.patch_synthesis_enabled.to_string()),
+        "engine.deterministic_patch_synthesis_enabled" => Some(
+            config
+                .engine
+                .deterministic_patch_synthesis_enabled
+                .to_string(),
+        ),
+        "engine.streaming_tool_execution" => Some(config.engine.streaming_tool_execution.clone()),
+        "engine.auto_memory_write" => Some(config.engine.auto_memory_write.clone()),
+        "engine.memory_dialectic_depth" => Some(config.engine.memory_dialectic_depth.to_string()),
+        "engine.required_validation_timeout_secs" => Some(
+            config
+                .engine
+                .required_validation_timeout_secs
+                .map(|v| v.to_string())
+                .unwrap_or_else(|| "none".to_string()),
+        ),
+        "engine.tool_dispatch_serial" => Some(config.engine.tool_dispatch_serial.to_string()),
+        "engine.read_only_tool_concurrency" => {
+            Some(config.engine.read_only_tool_concurrency.to_string())
+        }
+        "engine.tool_profile" => Some(config.engine.tool_profile.clone()),
+        "engine.workflow_contract" => Some(config.engine.workflow_contract.clone()),
+        "engine.task_guidance_enabled" => Some(config.engine.task_guidance_enabled.to_string()),
+        "engine.self_correction_enabled" => Some(config.engine.self_correction_enabled.to_string()),
         _ => None,
     }
 }
@@ -596,6 +637,60 @@ pub fn set_config_value(config: &mut AppConfig, key: &str, value: &str) -> Resul
         "lsp.enabled" => config.lsp.enabled = parse_bool(value)?,
         "lsp.auto_detect" => config.lsp.auto_detect = parse_bool(value)?,
         "lsp.disable_downloads" => config.lsp.disable_downloads = parse_bool(value)?,
+        "engine.approval_timeout_secs" => {
+            config.engine.approval_timeout_secs = value
+                .parse::<u64>()
+                .map_err(|_| format!("Invalid integer for {}: {}", key, value))?;
+        }
+        "engine.closeout_background_timeout_secs" => {
+            config.engine.closeout_background_timeout_secs = value
+                .parse::<u64>()
+                .map_err(|_| format!("Invalid integer for {}: {}", key, value))?;
+        }
+        "engine.patch_synthesis_enabled" => {
+            config.engine.patch_synthesis_enabled = parse_bool(value)?
+        }
+        "engine.deterministic_patch_synthesis_enabled" => {
+            config.engine.deterministic_patch_synthesis_enabled = parse_bool(value)?
+        }
+        "engine.streaming_tool_execution" => {
+            config.engine.streaming_tool_execution = value.to_string();
+        }
+        "engine.auto_memory_write" => {
+            config.engine.auto_memory_write = value.to_string();
+        }
+        "engine.memory_dialectic_depth" => {
+            config.engine.memory_dialectic_depth = value
+                .parse::<usize>()
+                .map_err(|_| format!("Invalid integer for {}: {}", key, value))?;
+        }
+        "engine.required_validation_timeout_secs" => {
+            config.engine.required_validation_timeout_secs = if value.eq_ignore_ascii_case("none") {
+                None
+            } else {
+                Some(
+                    value
+                        .parse::<u64>()
+                        .map_err(|_| format!("Invalid integer for {}: {}", key, value))?,
+                )
+            };
+        }
+        "engine.tool_dispatch_serial" => config.engine.tool_dispatch_serial = parse_bool(value)?,
+        "engine.read_only_tool_concurrency" => {
+            config.engine.read_only_tool_concurrency = value
+                .parse::<usize>()
+                .map_err(|_| format!("Invalid integer for {}: {}", key, value))?;
+        }
+        "engine.tool_profile" => {
+            config.engine.tool_profile = value.to_string();
+        }
+        "engine.workflow_contract" => {
+            config.engine.workflow_contract = value.to_string();
+        }
+        "engine.task_guidance_enabled" => config.engine.task_guidance_enabled = parse_bool(value)?,
+        "engine.self_correction_enabled" => {
+            config.engine.self_correction_enabled = parse_bool(value)?
+        }
         _ => return Err(format!("Unknown config key: {}", key)),
     }
     Ok(())
@@ -1029,6 +1124,51 @@ pub struct EngineConfig {
     /// 启用自我修正（用户中断时替换最后一条 assistant 消息）
     #[serde(default = "default_self_correction")]
     pub self_correction_enabled: bool,
+    /// 审批超时（秒）
+    #[serde(default = "default_approval_timeout")]
+    pub approval_timeout_secs: u64,
+    /// Closeout 后台阶段超时（秒）
+    #[serde(default = "default_closeout_background_timeout")]
+    pub closeout_background_timeout_secs: u64,
+    /// 启用 patch synthesis
+    #[serde(default = "default_true")]
+    pub patch_synthesis_enabled: bool,
+    /// 启用 deterministic patch synthesis
+    #[serde(default = "default_true")]
+    pub deterministic_patch_synthesis_enabled: bool,
+    /// Streaming tool execution mode（"off" | "shadow"）
+    #[serde(default = "default_streaming_tool_execution")]
+    pub streaming_tool_execution: String,
+    /// Auto memory write policy（"review_only" | "narrow" | "legacy"）
+    #[serde(default = "default_auto_memory_write")]
+    pub auto_memory_write: String,
+    /// Memory dialectic depth（0 = off）
+    #[serde(default)]
+    pub memory_dialectic_depth: usize,
+    /// Required validation timeout（秒），None = 不限
+    #[serde(default)]
+    pub required_validation_timeout_secs: Option<u64>,
+    /// 强制串行工具分发
+    #[serde(default)]
+    pub tool_dispatch_serial: bool,
+    /// 只读工具并发数
+    #[serde(default = "default_read_only_tool_concurrency")]
+    pub read_only_tool_concurrency: usize,
+    /// Tool profile（"standard" | "full" | "all" | "experimental"）
+    #[serde(default = "default_tool_profile")]
+    pub tool_profile: String,
+    /// Workflow contract（"off" | "auto" | "force"）
+    #[serde(default = "default_workflow_contract")]
+    pub workflow_contract: String,
+    /// 启用 task guidance 注入
+    #[serde(default)]
+    pub task_guidance_enabled: bool,
+    /// 启用 route-scoped tools（默认 true）
+    #[serde(default = "default_true")]
+    pub route_scoped_tools_enabled: bool,
+    /// 启用 debug tool exposure（默认 false）
+    #[serde(default)]
+    pub debug_tool_exposure: bool,
 }
 
 fn default_turn_timeout() -> u64 {
@@ -1044,7 +1184,7 @@ fn default_llm_request_timeout() -> u64 {
 }
 
 fn default_stream_idle_timeout() -> u64 {
-    30
+    120
 }
 
 fn default_runtime_profile() -> String {
@@ -1057,6 +1197,34 @@ fn default_closeout_visibility() -> String {
 
 fn default_self_correction() -> bool {
     true
+}
+
+fn default_approval_timeout() -> u64 {
+    300
+}
+
+fn default_closeout_background_timeout() -> u64 {
+    5
+}
+
+fn default_streaming_tool_execution() -> String {
+    "off".to_string()
+}
+
+fn default_auto_memory_write() -> String {
+    "review_only".to_string()
+}
+
+fn default_read_only_tool_concurrency() -> usize {
+    8
+}
+
+fn default_tool_profile() -> String {
+    "standard".to_string()
+}
+
+fn default_workflow_contract() -> String {
+    "auto".to_string()
 }
 
 impl Default for EngineConfig {
@@ -1072,6 +1240,21 @@ impl Default for EngineConfig {
             runtime_profile: default_runtime_profile(),
             closeout_visibility: default_closeout_visibility(),
             self_correction_enabled: default_self_correction(),
+            approval_timeout_secs: default_approval_timeout(),
+            closeout_background_timeout_secs: default_closeout_background_timeout(),
+            patch_synthesis_enabled: true,
+            deterministic_patch_synthesis_enabled: true,
+            streaming_tool_execution: default_streaming_tool_execution(),
+            auto_memory_write: default_auto_memory_write(),
+            memory_dialectic_depth: 0,
+            required_validation_timeout_secs: None,
+            tool_dispatch_serial: false,
+            read_only_tool_concurrency: default_read_only_tool_concurrency(),
+            tool_profile: default_tool_profile(),
+            workflow_contract: default_workflow_contract(),
+            task_guidance_enabled: false,
+            route_scoped_tools_enabled: true,
+            debug_tool_exposure: false,
         }
     }
 }
@@ -1091,29 +1274,262 @@ impl AppConfig {
         )
     }
 
-    /// LLM request timeout as Duration.
+    /// LLM request timeout as Duration (backward compat: checks PRIORITY_AGENT_LLM_REQUEST_TIMEOUT_SECS).
     pub fn llm_request_timeout(&self) -> std::time::Duration {
+        if let Ok(raw) = std::env::var("PRIORITY_AGENT_LLM_REQUEST_TIMEOUT_SECS") {
+            if let Ok(secs) = raw.trim().parse::<u64>() {
+                return std::time::Duration::from_secs(secs.clamp(30, 600));
+            }
+        }
         std::time::Duration::from_secs(self.engine.llm_request_timeout_secs.max(10))
     }
 
-    /// Stream idle timeout as Duration.
+    /// Stream idle timeout as Duration (backward compat: checks PRIORITY_AGENT_STREAM_IDLE_TIMEOUT_SECS).
     pub fn stream_idle_timeout(&self) -> std::time::Duration {
+        if let Ok(raw) = std::env::var("PRIORITY_AGENT_STREAM_IDLE_TIMEOUT_SECS") {
+            if let Ok(secs) = raw.trim().parse::<u64>() {
+                return std::time::Duration::from_secs(secs.clamp(30, 600));
+            }
+        }
         std::time::Duration::from_secs(self.engine.stream_idle_timeout_secs.max(5))
     }
 
-    /// Fallback model name.
-    pub fn fallback_model(&self) -> Option<&str> {
-        self.engine.fallback_model.as_deref()
+    /// Explicit LLM request timeout from env var (for provider profile override).
+    /// Returns None if the env var is not set; callers should fall back to provider-specific timeout.
+    pub fn explicit_llm_request_timeout(&self) -> Option<std::time::Duration> {
+        std::env::var("PRIORITY_AGENT_LLM_REQUEST_TIMEOUT_SECS")
+            .ok()
+            .and_then(|raw| raw.trim().parse::<u64>().ok())
+            .map(|secs| std::time::Duration::from_secs(secs.clamp(30, 600)))
     }
 
-    /// Runtime profile.
-    pub fn runtime_profile(&self) -> &str {
-        &self.engine.runtime_profile
+    /// Fallback model name (backward compat: checks PRIORITY_AGENT_FALLBACK_MODEL).
+    pub fn fallback_model(&self) -> Option<String> {
+        if let Ok(raw) = std::env::var("PRIORITY_AGENT_FALLBACK_MODEL") {
+            let v = raw.trim().to_string();
+            if !v.is_empty() && !v.eq_ignore_ascii_case("none") {
+                return Some(v);
+            }
+        }
+        self.engine.fallback_model.clone()
+    }
+
+    /// Runtime profile (backward compat: checks PRIORITY_AGENT_RUNTIME_PROFILE).
+    pub fn runtime_profile(&self) -> String {
+        if let Ok(raw) = std::env::var("PRIORITY_AGENT_RUNTIME_PROFILE") {
+            let v = raw.trim().to_ascii_lowercase();
+            if !v.is_empty() {
+                return v;
+            }
+        }
+        self.engine.runtime_profile.clone()
+    }
+
+    /// Whether self-correction is enabled (backward compat: checks PRIORITY_AGENT_SELF_CORRECTION).
+    pub fn self_correction_enabled(&self) -> bool {
+        if let Ok(raw) = std::env::var("PRIORITY_AGENT_SELF_CORRECTION") {
+            let v = raw.trim().to_ascii_lowercase();
+            if v == "0" || v == "false" || v == "no" || v == "off" {
+                return false;
+            }
+            return true;
+        }
+        self.engine.self_correction_enabled
     }
 
     /// Closeout visibility.
     pub fn closeout_visibility(&self) -> &str {
         &self.engine.closeout_visibility
+    }
+
+    /// Approval timeout as Duration (backward compat: checks PRIORITY_AGENT_APPROVAL_TIMEOUT_SECS).
+    pub fn approval_timeout(&self) -> std::time::Duration {
+        if let Ok(raw) = std::env::var("PRIORITY_AGENT_APPROVAL_TIMEOUT_SECS") {
+            if let Ok(secs) = raw.trim().parse::<u64>() {
+                return std::time::Duration::from_secs(secs.clamp(30, 1800));
+            }
+        }
+        std::time::Duration::from_secs(self.engine.approval_timeout_secs.clamp(30, 1800))
+    }
+
+    /// Closeout background stage timeout as Duration (backward compat: checks PRIORITY_AGENT_CLOSEOUT_BACKGROUND_TIMEOUT_SECS).
+    pub fn closeout_background_timeout(&self) -> std::time::Duration {
+        if let Ok(raw) = std::env::var("PRIORITY_AGENT_CLOSEOUT_BACKGROUND_TIMEOUT_SECS") {
+            if let Ok(secs) = raw.trim().parse::<u64>() {
+                return std::time::Duration::from_secs(secs.clamp(1, 60));
+            }
+        }
+        std::time::Duration::from_secs(self.engine.closeout_background_timeout_secs.clamp(1, 60))
+    }
+
+    /// Whether patch synthesis is enabled (backward compat: checks PRIORITY_AGENT_PATCH_SYNTHESIS).
+    pub fn patch_synthesis_enabled(&self) -> bool {
+        if let Ok(raw) = std::env::var("PRIORITY_AGENT_PATCH_SYNTHESIS") {
+            let v = raw.trim().to_ascii_lowercase();
+            if v == "0" || v == "false" || v == "no" {
+                return false;
+            }
+            return true;
+        }
+        self.engine.patch_synthesis_enabled
+    }
+
+    /// Whether deterministic patch synthesis is enabled (backward compat: checks PRIORITY_AGENT_DETERMINISTIC_PATCH_SYNTHESIS).
+    pub fn deterministic_patch_synthesis_enabled(&self) -> bool {
+        if let Ok(raw) = std::env::var("PRIORITY_AGENT_DETERMINISTIC_PATCH_SYNTHESIS") {
+            let v = raw.trim().to_ascii_lowercase();
+            if v == "0" || v == "false" || v == "no" {
+                return false;
+            }
+            return true;
+        }
+        self.engine.deterministic_patch_synthesis_enabled
+    }
+
+    /// Streaming tool execution shadow mode (backward compat: checks PRIORITY_AGENT_STREAMING_TOOL_EXECUTION).
+    pub fn streaming_tool_execution_shadow(&self) -> Option<String> {
+        if let Ok(raw) = std::env::var("PRIORITY_AGENT_STREAMING_TOOL_EXECUTION") {
+            let v = raw.trim().to_ascii_lowercase();
+            if v == "shadow" {
+                return Some("shadow".to_string());
+            }
+            return None;
+        }
+        if self.engine.streaming_tool_execution == "shadow" {
+            Some("shadow".to_string())
+        } else {
+            None
+        }
+    }
+
+    /// Auto memory write policy (backward compat: checks PRIORITY_AGENT_AUTO_MEMORY_WRITE).
+    pub fn auto_memory_write_policy(&self) -> &str {
+        if let Ok(raw) = std::env::var("PRIORITY_AGENT_AUTO_MEMORY_WRITE") {
+            let v = raw.trim().to_ascii_lowercase();
+            if v == "legacy" || v == "unsafe" || v == "all" || v == "1" || v == "true" || v == "on"
+            {
+                return "legacy";
+            }
+            if v == "narrow" || v == "verified" || v == "explicit" {
+                return "narrow";
+            }
+            return "review_only";
+        }
+        &self.engine.auto_memory_write
+    }
+
+    /// Memory dialectic depth (backward compat: checks PRIORITY_AGENT_MEMORY_DIALECTIC_DEPTH).
+    pub fn memory_dialectic_depth(&self) -> usize {
+        if let Ok(raw) = std::env::var("PRIORITY_AGENT_MEMORY_DIALECTIC_DEPTH") {
+            if let Ok(n) = raw.trim().parse::<usize>() {
+                return n;
+            }
+        }
+        self.engine.memory_dialectic_depth
+    }
+
+    /// Required validation timeout (backward compat: checks PRIORITY_AGENT_REQUIRED_VALIDATION_TIMEOUT_SECS).
+    pub fn required_validation_timeout(&self) -> Option<std::time::Duration> {
+        if let Ok(raw) = std::env::var("PRIORITY_AGENT_REQUIRED_VALIDATION_TIMEOUT_SECS") {
+            let v = raw.trim().to_ascii_lowercase();
+            if v.is_empty()
+                || v == "0"
+                || v == "none"
+                || v == "off"
+                || v == "false"
+                || v == "unlimited"
+            {
+                return None;
+            }
+            if let Ok(secs) = v.parse::<u64>() {
+                return Some(std::time::Duration::from_secs(secs.max(30)));
+            }
+        }
+        self.engine
+            .required_validation_timeout_secs
+            .map(|secs| std::time::Duration::from_secs(secs.max(30)))
+    }
+
+    /// Whether tool dispatch is forced serial (backward compat: checks PRIORITY_AGENT_TOOL_DISPATCH).
+    pub fn force_serial_tool_dispatch(&self) -> bool {
+        if let Ok(raw) = std::env::var("PRIORITY_AGENT_TOOL_DISPATCH") {
+            return raw.trim().eq_ignore_ascii_case("serial");
+        }
+        self.engine.tool_dispatch_serial
+    }
+
+    /// Read-only tool concurrency (backward compat: checks PRIORITY_AGENT_READ_ONLY_TOOL_CONCURRENCY).
+    pub fn read_only_tool_concurrency(&self) -> usize {
+        if let Ok(raw) = std::env::var("PRIORITY_AGENT_READ_ONLY_TOOL_CONCURRENCY") {
+            if let Ok(n) = raw.trim().parse::<usize>() {
+                if n > 0 {
+                    return n;
+                }
+            }
+        }
+        self.engine.read_only_tool_concurrency.max(1)
+    }
+
+    /// Tool profile (backward compat: checks PRIORITY_AGENT_TOOL_PROFILE).
+    pub fn tool_profile(&self) -> String {
+        if let Ok(raw) = std::env::var("PRIORITY_AGENT_TOOL_PROFILE") {
+            return raw.trim().to_ascii_lowercase();
+        }
+        self.engine.tool_profile.clone()
+    }
+
+    /// Workflow contract mode string (backward compat: checks PRIORITY_AGENT_WORKFLOW_CONTRACT).
+    pub fn workflow_contract(&self) -> String {
+        if let Ok(raw) = std::env::var("PRIORITY_AGENT_WORKFLOW_CONTRACT") {
+            return raw.trim().to_ascii_lowercase();
+        }
+        self.engine.workflow_contract.clone()
+    }
+
+    /// Whether task guidance is enabled (backward compat: checks PRIORITY_AGENT_TASK_GUIDANCE).
+    pub fn task_guidance_enabled(&self) -> bool {
+        if let Ok(raw) = std::env::var("PRIORITY_AGENT_TASK_GUIDANCE") {
+            let v = raw.trim().to_ascii_lowercase();
+            return v == "1" || v == "true" || v == "yes" || v == "on";
+        }
+        self.engine.task_guidance_enabled
+    }
+
+    /// Whether the runtime profile is MVA (minimum viable agent).
+    pub fn is_mva_profile(&self) -> bool {
+        matches!(
+            self.runtime_profile().as_str(),
+            "minimum_viable_agent" | "mva"
+        )
+    }
+
+    /// Whether the runtime profile enables structured closeout.
+    pub fn is_structured_closeout_profile(&self) -> bool {
+        matches!(
+            self.runtime_profile().as_str(),
+            "minimum_viable_agent" | "mva" | "project_partner_alignment"
+        )
+    }
+
+    /// Whether route-scoped tools are enabled (backward compat: checks PRIORITY_AGENT_ROUTE_SCOPED_TOOLS).
+    pub fn route_scoped_tools_enabled(&self) -> bool {
+        if let Ok(raw) = std::env::var("PRIORITY_AGENT_ROUTE_SCOPED_TOOLS") {
+            let v = raw.trim().to_ascii_lowercase();
+            if v == "0" || v == "false" || v == "no" || v == "off" {
+                return false;
+            }
+            return true;
+        }
+        self.engine.route_scoped_tools_enabled
+    }
+
+    /// Whether debug tool exposure is enabled (backward compat: checks PRIORITY_AGENT_DEBUG_TOOL_EXPOSURE).
+    pub fn debug_tool_exposure_enabled(&self) -> bool {
+        if let Ok(raw) = std::env::var("PRIORITY_AGENT_DEBUG_TOOL_EXPOSURE") {
+            let v = raw.trim().to_ascii_lowercase();
+            return v == "1" || v == "true" || v == "yes" || v == "on";
+        }
+        self.engine.debug_tool_exposure
     }
 }
 

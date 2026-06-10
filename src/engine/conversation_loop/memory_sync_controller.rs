@@ -28,14 +28,9 @@ enum AutoMemoryWritePolicy {
 
 impl AutoMemoryWritePolicy {
     fn from_env() -> Self {
-        match std::env::var("PRIORITY_AGENT_AUTO_MEMORY_WRITE")
-            .unwrap_or_default()
-            .trim()
-            .to_ascii_lowercase()
-            .as_str()
-        {
-            "legacy" | "unsafe" | "all" | "1" | "true" | "on" => Self::Legacy,
-            "narrow" | "verified" | "explicit" => Self::Narrow,
+        match crate::services::config::runtime_config().auto_memory_write_policy() {
+            "legacy" => Self::Legacy,
+            "narrow" => Self::Narrow,
             _ => Self::ReviewOnly,
         }
     }

@@ -7,8 +7,6 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::Mutex;
 
-const DEFAULT_APPROVAL_TIMEOUT_SECS: u64 = 300;
-
 #[derive(Debug, Clone)]
 pub struct ToolApprovalRequest {
     pub tool_call: ToolCall,
@@ -284,12 +282,7 @@ impl Default for ToolApprovalChannel {
 }
 
 fn approval_timeout() -> Duration {
-    let secs = std::env::var("PRIORITY_AGENT_APPROVAL_TIMEOUT_SECS")
-        .ok()
-        .and_then(|value| value.parse::<u64>().ok())
-        .map(|value| value.clamp(30, 1800))
-        .unwrap_or(DEFAULT_APPROVAL_TIMEOUT_SECS);
-    Duration::from_secs(secs)
+    crate::services::config::runtime_config().approval_timeout()
 }
 
 #[cfg(test)]

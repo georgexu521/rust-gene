@@ -45,41 +45,17 @@ impl ConversationLoop {
     }
 
     pub(crate) fn route_scoped_tools_enabled() -> bool {
-        if Self::env_flag_disabled("PRIORITY_AGENT_ROUTE_SCOPED_TOOLS") {
+        if !crate::services::config::runtime_config().route_scoped_tools_enabled() {
             return false;
         }
-        if Self::env_flag_enabled("PRIORITY_AGENT_DEBUG_TOOL_EXPOSURE") {
+        if crate::services::config::runtime_config().debug_tool_exposure_enabled() {
             return false;
         }
         !matches!(
-            std::env::var("PRIORITY_AGENT_TOOL_PROFILE")
-                .unwrap_or_default()
-                .trim()
-                .to_ascii_lowercase()
+            crate::services::config::runtime_config()
+                .tool_profile()
                 .as_str(),
             "full" | "all" | "experimental"
-        )
-    }
-
-    fn env_flag_enabled(name: &str) -> bool {
-        matches!(
-            std::env::var(name)
-                .unwrap_or_default()
-                .trim()
-                .to_ascii_lowercase()
-                .as_str(),
-            "1" | "true" | "yes" | "on"
-        )
-    }
-
-    fn env_flag_disabled(name: &str) -> bool {
-        matches!(
-            std::env::var(name)
-                .unwrap_or_default()
-                .trim()
-                .to_ascii_lowercase()
-                .as_str(),
-            "0" | "false" | "no" | "off"
         )
     }
 

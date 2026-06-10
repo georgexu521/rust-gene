@@ -23,6 +23,7 @@ impl MockProvider {
         }
     }
 
+    #[allow(dead_code)]
     pub fn queue_response(&self, response: ChatResponse) {
         self.responses.lock().unwrap().push(response);
     }

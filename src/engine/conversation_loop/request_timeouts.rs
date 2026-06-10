@@ -1,30 +1,18 @@
 use crate::services::api::provider_protocol::ProviderLatencyProfile;
+use crate::services::config::runtime_config;
 
 pub(super) fn llm_request_timeout() -> std::time::Duration {
-    let secs = std::env::var("PRIORITY_AGENT_LLM_REQUEST_TIMEOUT_SECS")
-        .ok()
-        .and_then(|value| value.parse::<u64>().ok())
-        .unwrap_or(180)
-        .clamp(30, 600);
-    std::time::Duration::from_secs(secs)
+    runtime_config().llm_request_timeout()
 }
 
 pub(super) fn stream_chunk_idle_timeout() -> std::time::Duration {
-    let secs = std::env::var("PRIORITY_AGENT_STREAM_IDLE_TIMEOUT_SECS")
-        .ok()
-        .and_then(|value| value.parse::<u64>().ok())
-        .unwrap_or(120)
-        .clamp(30, 600);
-    std::time::Duration::from_secs(secs)
+    runtime_config().stream_idle_timeout()
 }
 
 pub(super) fn profile_driven_timeout(profile: &ProviderLatencyProfile) -> std::time::Duration {
-    if let Ok(secs) = std::env::var("PRIORITY_AGENT_LLM_REQUEST_TIMEOUT_SECS") {
-        if let Ok(secs) = secs.parse::<u64>() {
-            return std::time::Duration::from_secs(secs.clamp(30, 600));
-        }
-    }
-    profile.timeout
+    runtime_config()
+        .explicit_llm_request_timeout()
+        .unwrap_or(profile.timeout)
 }
 
 pub(super) fn profile_driven_slow_warning(profile: &ProviderLatencyProfile) -> std::time::Duration {

@@ -577,18 +577,9 @@ impl RequestPreparationController {
 
         let mut memory = memory_manager.lock().await;
         let dialectic_depth = if context.retrieval_policy.allows_memory_context() {
-            // Use dialectic multi-pass for Memory/Project policies where
-            // deeper reasoning about memory relevance is valuable.
-            // Light policy stays at depth 1 (single pass, no extra LLM cost).
-            let depth_env = std::env::var("PRIORITY_AGENT_MEMORY_DIALECTIC_DEPTH")
-                .ok()
-                .and_then(|v| v.parse::<usize>().ok())
-                .unwrap_or(0);
-            if depth_env > 0 {
-                depth_env
-            } else {
-                1 // default: single pass (same as current behavior)
-            }
+            crate::services::config::runtime_config()
+                .memory_dialectic_depth()
+                .max(1)
         } else {
             0 // disabled
         };
@@ -1269,14 +1260,7 @@ fn zone_item_count(content: &str) -> usize {
 }
 
 fn mva_runtime_profile_enabled() -> bool {
-    matches!(
-        std::env::var("PRIORITY_AGENT_RUNTIME_PROFILE")
-            .unwrap_or_default()
-            .trim()
-            .to_ascii_lowercase()
-            .as_str(),
-        "minimum_viable_agent" | "mva"
-    )
+    crate::services::config::runtime_config().is_mva_profile()
 }
 
 fn compact_path(path: &str, resolved_path: &str) -> String {

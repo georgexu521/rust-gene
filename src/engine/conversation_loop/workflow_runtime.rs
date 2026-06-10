@@ -40,9 +40,7 @@ pub(super) fn workflow_contract_mode(provider: &dyn LlmProvider) -> WorkflowCont
         return WorkflowContractMode::Off;
     }
 
-    std::env::var("PRIORITY_AGENT_WORKFLOW_CONTRACT")
-        .map(|value| workflow_contract_env_mode(&value))
-        .unwrap_or(WorkflowContractMode::Auto)
+    workflow_contract_env_mode(&crate::services::config::runtime_config().workflow_contract())
 }
 
 fn workflow_contract_env_mode(value: &str) -> WorkflowContractMode {

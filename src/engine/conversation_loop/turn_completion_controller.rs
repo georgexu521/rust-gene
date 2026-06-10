@@ -588,14 +588,7 @@ fn latest_stop_status(trace: &TurnTrace) -> Option<LatestStopStatus> {
 }
 
 fn mva_runtime_profile_enabled() -> bool {
-    matches!(
-        std::env::var("PRIORITY_AGENT_RUNTIME_PROFILE")
-            .unwrap_or_default()
-            .trim()
-            .to_ascii_lowercase()
-            .as_str(),
-        "minimum_viable_agent" | "mva"
-    )
+    crate::services::config::runtime_config().is_mva_profile()
 }
 
 fn final_content_mentions_blocked_action(final_content: &str) -> bool {

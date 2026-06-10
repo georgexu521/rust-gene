@@ -47,12 +47,7 @@ pub(super) fn record_action_decision_if_needed(
 }
 
 fn mva_runtime_profile_enabled() -> bool {
-    matches!(
-        std::env::var("PRIORITY_AGENT_RUNTIME_PROFILE")
-            .ok()
-            .as_deref(),
-        Some("minimum_viable_agent" | "mva")
-    )
+    crate::services::config::runtime_config().is_mva_profile()
 }
 
 pub(super) fn attach_action_review_metadata(result: &mut ToolResult, review: &ActionReview) {
