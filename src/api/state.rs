@@ -931,6 +931,7 @@ impl ApiState {
 
         // 保存配置
         config.save()?;
+        crate::services::config::init_runtime_config(config.clone());
 
         Ok(())
     }

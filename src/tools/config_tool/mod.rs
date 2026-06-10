@@ -117,10 +117,13 @@ impl Tool for ConfigTool {
                     Ok(mut config) => {
                         match crate::services::config::set_config_value(&mut config, key, value) {
                             Ok(()) => match config.save() {
-                                Ok(()) => ToolResult::success(format!(
-                                    "Updated {} = {} and saved to config.toml",
-                                    key, value
-                                )),
+                                Ok(()) => {
+                                    crate::services::config::init_runtime_config(config);
+                                    ToolResult::success(format!(
+                                        "Updated {} = {} and refreshed runtime config",
+                                        key, value
+                                    ))
+                                }
                                 Err(e) => {
                                     ToolResult::error(format!("Failed to save config: {}", e))
                                 }

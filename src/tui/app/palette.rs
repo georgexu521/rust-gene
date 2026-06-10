@@ -242,7 +242,9 @@ impl TuiApp {
         }
         if let Ok(mut config) = crate::services::config::AppConfig::load() {
             config.api.model = choice.model.clone();
-            let _ = config.save();
+            if config.save().is_ok() {
+                crate::services::config::init_runtime_config(config);
+            }
         }
         self.model_notice = Some(format!("Model switched to {}", choice.model));
         self.close_model_select();
@@ -392,7 +394,9 @@ impl TuiApp {
         if let Ok(mut app_config) = crate::services::config::AppConfig::load() {
             app_config.api.model = config.default_model.clone();
             app_config.api.base_url = config.base_url.clone().unwrap_or_default();
-            let _ = app_config.save();
+            if app_config.save().is_ok() {
+                crate::services::config::init_runtime_config(app_config);
+            }
         }
         self.provider_notice = Some(format!(
             "Provider switched to {} ({})",

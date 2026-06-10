@@ -47,7 +47,7 @@ pub fn handle_skip(app: &mut TuiApp) -> String {
 
 pub async fn handle_reload(app: &mut TuiApp, args: &str) -> String {
     if args.is_empty() || args == "config" {
-        match crate::services::config::AppConfig::load() {
+        match crate::services::config::reload_runtime_config() {
             Ok(config) => {
                 // Apply visible UI config immediately.
                 app.theme = Arc::new(crate::tui::theme::Theme::from_name(&config.ui.theme));
@@ -515,10 +515,10 @@ pub fn handle_config(_app: &TuiApp, args: &str) -> String {
         return match crate::services::config::AppConfig::load() {
             Ok(mut config) => match set_config_value(&mut config, key, value) {
                 Ok(_) => match config.save() {
-                    Ok(_) => format!(
-                        "Updated {} = {} and saved to config.toml. Run /reload config to refresh runtime view.",
-                        key, value
-                    ),
+                    Ok(_) => {
+                        crate::services::config::init_runtime_config(config);
+                        format!("Updated {} = {} and refreshed runtime config.", key, value)
+                    }
                     Err(e) => format!("Updated in memory but failed to save config: {}", e),
                 },
                 Err(e) => e,
@@ -605,6 +605,7 @@ pub fn handle_theme(app: &mut TuiApp, args: &str) -> String {
                     preset_name, e
                 );
             }
+            crate::services::config::init_runtime_config(config.clone());
             if let Some(ref mut settings) = app.settings_state {
                 settings.config.ui.theme = preset_name.clone();
             }

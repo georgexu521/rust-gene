@@ -403,6 +403,7 @@ impl SettingsState {
     /// 保存配置到文件
     pub fn save_config(&mut self) -> anyhow::Result<()> {
         self.config.save()?;
+        crate::services::config::init_runtime_config(self.config.clone());
         self.show_saved = true;
         self.show_message("Configuration saved to file".to_string());
         Ok(())

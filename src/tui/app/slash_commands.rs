@@ -656,7 +656,9 @@ impl TuiApp {
                     }
                     if let Ok(mut config) = crate::services::config::AppConfig::load() {
                         config.api.model = model.to_string();
-                        let _ = config.save();
+                        if config.save().is_ok() {
+                            crate::services::config::init_runtime_config(config);
+                        }
                     }
                     self.model_notice = Some(format!("Model switched to {}", model));
                     format!("Model switched to {}. Next request will use it.", model)
