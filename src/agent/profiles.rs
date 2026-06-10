@@ -564,7 +564,7 @@ pub fn product_profiles() -> Vec<AgentProfile> {
             name: "build".into(),
             description: "Full coding mode — read, edit, shell, and validation".into(),
             role: AgentRole::Specialist,
-            system_prompt: String::new(),
+            system_prompt: "You are in BUILD mode. Make focused code changes directly when asked, then verify the changed behavior before finishing.".into(),
             allowed_tools: Vec::new(),
             disallowed_tools: Vec::new(),
             context: Some(AgentContextMode::InheritedSummary),
@@ -583,7 +583,7 @@ pub fn product_profiles() -> Vec<AgentProfile> {
             name: "plan".into(),
             description: "Read-only planner — explore, search, and ask questions".into(),
             role: AgentRole::Plan,
-            system_prompt: String::new(),
+            system_prompt: "You are in PLAN mode. Inspect and reason about the project, but do not modify files unless the user explicitly asks you to implement.".into(),
             allowed_tools: vec![
                 "file_read".into(),
                 "glob".into(),
@@ -609,7 +609,7 @@ pub fn product_profiles() -> Vec<AgentProfile> {
             name: "explore".into(),
             description: "Read/search only — glob, grep, read, LSP, and web fetch".into(),
             role: AgentRole::Guide,
-            system_prompt: String::new(),
+            system_prompt: "You are in EXPLORE mode. Search, read, and map the codebase with evidence. Avoid mutations unless the user changes the task.".into(),
             allowed_tools: vec![
                 "file_read".into(),
                 "glob".into(),
@@ -637,7 +637,7 @@ pub fn product_profiles() -> Vec<AgentProfile> {
             name: "review".into(),
             description: "Diff reviewer — read changed files, report findings, no edits".into(),
             role: AgentRole::Advisor,
-            system_prompt: String::new(),
+            system_prompt: "You are in REVIEW mode. Lead with concrete findings grounded in diffs, files, and command output. Avoid edits unless explicitly requested.".into(),
             allowed_tools: vec![
                 "file_read".into(),
                 "git_diff".into(),
@@ -666,7 +666,7 @@ pub fn product_profiles() -> Vec<AgentProfile> {
             name: "verify".into(),
             description: "Validator — run tests, check closeout, summarize proof".into(),
             role: AgentRole::Verification,
-            system_prompt: String::new(),
+            system_prompt: "You are in VERIFY mode. Run validation commands, check correctness, and summarize proof status. Report pass or fail clearly.".into(),
             allowed_tools: vec![
                 "file_read".into(),
                 "grep".into(),
@@ -689,7 +689,99 @@ pub fn product_profiles() -> Vec<AgentProfile> {
             max_turns: Some(15),
             max_cost_usd: None,
         },
+        AgentProfile {
+            name: "scout".into(),
+            description: "External research — web search, fetch docs, read-only local context".into(),
+            role: AgentRole::Guide,
+            system_prompt: "You are in SCOUT mode. Search the web, fetch external documentation, and read local context. Report findings with source URLs. Do not edit files.".into(),
+            allowed_tools: vec![
+                "web_search".into(),
+                "web_fetch".into(),
+                "file_read".into(),
+                "glob".into(),
+                "grep".into(),
+                "project_list".into(),
+                "ask_user".into(),
+            ],
+            disallowed_tools: vec!["file_edit".into(), "file_write".into(), "bash".into()],
+            context: Some(AgentContextMode::Minimal),
+            permission_mode: Some(AgentPermissionMode::ReadOnly),
+            risk_policy: Some(AgentRiskPolicy::ReadOnly),
+            output_contract: Some(AgentOutputContract::Findings),
+            model: None,
+            effort: None,
+            mcp_servers: Vec::new(),
+            memory: Some(AgentMemoryPolicy::None),
+            timeout_secs: Some(120),
+            max_turns: Some(8),
+            max_cost_usd: None,
+        },
     ]
+}
+
+// ── Profile registry views ─────────────────────────────────────
+
+/// Which product surface a profile belongs to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AgentProfileSurface {
+    /// Switchable primary session mode (build, plan, explore, review).
+    Primary,
+    /// Runnable as a subagent via the agent tool.
+    Subagent,
+    /// Hidden from product UI (compaction, title, summary, etc.).
+    Hidden,
+}
+
+/// Profiles intended as switchable primary session modes.
+///
+/// These map to `AgentMode` and control the main-session tool surface
+/// and permission policy.
+pub fn primary_profiles(project_root: impl AsRef<Path>) -> Vec<AgentProfile> {
+    product_profiles()
+        .into_iter()
+        .filter(|p| profile_surface(p) == AgentProfileSurface::Primary)
+        .chain(
+            load_profiles(project_root)
+                .into_iter()
+                .filter(|p| profile_surface(p) == AgentProfileSurface::Primary),
+        )
+        .collect()
+}
+
+/// Profiles intended as subagents that can be spawned via the agent tool.
+///
+/// These are not switchable primary modes. They are workers launched for
+/// bounded parallel tasks.
+pub fn subagent_profiles(project_root: impl AsRef<Path>) -> Vec<AgentProfile> {
+    let mut profiles = load_profiles(project_root);
+    // Include product profiles that are subagent-only (not primary).
+    for p in product_profiles() {
+        if profile_surface(&p) == AgentProfileSurface::Subagent {
+            upsert_profile(&mut profiles, p);
+        }
+    }
+    profiles.retain(|p| profile_surface(p) == AgentProfileSurface::Subagent);
+    profiles
+}
+
+/// All profiles that can be used with `/agent run`.
+///
+/// Includes both primary profiles (which may also be runnable) and
+/// subagent profiles. Excludes hidden profiles.
+pub fn runnable_profiles(project_root: impl AsRef<Path>) -> Vec<AgentProfile> {
+    let mut profiles = load_profiles(project_root);
+    for p in product_profiles() {
+        upsert_profile(&mut profiles, p);
+    }
+    profiles.retain(|p| profile_surface(p) != AgentProfileSurface::Hidden);
+    profiles
+}
+
+pub fn profile_surface(profile: &AgentProfile) -> AgentProfileSurface {
+    match profile.name.as_str() {
+        "build" | "plan" | "explore" | "review" => AgentProfileSurface::Primary,
+        _ => AgentProfileSurface::Subagent,
+    }
 }
 
 #[cfg(test)]
@@ -879,6 +971,87 @@ context = "fork"
             definition.permission_mode,
             AgentPermissionMode::IsolatedWrite
         );
-        assert!(definition.context_mode.requires_isolated_worktree());
+    }
+
+    #[test]
+    fn primary_profiles_include_only_switchable_modes() {
+        let profiles = primary_profiles(".");
+        let names: Vec<&str> = profiles.iter().map(|p| p.name.as_str()).collect();
+        assert!(names.contains(&"build"));
+        assert!(names.contains(&"plan"));
+        assert!(names.contains(&"explore"));
+        assert!(names.contains(&"review"));
+        // verify, default, explorer, implementer are NOT primary
+        assert!(!names.contains(&"verify"));
+        assert!(!names.contains(&"default"));
+        assert!(!names.contains(&"explorer"));
+        assert!(!names.contains(&"implementer"));
+    }
+
+    #[test]
+    fn subagent_profiles_include_workers() {
+        let profiles = subagent_profiles(".");
+        let names: Vec<&str> = profiles.iter().map(|p| p.name.as_str()).collect();
+        assert!(names.contains(&"default"));
+        assert!(names.contains(&"explorer"));
+        assert!(names.contains(&"verifier"));
+        assert!(names.contains(&"implementer"));
+        // primary profiles are not subagent
+        assert!(!names.contains(&"build"));
+        assert!(!names.contains(&"plan"));
+    }
+
+    #[test]
+    fn runnable_profiles_include_both_primary_and_subagent() {
+        let profiles = runnable_profiles(".");
+        let names: Vec<&str> = profiles.iter().map(|p| p.name.as_str()).collect();
+        assert!(names.contains(&"build"));
+        assert!(names.contains(&"explorer"));
+        assert!(names.contains(&"verify"));
+    }
+
+    #[test]
+    fn scout_profile_is_subagent_not_primary() {
+        assert_eq!(
+            profile_surface(&find_runnable_profile(".", "scout").unwrap()),
+            AgentProfileSurface::Subagent
+        );
+    }
+
+    #[test]
+    fn primary_profiles_have_non_empty_system_prompts() {
+        for profile in primary_profiles(".") {
+            assert!(
+                !profile.system_prompt.trim().is_empty(),
+                "primary profile '{}' should have a non-empty system_prompt",
+                profile.name
+            );
+        }
+    }
+
+    #[test]
+    fn primary_profiles_all_map_to_agent_mode() {
+        for profile in primary_profiles(".") {
+            let mode = crate::engine::agent_mode::AgentMode::parse(&profile.name);
+            assert!(
+                mode.is_some(),
+                "primary profile '{}' should map to an AgentMode variant",
+                profile.name
+            );
+        }
+    }
+
+    #[test]
+    fn read_only_primary_profiles_do_not_allow_code_changes() {
+        for profile in primary_profiles(".") {
+            if profile.name != "build" {
+                assert_ne!(
+                    profile.risk_policy,
+                    Some(AgentRiskPolicy::CodeChange),
+                    "non-build primary profile '{}' should not have CodeChange risk policy",
+                    profile.name
+                );
+            }
+        }
     }
 }

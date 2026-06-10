@@ -226,52 +226,57 @@ pub async fn handle_agent_list(app: &mut TuiApp, args: &str) -> String {
     let parts: Vec<&str> = args.split_whitespace().collect();
 
     if parts.is_empty() || parts[0] == "list" {
-        let profiles = crate::agent::profiles::product_profiles();
-        if profiles.is_empty() {
-            return "No built-in agent profiles available.".to_string();
+        let primary = crate::agent::profiles::primary_profiles(".");
+        let subagents = crate::agent::profiles::subagent_profiles(".");
+        let mut out = String::new();
+
+        if !primary.is_empty() {
+            out.push_str("Switchable primary modes:\n\n");
+            for p in &primary {
+                out.push_str(&format!("  {} — {}\n", p.name, p.description));
+                out.push_str(&format!(
+                    "    /agent switch {}  |  /agent run {} <prompt>\n",
+                    p.name, p.name
+                ));
+            }
         }
-        let mut out = String::from("Available agent profiles:\n\n");
-        for p in &profiles {
-            let risk = match p
-                .risk_policy
-                .unwrap_or(crate::agent::profiles::AgentRiskPolicy::ReadOnly)
-            {
-                crate::agent::profiles::AgentRiskPolicy::CodeChange => "write",
-                crate::agent::profiles::AgentRiskPolicy::ReadOnly => "read",
-                crate::agent::profiles::AgentRiskPolicy::VerifyOnly => "verify",
-            };
-            let perm = match p
-                .permission_mode
-                .unwrap_or(crate::agent::profiles::AgentPermissionMode::ReadOnly)
-            {
-                crate::agent::profiles::AgentPermissionMode::ReadOnly => "read-only",
-                crate::agent::profiles::AgentPermissionMode::Bubble => "bubble",
-                crate::agent::profiles::AgentPermissionMode::IsolatedWrite => "isolated",
-            };
-            let tools = if p.allowed_tools.is_empty() {
-                "all".to_string()
-            } else {
-                format!("{} tools", p.allowed_tools.len())
-            };
-            out.push_str(&format!(
-                "  {} — {} (risk={risk}, perm={perm}, tools={tools})\n",
-                p.name, p.description,
-            ));
+        if !subagents.is_empty() {
+            if !out.is_empty() {
+                out.push('\n');
+            }
+            out.push_str("Runnable subagents:\n\n");
+            for p in &subagents {
+                let risk = match p
+                    .risk_policy
+                    .unwrap_or(crate::agent::profiles::AgentRiskPolicy::ReadOnly)
+                {
+                    crate::agent::profiles::AgentRiskPolicy::CodeChange => "write",
+                    crate::agent::profiles::AgentRiskPolicy::ReadOnly => "read",
+                    crate::agent::profiles::AgentRiskPolicy::VerifyOnly => "verify",
+                };
+                out.push_str(&format!("  {} — {} (risk={risk})\n", p.name, p.description,));
+                out.push_str(&format!("    /agent run {} <prompt>\n", p.name));
+            }
         }
-        out.push_str("\nUse /agent <name> to see profile detail.\n");
-        out.push_str("Use /agent switch <mode> to set the main session mode.\n");
-        out.push_str("Use /agent run <profile> <prompt> to spawn a sub-agent.\n");
+        if out.is_empty() {
+            return "No agent profiles available.".to_string();
+        }
         return out;
     }
 
     if parts[0] == "switch" {
         let Some(name) = parts.get(1) else {
-            return "Usage: /agent switch <auto|build|plan|explore|review>".to_string();
+            let primary = crate::agent::profiles::primary_profiles(".");
+            let names: Vec<&str> = primary.iter().map(|p| p.name.as_str()).collect();
+            return format!("Usage: /agent switch <auto|{}>", names.join("|"));
         };
         let Some(mode) = agent_mode_for_profile(name) else {
+            let primary = crate::agent::profiles::primary_profiles(".");
+            let names: Vec<&str> = primary.iter().map(|p| p.name.as_str()).collect();
             return format!(
-                "Agent profile '{}' is run-only or unknown. Switchable modes: auto, build, plan, explore, review.",
-                name
+                "Agent profile '{}' is run-only or unknown. Switchable modes: auto, {}.",
+                name,
+                names.join(", ")
             );
         };
         app.set_agent_mode(mode);
@@ -287,7 +292,7 @@ pub async fn handle_agent_list(app: &mut TuiApp, args: &str) -> String {
     }
 
     let name = parts[0];
-    let profiles = crate::agent::profiles::product_profiles();
+    let profiles = crate::agent::profiles::runnable_profiles(".");
     if let Some(p) = profiles.into_iter().find(|p| p.name == name) {
         let mut out = format!("Agent profile: {}\n\n", p.name);
         out.push_str(&format!("  Description: {}\n", p.description));
@@ -345,7 +350,7 @@ async fn handle_agent_run(app: &TuiApp, args: &str) -> String {
         return "Usage: /agent run <profile> <prompt>".to_string();
     };
 
-    let profiles = crate::agent::profiles::product_profiles();
+    let profiles = crate::agent::profiles::runnable_profiles(".");
     let Some(product_profile) = profiles
         .into_iter()
         .find(|p| p.name.eq_ignore_ascii_case(profile))

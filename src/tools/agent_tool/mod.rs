@@ -170,12 +170,21 @@ impl Default for AgentTool {
 
 impl AgentTool {
     pub fn new() -> Self {
-        Self::with_profiles(&crate::agent::profiles::load_profiles("."))
+        Self {
+            description: description::build_tool_description(std::path::Path::new(".")),
+        }
     }
 
+    pub fn with_working_dir(working_dir: &std::path::Path) -> Self {
+        Self {
+            description: description::build_tool_description(working_dir),
+        }
+    }
+
+    #[allow(dead_code)]
     pub fn with_profiles(profiles: &[crate::agent::profiles::AgentProfile]) -> Self {
         Self {
-            description: description::build_tool_description(profiles),
+            description: description::build_tool_description(std::path::Path::new(".")),
         }
     }
 }
