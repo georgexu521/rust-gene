@@ -1122,12 +1122,7 @@ pub struct WorkflowContractAnalyzer<'a> {
 }
 
 fn workflow_llm_request_timeout() -> std::time::Duration {
-    let secs = std::env::var("PRIORITY_AGENT_LLM_REQUEST_TIMEOUT_SECS")
-        .ok()
-        .and_then(|value| value.parse::<u64>().ok())
-        .unwrap_or(180)
-        .clamp(30, 600);
-    std::time::Duration::from_secs(secs)
+    crate::services::config::runtime_config().llm_request_timeout()
 }
 
 impl<'a> WorkflowContractAnalyzer<'a> {

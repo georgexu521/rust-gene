@@ -383,14 +383,16 @@ fn format_effective_config() -> String {
     // Provider settings
     lines.push("Provider:".to_string());
     lines.push(format!(
-        "  timeout: {}s (env: PRIORITY_AGENT_LLM_REQUEST_TIMEOUT_SECS)",
-        std::env::var("PRIORITY_AGENT_LLM_REQUEST_TIMEOUT_SECS")
-            .unwrap_or_else(|_| "180".to_string())
+        "  timeout: {}s",
+        crate::services::config::runtime_config()
+            .llm_request_timeout()
+            .as_secs()
     ));
     lines.push(format!(
-        "  stream_idle_timeout: {}s (env: PRIORITY_AGENT_STREAM_IDLE_TIMEOUT_SECS)",
-        std::env::var("PRIORITY_AGENT_STREAM_IDLE_TIMEOUT_SECS")
-            .unwrap_or_else(|_| "120".to_string())
+        "  stream_idle_timeout: {}s",
+        crate::services::config::runtime_config()
+            .stream_idle_timeout()
+            .as_secs()
     ));
     lines.push(format!(
         "  reconnect_attempts: {} (env: PRIORITY_AGENT_PROVIDER_RECONNECT_ATTEMPTS)",
@@ -401,20 +403,23 @@ fn format_effective_config() -> String {
     // Tool settings
     lines.push("\nTools:".to_string());
     lines.push(format!(
-        "  profile: {} (env: PRIORITY_AGENT_TOOL_PROFILE)",
-        std::env::var("PRIORITY_AGENT_TOOL_PROFILE").unwrap_or_else(|_| "core".to_string())
+        "  profile: {}",
+        crate::services::config::runtime_config().tool_profile()
     ));
     lines.push(format!(
-        "  route_scoped: {} (env: PRIORITY_AGENT_ROUTE_SCOPED_TOOLS)",
-        std::env::var("PRIORITY_AGENT_ROUTE_SCOPED_TOOLS").unwrap_or_else(|_| "true".to_string())
+        "  route_scoped: {}",
+        if crate::services::config::runtime_config().route_scoped_tools_enabled() {
+            "true"
+        } else {
+            "false"
+        }
     ));
 
     // Memory settings
     lines.push("\nMemory:".to_string());
     lines.push(format!(
-        "  write_policy: {} (env: PRIORITY_AGENT_AUTO_MEMORY_WRITE)",
-        std::env::var("PRIORITY_AGENT_AUTO_MEMORY_WRITE")
-            .unwrap_or_else(|_| "review_only".to_string())
+        "  write_policy: {}",
+        crate::services::config::runtime_config().auto_memory_write_policy()
     ));
     lines.push(format!(
         "  active_memory: {} (env: PRIORITY_AGENT_ACTIVE_MEMORY)",
@@ -424,8 +429,10 @@ fn format_effective_config() -> String {
     // Fallback settings
     lines.push("\nFallback:".to_string());
     lines.push(format!(
-        "  model: {} (env: PRIORITY_AGENT_FALLBACK_MODEL)",
-        std::env::var("PRIORITY_AGENT_FALLBACK_MODEL").unwrap_or_else(|_| "none".to_string())
+        "  model: {}",
+        crate::services::config::runtime_config()
+            .fallback_model()
+            .unwrap_or_else(|| "none".to_string())
     ));
 
     lines.push("\nNotes:".to_string());

@@ -38,8 +38,10 @@ pub(super) fn format_provider_status_summary() -> String {
     let mut parts = Vec::new();
 
     // Provider timeout
-    let timeout = std::env::var("PRIORITY_AGENT_LLM_REQUEST_TIMEOUT_SECS")
-        .unwrap_or_else(|_| "180".to_string());
+    let timeout = crate::services::config::runtime_config()
+        .llm_request_timeout()
+        .as_secs()
+        .to_string();
     parts.push(format!("timeout={}s", timeout));
 
     // Reconnect attempts
@@ -48,13 +50,13 @@ pub(super) fn format_provider_status_summary() -> String {
     parts.push(format!("reconnect={}", reconnect));
 
     // Fallback model
-    let fallback =
-        std::env::var("PRIORITY_AGENT_FALLBACK_MODEL").unwrap_or_else(|_| "none".to_string());
+    let fallback = crate::services::config::runtime_config()
+        .fallback_model()
+        .unwrap_or_else(|| "none".to_string());
     parts.push(format!("fallback={}", fallback));
 
     // Tool profile
-    let tool_profile =
-        std::env::var("PRIORITY_AGENT_TOOL_PROFILE").unwrap_or_else(|_| "core".to_string());
+    let tool_profile = crate::services::config::runtime_config().tool_profile();
     parts.push(format!("tool_profile={}", tool_profile));
 
     parts.join(" | ")
@@ -64,8 +66,9 @@ pub(super) fn format_effective_config_summary() -> String {
     let mut parts = Vec::new();
 
     // Memory settings
-    let write_policy = std::env::var("PRIORITY_AGENT_AUTO_MEMORY_WRITE")
-        .unwrap_or_else(|_| "review_only".to_string());
+    let write_policy = crate::services::config::runtime_config()
+        .auto_memory_write_policy()
+        .to_string();
     parts.push(format!("memory_write={}", write_policy));
 
     let active_memory =
@@ -73,13 +76,18 @@ pub(super) fn format_effective_config_summary() -> String {
     parts.push(format!("active_memory={}", active_memory));
 
     // Route scoped tools
-    let route_scoped =
-        std::env::var("PRIORITY_AGENT_ROUTE_SCOPED_TOOLS").unwrap_or_else(|_| "true".to_string());
+    let route_scoped = if crate::services::config::runtime_config().route_scoped_tools_enabled() {
+        "true"
+    } else {
+        "false"
+    };
     parts.push(format!("route_scoped={}", route_scoped));
 
     // Stream idle timeout
-    let stream_idle = std::env::var("PRIORITY_AGENT_STREAM_IDLE_TIMEOUT_SECS")
-        .unwrap_or_else(|_| "120".to_string());
+    let stream_idle = crate::services::config::runtime_config()
+        .stream_idle_timeout()
+        .as_secs()
+        .to_string();
     parts.push(format!("stream_idle={}s", stream_idle));
 
     parts.join(" | ")

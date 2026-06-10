@@ -735,8 +735,9 @@ fn check_memory_store(priority_dir: &Path) -> CheckResult {
         0
     };
 
-    let write_policy = std::env::var("PRIORITY_AGENT_AUTO_MEMORY_WRITE")
-        .unwrap_or_else(|_| "review_only".to_string());
+    let write_policy = crate::services::config::runtime_config()
+        .auto_memory_write_policy()
+        .to_string();
     let active_memory = std::env::var("PRIORITY_AGENT_ACTIVE_MEMORY")
         .map(|v| v == "1")
         .unwrap_or(false);

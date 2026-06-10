@@ -127,7 +127,7 @@ impl StreamingConfig {
             memory_recall_mode: Arc::new(RwLock::new("balanced".to_string())),
             llm_memory_extraction: std::sync::atomic::AtomicBool::new(false),
             approval_channel: None,
-            fallback_model: std::env::var("PRIORITY_AGENT_FALLBACK_MODEL").ok(),
+            fallback_model: crate::services::config::runtime_config().fallback_model(),
             read_tracker: None,
         }
     }

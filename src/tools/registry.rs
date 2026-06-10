@@ -26,10 +26,8 @@ pub enum ToolRegistryProfile {
 
 impl ToolRegistryProfile {
     pub fn from_env() -> Self {
-        match std::env::var("PRIORITY_AGENT_TOOL_PROFILE")
-            .unwrap_or_default()
-            .trim()
-            .to_ascii_lowercase()
+        match crate::services::config::runtime_config()
+            .tool_profile()
             .as_str()
         {
             "full" | "all" | "experimental" => Self::Full,

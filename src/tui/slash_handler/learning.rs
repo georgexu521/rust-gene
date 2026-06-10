@@ -787,8 +787,9 @@ fn format_evolution_status_panel(app: &mut TuiApp) -> String {
         count_debug_values(improvements.iter().map(|proposal| proposal.eval_status));
     let skill_status = count_debug_values(skill_proposals.iter().map(|proposal| proposal.status));
     let skill_trust = count_debug_values(skill_proposals.iter().map(|proposal| proposal.trust));
-    let memory_write_policy = std::env::var("PRIORITY_AGENT_AUTO_MEMORY_WRITE")
-        .unwrap_or_else(|_| "review_only".to_string());
+    let memory_write_policy = crate::services::config::runtime_config()
+        .auto_memory_write_policy()
+        .to_string();
 
     let mut lines = vec![
         "Evolution Status".to_string(),

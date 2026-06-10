@@ -151,14 +151,7 @@ impl MemoryManager {
     }
 
     fn legacy_auto_memory_write_enabled() -> bool {
-        matches!(
-            std::env::var("PRIORITY_AGENT_AUTO_MEMORY_WRITE")
-                .unwrap_or_default()
-                .trim()
-                .to_ascii_lowercase()
-                .as_str(),
-            "legacy" | "unsafe" | "all" | "1" | "true" | "on"
-        )
+        crate::services::config::runtime_config().auto_memory_write_policy() == "legacy"
     }
 
     /// 维护长期记忆文件：去重 section，必要时归档过大的主题文件。

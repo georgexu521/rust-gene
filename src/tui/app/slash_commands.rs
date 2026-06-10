@@ -54,8 +54,9 @@ impl TuiApp {
                     .map(|(action, rest)| (action, rest.trim()))
                     .unwrap_or((query, ""));
                 if memory_action == "status" {
-                    let write_policy = std::env::var("PRIORITY_AGENT_AUTO_MEMORY_WRITE")
-                        .unwrap_or_else(|_| "review_only".to_string());
+                    let write_policy = crate::services::config::runtime_config()
+                        .auto_memory_write_policy()
+                        .to_string();
                     let active_memory = std::env::var("PRIORITY_AGENT_ACTIVE_MEMORY")
                         .map(|v| v == "1")
                         .unwrap_or(false);
@@ -152,7 +153,7 @@ impl TuiApp {
                             if self.memory_use { "on" } else { "off" },
                             if self.memory_generate { "on" } else { "off" },
                             self.memory_recall_mode,
-                            std::env::var("PRIORITY_AGENT_AUTO_MEMORY_WRITE").unwrap_or_else(|_| "review_only".to_string())
+                            crate::services::config::runtime_config().auto_memory_write_policy()
                         ));
                     };
                     let Some(value) = parts.next() else {
@@ -217,8 +218,9 @@ impl TuiApp {
                             );
                         }
                     }
-                    let write_policy = std::env::var("PRIORITY_AGENT_AUTO_MEMORY_WRITE")
-                        .unwrap_or_else(|_| "review_only".to_string());
+                    let write_policy = crate::services::config::runtime_config()
+                        .auto_memory_write_policy()
+                        .to_string();
                     return self.add_system_message(format!(
                         "Memory controls\n- use: {}\n- generate: {}\n- recall: {}\n- write-policy: {}",
                         if self.memory_use { "on" } else { "off" },

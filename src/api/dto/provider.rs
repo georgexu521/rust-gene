@@ -44,6 +44,7 @@ pub struct ProviderTimeoutEffectiveDto {
 
 impl ProviderTimeoutEffectiveDto {
     pub fn from_env() -> Self {
+        let cfg = crate::services::config::runtime_config();
         let source = if std::env::var("PRIORITY_AGENT_LLM_REQUEST_TIMEOUT_SECS").is_ok()
             || std::env::var("PRIORITY_AGENT_STREAM_IDLE_TIMEOUT_SECS").is_ok()
         {
@@ -52,14 +53,8 @@ impl ProviderTimeoutEffectiveDto {
             "default"
         };
         Self {
-            request_secs: std::env::var("PRIORITY_AGENT_LLM_REQUEST_TIMEOUT_SECS")
-                .ok()
-                .and_then(|v| v.parse().ok())
-                .unwrap_or(180),
-            stream_idle_secs: std::env::var("PRIORITY_AGENT_STREAM_IDLE_TIMEOUT_SECS")
-                .ok()
-                .and_then(|v| v.parse().ok())
-                .unwrap_or(120),
+            request_secs: cfg.llm_request_timeout().as_secs(),
+            stream_idle_secs: cfg.stream_idle_timeout().as_secs(),
             slow_warning_secs: std::env::var("PRIORITY_AGENT_SLOW_WARNING_SECS")
                 .ok()
                 .and_then(|v| v.parse().ok())
