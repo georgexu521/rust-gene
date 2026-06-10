@@ -41,9 +41,7 @@ pub(super) fn permission_denial_state_json(
 ) -> serde_json::Value {
     let key = permission_denial_key(session_id, family, tool_name);
     let counters = PERMISSION_DENIAL_COUNTERS.get_or_init(|| Mutex::new(HashMap::new()));
-    let mut counters = counters
-        .lock()
-        .expect("permission denial counters poisoned");
+    let mut counters = counters.lock().unwrap_or_else(|e| e.into_inner());
     let entry = counters.entry(key).or_default();
     if increment {
         entry.count = entry.count.saturating_add(1);
