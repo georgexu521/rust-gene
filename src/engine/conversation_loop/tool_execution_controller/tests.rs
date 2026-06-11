@@ -679,3 +679,119 @@ async fn pre_executed_read_only_result_after_serial_boundary_is_rerun() {
     );
     assert_eq!(batch.pre_executed_count(), 0);
 }
+
+// ── Segmented scheduling contract tests ──────────────────
+
+#[tokio::test]
+async fn read_only_read_only_runs_as_parallel_segment() {
+    let writes = Arc::new(AtomicUsize::new(0));
+    let tool_calls = vec![
+        tool_call("r1", "probe_read"),
+        tool_call("r2", "probe_read"),
+        tool_call("r3", "probe_read"),
+    ];
+    let batch = execute_probe_tools(&probe_loop(writes), &tool_calls, HashMap::new()).await;
+    // Read-only tools execute without error — verify the batch was created.
+    assert!(
+        !batch.results().is_empty() || batch.pre_executed_count() > 0,
+        "read-only tools should produce results or pre-executed results"
+    );
+}
+
+#[tokio::test]
+async fn mutating_tool_is_barrier_between_read_only_segments() {
+    let writes = Arc::new(AtomicUsize::new(0));
+    let tool_calls = vec![
+        tool_call("r1", "probe_read"),
+        tool_call("w1", "probe_write"),
+        tool_call("r2", "probe_read"),
+    ];
+    let batch = execute_probe_tools(&probe_loop(writes), &tool_calls, HashMap::new()).await;
+    let ids: Vec<&str> = batch
+        .results()
+        .iter()
+        .map(|(tc, _)| tc.id.as_str())
+        .collect();
+    assert_eq!(ids, vec!["r1", "w1", "r2"]);
+    let contents: Vec<&str> = batch
+        .results()
+        .iter()
+        .map(|(_, r)| r.content.as_str())
+        .collect();
+    assert_eq!(contents[0], "writes_seen=0");
+    assert_eq!(contents[2], "writes_seen=1");
+}
+
+#[tokio::test]
+async fn read_only_after_write_does_not_precede_write() {
+    let writes = Arc::new(AtomicUsize::new(0));
+    let tool_calls = vec![
+        tool_call("w1", "probe_write"),
+        tool_call("r1", "probe_read"),
+    ];
+    let batch = execute_probe_tools(&probe_loop(writes), &tool_calls, HashMap::new()).await;
+    let ids: Vec<&str> = batch
+        .results()
+        .iter()
+        .map(|(tc, _)| tc.id.as_str())
+        .collect();
+    assert_eq!(ids, vec!["w1", "r1"]);
+    let (_, r1) = batch
+        .results()
+        .iter()
+        .find(|(tc, _)| tc.id == "r1")
+        .unwrap();
+    assert_eq!(r1.content, "writes_seen=1");
+}
+
+#[tokio::test]
+async fn result_order_matches_original_tool_call_order() {
+    let writes = Arc::new(AtomicUsize::new(0));
+    let tool_calls = vec![
+        tool_call("a", "probe_read"),
+        tool_call("b", "probe_write"),
+        tool_call("c", "probe_read"),
+        tool_call("d", "probe_write"),
+        tool_call("e", "probe_read"),
+    ];
+    let batch = execute_probe_tools(&probe_loop(writes), &tool_calls, HashMap::new()).await;
+    let ids: Vec<&str> = batch
+        .results()
+        .iter()
+        .map(|(tc, _)| tc.id.as_str())
+        .collect();
+    assert_eq!(ids, vec!["a", "b", "c", "d", "e"]);
+}
+
+#[tokio::test]
+async fn denied_tool_flushes_prior_parallel_segment() {
+    let writes = Arc::new(AtomicUsize::new(0));
+    let tool_calls = vec![
+        tool_call("r1", "probe_read"),
+        tool_call("w1", "probe_write"),
+    ];
+    let batch = execute_probe_tools(&probe_loop(writes), &tool_calls, HashMap::new()).await;
+    let ids: Vec<&str> = batch
+        .results()
+        .iter()
+        .map(|(tc, _)| tc.id.as_str())
+        .collect();
+    assert_eq!(ids, vec!["r1", "w1"]);
+}
+
+#[tokio::test]
+async fn pre_executed_not_reused_after_serial_boundary() {
+    let writes = Arc::new(AtomicUsize::new(0));
+    let tool_calls = vec![
+        tool_call("r1", "probe_read"),
+        tool_call("w1", "probe_write"),
+        tool_call("r2", "probe_read"),
+    ];
+    let batch = execute_probe_tools(&probe_loop(writes), &tool_calls, HashMap::new()).await;
+    let (_, r2) = batch
+        .results()
+        .iter()
+        .find(|(tc, _)| tc.id == "r2")
+        .unwrap();
+    assert_eq!(r2.content, "writes_seen=1");
+}

@@ -1447,3 +1447,21 @@ fn test_extract_compact_boundaries_from_messages() {
     assert_eq!(boundaries[0].sequence, 2);
     assert_eq!(boundaries[0].boundary_id, "cb-abc");
 }
+
+#[test]
+fn summary_template_includes_all_required_sections() {
+    let template = crate::engine::context_compressor::SUMMARY_TEMPLATE;
+    // All 8 sections must be present.
+    assert!(template.contains("## Goal"));
+    assert!(template.contains("## Constraints"));
+    assert!(template.contains("## Progress"));
+    assert!(template.contains("## Key Decisions"));
+    assert!(template.contains("## Relevant Files"));
+    assert!(template.contains("## Next Steps"));
+    assert!(template.contains("## Critical Context"));
+    assert!(template.contains("## Tools & Patterns"));
+    // Template must make it clear this is continuation context.
+    let prefix = crate::engine::context_compressor::SUMMARY_PREFIX;
+    assert!(prefix.contains("compacted"));
+    assert!(prefix.contains("context space"));
+}

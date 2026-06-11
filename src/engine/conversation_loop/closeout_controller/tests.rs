@@ -608,3 +608,37 @@ fn verified_change_closeout_records_trace_only_when_ready() {
         .count();
     assert_eq!(matching_events, 1);
 }
+
+#[test]
+fn empty_ledger_produces_not_verified_regardless_of_summary_text() {
+    // When EvidenceLedger has no real tool or validation evidence,
+    // closeout must not become verified — even if a hypothetical
+    // compacted summary claims "Validation passed".
+    let mut bundle = TaskContextBundle::new("审查已有实现", ".", audit_route(), None);
+    bundle.add_acceptance_check("required regression checks pass");
+    let code_workflow = CodeChangeWorkflowRunner::new(&bundle);
+    let evidence_ledger = EvidenceLedger::new(); // empty — no tool or validation records
+    let required_commands = vec!["cargo test -q".to_string()];
+    let evaluation = CloseoutEvaluator::evaluate(
+        &code_workflow,
+        &bundle,
+        &evidence_ledger,
+        &required_commands,
+    );
+    let closeout = evaluation.closeout.expect("closeout");
+    // With an empty EvidenceLedger, proof must be NotRun regardless of
+    // what any compacted summary text might claim.
+    assert_eq!(
+        evaluation.verification_proof.status,
+        VerificationProofStatus::NotRun
+    );
+    assert_eq!(closeout.status, StageValidationStatus::NotVerified);
+    assert!(closeout
+        .validation
+        .iter()
+        .any(|item| item.contains("verification proof: not_run")));
+    assert!(closeout
+        .residual_risks
+        .iter()
+        .any(|item| item.contains("Verification proof is not_run")));
+}
