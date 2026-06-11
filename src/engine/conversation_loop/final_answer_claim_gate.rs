@@ -3,7 +3,7 @@ use crate::engine::intent_router::{IntentKind, IntentRoute, WorkflowKind};
 use crate::engine::verification_proof::{VerificationProof, VerificationProofStatus};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum FinalAnswerClaimKind {
+pub(crate) enum FinalAnswerClaimKind {
     MutationCompleted,
     ValidationPassed,
     CommitCreated,
@@ -14,15 +14,15 @@ pub enum FinalAnswerClaimKind {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct FinalAnswerClaim {
-    pub kind: FinalAnswerClaimKind,
-    pub span_preview: String,
-    pub command: Option<String>,
-    pub path: Option<String>,
+pub(crate) struct FinalAnswerClaim {
+    pub(crate) kind: FinalAnswerClaimKind,
+    pub(crate) span_preview: String,
+    pub(crate) command: Option<String>,
+    pub(crate) path: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum FinalAnswerClaimGateDecision {
+pub(crate) enum FinalAnswerClaimGateDecision {
     Pass,
     Repair {
         observation: FinalAnswerClaimObservation,
@@ -34,15 +34,15 @@ pub enum FinalAnswerClaimGateDecision {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct FinalAnswerClaimObservation {
-    pub unsupported_claims: Vec<FinalAnswerClaim>,
-    pub runtime_evidence: FinalAnswerEvidenceSnapshot,
-    pub route_workflow: String,
-    pub required_validation_commands: Vec<String>,
+pub(crate) struct FinalAnswerClaimObservation {
+    pub(crate) unsupported_claims: Vec<FinalAnswerClaim>,
+    pub(crate) runtime_evidence: FinalAnswerEvidenceSnapshot,
+    pub(crate) route_workflow: String,
+    pub(crate) required_validation_commands: Vec<String>,
 }
 
 impl FinalAnswerClaimObservation {
-    pub fn to_recent_observation_text(&self) -> String {
+    pub(crate) fn to_recent_observation_text(&self) -> String {
         let mut text = String::from("Final answer claim gate failed.\n\nUnsupported claims:\n");
         for claim in &self.unsupported_claims {
             text.push_str(&format!(
@@ -99,38 +99,38 @@ fn claim_kind_label(kind: FinalAnswerClaimKind) -> &'static str {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct FinalAnswerEvidenceSnapshot {
-    pub changed_files: Vec<String>,
-    pub successful_mutation_tools: usize,
-    pub validation_records: Vec<ValidationEvidenceSnapshot>,
-    pub verification_status: String,
-    pub git_commit_records: Vec<String>,
-    pub git_push_records: Vec<String>,
+pub(crate) struct FinalAnswerEvidenceSnapshot {
+    pub(crate) changed_files: Vec<String>,
+    pub(crate) successful_mutation_tools: usize,
+    pub(crate) validation_records: Vec<ValidationEvidenceSnapshot>,
+    pub(crate) verification_status: String,
+    pub(crate) git_commit_records: Vec<String>,
+    pub(crate) git_push_records: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ValidationEvidenceSnapshot {
-    pub command: Option<String>,
-    pub passed: bool,
+pub(crate) struct ValidationEvidenceSnapshot {
+    pub(crate) command: Option<String>,
+    pub(crate) passed: bool,
 }
 
 #[derive(Debug, Clone)]
-pub struct FinalAnswerClaimGateInput<'a> {
-    pub content: &'a str,
-    pub route: &'a IntentRoute,
-    pub evidence_ledger: &'a EvidenceLedger,
-    pub verification_proof: &'a VerificationProof,
-    pub required_validation_commands: &'a [String],
-    pub repair_used: bool,
-    pub iterations_used: usize,
-    pub max_iterations: usize,
+pub(crate) struct FinalAnswerClaimGateInput<'a> {
+    pub(crate) content: &'a str,
+    pub(crate) route: &'a IntentRoute,
+    pub(crate) evidence_ledger: &'a EvidenceLedger,
+    pub(crate) verification_proof: &'a VerificationProof,
+    pub(crate) required_validation_commands: &'a [String],
+    pub(crate) repair_used: bool,
+    pub(crate) iterations_used: usize,
+    pub(crate) max_iterations: usize,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[allow(dead_code)]
-pub struct FinalAnswerClaimGateBudget {
-    pub max_repairs_per_turn: u8,
-    pub max_repairs_per_goal_step: u8,
+pub(crate) struct FinalAnswerClaimGateBudget {
+    pub(crate) max_repairs_per_turn: u8,
+    pub(crate) max_repairs_per_goal_step: u8,
 }
 
 impl Default for FinalAnswerClaimGateBudget {
@@ -142,10 +142,10 @@ impl Default for FinalAnswerClaimGateBudget {
     }
 }
 
-pub struct FinalAnswerClaimGate;
+pub(crate) struct FinalAnswerClaimGate;
 
 impl FinalAnswerClaimGate {
-    pub fn evaluate(input: FinalAnswerClaimGateInput<'_>) -> FinalAnswerClaimGateDecision {
+    pub(crate) fn evaluate(input: FinalAnswerClaimGateInput<'_>) -> FinalAnswerClaimGateDecision {
         let claims = extract_claims(input.content);
         if claims.is_empty() {
             return FinalAnswerClaimGateDecision::Pass;
@@ -580,10 +580,25 @@ fn extract_command_mention(content: &str) -> Option<String> {
     let lower = content.to_lowercase();
     if lower.contains("cargo test") {
         Some("cargo test".to_string())
+    } else if lower.contains("cargo clippy") {
+        Some("cargo clippy".to_string())
+    } else if lower.contains("cargo check") {
+        Some("cargo check".to_string())
+    } else if lower.contains("npm test") || lower.contains("yarn test") || lower.contains("pnpm test")
+    {
+        Some("npm test".to_string())
+    } else if lower.contains("pytest") || lower.contains("python -m pytest") {
+        Some("pytest".to_string())
+    } else if lower.contains("go test") {
+        Some("go test".to_string())
+    } else if lower.contains("make test") {
+        Some("make test".to_string())
+    } else if lower.contains("mvn test") {
+        Some("mvn test".to_string())
+    } else if lower.contains("gradle test") {
+        Some("gradle test".to_string())
     } else if lower.contains("clippy") {
         Some("clippy".to_string())
-    } else if lower.contains("npm test") {
-        Some("npm test".to_string())
     } else {
         None
     }
@@ -600,7 +615,16 @@ fn command_identity(command: &str) -> String {
 fn command_matches_record(recorded: &str, claimed_or_required: &str) -> bool {
     let recorded = command_identity(recorded);
     let expected = command_identity(claimed_or_required);
-    recorded == expected || recorded.contains(&expected) || expected.contains(&recorded)
+    if recorded == expected {
+        return true;
+    }
+    // Allow prefix match so that "cargo test" also matches "cargo test -q",
+    // but reject arbitrary substring containment to avoid false positives.
+    if recorded.starts_with(&expected) {
+        let next = recorded.as_bytes().get(expected.len());
+        return next.is_none() || next == Some(&b' ');
+    }
+    false
 }
 
 impl ValidationEvidenceSnapshot {

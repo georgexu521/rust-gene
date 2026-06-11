@@ -53,7 +53,7 @@ impl TurnIterationSetupController {
             "Conversation loop iteration {} (effective: {}/{})",
             context.iteration, context.turn_state.effective_iterations, context.max_iterations
         );
-        context.turn_state.iterations_used = context.iteration + 1;
+        context.turn_state.iterations_used += 1;
 
         if let Some(memory_manager) = context.memory_manager {
             let mut memory = memory_manager.lock().await;
@@ -154,7 +154,7 @@ mod tests {
         .await;
 
         let TurnIterationSetupFlow::Continue { exposure_plan } = flow;
-        assert_eq!(turn_state.iterations_used, 3);
+        assert_eq!(turn_state.iterations_used, 1);
         assert_eq!(turn_state.reserved_repair_rounds, 1);
         assert!(exposure_plan.exposed_tool_names.contains("file_read"));
         assert!(exposure_plan.exposed_tool_names.contains("bash"));

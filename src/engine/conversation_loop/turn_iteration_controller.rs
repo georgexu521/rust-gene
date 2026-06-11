@@ -206,7 +206,6 @@ impl TurnIterationController {
             .await?
             {
                 TurnModelStepFlow::Retry => {
-                    context.loop_state.consecutive_empty_rounds = 0;
                     return Ok(TurnIterationFlow::Continue);
                 }
                 TurnModelStepFlow::Finish => {
@@ -235,7 +234,6 @@ impl TurnIterationController {
                     tool_calls,
                     pre_executed,
                 } => {
-                    context.loop_state.consecutive_empty_rounds = 0;
                     (content, tool_calls, pre_executed)
                 }
             };
@@ -614,7 +612,6 @@ mod tests {
 
         assert!(matches!(flow, TurnIterationFlow::Break));
         assert_eq!(loop_state.final_content, "done");
-        assert_eq!(loop_state.consecutive_empty_rounds, 0);
         assert_eq!(turn_state.iterations_used, 1);
         assert!(!loop_state.tool_calls_made);
     }

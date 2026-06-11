@@ -466,9 +466,9 @@ impl FinalCloseoutController {
                         .map(|claim| format!("{:?}", claim.kind))
                         .collect();
                     let risk_line = format!(
-                        "claim_gate: final answer contained unsupported claims ({}); downgraded from {:?} to not_verified",
+                        "claim_gate: final answer contained unsupported claims ({}); downgraded from {} to not_verified",
                         unsupported_kinds.join(", "),
-                        closeout.status
+                        closeout.status.label()
                     );
                     if closeout.status == StageValidationStatus::Passed {
                         closeout.status = StageValidationStatus::NotVerified;

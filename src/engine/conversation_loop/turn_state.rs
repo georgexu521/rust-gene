@@ -37,10 +37,6 @@ pub(super) struct TurnLoopState {
     pub(super) failed_tool_fingerprints: HashMap<String, usize>,
     pub(super) failed_tool_names: HashMap<String, usize>,
     pub(super) successful_required_validation_commands: HashSet<String>,
-    /// Count of consecutive model responses with no tool calls.
-    /// The loop only breaks after TWO consecutive empty rounds — the
-    /// first one may be "thinking out loud" before acting.
-    pub(super) consecutive_empty_rounds: usize,
 }
 
 pub(super) struct TurnLoopStateController;
