@@ -37,6 +37,7 @@ pub mod evidence_ledger;
 pub mod evolution_controller;
 pub mod experience_ledger;
 pub mod gate_outcome;
+pub mod goal;
 pub mod goal_drift;
 pub mod hooks;
 pub mod human_review;

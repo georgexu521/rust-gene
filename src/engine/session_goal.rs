@@ -184,6 +184,30 @@ impl SessionGoalManager {
             "Current Goal\n- none\n\nUse /goal set <text> to pin a goal.".to_string()
         })
     }
+
+    pub fn hydrate_from_objective(&self, objective: &str) -> Option<SessionGoal> {
+        let title = normalize_title(objective);
+        if title.is_empty() {
+            return None;
+        }
+        let route = IntentRoute {
+            intent: IntentKind::Planning,
+            confidence: 1.0,
+            workflow: WorkflowKind::Planning,
+            retrieval: crate::engine::intent_router::RetrievalPolicy::Project,
+            reasoning: crate::engine::intent_router::ReasoningPolicy::High,
+            risk: crate::engine::intent_router::RiskLevel::Medium,
+            recommended_tools: Vec::new(),
+            dependency_install_intent: false,
+            mcp_auth_intent: false,
+            reason: "hydrated from durable goal run".to_string(),
+        };
+        let goal = SessionGoal::new(title.clone(), &route, objective);
+        if let Ok(mut current) = self.current.write() {
+            *current = Some(goal.clone());
+        }
+        Some(goal)
+    }
 }
 
 fn should_track(route: &IntentRoute, text: &str) -> bool {
@@ -288,6 +312,24 @@ mod tests {
         assert_eq!(goal.title, "ship trace visibility");
         assert!(manager.current().is_some());
         manager.clear();
+        assert!(manager.current().is_none());
+    }
+
+    #[test]
+    fn hydrate_from_objective_restores_goal() {
+        let manager = SessionGoalManager::new();
+        let goal = manager
+            .hydrate_from_objective("refactor parser module for performance")
+            .expect("goal");
+        assert!(goal.title.contains("refactor parser"));
+        assert_eq!(goal.intent, IntentKind::Planning);
+        assert!(manager.current().is_some());
+    }
+
+    #[test]
+    fn hydrate_from_objective_ignores_empty() {
+        let manager = SessionGoalManager::new();
+        assert!(manager.hydrate_from_objective("").is_none());
         assert!(manager.current().is_none());
     }
 }

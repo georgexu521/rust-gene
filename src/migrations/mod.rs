@@ -10,6 +10,7 @@ pub mod v13_add_session_reverts;
 pub mod v14_add_provider_health_runs;
 pub mod v15_add_session_jobs;
 pub mod v16_add_session_part_message_id;
+pub mod v17_add_goal_runs;
 pub mod v1_initial;
 pub mod v2_add_tasks;
 pub mod v3_add_traces;

@@ -215,3 +215,52 @@ pub struct AgentTaskStateUpsert {
     pub cleanup_hooks: Vec<String>,
     pub payload: serde_json::Value,
 }
+
+/// Durable goal run record, mapping to the `goal_runs` table.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GoalRunRecord {
+    pub id: String,
+    pub session_id: String,
+    pub objective: String,
+    pub status: String,
+    pub stop_rules_json: Option<String>,
+    pub budget_json: Option<String>,
+    pub turn_count: i64,
+    pub last_closeout_status: Option<String>,
+    pub last_blocker: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+/// Durable goal step record, mapping to the `goal_steps` table.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GoalStepRecord {
+    pub id: String,
+    pub goal_id: String,
+    pub session_id: String,
+    pub turn_index: i64,
+    pub prompt: String,
+    pub closeout_status: Option<String>,
+    pub verification_status: Option<String>,
+    pub changed_files: i64,
+    pub validation_items: i64,
+    pub decision: String,
+    pub summary: Option<String>,
+    pub created_at: String,
+}
+
+/// Insert payload for creating a goal step.
+#[derive(Debug, Clone)]
+pub struct GoalStepInsert {
+    pub id: String,
+    pub goal_id: String,
+    pub session_id: String,
+    pub turn_index: i64,
+    pub prompt: String,
+    pub closeout_status: Option<String>,
+    pub verification_status: Option<String>,
+    pub changed_files: i64,
+    pub validation_items: i64,
+    pub decision: String,
+    pub summary: String,
+}

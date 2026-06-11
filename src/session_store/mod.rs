@@ -16,6 +16,7 @@ mod compact_store;
 pub mod event_mirror;
 mod event_store;
 pub mod export;
+mod goal_store;
 mod learning_store;
 pub mod message_ops;
 mod records;
@@ -204,6 +205,9 @@ impl SessionStore {
         runner.register(std::sync::Arc::new(
             crate::migrations::v16_add_session_part_message_id::V16AddSessionPartMessageId,
         ));
+        runner.register(std::sync::Arc::new(
+            crate::migrations::v17_add_goal_runs::V17AddGoalRuns,
+        ));
         runner.run(&conn)?;
 
         info!("SessionStore opened at {:?}", path);
@@ -268,6 +272,9 @@ impl SessionStore {
         ));
         runner.register(std::sync::Arc::new(
             crate::migrations::v16_add_session_part_message_id::V16AddSessionPartMessageId,
+        ));
+        runner.register(std::sync::Arc::new(
+            crate::migrations::v17_add_goal_runs::V17AddGoalRuns,
         ));
         runner.run(&conn)?;
 
