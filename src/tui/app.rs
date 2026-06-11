@@ -297,6 +297,10 @@ pub struct TuiApp {
     pub app_started_at: std::time::Instant,
     /// Bundled skills
     pub bundled_skills: std::collections::HashMap<String, crate::skills::Skill>,
+    /// Goal runner (lazily initialized when engine is available)
+    pub goal_runner: Option<crate::engine::goal::runner::GoalRunner>,
+    /// Pending goal prompt — set by /goal <objective> to trigger first turn
+    pub pending_goal_prompt: Option<String>,
     /// Unified skill runtime for bundled, project, and user skills.
     pub skill_runtime: crate::skills::SkillRuntime,
     /// 是否启用 Vim 模式
@@ -489,6 +493,13 @@ impl TuiApp {
             let _ = session_manager.start_session("New Session", &model);
         }
 
+        // Restart safety: mark any active goals as paused so they don't auto-resume
+        if let Err(e) =
+            crate::engine::goal::runner::pause_all_active_goals(&session_manager.store())
+        {
+            warn!("Failed to pause active goals on startup: {}", e);
+        }
+
         // 检测首次启动
         let onboarding_manager = crate::onboarding::OnboardingManager::new();
         let is_first_run = onboarding_manager.is_first_run();
@@ -615,6 +626,65 @@ impl TuiApp {
             provider_select_query: String::new(),
             provider_notice: None,
             pending_skill_invocations: Vec::new(),
+            goal_runner: None,
+            pending_goal_prompt: None,
+        }
+    }
+
+    pub(crate) fn lazy_goal_runner(&mut self) -> Option<&crate::engine::goal::runner::GoalRunner> {
+        if self.goal_runner.is_none() {
+            if let Some(ref engine) = self.streaming_engine {
+                let store = (*self.session_manager.store()).clone();
+                let goal_manager = engine.goal_manager();
+                self.goal_runner = Some(crate::engine::goal::runner::GoalRunner::new(
+                    store,
+                    goal_manager,
+                ));
+            }
+        }
+        self.goal_runner.as_ref()
+    }
+
+    async fn maybe_continue_goal(&mut self) {
+        let runner = match self.lazy_goal_runner() {
+            Some(runner) => runner.clone(),
+            None => return,
+        };
+
+        let session_id = match self.session_manager.current_session_id() {
+            Some(id) => id.to_string(),
+            None => return,
+        };
+
+        if !runner.has_active_goal(&session_id).unwrap_or(false) {
+            return;
+        }
+
+        let trace = self
+            .streaming_engine
+            .as_ref()
+            .and_then(|engine| engine.trace_store().latest())
+            .or_else(|| self.session_manager.latest_trace().ok().flatten());
+
+        let Some(trace) = trace else {
+            return;
+        };
+
+        match runner.after_turn(&session_id, &trace) {
+            Ok(crate::engine::goal::runner::GoalAfterTurnResult::Continue { prompt, .. }) => {
+                self.add_system_message("Goal: continuing with next automatic turn.".to_string());
+                self.send_message(prompt).await;
+            }
+            Ok(crate::engine::goal::runner::GoalAfterTurnResult::Terminal {
+                decision,
+                status: _,
+                step,
+            }) => {
+                self.add_system_message(format!("Goal {:?}: {}", decision, step.summary));
+            }
+            Err(e) => {
+                warn!("Goal continuation error: {}", e);
+            }
         }
     }
 
@@ -632,6 +702,9 @@ impl TuiApp {
         // 处理斜杠命令
         if content.starts_with('/') {
             self.handle_slash_command(&content).await;
+            if let Some(prompt) = self.pending_goal_prompt.take() {
+                self.send_message(prompt).await;
+            }
             return;
         }
 
@@ -1111,6 +1184,9 @@ impl TuiApp {
                         self.send_message(next_input).await;
                     }
                 }
+                // Goal continuation: after a turn completes, check if the active
+                // goal needs another automatic turn.
+                self.maybe_continue_goal().await;
             }
         }
 

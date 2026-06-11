@@ -448,17 +448,98 @@ pub fn handle_goal(app: &mut TuiApp, args: &str) -> String {
     };
     let manager = engine.goal_manager();
 
+    // Ensure the runner is initialized before any operation that needs it
+    let has_runner = app.lazy_goal_runner().is_some();
+
     // Explicit subcommand dispatch
     match trimmed {
-        "" | "status" | "show" => return manager.format_current(),
+        "" | "status" | "show" => {
+            if has_runner {
+                if let Some(session_id) = app.session_manager.current_session_id() {
+                    if let Some(ref runner) = app.goal_runner {
+                        match runner.status(session_id) {
+                            Ok(info) => {
+                                if let Some(ref goal) = info.goal {
+                                    return format!(
+                                        "Current Goal\n- Id: {}\n- Objective: {}\n- Status: {:?}\n- Turn: {}/{}\n- Steps: {}\n- Updated: {}",
+                                        goal.id,
+                                        goal.objective,
+                                        goal.status,
+                                        goal.turn_count,
+                                        goal.budget.max_turns,
+                                        info.steps.len(),
+                                        goal.updated_at
+                                    );
+                                }
+                            }
+                            Err(e) => {
+                                tracing::warn!("Goal runner status error: {}", e);
+                            }
+                        }
+                    }
+                }
+            }
+            return manager.format_current();
+        }
         "clear" | "reset" => {
+            if has_runner {
+                if let Some(session_id) = app.session_manager.current_session_id() {
+                    if let Some(ref runner) = app.goal_runner {
+                        match runner.clear(session_id) {
+                            Ok(true) => return "Goal cleared (durable run cancelled).".to_string(),
+                            Ok(false) => {}
+                            Err(e) => {
+                                return format!("Goal clear error: {}", e);
+                            }
+                        }
+                    }
+                }
+            }
             manager.clear();
             return "Current Goal\n- cleared".to_string();
         }
         "pause" => {
+            if has_runner {
+                if let Some(session_id) = app.session_manager.current_session_id() {
+                    if let Some(ref runner) = app.goal_runner {
+                        match runner.pause(session_id) {
+                            Ok(true) => {
+                                return "Goal paused. Use /goal resume to continue automatic turns.".to_string();
+                            }
+                            Ok(false) => {
+                                return "No active goal to pause.".to_string();
+                            }
+                            Err(e) => {
+                                return format!("Goal pause error: {}", e);
+                            }
+                        }
+                    }
+                }
+            }
             return goal_not_implemented("pause", "Pause automatic goal continuation. When the runner is active this will pause automatic turn scheduling.");
         }
         "resume" => {
+            if has_runner {
+                if let Some(session_id) = app.session_manager.current_session_id() {
+                    if let Some(ref runner) = app.goal_runner {
+                        match runner.resume(session_id) {
+                            Ok(true) => {
+                                app.pending_goal_prompt = Some(
+                                    "Continue working toward the active goal.".to_string(),
+                                );
+                                return "Goal resumed. The next turn will continue automatically."
+                                    .to_string();
+                            }
+                            Ok(false) => {
+                                return "No active goal to resume. Use /goal <objective> to start one.".to_string();
+                            }
+                            Err(e) => {
+                                return format!("Goal resume error: {}", e);
+                            }
+                        }
+                    }
+                }
+            }
             return goal_not_implemented("resume", "Resume automatic goal continuation. When paused this will restart turn scheduling if the goal is active.");
         }
         _ => {}
@@ -466,12 +547,39 @@ pub fn handle_goal(app: &mut TuiApp, args: &str) -> String {
 
     // /goal log [limit]
     if trimmed == "log" || trimmed.starts_with("log ") {
-        let _limit = trimmed
+        let limit = trimmed
             .strip_prefix("log")
             .unwrap_or_default()
             .trim()
             .parse::<usize>()
             .unwrap_or(10);
+        if has_runner {
+            if let Some(session_id) = app.session_manager.current_session_id() {
+                if let Some(ref runner) = app.goal_runner {
+                    match runner.status(session_id) {
+                        Ok(info) => {
+                            if info.steps.is_empty() {
+                                return "Goal Log\n- no steps recorded yet".to_string();
+                            }
+                            let mut lines = vec![format!("Goal Log ({} steps)", info.steps.len())];
+                            for step in info.steps.iter().rev().take(limit) {
+                                lines.push(format!(
+                                    "- turn {} [{}] {:?}: {}",
+                                    step.turn_index,
+                                    step.closeout_status.as_deref().unwrap_or("?"),
+                                    step.decision,
+                                    step.summary
+                                ));
+                            }
+                            return lines.join("\n");
+                        }
+                        Err(e) => {
+                            return format!("Goal log error: {}", e);
+                        }
+                    }
+                }
+            }
+        }
         return goal_not_implemented(
             "log",
             "Show recent goal steps. Once the durable goal store is implemented, this will display turn-by-turn progress.",
@@ -480,7 +588,7 @@ pub fn handle_goal(app: &mut TuiApp, args: &str) -> String {
 
     // /goal set <text> — compatibility alias
     if let Some(title) = trimmed.strip_prefix("set ") {
-        return set_goal_objective(&manager, title);
+        return start_goal_with_runner(app, title);
     }
 
     // /goal edit <text>
@@ -497,10 +605,55 @@ pub fn handle_goal(app: &mut TuiApp, args: &str) -> String {
 
     // /goal <objective> — preferred start command (non-empty, non-subcommand text)
     if !trimmed.is_empty() {
-        return set_goal_objective(&manager, trimmed);
+        return start_goal_with_runner(app, trimmed);
     }
 
     "Usage: /goal [<objective>|set|pause|resume|clear|edit|log|drift]".to_string()
+}
+
+fn start_goal_with_runner(app: &mut TuiApp, title: &str) -> String {
+    if title.is_empty() {
+        return "Goal Error\n- objective must be non-empty".to_string();
+    }
+    if title.chars().count() > 4000 {
+        return format!(
+            "Goal Error\n- objective is {} characters, maximum is 4000. Consider putting longer instructions in a file and referencing it from the goal.",
+            title.chars().count()
+        );
+    }
+
+    if let Some(session_id) = app.session_manager.current_session_id() {
+        let sid = session_id.to_string();
+        if let Some(ref runner) = app.goal_runner {
+            match runner.start(&sid, title) {
+                Ok(result) => {
+                    app.pending_goal_prompt = Some(result.first_prompt.clone());
+
+                    let engine = app.streaming_engine.as_ref().unwrap();
+                    let manager = engine.goal_manager();
+                    let status = manager
+                        .current()
+                        .map(|g| g.compact_status())
+                        .unwrap_or_else(|| "none".to_string());
+
+                    return format!(
+                        "Goal started\n- Id: {}\n- Objective: {}\n- Status: Active\n- Session goal: {}\n\nThe first turn will start automatically.",
+                        result.goal_id, title, status
+                    );
+                }
+                Err(e) => {
+                    return format!("Goal Error\n- {}", e);
+                }
+            }
+        }
+    }
+
+    // Fallback: use SessionGoalManager directly (no runner available)
+    let Some(engine) = app.streaming_engine.as_ref() else {
+        return "Goal Error\n- no engine available".to_string();
+    };
+    let manager = engine.goal_manager();
+    set_goal_objective(&manager, title)
 }
 
 fn goal_not_implemented(subcommand: &str, detail: &str) -> String {
