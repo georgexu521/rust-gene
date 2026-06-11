@@ -952,6 +952,7 @@ impl EvidenceLedger {
             changed_paths,
             file_evidence,
             relevance,
+            source_kind: None,
             execution,
         });
     }

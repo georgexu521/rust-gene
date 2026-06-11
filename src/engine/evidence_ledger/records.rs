@@ -72,6 +72,12 @@ pub struct ToolExecutionRecord {
     pub file_evidence: Vec<ToolFileEvidenceLink>,
     pub relevance: ToolExecutionRelevance,
     pub execution: ToolExecutionContextRecord,
+    /// How this record entered the evidence ledger.
+    ///
+    /// `compacted_summary` records come from LLM compaction and must not be
+    /// treated as raw verification proof by closeout.
+    #[serde(default)]
+    pub source_kind: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
