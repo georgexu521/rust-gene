@@ -1,7 +1,69 @@
 # Project Status
 Status: Current
 
-Last updated: 2026-06-09
+Last updated: 2026-06-11
+
+## Codex Goal Mode — Implemented (2026-06-11)
+
+Codex-style durable goal mode landed in 8 commits across 7 phases. See
+`docs/CODEX_GOAL_MODE_ALIGNMENT_PLAN_2026-06-11.md` for the full plan.
+
+### What was built
+
+- **`/goal <objective>`**: starts a persistent goal that drives multiple
+  full-agent turns until completed, paused, blocked, failed, or needs user.
+- **`GoalRunner`**: deterministic outer scheduler that invokes
+  `RuntimeController` per turn, extracts closeout/verification evidence, runs
+  `GoalDecisionEngine`, and decides whether to continue.
+- **`GoalDecisionEngine`**: screens turn-level evidence (closeout status,
+  verification proof, permission, blocker, budget) against hard rules to produce
+  `Complete`/`Continue`/`Pause`/`Blocked`/`Failed`/`NeedsUser` decisions.
+- **Durable persistence**: `goal_runs` and `goal_steps` tables (v17/v18
+  migrations) with full CRUD on `SessionStore`.
+- **`/goal pause`/`resume`/`clear`/`edit`/`log`**: full lifecycle management.
+- **`/quick`** and **`/active-task`**: show goal runner status (turn count,
+  budget, decision, blocker, proof).
+- **Desktop goal progress row**: compact inline controls above the composer
+  (objective, status, turns, pause/resume/edit/clear buttons). Backed by 7
+  Tauri commands (`goal_status`, `goal_start`, `goal_pause`, etc.).
+- **Scored eval config**: optional `ScoredEvalConfig` on `GoalStopRules` with
+  command, parser, threshold, and max attempts. Score tracks in `GoalStep`.
+- **Export**: goal summary with steps, decisions, scores, and blockers in
+  session export JSON.
+- **Restart safety**: active goals are paused on startup; user must
+  `/goal resume` to continue.
+- **Steer/queue**: while a goal is active, user messages are persisted with
+  `InputDelivery::Steer` so they interrupt and redirect the current turn.
+
+### Key source files
+
+```
+src/engine/goal/
+  mod.rs        — module root
+  model.rs      — GoalRun, GoalStep, GoalBudget, GoalStopRules, ScoredEvalConfig
+  decision.rs   — GoalDecisionEngine (deterministic evidence screening)
+  runner.rs     — GoalRunner (outer scheduler)
+src/migrations/
+  v17_add_goal_runs.rs
+  v18_add_goal_step_score.rs
+src/session_store/goal_store.rs   — CRUD methods
+```
+
+### Validation gates
+
+```bash
+cargo test -q goal --lib          # 47 tests (decision + model)
+cargo test -q session_goal --lib  # 6 tests
+cargo test -q session_store --lib # 51 tests
+cargo test -q                     # 2535+ tests, 0 failures
+```
+
+### Outstanding
+
+- Scored eval command execution is not yet wired into the runner loop
+  (score extraction currently reads from trace verification events).
+- Desktop progress row only has web-preview stubs; full interactive testing
+  requires a Tauri dev server session.
 
 ## 2026-06-09 Stabilization And Docs Audit
 

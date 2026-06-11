@@ -1051,15 +1051,25 @@ impl TuiApp {
         let Some((store, session_id)) = engine.session_binding() else {
             return false;
         };
+        let delivery = if self.has_active_goal() {
+            crate::engine::run_coordinator::InputDelivery::Steer
+        } else {
+            crate::engine::run_coordinator::InputDelivery::Queue
+        };
         let conn = store.shared_conn();
         let conn = conn.lock().expect("tui app sqlite conn lock poisoned");
-        crate::engine::run_coordinator::persist_session_input(
-            &conn,
-            &session_id,
-            content,
-            crate::engine::run_coordinator::InputDelivery::Queue,
-        )
-        .is_ok()
+        crate::engine::run_coordinator::persist_session_input(&conn, &session_id, content, delivery)
+            .is_ok()
+    }
+
+    fn has_active_goal(&self) -> bool {
+        self.goal_runner
+            .as_ref()
+            .and_then(|runner| {
+                let session_id = self.session_manager.current_session_id()?;
+                runner.has_active_goal(session_id).ok()
+            })
+            .unwrap_or(false)
     }
 
     fn promote_queued_session_input(&self) -> Option<String> {

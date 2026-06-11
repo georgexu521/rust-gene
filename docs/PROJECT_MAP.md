@@ -25,7 +25,8 @@ not proof of current code. Read exact files before editing.
 
 - `src/main.rs`: CLI entry and mode selection.
 - `src/bootstrap.rs`: shared startup wiring for registry, providers, memory, hooks, and runtime managers.
-- `src/engine/`: conversation loop, prompt/context assembly, routing, workflow, tracing, verification, retrieval, and runtime policy.
+- `src/engine/`: conversation loop, prompt/context assembly, routing, workflow, tracing, verification, retrieval, goal runner, and runtime policy.
+- `src/engine/goal/`: Codex-style durable goal mode — model types, decision engine, deterministic outer runner.
 - `src/tools/`: tool contracts and implementations exposed to the model.
 - `src/services/api/`: provider adapters, request/response normalization, response content sanitizing, weak-model tool-call repair.
 - `src/memory/`: memory providers, manager, persistence, retrieval, extraction, ranking, reports.
