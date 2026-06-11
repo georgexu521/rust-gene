@@ -8,7 +8,9 @@
 use std::sync::Arc;
 
 use super::decision::{GoalDecisionEngine, GoalDecisionInput};
-use super::model::{GoalBudget, GoalDecision, GoalRun, GoalRunStatus, GoalStep, GoalStopRules};
+use super::model::{
+    GoalBudget, GoalDecision, GoalRun, GoalRunStatus, GoalStep, GoalStopRules, ScoredEvalConfig,
+};
 use crate::engine::session_goal::SessionGoalManager;
 use crate::engine::trace::TurnTrace;
 use crate::session_store::{GoalRunRecord, GoalStepInsert, SessionStore};
@@ -103,7 +105,17 @@ impl GoalRunner {
         let repeated_blocker_count =
             compute_repeated_blocker_count(&run, trace, &run_record.last_blocker);
 
-        let input = GoalDecisionInput::from_trace_and_run(trace, &run, repeated_blocker_count);
+        let (previous_score, score_no_improvement_count) = compute_score_state(&self.store, &run);
+
+        let current_score = extract_score_from_trace(trace, &run.stop_rules.scored_eval);
+
+        let input = GoalDecisionInput::from_trace_and_run(
+            trace,
+            &run,
+            repeated_blocker_count,
+            previous_score,
+            score_no_improvement_count,
+        );
 
         let decision = GoalDecisionEngine::decide(&input);
 
@@ -128,6 +140,7 @@ impl GoalRunner {
             validation_items: input.validation_items,
             decision: decision.clone(),
             summary: summary.clone(),
+            score: current_score,
             created_at: chrono_utc_now(),
         };
 
@@ -143,6 +156,7 @@ impl GoalRunner {
             validation_items: input.validation_items as i64,
             decision: serde_json::to_string(&decision)?,
             summary: summary.clone(),
+            score: current_score,
         })?;
 
         self.store.update_goal_run_status(
@@ -328,6 +342,7 @@ fn goal_step_from_record(
         validation_items: record.validation_items as usize,
         decision: serde_json::from_str(&record.decision)?,
         summary: record.summary.clone().unwrap_or_default(),
+        score: record.score,
         created_at: record.created_at.clone(),
     })
 }
@@ -431,4 +446,34 @@ fn new_step_id() -> String {
 
 fn chrono_utc_now() -> String {
     chrono::Utc::now().to_rfc3339()
+}
+
+fn compute_score_state(store: &SessionStore, run: &GoalRun) -> (Option<f64>, u32) {
+    if run.stop_rules.scored_eval.is_none() {
+        return (None, 0);
+    }
+    let steps = match store.list_goal_steps(&run.id, 5) {
+        Ok(s) => s,
+        Err(_) => return (None, 0),
+    };
+    let previous_score = steps.last().and_then(|r| r.score);
+    let no_improvement = steps
+        .iter()
+        .rev()
+        .take_while(|s| s.score == previous_score)
+        .count() as u32;
+    (previous_score, no_improvement.saturating_sub(1))
+}
+
+fn extract_score_from_trace(
+    trace: &TurnTrace,
+    scored_eval: &Option<ScoredEvalConfig>,
+) -> Option<f64> {
+    let _eval = scored_eval.as_ref()?;
+    for event in trace.events.iter().rev() {
+        if let crate::engine::trace::TraceEvent::VerificationCompleted { passed, .. } = event {
+            return Some(if *passed { 1.0 } else { 0.0 });
+        }
+    }
+    None
 }

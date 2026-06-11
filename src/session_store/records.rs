@@ -246,6 +246,7 @@ pub struct GoalStepRecord {
     pub validation_items: i64,
     pub decision: String,
     pub summary: Option<String>,
+    pub score: Option<f64>,
     pub created_at: String,
 }
 
@@ -263,4 +264,5 @@ pub struct GoalStepInsert {
     pub validation_items: i64,
     pub decision: String,
     pub summary: String,
+    pub score: Option<f64>,
 }

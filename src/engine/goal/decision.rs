@@ -5,7 +5,7 @@
 //! The engine owns no semantic judgment — the LLM decides approach and repair,
 //! while the engine screens evidence against hard rules.
 
-use super::model::{GoalBudget, GoalDecision, GoalRun};
+use super::model::{GoalBudget, GoalDecision, GoalRun, ScoredEvalConfig};
 use crate::engine::trace::TurnTrace;
 
 #[derive(Debug, Clone)]
@@ -26,6 +26,10 @@ pub struct GoalDecisionInput {
     pub repeated_blocker_count: u32,
     pub budget: GoalBudget,
     pub require_verified_closeout: bool,
+    pub current_score: Option<f64>,
+    pub previous_score: Option<f64>,
+    pub score_no_improvement_count: u32,
+    pub scored_eval: Option<ScoredEvalConfig>,
 }
 
 pub struct GoalDecisionEngine;
@@ -54,6 +58,10 @@ impl GoalDecisionEngine {
         }
 
         if input.turn_count_exhausted() {
+            return GoalDecision::Blocked;
+        }
+
+        if input.score_exhausted() {
             return GoalDecision::Blocked;
         }
 
@@ -100,8 +108,13 @@ impl GoalDecisionInput {
         trace: &TurnTrace,
         run: &GoalRun,
         repeated_blocker_count: u32,
+        previous_score: Option<f64>,
+        score_no_improvement_count: u32,
     ) -> Self {
         let mut input = Self::default_from_run(run, repeated_blocker_count);
+        input.previous_score = previous_score;
+        input.score_no_improvement_count = score_no_improvement_count;
+        input.scored_eval = run.stop_rules.scored_eval.clone();
 
         for event in trace.events.iter() {
             match event {
@@ -171,18 +184,40 @@ impl GoalDecisionInput {
             repeated_blocker_count,
             budget: run.budget.clone(),
             require_verified_closeout: run.stop_rules.require_verified_closeout,
+            current_score: None,
+            previous_score: None,
+            score_no_improvement_count: 0,
+            scored_eval: None,
         }
     }
 
     fn turn_count_exhausted(&self) -> bool {
         self.current_turn >= self.budget.max_turns
     }
+
+    fn score_exhausted(&self) -> bool {
+        let Some(ref eval) = self.scored_eval else {
+            return false;
+        };
+        if eval.max_attempts == 0 {
+            return false;
+        }
+        if self.score_no_improvement_count >= eval.max_attempts {
+            return true;
+        }
+        if let (Some(current), Some(_previous)) = (self.current_score, self.previous_score) {
+            if current >= eval.target_threshold {
+                return false;
+            }
+        }
+        self.current_turn >= eval.max_attempts
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::engine::goal::model::GoalBudget;
+    use crate::engine::goal::model::{GoalBudget, ScoredEvalConfig};
 
     fn test_budget() -> GoalBudget {
         GoalBudget {
@@ -211,6 +246,10 @@ mod tests {
             repeated_blocker_count: 0,
             budget: test_budget(),
             require_verified_closeout: true,
+            current_score: None,
+            previous_score: None,
+            score_no_improvement_count: 0,
+            scored_eval: None,
         }
     }
 
@@ -270,6 +309,10 @@ mod tests {
             repeated_blocker_count: 0,
             budget: test_budget(),
             require_verified_closeout: true,
+            current_score: None,
+            previous_score: None,
+            score_no_improvement_count: 0,
+            scored_eval: None,
         };
         assert_eq!(GoalDecisionEngine::decide(&input), GoalDecision::Continue);
     }
@@ -307,6 +350,10 @@ mod tests {
             repeated_blocker_count: 3,
             budget: test_budget(),
             require_verified_closeout: true,
+            current_score: None,
+            previous_score: None,
+            score_no_improvement_count: 0,
+            scored_eval: None,
         };
         assert_eq!(GoalDecisionEngine::decide(&input), GoalDecision::Blocked);
     }
@@ -330,6 +377,10 @@ mod tests {
             repeated_blocker_count: 0,
             budget: test_budget(),
             require_verified_closeout: true,
+            current_score: None,
+            previous_score: None,
+            score_no_improvement_count: 0,
+            scored_eval: None,
         };
         assert_eq!(GoalDecisionEngine::decide(&input), GoalDecision::Blocked);
     }
@@ -381,6 +432,10 @@ mod tests {
             repeated_blocker_count: 0,
             budget: test_budget(),
             require_verified_closeout: true,
+            current_score: None,
+            previous_score: None,
+            score_no_improvement_count: 0,
+            scored_eval: None,
         };
         assert_eq!(GoalDecisionEngine::decide(&input), GoalDecision::Complete);
     }
@@ -404,6 +459,10 @@ mod tests {
             repeated_blocker_count: 2,
             budget: test_budget(),
             require_verified_closeout: true,
+            current_score: None,
+            previous_score: None,
+            score_no_improvement_count: 0,
+            scored_eval: None,
         };
         assert_eq!(GoalDecisionEngine::decide(&input), GoalDecision::Continue);
     }
@@ -413,5 +472,45 @@ mod tests {
         let mut input = input_with_closeout("passed", "not_run");
         input.require_verified_closeout = false;
         assert_eq!(GoalDecisionEngine::decide(&input), GoalDecision::Complete);
+    }
+
+    #[test]
+    fn blocks_when_score_no_improvement_exhausted() {
+        let mut input = input_with_closeout("passed", "verified");
+        input.scored_eval = Some(ScoredEvalConfig {
+            max_attempts: 3,
+            ..Default::default()
+        });
+        input.score_no_improvement_count = 3;
+        assert_eq!(GoalDecisionEngine::decide(&input), GoalDecision::Blocked);
+    }
+
+    #[test]
+    fn continues_when_score_improves() {
+        let mut input = input_with_closeout("partial", "partial");
+        input.scored_eval = Some(ScoredEvalConfig {
+            max_attempts: 5,
+            target_threshold: 0.9,
+            ..Default::default()
+        });
+        input.current_score = Some(0.7);
+        input.previous_score = Some(0.5);
+        input.score_no_improvement_count = 0;
+        assert_eq!(GoalDecisionEngine::decide(&input), GoalDecision::Continue);
+    }
+
+    #[test]
+    fn blocks_when_score_target_not_met_and_attempts_exhausted() {
+        let mut input = input_with_closeout("partial", "partial");
+        input.scored_eval = Some(ScoredEvalConfig {
+            max_attempts: 3,
+            target_threshold: 0.9,
+            ..Default::default()
+        });
+        input.current_score = Some(0.3);
+        input.previous_score = Some(0.3);
+        input.current_turn = 3;
+        input.score_no_improvement_count = 3;
+        assert_eq!(GoalDecisionEngine::decide(&input), GoalDecision::Blocked);
     }
 }

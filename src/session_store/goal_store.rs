@@ -115,8 +115,8 @@ impl SessionStore {
             "INSERT INTO goal_steps (id, goal_id, session_id, turn_index, prompt,
                                     closeout_status, verification_status,
                                     changed_files, validation_items,
-                                    decision, summary)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+                                    decision, summary, score)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
             params![
                 insert.id,
                 insert.goal_id,
@@ -129,6 +129,7 @@ impl SessionStore {
                 insert.validation_items,
                 insert.decision,
                 insert.summary,
+                insert.score,
             ],
         )?;
         Ok(())
@@ -140,7 +141,7 @@ impl SessionStore {
             "SELECT id, goal_id, session_id, turn_index, prompt,
                     closeout_status, verification_status,
                     changed_files, validation_items,
-                    decision, summary, created_at
+                    decision, summary, score, created_at
              FROM goal_steps
              WHERE goal_id = ?1
              ORDER BY turn_index ASC
@@ -159,7 +160,8 @@ impl SessionStore {
                 validation_items: row.get(8)?,
                 decision: row.get(9)?,
                 summary: row.get(10)?,
-                created_at: row.get(11)?,
+                score: row.get(11)?,
+                created_at: row.get(12)?,
             })
         })?;
         steps.collect()

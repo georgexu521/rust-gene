@@ -49,6 +49,7 @@ pub struct GoalStep {
     pub validation_items: usize,
     pub decision: GoalDecision,
     pub summary: String,
+    pub score: Option<f64>,
     pub created_at: String,
 }
 
@@ -81,6 +82,8 @@ pub struct GoalStopRules {
     pub require_clean_worktree: bool,
     #[serde(default)]
     pub require_verified_closeout: bool,
+    #[serde(default)]
+    pub scored_eval: Option<ScoredEvalConfig>,
 }
 
 impl Default for GoalStopRules {
@@ -90,6 +93,28 @@ impl Default for GoalStopRules {
             success_markers: Vec::new(),
             require_clean_worktree: false,
             require_verified_closeout: true,
+            scored_eval: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ScoredEvalConfig {
+    pub command: String,
+    pub score_parser: String,
+    pub target_threshold: f64,
+    pub artifact_path: Option<String>,
+    pub max_attempts: u32,
+}
+
+impl Default for ScoredEvalConfig {
+    fn default() -> Self {
+        Self {
+            command: String::new(),
+            score_parser: "regex:score=(\\d+\\.?\\d*)".to_string(),
+            target_threshold: 1.0,
+            artifact_path: None,
+            max_attempts: 5,
         }
     }
 }

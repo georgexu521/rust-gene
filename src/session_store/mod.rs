@@ -208,6 +208,9 @@ impl SessionStore {
         runner.register(std::sync::Arc::new(
             crate::migrations::v17_add_goal_runs::V17AddGoalRuns,
         ));
+        runner.register(std::sync::Arc::new(
+            crate::migrations::v18_add_goal_step_score::V18AddGoalStepScore,
+        ));
         runner.run(&conn)?;
 
         info!("SessionStore opened at {:?}", path);
@@ -275,6 +278,9 @@ impl SessionStore {
         ));
         runner.register(std::sync::Arc::new(
             crate::migrations::v17_add_goal_runs::V17AddGoalRuns,
+        ));
+        runner.register(std::sync::Arc::new(
+            crate::migrations::v18_add_goal_step_score::V18AddGoalStepScore,
         ));
         runner.run(&conn)?;
 
