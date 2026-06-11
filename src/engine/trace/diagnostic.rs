@@ -393,6 +393,7 @@ fn control_loop_phase_for_event(event: &TraceEvent) -> Option<&'static str> {
         | TraceEvent::CompletionContractEvaluated { .. }
         | TraceEvent::FinalCloseoutPrepared { .. }
         | TraceEvent::ExecutionReportPrepared { .. }
+        | TraceEvent::FinalAnswerClaimGate { .. }
         | TraceEvent::MemoryProposalPrepared { .. }
         | TraceEvent::CloseoutBackgroundStage { .. }
         | TraceEvent::Error { .. } => Some("closeout"),

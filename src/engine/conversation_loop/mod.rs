@@ -16,6 +16,7 @@ mod companion_context;
 mod context_budget_controller;
 #[cfg(test)]
 mod direct_task_behavior_tests;
+mod final_answer_claim_gate;
 mod first_code_change_controller;
 #[cfg(test)]
 mod focused_repair_recovery;

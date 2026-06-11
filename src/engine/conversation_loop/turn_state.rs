@@ -30,6 +30,9 @@ pub(super) struct TurnLoopState {
     /// Post-tool empty nudge: when the model returns empty content after
     /// having already executed tool calls, inject one "keep going" nudge.
     pub(super) post_tool_empty_retry_used: bool,
+    /// Claim gate repair: tracks whether a final-answer claim-gate repair
+    /// has already been used for this turn to prevent infinite loops.
+    pub(super) claim_gate_repair_used: bool,
     pub(super) companion_context_keys: HashSet<String>,
     pub(super) failed_tool_fingerprints: HashMap<String, usize>,
     pub(super) failed_tool_names: HashMap<String, usize>,
@@ -159,6 +162,7 @@ mod tests {
         assert!(!state.pseudo_tool_retry_used);
         assert!(!state.filesystem_grounding_retry_used);
         assert!(!state.continuation_retry_used);
+        assert!(!state.claim_gate_repair_used);
         assert!(state.companion_context_keys.is_empty());
         assert!(state.failed_tool_fingerprints.is_empty());
         assert!(state.failed_tool_names.is_empty());

@@ -851,6 +851,15 @@ pub enum TraceEvent {
         risks: usize,
         next_steps: usize,
     },
+    FinalAnswerClaimGate {
+        decision: String,
+        unsupported_claims: usize,
+        repair_attempt: u32,
+        changed_files: usize,
+        #[serde(default)]
+        verification_proof_status: Option<String>,
+        summary: String,
+    },
     Error {
         message: String,
     },

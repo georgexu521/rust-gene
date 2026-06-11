@@ -80,6 +80,7 @@ impl TraceEvent {
             TraceEvent::CompletionContractEvaluated { .. } => "completion.contract",
             TraceEvent::FinalCloseoutPrepared { .. } => "closeout",
             TraceEvent::ExecutionReportPrepared { .. } => "execution.report",
+            TraceEvent::FinalAnswerClaimGate { .. } => "claim.gate",
             TraceEvent::Error { .. } => "error",
         }
     }

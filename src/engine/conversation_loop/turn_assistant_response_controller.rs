@@ -70,11 +70,15 @@ impl TurnAssistantResponseController {
                         .filesystem_grounding_retry_used,
                     continuation_retry_used: &mut context.loop_state.continuation_retry_used,
                     post_tool_empty_retry_used: &mut context.loop_state.post_tool_empty_retry_used,
+                    claim_gate_repair_used: &mut context.loop_state.claim_gate_repair_used,
                     provider: context.provider,
                     tools: context.tools,
                     tx: context.tx,
                     trace: context.trace,
                     messages: context.messages,
+                    required_validation_commands: &[],
+                    iterations_used: context.iteration,
+                    max_iterations: 50,
                 },
             )
             .await

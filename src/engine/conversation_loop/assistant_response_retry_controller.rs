@@ -1,9 +1,13 @@
+use super::final_answer_claim_gate::{
+    FinalAnswerClaimGate, FinalAnswerClaimGateDecision, FinalAnswerClaimGateInput,
+};
 use super::tool_execution::safe_prefix_by_bytes;
 use super::{pseudo_tool_text, should_use_nonstreaming_tools};
 use crate::engine::evidence_ledger::EvidenceLedger;
 use crate::engine::intent_router::{IntentKind, IntentRoute, WorkflowKind};
 use crate::engine::streaming::{emit_text_progressively, StreamEvent};
 use crate::engine::trace::{TraceCollector, TraceEvent};
+use crate::engine::verification_proof::VerificationProof;
 use crate::services::api::{LlmProvider, Message, Tool};
 use std::collections::HashSet;
 use tokio::sync::mpsc;
@@ -18,6 +22,13 @@ pub(super) struct AssistantResponseRetryRequest<'a> {
     pub(super) filesystem_grounding_retry_used: bool,
     pub(super) continuation_retry_used: bool,
     pub(super) post_tool_empty_retry_used: bool,
+    pub(super) claim_gate_repair_used: bool,
+    pub(super) route: &'a IntentRoute,
+    pub(super) evidence_ledger: &'a EvidenceLedger,
+    pub(super) verification_proof: &'a VerificationProof,
+    pub(super) required_validation_commands: &'a [String],
+    pub(super) iterations_used: usize,
+    pub(super) max_iterations: usize,
 }
 
 pub(super) struct AssistantResponseRetryDecision {
@@ -28,6 +39,7 @@ pub(super) struct AssistantResponseRetryDecision {
     pub(super) mark_filesystem_grounding_retry_used: bool,
     pub(super) mark_continuation_retry_used: bool,
     pub(super) mark_post_tool_empty_retry_used: bool,
+    pub(super) mark_claim_gate_repair_used: bool,
 }
 
 pub(super) struct AssistantResponseRetryApplicationContext<'a> {
@@ -36,6 +48,7 @@ pub(super) struct AssistantResponseRetryApplicationContext<'a> {
     pub(super) filesystem_grounding_retry_used: &'a mut bool,
     pub(super) continuation_retry_used: &'a mut bool,
     pub(super) post_tool_empty_retry_used: &'a mut bool,
+    pub(super) claim_gate_repair_used: &'a mut bool,
     pub(super) trace: &'a TraceCollector,
     pub(super) messages: &'a mut Vec<Message>,
 }
@@ -50,11 +63,15 @@ pub(super) struct NoToolAssistantResponseContext<'a> {
     pub(super) filesystem_grounding_retry_used: &'a mut bool,
     pub(super) continuation_retry_used: &'a mut bool,
     pub(super) post_tool_empty_retry_used: &'a mut bool,
+    pub(super) claim_gate_repair_used: &'a mut bool,
     pub(super) provider: &'a dyn LlmProvider,
     pub(super) tools: &'a [Tool],
     pub(super) tx: Option<&'a mpsc::Sender<StreamEvent>>,
     pub(super) trace: &'a TraceCollector,
     pub(super) messages: &'a mut Vec<Message>,
+    pub(super) required_validation_commands: &'a [String],
+    pub(super) iterations_used: usize,
+    pub(super) max_iterations: usize,
 }
 
 pub(super) enum NoToolAssistantResponseFlow {
@@ -97,8 +114,56 @@ impl AssistantResponseRetryController {
                 && (needs_bash_tool_retry || needs_filesystem_tool_retry))
             || (!request.filesystem_grounding_retry_used && needs_filesystem_grounding_retry)
             || (!request.continuation_retry_used && needs_continuation_retry);
+
+        // If no other retry is needed, check the final-answer claim gate.
         if !should_retry {
-            return None;
+            let gate_input = FinalAnswerClaimGateInput {
+                content: request.content,
+                route: request.route,
+                evidence_ledger: request.evidence_ledger,
+                verification_proof: request.verification_proof,
+                required_validation_commands: request.required_validation_commands,
+                repair_used: request.claim_gate_repair_used,
+                iterations_used: request.iterations_used,
+                max_iterations: request.max_iterations,
+            };
+            let gate_decision = FinalAnswerClaimGate::evaluate(gate_input);
+            match gate_decision {
+                FinalAnswerClaimGateDecision::Repair { observation } => {
+                    let fallback_error = format!(
+                "final answer claim gate: unsupported claims detected ({}); triggering bounded repair",
+                observation.unsupported_claims.len()
+            );
+                    let correction = observation.to_recent_observation_text();
+                    return Some(AssistantResponseRetryDecision {
+                        fallback_error,
+                        assistant_message: Message::assistant(safe_prefix_by_bytes(
+                            request.content,
+                            1200,
+                        )),
+                        correction_message: Message::system(format!(
+                            "<recent_observation>\n{}\n</recent_observation>",
+                            correction
+                        )),
+                        mark_pseudo_tool_retry_used: false,
+                        mark_filesystem_grounding_retry_used: false,
+                        mark_continuation_retry_used: false,
+                        mark_post_tool_empty_retry_used: false,
+                        mark_claim_gate_repair_used: true,
+                    });
+                }
+                FinalAnswerClaimGateDecision::Downgrade { observation, .. } => {
+                    let _summary = format!(
+                        "final answer claim gate: unsupported claims detected ({}); downgrading closeout",
+                        observation.unsupported_claims.len()
+                    );
+                    // Downgrade does not trigger a retry; the caller (closeout) should handle it.
+                    return None;
+                }
+                FinalAnswerClaimGateDecision::Pass => {
+                    return None;
+                }
+            }
         }
 
         let (
@@ -165,6 +230,7 @@ Only report a tool as unavailable when it is not exposed in the current tool lis
             mark_filesystem_grounding_retry_used,
             mark_continuation_retry_used,
             mark_post_tool_empty_retry_used,
+            mark_claim_gate_repair_used: false,
         })
     }
 
@@ -181,6 +247,9 @@ Only report a tool as unavailable when it is not exposed in the current tool lis
         }
         if decision.mark_post_tool_empty_retry_used {
             *context.post_tool_empty_retry_used = true;
+        }
+        if decision.mark_claim_gate_repair_used {
+            *context.claim_gate_repair_used = true;
         }
         context.trace.record(TraceEvent::WorkflowFallback {
             error: decision.fallback_error,
@@ -211,6 +280,16 @@ Only report a tool as unavailable when it is not exposed in the current tool lis
             filesystem_grounding_retry_used: *context.filesystem_grounding_retry_used,
             continuation_retry_used: *context.continuation_retry_used,
             post_tool_empty_retry_used: *context.post_tool_empty_retry_used,
+            claim_gate_repair_used: *context.claim_gate_repair_used,
+            route: context.route,
+            evidence_ledger: context.evidence_ledger,
+            verification_proof: &VerificationProof::new(
+                crate::engine::verification_proof::VerificationProofStatus::NotRun,
+                "not evaluated",
+            ),
+            required_validation_commands: context.required_validation_commands,
+            iterations_used: context.iterations_used,
+            max_iterations: context.max_iterations,
         }) {
             Self::apply_decision(AssistantResponseRetryApplicationContext {
                 decision: retry_decision,
@@ -218,6 +297,7 @@ Only report a tool as unavailable when it is not exposed in the current tool lis
                 filesystem_grounding_retry_used: context.filesystem_grounding_retry_used,
                 continuation_retry_used: context.continuation_retry_used,
                 post_tool_empty_retry_used: context.post_tool_empty_retry_used,
+                claim_gate_repair_used: context.claim_gate_repair_used,
                 trace: context.trace,
                 messages: context.messages,
             });
@@ -306,6 +386,16 @@ mod tests {
             filesystem_grounding_retry_used: false,
             continuation_retry_used: false,
             post_tool_empty_retry_used: false,
+            claim_gate_repair_used: false,
+            route: &IntentRouter::new().route("test"),
+            evidence_ledger: &EvidenceLedger::new(),
+            verification_proof: &VerificationProof::new(
+                crate::engine::verification_proof::VerificationProofStatus::NotRun,
+                "not evaluated",
+            ),
+            required_validation_commands: &[],
+            iterations_used: 1,
+            max_iterations: 10,
         })
         .expect("bash command should trigger retry");
 
@@ -332,6 +422,16 @@ mod tests {
             filesystem_grounding_retry_used: false,
             continuation_retry_used: false,
             post_tool_empty_retry_used: false,
+            claim_gate_repair_used: false,
+            route: &IntentRouter::new().route("test"),
+            evidence_ledger: &EvidenceLedger::new(),
+            verification_proof: &VerificationProof::new(
+                crate::engine::verification_proof::VerificationProofStatus::NotRun,
+                "not evaluated",
+            ),
+            required_validation_commands: &[],
+            iterations_used: 1,
+            max_iterations: 10,
         })
         .expect("local filesystem answer without tool should trigger retry");
 
@@ -354,6 +454,16 @@ mod tests {
             filesystem_grounding_retry_used: false,
             continuation_retry_used: false,
             post_tool_empty_retry_used: false,
+            claim_gate_repair_used: false,
+            route: &IntentRouter::new().route("test"),
+            evidence_ledger: &EvidenceLedger::new(),
+            verification_proof: &VerificationProof::new(
+                crate::engine::verification_proof::VerificationProofStatus::NotRun,
+                "not evaluated",
+            ),
+            required_validation_commands: &[],
+            iterations_used: 1,
+            max_iterations: 10,
         })
         .expect("unsupported metadata should trigger grounding retry");
 
@@ -378,6 +488,16 @@ mod tests {
             filesystem_grounding_retry_used: false,
             continuation_retry_used: false,
             post_tool_empty_retry_used: false,
+            claim_gate_repair_used: false,
+            route: &IntentRouter::new().route("test"),
+            evidence_ledger: &EvidenceLedger::new(),
+            verification_proof: &VerificationProof::new(
+                crate::engine::verification_proof::VerificationProofStatus::NotRun,
+                "not evaluated",
+            ),
+            required_validation_commands: &[],
+            iterations_used: 1,
+            max_iterations: 10,
         })
         .expect("continuation placeholder should trigger a closeout retry");
 
@@ -399,6 +519,16 @@ mod tests {
             filesystem_grounding_retry_used: false,
             continuation_retry_used: false,
             post_tool_empty_retry_used: false,
+            claim_gate_repair_used: false,
+            route: &IntentRouter::new().route("test"),
+            evidence_ledger: &EvidenceLedger::new(),
+            verification_proof: &VerificationProof::new(
+                crate::engine::verification_proof::VerificationProofStatus::NotRun,
+                "not evaluated",
+            ),
+            required_validation_commands: &[],
+            iterations_used: 1,
+            max_iterations: 10,
         })
         .expect("Chinese fill-in placeholder should trigger a closeout retry");
 
@@ -419,6 +549,16 @@ mod tests {
             filesystem_grounding_retry_used: false,
             continuation_retry_used: false,
             post_tool_empty_retry_used: false,
+            claim_gate_repair_used: false,
+            route: &IntentRouter::new().route("test"),
+            evidence_ledger: &EvidenceLedger::new(),
+            verification_proof: &VerificationProof::new(
+                crate::engine::verification_proof::VerificationProofStatus::NotRun,
+                "not evaluated",
+            ),
+            required_validation_commands: &[],
+            iterations_used: 1,
+            max_iterations: 10,
         });
 
         assert!(decision.is_none());
@@ -442,6 +582,16 @@ mod tests {
             filesystem_grounding_retry_used,
             continuation_retry_used,
             post_tool_empty_retry_used,
+            claim_gate_repair_used: false,
+            route: &IntentRouter::new().route("test"),
+            evidence_ledger: &EvidenceLedger::new(),
+            verification_proof: &VerificationProof::new(
+                crate::engine::verification_proof::VerificationProofStatus::NotRun,
+                "not evaluated",
+            ),
+            required_validation_commands: &[],
+            iterations_used: 1,
+            max_iterations: 10,
         })
         .expect("bash command should trigger retry");
 
@@ -452,6 +602,7 @@ mod tests {
                 filesystem_grounding_retry_used: &mut filesystem_grounding_retry_used,
                 continuation_retry_used: &mut continuation_retry_used,
                 post_tool_empty_retry_used: &mut post_tool_empty_retry_used,
+                claim_gate_repair_used: &mut false,
                 trace: &trace,
                 messages: &mut messages,
             },
@@ -536,11 +687,15 @@ mod tests {
                 filesystem_grounding_retry_used: &mut filesystem_grounding_retry_used,
                 continuation_retry_used: &mut continuation_retry_used,
                 post_tool_empty_retry_used: &mut post_tool_empty_retry_used,
+                claim_gate_repair_used: &mut false,
                 provider: &provider,
                 tools: &tools,
                 tx: None,
                 trace: &trace,
                 messages: &mut messages,
+                required_validation_commands: &[],
+                iterations_used: 1,
+                max_iterations: 10,
             },
         )
         .await;
@@ -587,11 +742,15 @@ mod tests {
                 filesystem_grounding_retry_used: &mut filesystem_grounding_retry_used,
                 continuation_retry_used: &mut continuation_retry_used,
                 post_tool_empty_retry_used: &mut post_tool_empty_retry_used,
+                claim_gate_repair_used: &mut false,
                 provider: &provider,
                 tools: &tools,
                 tx: Some(&tx),
                 trace: &trace,
                 messages: &mut messages,
+                required_validation_commands: &[],
+                iterations_used: 1,
+                max_iterations: 10,
             },
         )
         .await;

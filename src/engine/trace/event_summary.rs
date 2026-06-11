@@ -1068,6 +1068,22 @@ impl TraceEvent {
                 risks,
                 next_steps
             ),
+            TraceEvent::FinalAnswerClaimGate {
+                decision,
+                unsupported_claims,
+                repair_attempt,
+                changed_files,
+                verification_proof_status,
+                summary,
+            } => format!(
+                "claim gate decision={} unsupported={} repair_attempt={} files={} proof={} summary={}",
+                decision,
+                unsupported_claims,
+                repair_attempt,
+                changed_files,
+                verification_proof_status.as_deref().unwrap_or("none"),
+                preview(summary)
+            ),
             TraceEvent::Error { message } => format!("error: {}", preview(message)),
         }
     }
