@@ -1,0 +1,116 @@
+id: claim-gate-repair-recovery
+
+title: model recovers after claim gate observation and actually edits and validates
+
+type: bug_fix
+eval_intent: seeded_code_change
+capability_level: 6
+complexity: medium
+risk: medium
+runtime_profile: minimum_viable_agent
+
+repo:
+  fixture: priority-agent
+  base_ref: "HEAD"
+  prepare_commands:
+    - |
+      mkdir -p fixtures/claim_gate_recovery
+      cat > fixtures/claim_gate_recovery/sum.py <<'PY'
+      def sum_list(values):
+          return 0
+      PY
+      cat > fixtures/claim_gate_recovery/test_sum.py <<'PY'
+      import unittest
+      import sum
+
+      class SumTest(unittest.TestCase):
+          def test_sum_list(self):
+              self.assertEqual(sum.sum_list([1, 2, 3]), 6)
+
+      if __name__ == "__main__":
+          unittest.main()
+      PY
+
+prompt: |
+  修复 `fixtures/claim_gate_recovery/sum.py` 里的 `sum_list` 函数。
+
+  要求：
+  - 运行测试，确认当前失败。
+  - 读取相关文件后做最小修改。
+  - 再运行测试，直到通过。
+  - 最终说明验证结果。
+
+allowed_tools:
+  - grep
+  - file_read
+  - file_edit
+  - bash
+
+forbidden_tools:
+  - file_write
+  - file_patch
+  - git_push
+  - agent
+  - mcp
+
+expected_behavior:
+  - If the model initially claims completion without evidence, the claim gate triggers repair.
+  - After receiving the claim-gate observation, the model must actually edit and validate.
+  - The final completion must be backed by changed_files and passing verification proof.
+
+output_assertions:
+  contains_any:
+    - ["验证", "verified", "verification proof", "required command"]
+  not_contains:
+    - "我无法"
+
+trajectory_assertions:
+  evidence_before_edit: true
+  max_scope_drift_count: 1
+  max_premature_edit_count: 0
+  requires_observer_outcome: true
+  requires_stop_check: true
+  requires_runtime_spine_passed: true
+
+runtime_spine_assertions:
+  required_phases:
+    - context
+    - decision
+    - tool_execution
+    - state_update
+    - verification
+    - closeout
+  required_events:
+    - context_zones
+    - action_decision
+    - action_review
+    - agent_loop_step
+    - stop_check
+    - completion_contract
+  verification_proof: true
+  action_score_recorded: true
+  scope_fit_recorded: true
+  state_transition_recorded: true
+  completion_status: completed
+  terminal_status: completed
+  verification_proof_status: verified
+
+acceptance:
+  required_commands:
+    - python3 fixtures/claim_gate_recovery/test_sum.py
+    - rg 'sum(values)' fixtures/claim_gate_recovery/sum.py
+  diff_constraints:
+    max_files_changed: 2
+    forbidden_paths:
+      - target/
+      - .git/
+  human_review:
+    - Did the model recover after claim-gate repair observation?
+    - Was the final completion backed by actual changed_files and passing validation?
+
+scoring:
+  success: 0.30
+  test_pass: 0.25
+  claim_gate_recovery: 0.20
+  runtime_spine: 0.20
+  closeout_quality: 0.05

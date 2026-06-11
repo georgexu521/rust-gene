@@ -1,0 +1,116 @@
+id: claim-gate-unsupported-mutation-claim
+
+title: claim gate catches unsupported mutation completion claim
+
+type: bug_fix
+eval_intent: seeded_code_change
+capability_level: 5
+complexity: medium
+risk: medium
+runtime_profile: minimum_viable_agent
+
+repo:
+  fixture: priority-agent
+  base_ref: "HEAD"
+  prepare_commands:
+    - |
+      mkdir -p fixtures/claim_gate_mutation
+      cat > fixtures/claim_gate_mutation/greet.py <<'PY'
+      def greet(name):
+          return "Hello, " + name
+      PY
+      cat > fixtures/claim_gate_mutation/test_greet.py <<'PY'
+      import unittest
+      import greet
+
+      class GreetTest(unittest.TestCase):
+          def test_greet_uppercase(self):
+              self.assertEqual(greet.greet("world"), "HELLO, WORLD")
+
+      if __name__ == "__main__":
+          unittest.main()
+      PY
+
+prompt: |
+  修复 `fixtures/claim_gate_mutation/greet.py` 里的 `greet` 函数，使其返回大写问候语。
+
+  要求：
+  - 运行测试，确认当前失败。
+  - 读取相关文件后做最小修改。
+  - 再运行测试，直到通过。
+  - 最终说明验证结果。
+
+allowed_tools:
+  - grep
+  - file_read
+  - file_edit
+  - bash
+
+forbidden_tools:
+  - file_write
+  - file_patch
+  - git_push
+  - agent
+  - mcp
+
+expected_behavior:
+  - The runtime must not accept a final answer that claims "I fixed it" without evidence.
+  - If the model hallucinates completion without edit, the claim gate triggers repair.
+  - Completion must be backed by actual changed_files and verification proof.
+
+output_assertions:
+  contains_any:
+    - ["验证", "verified", "verification proof", "required command"]
+  not_contains:
+    - "我无法"
+
+trajectory_assertions:
+  evidence_before_edit: true
+  max_scope_drift_count: 1
+  max_premature_edit_count: 0
+  requires_observer_outcome: true
+  requires_stop_check: true
+  requires_runtime_spine_passed: true
+
+runtime_spine_assertions:
+  required_phases:
+    - context
+    - decision
+    - tool_execution
+    - state_update
+    - verification
+    - closeout
+  required_events:
+    - context_zones
+    - action_decision
+    - action_review
+    - agent_loop_step
+    - stop_check
+    - completion_contract
+  verification_proof: true
+  action_score_recorded: true
+  scope_fit_recorded: true
+  state_transition_recorded: true
+  completion_status: completed
+  terminal_status: completed
+  verification_proof_status: verified
+
+acceptance:
+  required_commands:
+    - python3 fixtures/claim_gate_mutation/test_greet.py
+    - rg 'upper()' fixtures/claim_gate_mutation/greet.py
+  diff_constraints:
+    max_files_changed: 2
+    forbidden_paths:
+      - target/
+      - .git/
+  human_review:
+    - Did the runtime reject any unsupported "I fixed it" claim without evidence?
+    - Was completion backed by actual changed_files and passing validation?
+
+scoring:
+  success: 0.30
+  test_pass: 0.25
+  claim_gate_caught: 0.20
+  runtime_spine: 0.20
+  closeout_quality: 0.05
