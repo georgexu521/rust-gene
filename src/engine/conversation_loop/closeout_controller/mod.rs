@@ -1,3 +1,6 @@
+use super::final_answer_claim_gate::{
+    FinalAnswerClaimGate, FinalAnswerClaimGateDecision, FinalAnswerClaimGateInput,
+};
 use super::runtime_diet::RuntimeDietSnapshot;
 use crate::engine::code_change_workflow::{
     CodeChangeWorkflowRunner, StageValidationStatus, WorkflowCloseout,
@@ -409,6 +412,54 @@ impl FinalCloseoutController {
         }
 
         if let Some(mut closeout) = closeout {
+            // Final-answer claim gate: if the model's text claims completion/mutation/validation
+            // that the evidence does not support, downgrade the closeout so the user sees an
+            // honest status instead of a falsely-claimed success.
+            let claim_gate_input = FinalAnswerClaimGateInput {
+                content: context.final_content,
+                route: &context.task_bundle.route,
+                evidence_ledger: context.evidence_ledger,
+                verification_proof: &verification_proof,
+                required_validation_commands: context.required_validation_commands,
+                repair_used: true, // at closeout we never repair; only downgrade
+                iterations_used: context.iterations_used,
+                max_iterations: context.max_iterations,
+            };
+            let claim_gate_decision = FinalAnswerClaimGate::evaluate(claim_gate_input);
+            if let FinalAnswerClaimGateDecision::Downgrade { observation, .. }
+            | FinalAnswerClaimGateDecision::Repair { observation } = claim_gate_decision
+            {
+                let unsupported_kinds: Vec<String> = observation
+                    .unsupported_claims
+                    .iter()
+                    .map(|claim| format!("{:?}", claim.kind))
+                    .collect();
+                let risk_line = format!(
+                    "claim_gate: final answer contained unsupported claims ({}); downgraded from {:?} to not_verified",
+                    unsupported_kinds.join(", "),
+                    closeout.status
+                );
+                if closeout.status == StageValidationStatus::Passed {
+                    closeout.status = StageValidationStatus::NotVerified;
+                }
+                if !closeout.residual_risks.iter().any(|r| r.contains("claim_gate")) {
+                    closeout.residual_risks.push(risk_line);
+                }
+                context.trace.record(TraceEvent::FinalAnswerClaimGate {
+                    decision: "downgrade".to_string(),
+                    unsupported_claims: observation.unsupported_claims.len(),
+                    repair_attempt: 0,
+                    changed_files: observation.runtime_evidence.changed_files.len(),
+                    verification_proof_status: Some(
+                        observation.runtime_evidence.verification_status.clone(),
+                    ),
+                    summary: format!(
+                        "closeout claim gate: unsupported claims ({}) downgraded status",
+                        unsupported_kinds.join(", ")
+                    ),
+                });
+            }
+
             let evidence_snapshot = context.evidence_ledger.snapshot();
             let stop_record = context.task_bundle.agent_state.stop_checks.last();
             let terminal_status = context

@@ -30,6 +30,7 @@ pub struct GoalDecisionInput {
     pub previous_score: Option<f64>,
     pub score_no_improvement_count: u32,
     pub scored_eval: Option<ScoredEvalConfig>,
+    pub claim_gate_downgrade: bool,
 }
 
 pub struct GoalDecisionEngine;
@@ -71,6 +72,10 @@ impl GoalDecisionEngine {
             || input.requires_user_decision
         {
             return GoalDecision::NeedsUser;
+        }
+
+        if input.claim_gate_downgrade {
+            return GoalDecision::Continue;
         }
 
         if Self::stop_rules_satisfied(input) {
@@ -159,6 +164,13 @@ impl GoalDecisionInput {
                         input.requires_user_decision = true;
                     }
                 }
+                crate::engine::trace::TraceEvent::FinalAnswerClaimGate {
+                    decision, ..
+                } => {
+                    if decision == "downgrade" {
+                        input.claim_gate_downgrade = true;
+                    }
+                }
                 _ => {}
             }
         }
@@ -188,6 +200,7 @@ impl GoalDecisionInput {
             previous_score: None,
             score_no_improvement_count: 0,
             scored_eval: None,
+            claim_gate_downgrade: false,
         }
     }
 
@@ -250,6 +263,7 @@ mod tests {
             previous_score: None,
             score_no_improvement_count: 0,
             scored_eval: None,
+            claim_gate_downgrade: false,
         }
     }
 
@@ -313,6 +327,7 @@ mod tests {
             previous_score: None,
             score_no_improvement_count: 0,
             scored_eval: None,
+            claim_gate_downgrade: false,
         };
         assert_eq!(GoalDecisionEngine::decide(&input), GoalDecision::Continue);
     }
@@ -354,6 +369,7 @@ mod tests {
             previous_score: None,
             score_no_improvement_count: 0,
             scored_eval: None,
+            claim_gate_downgrade: false,
         };
         assert_eq!(GoalDecisionEngine::decide(&input), GoalDecision::Blocked);
     }
@@ -381,6 +397,7 @@ mod tests {
             previous_score: None,
             score_no_improvement_count: 0,
             scored_eval: None,
+            claim_gate_downgrade: false,
         };
         assert_eq!(GoalDecisionEngine::decide(&input), GoalDecision::Blocked);
     }
@@ -436,6 +453,7 @@ mod tests {
             previous_score: None,
             score_no_improvement_count: 0,
             scored_eval: None,
+            claim_gate_downgrade: false,
         };
         assert_eq!(GoalDecisionEngine::decide(&input), GoalDecision::Complete);
     }
@@ -463,6 +481,7 @@ mod tests {
             previous_score: None,
             score_no_improvement_count: 0,
             scored_eval: None,
+            claim_gate_downgrade: false,
         };
         assert_eq!(GoalDecisionEngine::decide(&input), GoalDecision::Continue);
     }
@@ -512,5 +531,14 @@ mod tests {
         input.current_turn = 3;
         input.score_no_improvement_count = 3;
         assert_eq!(GoalDecisionEngine::decide(&input), GoalDecision::Blocked);
+    }
+
+    #[test]
+    fn blocks_completion_when_claim_gate_downgraded() {
+        let mut input = input_with_closeout("passed", "verified");
+        input.claim_gate_downgrade = true;
+        // Even with passed closeout and verified proof, claim gate downgrade
+        // must prevent GoalDecision::Complete.
+        assert_eq!(GoalDecisionEngine::decide(&input), GoalDecision::Continue);
     }
 }

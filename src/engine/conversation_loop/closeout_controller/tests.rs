@@ -642,3 +642,59 @@ fn empty_ledger_produces_not_verified_regardless_of_summary_text() {
         .iter()
         .any(|item| item.contains("Verification proof is not_run")));
 }
+
+#[tokio::test]
+async fn closeout_downgrades_when_final_content_claims_unsupported_completion() {
+    // Regression: model text claims "I fixed it and tests passed" but
+    // EvidenceLedger is empty. Closeout must be downgraded to NotVerified.
+    let mut env = EnvVarGuard::acquire().await;
+    let store_dir = tempfile::tempdir().unwrap();
+    isolate_project_memory_stores(&mut env, &store_dir);
+    env.set("PRIORITY_AGENT_RUNTIME_PROFILE", "minimum_viable_agent");
+    let bundle = TaskContextBundle::new("fix the bug", ".", code_change_route(), None);
+    let code_workflow = CodeChangeWorkflowRunner::new(&bundle);
+    let trace = TraceCollector::new(TurnTrace::new("session", 1, "claim-gate-closeout"));
+    let mut runtime_diet = RuntimeDietSnapshot::new(true);
+    let evidence_ledger = EvidenceLedger::new(); // empty — no evidence
+    let mut final_content = "I fixed the bug and tests passed.".to_string();
+
+    FinalCloseoutController::apply_final_closeout(FinalCloseoutContext {
+        trace: &trace,
+        code_workflow: &code_workflow,
+        task_bundle: &bundle,
+        required_validation_commands: &["cargo test -q".to_string()],
+        runtime_diet: &mut runtime_diet,
+        final_content: &mut final_content,
+        final_tool_calls: &[],
+        iterations_used: 1,
+        max_iterations: 10,
+        evidence_ledger: &evidence_ledger,
+        settlement_gaps: &[],
+        memory_generate_enabled: false,
+        tx: None,
+    })
+    .await;
+
+    let finished = trace.finish(TurnStatus::Completed);
+    // Trace should contain a FinalAnswerClaimGate downgrade event.
+    assert!(
+        finished.events.iter().any(|event| matches!(
+            event,
+            TraceEvent::FinalAnswerClaimGate { decision, .. } if decision == "downgrade"
+        )),
+        "expected FinalAnswerClaimGate downgrade in trace"
+    );
+    // The closeout should have been downgraded to NotVerified.
+    assert!(
+        finished.events.iter().any(|event| matches!(
+            event,
+            TraceEvent::FinalCloseoutPrepared { status, .. } if status == "not_verified"
+        )),
+        "expected closeout status to be not_verified"
+    );
+    // Final content should contain the honest closeout, not the false claim.
+    assert!(
+        final_content.contains("Closeout:"),
+        "expected closeout text in final content"
+    );
+}
