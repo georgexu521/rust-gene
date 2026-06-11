@@ -1576,3 +1576,102 @@ function isTauriRuntime() {
 function basename(path: string) {
   return path.split(/[\\/]/).filter(Boolean).at(-1) || path;
 }
+
+export type DesktopGoalStatus = {
+  goal_id: string | null;
+  objective: string | null;
+  status: string | null;
+  turn_count: number | null;
+  max_turns: number | null;
+  last_decision: string | null;
+  last_closeout: string | null;
+  last_proof: string | null;
+  last_blocker: string | null;
+  step_count: number;
+  steps: DesktopGoalStep[];
+};
+
+export type DesktopGoalStep = {
+  turn_index: number;
+  decision: string;
+  closeout_status: string | null;
+  verification_status: string | null;
+  changed_files: number;
+  validation_items: number;
+  summary: string;
+};
+
+export function goalStatus(): Promise<DesktopGoalStatus> {
+  if (!isTauriRuntime()) {
+    return Promise.resolve({
+      goal_id: null,
+      objective: null,
+      status: null,
+      turn_count: null,
+      max_turns: null,
+      last_decision: null,
+      last_closeout: null,
+      last_proof: null,
+      last_blocker: null,
+      step_count: 0,
+      steps: [],
+    });
+  }
+  return invoke("goal_status");
+}
+
+export function goalStart(objective: string): Promise<DesktopGoalStatus> {
+  if (!isTauriRuntime()) {
+    return Promise.resolve({
+      goal_id: "preview-goal",
+      objective,
+      status: "Active",
+      turn_count: 0,
+      max_turns: 10,
+      last_decision: null,
+      last_closeout: null,
+      last_proof: null,
+      last_blocker: null,
+      step_count: 0,
+      steps: [],
+    });
+  }
+  return invoke("goal_start", { objective });
+}
+
+export function goalPause(): Promise<boolean> {
+  if (!isTauriRuntime()) return Promise.resolve(false);
+  return invoke("goal_pause");
+}
+
+export function goalResume(): Promise<boolean> {
+  if (!isTauriRuntime()) return Promise.resolve(false);
+  return invoke("goal_resume");
+}
+
+export function goalClear(): Promise<boolean> {
+  if (!isTauriRuntime()) return Promise.resolve(false);
+  return invoke("goal_clear");
+}
+
+export function goalEdit(objective: string): Promise<DesktopGoalStatus> {
+  if (!isTauriRuntime()) return Promise.resolve({
+    goal_id: "preview-goal",
+    objective,
+    status: "Active",
+    turn_count: 0,
+    max_turns: 10,
+    last_decision: null,
+    last_closeout: null,
+    last_proof: null,
+    last_blocker: null,
+    step_count: 0,
+    steps: [],
+  });
+  return invoke("goal_edit", { objective });
+}
+
+export function goalLog(): Promise<DesktopGoalStep[]> {
+  if (!isTauriRuntime()) return Promise.resolve([]);
+  return invoke("goal_log");
+}

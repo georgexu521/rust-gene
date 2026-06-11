@@ -34,6 +34,7 @@ import {
   AgentModeOption,
   ProviderSetupInfo,
   RecentSession,
+  DesktopGoalStatus,
   answerPermission,
   archiveSession,
   compactContext,
@@ -69,8 +70,14 @@ import {
   setProviderModel,
   setDetailLevel,
   setPermissionMode,
+  goalStatus,
+  goalPause,
+  goalResume,
+  goalClear,
+  goalEdit,
 } from "../runtime/desktopApi";
 import { Composer } from "./components/Composer";
+import { GoalProgressRow } from "./components/GoalProgressRow";
 import { CommandPalette, useCommandPalette, type Command } from "./components/CommandPalette";
 import { ContextDetailDrawer } from "./components/ContextDetailDrawer";
 import { ErrorBoundary } from "./components/ErrorBoundary";
@@ -128,6 +135,7 @@ export function App() {
   const [exportPath, setExportPath] = useState<string | null>(null);
   const [lastArchivedSession, setLastArchivedSession] = useState<RecentSession | null>(null);
   const [pendingDeleteSession, setPendingDeleteSession] = useState<RecentSession | null>(null);
+  const [currentGoal, setCurrentGoal] = useState<DesktopGoalStatus | null>(null);
   const [runState, setRunState] = useState(initialRunViewState);
   const permissionRecoveryRef = useRef<HTMLDivElement | null>(null);
   const activeRunSessionIdRef = useRef<string | null>(null);
@@ -162,6 +170,13 @@ export function App() {
       behavior: "smooth",
     });
   }, [runState.pendingPermission]);
+
+  useEffect(() => {
+    const fetchGoal = () => { void goalStatus().then(setCurrentGoal).catch(() => {}); };
+    fetchGoal();
+    const interval = setInterval(fetchGoal, 5000);
+    return () => clearInterval(interval);
+  }, []);
 
   async function initialize() {
     const [
@@ -936,6 +951,14 @@ export function App() {
             onAnswer={(approved) => void handlePermission(approved)}
           />
         </div>
+
+        <GoalProgressRow
+          goal={currentGoal}
+          onPause={() => { void goalPause().then(() => goalStatus().then(setCurrentGoal)); }}
+          onResume={() => { void goalResume().then(() => goalStatus().then(setCurrentGoal)); }}
+          onClear={() => { void goalClear().then(() => goalStatus().then(setCurrentGoal)); }}
+          onEdit={(obj) => { void goalEdit(obj).then(setCurrentGoal); }}
+        />
 
         <Composer
           composer={composer}

@@ -4496,4 +4496,80 @@ h1 {
 .streaming-caret { display: inline-block; width: 1px; height: 14px; background: var(--rx-accent); margin-left: 2px; vertical-align: text-bottom; animation: rx-blink 1s step-end infinite; }
 @keyframes rx-blink { 0%, 100% { opacity: 1; } 50% { opacity: 0; } }
 
+.goal-progress-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 12px;
+  margin: 0 6px 4px 6px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface-subtle);
+  font-size: 10px;
+  font-family: var(--font-mono, "SF Mono", "Cascadia Code", monospace);
+  color: var(--rx-muted, #6b7280);
+  overflow: hidden;
+}
+
+.goal-progress-seg {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  white-space: nowrap;
+}
+
+.goal-progress-label {
+  color: var(--rx-muted, #9ca3af);
+}
+
+.goal-progress-val {
+  color: var(--rx-foreground, #1f2937);
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.goal-status-active { color: var(--rx-accent, #7c3aed); }
+.goal-status-paused { color: var(--rx-warning, #d97706); }
+.goal-status-completed { color: var(--rx-success, #059669); }
+.goal-status-failed { color: var(--rx-danger, #dc2626); }
+.goal-status-blocked { color: var(--rx-danger, #dc2626); }
+.goal-status-needsuser { color: var(--rx-warning, #d97706); }
+
+.goal-progress-grow { flex: 1; }
+
+.goal-progress-actions {
+  display: inline-flex;
+  gap: 2px;
+}
+
+.goal-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border: none;
+  border-radius: 3px;
+  background: transparent;
+  color: var(--rx-muted, #9ca3af);
+  cursor: pointer;
+}
+
+.goal-btn:hover { background: var(--rx-subtle-hover, #e5e7eb); color: var(--rx-foreground, #1f2937); }
+.goal-btn:disabled { opacity: 0.3; cursor: default; }
+
+.goal-edit-input {
+  font-size: 10px;
+  font-family: var(--font-mono, "SF Mono", "Cascadia Code", monospace);
+  padding: 1px 4px;
+  border: 1px solid var(--rx-accent, #7c3aed);
+  border-radius: 3px;
+  outline: none;
+  background: var(--surface);
+  color: var(--rx-foreground, #1f2937);
+  min-width: 140px;
+}
+
 .message.reasoning { margin: 0; }

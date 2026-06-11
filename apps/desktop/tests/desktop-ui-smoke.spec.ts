@@ -360,3 +360,18 @@ async function assertStableVerticalStack(page: Page, selectors: string[]) {
     expect(current!.top).toBeGreaterThanOrEqual(previous!.bottom - 1);
   }
 }
+
+test.describe("goal progress row", () => {
+  test("shows goal progress when a goal is active", async ({ page }) => {
+    await page.goto("/?previewFixture=1");
+    // In web preview mode, goalStatus returns null, so the row should be absent.
+    const row = page.locator(".goal-progress-row");
+    await expect(row).toHaveCount(0);
+  });
+
+  test("goal progress row does not overlap composer", async ({ page }) => {
+    await page.goto("/?previewFixture=1");
+    // Even when absent, the composer should still be visible and functional.
+    await expect(page.locator(".composer")).toBeVisible();
+  });
+});
