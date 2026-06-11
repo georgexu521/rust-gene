@@ -488,3 +488,49 @@ fn format_goal_drift_report_has_header() {
     let report = format_goal_drift_report(&empty_trace(), 10);
     assert!(report.contains("Goal Drift"));
 }
+
+// ── goal parsing tests ────────────────────────────────────
+
+#[test]
+fn set_goal_objective_rejects_empty_title() {
+    let manager = crate::engine::session_goal::SessionGoalManager::new();
+    let result = set_goal_objective(&manager, "");
+    assert!(result.contains("Goal Error"));
+    assert!(result.contains("must be non-empty"));
+    assert!(manager.current().is_none());
+}
+
+#[test]
+fn set_goal_objective_rejects_over_4000_chars() {
+    let manager = crate::engine::session_goal::SessionGoalManager::new();
+    let long = "x".repeat(4001);
+    let result = set_goal_objective(&manager, &long);
+    assert!(result.contains("Goal Error"));
+    assert!(result.contains("maximum is 4000"));
+    assert!(manager.current().is_none());
+}
+
+#[test]
+fn set_goal_objective_accepts_exactly_4000_chars() {
+    let manager = crate::engine::session_goal::SessionGoalManager::new();
+    let title = "x".repeat(4000);
+    let result = set_goal_objective(&manager, &title);
+    assert!(result.contains("pinned:"));
+    assert!(manager.current().is_some());
+}
+
+#[test]
+fn set_goal_objective_accepts_valid_title() {
+    let manager = crate::engine::session_goal::SessionGoalManager::new();
+    let result = set_goal_objective(&manager, "ship trace visibility");
+    assert!(result.contains("pinned:"));
+    assert!(manager.current().is_some());
+}
+
+#[test]
+fn goal_not_implemented_shows_subcommand_and_detail() {
+    let result = goal_not_implemented("pause", "Pause automatic continuation.");
+    assert!(result.contains("Goal pause"));
+    assert!(result.contains("not implemented yet"));
+    assert!(result.contains("Pause automatic continuation."));
+}

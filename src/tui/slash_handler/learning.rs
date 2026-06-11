@@ -447,23 +447,86 @@ pub fn handle_goal(app: &mut TuiApp, args: &str) -> String {
         return "Current Goal\n- unavailable (no engine connected)".to_string();
     };
     let manager = engine.goal_manager();
-    if trimmed.is_empty() || trimmed == "status" || trimmed == "show" {
-        return manager.format_current();
+
+    // Explicit subcommand dispatch
+    match trimmed {
+        "" | "status" | "show" => return manager.format_current(),
+        "clear" | "reset" => {
+            manager.clear();
+            return "Current Goal\n- cleared".to_string();
+        }
+        "pause" => {
+            return goal_not_implemented("pause", "Pause automatic goal continuation. When the runner is active this will pause automatic turn scheduling.");
+        }
+        "resume" => {
+            return goal_not_implemented("resume", "Resume automatic goal continuation. When paused this will restart turn scheduling if the goal is active.");
+        }
+        _ => {}
     }
 
-    if trimmed == "clear" || trimmed == "reset" {
-        manager.clear();
-        return "Current Goal\n- cleared".to_string();
+    // /goal log [limit]
+    if trimmed == "log" || trimmed.starts_with("log ") {
+        let _limit = trimmed
+            .strip_prefix("log")
+            .unwrap_or_default()
+            .trim()
+            .parse::<usize>()
+            .unwrap_or(10);
+        return goal_not_implemented(
+            "log",
+            "Show recent goal steps. Once the durable goal store is implemented, this will display turn-by-turn progress.",
+        );
     }
 
+    // /goal set <text> — compatibility alias
     if let Some(title) = trimmed.strip_prefix("set ") {
-        return manager
-            .set_manual(title)
-            .map(|goal| format!("Current Goal\n- pinned: {}", goal.compact_status()))
-            .unwrap_or_else(|| "Usage: /goal set <text>".to_string());
+        return set_goal_objective(&manager, title);
     }
 
-    "Usage: /goal [set <text>|clear|drift [limit]]".to_string()
+    // /goal edit <text>
+    if let Some(text) = trimmed.strip_prefix("edit ") {
+        let objective = text.trim();
+        if objective.is_empty() {
+            return "Usage: /goal edit <text>".to_string();
+        }
+        return goal_not_implemented(
+            "edit",
+            "Replace the active goal objective while preserving run history.",
+        );
+    }
+
+    // /goal <objective> — preferred start command (non-empty, non-subcommand text)
+    if !trimmed.is_empty() {
+        return set_goal_objective(&manager, trimmed);
+    }
+
+    "Usage: /goal [<objective>|set|pause|resume|clear|edit|log|drift]".to_string()
+}
+
+fn goal_not_implemented(subcommand: &str, detail: &str) -> String {
+    format!(
+        "Goal {}\n- not implemented yet (Phase 1+)\n\n{}",
+        subcommand, detail
+    )
+}
+
+fn set_goal_objective(
+    manager: &crate::engine::session_goal::SessionGoalManager,
+    title: &str,
+) -> String {
+    if title.is_empty() {
+        return "Goal Error\n- objective must be non-empty".to_string();
+    }
+    if title.chars().count() > 4000 {
+        return format!(
+            "Goal Error\n- objective is {} characters, maximum is 4000. Consider putting longer instructions in a file and referencing it from the goal.",
+            title.chars().count()
+        );
+    }
+    manager
+        .set_manual(title)
+        .map(|goal| format!("Current Goal\n- pinned: {}", goal.compact_status()))
+        .unwrap_or_else(|| "Usage: /goal <objective>".to_string())
 }
 
 pub(crate) fn goal_drift_count_label(trace: &crate::engine::trace::TurnTrace) -> String {

@@ -1039,8 +1039,8 @@ pub const CMD_GOAL: CommandDef = CommandDef::new(
     "/goal",
     &[],
     "General",
-    "/goal [set <text>|clear]",
-    "Show or pin the current session goal",
+    "/goal [<objective>|pause|resume|clear|edit|log|status|drift]",
+    "Set, inspect, or manage a durable Codex-style goal",
 );
 
 pub const CMD_LEARN: CommandDef = CommandDef::new(

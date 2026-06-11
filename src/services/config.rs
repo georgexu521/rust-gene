@@ -293,6 +293,13 @@ pub const CONFIG_KEY_SPECS: &[ConfigKeySpec] = &[
         description: "Plugin signature trust policy",
     },
     ConfigKeySpec {
+        key: "features.goals",
+        value_type: "bool",
+        mutable: true,
+        secret: false,
+        description: "Enable Codex-style durable goal mode",
+    },
+    ConfigKeySpec {
         key: "engine.max_iterations",
         value_type: "integer",
         mutable: true,
@@ -405,7 +412,7 @@ pub fn config_schema_json() -> Value {
 
 pub fn format_config_summary(config: &AppConfig) -> String {
     format!(
-        "Config:\n  api.base_url = {}\n  api.model = {}\n  api.temperature = {}\n  api.max_tokens = {}\n  ui.theme = {}\n  ui.show_token_usage = {}\n  storage.persistence_enabled = {}\n  features.mcp_enabled = {}\n  features.skills_enabled = {}\n  features.web_search = {}\n  features.plugin_trust_mode = {}\n  engine.max_iterations = {}\n  memory.external_provider.enabled = {}\n  memory.external_provider.mode = {}\n  memory.external_provider.provider_type = {}\n  memory.external_provider.records_path = {}\n  tool_output.max_bytes = {}\n  tool_output.max_lines = {}\n  tool_output.preview_direction = {}\n  tool_output.retention_days = {}\n  lsp.enabled = {}\n  lsp.auto_detect = {}\n  lsp.disable_downloads = {}",
+        "Config:\n  api.base_url = {}\n  api.model = {}\n  api.temperature = {}\n  api.max_tokens = {}\n  ui.theme = {}\n  ui.show_token_usage = {}\n  storage.persistence_enabled = {}\n  features.mcp_enabled = {}\n  features.skills_enabled = {}\n  features.web_search = {}\n      features.plugin_trust_mode = {}\n  features.goals = {}\n  engine.max_iterations = {}\n  memory.external_provider.enabled = {}\n  memory.external_provider.mode = {}\n  memory.external_provider.provider_type = {}\n  memory.external_provider.records_path = {}\n  tool_output.max_bytes = {}\n  tool_output.max_lines = {}\n  tool_output.preview_direction = {}\n  tool_output.retention_days = {}\n  lsp.enabled = {}\n  lsp.auto_detect = {}\n  lsp.disable_downloads = {}",
         config.api.base_url,
         config.api.model,
         config.api.temperature,
@@ -417,6 +424,7 @@ pub fn format_config_summary(config: &AppConfig) -> String {
         config.features.skills_enabled,
         config.features.web_search,
         config.features.plugin_trust_mode,
+        config.features.goals,
         config.engine.max_iterations,
         config.memory.external_provider.enabled,
         config.memory.external_provider.effective_mode(),
@@ -457,6 +465,7 @@ pub fn get_config_value(config: &AppConfig, key: &str) -> Option<String> {
         "features.skills_enabled" => Some(config.features.skills_enabled.to_string()),
         "features.web_search" => Some(config.features.web_search.to_string()),
         "features.plugin_trust_mode" => Some(config.features.plugin_trust_mode.clone()),
+        "features.goals" => Some(config.features.goals.to_string()),
         "engine.max_iterations" => Some(config.engine.max_iterations.to_string()),
         "engine.turn_timeout_secs" => Some(config.engine.turn_timeout_secs.to_string()),
         "engine.session_end_memory_flush_timeout_secs" => Some(
@@ -560,6 +569,7 @@ pub fn set_config_value(config: &mut AppConfig, key: &str, value: &str) -> Resul
             let mode = crate::plugins::trust::TrustMode::parse_lossy(value);
             config.features.plugin_trust_mode = mode.as_str().to_string();
         }
+        "features.goals" => config.features.goals = parse_bool(value)?,
         "engine.max_iterations" => {
             config.engine.max_iterations = value
                 .parse::<usize>()
@@ -1078,6 +1088,9 @@ pub struct FeatureFlags {
     /// 插件信任模式: strict | warn | off
     #[serde(default = "default_plugin_trust_mode")]
     pub plugin_trust_mode: String,
+    /// 启用 Codex-style goal mode（持久化目标，跨 turn 自动推进）
+    #[serde(default)]
+    pub goals: bool,
 }
 
 fn default_plugin_trust_mode() -> String {
@@ -1092,6 +1105,7 @@ impl Default for FeatureFlags {
             web_search: true,
             llm_memory_extraction: true,
             plugin_trust_mode: "warn".to_string(),
+            goals: false,
         }
     }
 }
