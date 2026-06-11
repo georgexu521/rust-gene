@@ -50,6 +50,7 @@ pub fn handle_quick(app: &mut TuiApp) -> String {
         .and_then(|engine| engine.goal_manager().current())
         .map(|goal| goal.compact_status())
         .unwrap_or_else(|| "none".to_string());
+    let goal_runner_line = goal_runner_status_line(app);
     let drift_line = latest_trace_for_app(app)
         .map(|trace| goal_drift_count_label(&trace))
         .unwrap_or_else(|| "none".to_string());
@@ -92,7 +93,7 @@ pub fn handle_quick(app: &mut TuiApp) -> String {
     let a2a_line = latest_a2a_transcript_label();
 
     format!(
-        "Quick Panel\n\nStatus:\n- Agent mode: {}\n- UI mode: {:?}\n- Querying: {}\n- Pending prompts: {}\n- Messages: {}\n- Session: {}\n- Goal: {}\n- Goal drift: {}\n\nActive task:\n{}\n\nRuntime:\n- Provider: {}\n- Model: {}\n- Permissions: {}\n- Resource policy: {}\n- Runtime diet: {}\n- Recent commands: {}\n\nContracts:\n- State: {}\n- Plan: {}\n- Stage: {}\n- Retrieval: {}\n- Reflection: {}\n- Acceptance: {}\n- Guided debug: {}\n- Closeout: {}\n- Memory proposal: {}\n- A2A: {}\n\nWorkspace:\n- Project: {}\n- Path: {}\n- {}\n\nNext actions:\n1. /active-task   inspect unified task/progress state\n2. /memory-proposals review memory candidates\n3. /mode          switch auto/build/plan/explore/review\n4. /resource      inspect latest resource budget\n5. /goal          inspect or pin the active goal\n6. /project pulse inspect the next project step\n7. /doctor        run environment diagnostics",
+        "Quick Panel\n\nStatus:\n- Agent mode: {}\n- UI mode: {:?}\n- Querying: {}\n- Pending prompts: {}\n- Messages: {}\n- Session: {}\n- Goal: {}\n- Goal drift: {}\n- {}\n\nActive task:\n{}\n\nRuntime:\n- Provider: {}\n- Model: {}\n- Permissions: {}\n- Resource policy: {}\n- Runtime diet: {}\n- Recent commands: {}\n\nContracts:\n- State: {}\n- Plan: {}\n- Stage: {}\n- Retrieval: {}\n- Reflection: {}\n- Acceptance: {}\n- Guided debug: {}\n- Closeout: {}\n- Memory proposal: {}\n- A2A: {}\n\nWorkspace:\n- Project: {}\n- Path: {}\n- {}\n\nNext actions:\n1. /active-task   inspect unified task/progress state\n2. /memory-proposals review memory candidates\n3. /mode          switch auto/build/plan/explore/review\n4. /resource      inspect latest resource budget\n5. /goal          inspect or pin the active goal\n6. /project pulse inspect the next project step\n7. /doctor        run environment diagnostics",
         app.current_agent_mode_label(),
         app.mode,
         app.is_querying,
@@ -101,6 +102,7 @@ pub fn handle_quick(app: &mut TuiApp) -> String {
         &session[..8.min(session.len())],
         goal_line,
         drift_line,
+        goal_runner_line,
         active_task_plan.format(),
         app.current_provider_label(),
         app.current_model_label(),
@@ -126,7 +128,13 @@ pub fn handle_quick(app: &mut TuiApp) -> String {
 
 /// /active-task - Unified current task/progress panel
 pub fn handle_active_task(app: &mut TuiApp) -> String {
-    active_task_plan_for_app(app).format()
+    let mut output = active_task_plan_for_app(app).format();
+    let runner_line = goal_runner_detail_line(app);
+    if !runner_line.is_empty() {
+        output.push_str("\n\nGoal runner:\n");
+        output.push_str(&runner_line);
+    }
+    output
 }
 
 fn active_task_plan_for_app(app: &mut TuiApp) -> crate::engine::active_task_plan::ActiveTaskPlan {
@@ -524,9 +532,8 @@ pub fn handle_goal(app: &mut TuiApp, args: &str) -> String {
                     if let Some(ref runner) = app.goal_runner {
                         match runner.resume(session_id) {
                             Ok(true) => {
-                                app.pending_goal_prompt = Some(
-                                    "Continue working toward the active goal.".to_string(),
-                                );
+                                app.pending_goal_prompt =
+                                    Some("Continue working toward the active goal.".to_string());
                                 return "Goal resumed. The next turn will continue automatically."
                                     .to_string();
                             }
@@ -596,6 +603,36 @@ pub fn handle_goal(app: &mut TuiApp, args: &str) -> String {
         let objective = text.trim();
         if objective.is_empty() {
             return "Usage: /goal edit <text>".to_string();
+        }
+        if objective.chars().count() > 4000 {
+            return format!(
+                "Goal Error\n- objective is {} characters, maximum is 4000",
+                objective.chars().count()
+            );
+        }
+        if has_runner {
+            if let Some(session_id) = app.session_manager.current_session_id() {
+                if let Some(ref runner) = app.goal_runner {
+                    match runner.edit_objective(session_id, objective) {
+                        Ok(Some(goal)) => {
+                            return format!(
+                                "Goal edited\n- Id: {}\n- New objective: {}\n- Status: {:?}\n- Turn: {}/{}",
+                                goal.id,
+                                goal.objective,
+                                goal.status,
+                                goal.turn_count,
+                                goal.budget.max_turns
+                            );
+                        }
+                        Ok(None) => {
+                            return "Goal edit: no active goal to edit. Use /goal <objective> to start one.".to_string();
+                        }
+                        Err(e) => {
+                            return format!("Goal edit error: {}", e);
+                        }
+                    }
+                }
+            }
         }
         return goal_not_implemented(
             "edit",
@@ -753,6 +790,99 @@ fn compact_inline(text: &str, max_chars: usize) -> String {
         value.push_str("...");
     }
     value
+}
+
+fn goal_runner_status_line(app: &TuiApp) -> String {
+    let runner = match &app.goal_runner {
+        Some(r) => r,
+        None => return String::new(),
+    };
+    let session_id = match app.session_manager.current_session_id() {
+        Some(id) => id,
+        None => return String::new(),
+    };
+    match runner.status(session_id) {
+        Ok(info) => {
+            if let Some(ref goal) = info.goal {
+                let last_decision = info
+                    .steps
+                    .last()
+                    .map(|s| format!("{:?}", s.decision))
+                    .unwrap_or_else(|| "first turn".to_string());
+                let last_closeout = info
+                    .steps
+                    .last()
+                    .and_then(|s| s.closeout_status.as_deref())
+                    .unwrap_or("none");
+                let last_blocker = goal.last_blocker.as_deref().unwrap_or("none");
+                let proof = info
+                    .steps
+                    .last()
+                    .and_then(|s| s.verification_status.as_deref())
+                    .unwrap_or("none");
+                format!(
+                    "Goal runner: {:?} turn {}/{} decision={} closeout={} proof={} blocker={}",
+                    goal.status,
+                    goal.turn_count,
+                    goal.budget.max_turns,
+                    last_decision,
+                    last_closeout,
+                    proof,
+                    last_blocker,
+                )
+            } else {
+                String::new()
+            }
+        }
+        Err(_) => String::new(),
+    }
+}
+
+fn goal_runner_detail_line(app: &TuiApp) -> String {
+    let runner = match &app.goal_runner {
+        Some(r) => r,
+        None => return String::new(),
+    };
+    let session_id = match app.session_manager.current_session_id() {
+        Some(id) => id,
+        None => return String::new(),
+    };
+    match runner.status(session_id) {
+        Ok(info) => {
+            if let Some(ref goal) = info.goal {
+                let mut lines = vec![
+                    format!("  Objective: {}", goal.objective),
+                    format!(
+                        "  Status: {:?}  Turn: {}/{}  Created: {}",
+                        goal.status, goal.turn_count, goal.budget.max_turns, goal.created_at
+                    ),
+                    format!("  Updated: {}", goal.updated_at),
+                ];
+                if let Some(last_step) = info.steps.last() {
+                    lines.push(format!(
+                        "  Latest step: turn {} decision={:?} closeout={} proof={} files={} validation={}",
+                        last_step.turn_index,
+                        last_step.decision,
+                        last_step.closeout_status.as_deref().unwrap_or("none"),
+                        last_step.verification_status.as_deref().unwrap_or("none"),
+                        last_step.changed_files,
+                        last_step.validation_items,
+                    ));
+                    lines.push(format!("  Summary: {}", last_step.summary));
+                }
+                if info.steps.len() > 1 {
+                    lines.push(format!(
+                        "  Step history: {} turns completed",
+                        info.steps.len()
+                    ));
+                }
+                lines.join("\n")
+            } else {
+                String::new()
+            }
+        }
+        Err(_) => String::new(),
+    }
 }
 
 /// /learn - Show recent runtime learning events

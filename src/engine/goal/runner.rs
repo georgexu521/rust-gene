@@ -212,6 +212,43 @@ impl GoalRunner {
         Ok(true)
     }
 
+    pub fn edit_objective(
+        &self,
+        session_id: &str,
+        new_objective: &str,
+    ) -> anyhow::Result<Option<GoalRun>> {
+        let objective = new_objective.trim();
+        if objective.is_empty() {
+            return Err(anyhow::anyhow!("goal objective must be non-empty"));
+        }
+        if objective.chars().count() > 4000 {
+            return Err(anyhow::anyhow!(
+                "goal objective is {} characters, maximum is 4000",
+                objective.chars().count()
+            ));
+        }
+        let conn = self.store.shared_conn();
+        let conn = conn.lock().unwrap_or_else(|e| e.into_inner());
+        let updated = conn.execute(
+            "UPDATE goal_runs SET objective = ?1, updated_at = datetime('now')
+             WHERE session_id = ?2 AND status = ?3",
+            rusqlite::params![
+                objective,
+                session_id,
+                serde_json::to_string(&GoalRunStatus::Active)?,
+            ],
+        )?;
+        if updated > 0 {
+            self.goal_manager.hydrate_from_objective(objective);
+            self.store
+                .get_active_goal_run(session_id)?
+                .and_then(|record| goal_run_from_record(&record).ok())
+                .map_or(Ok(None), |run| Ok(Some(run)))
+        } else {
+            Ok(None)
+        }
+    }
+
     pub fn status(&self, session_id: &str) -> anyhow::Result<GoalStatusInfo> {
         let run = self
             .store
