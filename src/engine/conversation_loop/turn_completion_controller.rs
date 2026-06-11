@@ -1,4 +1,6 @@
-use super::closeout_controller::{FinalCloseoutContext, FinalCloseoutController};
+use super::closeout_controller::{
+    FinalCloseoutContext, FinalCloseoutController, FinalCloseoutFlow,
+};
 use super::runtime_diet::{trace_runtime_diet_report, RuntimeDietSnapshot};
 use super::LoopResult;
 use crate::engine::code_change_workflow::CodeChangeWorkflowRunner;
@@ -7,6 +9,7 @@ use crate::engine::intent_router::{IntentRoute, RiskLevel, WorkflowKind};
 use crate::engine::streaming::StreamEvent;
 use crate::engine::task_context::{TaskContextBundle, VerificationStatus};
 use crate::engine::trace::{control_loop_diagnostic, TraceCollector, TraceEvent, TurnTrace};
+use crate::services::api::Message;
 use crate::services::api::ToolCall;
 use serde_json::{json, Value};
 use std::collections::HashMap;
@@ -21,6 +24,8 @@ pub(super) struct TurnCompletionContext<'a> {
     pub(super) runtime_diet: &'a mut RuntimeDietSnapshot,
     pub(super) final_content: &'a mut String,
     pub(super) final_tool_calls: &'a [ToolCall],
+    pub(super) messages: &'a mut Vec<Message>,
+    pub(super) claim_gate_repair_used: &'a mut bool,
     pub(super) iterations_used: usize,
     pub(super) max_iterations: usize,
     pub(super) tool_calls_made: bool,
@@ -32,9 +37,14 @@ pub(super) struct TurnCompletionContext<'a> {
 
 pub(super) struct TurnCompletionController;
 
+pub(super) enum TurnCompletionFlow {
+    Complete(LoopResult),
+    Retry,
+}
+
 impl TurnCompletionController {
-    pub(super) async fn complete(context: TurnCompletionContext<'_>) -> LoopResult {
-        FinalCloseoutController::apply_final_closeout(FinalCloseoutContext {
+    pub(super) async fn complete(context: TurnCompletionContext<'_>) -> TurnCompletionFlow {
+        let closeout_flow = FinalCloseoutController::apply_final_closeout(FinalCloseoutContext {
             trace: context.trace,
             code_workflow: context.code_workflow,
             task_bundle: context.task_bundle,
@@ -42,6 +52,8 @@ impl TurnCompletionController {
             runtime_diet: context.runtime_diet,
             final_content: context.final_content,
             final_tool_calls: context.final_tool_calls,
+            messages: context.messages,
+            claim_gate_repair_used: context.claim_gate_repair_used,
             iterations_used: context.iterations_used,
             max_iterations: context.max_iterations,
             evidence_ledger: context.evidence_ledger,
@@ -50,6 +62,9 @@ impl TurnCompletionController {
             tx: context.tx,
         })
         .await;
+        if matches!(closeout_flow, FinalCloseoutFlow::Retry) {
+            return TurnCompletionFlow::Retry;
+        }
 
         trace_runtime_diet_report(
             context.trace,
@@ -80,13 +95,13 @@ impl TurnCompletionController {
             let _ = tx.send(StreamEvent::Complete).await;
         }
 
-        LoopResult {
+        TurnCompletionFlow::Complete(LoopResult {
             content: std::mem::take(context.final_content),
             tool_calls: Vec::new(),
             tool_calls_made: context.tool_calls_made,
             iterations: context.iterations_used,
             pre_executed_results: HashMap::new(),
-        }
+        })
     }
 }
 
@@ -667,6 +682,8 @@ mod tests {
         let mut runtime_diet = RuntimeDietSnapshot::new(true);
         let mut final_content = "hello".to_string();
         let final_tool_calls = Vec::new();
+        let mut messages = Vec::new();
+        let mut claim_gate_repair_used = false;
         let (tx, mut rx) = mpsc::channel(4);
         trace.record(TraceEvent::RequiredValidationHeartbeat {
             command_preview: "cargo test -q".to_string(),
@@ -683,6 +700,8 @@ mod tests {
             runtime_diet: &mut runtime_diet,
             final_content: &mut final_content,
             final_tool_calls: &final_tool_calls,
+            messages: &mut messages,
+            claim_gate_repair_used: &mut claim_gate_repair_used,
             iterations_used: 2,
             max_iterations: 8,
             tool_calls_made: true,
@@ -693,6 +712,9 @@ mod tests {
         })
         .await;
 
+        let TurnCompletionFlow::Complete(result) = result else {
+            panic!("expected completion");
+        };
         assert_eq!(result.content, "hello");
         assert!(result.tool_calls.is_empty());
         assert!(result.tool_calls_made);

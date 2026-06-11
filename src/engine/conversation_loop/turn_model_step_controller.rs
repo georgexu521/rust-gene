@@ -1,4 +1,5 @@
 use super::api_request_controller::{ApiRequestContext, ApiRequestController};
+use super::closeout_controller::CloseoutEvaluator;
 use super::request_preparation_controller::{
     RequestPreparationContext, RequestPreparationController,
 };
@@ -132,6 +133,13 @@ impl TurnModelStepController {
             }
         };
 
+        let closeout_evaluation = CloseoutEvaluator::evaluate(
+            context.code_workflow,
+            context.task_bundle,
+            &context.turn_state.evidence_ledger,
+            context.required_validation_commands,
+        );
+
         let assistant_flow =
             TurnAssistantResponseController::handle(TurnAssistantResponseContext {
                 outcome: api_outcome,
@@ -140,6 +148,8 @@ impl TurnModelStepController {
                 iteration: context.iteration,
                 route: context.route,
                 evidence_ledger: &context.turn_state.evidence_ledger,
+                verification_proof: &closeout_evaluation.verification_proof,
+                required_validation_commands: context.required_validation_commands,
                 exposed_tool_names: context.exposed_tool_names,
                 provider: context.conversation.provider.as_ref(),
                 tools: context.tools,

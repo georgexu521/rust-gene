@@ -114,7 +114,9 @@ use tool_execution_controller::{
 use tool_metadata::attach_tool_execution_metadata;
 #[cfg(test)]
 use tool_metadata::tool_execution_start_progress;
-use turn_completion_controller::{TurnCompletionContext, TurnCompletionController};
+use turn_completion_controller::{
+    TurnCompletionContext, TurnCompletionController, TurnCompletionFlow,
+};
 use turn_context_bootstrap_controller::{
     TurnContextBootstrapContext, TurnContextBootstrapController,
 };
@@ -731,54 +733,62 @@ impl ConversationLoop {
         let available_tools = turn_loop_bootstrap.available_tools;
         let mut loop_state = turn_loop_bootstrap.loop_state;
 
-        TurnIterationLoopController::run(TurnIterationLoopContext {
-            conversation: self,
-            route: &route,
-            profile: main_loop_profile,
-            code_workflow: &mut code_workflow,
-            task_bundle: &mut task_bundle,
-            turn_retrieval_context: turn_retrieval_context.as_ref(),
-            retained_context: &retained_context,
-            base_tools: &base_tools,
-            available_tools: &available_tools,
-            loop_state: &mut loop_state,
-            turn_state: &mut turn_state,
-            no_diff_audit_closeout_allowed,
-            code_write_tools_forbidden,
-            resource_policy: &resource_policy,
-            working_dir: &working_dir,
-            last_user_preview: last_user_preview.as_str(),
-            required_validation_commands: &required_validation_commands,
-            destructive_scope: &destructive_scope,
-            messages: &mut messages,
-            trace: &trace,
-            tx,
-        })
-        .await?;
+        loop {
+            TurnIterationLoopController::run(TurnIterationLoopContext {
+                conversation: self,
+                route: &route,
+                profile: main_loop_profile,
+                code_workflow: &mut code_workflow,
+                task_bundle: &mut task_bundle,
+                turn_retrieval_context: turn_retrieval_context.as_ref(),
+                retained_context: &retained_context,
+                base_tools: &base_tools,
+                available_tools: &available_tools,
+                loop_state: &mut loop_state,
+                turn_state: &mut turn_state,
+                no_diff_audit_closeout_allowed,
+                code_write_tools_forbidden,
+                resource_policy: &resource_policy,
+                working_dir: &working_dir,
+                last_user_preview: last_user_preview.as_str(),
+                required_validation_commands: &required_validation_commands,
+                destructive_scope: &destructive_scope,
+                messages: &mut messages,
+                trace: &trace,
+                tx,
+            })
+            .await?;
 
-        let settlement_gaps = turn_state.tool_lifecycle.unsettled_summaries();
-        let result = TurnCompletionController::complete(TurnCompletionContext {
-            trace: &trace,
-            route: &route,
-            code_workflow: &code_workflow,
-            task_bundle: &task_bundle,
-            required_validation_commands: &required_validation_commands,
-            runtime_diet: &mut turn_state.runtime_diet,
-            final_content: &mut loop_state.final_content,
-            final_tool_calls: &loop_state.final_tool_calls,
-            iterations_used: turn_state.iterations_used,
-            max_iterations: self.max_iterations,
-            tool_calls_made: loop_state.tool_calls_made,
-            evidence_ledger: &turn_state.evidence_ledger,
-            settlement_gaps: &settlement_gaps,
-            memory_generate_enabled: self.memory_generate_enabled,
-            tx,
-        })
-        .await;
+            let settlement_gaps = turn_state.tool_lifecycle.unsettled_summaries();
+            let completion = TurnCompletionController::complete(TurnCompletionContext {
+                trace: &trace,
+                route: &route,
+                code_workflow: &code_workflow,
+                task_bundle: &task_bundle,
+                required_validation_commands: &required_validation_commands,
+                runtime_diet: &mut turn_state.runtime_diet,
+                final_content: &mut loop_state.final_content,
+                final_tool_calls: &loop_state.final_tool_calls,
+                messages: &mut messages,
+                claim_gate_repair_used: &mut loop_state.claim_gate_repair_used,
+                iterations_used: turn_state.iterations_used,
+                max_iterations: self.max_iterations,
+                tool_calls_made: loop_state.tool_calls_made,
+                evidence_ledger: &turn_state.evidence_ledger,
+                settlement_gaps: &settlement_gaps,
+                memory_generate_enabled: self.memory_generate_enabled,
+                tx,
+            })
+            .await;
 
-        self.finish_trace(trace, TurnStatus::Completed).await;
-
-        Ok(result)
+            match completion {
+                TurnCompletionFlow::Retry => continue,
+                TurnCompletionFlow::Complete(result) => {
+                    self.finish_trace(trace, TurnStatus::Completed).await;
+                    return Ok(result);
+                }
+            }
+        }
     }
 }
 

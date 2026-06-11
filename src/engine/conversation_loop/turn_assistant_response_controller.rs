@@ -9,6 +9,7 @@ use crate::engine::evidence_ledger::EvidenceLedger;
 use crate::engine::intent_router::IntentRoute;
 use crate::engine::streaming::StreamEvent;
 use crate::engine::trace::TraceCollector;
+use crate::engine::verification_proof::VerificationProof;
 use crate::services::api::{LlmProvider, Message, Tool, ToolCall};
 use crate::tools::ToolResult;
 use std::collections::{HashMap, HashSet};
@@ -21,6 +22,8 @@ pub(super) struct TurnAssistantResponseContext<'a> {
     pub(super) iteration: usize,
     pub(super) route: &'a IntentRoute,
     pub(super) evidence_ledger: &'a EvidenceLedger,
+    pub(super) verification_proof: &'a VerificationProof,
+    pub(super) required_validation_commands: &'a [String],
     pub(super) exposed_tool_names: &'a HashSet<String>,
     pub(super) provider: &'a dyn LlmProvider,
     pub(super) tools: &'a [Tool],
@@ -62,6 +65,7 @@ impl TurnAssistantResponseController {
                     content: &content,
                     route: context.route,
                     evidence_ledger: context.evidence_ledger,
+                    verification_proof: context.verification_proof,
                     exposed_tool_names: context.exposed_tool_names,
                     tool_calls_made: context.loop_state.tool_calls_made,
                     pseudo_tool_retry_used: &mut context.loop_state.pseudo_tool_retry_used,
@@ -76,7 +80,7 @@ impl TurnAssistantResponseController {
                     tx: context.tx,
                     trace: context.trace,
                     messages: context.messages,
-                    required_validation_commands: &[],
+                    required_validation_commands: context.required_validation_commands,
                     iterations_used: context.iteration,
                     max_iterations: 50,
                 },
@@ -164,6 +168,10 @@ mod tests {
         };
         let provider = MockProvider;
         let evidence_ledger = EvidenceLedger::new();
+        let verification_proof = VerificationProof::new(
+            crate::engine::verification_proof::VerificationProofStatus::NotRun,
+            "not evaluated",
+        );
         let exposed_tool_names = HashSet::from(["bash".to_string()]);
 
         let flow = TurnAssistantResponseController::handle(TurnAssistantResponseContext {
@@ -173,6 +181,8 @@ mod tests {
             iteration: 3,
             route: &route,
             evidence_ledger: &evidence_ledger,
+            verification_proof: &verification_proof,
+            required_validation_commands: &[],
             exposed_tool_names: &exposed_tool_names,
             provider: &provider,
             tools: &[],
@@ -217,6 +227,10 @@ mod tests {
         let mut messages = vec![Message::user("hello")];
         let provider = MockProvider;
         let evidence_ledger = EvidenceLedger::new();
+        let verification_proof = VerificationProof::new(
+            crate::engine::verification_proof::VerificationProofStatus::NotRun,
+            "not evaluated",
+        );
         let exposed_tool_names = HashSet::new();
 
         let flow = TurnAssistantResponseController::handle(TurnAssistantResponseContext {
@@ -226,6 +240,8 @@ mod tests {
             iteration: 1,
             route: &route,
             evidence_ledger: &evidence_ledger,
+            verification_proof: &verification_proof,
+            required_validation_commands: &[],
             exposed_tool_names: &exposed_tool_names,
             provider: &provider,
             tools: &[],

@@ -1,4 +1,4 @@
-use crate::engine::evidence_ledger::EvidenceLedger;
+use crate::engine::evidence_ledger::{EvidenceLedger, ToolExecutionRecord, ToolExecutionStatus};
 use crate::engine::intent_router::{IntentKind, IntentRoute, WorkflowKind};
 use crate::engine::verification_proof::{VerificationProof, VerificationProofStatus};
 
@@ -155,7 +155,13 @@ impl FinalAnswerClaimGate {
         let unsupported: Vec<FinalAnswerClaim> = claims
             .into_iter()
             .filter(|claim| {
-                !is_claim_supported(claim, &evidence, input.route, input.verification_proof)
+                !is_claim_supported(
+                    claim,
+                    &evidence,
+                    input.route,
+                    input.verification_proof,
+                    input.required_validation_commands,
+                )
             })
             .collect();
 
@@ -196,8 +202,7 @@ fn extract_claims(content: &str) -> Vec<FinalAnswerClaim> {
             "i created",
             "i implemented",
         ],
-    ) || contains_any(content, &["all set", "done"])
-    {
+    ) {
         claims.push(FinalAnswerClaim {
             kind: FinalAnswerClaimKind::MutationCompleted,
             span_preview: extract_mutation_preview(content),
@@ -209,15 +214,7 @@ fn extract_claims(content: &str) -> Vec<FinalAnswerClaim> {
     // Mutation claims — Chinese
     if contains_any(
         content,
-        &[
-            "我修好了",
-            "已经修复",
-            "已经修改",
-            "我改了",
-            "已经实现",
-            "做完了",
-            "完成了",
-        ],
+        &["我修好了", "已经修复", "已经修改", "我改了", "已经实现"],
     ) {
         claims.push(FinalAnswerClaim {
             kind: FinalAnswerClaimKind::MutationCompleted,
@@ -331,22 +328,18 @@ fn is_claim_supported(
     evidence: &FinalAnswerEvidenceSnapshot,
     route: &IntentRoute,
     verification_proof: &VerificationProof,
+    required_validation_commands: &[String],
 ) -> bool {
     match claim.kind {
         FinalAnswerClaimKind::MutationCompleted => {
             !evidence.changed_files.is_empty() || evidence.successful_mutation_tools > 0
         }
-        FinalAnswerClaimKind::ValidationPassed => {
-            let has_validation_record = evidence
-                .validation_records
-                .iter()
-                .any(|record| record.passed);
-            let proof_supports = matches!(
-                verification_proof.status,
-                VerificationProofStatus::Verified | VerificationProofStatus::NotApplicable
-            );
-            has_validation_record || proof_supports
-        }
+        FinalAnswerClaimKind::ValidationPassed => validation_claim_supported(
+            claim,
+            evidence,
+            verification_proof,
+            required_validation_commands,
+        ),
         FinalAnswerClaimKind::CommitCreated => !evidence.git_commit_records.is_empty(),
         FinalAnswerClaimKind::Pushed => !evidence.git_push_records.is_empty(),
         FinalAnswerClaimKind::FileInspected => {
@@ -375,6 +368,38 @@ fn is_claim_supported(
             }
         },
     }
+}
+
+fn validation_claim_supported(
+    claim: &FinalAnswerClaim,
+    evidence: &FinalAnswerEvidenceSnapshot,
+    verification_proof: &VerificationProof,
+    required_validation_commands: &[String],
+) -> bool {
+    let passed_records = evidence
+        .validation_records
+        .iter()
+        .filter(|record| record.passed)
+        .collect::<Vec<_>>();
+
+    let Some(claimed_command) = claim.command.as_deref() else {
+        if !required_validation_commands.is_empty() {
+            return matches!(verification_proof.status, VerificationProofStatus::Verified)
+                && required_validation_commands.iter().all(|required| {
+                    passed_records
+                        .iter()
+                        .any(|record| record.command_matches(required))
+                });
+        }
+
+        let proof_verified = matches!(verification_proof.status, VerificationProofStatus::Verified);
+        return (!passed_records.is_empty() && proof_verified)
+            || verification_proof.validation_passed > 0;
+    };
+
+    passed_records
+        .iter()
+        .any(|record| record.command_matches(claimed_command))
 }
 
 fn should_attempt_repair(input: FinalAnswerClaimGateInput<'_>) -> bool {
@@ -417,13 +442,7 @@ fn build_evidence_snapshot(
     let successful_mutation_tools = ledger
         .tool_execution_records()
         .iter()
-        .filter(|record| {
-            record.status == crate::engine::evidence_ledger::ToolExecutionStatus::Completed
-                && matches!(
-                    record.tool.as_str(),
-                    "file_write" | "file_edit" | "file_patch" | "bash"
-                )
-        })
+        .filter(|record| is_effective_mutation_record(record))
         .count();
 
     let validation_records: Vec<ValidationEvidenceSnapshot> = ledger
@@ -472,6 +491,21 @@ fn build_evidence_snapshot(
         git_commit_records,
         git_push_records,
     }
+}
+
+fn is_effective_mutation_record(record: &ToolExecutionRecord) -> bool {
+    if record.status != ToolExecutionStatus::Completed {
+        return false;
+    }
+
+    if !record.changed_paths.is_empty() {
+        return true;
+    }
+
+    matches!(
+        record.tool.as_str(),
+        "file_write" | "file_edit" | "file_patch"
+    ) && record.read_only != Some(true)
 }
 
 fn contains_any(text: &str, needles: &[&str]) -> bool {
@@ -555,6 +589,28 @@ fn extract_command_mention(content: &str) -> Option<String> {
     }
 }
 
+fn command_identity(command: &str) -> String {
+    command
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_ascii_lowercase()
+}
+
+fn command_matches_record(recorded: &str, claimed_or_required: &str) -> bool {
+    let recorded = command_identity(recorded);
+    let expected = command_identity(claimed_or_required);
+    recorded == expected || recorded.contains(&expected) || expected.contains(&recorded)
+}
+
+impl ValidationEvidenceSnapshot {
+    fn command_matches(&self, claimed_or_required: &str) -> bool {
+        self.command
+            .as_deref()
+            .is_some_and(|command| command_matches_record(command, claimed_or_required))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -562,6 +618,8 @@ mod tests {
         IntentKind, IntentRoute, ReasoningPolicy, RetrievalPolicy, RiskLevel, WorkflowKind,
     };
     use crate::engine::verification_proof::VerificationProof;
+    use crate::services::api::ToolCall;
+    use crate::tools::ToolResult;
 
     fn code_change_route() -> IntentRoute {
         IntentRoute {
@@ -616,6 +674,14 @@ mod tests {
             EvidenceLedger::new(),
             VerificationProof::new(VerificationProofStatus::NotRun, "no validation"),
         )
+    }
+
+    fn tool_call(name: &str, args: serde_json::Value) -> ToolCall {
+        ToolCall {
+            id: "call_1".to_string(),
+            name: name.to_string(),
+            arguments: args,
+        }
     }
 
     #[test]
@@ -734,6 +800,34 @@ mod tests {
     }
 
     #[test]
+    fn read_only_bash_does_not_support_mutation_claim() {
+        let route = code_change_route();
+        let mut ledger = EvidenceLedger::new();
+        ledger.record_tool_result(
+            &tool_call("bash", serde_json::json!({"command": "ls -la"})),
+            &ToolResult::success_with_data(
+                "listed files",
+                serde_json::json!({
+                    "tool_summary": {
+                        "operation_kind": "list",
+                        "read_only": true
+                    }
+                }),
+            ),
+        );
+        let proof = VerificationProof::new(VerificationProofStatus::Verified, "validation passed");
+
+        let input = gate_input("I fixed the bug.", &route, &ledger, &proof);
+        let decision = FinalAnswerClaimGate::evaluate(input);
+
+        assert!(
+            matches!(decision, FinalAnswerClaimGateDecision::Repair { .. }),
+            "expected Repair, got {:?}",
+            decision
+        );
+    }
+
+    #[test]
     fn supported_validation_claim_passes() {
         let route = code_change_route();
         let mut ledger = EvidenceLedger::new();
@@ -755,6 +849,64 @@ mod tests {
         let decision = FinalAnswerClaimGate::evaluate(input);
 
         assert_eq!(decision, FinalAnswerClaimGateDecision::Pass);
+    }
+
+    #[test]
+    fn validation_claim_requires_matching_command() {
+        let route = code_change_route();
+        let mut ledger = EvidenceLedger::new();
+        ledger.record_validation_result("bash", Some("cargo test -q"), true, "tests passed");
+
+        let input = FinalAnswerClaimGateInput {
+            content: "Clippy passed.",
+            route: &route,
+            evidence_ledger: &ledger,
+            verification_proof: &VerificationProof::new(
+                VerificationProofStatus::Verified,
+                "cargo test passed",
+            ),
+            required_validation_commands: &["cargo test -q".to_string()],
+            repair_used: false,
+            iterations_used: 1,
+            max_iterations: 10,
+        };
+        let decision = FinalAnswerClaimGate::evaluate(input);
+
+        assert!(
+            matches!(decision, FinalAnswerClaimGateDecision::Repair { .. }),
+            "expected Repair, got {:?}",
+            decision
+        );
+    }
+
+    #[test]
+    fn not_applicable_proof_does_not_support_validation_claim() {
+        let route = code_change_route();
+        let ledger = EvidenceLedger::new();
+        let proof = VerificationProof::new(
+            VerificationProofStatus::NotApplicable,
+            "no validation needed",
+        );
+        let input = gate_input("Tests passed.", &route, &ledger, &proof);
+        let decision = FinalAnswerClaimGate::evaluate(input);
+
+        assert!(
+            matches!(decision, FinalAnswerClaimGateDecision::Repair { .. }),
+            "expected Repair, got {:?}",
+            decision
+        );
+    }
+
+    #[test]
+    fn vague_done_claim_is_task_completion_only() {
+        let claims = extract_claims("Done.");
+
+        assert!(claims
+            .iter()
+            .any(|claim| claim.kind == FinalAnswerClaimKind::TaskCompleted));
+        assert!(!claims
+            .iter()
+            .any(|claim| claim.kind == FinalAnswerClaimKind::MutationCompleted));
     }
 
     #[test]

@@ -17,7 +17,7 @@ use crate::engine::trace::{TraceCollector, TraceEvent};
 use crate::engine::verification_proof::{
     VerificationProof, VerificationProofRequest, VerificationProofStatus, VerificationProofTaskType,
 };
-use crate::services::api::ToolCall;
+use crate::services::api::{Message, ToolCall};
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 use tracing::warn;
@@ -30,12 +30,20 @@ pub(super) struct FinalCloseoutContext<'a> {
     pub(super) runtime_diet: &'a mut RuntimeDietSnapshot,
     pub(super) final_content: &'a mut String,
     pub(super) final_tool_calls: &'a [ToolCall],
+    pub(super) messages: &'a mut Vec<Message>,
+    pub(super) claim_gate_repair_used: &'a mut bool,
     pub(super) iterations_used: usize,
     pub(super) max_iterations: usize,
     pub(super) evidence_ledger: &'a EvidenceLedger,
     pub(super) settlement_gaps: &'a [String],
     pub(super) memory_generate_enabled: bool,
     pub(super) tx: Option<&'a mpsc::Sender<super::super::streaming::StreamEvent>>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum FinalCloseoutFlow {
+    Completed,
+    Retry,
 }
 
 pub(super) struct CloseoutEvaluation {
@@ -389,7 +397,9 @@ impl VerifiedChangeCloseoutController {
 pub(super) struct FinalCloseoutController;
 
 impl FinalCloseoutController {
-    pub(super) async fn apply_final_closeout(context: FinalCloseoutContext<'_>) {
+    pub(super) async fn apply_final_closeout(
+        context: FinalCloseoutContext<'_>,
+    ) -> FinalCloseoutFlow {
         let CloseoutEvaluation {
             mut closeout,
             runtime_validation_label,
@@ -421,46 +431,117 @@ impl FinalCloseoutController {
                 evidence_ledger: context.evidence_ledger,
                 verification_proof: &verification_proof,
                 required_validation_commands: context.required_validation_commands,
-                repair_used: true, // at closeout we never repair; only downgrade
+                repair_used: *context.claim_gate_repair_used,
                 iterations_used: context.iterations_used,
                 max_iterations: context.max_iterations,
             };
             let claim_gate_decision = FinalAnswerClaimGate::evaluate(claim_gate_input);
-            if let FinalAnswerClaimGateDecision::Downgrade { observation, .. }
-            | FinalAnswerClaimGateDecision::Repair { observation } = claim_gate_decision
-            {
-                let unsupported_kinds: Vec<String> = observation
-                    .unsupported_claims
-                    .iter()
-                    .map(|claim| format!("{:?}", claim.kind))
-                    .collect();
-                let risk_line = format!(
-                    "claim_gate: final answer contained unsupported claims ({}); downgraded from {:?} to not_verified",
-                    unsupported_kinds.join(", "),
-                    closeout.status
-                );
-                if closeout.status == StageValidationStatus::Passed {
-                    closeout.status = StageValidationStatus::NotVerified;
+            match claim_gate_decision {
+                FinalAnswerClaimGateDecision::Repair { observation } => {
+                    *context.claim_gate_repair_used = true;
+                    context.trace.record(TraceEvent::FinalAnswerClaimGate {
+                        decision: "repair".to_string(),
+                        unsupported_claims: observation.unsupported_claims.len(),
+                        repair_attempt: 1,
+                        changed_files: observation.runtime_evidence.changed_files.len(),
+                        verification_proof_status: Some(
+                            observation.runtime_evidence.verification_status.clone(),
+                        ),
+                        summary: "closeout claim gate: unsupported final claims re-entered the model loop".to_string(),
+                    });
+                    context.messages.push(Message::assistant(
+                        super::tool_execution::safe_prefix_by_bytes(context.final_content, 1200),
+                    ));
+                    context.messages.push(Message::system(format!(
+                        "<recent_observation>\n{}\n</recent_observation>",
+                        observation.to_recent_observation_text()
+                    )));
+                    context.final_content.clear();
+                    return FinalCloseoutFlow::Retry;
                 }
-                if !closeout.residual_risks.iter().any(|r| r.contains("claim_gate")) {
-                    closeout.residual_risks.push(risk_line);
+                FinalAnswerClaimGateDecision::Downgrade { observation, .. } => {
+                    let unsupported_kinds: Vec<String> = observation
+                        .unsupported_claims
+                        .iter()
+                        .map(|claim| format!("{:?}", claim.kind))
+                        .collect();
+                    let risk_line = format!(
+                        "claim_gate: final answer contained unsupported claims ({}); downgraded from {:?} to not_verified",
+                        unsupported_kinds.join(", "),
+                        closeout.status
+                    );
+                    if closeout.status == StageValidationStatus::Passed {
+                        closeout.status = StageValidationStatus::NotVerified;
+                    }
+                    if !closeout
+                        .residual_risks
+                        .iter()
+                        .any(|r| r.contains("claim_gate"))
+                    {
+                        closeout.residual_risks.push(risk_line);
+                    }
+                    context.trace.record(TraceEvent::FinalAnswerClaimGate {
+                        decision: "downgrade".to_string(),
+                        unsupported_claims: observation.unsupported_claims.len(),
+                        repair_attempt: 0,
+                        changed_files: observation.runtime_evidence.changed_files.len(),
+                        verification_proof_status: Some(
+                            observation.runtime_evidence.verification_status.clone(),
+                        ),
+                        summary: format!(
+                            "closeout claim gate: unsupported claims ({}) downgraded status",
+                            unsupported_kinds.join(", ")
+                        ),
+                    });
                 }
-                context.trace.record(TraceEvent::FinalAnswerClaimGate {
-                    decision: "downgrade".to_string(),
-                    unsupported_claims: observation.unsupported_claims.len(),
-                    repair_attempt: 0,
-                    changed_files: observation.runtime_evidence.changed_files.len(),
-                    verification_proof_status: Some(
-                        observation.runtime_evidence.verification_status.clone(),
-                    ),
-                    summary: format!(
-                        "closeout claim gate: unsupported claims ({}) downgraded status",
-                        unsupported_kinds.join(", ")
-                    ),
-                });
+                FinalAnswerClaimGateDecision::Pass => {}
             }
 
             let evidence_snapshot = context.evidence_ledger.snapshot();
+
+            // Settlement gap check: if tools were invoked in a programming workflow
+            // but verification is incomplete, surface the settlement risk.
+            if closeout.changed_files.is_empty()
+                && evidence_snapshot.tool_execution_records > 1
+                && !context.required_validation_commands.is_empty()
+                && closeout.status != StageValidationStatus::Failed
+            {
+                closeout.status = StageValidationStatus::NotVerified;
+                let gap_msg = format!(
+                    "settlement_gap: {} tool record(s) without file changes or validation proof",
+                    evidence_snapshot.tool_execution_records
+                );
+                if !closeout
+                    .residual_risks
+                    .iter()
+                    .any(|r| r.contains("settlement_gap"))
+                {
+                    closeout.residual_risks.push(gap_msg);
+                }
+                context
+                    .trace
+                    .record(TraceEvent::WorkflowFallback {
+                        error: "settlement_gap: tools executed but no file changes or validation proof produced"
+                            .to_string(),
+                    });
+            }
+
+            if !context.settlement_gaps.is_empty()
+                && closeout.status != StageValidationStatus::Failed
+            {
+                closeout.status = StageValidationStatus::NotVerified;
+                let gap_msg = format!(
+                    "settlement_gap: unsettled tool lifecycle record(s): {}",
+                    context.settlement_gaps.join(", ")
+                );
+                if !closeout.residual_risks.iter().any(|risk| risk == &gap_msg) {
+                    closeout.residual_risks.push(gap_msg.clone());
+                }
+                context
+                    .trace
+                    .record(TraceEvent::WorkflowFallback { error: gap_msg });
+            }
+
             let stop_record = context.task_bundle.agent_state.stop_checks.last();
             let terminal_status = context
                 .task_bundle
@@ -510,49 +591,6 @@ impl FinalCloseoutController {
                 acceptance_items: closeout.acceptance.len(),
                 residual_risks: closeout.residual_risks.len(),
             });
-
-            // Settlement gap check: if tools were invoked in a programming workflow
-            // but verification is incomplete, surface the settlement risk.
-            if closeout.changed_files.is_empty()
-                && evidence_snapshot.tool_execution_records > 1
-                && !context.required_validation_commands.is_empty()
-                && closeout.status != StageValidationStatus::Failed
-            {
-                closeout.status = StageValidationStatus::NotVerified;
-                let gap_msg = format!(
-                    "settlement_gap: {} tool record(s) without file changes or validation proof",
-                    evidence_snapshot.tool_execution_records
-                );
-                if !closeout
-                    .residual_risks
-                    .iter()
-                    .any(|r| r.contains("settlement_gap"))
-                {
-                    closeout.residual_risks.push(gap_msg);
-                }
-                context
-                    .trace
-                    .record(TraceEvent::WorkflowFallback {
-                        error: "settlement_gap: tools executed but no file changes or validation proof produced"
-                            .to_string(),
-                    });
-            }
-
-            if !context.settlement_gaps.is_empty()
-                && closeout.status != StageValidationStatus::Failed
-            {
-                closeout.status = StageValidationStatus::NotVerified;
-                let gap_msg = format!(
-                    "settlement_gap: unsettled tool lifecycle record(s): {}",
-                    context.settlement_gaps.join(", ")
-                );
-                if !closeout.residual_risks.iter().any(|risk| risk == &gap_msg) {
-                    closeout.residual_risks.push(gap_msg.clone());
-                }
-                context
-                    .trace
-                    .record(TraceEvent::WorkflowFallback { error: gap_msg });
-            }
 
             if let Some(tx) = context.tx {
                 let _ = tx
@@ -731,6 +769,8 @@ impl FinalCloseoutController {
                 ),
             });
         }
+
+        FinalCloseoutFlow::Completed
     }
 }
 

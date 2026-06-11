@@ -57,6 +57,7 @@ pub(super) struct NoToolAssistantResponseContext<'a> {
     pub(super) content: &'a str,
     pub(super) route: &'a IntentRoute,
     pub(super) evidence_ledger: &'a EvidenceLedger,
+    pub(super) verification_proof: &'a VerificationProof,
     pub(super) exposed_tool_names: &'a HashSet<String>,
     pub(super) tool_calls_made: bool,
     pub(super) pseudo_tool_retry_used: &'a mut bool,
@@ -283,10 +284,7 @@ Only report a tool as unavailable when it is not exposed in the current tool lis
             claim_gate_repair_used: *context.claim_gate_repair_used,
             route: context.route,
             evidence_ledger: context.evidence_ledger,
-            verification_proof: &VerificationProof::new(
-                crate::engine::verification_proof::VerificationProofStatus::NotRun,
-                "not evaluated",
-            ),
+            verification_proof: context.verification_proof,
             required_validation_commands: context.required_validation_commands,
             iterations_used: context.iterations_used,
             max_iterations: context.max_iterations,
@@ -663,6 +661,10 @@ mod tests {
     async fn no_tool_response_retries_when_controller_decides_to_correct() {
         let route = IntentRouter::new().route("运行 python3 app.py 看看输出");
         let evidence_ledger = EvidenceLedger::new();
+        let verification_proof = VerificationProof::new(
+            crate::engine::verification_proof::VerificationProofStatus::NotRun,
+            "not evaluated",
+        );
         let trace = trace();
         let provider = MockProvider {
             base_url: "mock://local",
@@ -681,6 +683,7 @@ mod tests {
                 content: "```bash\npython3 app.py\n```",
                 route: &route,
                 evidence_ledger: &evidence_ledger,
+                verification_proof: &verification_proof,
                 exposed_tool_names: &exposed_tools,
                 tool_calls_made: false,
                 pseudo_tool_retry_used: &mut pseudo_tool_retry_used,
@@ -717,6 +720,10 @@ mod tests {
     async fn no_tool_response_finishes_and_emits_nonstreaming_text_chunk() {
         let route = IntentRouter::new().route("say hello");
         let evidence_ledger = EvidenceLedger::new();
+        let verification_proof = VerificationProof::new(
+            crate::engine::verification_proof::VerificationProofStatus::NotRun,
+            "not evaluated",
+        );
         let trace = trace();
         let provider = MockProvider {
             base_url: "https://api.minimaxi.com/v1",
@@ -736,6 +743,7 @@ mod tests {
                 content: "hello",
                 route: &route,
                 evidence_ledger: &evidence_ledger,
+                verification_proof: &verification_proof,
                 exposed_tool_names: &exposed_tools,
                 tool_calls_made: false,
                 pseudo_tool_retry_used: &mut pseudo_tool_retry_used,
