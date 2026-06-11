@@ -82,6 +82,7 @@ pub struct SessionExport {
     pub compaction_count: usize,
     pub unresolved_settlement: Vec<String>,
     pub tool_outputs: Vec<ExportToolOutput>,
+    pub goal_summary: Option<serde_json::Value>,
 }
 
 /// Tool output metadata in the export.
@@ -130,6 +131,7 @@ pub struct SessionExportInput {
     pub compaction_count: usize,
     pub unresolved_settlement: Vec<String>,
     pub tool_outputs: Vec<ExportToolOutput>,
+    pub goal_summary: Option<serde_json::Value>,
 }
 
 /// Build a session export.
@@ -219,6 +221,7 @@ pub fn build_export(
         compaction_count: input.compaction_count,
         unresolved_settlement,
         tool_outputs,
+        goal_summary: input.goal_summary,
     }
 }
 
@@ -441,6 +444,7 @@ mod tests {
                 tool_name: "bash".into(),
                 original_bytes: 1024,
             }],
+            goal_summary: None,
         }
     }
 

@@ -582,9 +582,10 @@ impl TuiSessionManager {
             }
         };
 
+        let session_id_owned = session.id.clone();
         Ok(crate::session_store::export::build_export(
             crate::session_store::export::SessionExportInput {
-                session_id: session.id,
+                session_id: session_id_owned.clone(),
                 title: Some(session.title),
                 model: Some(session.model),
                 messages,
@@ -598,6 +599,7 @@ impl TuiSessionManager {
                 compaction_count,
                 unresolved_settlement,
                 tool_outputs,
+                goal_summary: build_goal_export_summary(&self.store, &session_id_owned),
             },
             privacy,
             format,
@@ -1034,6 +1036,48 @@ fn compact_preview_line(input: &str, max_chars: usize) -> String {
         out.push(ch);
     }
     out
+}
+
+fn build_goal_export_summary(
+    store: &Arc<SessionStore>,
+    session_id: &str,
+) -> Option<serde_json::Value> {
+    let db = store.as_ref();
+    let active = db
+        .get_active_goal_run(session_id)
+        .ok()
+        .flatten()
+        .or_else(|| db.get_goal_run(session_id).ok().flatten())?;
+    let steps = db.list_goal_steps(&active.id, 50).ok().unwrap_or_default();
+    let steps_json: Vec<serde_json::Value> = steps
+        .iter()
+        .map(|s| {
+            serde_json::json!({
+                "id": s.id,
+                "turn_index": s.turn_index,
+                "decision": s.decision,
+                "closeout_status": s.closeout_status,
+                "verification_status": s.verification_status,
+                "changed_files": s.changed_files,
+                "validation_items": s.validation_items,
+                "score": s.score,
+                "summary": s.summary,
+                "created_at": s.created_at,
+            })
+        })
+        .collect();
+    Some(serde_json::json!({
+        "goal_id": active.id,
+        "objective": active.objective,
+        "status": active.status,
+        "turn_count": active.turn_count,
+        "last_closeout_status": active.last_closeout_status,
+        "last_blocker": active.last_blocker,
+        "created_at": active.created_at,
+        "updated_at": active.updated_at,
+        "step_count": steps.len(),
+        "steps": steps_json,
+    }))
 }
 
 pub mod export_builder;

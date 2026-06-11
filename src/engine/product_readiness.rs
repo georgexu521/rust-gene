@@ -33,6 +33,7 @@ pub fn collect_readiness_checks() -> Vec<ReadinessCheck> {
         check_lsp_status(),
         check_permissions_mode(),
         check_runtime_available(),
+        check_goal_runner_health(),
     ]
 }
 
@@ -181,6 +182,73 @@ pub fn readiness_report() -> String {
     }
 
     out
+}
+
+fn check_goal_runner_health() -> ReadinessCheck {
+    let config = crate::services::config::runtime_config();
+    if !config.features.goals {
+        return ReadinessCheck {
+            name: "goal_runner".into(),
+            status: ReadinessStatus::Warn,
+            detail: "Goal mode is not enabled (features.goals = false).".into(),
+            remediation: Some(
+                "Set features.goals = true in config to enable Codex-style durable goal tracking."
+                    .into(),
+            ),
+        };
+    }
+
+    let store = crate::session_store::SessionStore::default_path();
+    if !store.exists() {
+        return ReadinessCheck {
+            name: "goal_runner".into(),
+            status: ReadinessStatus::Warn,
+            detail: "Session store not found; cannot verify goal persistence.".into(),
+            remediation: Some("Start a session to create the store.".into()),
+        };
+    }
+
+    match crate::session_store::SessionStore::open(&store) {
+        Ok(db) => {
+            let conn = db.shared_conn();
+            let guard = conn.lock().unwrap_or_else(|e| e.into_inner());
+            let active_count: i64 = guard
+                .query_row(
+                    "SELECT COUNT(*) FROM goal_runs WHERE status = ?1",
+                    rusqlite::params!["\"Active\""],
+                    |row| row.get(0),
+                )
+                .unwrap_or(-1);
+
+            if active_count > 0 {
+                ReadinessCheck {
+                    name: "goal_runner".into(),
+                    status: ReadinessStatus::Warn,
+                    detail: format!(
+                        "{} active goal(s) found in store. Use /goal resume to continue.",
+                        active_count
+                    ),
+                    remediation: Some(
+                        "Active goals are paused on restart for safety. Use /goal resume to continue."
+                            .into(),
+                    ),
+                }
+            } else {
+                ReadinessCheck {
+                    name: "goal_runner".into(),
+                    status: ReadinessStatus::Ready,
+                    detail: "Goal runner infrastructure is healthy.".into(),
+                    remediation: None,
+                }
+            }
+        }
+        Err(e) => ReadinessCheck {
+            name: "goal_runner".into(),
+            status: ReadinessStatus::Warn,
+            detail: format!("Could not open session store: {}", e),
+            remediation: None,
+        },
+    }
 }
 
 #[cfg(test)]
