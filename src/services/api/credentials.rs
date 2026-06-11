@@ -76,9 +76,15 @@ pub fn save_credential(provider_id: &str, key: &str) -> CredentialSaveOutcome {
             reason: format!("unknown provider '{}'", provider_id),
         };
     };
-    if key.trim().is_empty() {
+    let key = key.trim();
+    if key.is_empty() {
         return CredentialSaveOutcome::Rejected {
             reason: "key must not be empty".to_string(),
+        };
+    }
+    if key.chars().any(|ch| ch.is_control()) {
+        return CredentialSaveOutcome::Rejected {
+            reason: "key must be a single-line printable value".to_string(),
         };
     }
 
@@ -112,7 +118,7 @@ pub fn save_credential(provider_id: &str, key: &str) -> CredentialSaveOutcome {
         !target_vars.iter().any(|var| line_assigns_var(trimmed, var))
     });
 
-    lines.push(format!("{}={}", key_env_var, key));
+    lines.push(format!("{}={}", key_env_var, dotenv_value(key)));
     lines.push(format!("PRIORITY_AGENT_DEFAULT_PROVIDER={}", provider_id));
 
     let content = lines.join("\n") + "\n";
@@ -152,6 +158,18 @@ fn line_assigns_var(trimmed_line: &str, var: &str) -> bool {
         .unwrap_or(trimmed_line)
         .trim_start();
     assignment.starts_with(&format!("{}=", var))
+}
+
+fn dotenv_value(value: &str) -> String {
+    if value
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-' | '.' | ':' | '/'))
+    {
+        return value.to_string();
+    }
+
+    let escaped = value.replace('\\', "\\\\").replace('"', "\\\"");
+    format!("\"{}\"", escaped)
 }
 
 /// Status of a provider's credentials.
@@ -356,6 +374,58 @@ mod tests {
         assert_eq!(
             std::env::var("PRIORITY_AGENT_DEFAULT_PROVIDER").unwrap_or_default(),
             "minimax"
+        );
+    }
+
+    #[test]
+    fn save_credential_trims_key_before_persisting() {
+        let tmp = tempfile::tempdir().unwrap();
+        let env_path = tmp.path().join(".priority-agent").join(".env");
+        let mut env = crate::test_utils::env_guard::EnvVarGuard::acquire_blocking();
+        env.set(
+            "PRIORITY_AGENT_CREDENTIAL_ENV_PATH",
+            &env_path.display().to_string(),
+        );
+
+        let outcome = save_credential("minimax", "  trimmed-key  ");
+        assert_eq!(outcome, CredentialSaveOutcome::Verified);
+
+        let content = std::fs::read_to_string(&env_path).unwrap();
+        assert!(content.contains("MINIMAX_API_KEY=trimmed-key\n"));
+        assert_eq!(
+            std::env::var("MINIMAX_API_KEY").unwrap_or_default(),
+            "trimmed-key"
+        );
+    }
+
+    #[test]
+    fn save_credential_rejects_multiline_key() {
+        let result = save_credential("minimax", "first-line\nSECOND_VAR=injected");
+        assert!(matches!(
+            result,
+            CredentialSaveOutcome::Rejected { reason }
+                if reason.contains("single-line printable")
+        ));
+    }
+
+    #[test]
+    fn save_credential_quotes_dotenv_special_values() {
+        let tmp = tempfile::tempdir().unwrap();
+        let env_path = tmp.path().join(".priority-agent").join(".env");
+        let mut env = crate::test_utils::env_guard::EnvVarGuard::acquire_blocking();
+        env.set(
+            "PRIORITY_AGENT_CREDENTIAL_ENV_PATH",
+            &env_path.display().to_string(),
+        );
+
+        let outcome = save_credential("minimax", "key#with=specials");
+        assert_eq!(outcome, CredentialSaveOutcome::Verified);
+
+        let content = std::fs::read_to_string(&env_path).unwrap();
+        assert!(content.contains("MINIMAX_API_KEY=\"key#with=specials\"\n"));
+        assert_eq!(
+            std::env::var("MINIMAX_API_KEY").unwrap_or_default(),
+            "key#with=specials"
         );
     }
 

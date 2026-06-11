@@ -79,8 +79,8 @@ test.describe("desktop UI smoke", () => {
     await expect(page.getByRole("dialog", { name: "Provider controls" })).not.toBeVisible();
     await expect(page.getByRole("button", { name: "New Chat" })).toBeVisible();
     await expect(page.getByRole("button", { name: "rust-agent" })).toBeVisible();
-    await expect(page.getByLabel("Current session")).toContainText("Continuing");
-    await expect(page.getByLabel("Current session")).toContainText("Desktop app Phase 1");
+    await expect(page.getByLabel("Current session", { exact: true })).toContainText("Continuing");
+    await expect(page.getByLabel("Current session", { exact: true })).toContainText("Desktop app Phase 1");
     await expect(page.locator(".startup-state-card")).toContainText("Restored session");
     await expect(page.locator(".startup-state-card")).toContainText("Desktop app Phase 1");
     await page.getByRole("button", { name: "Environment information" }).click();
@@ -116,15 +116,15 @@ test.describe("desktop UI smoke", () => {
     await expect(
       page.locator(".recent-list .recent-item", { hasText: "Daily desktop flow" }),
     ).toBeVisible();
-    await expect(page.getByLabel("Current session")).toContainText("Daily desktop flow");
+    await expect(page.getByLabel("Current session", { exact: true })).toContainText("Daily desktop flow");
 
     await page.locator(".recent-item-main", { hasText: "Daily desktop flow" }).click();
     await expect(page.getByText("Loaded preview session: web-preview")).toBeVisible();
 
     await page.getByRole("button", { name: "New Chat" }).click();
     await expect(page.getByText("Loaded preview session: web-preview")).not.toBeVisible();
-    await expect(page.getByLabel("Current session")).toContainText("New conversation");
-    await expect(page.getByLabel("Current session")).toContainText("No active session");
+    await expect(page.getByLabel("Current session", { exact: true })).toContainText("New conversation");
+    await expect(page.getByLabel("Current session", { exact: true })).toContainText("No active session");
     await expect(page.locator(".startup-state-card")).not.toBeVisible();
     await expect(
       page.locator(".empty-state").getByRole("heading", { name: "What should we build in rust-agent?" }),

@@ -6,6 +6,9 @@
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
+use once_cell::sync::Lazy;
+use regex::Regex;
+
 /// Export format.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -223,16 +226,46 @@ pub fn build_export(
 pub fn redact_content(content: &str) -> String {
     content
         .lines()
-        .filter(|line| {
-            let lower = line.to_lowercase();
-            !(lower.contains("api_key")
-                || lower.contains("secret")
-                || lower.contains("token")
-                || lower.contains("password")
-                || lower.contains("credential"))
-        })
+        .map(redact_sensitive_line)
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+fn redact_sensitive_line(line: &str) -> String {
+    static SENSITIVE_ASSIGNMENT_RE: Lazy<Regex> = Lazy::new(|| {
+        Regex::new(
+            r#"(?ix)
+            \b(?:api[_-]?key|secret|token|password|credential|authorization)\b
+            \s*[:=]\s*
+            (?:"[^"]*"|'[^']*'|[^\s,;]+)
+            "#,
+        )
+        .expect("valid sensitive assignment redaction regex")
+    });
+    static BEARER_RE: Lazy<Regex> = Lazy::new(|| {
+        Regex::new(r"(?i)\bbearer\s+[A-Za-z0-9._~+/=-]{12,}").expect("valid bearer redaction regex")
+    });
+    static STANDALONE_SECRET_RE: Lazy<Regex> = Lazy::new(|| {
+        Regex::new(
+            r#"(?ix)
+            \b(?:
+                sk|pk|rk|ghp|gho|ghu|ghs|ghr|github_pat|glpat|hf|xox[baprs]
+            )[-_][A-Za-z0-9][A-Za-z0-9._-]{10,}\b
+            "#,
+        )
+        .expect("valid standalone secret redaction regex")
+    });
+    static JWT_RE: Lazy<Regex> = Lazy::new(|| {
+        Regex::new(r"\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b")
+            .expect("valid jwt redaction regex")
+    });
+
+    let line = BEARER_RE.replace_all(line, "Bearer [REDACTED]");
+    let line = STANDALONE_SECRET_RE.replace_all(&line, "[REDACTED]");
+    let line = JWT_RE.replace_all(&line, "[REDACTED]");
+    SENSITIVE_ASSIGNMENT_RE
+        .replace_all(&line, "[REDACTED]")
+        .to_string()
 }
 
 /// Serialize the export to a string.
@@ -443,6 +476,23 @@ mod tests {
         assert!(export.diagnostics[0].path.is_none());
         assert!(export.diagnostics[0].detail.is_none());
         assert_eq!(export.tool_stats["calls"]["file_write"], 1);
+    }
+
+    #[test]
+    fn redaction_replaces_secret_shapes_without_keyword_labels() {
+        let content = "\
+normal line
+use sk-live-abcdefghijklmnopqrstuvwxyz here
+Authorization: Bearer abcdefghijklmnopqrstuvwxyz012345
+jwt eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJnZXgifQ.signaturevalue";
+
+        let redacted = redact_content(content);
+
+        assert!(redacted.contains("normal line"));
+        assert!(!redacted.contains("sk-live-"));
+        assert!(!redacted.contains("abcdefghijklmnopqrstuvwxyz012345"));
+        assert!(!redacted.contains("eyJhbGci"));
+        assert!(redacted.contains("[REDACTED]"));
     }
 
     #[test]

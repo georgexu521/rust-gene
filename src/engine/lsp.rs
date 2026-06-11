@@ -1022,6 +1022,26 @@ impl LspManager {
     /// Otherwise, attempts to auto-detect and start a server from the
     /// built-in registry. Respects `lsp.enabled` and `lsp.auto_detect`.
     pub fn ensure_server_for_extension(&self, path: &std::path::Path) {
+        let config = crate::services::config::AppConfig::load()
+            .map(|config| config.lsp)
+            .unwrap_or_default();
+        self.ensure_server_for_extension_with_config(path, &config);
+    }
+
+    pub fn ensure_server_for_extension_with_config(
+        &self,
+        path: &std::path::Path,
+        config: &crate::services::config::LspConfig,
+    ) {
+        if !config.enabled {
+            debug!("LSP disabled by config; skipping lazy server start");
+            return;
+        }
+        if !config.auto_detect {
+            debug!("LSP auto-detection disabled by config; skipping lazy server start");
+            return;
+        }
+
         let Some(ext) = path.extension().and_then(|e| e.to_str()) else {
             return;
         };
@@ -1030,7 +1050,8 @@ impl LspManager {
         // Check if a server for this extension is already registered.
         let clients = self.clients.read().unwrap();
         for entry in Self::registry_entries() {
-            if entry.extensions.iter().any(|e| e == &ext) {
+            let override_config = lsp_server_override(config, &entry);
+            if lsp_registry_entry_handles_extension(&entry, override_config, &ext) {
                 let lang_name = entry.language.to_lowercase();
                 let already = clients
                     .keys()
@@ -1044,11 +1065,6 @@ impl LspManager {
 
         // Not running yet — try to start one.
         let working_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-        let _config = crate::services::config::LspConfig {
-            enabled: true,
-            auto_detect: true,
-            ..Default::default()
-        };
         let root_uri = format!(
             "file://{}",
             working_dir
@@ -1058,13 +1074,30 @@ impl LspManager {
         );
 
         for entry in Self::registry_entries() {
-            if entry.extensions.iter().any(|e| e == &ext) {
+            let override_config = lsp_server_override(config, &entry);
+            if lsp_registry_entry_handles_extension(&entry, override_config, &ext) {
+                if override_config.is_some_and(|entry| entry.disabled) {
+                    info!("LSP server {} disabled by config", entry.command);
+                    return;
+                }
                 let client = Arc::new(LspClient::new(LspServerConfig {
                     name: format!("{}-lazy", entry.language),
-                    command: entry.command.clone(),
-                    args: entry.args.clone(),
+                    command: override_config
+                        .and_then(|config| config.command.clone())
+                        .unwrap_or_else(|| entry.command.clone()),
+                    args: override_config
+                        .map(|config| {
+                            if config.args.is_empty() {
+                                entry.args.clone()
+                            } else {
+                                config.args.clone()
+                            }
+                        })
+                        .unwrap_or_else(|| entry.args.clone()),
                     root_uri: root_uri.clone(),
-                    env: HashMap::new(),
+                    env: override_config
+                        .map(|config| config.env.clone())
+                        .unwrap_or_default(),
                 }));
                 // Start initialisation in background — don't block the tool call.
                 let client_clone = client.clone();
@@ -1124,6 +1157,31 @@ impl Default for LspManager {
     fn default() -> Self {
         Self::new()
     }
+}
+
+fn lsp_server_override<'a>(
+    config: &'a crate::services::config::LspConfig,
+    entry: &LspRegistryEntry,
+) -> Option<&'a crate::services::config::LspServerConfigEntry> {
+    config
+        .servers
+        .get(&entry.command)
+        .or_else(|| config.servers.get(&entry.language))
+        .or_else(|| config.servers.get(&entry.language.to_lowercase()))
+}
+
+fn lsp_registry_entry_handles_extension(
+    entry: &LspRegistryEntry,
+    override_config: Option<&crate::services::config::LspServerConfigEntry>,
+    ext: &str,
+) -> bool {
+    let extensions = override_config
+        .filter(|config| !config.extensions.is_empty())
+        .map(|config| config.extensions.as_slice())
+        .unwrap_or(entry.extensions.as_slice());
+    extensions
+        .iter()
+        .any(|configured_ext| configured_ext.eq_ignore_ascii_case(ext))
 }
 
 /// 辅助函数：将文件路径转换为 LSP URI
@@ -1189,6 +1247,58 @@ mod tests {
     #[test]
     fn test_lsp_manager_creation() {
         let manager = LspManager::new();
+        assert!(manager.server_names().is_empty());
+    }
+
+    #[test]
+    fn lazy_start_respects_disabled_lsp_config() {
+        let manager = LspManager::new();
+        let config = crate::services::config::LspConfig {
+            enabled: false,
+            auto_detect: true,
+            ..Default::default()
+        };
+
+        manager.ensure_server_for_extension_with_config(Path::new("src/main.rs"), &config);
+
+        assert!(manager.server_names().is_empty());
+    }
+
+    #[test]
+    fn lazy_start_respects_auto_detect_disabled_config() {
+        let manager = LspManager::new();
+        let config = crate::services::config::LspConfig {
+            enabled: true,
+            auto_detect: false,
+            ..Default::default()
+        };
+
+        manager.ensure_server_for_extension_with_config(Path::new("src/main.rs"), &config);
+
+        assert!(manager.server_names().is_empty());
+    }
+
+    #[test]
+    fn lazy_start_respects_disabled_server_override() {
+        let manager = LspManager::new();
+        let mut config = crate::services::config::LspConfig {
+            enabled: true,
+            auto_detect: true,
+            ..Default::default()
+        };
+        config.servers.insert(
+            "rust-analyzer".to_string(),
+            crate::services::config::LspServerConfigEntry {
+                command: None,
+                args: Vec::new(),
+                extensions: Vec::new(),
+                env: HashMap::new(),
+                disabled: true,
+            },
+        );
+
+        manager.ensure_server_for_extension_with_config(Path::new("src/main.rs"), &config);
+
         assert!(manager.server_names().is_empty());
     }
 
