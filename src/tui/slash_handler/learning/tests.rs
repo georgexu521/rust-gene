@@ -332,7 +332,7 @@ fn compact_inline_truncates_and_joins() {
 
 #[test]
 fn count_debug_values_counts_distinct() {
-    let items = vec!["a", "b", "a", "c", "b", "a"];
+    let items = ["a", "b", "a", "c", "b", "a"];
     let counts: Vec<(String, usize)> = count_debug_values::<&&str>(items.iter());
     assert_eq!(counts.len(), 3);
     let a = counts.iter().find(|c| c.0 == "\"a\"").unwrap();

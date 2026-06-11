@@ -347,11 +347,9 @@ mod tests {
     fn with_env_vars(vars: &[(&str, Option<&str>)], f: impl FnOnce()) {
         let mut env = EnvVarGuard::acquire_blocking();
         let config_home = tempfile::tempdir().expect("temp config home");
-        env.set(
-            "XDG_CONFIG_HOME",
-            &config_home.path().to_string_lossy().to_string(),
-        );
-        env.set("HOME", &config_home.path().to_string_lossy().to_string());
+        let config_home_path = config_home.path().to_string_lossy();
+        env.set("XDG_CONFIG_HOME", config_home_path.as_ref());
+        env.set("HOME", config_home_path.as_ref());
         for spec in crate::services::api::provider::DEFAULT_PROVIDER_ENV_SPECS {
             for key in spec
                 .key_env_vars

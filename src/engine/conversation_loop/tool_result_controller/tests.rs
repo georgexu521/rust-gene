@@ -18,12 +18,14 @@ async fn appends_provider_tool_result_and_records_evidence() {
     append_provider_tool_result(
         &tool_call("bash"),
         &mut result,
-        &mut ledger,
-        &mut tool_results_text,
-        &mut messages,
-        Some("session-test"),
-        std::path::Path::new("."),
-        None,
+        ProviderToolResultAppendContext {
+            evidence_ledger: &mut ledger,
+            tool_results_text: &mut tool_results_text,
+            messages: &mut messages,
+            session_id: Some("session-test"),
+            working_dir: std::path::Path::new("."),
+            store: None,
+        },
     )
     .await;
 

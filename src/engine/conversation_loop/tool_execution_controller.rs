@@ -633,7 +633,6 @@ impl ToolExecutionController {
         let mut parallel_jobs: Vec<(usize, _)> = Vec::new();
         let mut results: Vec<(ToolCall, ToolResult)> = Vec::new();
         let mut scheduled_count = 0usize;
-        let mut serial_boundary_seen = false;
         lifecycle.pending_batch(tool_calls);
         let runtime_context = ToolRuntimeContext::new(ToolRuntimeContextInput {
             route,
@@ -667,7 +666,6 @@ impl ToolExecutionController {
         } else {
             read_only_tool_concurrency().min(resource_policy.parallelism_limit.max(1))
         };
-        let mut segment_index: u64 = 0;
         let mut serial_boundary_seen = false;
 
         // ── Phase 1: scan and categorize ──

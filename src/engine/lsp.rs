@@ -862,7 +862,14 @@ impl LspManager {
 
     /// 关闭所有 LSP 客户端并清理子进程
     pub async fn shutdown(&self) {
-        for (name, client) in self.clients.read().unwrap().iter() {
+        let clients = self
+            .clients
+            .read()
+            .unwrap()
+            .iter()
+            .map(|(name, client)| (name.clone(), Arc::clone(client)))
+            .collect::<Vec<_>>();
+        for (name, client) in clients {
             if let Err(e) = client.shutdown().await {
                 warn!("Failed to shutdown LSP client {}: {}", name, e);
             }
@@ -902,7 +909,8 @@ impl LspManager {
 
     /// 动态注销 LSP 服务器
     pub async fn unregister_server(&self, name: &str) -> anyhow::Result<()> {
-        if let Some(client) = self.clients.write().unwrap().remove(name) {
+        let client = { self.clients.write().unwrap().remove(name) };
+        if let Some(client) = client {
             client.shutdown().await?;
             info!("Unregistered LSP server: {}", name);
             Ok(())
@@ -1086,9 +1094,16 @@ impl LspManager {
     pub async fn get_diagnostics(&self, path: &str) -> Vec<LspDiagnostic> {
         // 尝试将 path 转换为 URI
         let uri = path_to_uri(std::path::Path::new(path));
+        let clients = self
+            .clients
+            .read()
+            .unwrap()
+            .values()
+            .cloned()
+            .collect::<Vec<_>>();
 
         // 遍历所有客户端查找诊断
-        for client in self.clients.read().unwrap().values() {
+        for client in clients {
             let diags = client.get_diagnostics(&uri).await;
             if !diags.is_empty() {
                 return diags;

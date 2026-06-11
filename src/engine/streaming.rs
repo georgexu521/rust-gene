@@ -1005,7 +1005,7 @@ impl StreamingQueryEngine {
 
             // 2. 检查是否需要压缩
             {
-                let mut hist = history.lock().await;
+                let hist = history.lock().await;
                 let mut comp = compressor.lock().await;
                 if comp.needs_compression(&hist) {
                     let before_tokens =
@@ -1029,17 +1029,22 @@ impl StreamingQueryEngine {
                             "streaming history exceeded compression threshold",
                         ));
                         drop(comp);
-                        if let (Some(mem_mutex), Some(ref sid)) =
-                            (&engine.memory_manager, &engine.session_id)
-                        {
+                        let pre_compress_flush = engine
+                            .memory_manager
+                            .as_ref()
+                            .zip(engine.session_id.as_ref())
+                            .map(|(mem_mutex, sid)| (mem_mutex.clone(), sid.clone(), hist.clone()));
+                        drop(hist);
+                        if let Some((mem_mutex, sid, pre_compress_history)) = pre_compress_flush {
                             let mut mem = mem_mutex.lock().await;
                             mem.flush_session_with_reason_async(
-                                sid.clone(),
+                                sid,
                                 crate::memory::MemoryFlushReason::PreCompress,
-                                &hist,
+                                &pre_compress_history,
                             )
                             .await;
                         }
+                        let mut hist = history.lock().await;
                         let mut comp = compressor.lock().await;
                         comp.set_llm_summary_stable_prefix(engine.system_prompt.clone());
                         let compressed = comp.compress_async(&hist).await;

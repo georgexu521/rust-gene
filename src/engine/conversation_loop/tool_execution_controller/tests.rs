@@ -685,17 +685,48 @@ async fn pre_executed_read_only_result_after_serial_boundary_is_rerun() {
 #[tokio::test]
 async fn read_only_read_only_runs_as_parallel_segment() {
     let writes = Arc::new(AtomicUsize::new(0));
+    let loop_instance = probe_loop(writes);
     let tool_calls = vec![
-        tool_call("r1", "probe_read"),
-        tool_call("r2", "probe_read"),
-        tool_call("r3", "probe_read"),
+        tool_call_with_args("r1", "probe_read", json!({"slot": 1})),
+        tool_call_with_args("r2", "probe_read", json!({"slot": 2})),
+        tool_call_with_args("r3", "probe_read", json!({"slot": 3})),
     ];
-    let batch = execute_probe_tools(&probe_loop(writes), &tool_calls, HashMap::new()).await;
-    // Read-only tools execute without error — verify the batch was created.
-    assert!(
-        !batch.results().is_empty() || batch.pre_executed_count() > 0,
-        "read-only tools should produce results or pre-executed results"
+    let trace = TraceCollector::new(crate::engine::trace::TurnTrace::new(
+        "session",
+        1,
+        "probe parallel reads",
+    ));
+    let batch = execute_probe_tools_with_trace(
+        &loop_instance,
+        &tool_calls,
+        HashMap::new(),
+        Some(trace.clone()),
+    )
+    .await;
+    assert_eq!(
+        batch
+            .results()
+            .iter()
+            .map(|(tc, _)| tc.id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["r1", "r2", "r3"]
     );
+    let parallel_started = trace
+        .snapshot()
+        .events
+        .iter()
+        .filter(|event| {
+            matches!(
+                event,
+                TraceEvent::ToolStarted {
+                    tool,
+                    parallel: true,
+                    ..
+                } if tool == "probe_read"
+            )
+        })
+        .count();
+    assert_eq!(parallel_started, 3);
 }
 
 #[tokio::test]
@@ -768,15 +799,23 @@ async fn denied_tool_flushes_prior_parallel_segment() {
     let writes = Arc::new(AtomicUsize::new(0));
     let tool_calls = vec![
         tool_call("r1", "probe_read"),
-        tool_call("w1", "probe_write"),
+        tool_call("denied", "missing_tool"),
+        tool_call("r2", "probe_read"),
     ];
     let batch = execute_probe_tools(&probe_loop(writes), &tool_calls, HashMap::new()).await;
-    let ids: Vec<&str> = batch
-        .results()
-        .iter()
-        .map(|(tc, _)| tc.id.as_str())
-        .collect();
-    assert_eq!(ids, vec!["r1", "w1"]);
+    let results = batch.results();
+    assert_eq!(
+        results
+            .iter()
+            .map(|(tc, _)| tc.id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["r1", "denied", "r2"]
+    );
+    assert_eq!(results[0].1.content, "writes_seen=0");
+    assert!(!results[1].1.success);
+    assert!(results[1].1.content.contains("not found"));
+    assert_eq!(results[2].1.content, "writes_seen=0");
+    assert_eq!(batch.denied_count(), 1);
 }
 
 #[tokio::test]
@@ -787,11 +826,13 @@ async fn pre_executed_not_reused_after_serial_boundary() {
         tool_call("w1", "probe_write"),
         tool_call("r2", "probe_read"),
     ];
-    let batch = execute_probe_tools(&probe_loop(writes), &tool_calls, HashMap::new()).await;
+    let pre_executed = HashMap::from([(2usize, ToolResult::success("stale_pre_executed_read"))]);
+    let batch = execute_probe_tools(&probe_loop(writes), &tool_calls, pre_executed).await;
     let (_, r2) = batch
         .results()
         .iter()
         .find(|(tc, _)| tc.id == "r2")
         .unwrap();
     assert_eq!(r2.content, "writes_seen=1");
+    assert_eq!(batch.pre_executed_count(), 0);
 }

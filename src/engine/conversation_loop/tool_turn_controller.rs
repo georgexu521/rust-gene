@@ -1,6 +1,8 @@
 use super::context_budget_controller::ContextBudgetController;
 use super::runtime_diet::RuntimeDietSnapshot;
-use super::tool_result_controller::{append_provider_tool_result, NormalizedToolResult};
+use super::tool_result_controller::{
+    append_provider_tool_result, NormalizedToolResult, ProviderToolResultAppendContext,
+};
 use crate::engine::evidence_ledger::EvidenceLedger;
 use crate::services::api::{Message, ToolCall};
 use crate::tools::ToolResult;
@@ -27,12 +29,14 @@ impl ToolTurnController {
         let normalized = append_provider_tool_result(
             tool_call,
             result,
-            context.evidence_ledger,
-            context.tool_results_text,
-            context.messages,
-            context.session_id,
-            context.working_dir,
-            context.store,
+            ProviderToolResultAppendContext {
+                evidence_ledger: context.evidence_ledger,
+                tool_results_text: context.tool_results_text,
+                messages: context.messages,
+                session_id: context.session_id,
+                working_dir: context.working_dir,
+                store: context.store,
+            },
         )
         .await;
         let result_budget = ContextBudgetController::observe_tool_result(&normalized);

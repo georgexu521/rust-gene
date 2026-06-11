@@ -235,8 +235,7 @@ pub fn persist_runtime_message(
         } => {
             let tc_json = tool_calls
                 .as_ref()
-                .map(|tc| serde_json::to_value(tc).ok())
-                .flatten();
+                .and_then(|tc| serde_json::to_value(tc).ok());
             store.add_message(session_id, "assistant", content, tc_json.as_ref(), None)?;
         }
         crate::services::api::Message::Tool {

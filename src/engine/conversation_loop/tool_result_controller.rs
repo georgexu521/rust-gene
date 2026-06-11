@@ -257,13 +257,16 @@ impl ToolResultContextPolicy {
 pub(super) async fn append_provider_tool_result(
     tool_call: &ToolCall,
     result: &mut ToolResult,
-    evidence_ledger: &mut EvidenceLedger,
-    tool_results_text: &mut String,
-    messages: &mut Vec<Message>,
-    session_id: Option<&str>,
-    working_dir: &Path,
-    store: Option<&crate::session_store::SessionStore>,
+    context: ProviderToolResultAppendContext<'_>,
 ) -> NormalizedToolResult {
+    let ProviderToolResultAppendContext {
+        evidence_ledger,
+        tool_results_text,
+        messages,
+        session_id,
+        working_dir,
+        store,
+    } = context;
     let normalized =
         ToolResultNormalizer::normalize_after_execution(tool_call, result, session_id, working_dir)
             .await;
@@ -277,6 +280,15 @@ pub(super) async fn append_provider_tool_result(
         let _ = crate::session_store::message_ops::persist_runtime_message(s, sid, &tool_msg);
     }
     normalized
+}
+
+pub(super) struct ProviderToolResultAppendContext<'a> {
+    pub(super) evidence_ledger: &'a mut EvidenceLedger,
+    pub(super) tool_results_text: &'a mut String,
+    pub(super) messages: &'a mut Vec<Message>,
+    pub(super) session_id: Option<&'a str>,
+    pub(super) working_dir: &'a Path,
+    pub(super) store: Option<&'a crate::session_store::SessionStore>,
 }
 
 pub(super) fn invalid_tool_params_result(
