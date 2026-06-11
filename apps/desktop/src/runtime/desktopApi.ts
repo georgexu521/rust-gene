@@ -1601,6 +1601,11 @@ export type DesktopGoalStep = {
   summary: string;
 };
 
+export type DesktopGoalCommandResult = {
+  status: DesktopGoalStatus;
+  next_prompt: string | null;
+};
+
 export function goalStatus(): Promise<DesktopGoalStatus> {
   if (!isTauriRuntime()) {
     return Promise.resolve({
@@ -1620,20 +1625,23 @@ export function goalStatus(): Promise<DesktopGoalStatus> {
   return invoke("goal_status");
 }
 
-export function goalStart(objective: string): Promise<DesktopGoalStatus> {
+export function goalStart(objective: string): Promise<DesktopGoalCommandResult> {
   if (!isTauriRuntime()) {
     return Promise.resolve({
-      goal_id: "preview-goal",
-      objective,
-      status: "Active",
-      turn_count: 0,
-      max_turns: 10,
-      last_decision: null,
-      last_closeout: null,
-      last_proof: null,
-      last_blocker: null,
-      step_count: 0,
-      steps: [],
+      status: {
+        goal_id: "preview-goal",
+        objective,
+        status: "Active",
+        turn_count: 0,
+        max_turns: 10,
+        last_decision: null,
+        last_closeout: null,
+        last_proof: null,
+        last_blocker: null,
+        step_count: 0,
+        steps: [],
+      },
+      next_prompt: `Goal: ${objective}\n\nWork toward this objective. Take the smallest useful step first.`,
     });
   }
   return invoke("goal_start", { objective });
@@ -1644,8 +1652,25 @@ export function goalPause(): Promise<boolean> {
   return invoke("goal_pause");
 }
 
-export function goalResume(): Promise<boolean> {
-  if (!isTauriRuntime()) return Promise.resolve(false);
+export function goalResume(): Promise<DesktopGoalCommandResult> {
+  if (!isTauriRuntime()) {
+    return Promise.resolve({
+      status: {
+        goal_id: "preview-goal",
+        objective: "Preview goal",
+        status: "Active",
+        turn_count: 0,
+        max_turns: 10,
+        last_decision: null,
+        last_closeout: null,
+        last_proof: null,
+        last_blocker: null,
+        step_count: 0,
+        steps: [],
+      },
+      next_prompt: "Continue working toward the active goal.",
+    });
+  }
   return invoke("goal_resume");
 }
 

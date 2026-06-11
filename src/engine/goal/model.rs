@@ -13,6 +13,43 @@ pub enum GoalRunStatus {
 }
 
 impl GoalRunStatus {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            GoalRunStatus::Active => "active",
+            GoalRunStatus::Paused => "paused",
+            GoalRunStatus::Completed => "completed",
+            GoalRunStatus::Blocked => "blocked",
+            GoalRunStatus::Failed => "failed",
+            GoalRunStatus::NeedsUser => "needs_user",
+            GoalRunStatus::Cancelled => "cancelled",
+        }
+    }
+
+    pub fn legacy_json_str(&self) -> &'static str {
+        match self {
+            GoalRunStatus::Active => "\"active\"",
+            GoalRunStatus::Paused => "\"paused\"",
+            GoalRunStatus::Completed => "\"completed\"",
+            GoalRunStatus::Blocked => "\"blocked\"",
+            GoalRunStatus::Failed => "\"failed\"",
+            GoalRunStatus::NeedsUser => "\"needs_user\"",
+            GoalRunStatus::Cancelled => "\"cancelled\"",
+        }
+    }
+
+    pub fn from_storage(value: &str) -> Option<Self> {
+        match value {
+            "active" => Some(GoalRunStatus::Active),
+            "paused" => Some(GoalRunStatus::Paused),
+            "completed" => Some(GoalRunStatus::Completed),
+            "blocked" => Some(GoalRunStatus::Blocked),
+            "failed" => Some(GoalRunStatus::Failed),
+            "needs_user" => Some(GoalRunStatus::NeedsUser),
+            "cancelled" => Some(GoalRunStatus::Cancelled),
+            _ => serde_json::from_str(value).ok(),
+        }
+    }
+
     pub fn is_terminal(&self) -> bool {
         matches!(
             self,

@@ -645,19 +645,19 @@ impl TuiApp {
         self.goal_runner.as_ref()
     }
 
-    async fn maybe_continue_goal(&mut self) {
+    async fn maybe_continue_goal(&mut self) -> bool {
         let runner = match self.lazy_goal_runner() {
             Some(runner) => runner.clone(),
-            None => return,
+            None => return false,
         };
 
         let session_id = match self.session_manager.current_session_id() {
             Some(id) => id.to_string(),
-            None => return,
+            None => return false,
         };
 
         if !runner.has_active_goal(&session_id).unwrap_or(false) {
-            return;
+            return false;
         }
 
         let trace = self
@@ -667,13 +667,12 @@ impl TuiApp {
             .or_else(|| self.session_manager.latest_trace().ok().flatten());
 
         let Some(trace) = trace else {
-            return;
+            return false;
         };
 
         match runner.after_turn(&session_id, &trace) {
             Ok(crate::engine::goal::runner::GoalAfterTurnResult::Continue { prompt, .. }) => {
-                self.add_system_message("Goal: continuing with next automatic turn.".to_string());
-                self.send_message(prompt).await;
+                self.persist_goal_continuation(&prompt)
             }
             Ok(crate::engine::goal::runner::GoalAfterTurnResult::Terminal {
                 decision,
@@ -681,11 +680,29 @@ impl TuiApp {
                 step,
             }) => {
                 self.add_system_message(format!("Goal {:?}: {}", decision, step.summary));
+                false
             }
             Err(e) => {
                 warn!("Goal continuation error: {}", e);
+                false
             }
         }
+    }
+
+    async fn drain_next_queued_session_input(&mut self, system_message: &str) -> bool {
+        if !self.run_coordinator.wake() {
+            return false;
+        }
+
+        let Some(next_input) = self.promote_queued_session_input() else {
+            self.run_coordinator.accept_wake();
+            return false;
+        };
+
+        self.run_coordinator.accept_wake();
+        self.add_system_message(system_message.to_string());
+        self.send_message(next_input).await;
+        true
     }
 
     /// 提交用户消息
@@ -1062,6 +1079,24 @@ impl TuiApp {
             .is_ok()
     }
 
+    fn persist_goal_continuation(&self, content: &str) -> bool {
+        let Some(engine) = &self.streaming_engine else {
+            return false;
+        };
+        let Some((store, session_id)) = engine.session_binding() else {
+            return false;
+        };
+        let conn = store.shared_conn();
+        let conn = conn.lock().expect("tui app sqlite conn lock poisoned");
+        crate::engine::run_coordinator::persist_session_input(
+            &conn,
+            &session_id,
+            content,
+            crate::engine::run_coordinator::InputDelivery::Queue,
+        )
+        .is_ok()
+    }
+
     fn has_active_goal(&self) -> bool {
         self.goal_runner
             .as_ref()
@@ -1185,18 +1220,15 @@ impl TuiApp {
                 self.runtime_facade_state.set_querying(false).await;
                 self.stream_started_at = None;
                 self.current_tool_anchor_id = None;
-                if self.run_coordinator.wake() {
-                    if let Some(next_input) = self.promote_queued_session_input() {
-                        self.run_coordinator.accept_wake();
-                        self.add_system_message(
-                            "Running queued message from this session.".to_string(),
-                        );
-                        self.send_message(next_input).await;
-                    }
+                let ran_queued_input = self
+                    .drain_next_queued_session_input("Running queued message from this session.")
+                    .await;
+                if !ran_queued_input && self.maybe_continue_goal().await {
+                    self.drain_next_queued_session_input(
+                        "Goal: continuing with next automatic turn.",
+                    )
+                    .await;
                 }
-                // Goal continuation: after a turn completes, check if the active
-                // goal needs another automatic turn.
-                self.maybe_continue_goal().await;
             }
         }
 

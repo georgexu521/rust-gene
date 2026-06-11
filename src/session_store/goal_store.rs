@@ -2,6 +2,8 @@
 
 use rusqlite::{params, Result as SqlResult};
 
+use crate::engine::goal::model::GoalRunStatus;
+
 use super::records::{GoalRunRecord, GoalStepInsert, GoalStepRecord};
 use super::SessionStore;
 
@@ -25,30 +27,56 @@ impl SessionStore {
     }
 
     pub fn get_active_goal_run(&self, session_id: &str) -> SqlResult<Option<GoalRunRecord>> {
+        self.get_latest_goal_run_by_status(session_id, GoalRunStatus::Active)
+    }
+
+    pub fn get_latest_goal_run_by_status(
+        &self,
+        session_id: &str,
+        status: GoalRunStatus,
+    ) -> SqlResult<Option<GoalRunRecord>> {
         let conn = self.conn();
         let result = conn.query_row(
             "SELECT id, session_id, objective, status, stop_rules_json, budget_json,
                     turn_count, last_closeout_status, last_blocker, created_at, updated_at
              FROM goal_runs
-             WHERE session_id = ?1 AND status = 'active'
+             WHERE session_id = ?1 AND status IN (?2, ?3)
              ORDER BY created_at DESC
              LIMIT 1",
-            params![session_id],
-            |row| {
-                Ok(GoalRunRecord {
-                    id: row.get(0)?,
-                    session_id: row.get(1)?,
-                    objective: row.get(2)?,
-                    status: row.get(3)?,
-                    stop_rules_json: row.get(4)?,
-                    budget_json: row.get(5)?,
-                    turn_count: row.get(6)?,
-                    last_closeout_status: row.get(7)?,
-                    last_blocker: row.get(8)?,
-                    created_at: row.get(9)?,
-                    updated_at: row.get(10)?,
-                })
-            },
+            params![session_id, status.as_str(), status.legacy_json_str()],
+            goal_run_record_from_row,
+        );
+        match result {
+            Ok(record) => Ok(Some(record)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(e),
+        }
+    }
+
+    pub fn get_current_goal_run(&self, session_id: &str) -> SqlResult<Option<GoalRunRecord>> {
+        let conn = self.conn();
+        let labels = ["active", "paused", "needs_user", "blocked"];
+        let legacy_labels = ["\"active\"", "\"paused\"", "\"needs_user\"", "\"blocked\""];
+        let result = conn.query_row(
+            "SELECT id, session_id, objective, status, stop_rules_json, budget_json,
+                    turn_count, last_closeout_status, last_blocker, created_at, updated_at
+             FROM goal_runs
+             WHERE session_id = ?1
+               AND status IN (?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+             ORDER BY created_at DESC
+             LIMIT 1",
+            params![
+                session_id,
+                labels[0],
+                labels[1],
+                labels[2],
+                labels[3],
+                legacy_labels[0],
+                legacy_labels[1],
+                legacy_labels[2],
+                legacy_labels[3],
+            ],
+            goal_run_record_from_row,
         );
         match result {
             Ok(record) => Ok(Some(record)),
@@ -65,21 +93,7 @@ impl SessionStore {
              FROM goal_runs
              WHERE id = ?1",
             params![goal_id],
-            |row| {
-                Ok(GoalRunRecord {
-                    id: row.get(0)?,
-                    session_id: row.get(1)?,
-                    objective: row.get(2)?,
-                    status: row.get(3)?,
-                    stop_rules_json: row.get(4)?,
-                    budget_json: row.get(5)?,
-                    turn_count: row.get(6)?,
-                    last_closeout_status: row.get(7)?,
-                    last_blocker: row.get(8)?,
-                    created_at: row.get(9)?,
-                    updated_at: row.get(10)?,
-                })
-            },
+            goal_run_record_from_row,
         );
         match result {
             Ok(record) => Ok(Some(record)),
@@ -89,6 +103,26 @@ impl SessionStore {
     }
 
     pub fn update_goal_run_status(
+        &self,
+        goal_id: &str,
+        status: &str,
+        last_closeout_status: Option<&str>,
+        last_blocker: Option<&str>,
+    ) -> SqlResult<()> {
+        let conn = self.conn();
+        conn.execute(
+            "UPDATE goal_runs
+             SET status = ?1,
+                 last_closeout_status = ?2,
+                 last_blocker = ?3,
+                 updated_at = datetime('now')
+             WHERE id = ?4",
+            params![status, last_closeout_status, last_blocker, goal_id],
+        )?;
+        Ok(())
+    }
+
+    pub fn update_goal_run_after_turn(
         &self,
         goal_id: &str,
         status: &str,
@@ -166,4 +200,20 @@ impl SessionStore {
         })?;
         steps.collect()
     }
+}
+
+fn goal_run_record_from_row(row: &rusqlite::Row<'_>) -> SqlResult<GoalRunRecord> {
+    Ok(GoalRunRecord {
+        id: row.get(0)?,
+        session_id: row.get(1)?,
+        objective: row.get(2)?,
+        status: row.get(3)?,
+        stop_rules_json: row.get(4)?,
+        budget_json: row.get(5)?,
+        turn_count: row.get(6)?,
+        last_closeout_status: row.get(7)?,
+        last_blocker: row.get(8)?,
+        created_at: row.get(9)?,
+        updated_at: row.get(10)?,
+    })
 }

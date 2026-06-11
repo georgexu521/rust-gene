@@ -214,8 +214,11 @@ fn check_goal_runner_health() -> ReadinessCheck {
             let guard = conn.lock().unwrap_or_else(|e| e.into_inner());
             let active_count: i64 = guard
                 .query_row(
-                    "SELECT COUNT(*) FROM goal_runs WHERE status = ?1",
-                    rusqlite::params!["\"Active\""],
+                    "SELECT COUNT(*) FROM goal_runs WHERE status IN (?1, ?2)",
+                    rusqlite::params![
+                        crate::engine::goal::model::GoalRunStatus::Active.as_str(),
+                        crate::engine::goal::model::GoalRunStatus::Active.legacy_json_str(),
+                    ],
                     |row| row.get(0),
                 )
                 .unwrap_or(-1);

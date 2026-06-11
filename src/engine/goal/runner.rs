@@ -72,7 +72,7 @@ impl GoalRunner {
             &goal_id,
             session_id,
             objective,
-            &serde_json::to_string(&GoalRunStatus::Active)?,
+            GoalRunStatus::Active.as_str(),
             &serde_json::to_string(&GoalStopRules::default())?,
             &serde_json::to_string(&GoalBudget::default())?,
         )?;
@@ -109,13 +109,14 @@ impl GoalRunner {
 
         let current_score = extract_score_from_trace(trace, &run.stop_rules.scored_eval);
 
-        let input = GoalDecisionInput::from_trace_and_run(
+        let mut input = GoalDecisionInput::from_trace_and_run(
             trace,
             &run,
             repeated_blocker_count,
             previous_score,
             score_no_improvement_count,
         );
+        input.current_score = current_score;
 
         let decision = GoalDecisionEngine::decide(&input);
 
@@ -159,9 +160,9 @@ impl GoalRunner {
             score: current_score,
         })?;
 
-        self.store.update_goal_run_status(
+        self.store.update_goal_run_after_turn(
             &run.id,
-            &serde_json::to_string(&new_status)?,
+            new_status.as_str(),
             closeout_status.as_deref(),
             blocker.as_deref(),
         )?;
@@ -184,7 +185,7 @@ impl GoalRunner {
         };
         self.store.update_goal_run_status(
             &run_record.id,
-            &serde_json::to_string(&GoalRunStatus::Paused)?,
+            GoalRunStatus::Paused.as_str(),
             None,
             None,
         )?;
@@ -192,7 +193,10 @@ impl GoalRunner {
     }
 
     pub fn resume(&self, session_id: &str) -> anyhow::Result<bool> {
-        let Some(run_record) = self.store.get_active_goal_run(session_id)? else {
+        let Some(run_record) = self
+            .store
+            .get_latest_goal_run_by_status(session_id, GoalRunStatus::Paused)?
+        else {
             return Ok(false);
         };
         let run = goal_run_from_record(&run_record)?;
@@ -204,7 +208,7 @@ impl GoalRunner {
         }
         self.store.update_goal_run_status(
             &run_record.id,
-            &serde_json::to_string(&GoalRunStatus::Active)?,
+            GoalRunStatus::Active.as_str(),
             None,
             None,
         )?;
@@ -213,12 +217,12 @@ impl GoalRunner {
     }
 
     pub fn clear(&self, session_id: &str) -> anyhow::Result<bool> {
-        let Some(run_record) = self.store.get_active_goal_run(session_id)? else {
+        let Some(run_record) = self.store.get_current_goal_run(session_id)? else {
             return Ok(false);
         };
         self.store.update_goal_run_status(
             &run_record.id,
-            &serde_json::to_string(&GoalRunStatus::Cancelled)?,
+            GoalRunStatus::Cancelled.as_str(),
             None,
             None,
         )?;
@@ -246,11 +250,7 @@ impl GoalRunner {
         let updated = conn.execute(
             "UPDATE goal_runs SET objective = ?1, updated_at = datetime('now')
              WHERE session_id = ?2 AND status = ?3",
-            rusqlite::params![
-                objective,
-                session_id,
-                serde_json::to_string(&GoalRunStatus::Active)?,
-            ],
+            rusqlite::params![objective, session_id, GoalRunStatus::Active.as_str()],
         )?;
         if updated > 0 {
             self.goal_manager.hydrate_from_objective(objective);
@@ -266,7 +266,7 @@ impl GoalRunner {
     pub fn status(&self, session_id: &str) -> anyhow::Result<GoalStatusInfo> {
         let run = self
             .store
-            .get_active_goal_run(session_id)?
+            .get_current_goal_run(session_id)?
             .and_then(|record| goal_run_from_record(&record).ok());
 
         let steps = if let Some(ref run) = run {
@@ -292,10 +292,11 @@ pub fn pause_all_active_goals(store: &SessionStore) -> anyhow::Result<usize> {
     let conn = conn.lock().unwrap_or_else(|e| e.into_inner());
     let count = conn.execute(
         "UPDATE goal_runs SET status = ?1, updated_at = datetime('now')
-         WHERE status = ?2",
+         WHERE status IN (?2, ?3)",
         rusqlite::params![
-            serde_json::to_string(&GoalRunStatus::Paused)?,
-            serde_json::to_string(&GoalRunStatus::Active)?,
+            GoalRunStatus::Paused.as_str(),
+            GoalRunStatus::Active.as_str(),
+            GoalRunStatus::Active.legacy_json_str(),
         ],
     )?;
     Ok(count)
@@ -306,7 +307,8 @@ fn goal_run_from_record(record: &GoalRunRecord) -> anyhow::Result<GoalRun> {
         id: record.id.clone(),
         session_id: record.session_id.clone(),
         objective: record.objective.clone(),
-        status: serde_json::from_str(&record.status)?,
+        status: GoalRunStatus::from_storage(&record.status)
+            .ok_or_else(|| anyhow::anyhow!("unknown goal run status: {}", record.status))?,
         stop_rules: record
             .stop_rules_json
             .as_deref()
@@ -429,19 +431,11 @@ fn format_decision_summary(decision: &GoalDecision, input: &GoalDecisionInput) -
 }
 
 fn new_goal_id() -> String {
-    let millis = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_millis())
-        .unwrap_or_default();
-    format!("goalrun_{}", millis)
+    format!("goalrun_{}", uuid::Uuid::new_v4())
 }
 
 fn new_step_id() -> String {
-    let millis = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_millis())
-        .unwrap_or_default();
-    format!("step_{}", millis)
+    format!("step_{}", uuid::Uuid::new_v4())
 }
 
 fn chrono_utc_now() -> String {
@@ -476,4 +470,134 @@ fn extract_score_from_trace(
         }
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::engine::session_goal::SessionGoalManager;
+    use crate::engine::trace::{TraceEvent, TurnStatus, TurnTrace};
+
+    fn test_runner() -> (SessionStore, GoalRunner) {
+        let store = SessionStore::in_memory().unwrap();
+        store.create_session("s1", "Test", "model").unwrap();
+        let runner = GoalRunner::new(store.clone(), Arc::new(SessionGoalManager::new()));
+        (store, runner)
+    }
+
+    #[test]
+    fn start_pause_resume_uses_queryable_status_labels_without_turn_increment() {
+        let (store, runner) = test_runner();
+        let started = runner.start("s1", "ship goal mode").unwrap();
+        let active = store.get_active_goal_run("s1").unwrap().unwrap();
+        assert_eq!(active.id, started.goal_id);
+        assert_eq!(active.status, GoalRunStatus::Active.as_str());
+        assert_eq!(active.turn_count, 0);
+
+        assert!(runner.pause("s1").unwrap());
+        assert!(store.get_active_goal_run("s1").unwrap().is_none());
+        let paused = store
+            .get_latest_goal_run_by_status("s1", GoalRunStatus::Paused)
+            .unwrap()
+            .unwrap();
+        assert_eq!(paused.id, started.goal_id);
+        assert_eq!(paused.turn_count, 0);
+
+        let visible = runner.status("s1").unwrap().goal.unwrap();
+        assert_eq!(visible.status, GoalRunStatus::Paused);
+
+        assert!(runner.resume("s1").unwrap());
+        let active = store.get_active_goal_run("s1").unwrap().unwrap();
+        assert_eq!(active.id, started.goal_id);
+        assert_eq!(active.turn_count, 0);
+    }
+
+    #[test]
+    fn legacy_json_status_rows_are_still_queryable() {
+        let (store, _runner) = test_runner();
+        store
+            .create_goal_run(
+                "legacy",
+                "s1",
+                "old goal",
+                GoalRunStatus::Active.legacy_json_str(),
+                &serde_json::to_string(&GoalStopRules::default()).unwrap(),
+                &serde_json::to_string(&GoalBudget::default()).unwrap(),
+            )
+            .unwrap();
+
+        let active = store.get_active_goal_run("s1").unwrap().unwrap();
+        assert_eq!(active.id, "legacy");
+        let parsed = goal_run_from_record(&active).unwrap();
+        assert_eq!(parsed.status, GoalRunStatus::Active);
+    }
+
+    #[test]
+    fn after_turn_records_current_score_and_increments_turn_once() {
+        let (store, runner) = test_runner();
+        let started = runner.start("s1", "improve score").unwrap();
+        let stop_rules = GoalStopRules {
+            scored_eval: Some(ScoredEvalConfig {
+                max_attempts: 5,
+                target_threshold: 0.9,
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        {
+            let conn = store.shared_conn();
+            let conn = conn.lock().unwrap();
+            conn.execute(
+                "UPDATE goal_runs SET stop_rules_json = ?1 WHERE id = ?2",
+                rusqlite::params![serde_json::to_string(&stop_rules).unwrap(), started.goal_id],
+            )
+            .unwrap();
+        }
+
+        let mut trace = TurnTrace::new("s1", 1, "improve score");
+        trace.events.push(TraceEvent::VerificationCompleted {
+            changed_files: 1,
+            passed: true,
+            check_passed: true,
+            tests_passed: true,
+            review_passed: true,
+            failed_commands: Vec::new(),
+        });
+        trace.events.push(TraceEvent::FinalCloseoutPrepared {
+            status: "partial".to_string(),
+            terminal_status: None,
+            stop_reason: None,
+            stop_action: None,
+            failure_type: None,
+            recovery_plan_id: None,
+            rollback_status: None,
+            changed_files: 1,
+            validation_items: 1,
+            tool_records: 1,
+            tool_evidence: None,
+            verification_proof_status: Some("partial".to_string()),
+            verification_proof_summary: None,
+            verification_proof_kind_summary: None,
+            verification_proof_support_status: None,
+            verification_proof_support_summary: None,
+            verification_proof_supports_verified: None,
+            verification_proof_residual_risk: None,
+            acceptance_items: 0,
+            residual_risks: 0,
+        });
+        trace.finish(TurnStatus::Completed);
+
+        let result = runner.after_turn("s1", &trace).unwrap();
+        let step = match result {
+            GoalAfterTurnResult::Continue { step, .. } => step,
+            other => panic!("expected continuation, got {other:?}"),
+        };
+        assert_eq!(step.score, Some(1.0));
+
+        let active = store.get_active_goal_run("s1").unwrap().unwrap();
+        assert_eq!(active.turn_count, 1);
+        let steps = store.list_goal_steps(&active.id, 10).unwrap();
+        assert_eq!(steps.len(), 1);
+        assert_eq!(steps[0].score, Some(1.0));
+    }
 }

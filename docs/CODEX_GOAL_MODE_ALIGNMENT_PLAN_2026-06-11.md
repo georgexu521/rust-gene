@@ -1,5 +1,5 @@
 # Codex Goal Mode Alignment Plan
-Status: Active
+Status: Implemented MVP, hardening in progress
 
 Last updated: 2026-06-11
 
@@ -16,11 +16,11 @@ runtime evidence, and decides whether another bounded turn is justified.
 
 ## 2026-06-11 Review Adjustments
 
-The first implementation should be smaller than the full roadmap below.
-`AGENTS.md` says not to force heavyweight planning, and that applies here: treat
-Phases 0-2 as the actionable next slice. Later phases are backlog candidates
-that should be revisited after the basic goal store and decision engine have
-real dogfood data.
+The first implementation was scoped around a small Phase 0-2 slice because
+`AGENTS.md` says not to force heavyweight planning. The current implementation
+has moved beyond that slice: Phases 0-7 now exist in code. The remaining work is
+hardening, dogfood, integration coverage, and product polish rather than a
+second goal-system design.
 
 Review findings from the current repository:
 
@@ -37,8 +37,9 @@ Review findings from the current repository:
   `skills_enabled`, `web_search`, `llm_memory_extraction`, and
   `plugin_trust_mode`. Adding `features.goals` is a straightforward config
   extension, not a new configuration system.
-- The scored improvement loop is speculative until the basic runner has usage
-  evidence. Keep it optional and do not block the MVP on it.
+- The scored improvement loop is implemented as an optional stop-rule path. Keep
+  it optional until dogfood runs prove which score parsers and thresholds are
+  useful.
 
 ## Public Codex Reference Points
 
@@ -100,29 +101,32 @@ from public OpenAI Codex documentation on `developers.openai.com`, checked on
   trace, closeout, memory proposal, and project progress.
 - `apps/desktop/` exists and desktop already renders session parts, closeout
   events, trace details, and a current session panel. The desktop bridge is
-  close enough to add goal progress later without inventing a new runtime.
+  close enough to host the goal progress row without inventing a new runtime.
+- `features.goals` exists in the normal config feature block.
+- Durable `GoalRun`/`GoalStep` storage exists through the v17 migration and
+  `SessionStore` goal helpers.
+- `GoalDecisionEngine` exists and screens closeout/proof/blocker/budget/score
+  evidence deterministically.
+- `GoalRunner` exists and drives start, pause, resume, clear, status, step
+  recording, and automatic continuation prompts.
+- `/goal <objective>`, `/goal status`, `/goal pause`, `/goal resume`,
+  `/goal clear`, `/goal edit`, and `/goal log` are wired in TUI.
+- Desktop exposes a compact goal progress row and goal commands over the Tauri
+  bridge.
+- Export/readiness include goal information.
 
 ### Gaps
 
-- `SessionGoal` is intentionally lightweight. It is visible state, not a
-  persistent cross-turn runner.
-- `/goal <objective>` does not currently match Codex semantics. The current
-  command expects `/goal set <text>` for manual pinning and does not start a
-  long-running goal.
-- There is no durable `GoalRun` or `GoalStep` model. Goal state is not yet
-  recoverable after process restart.
-- There is no outer scheduler that calls `RuntimeController::submit_turn()` more
-  than once for the same objective.
-- `SessionRunCoordinator` manages admission and queue drain mechanics, but it
-  does not decide whether the goal needs another turn.
-- `ActiveTaskPlan` is a projection surface. It does not advance work by itself.
-- Desktop has no goal progress row above the composer and no pause/resume/edit
-  controls.
-- Closeout status is available, but there is no deterministic goal-level
-  completion decision that combines closeout, verification proof, stop rules,
-  budgets, and blocker history.
-- There is no `features.goals` flag yet, but the existing `FeatureFlags` config
-  block makes this a small extension rather than a new subsystem.
+- Goal mode still needs broader integration coverage across real TUI and desktop
+  runs, especially user steering while an automatic continuation is queued.
+- Desktop start/resume should keep using the existing run event/watchdog path;
+  avoid adding a parallel desktop-only agent loop.
+- Restart behavior should remain conservative: active goals are paused or made
+  explicit, never silently auto-resumed.
+- The scored improvement loop needs dogfood data before adding more parser types
+  or product promises.
+- Export/readiness should stay factual and evidence-backed; do not report a goal
+  as ready unless the durable store and latest step evidence are queryable.
 
 ## Target Product Semantics
 
@@ -329,14 +333,12 @@ current objective, stop rules, and last-step evidence.
 
 ## Development Plan
 
-Execution rule: implement and verify Phases 0-2 first. Do not start Phase 3
-automatic continuation until the feature flag, durable store, and decision
-engine tests are merged. Treat Phases 4-7 as follow-up backlog, not required
-scope for the first implementation.
+Execution rule: the MVP is now implemented. Further work should be hardening
+and dogfood-driven, not a second design pass.
 
 ### Phase 0 — Feature Flag And Compatibility Contract
 
-Status: MVP slice
+Status: Implemented
 
 Tasks:
 
@@ -371,7 +373,7 @@ cargo fmt --check
 
 ### Phase 1 — Durable Goal Store
 
-Status: MVP slice
+Status: Implemented
 
 Tasks:
 
@@ -408,7 +410,7 @@ cargo check -q
 
 ### Phase 2 — Goal Decision Engine
 
-Status: MVP slice
+Status: Implemented
 
 Tasks:
 
@@ -453,7 +455,7 @@ cargo test -q active_task_plan --lib
 
 ### Phase 3 — Single-Session GoalRunner
 
-Status: Deferred until Phases 0-2 pass
+Status: Implemented, hardening in progress
 
 Tasks:
 
@@ -485,23 +487,30 @@ cargo test -q runtime_controller --lib
 cargo check -q
 ```
 
-## Deferred Backlog
+## Implemented Follow-Up Phases
 
-These items are valid, but they should not be part of the first implementation
-slice.
+These items moved from backlog into the implementation. Keep the scope honest:
+the product surface exists, but it still needs dogfood and smoke coverage before
+being described as mature.
 
-- TUI product surface: after the runner MVP, expand `/quick`, `/active-task`,
-  and `/goal log` with turn count, budget, latest decision, blocker, and
-  verification status.
-- Desktop progress row: `apps/desktop/` exists, so desktop work is real, but
-  wait until the TUI/runtime path proves safe continuation. Then add compact
-  pause/resume/edit/clear controls above the composer and cover them with
-  `corepack pnpm --dir apps/desktop build` plus `test:ui-smoke`.
-- Export/readiness: after durable goal steps exist, add goal summary, blocker,
-  budget use, final decision, and validation evidence to export/readiness.
-- Scored improvement loop: optional after dogfood data. Do not build score
-  parsing or threshold-based continuation until real goal runs show it is
-  needed.
+- Phase 4 TUI product surface: `/quick`, `/active-task`, and `/goal log` expose
+  turn count, budget, latest decision, blocker, and verification status.
+- Phase 5 desktop progress row: compact pause/resume/edit/clear controls are
+  mounted above the composer and use the same desktop run event path for
+  start/resume continuation prompts.
+- Phase 6 scored improvement loop: optional scored-eval stop rules feed the
+  deterministic decision engine.
+- Phase 7 export/readiness: durable goal state and latest step evidence are
+  included in readiness/export surfaces.
+
+Hardening checklist:
+
+- Add real desktop smoke coverage for `/goal <objective>` and Resume.
+- Dogfood steering behavior: user follow-up during active goal should take
+  priority over automatic continuation.
+- Keep score parsing conservative until real runs need parser formats beyond
+  the current verification-derived score.
+- Keep restart resume explicit.
 
 ## Safety And Runtime Boundaries
 

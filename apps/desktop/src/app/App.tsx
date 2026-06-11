@@ -71,6 +71,7 @@ import {
   setDetailLevel,
   setPermissionMode,
   goalStatus,
+  goalStart,
   goalPause,
   goalResume,
   goalClear,
@@ -599,6 +600,60 @@ export function App() {
     }
   }
 
+  async function submitRuntimeMessage(
+    message: string,
+    contexts: DesktopRunContext[],
+    watchdogReason: string,
+  ) {
+    setRunState((current) => submitUserMessage(current, message, contexts));
+    armRunWatchdog(watchdogReason);
+
+    try {
+      await sendMessage(message, contexts);
+    } catch (err) {
+      clearRunWatchdog();
+      setRunState((current) => withError(current, err));
+      void refreshSessions();
+    }
+  }
+
+  async function handleGoalCommand(command: string) {
+    const goalArgs = command.slice("/goal".length).trim();
+    if (!goalArgs || goalArgs === "status" || goalArgs === "show") {
+      await goalStatus().then(setCurrentGoal);
+      return;
+    }
+    if (goalArgs === "pause") {
+      await goalPause();
+      await goalStatus().then(setCurrentGoal);
+      return;
+    }
+    if (goalArgs === "resume") {
+      const result = await goalResume();
+      setCurrentGoal(result.status);
+      if (result.next_prompt) {
+        await submitRuntimeMessage(result.next_prompt, [], "after goal resume");
+      }
+      return;
+    }
+    if (goalArgs === "clear" || goalArgs === "reset") {
+      await goalClear();
+      await goalStatus().then(setCurrentGoal);
+      return;
+    }
+    if (goalArgs.startsWith("edit ")) {
+      const status = await goalEdit(goalArgs.slice("edit ".length).trim());
+      setCurrentGoal(status);
+      return;
+    }
+
+    const result = await goalStart(goalArgs);
+    setCurrentGoal(result.status);
+    if (result.next_prompt) {
+      await submitRuntimeMessage(result.next_prompt, [], "after goal start");
+    }
+  }
+
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const message = composer.trim();
@@ -606,18 +661,21 @@ export function App() {
       return;
     }
 
+    const contexts = runContexts;
     setComposer("");
     setRunContexts([]);
-    setRunState((current) => submitUserMessage(current, message, runContexts));
-    armRunWatchdog("after submit");
 
-    try {
-      await sendMessage(message, runContexts);
-    } catch (err) {
-      clearRunWatchdog();
-      setRunState((current) => withError(current, err));
-      void refreshSessions();
+    if (message === "/goal" || message.startsWith("/goal ")) {
+      try {
+        await handleGoalCommand(message);
+      } catch (err) {
+        setRunState((current) => withError(current, err));
+        void refreshSessions();
+      }
+      return;
     }
+
+    await submitRuntimeMessage(message, contexts, "after submit");
   }
 
   async function handleAddContext(context: DesktopRunContext) {
@@ -955,7 +1013,16 @@ export function App() {
         <GoalProgressRow
           goal={currentGoal}
           onPause={() => { void goalPause().then(() => goalStatus().then(setCurrentGoal)); }}
-          onResume={() => { void goalResume().then(() => goalStatus().then(setCurrentGoal)); }}
+          onResume={() => {
+            void goalResume()
+              .then(async (result) => {
+                setCurrentGoal(result.status);
+                if (result.next_prompt) {
+                  await submitRuntimeMessage(result.next_prompt, [], "after goal resume");
+                }
+              })
+              .catch((err) => setRunState((current) => withError(current, err)));
+          }}
           onClear={() => { void goalClear().then(() => goalStatus().then(setCurrentGoal)); }}
           onEdit={(obj) => { void goalEdit(obj).then(setCurrentGoal); }}
         />

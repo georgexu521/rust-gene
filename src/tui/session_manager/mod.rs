@@ -1043,11 +1043,7 @@ fn build_goal_export_summary(
     session_id: &str,
 ) -> Option<serde_json::Value> {
     let db = store.as_ref();
-    let active = db
-        .get_active_goal_run(session_id)
-        .ok()
-        .flatten()
-        .or_else(|| db.get_goal_run(session_id).ok().flatten())?;
+    let active = db.get_current_goal_run(session_id).ok().flatten()?;
     let steps = db.list_goal_steps(&active.id, 50).ok().unwrap_or_default();
     let steps_json: Vec<serde_json::Value> = steps
         .iter()

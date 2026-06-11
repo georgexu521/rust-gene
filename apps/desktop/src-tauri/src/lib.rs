@@ -1778,6 +1778,12 @@ struct DesktopGoalStep {
     summary: String,
 }
 
+#[derive(Debug, Serialize)]
+struct DesktopGoalCommandResult {
+    status: DesktopGoalStatus,
+    next_prompt: Option<String>,
+}
+
 #[tauri::command]
 async fn goal_status(state: State<'_, DesktopAppState>) -> Result<DesktopGoalStatus, String> {
     let Some(runner) = lazy_goal_runner(&state).await else {
@@ -1837,7 +1843,7 @@ async fn goal_status(state: State<'_, DesktopAppState>) -> Result<DesktopGoalSta
 async fn goal_start(
     objective: String,
     state: State<'_, DesktopAppState>,
-) -> Result<DesktopGoalStatus, String> {
+) -> Result<DesktopGoalCommandResult, String> {
     let Some(runner) = lazy_goal_runner(&state).await else {
         return Err("no engine available".to_string());
     };
@@ -1848,11 +1854,14 @@ async fn goal_start(
         .clone()
         .ok_or_else(|| "no active session".to_string())?;
 
-    runner
+    let result = runner
         .start(&session_id, &objective)
         .map_err(|e| e.to_string())?;
 
-    goal_status(state).await
+    Ok(DesktopGoalCommandResult {
+        status: goal_status(state).await?,
+        next_prompt: Some(result.first_prompt),
+    })
 }
 
 #[tauri::command]
@@ -1871,9 +1880,12 @@ async fn goal_pause(state: State<'_, DesktopAppState>) -> Result<bool, String> {
 }
 
 #[tauri::command]
-async fn goal_resume(state: State<'_, DesktopAppState>) -> Result<bool, String> {
+async fn goal_resume(state: State<'_, DesktopAppState>) -> Result<DesktopGoalCommandResult, String> {
     let Some(runner) = lazy_goal_runner(&state).await else {
-        return Ok(false);
+        return Ok(DesktopGoalCommandResult {
+            status: goal_status(state).await?,
+            next_prompt: None,
+        });
     };
     let session_id = state
         .active_session_id
@@ -1882,7 +1894,11 @@ async fn goal_resume(state: State<'_, DesktopAppState>) -> Result<bool, String> 
         .clone()
         .ok_or_else(|| "no active session".to_string())?;
 
-    runner.resume(&session_id).map_err(|e| e.to_string())
+    let resumed = runner.resume(&session_id).map_err(|e| e.to_string())?;
+    Ok(DesktopGoalCommandResult {
+        status: goal_status(state).await?,
+        next_prompt: resumed.then(|| "Continue working toward the active goal.".to_string()),
+    })
 }
 
 #[tauri::command]
