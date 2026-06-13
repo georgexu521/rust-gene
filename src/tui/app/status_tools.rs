@@ -433,7 +433,10 @@ impl TuiApp {
             .or_else(|| self.messages.last())
             .map(|message| message.id.clone())
             .unwrap_or_else(|| format!("session-parts-{session_id}"));
-        self.tool_runs_by_message_id.insert(anchor_id, runs.clone());
+        self.sync_snapshot
+            .tool_runs_by_message_id
+            .insert(anchor_id, runs.clone());
+        self.sync_snapshot.tool_runs = runs.clone();
         self.tool_runs_snapshot = runs;
         Ok(self.tool_runs_snapshot.len())
     }
@@ -530,7 +533,6 @@ impl TuiApp {
         self.sync_snapshot
             .tool_runs_by_message_id
             .get(message_id)
-            .or_else(|| self.tool_runs_by_message_id.get(message_id))
             .map(Vec::as_slice)
     }
 }

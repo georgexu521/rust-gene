@@ -208,7 +208,7 @@ mod tests {
             msg(MessageRole::User, "user_1"),
             msg(MessageRole::Assistant, "assistant_1"),
         ];
-        app.tool_runs_by_message_id.insert(
+        app.sync_snapshot.tool_runs_by_message_id.insert(
             "user_1".to_string(),
             vec![ToolRunView::new("tool_1".to_string(), "bash".to_string())],
         );
@@ -236,7 +236,7 @@ mod tests {
         let mut app = TuiApp::new();
         app.focus_mode = true;
         let item = msg(MessageRole::User, "user_1");
-        app.tool_runs_by_message_id.insert(
+        app.sync_snapshot.tool_runs_by_message_id.insert(
             "user_1".to_string(),
             vec![ToolRunView::new("tool_1".to_string(), "bash".to_string())],
         );

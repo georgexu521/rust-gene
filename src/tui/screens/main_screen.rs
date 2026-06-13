@@ -85,8 +85,9 @@ pub fn render_chat_area(f: &mut Frame, app: &TuiApp, area: Rect) {
     }
 
     // 计算可见消息（focus_mode 下仅显示 user/assistant）
+    let projected_messages = app.visible_timeline_messages();
     let messages: Vec<_> = if app.focus_mode {
-        app.visible_messages()
+        projected_messages
             .iter()
             .filter(|m| {
                 matches!(
@@ -96,7 +97,7 @@ pub fn render_chat_area(f: &mut Frame, app: &TuiApp, area: Rect) {
             })
             .collect()
     } else {
-        app.visible_messages().iter().collect()
+        projected_messages.iter().collect()
     };
 
     let items = timeline_items(&messages, app);
@@ -677,12 +678,14 @@ fn render_context_panel(f: &mut Frame, app: &TuiApp, area: Rect) {
     let short_session_id = &session_id[..session_id.len().min(8)];
     let timeline_items = app.timeline_item_count();
     let all_tool_runs = app
+        .sync_snapshot
         .tool_runs_by_message_id
         .values()
         .map(Vec::len)
         .sum::<usize>()
         + app.tool_runs_snapshot.len();
     let failed_tool_runs = app
+        .sync_snapshot
         .tool_runs_by_message_id
         .values()
         .flatten()

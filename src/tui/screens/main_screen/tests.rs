@@ -258,7 +258,8 @@ fn transcript_items_insert_tool_runs_after_active_user() {
     run.arguments = Some(serde_json::json!({
         "command": "ls -la ~/Desktop"
     }));
-    app.tool_runs_by_message_id
+    app.sync_snapshot
+        .tool_runs_by_message_id
         .insert(items[2].id.clone(), vec![run]);
     let refs: Vec<_> = items.iter().collect();
 
@@ -279,11 +280,11 @@ fn transcript_items_keep_tool_runs_for_previous_turns() {
         msg(MessageRole::User, "second question"),
         msg(MessageRole::Assistant, "second answer"),
     ];
-    app.tool_runs_by_message_id.insert(
+    app.sync_snapshot.tool_runs_by_message_id.insert(
         items[0].id.clone(),
         vec![ToolRunView::new("tool_1".to_string(), "bash".to_string())],
     );
-    app.tool_runs_by_message_id.insert(
+    app.sync_snapshot.tool_runs_by_message_id.insert(
         items[2].id.clone(),
         vec![ToolRunView::new("tool_2".to_string(), "grep".to_string())],
     );

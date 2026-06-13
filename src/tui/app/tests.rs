@@ -108,7 +108,7 @@ async fn cancel_active_run_interrupts_query_and_marks_tool_cancelled() {
     assert!(app.messages[1].content.contains("Cancelled"));
     assert_eq!(app.tool_runs_snapshot[0].status, ToolRunStatus::Cancelled);
     assert_eq!(
-        app.tool_runs_by_message_id["msg_0"][0].status,
+        app.sync_snapshot.tool_runs_by_message_id["msg_0"][0].status,
         ToolRunStatus::Cancelled
     );
 }
@@ -1027,12 +1027,14 @@ fn test_jump_to_failed_and_edit_timeline_items() {
 
     let mut failed = ToolRunView::new("tool_failed".to_string(), "bash".to_string());
     failed.mark_complete("Result: ERROR\nfailed".to_string());
-    app.tool_runs_by_message_id
+    app.sync_snapshot
+        .tool_runs_by_message_id
         .insert(first_user.id.clone(), vec![failed]);
 
     let mut edit = ToolRunView::new("tool_edit".to_string(), "file_edit".to_string());
     edit.mark_complete("Result: OK\nchanged".to_string());
-    app.tool_runs_by_message_id
+    app.sync_snapshot
+        .tool_runs_by_message_id
         .insert(second_user.id.clone(), vec![edit]);
 
     let failed_result = app.jump_to_timeline_target("failed");
@@ -1063,7 +1065,7 @@ fn test_scroll_down_uses_timeline_item_count_with_tool_groups() {
         timestamp: std::time::SystemTime::UNIX_EPOCH,
         metadata: Default::default(),
     });
-    app.tool_runs_by_message_id.insert(
+    app.sync_snapshot.tool_runs_by_message_id.insert(
         user.id.clone(),
         vec![ToolRunView::new("tool_1".to_string(), "bash".to_string())],
     );
@@ -1095,6 +1097,7 @@ fn test_sync_tool_runs_from_spine_adds_missing_transcript_row() {
     app.sync_tool_runs_from_spine_snapshot();
 
     let runs = app
+        .sync_snapshot
         .tool_runs_by_message_id
         .get("user_1")
         .expect("spine-backed tool run should be inserted");
@@ -1119,7 +1122,7 @@ fn test_sync_tool_runs_from_spine_adds_missing_transcript_row() {
 #[test]
 fn test_tool_runs_for_message_prefers_sync_snapshot_projection() {
     let mut app = TuiApp::new();
-    app.tool_runs_by_message_id.insert(
+    app.sync_snapshot.tool_runs_by_message_id.insert(
         "user_1".to_string(),
         vec![ToolRunView::new(
             "legacy_call".to_string(),
@@ -1139,6 +1142,44 @@ fn test_tool_runs_for_message_prefers_sync_snapshot_projection() {
     assert_eq!(runs.len(), 1);
     assert_eq!(runs[0].id, "sync_call");
     assert_eq!(runs[0].name, "file_read");
+}
+
+#[tokio::test]
+async fn test_visible_timeline_messages_projects_active_assistant_parts() {
+    let mut app = TuiApp::new();
+    app.messages.push(MessageItem {
+        id: "user_1".to_string(),
+        role: MessageRole::User,
+        content: "inspect".to_string(),
+        timestamp: std::time::SystemTime::UNIX_EPOCH,
+        metadata: Default::default(),
+    });
+    app.messages.push(MessageItem {
+        id: "assistant_1".to_string(),
+        role: MessageRole::Assistant,
+        content: String::new(),
+        timestamp: std::time::SystemTime::UNIX_EPOCH,
+        metadata: Default::default(),
+    });
+    {
+        let mut sync = app.sync_store.lock().await;
+        sync.start_turn("user_1".to_string(), "assistant_1".to_string());
+        sync.apply_stream_event(&StreamEvent::ThinkingStart);
+        sync.apply_stream_event(&StreamEvent::ThinkingChunk("read README".to_string()));
+        sync.apply_stream_event(&StreamEvent::ThinkingComplete);
+        sync.apply_stream_event(&StreamEvent::TextChunk(
+            "This is a Rust project.".to_string(),
+        ));
+        app.sync_snapshot = sync.snapshot();
+    }
+
+    let messages = app.visible_timeline_messages();
+
+    assert_eq!(messages[1].id, "assistant_1");
+    assert_eq!(
+        messages[1].content,
+        "<think>read README</think>\n\nThis is a Rust project."
+    );
 }
 
 #[test]
@@ -1222,7 +1263,7 @@ fn test_toggle_collapse_maps_tool_group_anchor_to_parent_message() {
         timestamp: std::time::SystemTime::UNIX_EPOCH,
         metadata: Default::default(),
     });
-    app.tool_runs_by_message_id.insert(
+    app.sync_snapshot.tool_runs_by_message_id.insert(
         user.id.clone(),
         vec![ToolRunView::new(
             "tool_1".to_string(),
@@ -1335,7 +1376,7 @@ fn test_scroll_to_message_index_maps_through_timeline_tool_groups() {
         timestamp: std::time::SystemTime::UNIX_EPOCH,
         metadata: Default::default(),
     });
-    app.tool_runs_by_message_id.insert(
+    app.sync_snapshot.tool_runs_by_message_id.insert(
         first_user.id,
         vec![ToolRunView::new("tool_1".to_string(), "bash".to_string())],
     );
@@ -1490,7 +1531,7 @@ fn test_cycle_expanded_tool_run_moves_through_visible_tools() {
         metadata: Default::default(),
     };
     app.messages.push(user);
-    app.tool_runs_by_message_id.insert(
+    app.sync_snapshot.tool_runs_by_message_id.insert(
         "user_1".to_string(),
         vec![
             ToolRunView::new("tool_1".to_string(), "bash".to_string()),
@@ -1560,7 +1601,8 @@ fn test_open_tool_viewer_uses_expanded_tool_or_latest() {
     first.mark_complete("Result: OK\nfirst\n".to_string());
     let mut second = ToolRunView::new("tool_2".to_string(), "grep".to_string());
     second.mark_complete("Result: OK\nsecond\n".to_string());
-    app.tool_runs_by_message_id
+    app.sync_snapshot
+        .tool_runs_by_message_id
         .insert("user_1".to_string(), vec![first.clone(), second.clone()]);
 
     assert!(app.open_tool_viewer());
@@ -1586,7 +1628,8 @@ fn test_tool_output_index_and_open_by_id() {
     app.messages.push(user);
     let mut first = ToolRunView::new("tool_1".to_string(), "bash".to_string());
     first.mark_complete("Result: OK\nfirst\n".to_string());
-    app.tool_runs_by_message_id
+    app.sync_snapshot
+        .tool_runs_by_message_id
         .insert("user_1".to_string(), vec![first]);
 
     let lines = app.tool_output_index_lines();

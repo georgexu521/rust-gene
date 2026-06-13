@@ -225,8 +225,6 @@ pub struct TuiApp {
     /// render-compatible fields are refreshed from its snapshot.
     sync_store: Arc<Mutex<TuiSyncStore>>,
     pub sync_snapshot: TuiSyncSnapshot,
-    /// 历史工具运行视图，按触发该轮的用户消息 id 锚定
-    pub tool_runs_by_message_id: HashMap<String, Vec<ToolRunView>>,
     current_tool_anchor_id: Option<String>,
     /// 是否展开工具 transcript 细节
     pub transcript_expanded: bool,
@@ -713,7 +711,6 @@ impl TuiApp {
             runtime_facade_state: RuntimeFacadeState::default(),
             sync_store: Arc::new(Mutex::new(TuiSyncStore::new())),
             sync_snapshot: TuiSyncSnapshot::default(),
-            tool_runs_by_message_id: HashMap::new(),
             current_tool_anchor_id: None,
             transcript_expanded: false,
             expanded_tool_run_id: None,
@@ -1437,7 +1434,6 @@ impl TuiApp {
             .take(self.typewriter_position)
             .collect();
         self.tool_runs_snapshot = self.sync_snapshot.tool_runs.clone();
-        self.tool_runs_by_message_id = self.sync_snapshot.tool_runs_by_message_id.clone();
         self.stream_usage_snapshot = self.sync_snapshot.usage;
         self.runtime_facade_state.check_slow_warning().await;
         if self.runtime_facade_state.check_timeout().await {
@@ -1478,6 +1474,7 @@ impl TuiApp {
                 continue;
             };
             let runs = self
+                .sync_snapshot
                 .tool_runs_by_message_id
                 .entry(parent_message_id)
                 .or_default();
@@ -1712,8 +1709,6 @@ impl TuiApp {
                     if last_msg.role == MessageRole::Assistant {
                         let response = self.sync_snapshot.assistant_message_content.clone();
                         self.tool_runs_snapshot = self.sync_snapshot.tool_runs.clone();
-                        self.tool_runs_by_message_id =
-                            self.sync_snapshot.tool_runs_by_message_id.clone();
                         let final_metadata = assistant_completion_metadata(
                             model_label,
                             self.stream_usage_snapshot,

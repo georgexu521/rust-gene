@@ -6,6 +6,7 @@
 
 use crate::{
     engine::streaming::StreamEvent,
+    state::{MessageItem, MessageRole},
     tui::{
         app::StreamUsageSnapshot,
         tool_view::{upsert_tool_run, with_tool_run, ToolRunView},
@@ -67,6 +68,28 @@ pub struct TuiMessagePart {
     pub kind: TuiPartKind,
     pub text: String,
     pub streaming: bool,
+}
+
+impl TuiSyncSnapshot {
+    pub fn project_message_items(&self, base_messages: &[MessageItem]) -> Vec<MessageItem> {
+        let mut projected = base_messages.to_vec();
+        if let Some(assistant_id) = self.active_assistant_message_id.as_deref() {
+            if let Some(message) = projected.iter_mut().find(|message| {
+                message.id == assistant_id && message.role == MessageRole::Assistant
+            }) {
+                message.content = self.assistant_message_content.clone();
+            } else if !self.assistant_message_content.is_empty() {
+                projected.push(MessageItem {
+                    id: assistant_id.to_string(),
+                    role: MessageRole::Assistant,
+                    content: self.assistant_message_content.clone(),
+                    timestamp: std::time::SystemTime::now(),
+                    metadata: Default::default(),
+                });
+            }
+        }
+        projected
+    }
 }
 
 #[derive(Debug, Clone, Default)]

@@ -1677,7 +1677,8 @@ mod tests {
         completed.push_args_delta(r#"{"command":"cargo check -q"}"#);
         completed.mark_running("bash".to_string());
         completed.mark_complete("Result: OK\ncargo check finished successfully".to_string());
-        app.tool_runs_by_message_id
+        app.sync_snapshot
+            .tool_runs_by_message_id
             .insert("user_completed_tool".to_string(), vec![completed]);
 
         app.messages.push(crate::state::MessageItem {

@@ -27,7 +27,6 @@ impl TuiApp {
             self.sync_snapshot = sync.snapshot();
         }
         self.tool_runs_snapshot = self.sync_snapshot.tool_runs.clone();
-        self.tool_runs_by_message_id = self.sync_snapshot.tool_runs_by_message_id.clone();
         self.current_tool_anchor_id = None;
         self.settle_unfinished_tool_parts(reason);
 
@@ -77,7 +76,6 @@ impl TuiApp {
             self.sync_snapshot = sync.snapshot();
         }
         self.tool_runs_snapshot = self.sync_snapshot.tool_runs.clone();
-        self.tool_runs_by_message_id = self.sync_snapshot.tool_runs_by_message_id.clone();
         self.current_tool_anchor_id = None;
         self.settle_unfinished_tool_parts(reason);
 
@@ -550,7 +548,8 @@ impl TuiApp {
     }
 
     pub fn timeline_item_count(&self) -> usize {
-        let messages = self.visible_messages().iter().collect::<Vec<_>>();
+        let projected_messages = self.visible_timeline_messages();
+        let messages = projected_messages.iter().collect::<Vec<_>>();
         crate::tui::view_model::timeline::timeline_items(&messages, self).len()
     }
 
@@ -562,7 +561,8 @@ impl TuiApp {
         }
 
         let target_index = {
-            let messages = self.visible_messages().iter().collect::<Vec<_>>();
+            let projected_messages = self.visible_timeline_messages();
+            let messages = projected_messages.iter().collect::<Vec<_>>();
             let timeline = crate::tui::view_model::timeline::timeline_items(&messages, self);
             match normalized.as_str() {
                 "user" | "prompt" => timeline
@@ -612,7 +612,8 @@ impl TuiApp {
 
     pub fn scroll_to_message_index(&mut self, target_message_index: usize) -> bool {
         let target_index = {
-            let messages = self.visible_messages().iter().collect::<Vec<_>>();
+            let projected_messages = self.visible_timeline_messages();
+            let messages = projected_messages.iter().collect::<Vec<_>>();
             let timeline = crate::tui::view_model::timeline::timeline_items(&messages, self);
             timeline.iter().position(|item| {
                 matches!(
@@ -650,7 +651,8 @@ impl TuiApp {
 
     pub fn toggle_collapse_at_scroll_anchor(&mut self) -> bool {
         let message_index = {
-            let messages = self.visible_messages().iter().collect::<Vec<_>>();
+            let projected_messages = self.visible_timeline_messages();
+            let messages = projected_messages.iter().collect::<Vec<_>>();
             let timeline = crate::tui::view_model::timeline::timeline_items(&messages, self);
             if timeline.is_empty() {
                 return false;
@@ -689,7 +691,8 @@ impl TuiApp {
 
     pub fn toggle_reasoning_at_scroll_anchor(&mut self) -> bool {
         let message_id = {
-            let messages = self.visible_messages().iter().collect::<Vec<_>>();
+            let projected_messages = self.visible_timeline_messages();
+            let messages = projected_messages.iter().collect::<Vec<_>>();
             let timeline = crate::tui::view_model::timeline::timeline_items(&messages, self);
             if timeline.is_empty() {
                 return false;
@@ -733,7 +736,8 @@ impl TuiApp {
     }
 
     pub fn current_timeline_anchor_index(&self) -> usize {
-        let messages = self.visible_messages().iter().collect::<Vec<_>>();
+        let projected_messages = self.visible_timeline_messages();
+        let messages = projected_messages.iter().collect::<Vec<_>>();
         let timeline = crate::tui::view_model::timeline::timeline_items(&messages, self);
         crate::tui::view_model::timeline::resolve_scroll_offset(
             &timeline,
@@ -754,7 +758,8 @@ impl TuiApp {
     }
 
     fn timeline_stable_id_at(&self, index: usize) -> Option<String> {
-        let messages = self.visible_messages().iter().collect::<Vec<_>>();
+        let projected_messages = self.visible_timeline_messages();
+        let messages = projected_messages.iter().collect::<Vec<_>>();
         let timeline = crate::tui::view_model::timeline::timeline_items(&messages, self);
         timeline.get(index).map(|item| item.stable_id().to_string())
     }
@@ -767,7 +772,8 @@ impl TuiApp {
     /// 当前模型名称（用于状态展示）
     pub fn clear_tool_transcript(&mut self) {
         self.tool_runs_snapshot.clear();
-        self.tool_runs_by_message_id.clear();
+        self.sync_snapshot.tool_runs.clear();
+        self.sync_snapshot.tool_runs_by_message_id.clear();
         self.current_tool_anchor_id = None;
         self.expanded_tool_run_id = None;
         self.stream_usage_snapshot = None;
@@ -776,6 +782,15 @@ impl TuiApp {
     /// 获取消息（考虑滚动）
     pub fn visible_messages(&self) -> &[MessageItem] {
         &self.messages
+    }
+
+    /// 获取 timeline 使用的消息投影。
+    ///
+    /// Historical messages come from the session/app state, while the active
+    /// streaming assistant message is projected from the TUI sync store
+    /// message/part model.
+    pub fn visible_timeline_messages(&self) -> Vec<MessageItem> {
+        self.sync_snapshot.project_message_items(&self.messages)
     }
 
     /// 设置错误信息
