@@ -1196,6 +1196,126 @@ async fn test_visible_timeline_messages_projects_active_assistant_parts() {
 }
 
 #[test]
+fn test_hydrate_persisted_projection_parts_replays_message_parts() {
+    let mut app = TuiApp::new();
+    app.messages.push(MessageItem {
+        id: "user_1".to_string(),
+        role: MessageRole::User,
+        content: "inspect".to_string(),
+        timestamp: std::time::SystemTime::UNIX_EPOCH,
+        metadata: Default::default(),
+    });
+    app.messages.push(MessageItem {
+        id: "assistant_1".to_string(),
+        role: MessageRole::Assistant,
+        content: String::new(),
+        timestamp: std::time::SystemTime::UNIX_EPOCH,
+        metadata: Default::default(),
+    });
+    let parts = vec![
+        PersistedPartFixture::new(1, "reasoning", "reasoning_1")
+            .message_id("assistant_1")
+            .payload(serde_json::json!({"content": "read README"}))
+            .build(),
+        PersistedPartFixture::new(2, "assistant_text", "text_1")
+            .message_id("assistant_1")
+            .payload(serde_json::json!({"content": "This is a Rust project."}))
+            .build(),
+        PersistedPartFixture::new(3, "tool", "tool_call_1")
+            .message_id("assistant_1")
+            .tool_call_id("call_1")
+            .tool_name("bash")
+            .status("completed")
+            .payload(serde_json::json!({
+                "input_args": "{\"command\":\"pwd\"}",
+                "result_preview": "/Users/georgexu/Desktop/rust-agent"
+            }))
+            .build(),
+    ];
+
+    let hydration = app.hydrate_persisted_projection_parts("session_1", &parts);
+    let messages = app.visible_timeline_messages();
+    let runs = app
+        .tool_runs_for_message("user_1")
+        .expect("tool runs anchored to prior user");
+
+    assert_eq!(hydration.assistant_text_parts, 1);
+    assert_eq!(hydration.reasoning_parts, 1);
+    assert_eq!(hydration.tool_runs, 1);
+    assert_eq!(
+        messages[1].content,
+        "<think>read README</think>\n\nThis is a Rust project."
+    );
+    assert_eq!(runs.len(), 1);
+    assert_eq!(runs[0].id, "call_1");
+    assert_eq!(runs[0].name, "bash");
+    assert_eq!(runs[0].status, ToolRunStatus::Completed);
+
+    let hydration = app.hydrate_persisted_projection_parts("session_1", &parts);
+    assert_eq!(hydration.tool_runs, 1);
+    assert_eq!(
+        app.tool_runs_for_message("user_1")
+            .expect("tool runs after replay")
+            .len(),
+        1
+    );
+}
+
+struct PersistedPartFixture {
+    part: crate::session_store::PersistedSessionPart,
+}
+
+impl PersistedPartFixture {
+    fn new(id: i64, kind: &str, part_id: &str) -> Self {
+        Self {
+            part: crate::session_store::PersistedSessionPart {
+                id,
+                session_id: "session_1".to_string(),
+                part_index: id,
+                part_id: part_id.to_string(),
+                kind: kind.to_string(),
+                tool_call_id: None,
+                tool_name: None,
+                status: None,
+                payload: serde_json::json!({}),
+                projected_to_seq: 42,
+                updated_at: "2026-06-13T00:00:00Z".to_string(),
+                message_id: None,
+            },
+        }
+    }
+
+    fn message_id(mut self, message_id: &str) -> Self {
+        self.part.message_id = Some(message_id.to_string());
+        self
+    }
+
+    fn tool_call_id(mut self, tool_call_id: &str) -> Self {
+        self.part.tool_call_id = Some(tool_call_id.to_string());
+        self
+    }
+
+    fn tool_name(mut self, tool_name: &str) -> Self {
+        self.part.tool_name = Some(tool_name.to_string());
+        self
+    }
+
+    fn status(mut self, status: &str) -> Self {
+        self.part.status = Some(status.to_string());
+        self
+    }
+
+    fn payload(mut self, payload: serde_json::Value) -> Self {
+        self.part.payload = payload;
+        self
+    }
+
+    fn build(self) -> crate::session_store::PersistedSessionPart {
+        self.part
+    }
+}
+
+#[test]
 fn test_persisted_final_answer_matches_current_user_turn() {
     let messages = vec![
         MessageItem {

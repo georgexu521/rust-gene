@@ -409,29 +409,20 @@ impl TuiApp {
         &mut self,
         session_id: &str,
     ) -> Result<usize, String> {
+        Ok(self
+            .hydrate_persisted_projection_for_session(session_id)?
+            .tool_runs)
+    }
+
+    pub fn hydrate_persisted_projection_for_session(
+        &mut self,
+        session_id: &str,
+    ) -> Result<TuiProjectionHydration, String> {
         let parts = self
             .session_manager
             .load_session_parts(session_id)
             .map_err(|err| err.to_string())?;
-        let runs = parts
-            .into_iter()
-            .filter_map(persisted_part_to_tool_run)
-            .collect::<Vec<_>>();
-        if runs.is_empty() {
-            return Ok(0);
-        }
-
-        let anchor_id = self
-            .messages
-            .iter()
-            .rev()
-            .find(|message| message.role == MessageRole::User)
-            .or_else(|| self.messages.last())
-            .map(|message| message.id.clone())
-            .unwrap_or_else(|| format!("session-parts-{session_id}"));
-        self.sync_snapshot
-            .set_tool_runs_for_message(anchor_id, runs.clone());
-        Ok(self.projected_tool_runs().len())
+        Ok(self.hydrate_persisted_projection_parts(session_id, &parts))
     }
 
     fn find_visible_tool_run(&self, id: &str) -> Option<ToolRunView> {
@@ -538,6 +529,129 @@ impl TuiApp {
 
     pub fn tool_runs_for_message(&self, message_id: &str) -> Option<Vec<ToolRunView>> {
         self.sync_snapshot.tool_runs_for_message(message_id)
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct TuiProjectionHydration {
+    pub assistant_text_parts: usize,
+    pub reasoning_parts: usize,
+    pub tool_runs: usize,
+}
+
+impl TuiApp {
+    pub(in crate::tui::app) fn hydrate_persisted_projection_parts(
+        &mut self,
+        session_id: &str,
+        parts: &[crate::session_store::PersistedSessionPart],
+    ) -> TuiProjectionHydration {
+        let fallback_user_id = self.fallback_user_message_id(session_id);
+        let fallback_assistant_id = self.fallback_assistant_message_id();
+        let mut grouped_tool_runs = std::collections::BTreeMap::<String, Vec<ToolRunView>>::new();
+        let mut hydration = TuiProjectionHydration::default();
+
+        for part in parts {
+            match part.kind.as_str() {
+                "assistant_text" => {
+                    let Some(text) = part.payload["content"].as_str() else {
+                        continue;
+                    };
+                    let Some(message_id) = part
+                        .message_id
+                        .as_deref()
+                        .map(str::to_string)
+                        .or_else(|| fallback_assistant_id.clone())
+                    else {
+                        continue;
+                    };
+                    self.sync_snapshot.set_message_text_part(
+                        &message_id,
+                        TuiMessageRole::Assistant,
+                        TuiPartKind::Text,
+                        text.to_string(),
+                        false,
+                    );
+                    hydration.assistant_text_parts += 1;
+                }
+                "reasoning" => {
+                    let Some(text) = part.payload["content"].as_str() else {
+                        continue;
+                    };
+                    let Some(message_id) = part
+                        .message_id
+                        .as_deref()
+                        .map(str::to_string)
+                        .or_else(|| fallback_assistant_id.clone())
+                    else {
+                        continue;
+                    };
+                    self.sync_snapshot.set_message_text_part(
+                        &message_id,
+                        TuiMessageRole::Assistant,
+                        TuiPartKind::Thinking,
+                        text.to_string(),
+                        false,
+                    );
+                    hydration.reasoning_parts += 1;
+                }
+                "tool" | "shell" => {
+                    let Some(run) = persisted_part_to_tool_run(part.clone()) else {
+                        continue;
+                    };
+                    let anchor_id = self
+                        .tool_anchor_for_part_message(part.message_id.as_deref())
+                        .unwrap_or_else(|| fallback_user_id.clone());
+                    grouped_tool_runs.entry(anchor_id).or_default().push(run);
+                }
+                _ => {}
+            }
+        }
+
+        for (message_id, runs) in grouped_tool_runs {
+            self.sync_snapshot
+                .set_tool_runs_for_message(message_id, runs);
+        }
+        hydration.tool_runs = self.projected_tool_runs().len();
+        hydration
+    }
+
+    fn fallback_user_message_id(&self, session_id: &str) -> String {
+        self.messages
+            .iter()
+            .rev()
+            .find(|message| message.role == MessageRole::User)
+            .or_else(|| self.messages.last())
+            .map(|message| message.id.clone())
+            .unwrap_or_else(|| format!("session-parts-{session_id}"))
+    }
+
+    fn fallback_assistant_message_id(&self) -> Option<String> {
+        self.messages
+            .iter()
+            .rev()
+            .find(|message| message.role == MessageRole::Assistant)
+            .map(|message| message.id.clone())
+    }
+
+    fn tool_anchor_for_part_message(&self, message_id: Option<&str>) -> Option<String> {
+        let message_id = message_id?;
+        let index = self
+            .messages
+            .iter()
+            .position(|message| message.id == message_id)?;
+        match self.messages[index].role {
+            MessageRole::User => Some(self.messages[index].id.clone()),
+            MessageRole::Assistant | MessageRole::Tool | MessageRole::System => self
+                .messages
+                .get(..index)
+                .and_then(|messages| {
+                    messages
+                        .iter()
+                        .rev()
+                        .find(|message| message.role == MessageRole::User)
+                })
+                .map(|message| message.id.clone()),
+        }
     }
 }
 

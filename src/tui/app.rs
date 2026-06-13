@@ -16,7 +16,7 @@ use crate::state::{
     RuntimeStatusSnapshot, RuntimeToolStatus, TaskItem,
 };
 use crate::tui::components::input::InputState;
-use crate::tui::sync_store::{TuiSyncSnapshot, TuiSyncStore};
+use crate::tui::sync_store::{TuiMessageRole, TuiPartKind, TuiSyncSnapshot, TuiSyncStore};
 use crate::tui::tool_view::{ToolRunStatus, ToolRunView};
 use futures::StreamExt;
 use std::collections::{HashMap, VecDeque};
@@ -1516,13 +1516,34 @@ impl TuiApp {
         self.typewriter_position = final_answer.chars().count();
         if let Some(last_msg) = self.messages.last_mut() {
             if last_msg.role == MessageRole::Assistant {
-                last_msg.content = final_answer;
+                last_msg.content = final_answer.clone();
+                self.sync_snapshot.set_message_text_part(
+                    &last_msg.id,
+                    TuiMessageRole::Assistant,
+                    TuiPartKind::Text,
+                    final_answer.clone(),
+                    false,
+                );
             }
         }
         self.runtime_facade_state.mark_tool_turns_persisted().await;
         self.runtime_facade_state.set_querying(false).await;
         self.facade_snapshot = self.runtime_facade_state.snapshot().await;
-        self.sync_tool_runs_from_spine_snapshot();
+        if let Some(session_id) = self
+            .session_manager
+            .current_session_id()
+            .map(str::to_string)
+        {
+            if let Err(err) = self.hydrate_persisted_projection_for_session(&session_id) {
+                warn!(
+                    "Failed to hydrate persisted projection during recovery: {}",
+                    err
+                );
+                self.sync_tool_runs_from_spine_snapshot();
+            }
+        } else {
+            self.sync_tool_runs_from_spine_snapshot();
+        }
         self.stream_done.store(true, Ordering::SeqCst);
         self.is_querying = false;
         self.run_coordinator.finish_run();

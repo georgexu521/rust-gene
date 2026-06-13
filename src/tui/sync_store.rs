@@ -73,6 +73,14 @@ pub struct TuiMessagePart {
 impl TuiSyncSnapshot {
     pub fn project_message_items(&self, base_messages: &[MessageItem]) -> Vec<MessageItem> {
         let mut projected = base_messages.to_vec();
+        for message in projected
+            .iter_mut()
+            .filter(|message| message.role == MessageRole::Assistant)
+        {
+            if let Some(content) = self.rendered_assistant_content_for(&message.id) {
+                message.content = content;
+            }
+        }
         if let Some(assistant_id) = self.active_assistant_message_id.as_deref() {
             if let Some(message) = projected.iter_mut().find(|message| {
                 message.id == assistant_id && message.role == MessageRole::Assistant
@@ -89,6 +97,42 @@ impl TuiSyncSnapshot {
             }
         }
         projected
+    }
+
+    pub fn set_message_text_part(
+        &mut self,
+        message_id: &str,
+        role: TuiMessageRole,
+        kind: TuiPartKind,
+        text: String,
+        streaming: bool,
+    ) {
+        if kind == TuiPartKind::Tool {
+            return;
+        }
+        self.upsert_message_projection(message_id, role);
+        let part_id = part_id_for(message_id, kind);
+        let parts = self
+            .parts_by_message_id
+            .entry(message_id.to_string())
+            .or_default();
+        if let Some(part) = parts.iter_mut().find(|part| part.id == part_id) {
+            part.text = text;
+            part.streaming = streaming;
+        } else {
+            parts.push(TuiMessagePart {
+                id: part_id.clone(),
+                message_id: message_id.to_string(),
+                kind,
+                text,
+                tool_run: None,
+                streaming,
+            });
+        }
+        self.push_message_part_id(message_id, part_id);
+        if Some(message_id) == self.active_assistant_message_id.as_deref() {
+            self.rebuild_assistant_projection_for(message_id);
+        }
     }
 
     pub fn tool_runs_for_message(&self, message_id: &str) -> Option<Vec<ToolRunView>> {
@@ -155,6 +199,7 @@ impl TuiSyncSnapshot {
     }
 
     fn upsert_tool_part_for_message(&mut self, message_id: &str, tool_id: &str, name: &str) {
+        self.upsert_message_projection(message_id, TuiMessageRole::User);
         let part_id = format!("{message_id}:tool:{tool_id}");
         let parts = self
             .parts_by_message_id
@@ -171,13 +216,7 @@ impl TuiSyncSnapshot {
             tool_run: self.tool_runs.iter().find(|run| run.id == tool_id).cloned(),
             streaming: true,
         });
-        if let Some(message) = self
-            .messages
-            .iter_mut()
-            .find(|message| message.id == message_id)
-        {
-            message.part_ids.push(part_id);
-        }
+        self.push_message_part_id(message_id, part_id);
     }
 
     fn replace_tool_part_run(&mut self, message_id: &str, run: ToolRunView) {
@@ -225,6 +264,67 @@ impl TuiSyncSnapshot {
         message
             .part_ids
             .retain(|part_id| valid_parts.iter().any(|part| part.id == *part_id));
+    }
+
+    fn upsert_message_projection(&mut self, message_id: &str, role: TuiMessageRole) {
+        if self.messages.iter().any(|message| message.id == message_id) {
+            return;
+        }
+        self.messages.push(TuiMessageProjection {
+            id: message_id.to_string(),
+            role,
+            part_ids: Vec::new(),
+        });
+    }
+
+    fn push_message_part_id(&mut self, message_id: &str, part_id: String) {
+        if let Some(message) = self
+            .messages
+            .iter_mut()
+            .find(|message| message.id == message_id)
+        {
+            if !message.part_ids.iter().any(|id| id == &part_id) {
+                message.part_ids.push(part_id);
+            }
+        }
+    }
+
+    fn rendered_assistant_content_for(&self, message_id: &str) -> Option<String> {
+        let parts = self.parts_by_message_id.get(message_id)?;
+        let text = parts
+            .iter()
+            .find(|part| part.kind == TuiPartKind::Text)
+            .map(|part| part.text.clone())
+            .unwrap_or_default();
+        let thinking = parts
+            .iter()
+            .find(|part| part.kind == TuiPartKind::Thinking)
+            .map(|part| (part.text.clone(), part.streaming))
+            .unwrap_or_default();
+        (!text.is_empty() || !thinking.0.is_empty())
+            .then(|| render_assistant_message_content(&thinking.0, thinking.1, &text))
+    }
+
+    fn rebuild_assistant_projection_for(&mut self, message_id: &str) {
+        let parts = self
+            .parts_by_message_id
+            .get(message_id)
+            .cloned()
+            .unwrap_or_default();
+        let text = parts
+            .iter()
+            .find(|part| part.kind == TuiPartKind::Text)
+            .map(|part| part.text.clone())
+            .unwrap_or_default();
+        let thinking = parts
+            .iter()
+            .find(|part| part.kind == TuiPartKind::Thinking)
+            .map(|part| (part.text.clone(), part.streaming))
+            .unwrap_or_default();
+        self.assistant_text = text.clone();
+        self.thinking_text = thinking.0.clone();
+        self.assistant_message_content =
+            render_assistant_message_content(&thinking.0, thinking.1, &text);
     }
 }
 
@@ -487,26 +587,7 @@ impl TuiSyncStore {
         let Some(message_id) = self.snapshot.active_assistant_message_id.clone() else {
             return;
         };
-        let parts = self
-            .snapshot
-            .parts_by_message_id
-            .get(&message_id)
-            .cloned()
-            .unwrap_or_default();
-        let text = parts
-            .iter()
-            .find(|part| part.kind == TuiPartKind::Text)
-            .map(|part| part.text.clone())
-            .unwrap_or_default();
-        let thinking = parts
-            .iter()
-            .find(|part| part.kind == TuiPartKind::Thinking)
-            .map(|part| (part.text.clone(), part.streaming))
-            .unwrap_or_default();
-        self.snapshot.assistant_text = text.clone();
-        self.snapshot.thinking_text = thinking.0.clone();
-        self.snapshot.assistant_message_content =
-            render_assistant_message_content(&thinking.0, thinking.1, &text);
+        self.snapshot.rebuild_assistant_projection_for(&message_id);
     }
 }
 
