@@ -942,10 +942,23 @@ impl TuiApp {
         self.send_message(content).await;
     }
 
-    /// 插入粘贴内容；长粘贴折叠为占位符，避免输入区撑满屏幕
+    /// 插入粘贴内容；长粘贴折叠为占位符，避免输入区撑满屏幕。
+    /// 如果粘贴的是单个存在的文件路径，则作为附件 intake。
     pub fn insert_paste(&mut self, text: String) {
         if text.is_empty() {
             return;
+        }
+
+        let trimmed = text.trim();
+        if trimmed.lines().count() == 1 && !trimmed.is_empty() {
+            if trimmed.starts_with("data:image") {
+                return self.insert_image_paste(text);
+            }
+            let path = std::path::Path::new(trimmed);
+            if path.exists() {
+                let _ = self.attach_context_path(trimmed);
+                return;
+            }
         }
 
         let char_count = text.chars().count();
@@ -960,6 +973,17 @@ impl TuiApp {
             "[[paste:{} {} lines {} chars]]",
             paste_id, line_count, char_count
         );
+        self.pasted_blocks.push(PastedBlock {
+            placeholder: placeholder.clone(),
+            content: text,
+        });
+        self.input.insert_str(&placeholder);
+    }
+
+    fn insert_image_paste(&mut self, text: String) {
+        let paste_id = self.pasted_blocks.len() + 1;
+        let char_count = text.chars().count();
+        let placeholder = format!("[[image:{} {} chars]]", paste_id, char_count);
         self.pasted_blocks.push(PastedBlock {
             placeholder: placeholder.clone(),
             content: text,

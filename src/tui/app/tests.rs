@@ -656,6 +656,25 @@ fn test_long_paste_uses_placeholder_and_expands() {
 }
 
 #[test]
+fn test_paste_file_path_attaches_as_context() {
+    let mut app = TuiApp::new();
+    app.insert_paste("Cargo.toml".to_string());
+    assert!(app
+        .composer_attachments
+        .iter()
+        .any(|p| p.contains("Cargo.toml")));
+    assert!(!app.input.value().contains("Cargo.toml"));
+}
+
+#[test]
+fn test_paste_image_data_uses_image_placeholder() {
+    let mut app = TuiApp::new();
+    app.insert_paste("data:image/png;base64,abcd".to_string());
+    assert_eq!(app.pasted_block_count(), 1);
+    assert!(app.input.value().contains("[[image:1"));
+}
+
+#[test]
 fn test_composer_attachments_add_remove_and_clear() {
     let mut app = TuiApp::new();
 
