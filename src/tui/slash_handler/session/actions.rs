@@ -688,12 +688,18 @@ fn write_current_session_export(app: &TuiApp, format: &str, privacy: &str, label
         .session_manager
         .write_session_export(session_id, format, privacy)
     {
-        Ok(path) => format!(
-            "{label} written to: {}\nPrivacy: {}\nFormat: {:?}",
-            path.display(),
-            privacy.label(),
-            format
-        ),
+        Ok(path) => {
+            let file_url = format!("file://{}", path.display());
+            if let Ok(mut ctx) = arboard::Clipboard::new() {
+                let _ = ctx.set_text(file_url.clone());
+            }
+            format!(
+                "{label} written to: {}\n{file_url}\nPrivacy: {}\nFormat: {:?}",
+                path.display(),
+                privacy.label(),
+                format
+            )
+        }
         Err(err) => format!("Failed to export session: {err}"),
     }
 }
