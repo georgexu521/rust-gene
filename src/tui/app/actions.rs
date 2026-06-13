@@ -26,7 +26,6 @@ impl TuiApp {
             sync.mark_active_tools_with_result("Result: ERROR\nTool run is cancelled.".to_string());
             self.sync_snapshot = sync.snapshot();
         }
-        self.tool_runs_snapshot = self.sync_snapshot.tool_runs.clone();
         self.current_tool_anchor_id = None;
         self.settle_unfinished_tool_parts(reason);
 
@@ -75,7 +74,6 @@ impl TuiApp {
             sync.mark_active_tools_with_result(format!("Result: ERROR\n{reason}"));
             self.sync_snapshot = sync.snapshot();
         }
-        self.tool_runs_snapshot = self.sync_snapshot.tool_runs.clone();
         self.current_tool_anchor_id = None;
         self.settle_unfinished_tool_parts(reason);
 
@@ -771,7 +769,6 @@ impl TuiApp {
 
     /// 当前模型名称（用于状态展示）
     pub fn clear_tool_transcript(&mut self) {
-        self.tool_runs_snapshot.clear();
         self.sync_snapshot.clear_tool_parts();
         self.current_tool_anchor_id = None;
         self.expanded_tool_run_id = None;

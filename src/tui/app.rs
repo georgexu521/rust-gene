@@ -215,8 +215,6 @@ pub struct TuiApp {
     pub prompt_picker_selected: usize,
     /// 流式查询引擎
     pub streaming_engine: Option<Arc<StreamingQueryEngine>>,
-    /// 当前工具运行视图快照
-    pub tool_runs_snapshot: Vec<ToolRunView>,
     /// Shared runtime-state snapshot used by status/tool selectors.
     pub runtime_state_snapshot: RuntimeAppState,
     /// Shared product runtime facade snapshot for cross-frontend migration.
@@ -706,7 +704,6 @@ impl TuiApp {
             prompt_stash: None,
             prompt_picker_selected: 0,
             streaming_engine: engine,
-            tool_runs_snapshot: Vec::new(),
             runtime_state_snapshot: RuntimeAppState::default(),
             runtime_facade_state: RuntimeFacadeState::default(),
             sync_store: Arc::new(Mutex::new(TuiSyncStore::new())),
@@ -1217,7 +1214,6 @@ impl TuiApp {
             self.runtime_facade_state.reset().await;
             self.runtime_facade_state.set_querying(true).await;
             self.runtime_facade_state.set_stream_usage(None).await;
-            self.tool_runs_snapshot.clear();
             self.current_tool_anchor_id = Some(user_msg_id.clone());
             self.stream_usage_snapshot = None;
             self.runtime_state_snapshot = self.build_runtime_state_snapshot();
@@ -1433,7 +1429,6 @@ impl TuiApp {
             .chars()
             .take(self.typewriter_position)
             .collect();
-        self.tool_runs_snapshot = self.sync_snapshot.tool_runs.clone();
         self.stream_usage_snapshot = self.sync_snapshot.usage;
         self.runtime_facade_state.check_slow_warning().await;
         if self.runtime_facade_state.check_timeout().await {
@@ -1488,7 +1483,6 @@ impl TuiApp {
             self.sync_snapshot
                 .upsert_tool_run_for_message(parent_message_id, run);
         }
-        self.tool_runs_snapshot = self.sync_snapshot.tool_runs.clone();
     }
 
     async fn recover_persisted_final_answer_if_available(&mut self) -> bool {
@@ -1602,7 +1596,7 @@ impl TuiApp {
         if !self.is_querying && self.stream_handle.is_none() {
             return None;
         }
-        if self.tool_runs_snapshot.iter().any(|run| {
+        if self.projected_tool_runs().iter().any(|run| {
             matches!(
                 run.status,
                 ToolRunStatus::Running | ToolRunStatus::WaitingPermission
@@ -1710,17 +1704,17 @@ impl TuiApp {
                     });
                 let model_label = self.current_model_label();
                 let provider_phase = self.facade_snapshot.provider_request.phase;
+                let response = self.sync_snapshot.assistant_message_content.clone();
+                let tool_runs = self.projected_tool_runs();
+                let final_metadata = assistant_completion_metadata(
+                    model_label,
+                    self.stream_usage_snapshot,
+                    elapsed_ms,
+                    provider_phase,
+                    &tool_runs,
+                );
                 if let Some(last_msg) = self.messages.last_mut() {
                     if last_msg.role == MessageRole::Assistant {
-                        let response = self.sync_snapshot.assistant_message_content.clone();
-                        self.tool_runs_snapshot = self.sync_snapshot.tool_runs.clone();
-                        let final_metadata = assistant_completion_metadata(
-                            model_label,
-                            self.stream_usage_snapshot,
-                            elapsed_ms,
-                            provider_phase,
-                            &self.tool_runs_snapshot,
-                        );
                         last_msg.content = response;
                         last_msg.metadata.extend(final_metadata);
                         final_response_to_persist =

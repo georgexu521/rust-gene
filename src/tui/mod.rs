@@ -1614,7 +1614,8 @@ mod tests {
         running.push_args_delta(r#"{"command":"cargo check -q"}"#);
         running.mark_running("bash".to_string());
         running.push_progress("waiting for cargo metadata".to_string());
-        app.tool_runs_snapshot.push(running);
+        app.sync_snapshot
+            .set_tool_runs_for_message("user_snapshot_tool".to_string(), vec![running]);
         app.runtime_state_snapshot
             .tool_uses
             .push(crate::state::RuntimeToolUse {

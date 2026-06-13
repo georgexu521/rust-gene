@@ -205,23 +205,23 @@ fn context_usage_label(app: &TuiApp) -> Option<String> {
 }
 
 fn changed_file_count(app: &TuiApp) -> usize {
-    app.tool_runs_snapshot
-        .iter()
+    app.projected_tool_runs()
+        .into_iter()
         .filter(|run| matches!(run.name.as_str(), "file_write" | "file_edit" | "file_patch"))
         .count()
 }
 
 fn last_validation_label(app: &TuiApp) -> Option<String> {
-    let has_tests = app.tool_runs_snapshot.iter().any(|run| {
+    let tool_runs = app.projected_tool_runs();
+    let has_tests = tool_runs.iter().any(|run| {
         (run.name == "run_tests" || run.name == "bash")
             && matches!(run.status, ToolRunStatus::Completed)
     });
-    let has_edits = app.tool_runs_snapshot.iter().any(|run| {
+    let has_edits = tool_runs.iter().any(|run| {
         matches!(run.name.as_str(), "file_write" | "file_edit" | "file_patch")
             && matches!(run.status, ToolRunStatus::Completed)
     });
-    let has_failures = app
-        .tool_runs_snapshot
+    let has_failures = tool_runs
         .iter()
         .any(|run| matches!(run.status, ToolRunStatus::Failed | ToolRunStatus::TimedOut));
 

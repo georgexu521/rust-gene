@@ -139,13 +139,9 @@ impl TuiApp {
     }
 
     pub(in crate::tui::app) fn build_runtime_state_snapshot(&self) -> RuntimeAppState {
-        let tool_uses = self
-            .tool_runs_snapshot
-            .iter()
-            .map(runtime_tool_use_from_view)
-            .collect();
-        let terminal_tasks = self
-            .tool_runs_snapshot
+        let tool_runs = self.projected_tool_runs();
+        let tool_uses = tool_runs.iter().map(runtime_tool_use_from_view).collect();
+        let terminal_tasks = tool_runs
             .iter()
             .filter_map(runtime_terminal_task_from_view)
             .collect();
@@ -219,8 +215,8 @@ impl TuiApp {
 
     pub fn active_tool_count(&self) -> usize {
         if self.runtime_state_snapshot.tool_uses.is_empty() {
-            self.tool_runs_snapshot
-                .iter()
+            self.projected_tool_runs()
+                .into_iter()
                 .filter(|run| run.is_active())
                 .count()
         } else {
@@ -244,8 +240,8 @@ impl TuiApp {
             return Some(format!("{} {}s", tool.summary, elapsed));
         }
         let active = self
-            .tool_runs_snapshot
-            .iter()
+            .projected_tool_runs()
+            .into_iter()
             .rev()
             .find(|run| run.is_active())?;
         Some(format!(
@@ -435,8 +431,7 @@ impl TuiApp {
             .unwrap_or_else(|| format!("session-parts-{session_id}"));
         self.sync_snapshot
             .set_tool_runs_for_message(anchor_id, runs.clone());
-        self.tool_runs_snapshot = self.sync_snapshot.tool_runs.clone();
-        Ok(self.tool_runs_snapshot.len())
+        Ok(self.projected_tool_runs().len())
     }
 
     fn find_visible_tool_run(&self, id: &str) -> Option<ToolRunView> {
@@ -450,6 +445,20 @@ impl TuiApp {
         for msg in &self.messages {
             if let Some(group) = self.tool_runs_for_message(&msg.id) {
                 runs.extend(group);
+            }
+        }
+        runs
+    }
+
+    pub fn projected_tool_runs(&self) -> Vec<ToolRunView> {
+        let mut runs = self.visible_tool_runs();
+        let mut seen = runs
+            .iter()
+            .map(|run| run.id.clone())
+            .collect::<std::collections::BTreeSet<_>>();
+        for run in self.sync_snapshot.all_tool_runs() {
+            if seen.insert(run.id.clone()) {
+                runs.push(run);
             }
         }
         runs

@@ -338,7 +338,7 @@ pub fn handle_uptime(app: &TuiApp) -> String {
         seconds,
         app.session_manager.current_session_id().unwrap_or("none"),
         app.messages.len(),
-        app.tool_runs_snapshot.len()
+        app.projected_tool_runs().len()
     )
 }
 /// /version - Show version

@@ -479,9 +479,9 @@ fn diagnostic_tool_runs(app: &TuiApp) -> Vec<crate::tui::tool_view::ToolRunView>
             runs.push(run);
         }
     }
-    for run in &app.tool_runs_snapshot {
+    for run in app.projected_tool_runs() {
         if seen.insert(run.id.clone()) {
-            runs.push(run.clone());
+            runs.push(run);
         }
     }
     runs

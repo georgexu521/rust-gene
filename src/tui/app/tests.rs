@@ -106,7 +106,10 @@ async fn cancel_active_run_interrupts_query_and_marks_tool_cancelled() {
     assert!(app.stream_started_at.is_none());
     assert!(app.current_tool_anchor_id.is_none());
     assert!(app.messages[1].content.contains("Cancelled"));
-    assert_eq!(app.tool_runs_snapshot[0].status, ToolRunStatus::Cancelled);
+    assert_eq!(
+        app.projected_tool_runs()[0].status,
+        ToolRunStatus::Cancelled
+    );
     let projected_runs = app
         .sync_snapshot
         .tool_runs_for_message("msg_0")
@@ -155,8 +158,9 @@ async fn timeout_active_run_finishes_query_and_marks_tool_failed() {
         app.messages[1].content,
         "[Error: provider request timed out after 120.0s]"
     );
-    assert_eq!(app.tool_runs_snapshot[0].status, ToolRunStatus::Failed);
-    assert!(app.tool_runs_snapshot[0]
+    let projected_runs = app.projected_tool_runs();
+    assert_eq!(projected_runs[0].status, ToolRunStatus::Failed);
+    assert!(projected_runs[0]
         .result_body
         .as_deref()
         .is_some_and(|result| result.contains("provider request timed out")));
@@ -290,8 +294,10 @@ fn provider_watchdog_ignores_queued_tool_placeholder() {
     let mut app = TuiApp::new();
     app.is_querying = true;
     app.stream_started_at = Some(std::time::Instant::now() - std::time::Duration::from_secs(31));
-    app.tool_runs_snapshot
-        .push(ToolRunView::new("queued".to_string(), "bash".to_string()));
+    app.sync_snapshot.set_tool_runs_for_message(
+        "user_1".to_string(),
+        vec![ToolRunView::new("queued".to_string(), "bash".to_string())],
+    );
 
     let reason = app
         .provider_wait_timeout_reason()
@@ -1671,7 +1677,8 @@ fn test_runtime_snapshot_keeps_terminal_task_metadata() {
             "transcript_summary": "npm run dev"
         })),
     );
-    app.tool_runs_snapshot.push(run);
+    app.sync_snapshot
+        .set_tool_runs_for_message("user_1".to_string(), vec![run]);
     app.runtime_state_snapshot = app.build_runtime_state_snapshot();
 
     assert_eq!(

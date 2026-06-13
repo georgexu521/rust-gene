@@ -1142,8 +1142,8 @@ impl TuiApp {
             return;
         }
         let failed_tool = self
-            .tool_runs_snapshot
-            .iter()
+            .projected_tool_runs()
+            .into_iter()
             .any(|run| matches!(run.status, ToolRunStatus::Failed | ToolRunStatus::TimedOut));
         let stream_error = assistant_response.contains("[Error:");
         let has_response = !assistant_response.trim().is_empty();
@@ -1154,7 +1154,7 @@ impl TuiApp {
             .or_else(|| self.session_manager.latest_trace().ok().flatten());
         let attribution =
             skill_outcome_attribution(trace.as_ref(), has_response, stream_error, failed_tool);
-        let tool_calls = self.tool_runs_snapshot.len();
+        let tool_calls = self.projected_tool_runs().len();
         let store = crate::engine::skill_evolution::SkillProposalStore::default();
         for pending in self.pending_skill_invocations.drain(..) {
             let event = crate::engine::skill_evolution::SkillUsageEvent {

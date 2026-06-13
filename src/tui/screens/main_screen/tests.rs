@@ -320,7 +320,8 @@ fn render_status_bar_shows_debug_density_and_active_tools() {
     let mut run = ToolRunView::new("tool_1".to_string(), "bash".to_string());
     run.arguments = Some(serde_json::json!({ "command": "cargo test" }));
     run.mark_running("bash".to_string());
-    app.tool_runs_snapshot.push(run);
+    app.sync_snapshot
+        .set_tool_runs_for_message("user_1".to_string(), vec![run]);
 
     let rendered = render_status_bar_text(&app);
 
@@ -645,9 +646,8 @@ fn render_status_bar_projects_runtime_failures_and_background_tools() {
             }
         })),
     );
-    app.tool_runs_snapshot.push(failed);
-    app.tool_runs_snapshot.push(pty);
-    app.tool_runs_snapshot.push(background);
+    app.sync_snapshot
+        .set_tool_runs_for_message("user_1".to_string(), vec![failed, pty, background]);
 
     let rendered = render_status_bar_text(&app);
 

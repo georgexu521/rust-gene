@@ -82,8 +82,8 @@ pub fn active_turn_status(app: &TuiApp) -> Option<ActiveTurnStatus> {
     }
 
     if let Some(run) = app
-        .tool_runs_snapshot
-        .iter()
+        .projected_tool_runs()
+        .into_iter()
         .rev()
         .find(|run| run.is_active())
     {
