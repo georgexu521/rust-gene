@@ -109,18 +109,6 @@ fn global_agents_path() -> Option<PathBuf> {
     dirs::home_dir().map(|h| h.join(".priority-agent").join(FILE_NAME))
 }
 
-fn find_project_root(start: &Path) -> Option<PathBuf> {
-    let mut cur = start.to_path_buf();
-    loop {
-        if cur.join(".git").exists() {
-            return Some(cur);
-        }
-        if !cur.pop() {
-            return None;
-        }
-    }
-}
-
 fn full_agents_loading_enabled() -> bool {
     matches!(
         std::env::var("PRIORITY_AGENT_AGENTS_MD_FULL")
@@ -308,7 +296,8 @@ fn load_instruction_layers_internal(
         }
     }
 
-    let root = find_project_root(working_dir).unwrap_or_else(|| working_dir.to_path_buf());
+    let root = crate::workspace::find_project_root(working_dir)
+        .unwrap_or_else(|| working_dir.to_path_buf());
 
     let root_agents = root.join(FILE_NAME);
     if root_agents.exists() {
@@ -346,7 +335,8 @@ fn load_instruction_layers_internal(
 }
 
 fn load_root_context_layers_internal(working_dir: &Path) -> Vec<RootContextLayer> {
-    let root = find_project_root(working_dir).unwrap_or_else(|| working_dir.to_path_buf());
+    let root = crate::workspace::find_project_root(working_dir)
+        .unwrap_or_else(|| working_dir.to_path_buf());
     [
         RootContextKind::Soul,
         RootContextKind::User,

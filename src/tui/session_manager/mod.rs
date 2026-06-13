@@ -33,6 +33,8 @@ pub struct TuiSessionManager {
     store: Arc<SessionStore>,
     current_session_id: Option<String>,
     current_session_title: String,
+    /// Workspace root per session id (in-memory tag until schema migration).
+    session_workspaces: HashMap<String, String>,
 }
 
 impl TuiSessionManager {
@@ -47,6 +49,7 @@ impl TuiSessionManager {
             store,
             current_session_id: None,
             current_session_title: String::new(),
+            session_workspaces: HashMap::new(),
         })
     }
 
@@ -57,6 +60,7 @@ impl TuiSessionManager {
             store,
             current_session_id: None,
             current_session_title: String::new(),
+            session_workspaces: HashMap::new(),
         })
     }
 
@@ -79,6 +83,7 @@ impl TuiSessionManager {
             store,
             current_session_id: Some(session_id),
             current_session_title: title,
+            session_workspaces: HashMap::new(),
         })
     }
 
@@ -122,6 +127,20 @@ impl TuiSessionManager {
     /// 获取当前会话标题
     pub fn current_session_title(&self) -> &str {
         &self.current_session_title
+    }
+
+    /// Tag a session with a workspace root.
+    pub fn tag_session_workspace(&mut self, session_id: &str, workspace_root: &str) {
+        self.session_workspaces
+            .insert(session_id.to_string(), workspace_root.to_string());
+    }
+
+    /// Get the workspace root for a session, falling back to the current workspace.
+    pub fn session_workspace(&self, session_id: &str, current_workspace: &str) -> String {
+        self.session_workspaces
+            .get(session_id)
+            .cloned()
+            .unwrap_or_else(|| current_workspace.to_string())
     }
 
     /// 更新当前会话标题
@@ -427,7 +446,11 @@ impl TuiSessionManager {
     }
 
     /// Fork the current session into a new child session and switch to it.
-    pub async fn fork_current_session(&mut self, title: &str) -> anyhow::Result<String> {
+    pub async fn fork_current_session(
+        &mut self,
+        title: &str,
+        workspace_root: &str,
+    ) -> anyhow::Result<String> {
         let parent_id = self
             .current_session_id()
             .ok_or_else(|| anyhow::anyhow!("No active session"))?
@@ -453,6 +476,7 @@ impl TuiSessionManager {
             )?;
         }
 
+        self.tag_session_workspace(&child_id, workspace_root);
         self.current_session_id = Some(child_id.clone());
         self.current_session_title = title.to_string();
 

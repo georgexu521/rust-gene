@@ -689,7 +689,7 @@ async fn test_fork_current_session_copies_messages() {
         .to_string();
     let child_id = app
         .session_manager
-        .fork_current_session("Child")
+        .fork_current_session("Child", "/tmp")
         .await
         .unwrap();
 

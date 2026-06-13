@@ -49,3 +49,4 @@ pub mod tui;
 pub mod version;
 #[cfg(feature = "voice")]
 pub mod voice;
+pub mod workspace;

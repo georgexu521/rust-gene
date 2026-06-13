@@ -14,6 +14,7 @@ pub mod v17_add_goal_runs;
 pub mod v18_add_goal_step_score;
 pub mod v19_add_message_metadata;
 pub mod v1_initial;
+pub mod v20_add_session_workspace;
 pub mod v2_add_tasks;
 pub mod v3_add_traces;
 pub mod v4_add_learning_events;

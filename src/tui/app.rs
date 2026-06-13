@@ -16,6 +16,7 @@ use crate::state::{
 use crate::tui::components::input::InputState;
 use crate::tui::sync_store::{TuiSyncSnapshot, TuiSyncStore};
 use crate::tui::tool_view::{ToolRunStatus, ToolRunView};
+use crate::workspace::Workspace;
 use futures::StreamExt;
 use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -174,6 +175,8 @@ pub struct TuiApp {
     pub mode_stack: Vec<AppMode>,
     /// Leader-key 等待状态
     pub leader_state: Option<LeaderState>,
+    /// 当前检测到的 workspace
+    pub workspace: Workspace,
     /// 当前 coding agent 产品模式
     pub agent_mode: AgentMode,
     /// 输入状态
@@ -717,25 +720,27 @@ impl TuiApp {
             })
         };
 
-        if session_manager.current_session_id().is_none() {
-            let _ = session_manager.start_session("New Session", &model);
-        }
-
-        // Restart safety: mark any active goals as paused so they don't auto-resume
-        if let Err(e) =
-            crate::engine::goal::runner::pause_all_active_goals(&session_manager.store())
-        {
-            warn!("Failed to pause active goals on startup: {}", e);
-        }
-
         let app_config = crate::services::config::AppConfig::load().unwrap_or_default();
         let pinned_sessions = app_config.ui.pinned_sessions.clone();
         let theme_name = app_config.ui.theme.clone();
+
+        let workspace = Workspace::detect(
+            std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")),
+        );
+
+        if session_manager.current_session_id().is_none() {
+            if let Ok(id) = session_manager.start_session("New Session", &model) {
+                session_manager.tag_session_workspace(&id, &workspace.root.to_string_lossy());
+            }
+        }
+
+        // Restart safety: mark any active goals as paused so they don't auto-resume
 
         Self {
             mode: AppMode::Chat,
             mode_stack: Vec::new(),
             leader_state: None,
+            workspace,
             agent_mode: AgentMode::Auto,
             input: InputState::new(),
             messages: Vec::new(),

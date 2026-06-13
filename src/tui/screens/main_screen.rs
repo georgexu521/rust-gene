@@ -19,7 +19,7 @@ use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Modifier, Style},
     text::{Line, Span, Text},
-    widgets::{Block, Borders, Clear, Paragraph, Wrap},
+    widgets::{Block, Borders, Clear, ListItem, Paragraph, Wrap},
     Frame,
 };
 
@@ -622,49 +622,53 @@ fn render_sessions_panel(f: &mut Frame, app: &TuiApp, area: Rect) {
 
     let visible_sessions = app.visible_sidebar_sessions(50);
     let current_id = app.session_manager.current_session_id().unwrap_or("");
-    let pinned_count = visible_sessions
-        .iter()
-        .filter(|session| app.pinned_sessions.contains(&session.id))
-        .count();
+    let current_workspace = app.workspace.root.to_string_lossy().to_string();
 
     let mut items: Vec<ListItem> = Vec::new();
 
-    // 已固定分组
-    if pinned_count > 0 {
+    // 已固定分组（按 workspace 再分组）
+    let pinned: Vec<_> = visible_sessions
+        .iter()
+        .filter(|s| app.pinned_sessions.contains(&s.id))
+        .collect();
+    if !pinned.is_empty() {
         items.push(ListItem::new(Line::from(Span::styled(
             "─ Pinned ─".to_string(),
             Style::default()
                 .fg(app.theme.tokens.tone.accent)
                 .add_modifier(Modifier::BOLD),
         ))));
-        for (i, session) in visible_sessions.iter().take(pinned_count).enumerate() {
-            items.push(build_session_item(
-                app,
-                session,
-                current_id,
-                i,
-                true,
-                visible_sessions.len(),
-                search_chunks[1].width,
-            ));
-        }
-    }
-
-    // 未固定分组
-    if pinned_count > 0 && pinned_count < visible_sessions.len() {
-        items.push(ListItem::new(Line::from("")));
-    }
-
-    for (i, session) in visible_sessions.iter().skip(pinned_count).enumerate() {
-        items.push(build_session_item(
+        push_grouped_sessions(
+            &mut items,
             app,
-            session,
+            &pinned,
             current_id,
-            pinned_count + i,
-            false,
-            visible_sessions.len(),
+            0,
+            true,
+            &current_workspace,
             search_chunks[1].width,
-        ));
+        );
+    }
+
+    // 未固定分组（按 workspace 再分组）
+    let unpinned: Vec<_> = visible_sessions
+        .iter()
+        .filter(|s| !app.pinned_sessions.contains(&s.id))
+        .collect();
+    if !unpinned.is_empty() {
+        if !pinned.is_empty() {
+            items.push(ListItem::new(Line::from("")));
+        }
+        push_grouped_sessions(
+            &mut items,
+            app,
+            &unpinned,
+            current_id,
+            pinned.len(),
+            false,
+            &current_workspace,
+            search_chunks[1].width,
+        );
     }
 
     if items.is_empty() {
@@ -676,6 +680,53 @@ fn render_sessions_panel(f: &mut Frame, app: &TuiApp, area: Rect) {
 
     let list = List::new(items);
     f.render_widget(list, search_chunks[1]);
+}
+
+#[allow(clippy::too_many_arguments)]
+fn push_grouped_sessions<'a>(
+    items: &mut Vec<ListItem<'a>>,
+    app: &'a TuiApp,
+    sessions: &[&crate::session_store::SessionRecord],
+    current_id: &str,
+    start_index: usize,
+    is_pinned: bool,
+    current_workspace: &str,
+    width: u16,
+) {
+    use std::collections::BTreeMap;
+    let mut groups: BTreeMap<String, Vec<&crate::session_store::SessionRecord>> = BTreeMap::new();
+    for session in sessions {
+        let ws = app
+            .session_manager
+            .session_workspace(&session.id, current_workspace);
+        groups.entry(ws).or_default().push(session);
+    }
+
+    let mut index = start_index;
+    for (workspace, group) in groups {
+        let name = std::path::Path::new(&workspace)
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_else(|| workspace.clone());
+        items.push(ListItem::new(Line::from(Span::styled(
+            format!("  {name}"),
+            Style::default()
+                .fg(app.theme.tokens.fg.meta)
+                .add_modifier(Modifier::BOLD),
+        ))));
+        for session in group {
+            items.push(build_session_item(
+                app,
+                session,
+                current_id,
+                index,
+                is_pinned,
+                sessions.len(),
+                width,
+            ));
+            index += 1;
+        }
+    }
 }
 
 fn render_context_panel(f: &mut Frame, app: &TuiApp, area: Rect) {
@@ -745,6 +796,7 @@ fn render_context_panel(f: &mut Frame, app: &TuiApp, area: Rect) {
             ),
             app,
         ),
+        context_row("workspace", app.workspace.display_name.clone(), app),
         context_row("mode", app.current_agent_mode_label(), app),
         Line::from(""),
         context_heading("Runtime", app),

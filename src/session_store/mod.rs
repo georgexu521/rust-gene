@@ -218,6 +218,9 @@ impl SessionStore {
         runner.register(std::sync::Arc::new(
             crate::migrations::v19_add_message_metadata::V19AddMessageMetadata,
         ));
+        runner.register(std::sync::Arc::new(
+            crate::migrations::v20_add_session_workspace::V20AddSessionWorkspace,
+        ));
         runner.run(&conn)?;
 
         info!("SessionStore opened at {:?}", path);
@@ -291,6 +294,9 @@ impl SessionStore {
         ));
         runner.register(std::sync::Arc::new(
             crate::migrations::v19_add_message_metadata::V19AddMessageMetadata,
+        ));
+        runner.register(std::sync::Arc::new(
+            crate::migrations::v20_add_session_workspace::V20AddSessionWorkspace,
         ));
         runner.run(&conn)?;
 

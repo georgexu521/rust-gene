@@ -238,7 +238,11 @@ pub async fn handle_fork(app: &mut TuiApp, args: &str) -> String {
         title.to_string()
     };
 
-    match app.session_manager.fork_current_session(&title).await {
+    match app
+        .session_manager
+        .fork_current_session(&title, &app.workspace.root.to_string_lossy())
+        .await
+    {
         Ok(id) => format!(
             "Forked into new session: {} ({}). Switched to it automatically.",
             title,
