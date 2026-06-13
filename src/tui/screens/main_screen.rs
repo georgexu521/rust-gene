@@ -6,7 +6,7 @@ use crate::{
     state::MessageRole,
     tui::{
         app::{SidebarPanel, TuiApp},
-        components::message,
+        components::{message, tool_renderers::render_tool_lines},
         tool_view::ToolRunView,
         view_model::timeline::{
             estimate_timeline_item_height, resolve_scroll_offset, timeline_item_heights,
@@ -221,7 +221,7 @@ pub fn render_chat_area(f: &mut Frame, app: &TuiApp, area: Rect) {
                 f.render_widget(paragraph, msg_area);
             }
             TimelineItem::ToolRuns { runs, .. } => {
-                let paragraph = render_tool_runs_message(runs, app);
+                let paragraph = render_tool_runs_message(runs, app, msg_area.width as usize);
                 f.render_widget(paragraph, msg_area);
             }
         };
@@ -390,7 +390,11 @@ fn visible_items_height(
         .min(max_height)
 }
 
-fn render_tool_runs_message<'a>(runs: &'a [ToolRunView], app: &'a TuiApp) -> Paragraph<'a> {
+fn render_tool_runs_message<'a>(
+    runs: &'a [ToolRunView],
+    app: &'a TuiApp,
+    width: usize,
+) -> Paragraph<'a> {
     let mut lines = Vec::new();
     let view = tool_rows_for_runs_with_spine(runs, &app.facade_snapshot.tool_turns, 120);
     if view.hidden_routine_count > 0 {
@@ -432,6 +436,15 @@ fn render_tool_runs_message<'a>(runs: &'a [ToolRunView], app: &'a TuiApp) -> Par
                 Span::styled(format!("{prefix} "), Style::default().fg(accent)),
                 Span::styled(line, style),
             ]));
+        }
+        if expanded {
+            let rendered = render_tool_lines(run, &app.theme, width);
+            for mut rendered_line in rendered {
+                for span in rendered_line.spans.iter_mut() {
+                    span.style = span.style.patch(Style::default());
+                }
+                lines.push(rendered_line);
+            }
         }
         if run_idx + 1 < visible_rows.len() {
             lines.push(Line::from(""));

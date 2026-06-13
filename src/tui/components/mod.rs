@@ -11,3 +11,4 @@ pub mod message;
 pub mod message_search;
 pub mod progress;
 pub mod settings;
+pub mod tool_renderers;

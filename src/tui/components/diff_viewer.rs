@@ -161,9 +161,7 @@ fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tui::components::diff_renderer::{
-        find_next_hunk_line, find_prev_hunk_line,
-    };
+    use crate::tui::components::diff_renderer::{find_next_hunk_line, find_prev_hunk_line};
     use ratatui::{backend::TestBackend, Terminal};
 
     fn render_diff_text(diff_text: &str, title: &str) -> String {

@@ -304,7 +304,7 @@ fn trim_tree_prefix(line: &str) -> String {
         .to_string()
 }
 
-fn compact_line(line: &str, max_chars: usize) -> String {
+pub fn compact_line(line: &str, max_chars: usize) -> String {
     let mut out = String::new();
     for ch in line.chars().take(max_chars) {
         out.push(ch);

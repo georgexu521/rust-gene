@@ -452,19 +452,29 @@ diff --git a/src/main.rs b/src/main.rs
     #[test]
     fn build_diff_lines_include_gutter() {
         let theme = crate::tui::theme::Theme::default();
-        let diff = "@@ -1,3 +1,4 @@\n fn main() {\n-    println!(\"old\");\n+    println!(\"new\");\n }";
+        let diff =
+            "@@ -1,3 +1,4 @@\n fn main() {\n-    println!(\"old\");\n+    println!(\"new\");\n }";
         let (lines, _, _) = build_diff_lines(diff, &theme, true);
         assert!(!lines.is_empty());
-        let text = lines[1].spans.iter().map(|s| s.content.to_string()).collect::<String>();
+        let text = lines[1]
+            .spans
+            .iter()
+            .map(|s| s.content.to_string())
+            .collect::<String>();
         assert!(text.contains('│'));
     }
 
     #[test]
     fn build_diff_lines_omit_gutter() {
         let theme = crate::tui::theme::Theme::default();
-        let diff = "@@ -1,3 +1,4 @@\n fn main() {\n-    println!(\"old\");\n+    println!(\"new\");\n }";
+        let diff =
+            "@@ -1,3 +1,4 @@\n fn main() {\n-    println!(\"old\");\n+    println!(\"new\");\n }";
         let (lines, _, _) = build_diff_lines(diff, &theme, false);
-        let text = lines[1].spans.iter().map(|s| s.content.to_string()).collect::<String>();
+        let text = lines[1]
+            .spans
+            .iter()
+            .map(|s| s.content.to_string())
+            .collect::<String>();
         assert!(!text.contains('│'));
     }
 }
