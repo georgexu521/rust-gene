@@ -8,6 +8,22 @@ pub mod trust;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum TuiSlot {
+    SidebarTitle,
+    SidebarFooter,
+    StatusBar,
+    MessageBeforeSend,
+    ToolCard,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct PluginTuiContribution {
+    #[serde(default)]
+    pub slots: Vec<TuiSlot>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PluginManifest {
     pub name: String,
@@ -30,6 +46,8 @@ pub struct PluginManifest {
     pub signature: Option<String>,
     #[serde(default)]
     pub public_key: Option<String>,
+    #[serde(default)]
+    pub tui: PluginTuiContribution,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -74,6 +92,8 @@ pub struct PluginRuntimeFacts {
     pub issues: Vec<PluginValidationIssue>,
     pub contributions: Vec<String>,
     pub diagnostic: String,
+    #[serde(default)]
+    pub tui_slots: Vec<TuiSlot>,
 }
 
 pub fn default_plugin_roots(working_dir: &Path) -> Vec<PathBuf> {
@@ -273,6 +293,11 @@ pub fn runtime_facts_for_plugin(
     {
         contributions.push("runtime:process".to_string());
     }
+    for slot in &plugin.manifest.tui.slots {
+        contributions.push(format!("tui:{:?}", slot));
+    }
+
+    let tui_slots = plugin.manifest.tui.slots.clone();
 
     let diagnostic = match status {
         PluginRuntimeStatus::Ready => "plugin ready".to_string(),
@@ -310,6 +335,7 @@ pub fn runtime_facts_for_plugin(
         issues,
         contributions,
         diagnostic,
+        tui_slots,
     }
 }
 
@@ -379,6 +405,7 @@ entry_args = ["index.js"]
             tool_timeout_secs: None,
             signature: None,
             public_key: None,
+            tui: Default::default(),
         };
 
         let issues = validate_manifest(&manifest);
@@ -472,6 +499,36 @@ enabled = true
         assert_eq!(disabled.status, PluginRuntimeStatus::Disabled);
         assert_eq!(blocked.status, PluginRuntimeStatus::Blocked);
         assert!(blocked.diagnostic.contains("entry_command"));
+
+        let _ = std::fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn manifest_tui_slots_are_parsed_and_validated() {
+        let temp_dir =
+            std::env::temp_dir().join(format!("pa-plugin-tui-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        let ui_dir = temp_dir.join("ui-plugin");
+        std::fs::create_dir_all(&ui_dir).unwrap();
+        std::fs::write(
+            ui_dir.join("plugin.toml"),
+            r#"
+name = "ui-plugin"
+version = "0.1.0"
+enabled = true
+entry_command = "sh"
+
+[tui]
+slots = ["status_bar"]
+"#,
+        )
+        .unwrap();
+
+        let discovered = discover_plugins(std::slice::from_ref(&temp_dir));
+        let facts = runtime_facts(&discovered, trust::TrustMode::Off);
+        let ui = facts.iter().find(|f| f.id == "ui-plugin").unwrap();
+        assert_eq!(ui.tui_slots, vec![TuiSlot::StatusBar]);
+        assert!(ui.contributions.contains(&"tui:StatusBar".to_string()));
 
         let _ = std::fs::remove_dir_all(temp_dir);
     }

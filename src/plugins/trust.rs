@@ -248,6 +248,7 @@ mod tests {
             tool_timeout_secs: None,
             signature: None,
             public_key: None,
+            tui: Default::default(),
         }
     }
 
