@@ -259,8 +259,7 @@ fn transcript_items_insert_tool_runs_after_active_user() {
         "command": "ls -la ~/Desktop"
     }));
     app.sync_snapshot
-        .tool_runs_by_message_id
-        .insert(items[2].id.clone(), vec![run]);
+        .set_tool_runs_for_message(items[2].id.clone(), vec![run]);
     let refs: Vec<_> = items.iter().collect();
 
     let transcript = timeline_items(&refs, &app);
@@ -280,11 +279,11 @@ fn transcript_items_keep_tool_runs_for_previous_turns() {
         msg(MessageRole::User, "second question"),
         msg(MessageRole::Assistant, "second answer"),
     ];
-    app.sync_snapshot.tool_runs_by_message_id.insert(
+    app.sync_snapshot.set_tool_runs_for_message(
         items[0].id.clone(),
         vec![ToolRunView::new("tool_1".to_string(), "bash".to_string())],
     );
-    app.sync_snapshot.tool_runs_by_message_id.insert(
+    app.sync_snapshot.set_tool_runs_for_message(
         items[2].id.clone(),
         vec![ToolRunView::new("tool_2".to_string(), "grep".to_string())],
     );
@@ -510,7 +509,8 @@ fn render_context_sidebar_shows_runtime_summary() {
     );
     let mut failed = ToolRunView::new("tool_1".to_string(), "bash".to_string());
     failed.mark_complete("Result: ERROR\nfailed".to_string());
-    app.tool_runs_snapshot.push(failed);
+    app.sync_snapshot
+        .set_tool_runs_for_message("user_1".to_string(), vec![failed]);
 
     let rendered = render_context_sidebar_text(&app);
 

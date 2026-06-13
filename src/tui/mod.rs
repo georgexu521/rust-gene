@@ -423,8 +423,7 @@ fn sidebar_layout(area: ratatui::layout::Rect) -> SidebarLayout {
         } else {
             area.width
                 .saturating_sub(4)
-                .min(OVERLAY_SIDEBAR_MAX_WIDTH)
-                .max(24)
+                .clamp(24, OVERLAY_SIDEBAR_MAX_WIDTH)
         };
         let height = if area.height > 8 {
             area.height.saturating_sub(6)
@@ -1678,8 +1677,7 @@ mod tests {
         completed.mark_running("bash".to_string());
         completed.mark_complete("Result: OK\ncargo check finished successfully".to_string());
         app.sync_snapshot
-            .tool_runs_by_message_id
-            .insert("user_completed_tool".to_string(), vec![completed]);
+            .set_tool_runs_for_message("user_completed_tool".to_string(), vec![completed]);
 
         app.messages.push(crate::state::MessageItem {
             id: "assistant_completed_tool".to_string(),

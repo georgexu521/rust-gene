@@ -107,10 +107,11 @@ async fn cancel_active_run_interrupts_query_and_marks_tool_cancelled() {
     assert!(app.current_tool_anchor_id.is_none());
     assert!(app.messages[1].content.contains("Cancelled"));
     assert_eq!(app.tool_runs_snapshot[0].status, ToolRunStatus::Cancelled);
-    assert_eq!(
-        app.sync_snapshot.tool_runs_by_message_id["msg_0"][0].status,
-        ToolRunStatus::Cancelled
-    );
+    let projected_runs = app
+        .sync_snapshot
+        .tool_runs_for_message("msg_0")
+        .expect("projected tool runs");
+    assert_eq!(projected_runs[0].status, ToolRunStatus::Cancelled);
 }
 
 #[tokio::test]
@@ -189,6 +190,7 @@ async fn refresh_response_times_out_stale_provider_wait() {
     let mut app = TuiApp::new();
     app.is_querying = true;
     app.stream_started_at = Some(std::time::Instant::now() - std::time::Duration::from_secs(3));
+    app.runtime_facade_state.set_querying(true).await;
     app.runtime_facade_state
         .process_diagnostic(&serde_json::json!({
             "schema": "api_request_stage.v1",
@@ -196,6 +198,14 @@ async fn refresh_response_times_out_stale_provider_wait() {
             "provider_family": "deepseek",
             "model": "deepseek-v4-flash",
             "timeout_ms": 1_000
+        }))
+        .await;
+    app.runtime_facade_state
+        .process_diagnostic(&serde_json::json!({
+            "schema": "provider_request.v1",
+            "stage": "provider_request_timeout",
+            "elapsed_ms": 3_000,
+            "message": "provider request timed out after 1.0s"
         }))
         .await;
     app.messages.push(MessageItem {
@@ -1028,14 +1038,12 @@ fn test_jump_to_failed_and_edit_timeline_items() {
     let mut failed = ToolRunView::new("tool_failed".to_string(), "bash".to_string());
     failed.mark_complete("Result: ERROR\nfailed".to_string());
     app.sync_snapshot
-        .tool_runs_by_message_id
-        .insert(first_user.id.clone(), vec![failed]);
+        .set_tool_runs_for_message(first_user.id.clone(), vec![failed]);
 
     let mut edit = ToolRunView::new("tool_edit".to_string(), "file_edit".to_string());
     edit.mark_complete("Result: OK\nchanged".to_string());
     app.sync_snapshot
-        .tool_runs_by_message_id
-        .insert(second_user.id.clone(), vec![edit]);
+        .set_tool_runs_for_message(second_user.id.clone(), vec![edit]);
 
     let failed_result = app.jump_to_timeline_target("failed");
     assert!(failed_result.contains("failed"));
@@ -1065,7 +1073,7 @@ fn test_scroll_down_uses_timeline_item_count_with_tool_groups() {
         timestamp: std::time::SystemTime::UNIX_EPOCH,
         metadata: Default::default(),
     });
-    app.sync_snapshot.tool_runs_by_message_id.insert(
+    app.sync_snapshot.set_tool_runs_for_message(
         user.id.clone(),
         vec![ToolRunView::new("tool_1".to_string(), "bash".to_string())],
     );
@@ -1098,8 +1106,7 @@ fn test_sync_tool_runs_from_spine_adds_missing_transcript_row() {
 
     let runs = app
         .sync_snapshot
-        .tool_runs_by_message_id
-        .get("user_1")
+        .tool_runs_for_message("user_1")
         .expect("spine-backed tool run should be inserted");
     assert_eq!(runs.len(), 1);
     assert_eq!(runs[0].name, "bash");
@@ -1122,14 +1129,14 @@ fn test_sync_tool_runs_from_spine_adds_missing_transcript_row() {
 #[test]
 fn test_tool_runs_for_message_prefers_sync_snapshot_projection() {
     let mut app = TuiApp::new();
-    app.sync_snapshot.tool_runs_by_message_id.insert(
+    app.sync_snapshot.set_tool_runs_for_message(
         "user_1".to_string(),
         vec![ToolRunView::new(
             "legacy_call".to_string(),
             "bash".to_string(),
         )],
     );
-    app.sync_snapshot.tool_runs_by_message_id.insert(
+    app.sync_snapshot.set_tool_runs_for_message(
         "user_1".to_string(),
         vec![ToolRunView::new(
             "sync_call".to_string(),
@@ -1263,7 +1270,7 @@ fn test_toggle_collapse_maps_tool_group_anchor_to_parent_message() {
         timestamp: std::time::SystemTime::UNIX_EPOCH,
         metadata: Default::default(),
     });
-    app.sync_snapshot.tool_runs_by_message_id.insert(
+    app.sync_snapshot.set_tool_runs_for_message(
         user.id.clone(),
         vec![ToolRunView::new(
             "tool_1".to_string(),
@@ -1376,7 +1383,7 @@ fn test_scroll_to_message_index_maps_through_timeline_tool_groups() {
         timestamp: std::time::SystemTime::UNIX_EPOCH,
         metadata: Default::default(),
     });
-    app.sync_snapshot.tool_runs_by_message_id.insert(
+    app.sync_snapshot.set_tool_runs_for_message(
         first_user.id,
         vec![ToolRunView::new("tool_1".to_string(), "bash".to_string())],
     );
@@ -1531,7 +1538,7 @@ fn test_cycle_expanded_tool_run_moves_through_visible_tools() {
         metadata: Default::default(),
     };
     app.messages.push(user);
-    app.sync_snapshot.tool_runs_by_message_id.insert(
+    app.sync_snapshot.set_tool_runs_for_message(
         "user_1".to_string(),
         vec![
             ToolRunView::new("tool_1".to_string(), "bash".to_string()),
@@ -1602,8 +1609,7 @@ fn test_open_tool_viewer_uses_expanded_tool_or_latest() {
     let mut second = ToolRunView::new("tool_2".to_string(), "grep".to_string());
     second.mark_complete("Result: OK\nsecond\n".to_string());
     app.sync_snapshot
-        .tool_runs_by_message_id
-        .insert("user_1".to_string(), vec![first.clone(), second.clone()]);
+        .set_tool_runs_for_message("user_1".to_string(), vec![first.clone(), second.clone()]);
 
     assert!(app.open_tool_viewer());
     assert_eq!(app.mode, AppMode::ToolViewer);
@@ -1629,8 +1635,7 @@ fn test_tool_output_index_and_open_by_id() {
     let mut first = ToolRunView::new("tool_1".to_string(), "bash".to_string());
     first.mark_complete("Result: OK\nfirst\n".to_string());
     app.sync_snapshot
-        .tool_runs_by_message_id
-        .insert("user_1".to_string(), vec![first]);
+        .set_tool_runs_for_message("user_1".to_string(), vec![first]);
 
     let lines = app.tool_output_index_lines();
     assert_eq!(lines.len(), 1);

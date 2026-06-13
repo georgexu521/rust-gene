@@ -9,7 +9,7 @@ use crate::{
     },
 };
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub enum TimelineItem<'a> {
     Message {
         message_index: usize,
@@ -17,16 +17,17 @@ pub enum TimelineItem<'a> {
         msg: &'a MessageItem,
     },
     ToolRuns {
-        id: &'a str,
+        id: String,
         parent_message_id: &'a str,
-        runs: &'a [ToolRunView],
+        runs: Vec<ToolRunView>,
     },
 }
 
 impl<'a> TimelineItem<'a> {
-    pub fn stable_id(&self) -> &'a str {
+    pub fn stable_id(&self) -> &str {
         match self {
-            Self::Message { id, .. } | Self::ToolRuns { id, .. } => id,
+            Self::Message { id, .. } => id,
+            Self::ToolRuns { id, .. } => id.as_str(),
         }
     }
 
@@ -70,7 +71,10 @@ pub fn timeline_items<'a>(messages: &[&'a MessageItem], app: &'a TuiApp) -> Vec<
         });
         if !app.focus_mode && msg.role == MessageRole::User {
             if let Some(runs) = app.tool_runs_for_message(&msg.id) {
-                let first_run_id = runs.first().map(|run| run.id.as_str()).unwrap_or("tools");
+                let first_run_id = runs
+                    .first()
+                    .map(|run| run.id.clone())
+                    .unwrap_or_else(|| "tools".to_string());
                 items.push(TimelineItem::ToolRuns {
                     id: first_run_id,
                     parent_message_id: &msg.id,
@@ -208,7 +212,7 @@ mod tests {
             msg(MessageRole::User, "user_1"),
             msg(MessageRole::Assistant, "assistant_1"),
         ];
-        app.sync_snapshot.tool_runs_by_message_id.insert(
+        app.sync_snapshot.set_tool_runs_for_message(
             "user_1".to_string(),
             vec![ToolRunView::new("tool_1".to_string(), "bash".to_string())],
         );
@@ -221,14 +225,17 @@ mod tests {
             timeline[0],
             TimelineItem::Message { id: "user_1", .. }
         ));
-        assert!(matches!(
-            timeline[1],
+        match &timeline[1] {
             TimelineItem::ToolRuns {
-                id: "tool_1",
-                parent_message_id: "user_1",
+                id,
+                parent_message_id,
                 ..
+            } => {
+                assert_eq!(id, "tool_1");
+                assert_eq!(*parent_message_id, "user_1");
             }
-        ));
+            item => panic!("expected tool runs item, got {item:?}"),
+        }
     }
 
     #[test]
@@ -236,7 +243,7 @@ mod tests {
         let mut app = TuiApp::new();
         app.focus_mode = true;
         let item = msg(MessageRole::User, "user_1");
-        app.sync_snapshot.tool_runs_by_message_id.insert(
+        app.sync_snapshot.set_tool_runs_for_message(
             "user_1".to_string(),
             vec![ToolRunView::new("tool_1".to_string(), "bash".to_string())],
         );

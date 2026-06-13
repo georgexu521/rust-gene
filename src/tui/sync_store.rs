@@ -36,7 +36,6 @@ pub struct TuiSyncSnapshot {
     pub thinking_text: String,
     pub thinking_streaming: bool,
     pub tool_runs: Vec<ToolRunView>,
-    pub tool_runs_by_message_id: HashMap<String, Vec<ToolRunView>>,
     pub usage: Option<StreamUsageSnapshot>,
     pub last_error: Option<String>,
 }
@@ -61,12 +60,13 @@ pub enum TuiPartKind {
     Tool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub struct TuiMessagePart {
     pub id: String,
     pub message_id: String,
     pub kind: TuiPartKind,
     pub text: String,
+    pub tool_run: Option<ToolRunView>,
     pub streaming: bool,
 }
 
@@ -89,6 +89,142 @@ impl TuiSyncSnapshot {
             }
         }
         projected
+    }
+
+    pub fn tool_runs_for_message(&self, message_id: &str) -> Option<Vec<ToolRunView>> {
+        let runs = self
+            .parts_by_message_id
+            .get(message_id)?
+            .iter()
+            .filter(|part| part.kind == TuiPartKind::Tool)
+            .filter_map(|part| part.tool_run.clone())
+            .collect::<Vec<_>>();
+        (!runs.is_empty()).then_some(runs)
+    }
+
+    pub fn all_tool_runs(&self) -> Vec<ToolRunView> {
+        let mut runs = Vec::new();
+        let mut seen = std::collections::BTreeSet::new();
+        for part in self
+            .parts_by_message_id
+            .values()
+            .flat_map(|parts| parts.iter())
+            .filter(|part| part.kind == TuiPartKind::Tool)
+        {
+            if let Some(run) = part.tool_run.clone() {
+                if seen.insert(run.id.clone()) {
+                    runs.push(run);
+                }
+            }
+        }
+        runs
+    }
+
+    pub fn set_tool_runs_for_message(&mut self, message_id: String, runs: Vec<ToolRunView>) {
+        self.parts_by_message_id
+            .entry(message_id.clone())
+            .or_default()
+            .retain(|part| part.kind != TuiPartKind::Tool);
+        self.remove_stale_part_ids(&message_id);
+        for run in runs {
+            self.upsert_tool_part_for_message(&message_id, &run.id, &run.name);
+            self.replace_tool_part_run(&message_id, run);
+        }
+        self.rebuild_flat_tool_runs();
+    }
+
+    pub fn upsert_tool_run_for_message(&mut self, message_id: String, run: ToolRunView) {
+        self.upsert_tool_part_for_message(&message_id, &run.id, &run.name);
+        self.replace_tool_part_run(&message_id, run);
+        self.rebuild_flat_tool_runs();
+    }
+
+    pub fn clear_tool_parts(&mut self) {
+        for parts in self.parts_by_message_id.values_mut() {
+            parts.retain(|part| part.kind != TuiPartKind::Tool);
+        }
+        let message_ids = self
+            .messages
+            .iter()
+            .map(|message| message.id.clone())
+            .collect::<Vec<_>>();
+        for message_id in message_ids {
+            self.remove_stale_part_ids(&message_id);
+        }
+        self.tool_runs.clear();
+    }
+
+    fn upsert_tool_part_for_message(&mut self, message_id: &str, tool_id: &str, name: &str) {
+        let part_id = format!("{message_id}:tool:{tool_id}");
+        let parts = self
+            .parts_by_message_id
+            .entry(message_id.to_string())
+            .or_default();
+        if parts.iter().any(|part| part.id == part_id) {
+            return;
+        }
+        parts.push(TuiMessagePart {
+            id: part_id.clone(),
+            message_id: message_id.to_string(),
+            kind: TuiPartKind::Tool,
+            text: name.to_string(),
+            tool_run: self.tool_runs.iter().find(|run| run.id == tool_id).cloned(),
+            streaming: true,
+        });
+        if let Some(message) = self
+            .messages
+            .iter_mut()
+            .find(|message| message.id == message_id)
+        {
+            message.part_ids.push(part_id);
+        }
+    }
+
+    fn replace_tool_part_run(&mut self, message_id: &str, run: ToolRunView) {
+        let Some(parts) = self.parts_by_message_id.get_mut(message_id) else {
+            return;
+        };
+        if let Some(part) = parts
+            .iter_mut()
+            .find(|part| part.kind == TuiPartKind::Tool && part.id.ends_with(&run.id))
+        {
+            part.text = run.name.clone();
+            part.streaming = run.is_active();
+            part.tool_run = Some(run);
+        }
+    }
+
+    fn sync_tool_part(&mut self, tool_id: &str) {
+        let Some(message_id) = self.active_user_message_id.clone() else {
+            return;
+        };
+        let Some(run) = self.tool_runs.iter().find(|run| run.id == tool_id).cloned() else {
+            return;
+        };
+        self.upsert_tool_part_for_message(&message_id, tool_id, &run.name);
+        self.replace_tool_part_run(&message_id, run);
+    }
+
+    fn rebuild_flat_tool_runs(&mut self) {
+        self.tool_runs = self.all_tool_runs();
+    }
+
+    fn remove_stale_part_ids(&mut self, message_id: &str) {
+        let Some(message) = self
+            .messages
+            .iter_mut()
+            .find(|message| message.id == message_id)
+        else {
+            return;
+        };
+        let valid_parts = self
+            .parts_by_message_id
+            .get(message_id)
+            .map(Vec::as_slice)
+            .unwrap_or(&[]);
+        message
+            .part_ids
+            .retain(|part_id| valid_parts.iter().any(|part| part.id == *part_id));
     }
 }
 
@@ -169,25 +305,24 @@ impl TuiSyncStore {
                 self.snapshot.assistant_streaming = false;
                 upsert_tool_run(&mut self.snapshot.tool_runs, id.clone(), name.clone());
                 self.upsert_tool_part(id, name);
-                self.sync_active_tool_runs();
             }
             StreamEvent::ToolCallArgs { id, args_delta } => {
                 with_tool_run(&mut self.snapshot.tool_runs, id, |run| {
                     run.push_args_delta(args_delta)
                 });
-                self.sync_active_tool_runs();
+                self.snapshot.sync_tool_part(id);
             }
             StreamEvent::ToolExecutionStart { id, name, .. } => {
                 with_tool_run(&mut self.snapshot.tool_runs, id, |run| {
                     run.mark_running(name.clone())
                 });
-                self.sync_active_tool_runs();
+                self.snapshot.sync_tool_part(id);
             }
             StreamEvent::ToolExecutionProgress { id, progress } => {
                 with_tool_run(&mut self.snapshot.tool_runs, id, |run| {
                     run.push_progress(progress.clone())
                 });
-                self.sync_active_tool_runs();
+                self.snapshot.sync_tool_part(id);
             }
             StreamEvent::ToolExecutionComplete {
                 id,
@@ -201,7 +336,7 @@ impl TuiSyncStore {
                         run.result_data = Some(data);
                     }
                 });
-                self.sync_active_tool_runs();
+                self.snapshot.sync_tool_part(id);
             }
             StreamEvent::PermissionRequest {
                 id,
@@ -212,7 +347,7 @@ impl TuiSyncStore {
                 with_tool_run(&mut self.snapshot.tool_runs, id, |run| {
                     run.mark_waiting_permission(tool_name.clone(), arguments.clone())
                 });
-                self.sync_active_tool_runs();
+                self.snapshot.sync_tool_part(id);
             }
             StreamEvent::Usage {
                 prompt_tokens,
@@ -287,19 +422,14 @@ impl TuiSyncStore {
         {
             run.mark_complete(result.clone());
         }
-        self.sync_active_tool_runs();
-    }
-
-    fn sync_active_tool_runs(&mut self) {
-        let Some(parent_id) = self.snapshot.active_user_message_id.clone() else {
-            return;
-        };
-        if self.snapshot.tool_runs.is_empty() {
-            self.snapshot.tool_runs_by_message_id.remove(&parent_id);
-        } else {
-            self.snapshot
-                .tool_runs_by_message_id
-                .insert(parent_id, self.snapshot.tool_runs.clone());
+        let ids = self
+            .snapshot
+            .tool_runs
+            .iter()
+            .map(|run| run.id.clone())
+            .collect::<Vec<_>>();
+        for id in ids {
+            self.snapshot.sync_tool_part(&id);
         }
     }
 
@@ -319,6 +449,7 @@ impl TuiSyncStore {
             message_id: message_id.clone(),
             kind,
             text: String::new(),
+            tool_run: None,
             streaming: false,
         });
         if let Some(message) = self
@@ -336,30 +467,9 @@ impl TuiSyncStore {
         let Some(message_id) = self.snapshot.active_user_message_id.clone() else {
             return;
         };
-        let part_id = format!("{message_id}:tool:{tool_id}");
-        let parts = self
-            .snapshot
-            .parts_by_message_id
-            .entry(message_id.clone())
-            .or_default();
-        if parts.iter().any(|part| part.id == part_id) {
-            return;
-        }
-        parts.push(TuiMessagePart {
-            id: part_id.clone(),
-            message_id: message_id.clone(),
-            kind: TuiPartKind::Tool,
-            text: name.to_string(),
-            streaming: true,
-        });
-        if let Some(message) = self
-            .snapshot
-            .messages
-            .iter_mut()
-            .find(|message| message.id == message_id)
-        {
-            message.part_ids.push(part_id);
-        }
+        self.snapshot
+            .upsert_tool_part_for_message(&message_id, tool_id, name);
+        self.snapshot.sync_tool_part(tool_id);
     }
 
     fn mark_active_parts_not_streaming(&mut self) {
@@ -480,8 +590,7 @@ mod tests {
         assert_eq!(snapshot.tool_runs.len(), 1);
         assert_eq!(
             snapshot
-                .tool_runs_by_message_id
-                .get("user_1")
+                .tool_runs_for_message("user_1")
                 .expect("anchored tool runs")
                 .len(),
             1

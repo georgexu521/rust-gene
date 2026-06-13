@@ -474,13 +474,12 @@ pub async fn handle_diagnostic(app: &TuiApp) -> String {
 fn diagnostic_tool_runs(app: &TuiApp) -> Vec<crate::tui::tool_view::ToolRunView> {
     let mut runs = Vec::new();
     let mut seen = std::collections::BTreeSet::new();
-    for run in app
-        .sync_snapshot
-        .tool_runs_by_message_id
-        .values()
-        .flat_map(|message_runs| message_runs.iter())
-        .chain(app.tool_runs_snapshot.iter())
-    {
+    for run in app.sync_snapshot.all_tool_runs() {
+        if seen.insert(run.id.clone()) {
+            runs.push(run);
+        }
+    }
+    for run in &app.tool_runs_snapshot {
         if seen.insert(run.id.clone()) {
             runs.push(run.clone());
         }

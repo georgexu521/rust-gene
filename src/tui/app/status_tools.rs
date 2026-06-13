@@ -434,24 +434,22 @@ impl TuiApp {
             .map(|message| message.id.clone())
             .unwrap_or_else(|| format!("session-parts-{session_id}"));
         self.sync_snapshot
-            .tool_runs_by_message_id
-            .insert(anchor_id, runs.clone());
-        self.sync_snapshot.tool_runs = runs.clone();
-        self.tool_runs_snapshot = runs;
+            .set_tool_runs_for_message(anchor_id, runs.clone());
+        self.tool_runs_snapshot = self.sync_snapshot.tool_runs.clone();
         Ok(self.tool_runs_snapshot.len())
     }
 
-    fn find_visible_tool_run(&self, id: &str) -> Option<&ToolRunView> {
+    fn find_visible_tool_run(&self, id: &str) -> Option<ToolRunView> {
         self.visible_tool_runs()
             .into_iter()
             .find(|run| run.id.as_str() == id)
     }
 
-    fn visible_tool_runs(&self) -> Vec<&ToolRunView> {
+    fn visible_tool_runs(&self) -> Vec<ToolRunView> {
         let mut runs = Vec::new();
         for msg in &self.messages {
             if let Some(group) = self.tool_runs_for_message(&msg.id) {
-                runs.extend(group.iter());
+                runs.extend(group);
             }
         }
         runs
@@ -529,11 +527,8 @@ impl TuiApp {
         self.transcript_expanded || self.expanded_tool_run_id.as_deref() == Some(run.id.as_str())
     }
 
-    pub fn tool_runs_for_message(&self, message_id: &str) -> Option<&[ToolRunView]> {
-        self.sync_snapshot
-            .tool_runs_by_message_id
-            .get(message_id)
-            .map(Vec::as_slice)
+    pub fn tool_runs_for_message(&self, message_id: &str) -> Option<Vec<ToolRunView>> {
+        self.sync_snapshot.tool_runs_for_message(message_id)
     }
 }
 

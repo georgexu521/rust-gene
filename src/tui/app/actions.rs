@@ -772,8 +772,7 @@ impl TuiApp {
     /// 当前模型名称（用于状态展示）
     pub fn clear_tool_transcript(&mut self) {
         self.tool_runs_snapshot.clear();
-        self.sync_snapshot.tool_runs.clear();
-        self.sync_snapshot.tool_runs_by_message_id.clear();
+        self.sync_snapshot.clear_tool_parts();
         self.current_tool_anchor_id = None;
         self.expanded_tool_run_id = None;
         self.stream_usage_snapshot = None;

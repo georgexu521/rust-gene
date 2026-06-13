@@ -1473,17 +1473,22 @@ impl TuiApp {
             let Some(parent_message_id) = turn.parent_message_id.clone() else {
                 continue;
             };
-            let runs = self
+            let mut runs = self
                 .sync_snapshot
-                .tool_runs_by_message_id
-                .entry(parent_message_id)
-                .or_default();
-            if let Some(run) = runs.iter_mut().find(|run| run.id == turn.id) {
+                .tool_runs_for_message(&parent_message_id)
+                .unwrap_or_default();
+            let run = if let Some(run) = runs.iter_mut().find(|run| run.id == turn.id) {
                 apply_tool_turn_snapshot(run, &turn);
+                run.clone()
             } else {
-                runs.push(tool_run_from_turn_snapshot(&turn));
-            }
+                let run = tool_run_from_turn_snapshot(&turn);
+                runs.push(run.clone());
+                run
+            };
+            self.sync_snapshot
+                .upsert_tool_run_for_message(parent_message_id, run);
         }
+        self.tool_runs_snapshot = self.sync_snapshot.tool_runs.clone();
     }
 
     async fn recover_persisted_final_answer_if_available(&mut self) -> bool {

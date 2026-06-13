@@ -677,19 +677,9 @@ fn render_context_panel(f: &mut Frame, app: &TuiApp, area: Rect) {
     let session_id = app.session_manager.current_session_id().unwrap_or("?");
     let short_session_id = &session_id[..session_id.len().min(8)];
     let timeline_items = app.timeline_item_count();
-    let all_tool_runs = app
-        .sync_snapshot
-        .tool_runs_by_message_id
-        .values()
-        .map(Vec::len)
-        .sum::<usize>()
-        + app.tool_runs_snapshot.len();
-    let failed_tool_runs = app
-        .sync_snapshot
-        .tool_runs_by_message_id
-        .values()
-        .flatten()
-        .chain(app.tool_runs_snapshot.iter())
+    let all_tool_runs = app.sync_snapshot.all_tool_runs();
+    let failed_tool_runs = all_tool_runs
+        .iter()
         .filter(|run| {
             matches!(
                 run.status,
@@ -771,7 +761,7 @@ fn render_context_panel(f: &mut Frame, app: &TuiApp, area: Rect) {
         context_heading("Tools", app),
         context_row(
             "runs",
-            format!("{all_tool_runs} total · {failed_tool_runs} failed"),
+            format!("{} total · {failed_tool_runs} failed", all_tool_runs.len()),
             app,
         ),
         context_row(
