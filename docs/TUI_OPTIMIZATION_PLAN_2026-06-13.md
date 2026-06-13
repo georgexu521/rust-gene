@@ -77,10 +77,10 @@ cargo test -q message --lib
 
 ### Acceptance criteria
 
-- [ ] Assistant messages render as a sequence of typed parts when projection data exists.
-- [ ] Reasoning no longer requires `<think>` text parsing for new live streams.
-- [ ] Reloaded sessions reconstruct the same part timeline.
-- [ ] `TuiMessagePart`/projection snapshot is the single source of truth for live TUI message rendering.
+- [x] Assistant messages render as a sequence of typed parts when projection data exists.
+- [x] Reasoning no longer requires `<think>` text parsing for new live streams.
+- [x] Reloaded sessions reconstruct the same part timeline.
+- [x] `TuiMessagePart`/projection snapshot is the single source of truth for live TUI message rendering.
 
 ---
 
@@ -142,10 +142,10 @@ cargo test -q app --lib
 
 ### Acceptance criteria
 
-- [ ] Each major tool family has a dedicated inline renderer.
-- [ ] Diff/popup logic is shared between inline cards and `/diff` panel.
-- [ ] Successful routine read-only tools collapse by default; failures and mutations stay visible.
-- [ ] `ctrl+o` and `ctrl+t` still work on the focused tool.
+- [x] Each major tool family has a dedicated inline renderer.
+- [x] Diff/popup logic is shared between inline cards and `/diff` panel.
+- [x] Successful routine read-only tools collapse by default; failures and mutations stay visible.
+- [x] `ctrl+o` and `ctrl+t` still work on the focused tool.
 
 ---
 
@@ -204,10 +204,10 @@ cargo test -q app --lib
 
 ### Acceptance criteria
 
-- [ ] Mode stack helpers exist; migrated overlays restore previous mode via `pop_mode`.
-- [ ] Leader key sequences are configurable and documented.
-- [ ] Input box supports select/copy/cut/paste/undo/redo.
-- [ ] Existing shortcuts still work.
+- [x] Mode stack helpers exist; migrated overlays restore previous mode via `pop_mode`.
+- [x] Leader key sequences are configurable and documented.
+- [x] Input box supports select/copy/cut/paste/undo/redo.
+- [x] Existing shortcuts still work.
 
 ---
 
@@ -264,10 +264,10 @@ cargo test -q app --lib
 
 ### Acceptance criteria
 
-- [ ] `/fork` creates a child session and the sidebar shows hierarchy.
-- [ ] `/compact` shows a summary and stores a visible compact boundary.
-- [ ] `/share` writes a redacted export file and copies its path.
-- [ ] Sessions are grouped by detected workspace in the sidebar.
+- [x] `/fork` creates a child session and the sidebar shows hierarchy.
+- [x] `/compact` shows a summary and stores a visible compact boundary.
+- [x] `/share` writes a redacted export file and copies its path.
+- [x] Sessions are grouped by detected workspace in the sidebar.
 
 ---
 
@@ -321,9 +321,9 @@ cargo test -q runtime_panels --lib
 
 ### Acceptance criteria
 
-- [ ] KV store persists UI preferences across restarts.
-- [ ] Plugin manifest can declare TUI slots (validated but not executed).
-- [ ] Skills can declare a static panel shown under `/panel skills`.
+- [x] KV store persists UI preferences across restarts.
+- [x] Plugin manifest can declare TUI slots (validated but not executed).
+- [x] Skills can declare a static panel shown under `/panel skills`.
 
 ---
 
