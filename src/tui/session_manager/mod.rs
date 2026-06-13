@@ -426,6 +426,40 @@ impl TuiSessionManager {
         Ok(messages)
     }
 
+    /// Fork the current session into a new child session and switch to it.
+    pub async fn fork_current_session(&mut self, title: &str) -> anyhow::Result<String> {
+        let parent_id = self
+            .current_session_id()
+            .ok_or_else(|| anyhow::anyhow!("No active session"))?
+            .to_string();
+        let parent = self
+            .store
+            .get_session(&parent_id)?
+            .ok_or_else(|| anyhow::anyhow!("Current session not found: {}", parent_id))?;
+
+        let child_id = format!("sess_{}", Uuid::new_v4().simple());
+        self.store
+            .create_child_session(&child_id, title, &parent.model, &parent_id)?;
+
+        let records = self.store.get_messages(&parent_id)?;
+        for record in records {
+            self.store.add_message_with_metadata(
+                &child_id,
+                &record.role,
+                &record.content,
+                record.tool_calls.as_ref(),
+                record.tool_call_id.as_deref(),
+                record.metadata.as_ref(),
+            )?;
+        }
+
+        self.current_session_id = Some(child_id.clone());
+        self.current_session_title = title.to_string();
+
+        info!("Forked session {} into {}", parent_id, child_id);
+        Ok(child_id)
+    }
+
     /// 列出会话
     pub fn list_sessions(&self, limit: i64) -> anyhow::Result<Vec<SessionRecord>> {
         Ok(self.store.list_sessions(limit)?)

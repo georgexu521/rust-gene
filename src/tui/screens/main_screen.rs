@@ -864,6 +864,12 @@ fn build_session_item<'a>(
         "○"
     };
 
+    let indent = if session.parent_session_id.is_some() {
+        "  "
+    } else {
+        ""
+    };
+
     let title = if session.title.is_empty() {
         format!("Session {}", &session.id[..8.min(session.id.len())])
     } else {
@@ -894,7 +900,7 @@ fn build_session_item<'a>(
         .bg(row_bg.unwrap_or(app.theme.tokens.surface.bg));
 
     let title_line = Line::from(vec![
-        Span::styled(selection, base),
+        Span::styled(format!("{indent}{selection}"), base),
         Span::styled(format!("{prefix} "), base),
         Span::styled(display_title, base),
     ]);

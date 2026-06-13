@@ -674,6 +674,45 @@ fn test_paste_image_data_uses_image_placeholder() {
     assert!(app.input.value().contains("[[image:1"));
 }
 
+#[tokio::test]
+async fn test_fork_current_session_copies_messages() {
+    let mut app = TuiApp::new();
+    app.session_manager.start_session("Parent", "mock").unwrap();
+    app.session_manager
+        .add_message(crate::state::MessageRole::User, "hello")
+        .unwrap();
+
+    let parent_id = app
+        .session_manager
+        .current_session_id()
+        .unwrap()
+        .to_string();
+    let child_id = app
+        .session_manager
+        .fork_current_session("Child")
+        .await
+        .unwrap();
+
+    assert!(child_id.starts_with("sess_"));
+    assert_eq!(
+        app.session_manager.current_session_id(),
+        Some(child_id.as_str())
+    );
+    let child_record = app
+        .session_manager
+        .store()
+        .get_session(&child_id)
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        child_record.parent_session_id.as_deref(),
+        Some(parent_id.as_str())
+    );
+    let child_msgs = app.session_manager.load_messages(&child_id).unwrap();
+    assert_eq!(child_msgs.len(), 1);
+    assert_eq!(child_msgs[0].content, "hello");
+}
+
 #[test]
 fn test_composer_attachments_add_remove_and_clear() {
     let mut app = TuiApp::new();

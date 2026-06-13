@@ -855,6 +855,7 @@ impl TuiApp {
             "/retry" => slash::handle_retry(self, args).await,
             "/stop" => slash::handle_stop(self, args),
             "/reload" => slash::handle_reload(self, args).await,
+            "/fork" => slash::handle_fork(self, args).await,
             "/share" => slash::handle_share(self, args),
             "/cost" | "/token" => slash::handle_token(self).await,
             "/diff" => slash::handle_diff(self, args).await,

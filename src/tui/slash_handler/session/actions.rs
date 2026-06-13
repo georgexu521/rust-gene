@@ -229,6 +229,25 @@ pub fn handle_redo(app: &mut TuiApp, args: &str) -> String {
     results.join("\n")
 }
 
+/// /fork - 创建当前会话的子会话并切换到它。
+pub async fn handle_fork(app: &mut TuiApp, args: &str) -> String {
+    let title = args.trim();
+    let title = if title.is_empty() {
+        format!("{} (fork)", app.session_manager.current_session_title())
+    } else {
+        title.to_string()
+    };
+
+    match app.session_manager.fork_current_session(&title).await {
+        Ok(id) => format!(
+            "Forked into new session: {} ({}). Switched to it automatically.",
+            title,
+            &id[..8.min(id.len())]
+        ),
+        Err(err) => format!("Fork failed: {err}"),
+    }
+}
+
 /// /changes - 展示最近 turn 的文件变更（含增删行数）
 pub async fn handle_changes(app: &TuiApp) -> String {
     let session_id = match app.session_manager.current_session_id() {

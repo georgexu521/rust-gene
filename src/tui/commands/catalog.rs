@@ -522,12 +522,20 @@ pub const CMD_RELOAD: CommandDef = CommandDef::new(
     "Reload configuration, skills, or tools",
 );
 
+pub const CMD_FORK: CommandDef = CommandDef::new(
+    "/fork",
+    &[],
+    "Session",
+    "/fork [title]",
+    "Fork the current session into a child session and switch to it",
+);
+
 pub const CMD_SHARE: CommandDef = CommandDef::new(
     "/share",
     &[],
     "Session",
     "/share",
-    "Share current session as a transcript",
+    "Export current session to a local file",
 );
 
 pub const CMD_TOKEN: CommandDef = CommandDef::new(
@@ -1210,6 +1218,7 @@ pub const ALL_COMMANDS: &[&CommandDef] = &[
     &CMD_RETRY,
     &CMD_STOP,
     &CMD_RELOAD,
+    &CMD_FORK,
     &CMD_SHARE,
     &CMD_TOKEN,
     &CMD_LSP,
