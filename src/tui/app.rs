@@ -1677,7 +1677,7 @@ impl TuiApp {
             crate::engine::runtime_facade::ProviderPhase::Completed
                 | crate::engine::runtime_facade::ProviderPhase::Cancelled
         ) {
-            if !self.post_tool_turn_wait_has_timed_out(timeout_ms) {
+            if !self.post_tool_turn_wait_has_timed_out(timeout_ms, provider.elapsed_ms) {
                 return None;
             }
             return Some(format!(
@@ -1689,7 +1689,11 @@ impl TuiApp {
             .stream_started_at
             .map(|started| started.elapsed().as_millis() as u64)
             .unwrap_or_default();
-        let elapsed_ms = provider.elapsed_ms.max(local_elapsed_ms);
+        let elapsed_ms = if provider.phase.is_active() {
+            provider.elapsed_ms
+        } else {
+            provider.elapsed_ms.max(local_elapsed_ms)
+        };
         if elapsed_ms < timeout_ms {
             return None;
         }
@@ -1701,7 +1705,7 @@ impl TuiApp {
         }))
     }
 
-    fn post_tool_turn_wait_has_timed_out(&self, timeout_ms: u64) -> bool {
+    fn post_tool_turn_wait_has_timed_out(&self, timeout_ms: u64, provider_elapsed_ms: u64) -> bool {
         if timeout_ms == 0 {
             return false;
         }
@@ -1715,9 +1719,7 @@ impl TuiApp {
         if !has_waiting_tool_turn {
             return false;
         }
-        self.stream_started_at
-            .map(|started| started.elapsed().as_millis() as u64 >= timeout_ms)
-            .unwrap_or(false)
+        provider_elapsed_ms >= timeout_ms
     }
 
     /// 定时更新 - 处理流式响应刷新和计划审批检查

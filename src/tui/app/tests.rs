@@ -229,6 +229,23 @@ fn provider_watchdog_honors_explicit_shorter_timeout() {
 }
 
 #[test]
+fn provider_watchdog_uses_current_provider_elapsed_not_whole_turn_elapsed() {
+    let mut guard = crate::test_utils::env_guard::EnvVarGuard::acquire_blocking();
+    guard.set("PRIORITY_AGENT_LLM_REQUEST_TIMEOUT_SECS", "30");
+
+    let mut app = TuiApp::new();
+    app.is_querying = true;
+    app.stream_started_at = Some(std::time::Instant::now() - std::time::Duration::from_secs(31));
+    app.facade_snapshot.provider_request.phase = ProviderPhase::Started;
+    app.facade_snapshot.provider_request.provider_family = Some("deepseek".to_string());
+    app.facade_snapshot.provider_request.model = Some("deepseek-v4-flash".to_string());
+    app.facade_snapshot.provider_request.timeout_ms = 120_000;
+    app.facade_snapshot.provider_request.elapsed_ms = 1_000;
+
+    assert_eq!(app.provider_wait_timeout_reason(), None);
+}
+
+#[test]
 fn provider_watchdog_times_out_query_when_provider_phase_is_lost() {
     let mut guard = crate::test_utils::env_guard::EnvVarGuard::acquire_blocking();
     guard.set("PRIORITY_AGENT_LLM_REQUEST_TIMEOUT_SECS", "30");
@@ -277,6 +294,7 @@ fn provider_watchdog_times_out_post_tool_result_stall() {
     app.facade_snapshot.provider_request.provider_family = Some("deepseek".to_string());
     app.facade_snapshot.provider_request.model = Some("deepseek-v4-flash".to_string());
     app.facade_snapshot.provider_request.timeout_ms = 120_000;
+    app.facade_snapshot.provider_request.elapsed_ms = 31_000;
     app.facade_snapshot.tool_turns.push(ToolTurnSnapshot {
         id: "call_1".to_string(),
         name: "bash".to_string(),
@@ -295,6 +313,32 @@ fn provider_watchdog_times_out_post_tool_result_stall() {
         reason,
         "tool turn stalled after result observation for 30.0s"
     );
+}
+
+#[test]
+fn provider_watchdog_does_not_reuse_whole_turn_elapsed_for_post_tool_wait() {
+    let mut guard = crate::test_utils::env_guard::EnvVarGuard::acquire_blocking();
+    guard.set("PRIORITY_AGENT_LLM_REQUEST_TIMEOUT_SECS", "30");
+
+    let mut app = TuiApp::new();
+    app.is_querying = true;
+    app.stream_started_at = Some(std::time::Instant::now() - std::time::Duration::from_secs(31));
+    app.facade_snapshot.provider_request.phase = ProviderPhase::Completed;
+    app.facade_snapshot.provider_request.provider_family = Some("deepseek".to_string());
+    app.facade_snapshot.provider_request.model = Some("deepseek-v4-flash".to_string());
+    app.facade_snapshot.provider_request.timeout_ms = 120_000;
+    app.facade_snapshot.provider_request.elapsed_ms = 3_000;
+    app.facade_snapshot.tool_turns.push(ToolTurnSnapshot {
+        id: "call_1".to_string(),
+        name: "file_read".to_string(),
+        parent_message_id: Some("user_1".to_string()),
+        phase: ToolTurnPhase::SentBackToModel,
+        arguments_preview: None,
+        result_preview: Some("Result: OK".to_string()),
+        failure: None,
+    });
+
+    assert_eq!(app.provider_wait_timeout_reason(), None);
 }
 
 #[test]
