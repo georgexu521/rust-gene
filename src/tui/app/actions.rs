@@ -1,6 +1,156 @@
 use super::*;
 
 impl TuiApp {
+    pub async fn cancel_active_run(&mut self, reason: &str) -> bool {
+        if !self.is_querying && self.stream_handle.is_none() {
+            return false;
+        }
+
+        if let Some(handle) = self.stream_handle.take() {
+            handle.abort();
+        }
+        self.stream_done
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        self.is_querying = false;
+        self.run_coordinator.finish_run();
+        let runtime_state = self.runtime_facade_state.clone();
+        let _ = tokio::time::timeout(std::time::Duration::from_millis(75), async move {
+            runtime_state.mark_cancelled().await;
+            runtime_state.set_querying(false).await;
+        })
+        .await;
+        self.stream_started_at = None;
+
+        {
+            let mut runs = self.tool_runs.lock().await;
+            for run in runs.iter_mut().filter(|run| run.is_active()) {
+                run.mark_complete("Result: ERROR\nTool run is cancelled.".to_string());
+            }
+            self.tool_runs_snapshot = runs.clone();
+        }
+        if let Some(anchor_id) = &self.current_tool_anchor_id {
+            if self.tool_runs_snapshot.is_empty() {
+                self.tool_runs_by_message_id.remove(anchor_id);
+            } else {
+                self.tool_runs_by_message_id
+                    .insert(anchor_id.clone(), self.tool_runs_snapshot.clone());
+            }
+        }
+        self.current_tool_anchor_id = None;
+        self.settle_unfinished_tool_parts(reason);
+
+        if let Some(last_msg) = self.messages.last_mut() {
+            if last_msg.role == crate::state::MessageRole::Assistant && last_msg.content.is_empty()
+            {
+                last_msg.content = format!("[Cancelled: {reason}]");
+            }
+        }
+        self.add_toast(reason.to_string(), "!");
+        true
+    }
+
+    pub async fn timeout_active_run(&mut self, reason: &str) -> bool {
+        if !self.is_querying && self.stream_handle.is_none() {
+            return false;
+        }
+
+        if let Some(handle) = self.stream_handle.take() {
+            handle.abort();
+        }
+        self.stream_done
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        self.is_querying = false;
+        self.run_coordinator.finish_run();
+        let error_message = format!("[Error: {reason}]");
+        if let Some(last_msg) = self.messages.last_mut() {
+            if last_msg.role == crate::state::MessageRole::Assistant && last_msg.content.is_empty()
+            {
+                last_msg.content = error_message.clone();
+            }
+        }
+        let runtime_state = self.runtime_facade_state.clone();
+        let reason_for_runtime = reason.to_string();
+        let _ = tokio::time::timeout(std::time::Duration::from_millis(75), async move {
+            runtime_state
+                .mark_active_tool_turns_timed_out(&reason_for_runtime)
+                .await;
+            runtime_state.set_querying(false).await;
+        })
+        .await;
+        self.stream_started_at = None;
+
+        {
+            let mut runs = self.tool_runs.lock().await;
+            for run in runs.iter_mut().filter(|run| run.is_active()) {
+                run.mark_complete(format!("Result: ERROR\n{reason}"));
+            }
+            self.tool_runs_snapshot = runs.clone();
+        }
+        if let Some(anchor_id) = &self.current_tool_anchor_id {
+            if self.tool_runs_snapshot.is_empty() {
+                self.tool_runs_by_message_id.remove(anchor_id);
+            } else {
+                self.tool_runs_by_message_id
+                    .insert(anchor_id.clone(), self.tool_runs_snapshot.clone());
+            }
+        }
+        self.current_tool_anchor_id = None;
+        self.settle_unfinished_tool_parts(reason);
+
+        {
+            let mut response = self.current_response.lock().await;
+            if response.trim().is_empty() {
+                response.push_str(&error_message);
+                self.typewriter_position = error_message.chars().count();
+            }
+        }
+        self.add_toast(reason.to_string(), "!");
+        true
+    }
+
+    fn settle_unfinished_tool_parts(&self, reason: &str) {
+        let Some(session_id) = self.session_manager.current_session_id() else {
+            return;
+        };
+        match self
+            .session_manager
+            .settle_unfinished_tool_parts(session_id, reason)
+        {
+            Ok(0) => {}
+            Ok(count) => tracing::debug!(
+                "Settled {} unfinished tool part(s) after TUI cancellation",
+                count
+            ),
+            Err(err) => tracing::warn!("Failed to settle unfinished tool parts: {}", err),
+        }
+    }
+
+    pub fn timeout_active_run_immediate(&mut self, reason: &str) -> bool {
+        if !self.is_querying && self.stream_handle.is_none() {
+            return false;
+        }
+
+        if let Some(handle) = self.stream_handle.take() {
+            handle.abort();
+        }
+        self.stream_done
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        self.is_querying = false;
+        self.run_coordinator.finish_run();
+        self.stream_started_at = None;
+        self.current_tool_anchor_id = None;
+        self.settle_unfinished_tool_parts(reason);
+
+        let error_message = format!("[Error: {reason}]");
+        if let Some(last_msg) = self.messages.last_mut() {
+            if last_msg.role == crate::state::MessageRole::Assistant {
+                last_msg.content = error_message;
+            }
+        }
+        self.add_toast(reason.to_string(), "!");
+        true
+    }
+
     /// 检查是否有待回答的用户问题
     pub(super) async fn check_pending_question(&mut self) {
         let Some(ref engine) = self.streaming_engine else {
@@ -146,6 +296,187 @@ impl TuiApp {
         }
     }
 
+    pub fn prompt_history_lines(&self, limit: usize) -> Vec<String> {
+        let limit = limit.max(1);
+        let start = self.history.len().saturating_sub(limit);
+        self.history
+            .iter()
+            .enumerate()
+            .skip(start)
+            .map(|(idx, prompt)| format!("{}. {}", idx + 1, compact_prompt_line(prompt, 120)))
+            .collect()
+    }
+
+    pub fn save_prompt_stash_from_input(&mut self) -> bool {
+        let draft = self.input.value().trim();
+        if draft.is_empty() || draft.starts_with("/prompt-stash") {
+            return false;
+        }
+        self.prompt_stash = Some(self.input.value().to_string());
+        self.input.clear();
+        true
+    }
+
+    pub fn restore_prompt_stash_to_input(&mut self) -> bool {
+        let Some(stash) = self.prompt_stash.take() else {
+            return false;
+        };
+        self.input.set_value(stash);
+        true
+    }
+
+    pub fn clear_prompt_stash(&mut self) -> bool {
+        self.prompt_stash.take().is_some()
+    }
+
+    pub fn prompt_stash_summary(&self) -> Option<String> {
+        self.prompt_stash
+            .as_deref()
+            .map(|stash| compact_prompt_line(stash, 120))
+    }
+
+    pub fn open_prompt_picker(&mut self) {
+        self.prompt_picker_selected = 0;
+        self.mode = AppMode::PromptHistory;
+    }
+
+    pub fn close_prompt_picker(&mut self) {
+        self.prompt_picker_selected = 0;
+        self.mode = if self.vim_mode {
+            AppMode::VimNormal
+        } else {
+            AppMode::Chat
+        };
+    }
+
+    pub fn prompt_picker_items(&self) -> Vec<(String, String, String)> {
+        let mut items = Vec::new();
+        if let Some(stash) = &self.prompt_stash {
+            items.push((
+                "stash".to_string(),
+                compact_prompt_line(stash, 96),
+                stash.clone(),
+            ));
+        }
+        for (idx, prompt) in self.history.iter().enumerate().rev().take(12) {
+            items.push((
+                format!("#{}", idx + 1),
+                compact_prompt_line(prompt, 96),
+                prompt.clone(),
+            ));
+        }
+        items
+    }
+
+    pub fn prompt_picker_next(&mut self) {
+        let len = self.prompt_picker_items().len();
+        if len > 0 {
+            self.prompt_picker_selected = (self.prompt_picker_selected + 1).min(len - 1);
+        }
+    }
+
+    pub fn prompt_picker_prev(&mut self) {
+        self.prompt_picker_selected = self.prompt_picker_selected.saturating_sub(1);
+    }
+
+    pub fn accept_prompt_picker_selection(&mut self) -> bool {
+        let Some((_, _, content)) = self
+            .prompt_picker_items()
+            .get(self.prompt_picker_selected)
+            .cloned()
+        else {
+            self.close_prompt_picker();
+            return false;
+        };
+        self.input.set_value(content);
+        self.close_prompt_picker();
+        true
+    }
+
+    pub fn open_composer_file_picker(&mut self, root: Option<&str>) -> String {
+        let root = root
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or(".");
+        let path = std::path::Path::new(root);
+        if !path.exists() {
+            return format!("File picker root not found: {root}");
+        }
+        self.file_picker_state = Some(crate::tui::components::file_browser::FileBrowserState::new(
+            path,
+        ));
+        self.file_picker_filtering = false;
+        self.mode = AppMode::FilePicker;
+        format!("File picker opened at {root}.")
+    }
+
+    pub fn close_composer_file_picker(&mut self) {
+        self.file_picker_state = None;
+        self.file_picker_filtering = false;
+        self.mode = if self.vim_mode {
+            AppMode::VimNormal
+        } else {
+            AppMode::Chat
+        };
+    }
+
+    pub fn file_picker_next(&mut self) {
+        if let Some(state) = &mut self.file_picker_state {
+            state.next();
+        }
+    }
+
+    pub fn file_picker_prev(&mut self) {
+        if let Some(state) = &mut self.file_picker_state {
+            state.prev();
+        }
+    }
+
+    pub fn accept_file_picker_selection(&mut self) -> String {
+        let Some(state) = &mut self.file_picker_state else {
+            return "File picker is not open.".to_string();
+        };
+
+        if state.selected_is_dir() {
+            state.toggle_current();
+            return "Toggled directory.".to_string();
+        }
+
+        let Some(path) = state.selected_path().cloned() else {
+            return "No file selected.".to_string();
+        };
+        let result = self.attach_context_path(&path.to_string_lossy());
+        self.close_composer_file_picker();
+        result.unwrap_or_else(|message| message)
+    }
+
+    pub fn start_file_picker_filter(&mut self) {
+        self.file_picker_filtering = true;
+    }
+
+    pub fn finish_file_picker_filter(&mut self) {
+        self.file_picker_filtering = false;
+    }
+
+    pub fn push_file_picker_filter_char(&mut self, ch: char) {
+        if let Some(state) = &mut self.file_picker_state {
+            state.push_filter_char(ch);
+        }
+    }
+
+    pub fn pop_file_picker_filter_char(&mut self) {
+        if let Some(state) = &mut self.file_picker_state {
+            state.pop_filter_char();
+        }
+    }
+
+    pub fn clear_file_picker_filter(&mut self) {
+        if let Some(state) = &mut self.file_picker_state {
+            state.clear_filter();
+        }
+        self.file_picker_filtering = false;
+    }
+
     /// 添加助手响应
     pub async fn add_assistant_response(&mut self, content: String) {
         self.is_querying = false;
@@ -215,36 +546,239 @@ impl TuiApp {
 
     /// 向上滚动
     pub fn scroll_up(&mut self) {
-        if self.scroll_offset > 0 {
-            self.scroll_offset -= 1;
-        }
-        self.pinned_to_bottom = false;
+        let resolved = self.current_timeline_anchor_index();
+        let next_offset = resolved.saturating_sub(1);
+        self.set_manual_scroll_offset(next_offset);
     }
 
     /// 向下滚动
     pub fn scroll_down(&mut self) {
-        self.scroll_offset += 1;
-        // Re-pin if scrolled past the last message
-        if self.scroll_offset >= self.messages.len() {
-            self.pinned_to_bottom = true;
+        let resolved = self.current_timeline_anchor_index();
+        self.scroll_offset = resolved.saturating_add(1);
+        // Re-pin if scrolled past the last timeline item.
+        if self.scroll_offset >= self.timeline_item_count() {
+            self.scroll_to_bottom();
+        } else {
+            self.pinned_to_bottom = false;
+            self.scroll_anchor_id = self.timeline_stable_id_at(self.scroll_offset);
         }
     }
 
     /// 滚动到底部（显示最新消息）
     pub fn scroll_to_bottom(&mut self) {
-        self.scroll_offset = self.messages.len();
+        self.scroll_offset = self.timeline_item_count();
+        self.scroll_anchor_id = None;
         self.pinned_to_bottom = true;
+    }
+
+    pub fn timeline_item_count(&self) -> usize {
+        let messages = self.visible_messages().iter().collect::<Vec<_>>();
+        crate::tui::view_model::timeline::timeline_items(&messages, self).len()
+    }
+
+    pub fn jump_to_timeline_target(&mut self, target: &str) -> String {
+        let normalized = target.trim().to_ascii_lowercase();
+        if normalized.is_empty() || matches!(normalized.as_str(), "bottom" | "latest" | "end") {
+            self.scroll_to_bottom();
+            return "Jumped to latest message.".to_string();
+        }
+
+        let target_index = {
+            let messages = self.visible_messages().iter().collect::<Vec<_>>();
+            let timeline = crate::tui::view_model::timeline::timeline_items(&messages, self);
+            match normalized.as_str() {
+                "user" | "prompt" => timeline
+                    .iter()
+                    .rposition(crate::tui::view_model::timeline::TimelineItem::is_user_message),
+                "failed" | "failure" | "error" => timeline.iter().rposition(|item| {
+                    matches!(
+                        item,
+                        crate::tui::view_model::timeline::TimelineItem::ToolRuns { runs, .. }
+                            if runs.iter().any(|run| matches!(
+                                run.status,
+                                crate::tui::tool_view::ToolRunStatus::Failed
+                                    | crate::tui::tool_view::ToolRunStatus::TimedOut
+                                    | crate::tui::tool_view::ToolRunStatus::Cancelled
+                            ))
+                    )
+                }),
+                "edit" | "change" | "write" => timeline.iter().rposition(|item| {
+                    matches!(
+                        item,
+                        crate::tui::view_model::timeline::TimelineItem::ToolRuns { runs, .. }
+                            if runs.iter().any(|run| matches!(
+                                run.name.as_str(),
+                                "file_write" | "file_edit" | "file_patch" | "format"
+                            ))
+                    )
+                }),
+                other => {
+                    return format!(
+                        "Unknown jump target: {other}. Use user, failed, edit, or latest."
+                    );
+                }
+            }
+        };
+
+        if let Some(index) = target_index {
+            self.set_manual_scroll_offset(index);
+            format!("Jumped to {normalized} timeline item.")
+        } else {
+            format!("No {normalized} timeline item found.")
+        }
+    }
+
+    pub fn scroll_to_top(&mut self) {
+        self.set_manual_scroll_offset(0);
+    }
+
+    pub fn scroll_to_message_index(&mut self, target_message_index: usize) -> bool {
+        let target_index = {
+            let messages = self.visible_messages().iter().collect::<Vec<_>>();
+            let timeline = crate::tui::view_model::timeline::timeline_items(&messages, self);
+            timeline.iter().position(|item| {
+                matches!(
+                    item,
+                    crate::tui::view_model::timeline::TimelineItem::Message { message_index, .. }
+                        if *message_index == target_message_index
+                )
+            })
+        };
+
+        let Some(index) = target_index else {
+            return false;
+        };
+        self.set_manual_scroll_offset(index);
+        true
     }
 
     /// 向上滚动半页（Vim Ctrl+U）
     pub fn scroll_up_half_page(&mut self) {
-        self.scroll_offset = self.scroll_offset.saturating_sub(5);
-        self.pinned_to_bottom = false;
+        let resolved = self.current_timeline_anchor_index();
+        self.set_manual_scroll_offset(resolved.saturating_sub(5));
     }
 
     /// 向下滚动半页（Vim Ctrl+D）
     pub fn scroll_down_half_page(&mut self) {
-        self.scroll_offset += 5;
+        let resolved = self.current_timeline_anchor_index();
+        self.scroll_offset = resolved.saturating_add(5);
+        if self.scroll_offset >= self.timeline_item_count() {
+            self.scroll_to_bottom();
+        } else {
+            self.pinned_to_bottom = false;
+            self.scroll_anchor_id = self.timeline_stable_id_at(self.scroll_offset);
+        }
+    }
+
+    pub fn toggle_collapse_at_scroll_anchor(&mut self) -> bool {
+        let message_index = {
+            let messages = self.visible_messages().iter().collect::<Vec<_>>();
+            let timeline = crate::tui::view_model::timeline::timeline_items(&messages, self);
+            if timeline.is_empty() {
+                return false;
+            }
+
+            let anchor = crate::tui::view_model::timeline::resolve_scroll_offset(
+                &timeline,
+                self.scroll_offset,
+                self.scroll_anchor_id.as_deref(),
+            )
+            .min(timeline.len().saturating_sub(1));
+            timeline
+                .iter()
+                .take(anchor + 1)
+                .rev()
+                .find_map(|item| match item {
+                    crate::tui::view_model::timeline::TimelineItem::Message {
+                        message_index,
+                        ..
+                    } => Some(*message_index),
+                    crate::tui::view_model::timeline::TimelineItem::ToolRuns { .. } => None,
+                })
+        };
+
+        let Some(idx) = message_index else {
+            return false;
+        };
+
+        if self.collapsed_indices.contains(&idx) {
+            self.collapsed_indices.remove(&idx);
+        } else {
+            self.collapsed_indices.insert(idx);
+        }
+        true
+    }
+
+    pub fn toggle_reasoning_at_scroll_anchor(&mut self) -> bool {
+        let message_id = {
+            let messages = self.visible_messages().iter().collect::<Vec<_>>();
+            let timeline = crate::tui::view_model::timeline::timeline_items(&messages, self);
+            if timeline.is_empty() {
+                return false;
+            }
+
+            let anchor = crate::tui::view_model::timeline::resolve_scroll_offset(
+                &timeline,
+                self.scroll_offset,
+                self.scroll_anchor_id.as_deref(),
+            )
+            .min(timeline.len().saturating_sub(1));
+            timeline
+                .iter()
+                .take(anchor + 1)
+                .rev()
+                .find_map(|item| match item {
+                    crate::tui::view_model::timeline::TimelineItem::Message { msg, .. }
+                        if msg.role == crate::state::MessageRole::Assistant
+                            && crate::tui::view_model::reasoning::assistant_reasoning_view(
+                                &msg.content,
+                            )
+                            .has_hidden_reasoning() =>
+                    {
+                        Some(msg.id.clone())
+                    }
+                    crate::tui::view_model::timeline::TimelineItem::Message { .. }
+                    | crate::tui::view_model::timeline::TimelineItem::ToolRuns { .. } => None,
+                })
+        };
+
+        let Some(message_id) = message_id else {
+            return false;
+        };
+
+        if self.expanded_reasoning_message_id.as_deref() == Some(message_id.as_str()) {
+            self.expanded_reasoning_message_id = None;
+        } else {
+            self.expanded_reasoning_message_id = Some(message_id);
+        }
+        true
+    }
+
+    pub fn current_timeline_anchor_index(&self) -> usize {
+        let messages = self.visible_messages().iter().collect::<Vec<_>>();
+        let timeline = crate::tui::view_model::timeline::timeline_items(&messages, self);
+        crate::tui::view_model::timeline::resolve_scroll_offset(
+            &timeline,
+            self.scroll_offset,
+            self.scroll_anchor_id.as_deref(),
+        )
+    }
+
+    fn set_manual_scroll_offset(&mut self, offset: usize) {
+        let count = self.timeline_item_count();
+        if offset >= count {
+            self.scroll_to_bottom();
+            return;
+        }
+        self.scroll_offset = offset;
+        self.scroll_anchor_id = self.timeline_stable_id_at(offset);
+        self.pinned_to_bottom = false;
+    }
+
+    fn timeline_stable_id_at(&self, index: usize) -> Option<String> {
+        let messages = self.visible_messages().iter().collect::<Vec<_>>();
+        let timeline = crate::tui::view_model::timeline::timeline_items(&messages, self);
+        timeline.get(index).map(|item| item.stable_id().to_string())
     }
 
     /// 获取可见消息数量
@@ -277,4 +811,26 @@ impl TuiApp {
     pub fn clear_error(&mut self) {
         self.error_message = None;
     }
+}
+
+fn compact_prompt_line(prompt: &str, max_chars: usize) -> String {
+    let normalized = prompt
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>()
+        .join(" / ");
+    let source = if normalized.is_empty() {
+        prompt.trim()
+    } else {
+        normalized.as_str()
+    };
+    let mut out = String::new();
+    for ch in source.chars().take(max_chars) {
+        out.push(ch);
+    }
+    if source.chars().count() > max_chars {
+        out.push('…');
+    }
+    out
 }

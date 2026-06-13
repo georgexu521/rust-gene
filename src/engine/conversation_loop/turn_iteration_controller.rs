@@ -233,9 +233,7 @@ impl TurnIterationController {
                     content,
                     tool_calls,
                     pre_executed,
-                } => {
-                    (content, tool_calls, pre_executed)
-                }
+                } => (content, tool_calls, pre_executed),
             };
 
         let mut tool_round_state = TurnToolRoundStepController::run(TurnToolRoundStepContext {

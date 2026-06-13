@@ -103,7 +103,12 @@ impl ProviderType {
     }
 
     pub fn capabilities(&self) -> ProviderCapabilities {
-        ProviderCapabilities::for_family(self.protocol_family())
+        match self {
+            ProviderType::DeepSeek => {
+                ProviderCapabilities::detect(DEEPSEEK_DEFAULT_BASE_URL, "deepseek-v4-flash")
+            }
+            _ => ProviderCapabilities::for_family(self.protocol_family()),
+        }
     }
 }
 
@@ -218,7 +223,7 @@ pub const DEFAULT_PROVIDER_ENV_SPECS: &[ProviderEnvSpec] = &[
         base_url_env_vars: DEEPSEEK_BASE_URL_ENV,
         model_env_vars: DEEPSEEK_MODEL_ENV,
         default_base_url: DEEPSEEK_DEFAULT_BASE_URL,
-        default_model: "deepseek-v4-pro",
+        default_model: "deepseek-v4-flash",
     },
     ProviderEnvSpec {
         id: "glm",
@@ -289,6 +294,26 @@ impl ProviderRegistry {
     pub fn from_env() -> Self {
         let mut registry = Self::new();
 
+        let test_provider_active = crate::services::api::test_provider::TestProvider::from_env()
+            .map(|provider| {
+                let config = ProviderConfig {
+                    name: "test-fixture".to_string(),
+                    provider_type: ProviderType::Custom,
+                    api_key: "test-fixture".to_string(),
+                    base_url: Some("test://provider".to_string()),
+                    default_model: "test-fixture-model".to_string(),
+                    enabled: true,
+                };
+                registry.register(
+                    "test-fixture".to_string(),
+                    Arc::new(provider) as Arc<dyn LlmProvider>,
+                    config,
+                );
+                registry.select("test-fixture".to_string());
+                true
+            })
+            .unwrap_or(false);
+
         for spec in DEFAULT_PROVIDER_ENV_SPECS {
             if let Some(config) = provider_config_from_env_spec(spec) {
                 if let Some(provider) = Self::create_provider(&config) {
@@ -325,15 +350,17 @@ impl ProviderRegistry {
             }
         }
 
-        if let Some(preferred) = env_non_empty("PRIORITY_AGENT_DEFAULT_PROVIDER") {
-            let preferred = preferred.to_ascii_lowercase();
-            if registry.providers.contains_key(&preferred) {
-                registry.select(preferred);
-            } else {
-                warn!(
+        if !test_provider_active {
+            if let Some(preferred) = env_non_empty("PRIORITY_AGENT_DEFAULT_PROVIDER") {
+                let preferred = preferred.to_ascii_lowercase();
+                if registry.providers.contains_key(&preferred) {
+                    registry.select(preferred);
+                } else {
+                    warn!(
                     "PRIORITY_AGENT_DEFAULT_PROVIDER is set to '{}', but that provider is not configured",
                     preferred
                 );
+                }
             }
         }
 
@@ -511,7 +538,7 @@ fn default_model_for_provider_type(provider_type: ProviderType) -> &'static str 
     match provider_type {
         ProviderType::Kimi => "kimi-k2.5",
         ProviderType::KimiCode => "kimi-for-coding",
-        ProviderType::DeepSeek => "deepseek-v4-pro",
+        ProviderType::DeepSeek => "deepseek-v4-flash",
         ProviderType::Glm => "glm-5.1",
         ProviderType::Minimax => "MiniMax-M3",
         ProviderType::OpenAI
@@ -701,6 +728,8 @@ mod tests {
             deepseek.protocol_family,
             ProviderProtocolFamily::OpenAiCompatible
         );
+        assert!(!deepseek.supports_streaming_tool_calls);
+        assert!(deepseek.requires_nonstreaming_tool_calls);
 
         let openai = ProviderType::OpenAI.capabilities();
         assert_eq!(
@@ -804,6 +833,8 @@ mod tests {
             }
         }
         env.remove("PRIORITY_AGENT_DEFAULT_PROVIDER");
+        env.remove("PRIORITY_AGENT_TEST_PROVIDER_SCENARIO");
+        env.remove("PRIORITY_AGENT_TEST_PROVIDER_SLEEP_SECS");
     }
 
     #[test]
@@ -872,6 +903,37 @@ mod tests {
         let registry = ProviderRegistry::from_env();
 
         assert_eq!(registry.selected(), Some("deepseek"));
+    }
+
+    #[test]
+    fn test_from_env_registers_test_provider_when_scenario_is_set() {
+        let mut env = EnvVarGuard::acquire_blocking();
+        clear_default_provider_env(&mut env);
+        env.set("PRIORITY_AGENT_TEST_PROVIDER_SCENARIO", "tool-pwd");
+
+        let registry = ProviderRegistry::from_env();
+
+        assert_eq!(registry.selected(), Some("test-fixture"));
+        assert!(registry.get("test-fixture").is_some());
+        let cfg = registry
+            .get_config("test-fixture")
+            .expect("test fixture config");
+        assert_eq!(cfg.default_model, "test-fixture-model");
+        assert_eq!(cfg.base_url.as_deref(), Some("test://provider"));
+    }
+
+    #[test]
+    fn test_from_env_test_provider_scenario_beats_default_provider_override() {
+        let mut env = EnvVarGuard::acquire_blocking();
+        clear_default_provider_env(&mut env);
+        env.set("PRIORITY_AGENT_TEST_PROVIDER_SCENARIO", "tool-pwd");
+        env.set("MINIMAX_API_KEY", "minimax-key");
+        env.set("PRIORITY_AGENT_DEFAULT_PROVIDER", "minimax");
+
+        let registry = ProviderRegistry::from_env();
+
+        assert_eq!(registry.selected(), Some("test-fixture"));
+        assert!(registry.get("minimax").is_some());
     }
 
     #[test]

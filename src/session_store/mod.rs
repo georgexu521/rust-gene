@@ -211,6 +211,9 @@ impl SessionStore {
         runner.register(std::sync::Arc::new(
             crate::migrations::v18_add_goal_step_score::V18AddGoalStepScore,
         ));
+        runner.register(std::sync::Arc::new(
+            crate::migrations::v19_add_message_metadata::V19AddMessageMetadata,
+        ));
         runner.run(&conn)?;
 
         info!("SessionStore opened at {:?}", path);
@@ -281,6 +284,9 @@ impl SessionStore {
         ));
         runner.register(std::sync::Arc::new(
             crate::migrations::v18_add_goal_step_score::V18AddGoalStepScore,
+        ));
+        runner.register(std::sync::Arc::new(
+            crate::migrations::v19_add_message_metadata::V19AddMessageMetadata,
         ));
         runner.run(&conn)?;
 
@@ -967,12 +973,14 @@ mod tests {
                         content: "compact boundary summary".to_string(),
                         tool_calls: None,
                         tool_call_id: None,
+                        metadata: None,
                     },
                     MessageInsert {
                         role: "user".to_string(),
                         content: "continue".to_string(),
                         tool_calls: None,
                         tool_call_id: None,
+                        metadata: None,
                     },
                 ],
             )

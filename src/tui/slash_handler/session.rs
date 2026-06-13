@@ -177,21 +177,13 @@ pub async fn handle_new(app: &mut TuiApp) -> String {
         .unwrap_or("unknown");
     match app.session_manager.start_session("New Session", model) {
         Ok(id) => {
-            use crate::state::{MessageItem, MessageRole};
             app.messages.clear();
             app.clear_tool_transcript();
             if let Some(ref engine) = app.streaming_engine {
                 engine.set_session_id(id.clone());
                 engine.set_history(Vec::new()).await;
             }
-            let welcome = MessageItem {
-                id: "welcome".to_string(),
-                role: MessageRole::System,
-                content: "Started a new session. Previous messages cleared from view but saved to database.".to_string(),
-                timestamp: std::time::SystemTime::now(),
-                metadata: Default::default(),
-            };
-            app.messages.push(welcome);
+
             format!("New session started: {}", id)
         }
         Err(e) => format!("Failed to start new session: {}", e),
@@ -973,8 +965,15 @@ pub async fn handle_verify(app: &mut TuiApp) -> String {
             let failed = count_test_failed(output);
             let summary = format!(
                 "# Verify Report\n\nProject: {}\nCommand: `{}`\n\n**Result**: {} passed, {} failed\n\n```\n{}\n```",
-                project_type, test_cmd, passed, failed,
-                if output.len() > 2000 { &output[..2000] } else { output }
+                project_type,
+                test_cmd,
+                passed,
+                failed,
+                if output.len() > 2000 {
+                    &output[..2000]
+                } else {
+                    output
+                }
             );
             app.add_system_message(summary.clone());
             String::new()

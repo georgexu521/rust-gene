@@ -12,6 +12,7 @@ pub mod v15_add_session_jobs;
 pub mod v16_add_session_part_message_id;
 pub mod v17_add_goal_runs;
 pub mod v18_add_goal_step_score;
+pub mod v19_add_message_metadata;
 pub mod v1_initial;
 pub mod v2_add_tasks;
 pub mod v3_add_traces;

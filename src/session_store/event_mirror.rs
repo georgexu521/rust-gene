@@ -92,8 +92,13 @@ impl StreamEventMirror {
             StreamEvent::ToolExecutionProgress { id, progress } => {
                 self.writer.tool_progress(id, progress)
             }
-            StreamEvent::ToolExecutionComplete { id, result, .. } => {
-                let succeeded = self.writer.tool_succeeded(id, &safe_preview(result, 256));
+            StreamEvent::ToolExecutionComplete {
+                id,
+                result,
+                metadata,
+                result_data,
+            } => {
+                let tool_succeeded = tool_execution_succeeded(metadata, result_data, result);
                 let _ = self.writer.tool_result_completed(id, result);
                 if is_shell_tool(self.tool_names.get(id).map(String::as_str)) {
                     let command = self
@@ -104,10 +109,19 @@ impl StreamEventMirror {
                         .writer
                         .shell_output_completed(id, command.as_deref(), result);
                 }
+                let status_event = if tool_succeeded {
+                    self.writer.tool_succeeded(id, &safe_preview(result, 256))
+                } else {
+                    self.writer.tool_failed(id, &safe_preview(result, 512))
+                };
                 self.tool_args.remove(id);
                 self.tool_names.remove(id);
-                succeeded
+                status_event
             }
+            StreamEvent::ToolResultsReadyForModel { ids } => self.writer.write_event(
+                "tool_results_ready_for_model",
+                &serde_json::json!({ "tool_call_ids": ids }).to_string(),
+            ),
             StreamEvent::Closeout {
                 status,
                 evidence_summary,
@@ -149,6 +163,33 @@ impl StreamEventMirror {
             StreamEvent::Error(message) => self.writer.runtime_error(message),
         };
     }
+}
+
+fn tool_execution_succeeded(
+    metadata: &Option<serde_json::Value>,
+    result_data: &Option<serde_json::Value>,
+    result: &str,
+) -> bool {
+    for value in [result_data.as_ref(), metadata.as_ref()]
+        .into_iter()
+        .flatten()
+    {
+        if let Some(success) = value
+            .get("success")
+            .or_else(|| value.pointer("/tool_summary/success"))
+            .and_then(serde_json::Value::as_bool)
+        {
+            return success;
+        }
+        if let Some(status) = value
+            .get("status")
+            .or_else(|| value.pointer("/tool_observation/status"))
+            .and_then(serde_json::Value::as_str)
+        {
+            return matches!(status, "success" | "passed" | "completed" | "ok");
+        }
+    }
+    !result.contains("Result: ERROR")
 }
 
 fn safe_preview(s: &str, max_bytes: usize) -> String {

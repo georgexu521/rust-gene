@@ -4,6 +4,8 @@ impl TuiApp {
     pub fn current_model_label(&self) -> String {
         if let Some(ref engine) = self.streaming_engine {
             engine.model_name().to_string()
+        } else if let Some(model) = self.facade_snapshot.provider_request.model.as_deref() {
+            model.to_string()
         } else {
             "unknown".to_string()
         }
@@ -13,6 +15,16 @@ impl TuiApp {
     pub fn current_provider_label(&self) -> String {
         if let Some(ref engine) = self.streaming_engine {
             provider_name_from_base_url(&engine.provider_base_url()).to_string()
+        } else if let Some(provider) = self
+            .facade_snapshot
+            .provider_request
+            .provider_family
+            .as_deref()
+        {
+            display_provider_label(
+                provider,
+                self.facade_snapshot.provider_request.model.as_deref(),
+            )
         } else {
             "unknown".to_string()
         }
@@ -52,7 +64,7 @@ impl TuiApp {
         if let Some(ref engine) = self.streaming_engine {
             permission_mode_name(engine.permission_mode()).replace('_', "-")
         } else {
-            "unknown".to_string()
+            permission_mode_name(crate::permissions::PermissionMode::default()).replace('_', "-")
         }
     }
 
@@ -579,4 +591,43 @@ fn persisted_part_to_tool_run(
         _ => run.status,
     };
     Some(run)
+}
+
+fn display_provider_label(provider_family: &str, model: Option<&str>) -> String {
+    let family = provider_family.to_ascii_lowercase();
+    let model = model.unwrap_or_default().to_ascii_lowercase();
+    if family == "deepseek"
+        || (family.starts_with("openai_compatible") && model.contains("deepseek"))
+    {
+        "DeepSeek".to_string()
+    } else if family == "minimax" || model.contains("minimax") {
+        "MiniMax".to_string()
+    } else if family == "kimi-code" || family == "kimi_code" {
+        "Kimi Code".to_string()
+    } else if family == "kimi" || family == "moonshot" || model.contains("kimi") {
+        "Kimi".to_string()
+    } else if family == "glm" || family == "zai" || family == "z.ai" || model.contains("glm") {
+        "GLM".to_string()
+    } else if family == "openai" {
+        "OpenAI".to_string()
+    } else {
+        provider_family.to_string()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn provider_and_model_labels_fallback_to_runtime_facade() {
+        let mut app = TuiApp::new();
+        app.facade_snapshot.provider_request.provider_family =
+            Some("openai_compatible".to_string());
+        app.facade_snapshot.provider_request.model = Some("deepseek-v4-flash".to_string());
+
+        assert_eq!(app.current_provider_label(), "DeepSeek");
+        assert_eq!(app.current_model_label(), "deepseek-v4-flash");
+        assert_eq!(app.current_permission_label(), "auto");
+    }
 }

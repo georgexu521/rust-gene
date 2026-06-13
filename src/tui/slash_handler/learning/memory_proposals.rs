@@ -357,12 +357,7 @@ pub(super) fn format_memory_proposal_batch_apply_result(
     };
     format!(
         "Batch applied memory proposals\n- matched: {}\n- applied: {}\n- candidates applied: {}\n- failed: {}\n- ids: {}\n- failures: {}",
-        result.matched,
-        result.applied,
-        result.applied_candidates,
-        result.failed,
-        ids,
-        failures
+        result.matched, result.applied, result.applied_candidates, result.failed, ids, failures
     )
 }
 

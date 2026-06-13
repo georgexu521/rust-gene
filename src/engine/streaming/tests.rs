@@ -296,7 +296,7 @@ async fn streaming_history_does_not_persist_completed_tool_calls_as_final_assist
     let provider = Arc::new(ToolTurnProvider {
         responses: StdMutex::new(VecDeque::from(vec![
             crate::services::api::ChatResponse {
-                content: String::new(),
+                content: "I will inspect the marker file first.".to_string(),
                 tool_calls: Some(vec![crate::services::api::ToolCall {
                     id: "call_read".to_string(),
                     name: "file_read".to_string(),

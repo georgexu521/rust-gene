@@ -51,7 +51,7 @@ pub fn summarize_export_events(events: &[SessionEventRow]) -> ExportEventSummary
                     collect_changed_paths_from_tool_input(&input, &mut changed_files);
                 }
             }
-            "tool_succeeded" | "tool_result_completed" => {
+            "tool_succeeded" => {
                 if let Some((call_id, tool)) = tool_call_and_name_for_event(&payload, &call_tools) {
                     if !counted_successes.insert(call_id) {
                         continue;
@@ -59,6 +59,7 @@ pub fn summarize_export_events(events: &[SessionEventRow]) -> ExportEventSummary
                     *tool_successes.entry(tool).or_default() += 1;
                 }
             }
+            "tool_result_completed" => {}
             "tool_failed" => {
                 if let Some((call_id, tool)) = tool_call_and_name_for_event(&payload, &call_tools) {
                     if !counted_failures.insert(call_id) {

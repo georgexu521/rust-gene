@@ -52,6 +52,7 @@ impl TurnAssistantResponseController {
             final_content: &mut context.loop_state.final_content,
             final_tool_calls: &mut context.loop_state.final_tool_calls,
             tool_calls_made: &mut context.loop_state.tool_calls_made,
+            tx: context.tx,
             trace: context.trace,
             iteration: context.iteration,
         });
@@ -204,7 +205,10 @@ mod tests {
         assert_eq!(tool_calls[0].id, tool_call.id);
         assert_eq!(tool_calls[0].name, tool_call.name);
         assert!(pre_executed.is_empty());
-        assert_eq!(loop_state.final_content, "running check");
+        assert!(
+            loop_state.final_content.is_empty(),
+            "tool-call responses must wait for the post-tool final answer"
+        );
         assert_eq!(loop_state.final_tool_calls.len(), 1);
         assert!(loop_state.tool_calls_made);
 

@@ -524,7 +524,10 @@ pub fn handle_goal(app: &mut TuiApp, args: &str) -> String {
                     }
                 }
             }
-            return goal_not_implemented("pause", "Pause automatic goal continuation. When the runner is active this will pause automatic turn scheduling.");
+            return goal_not_implemented(
+                "pause",
+                "Pause automatic goal continuation. When the runner is active this will pause automatic turn scheduling.",
+            );
         }
         "resume" => {
             if has_runner {
@@ -547,7 +550,10 @@ pub fn handle_goal(app: &mut TuiApp, args: &str) -> String {
                     }
                 }
             }
-            return goal_not_implemented("resume", "Resume automatic goal continuation. When paused this will restart turn scheduling if the goal is active.");
+            return goal_not_implemented(
+                "resume",
+                "Resume automatic goal continuation. When paused this will restart turn scheduling if the goal is active.",
+            );
         }
         _ => {}
     }

@@ -38,13 +38,31 @@ pub struct ApiComponents {
 
 /// 初始化 LLM Provider（由 ProviderRegistry 的确定性优先级和用户覆盖项选择）
 pub fn init_provider() -> Result<(Arc<dyn crate::services::api::LlmProvider>, String)> {
+    init_provider_with_default_preference(None)
+}
+
+/// 初始化 TUI 默认 Provider。
+///
+/// TUI is the interactive product surface, so when the user has not set an
+/// explicit default provider, prefer DeepSeek's fast default if it is
+/// configured. Environment and saved config overrides still win.
+pub fn init_tui_provider() -> Result<(Arc<dyn crate::services::api::LlmProvider>, String)> {
+    init_provider_with_default_preference(Some("deepseek"))
+}
+
+fn init_provider_with_default_preference(
+    default_provider: Option<&str>,
+) -> Result<(Arc<dyn crate::services::api::LlmProvider>, String)> {
     let app_config = crate::services::config::AppConfig::load().unwrap_or_default();
     let mut registry = crate::services::api::provider::ProviderRegistry::from_env();
-    if std::env::var("PRIORITY_AGENT_DEFAULT_PROVIDER")
+    let has_env_default = std::env::var("PRIORITY_AGENT_DEFAULT_PROVIDER")
         .ok()
         .filter(|value| !value.trim().is_empty())
-        .is_none()
-    {
+        .is_some();
+    let has_test_provider = registry.get("test-fixture").is_some();
+    if has_test_provider {
+        registry.select("test-fixture".to_string());
+    } else if !has_env_default {
         if let Some(saved_provider) = app_config
             .api
             .provider_name
@@ -53,6 +71,10 @@ pub fn init_provider() -> Result<(Arc<dyn crate::services::api::LlmProvider>, St
             .filter(|name| !name.is_empty())
         {
             registry.select(saved_provider.to_ascii_lowercase());
+        } else if let Some(default_provider) = default_provider {
+            if registry.get(default_provider).is_some() {
+                registry.select(default_provider.to_string());
+            }
         }
     }
     let Some(provider) = registry.get_selected_provider() else {
@@ -214,6 +236,13 @@ pub async fn init_app(working_dir: &std::path::Path) -> Result<AppComponents> {
     init_components(provider, model, tool_registry, working_dir).await
 }
 
+/// 初始化 TUI 组件。
+pub async fn init_tui_app(working_dir: &std::path::Path) -> Result<AppComponents> {
+    let (provider, model) = init_tui_provider()?;
+    let tool_registry = init_tool_registry(working_dir);
+    init_components(provider, model, tool_registry, working_dir).await
+}
+
 /// 初始化 API server 所需组件。
 pub async fn init_api_components(working_dir: &std::path::Path) -> Result<ApiComponents> {
     let components = init_app(working_dir).await?;
@@ -361,6 +390,8 @@ mod tests {
             }
         }
         env.remove("PRIORITY_AGENT_DEFAULT_PROVIDER");
+        env.remove("PRIORITY_AGENT_TEST_PROVIDER_SCENARIO");
+        env.remove("PRIORITY_AGENT_TEST_PROVIDER_SLEEP_SECS");
         env.remove("PRIORITY_AGENT_API_PROVIDER_NAME");
         for (k, v) in vars {
             if let Some(val) = v {
@@ -387,6 +418,35 @@ mod tests {
             || {
                 let (_provider, model) = init_provider().expect("provider should initialize");
                 assert_eq!(model, "MiniMax-M2.7");
+            },
+        );
+    }
+
+    #[test]
+    fn test_init_tui_provider_prefers_deepseek_flash() {
+        with_env_vars(
+            &[
+                ("MINIMAX_API_KEY", Some("mini-key")),
+                ("DEEPSEEK_API_KEY", Some("deepseek-key")),
+            ],
+            || {
+                let (_provider, model) = init_tui_provider().expect("provider should initialize");
+                assert_eq!(model, "deepseek-v4-flash");
+            },
+        );
+    }
+
+    #[test]
+    fn test_init_tui_provider_env_override_beats_deepseek_default() {
+        with_env_vars(
+            &[
+                ("MINIMAX_API_KEY", Some("mini-key")),
+                ("DEEPSEEK_API_KEY", Some("deepseek-key")),
+                ("PRIORITY_AGENT_DEFAULT_PROVIDER", Some("minimax")),
+            ],
+            || {
+                let (_provider, model) = init_tui_provider().expect("provider should initialize");
+                assert_eq!(model, "MiniMax-M3");
             },
         );
     }
@@ -426,6 +486,27 @@ mod tests {
 
                 let (_provider, model) = init_provider().expect("provider should initialize");
                 assert_eq!(model, "MiniMax-M3");
+            },
+        );
+    }
+
+    #[test]
+    fn test_init_provider_test_provider_scenario_beats_saved_provider() {
+        with_env_vars(
+            &[
+                ("MINIMAX_API_KEY", Some("mini-key")),
+                ("PRIORITY_AGENT_DEFAULT_PROVIDER", Some("minimax")),
+                ("PRIORITY_AGENT_TEST_PROVIDER_SCENARIO", Some("tool-pwd")),
+            ],
+            || {
+                let mut config = crate::services::config::AppConfig::default();
+                config.api.provider_name = Some("minimax".to_string());
+                config.api.model = "MiniMax-M2.7".to_string();
+                config.save().unwrap();
+
+                let (provider, model) = init_provider().expect("provider should initialize");
+                assert_eq!(provider.base_url(), "test://provider");
+                assert_eq!(model, "test-fixture-model");
             },
         );
     }

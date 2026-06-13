@@ -35,7 +35,9 @@ pub fn handle_permissions(app: &mut TuiApp, args: &str) -> String {
                 ctx.rules.always_allow.len(),
                 ctx.rules.always_deny.len(),
                 ctx.rules.always_ask.len(),
-                cwd.join(".priority-agent").join("permissions.toml").display(),
+                cwd.join(".priority-agent")
+                    .join("permissions.toml")
+                    .display(),
                 dirs::home_dir()
                     .unwrap_or_else(|| std::path::PathBuf::from("."))
                     .join(".priority-agent")
@@ -162,14 +164,15 @@ pub fn handle_permissions(app: &mut TuiApp, args: &str) -> String {
             let file_path = match parts.next() {
                 Some(p) if !p.trim().is_empty() => p.trim(),
                 _ => {
-                    return "Usage: /permissions import <path> [project|global] [merge]".to_string()
+                    return "Usage: /permissions import <path> [project|global] [merge]"
+                        .to_string();
                 }
             };
             let scope = match parts.next().map(|s| s.to_ascii_lowercase()) {
                 Some(s) if s == "global" => RuleSource::Global,
                 Some(s) if s == "project" => RuleSource::Project,
                 Some(other) => {
-                    return format!("Invalid scope '{}'. Use 'project' or 'global'.", other)
+                    return format!("Invalid scope '{}'. Use 'project' or 'global'.", other);
                 }
                 None => RuleSource::Project,
             };
@@ -348,14 +351,14 @@ pub fn handle_permissions(app: &mut TuiApp, args: &str) -> String {
                 Some(p) if !p.trim().is_empty() => p.trim(),
                 _ => {
                     return "Usage: /permissions <allow|deny|ask> <pattern> [project|global]"
-                        .to_string()
+                        .to_string();
                 }
             };
             let scope = match parts.next().map(|s| s.to_ascii_lowercase()) {
                 Some(s) if s == "global" => RuleSource::Global,
                 Some(s) if s == "project" => RuleSource::Project,
                 Some(other) => {
-                    return format!("Invalid scope '{}'. Use 'project' or 'global'.", other)
+                    return format!("Invalid scope '{}'. Use 'project' or 'global'.", other);
                 }
                 None => RuleSource::Project,
             };

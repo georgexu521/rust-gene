@@ -140,7 +140,7 @@ pub async fn handle_prompt(app: &mut TuiApp, args: &str) -> String {
         let prompt = match read_prompt_file() {
             Ok(Some(v)) => v,
             Ok(None) => {
-                return "No custom system prompt set. Use `/prompt edit <text>` first.".to_string()
+                return "No custom system prompt set. Use `/prompt edit <text>` first.".to_string();
             }
             Err(e) => return format!("Failed to read prompt: {}", e),
         };
@@ -324,11 +324,28 @@ pub fn handle_skeleton(_app: &mut TuiApp, args: &str) -> String {
     let filename = parts.get(1).unwrap_or(&"main");
 
     let skeleton = match lang {
-        "rust" => format!("// {}.rs\n\nfn main() {{\n    println!(\"Hello, world!\");\n}}\n", filename),
-        "python" => format!("# {}.py\n\ndef main():\n    print(\"Hello, world!\")\n\nif __name__ == \"__main__\":\n    main()\n", filename),
-        "typescript" | "ts" => format!("// {}.ts\n\nexport function main(): void {{\n    console.log(\"Hello, world!\");\n}}\n", filename),
-        "javascript" | "js" => format!("// {}.js\n\nfunction main() {{\n    console.log(\"Hello, world!\");\n}}\n\nmain();\n", filename),
-        _ => return format!("Unsupported language: {}. Supported: rust, python, typescript, javascript", lang),
+        "rust" => format!(
+            "// {}.rs\n\nfn main() {{\n    println!(\"Hello, world!\");\n}}\n",
+            filename
+        ),
+        "python" => format!(
+            "# {}.py\n\ndef main():\n    print(\"Hello, world!\")\n\nif __name__ == \"__main__\":\n    main()\n",
+            filename
+        ),
+        "typescript" | "ts" => format!(
+            "// {}.ts\n\nexport function main(): void {{\n    console.log(\"Hello, world!\");\n}}\n",
+            filename
+        ),
+        "javascript" | "js" => format!(
+            "// {}.js\n\nfunction main() {{\n    console.log(\"Hello, world!\");\n}}\n\nmain();\n",
+            filename
+        ),
+        _ => {
+            return format!(
+                "Unsupported language: {}. Supported: rust, python, typescript, javascript",
+                lang
+            );
+        }
     };
 
     format!("```{}```\n\n{}", lang, skeleton)

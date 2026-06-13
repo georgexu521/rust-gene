@@ -1,5 +1,7 @@
-use crate::tui::app::{StatusBarDensity, TuiApp};
-use crate::tui::tool_view::ToolRunStatus;
+use crate::tui::{
+    app::TuiApp,
+    view_model::footer::{footer_items, FooterItem, FooterTone},
+};
 use ratatui::{
     layout::{Alignment, Rect},
     style::Style,
@@ -7,236 +9,17 @@ use ratatui::{
     widgets::Paragraph,
     Frame,
 };
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 /// 渲染状态栏（Reasonix 风格：mode glyph · session · cost · cache · ctx）
 pub fn render_status_bar(f: &mut Frame, app: &TuiApp, area: Rect) {
-    let mut parts = Vec::new();
-    let runtime = app.runtime_status_snapshot_now();
-
-    // Mode glyph (Reasonix style)
-    let mode_glyph = match app.agent_mode {
-        crate::engine::agent_mode::AgentMode::Auto => "●",
-        crate::engine::agent_mode::AgentMode::Build => "●",
-        crate::engine::agent_mode::AgentMode::Plan => "⊞",
-        crate::engine::agent_mode::AgentMode::Explore => "⊙",
-        crate::engine::agent_mode::AgentMode::Review => "◐",
-    };
-    let mode_color = match app.agent_mode {
-        crate::engine::agent_mode::AgentMode::Auto
-        | crate::engine::agent_mode::AgentMode::Build => app.theme.tokens.tone.ok,
-        crate::engine::agent_mode::AgentMode::Plan
-        | crate::engine::agent_mode::AgentMode::Explore => app.theme.tokens.tone.accent,
-        crate::engine::agent_mode::AgentMode::Review => app.theme.tokens.tone.warn,
-    };
-
-    // 左侧：mode glyph + 状态
-    if runtime.is_querying {
-        let provider_label = app.facade_snapshot.provider_request.status_label();
-        let label = if !provider_label.is_empty() {
-            provider_label
-        } else {
-            runtime
-                .current_tool_label
-                .clone()
-                .unwrap_or_else(|| "Thinking".to_string())
-        };
-        let spinner_color = if app.facade_snapshot.provider_request.is_known_slow_path {
-            app.theme.tokens.tone.err
-        } else {
-            app.theme.tokens.tone.warn
-        };
-        parts.push(Span::styled(
-            format!("◌ {}", label),
-            Style::default().fg(spinner_color),
-        ));
-        if app.facade_snapshot.provider_request.phase.is_active() {
-            let elapsed = app.facade_snapshot.provider_request.elapsed_ms;
-            if elapsed > 0 {
-                parts.push(Span::styled(
-                    format!("{:.1}s", elapsed as f64 / 1000.0),
-                    Style::default().fg(app.theme.tokens.fg.faint),
-                ));
-            }
-        }
-        if let Some(usage) = app.stream_usage_label() {
-            parts.push(Span::styled(
-                usage,
-                Style::default().fg(app.theme.tokens.fg.faint),
-            ));
-        }
-        parts.push(Span::styled(
-            "esc to interrupt",
-            Style::default().fg(app.theme.tokens.fg.faint),
-        ));
-    } else if let Some(ref error) = runtime.last_error {
-        parts.push(Span::styled(
-            format!("✗ {}", error),
-            Style::default().fg(app.theme.tokens.tone.err),
-        ));
-    } else {
-        parts.push(Span::styled(
-            format!("{} {}", mode_glyph, app.current_agent_mode_label()),
-            Style::default().fg(mode_color),
-        ));
-    }
-
-    // Session info
-    if let Some(session_id) = app.session_manager.current_session_id() {
-        let short_id = if session_id.len() > 8 {
-            &session_id[..8]
-        } else {
-            session_id
-        };
-        parts.push(Span::styled(
-            short_id.to_string(),
-            Style::default().fg(app.theme.tokens.fg.faint),
-        ));
-    }
-
-    // Permission
-    parts.push(Span::styled(
-        app.current_permission_label(),
-        Style::default().fg(app.theme.tokens.tone.warn),
-    ));
-
-    // Provider / Model
-    parts.push(Span::styled(
-        format!(
-            "{} / {}",
-            app.current_provider_label(),
-            app.current_model_label()
-        ),
-        Style::default().fg(app.theme.tokens.fg.faint),
-    ));
-
-    // Context usage bar (Reasonix style: 8 cells)
-    if let Some(usage) = app.stream_usage_snapshot {
-        let cap: u32 = 128_000; // rough context cap, configurable
-        let used = usage.prompt_tokens;
-        let ratio = (used as f64 / cap as f64).min(1.0);
-        let pct = (ratio * 100.0) as u32;
-        let bar_color = if ratio >= 0.8 {
-            app.theme.tokens.tone.err
-        } else if ratio >= 0.5 {
-            app.theme.tokens.tone.warn
-        } else {
-            app.theme.tokens.tone.ok
-        };
-        let filled = (ratio * 8.0).round() as usize;
-        let empty = 8 - filled;
-        let bar = "█".repeat(filled) + &"░".repeat(empty);
-        parts.push(Span::styled(
-            format!("ctx {bar} {pct}%"),
-            Style::default().fg(bar_color),
-        ));
-
-        // Cache hit %
-        if usage.cached_tokens.unwrap_or(0) > 0 && usage.prompt_tokens > 0 {
-            let hit_pct = (usage.cached_tokens.unwrap_or(0) as f64 / usage.prompt_tokens as f64
-                * 100.0) as u32;
-            parts.push(Span::styled(
-                format!("cache {}%", hit_pct),
-                Style::default().fg(app.theme.tokens.tone.accent),
-            ));
-        }
-    }
-
-    // Turn cost (from last usage)
-    if !app.is_querying {
-        if let Some(usage) = app.stream_usage_label() {
-            parts.push(Span::styled(
-                format!("last {}", usage),
-                Style::default().fg(app.theme.tokens.fg.faint),
-            ));
-        }
-    }
-
-    // Changed files (from tool runs snapshot)
-    let changed = changed_file_count(app);
-    if changed > 0 {
-        parts.push(Span::styled(
-            format!("changed:{}", changed),
-            Style::default().fg(app.theme.tokens.tone.accent),
-        ));
-    }
-
-    // Validation status (from last completed Write/Edit tool)
-    let validation = last_validation_label(app);
-    if !validation.is_empty() {
-        let color = if validation == "verified" {
-            app.theme.tokens.tone.ok
-        } else if validation == "failed" {
-            app.theme.tokens.tone.err
-        } else {
-            app.theme.tokens.tone.warn
-        };
-        parts.push(Span::styled(
-            format!("validation:{}", validation),
-            Style::default().fg(color),
-        ));
-    }
-
-    if runtime.mcp_server_count > 0 {
-        parts.push(Span::styled(
-            format!(
-                "mcp:{}/{}",
-                runtime.mcp_available_count, runtime.mcp_server_count
-            ),
-            Style::default().fg(app.theme.tokens.fg.faint),
-        ));
-    }
-
-    if app.vim_mode {
-        parts.push(Span::styled(
-            "vim",
-            Style::default().fg(app.theme.tokens.tone.violet),
-        ));
-    }
-
-    // Memory mode
-    if app.memory_use {
-        let recall_label = match app.memory_recall_mode.as_str() {
-            "off" => "mem:off",
-            "strict" => "mem:strict",
-            "balanced" => "mem:bal",
-            "preference-only" => "mem:pref",
-            _ => "mem",
-        };
-        parts.push(Span::styled(
-            recall_label,
-            Style::default().fg(app.theme.tokens.tone.info),
-        ));
-    }
-
-    // Debug extras
-    if app.status_bar_density == StatusBarDensity::Debug {
-        parts.push(Span::styled(
-            format!("scroll:{}", app.scroll_offset),
-            Style::default().fg(app.theme.tokens.fg.faint),
-        ));
-        parts.push(Span::styled(
-            format!(
-                "tools:{}/{}",
-                runtime.active_tool_count, runtime.total_tools
-            ),
-            Style::default().fg(app.theme.tokens.fg.faint),
-        ));
-        parts.push(Span::styled(
-            format!("msgs:{}", runtime.messages),
-            Style::default().fg(app.theme.tokens.fg.faint),
-        ));
-    }
-    parts.push(Span::styled(
-        format!("v{}", env!("CARGO_PKG_VERSION")),
-        Style::default().fg(app.theme.tokens.fg.faint),
-    ));
-    parts.push(Span::styled(
-        "? shortcuts",
-        Style::default().fg(app.theme.tokens.fg.faint),
-    ));
+    let parts = fit_footer_items(footer_items(app), usize::from(area.width))
+        .into_iter()
+        .map(|item| Span::styled(item.label, Style::default().fg(tone_color(item.tone, app))))
+        .collect::<Vec<_>>();
 
     // 用 " · " 连接所有部分
-    let mut spans = Vec::new();
+    let mut spans = vec![Span::styled(" ", Style::default())];
     for (i, part) in parts.iter().enumerate() {
         if i > 0 {
             spans.push(Span::styled(
@@ -253,37 +36,163 @@ pub fn render_status_bar(f: &mut Frame, app: &TuiApp, area: Rect) {
     );
 }
 
-/// Count completed file mutation tools from the tool runs snapshot.
-fn changed_file_count(app: &TuiApp) -> usize {
-    app.tool_runs_snapshot
-        .iter()
-        .filter(|run| matches!(run.name.as_str(), "file_write" | "file_edit" | "file_patch"))
-        .count()
+fn fit_footer_items(mut items: Vec<FooterItem>, width: usize) -> Vec<FooterItem> {
+    if width == 0 {
+        return Vec::new();
+    }
+
+    while footer_width(&items) > width {
+        let Some(index) = drop_candidate(&items) else {
+            break;
+        };
+        items.remove(index);
+    }
+
+    while footer_width(&items) > width {
+        let Some(index) = truncation_candidate(&items) else {
+            break;
+        };
+        let current = display_width(&items[index].label);
+        let overflow = footer_width(&items).saturating_sub(width);
+        let target = current.saturating_sub(overflow).max(1);
+        if target >= current {
+            break;
+        }
+        items[index].label = truncate_display_width(&items[index].label, target);
+    }
+
+    while footer_width(&items) > width {
+        let Some(index) = forced_drop_candidate(&items) else {
+            break;
+        };
+        items.remove(index);
+    }
+
+    items
 }
 
-/// Derive a validation label from completed tool runs.
-fn last_validation_label(app: &TuiApp) -> String {
-    // Check if any run_tests or bash test commands completed
-    let has_tests = app.tool_runs_snapshot.iter().any(|run| {
-        (run.name == "run_tests" || run.name == "bash")
-            && matches!(run.status, ToolRunStatus::Completed)
-    });
-    let has_edits = app.tool_runs_snapshot.iter().any(|run| {
-        matches!(run.name.as_str(), "file_write" | "file_edit" | "file_patch")
-            && matches!(run.status, ToolRunStatus::Completed)
-    });
-    let has_failures = app
-        .tool_runs_snapshot
+fn drop_candidate(items: &[FooterItem]) -> Option<usize> {
+    items
         .iter()
-        .any(|run| matches!(run.status, ToolRunStatus::Failed | ToolRunStatus::TimedOut));
+        .enumerate()
+        .filter(|(index, item)| footer_priority(item, *index) < 900)
+        .min_by_key(|(index, item)| (footer_priority(item, *index), *index))
+        .map(|(index, _)| index)
+}
 
-    if has_edits && !has_tests && !has_failures {
-        "pending".to_string()
-    } else if has_tests && !has_failures {
-        "tested".to_string()
-    } else if has_failures {
-        "failed".to_string()
+fn truncation_candidate(items: &[FooterItem]) -> Option<usize> {
+    items
+        .iter()
+        .enumerate()
+        .filter(|(index, item)| *index != 0 && item.label != "? shortcuts")
+        .max_by_key(|(_, item)| (item.label.contains(" / "), display_width(&item.label)))
+        .map(|(index, _)| index)
+}
+
+fn forced_drop_candidate(items: &[FooterItem]) -> Option<usize> {
+    items
+        .iter()
+        .enumerate()
+        .filter(|(index, _)| *index != 0)
+        .min_by_key(|(index, item)| (forced_drop_priority(item, *index), *index))
+        .map(|(index, _)| index)
+}
+
+fn forced_drop_priority(item: &FooterItem, _index: usize) -> u16 {
+    if item.label == "? shortcuts" {
+        0
+    } else if item.label.contains(" / ") {
+        1
     } else {
-        String::new()
+        2
+    }
+}
+
+fn footer_priority(item: &FooterItem, index: usize) -> u16 {
+    if index == 0 {
+        return 1_000;
+    }
+    if item.label.contains(" / ") {
+        return 950;
+    }
+    if item.label == "? shortcuts" {
+        return 900;
+    }
+    match item.label.as_str() {
+        "auto" | "ask" | "review" | "read-only" => 800,
+        "vim" | "mem" | "mem:bal" | "mem:strict" | "mem:pref" | "mem:off" => 650,
+        label if label.starts_with('v') => 300,
+        label if label.starts_with("last ") => 250,
+        label if label.starts_with("mcp:") => 240,
+        label
+            if label.starts_with("provider:")
+                || label.starts_with("ctx ")
+                || label.starts_with("changed:")
+                || label.starts_with("validation:")
+                || label.starts_with("scroll:")
+                || label.starts_with("tools:")
+                || label.starts_with("msgs:") =>
+        {
+            200
+        }
+        _ => 400,
+    }
+}
+
+fn footer_width(items: &[FooterItem]) -> usize {
+    let labels = items
+        .iter()
+        .map(|item| display_width(&item.label))
+        .sum::<usize>();
+    let separators = items.len().saturating_sub(1) * 3;
+    1 + labels + separators
+}
+
+fn truncate_display_width(value: &str, max_width: usize) -> String {
+    if display_width(value) <= max_width {
+        return value.to_string();
+    }
+    if max_width == 0 {
+        return String::new();
+    }
+    if max_width == 1 {
+        return "…".to_string();
+    }
+
+    let content_width = max_width - 1;
+    let mut width = 0usize;
+    let mut out = String::new();
+    for ch in value.chars() {
+        let ch_width = UnicodeWidthChar::width(ch).unwrap_or(0);
+        if width + ch_width > content_width {
+            break;
+        }
+        width += ch_width;
+        out.push(ch);
+    }
+    out.push('…');
+    out
+}
+
+fn display_width(value: &str) -> usize {
+    UnicodeWidthStr::width(value)
+}
+
+fn tone_color(tone: FooterTone, app: &TuiApp) -> ratatui::style::Color {
+    match tone {
+        FooterTone::Mode => match app.agent_mode {
+            crate::engine::agent_mode::AgentMode::Auto
+            | crate::engine::agent_mode::AgentMode::Build => app.theme.tokens.tone.ok,
+            crate::engine::agent_mode::AgentMode::Plan
+            | crate::engine::agent_mode::AgentMode::Explore => app.theme.tokens.tone.accent,
+            crate::engine::agent_mode::AgentMode::Review => app.theme.tokens.tone.warn,
+        },
+        FooterTone::Error => app.theme.tokens.tone.err,
+        FooterTone::Warning => app.theme.tokens.tone.warn,
+        FooterTone::Faint => app.theme.tokens.fg.faint,
+        FooterTone::Info => app.theme.tokens.tone.info,
+        FooterTone::Accent => app.theme.tokens.tone.accent,
+        FooterTone::Ok => app.theme.tokens.tone.ok,
+        FooterTone::Violet => app.theme.tokens.tone.violet,
     }
 }

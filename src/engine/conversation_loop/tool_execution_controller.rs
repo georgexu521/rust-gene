@@ -59,6 +59,20 @@ use runtime_context::{
     unix_time_millis, ToolRuntimeContext, ToolRuntimeContextInput, ToolRuntimeTiming,
 };
 
+fn persist_tool_outcome_learning_event_background(
+    store: Option<Arc<crate::session_store::SessionStore>>,
+    session_id: String,
+    tool_call: ToolCall,
+    result: ToolResult,
+) {
+    let Some(store) = store else {
+        return;
+    };
+    tokio::task::spawn_blocking(move || {
+        persist_tool_outcome_learning_event(Some(&store), &session_id, &tool_call, &result);
+    });
+}
+
 pub(super) struct ToolExecutionRequest<'a> {
     pub(super) tool_calls: &'a [ToolCall],
     pub(super) parent_assistant_content: &'a str,
@@ -277,11 +291,11 @@ impl ToolExecutionController {
 
         while let Some((order, (tc, result))) = readonly_stream.next().await {
             lifecycle.completed(&tc, &result);
-            persist_tool_outcome_learning_event(
-                execution.session_store.as_ref(),
-                &execution.session_id,
-                &tc,
-                &result,
+            persist_tool_outcome_learning_event_background(
+                execution.session_store.clone(),
+                execution.session_id.clone(),
+                tc.clone(),
+                result.clone(),
             );
             if let Some(tx) = tx {
                 let result_content = ToolResultNormalizer::normalize(&tc, &result).ui_content;
@@ -326,11 +340,11 @@ impl ToolExecutionController {
                     .runtime_context
                     .attach_action_decision(&tc, &mut result);
                 record_tool_observation(exec_context.trace, &tc, &result);
-                persist_tool_outcome_learning_event(
-                    execution.session_store.as_ref(),
-                    &execution.session_id,
-                    &tc,
-                    &result,
+                persist_tool_outcome_learning_event_background(
+                    execution.session_store.clone(),
+                    execution.session_id.clone(),
+                    tc.clone(),
+                    result.clone(),
                 );
                 persist_session_job_if_shell(
                     execution.session_store.as_ref(),
@@ -576,8 +590,8 @@ impl ToolExecutionController {
             }
             if let Some(ref trace) = exec_context.trace {
                 trace.record(TraceEvent::ToolCompleted {
-                    tool: tool_name,
-                    call_id: tool_id,
+                    tool: tool_name.clone(),
+                    call_id: tool_id.clone(),
                     success: result.success,
                     duration_ms: result.duration_ms,
                     output_chars: result.content.chars().count(),
@@ -593,11 +607,11 @@ impl ToolExecutionController {
             } else {
                 lifecycle.completed(&tc, &result);
             }
-            persist_tool_outcome_learning_event(
-                execution.session_store.as_ref(),
-                &execution.session_id,
-                &tc,
-                &result,
+            persist_tool_outcome_learning_event_background(
+                execution.session_store.clone(),
+                execution.session_id.clone(),
+                tc.clone(),
+                result.clone(),
             );
             results.push((tc, result));
         }
@@ -689,6 +703,7 @@ impl ToolExecutionController {
                         results.extend(parallel_results);
                     }
                     let storm_result = crate::tools::ToolResult::error(reason);
+                    emit_denied_tool_events(tx, tc, &storm_result).await;
                     results.push((tc.clone(), storm_result));
                     scheduled_count += 1;
                     continue;
@@ -706,13 +721,14 @@ impl ToolExecutionController {
                             .await;
                         results.extend(parallel_results);
                     }
-                    persist_tool_outcome_learning_event(
-                        execution.session_store.as_ref(),
-                        &execution.session_id,
-                        tc,
-                        &result,
+                    persist_tool_outcome_learning_event_background(
+                        execution.session_store.clone(),
+                        execution.session_id.clone(),
+                        tc.clone(),
+                        result.clone(),
                     );
                     lifecycle.denied(tc);
+                    emit_denied_tool_events(tx, tc, &result).await;
                     results.push((tc.clone(), result));
                     scheduled_count += 1;
                     continue;
@@ -738,11 +754,11 @@ impl ToolExecutionController {
                     runtime_context.attach(&mut pre_result, true, true, None);
                     runtime_context.attach_action_decision(tc, &mut pre_result);
                     record_tool_observation(&trace, tc, &pre_result);
-                    persist_tool_outcome_learning_event(
-                        execution.session_store.as_ref(),
-                        &execution.session_id,
-                        tc,
-                        &pre_result,
+                    persist_tool_outcome_learning_event_background(
+                        execution.session_store.clone(),
+                        execution.session_id.clone(),
+                        tc.clone(),
+                        pre_result.clone(),
                     );
                     if let Some(ref trace) = trace {
                         trace.record(TraceEvent::ToolStarted {
@@ -891,6 +907,32 @@ fn tool_completion_metadata(result: &ToolResult) -> Option<serde_json::Value> {
         object.insert("tool_observation".to_string(), observation.clone());
     }
     Some(metadata)
+}
+
+async fn emit_denied_tool_events(
+    tx: Option<&mpsc::Sender<StreamEvent>>,
+    tool_call: &ToolCall,
+    result: &ToolResult,
+) {
+    let Some(tx) = tx else {
+        return;
+    };
+    let _ = tx
+        .send(StreamEvent::ToolExecutionStart {
+            id: tool_call.id.clone(),
+            name: tool_call.name.clone(),
+            metadata: tool_execution_start_metadata(&tool_call.name, &tool_call.arguments),
+        })
+        .await;
+    let result_content = ToolResultNormalizer::normalize(tool_call, result).ui_content;
+    let _ = tx
+        .send(StreamEvent::ToolExecutionComplete {
+            id: tool_call.id.clone(),
+            result: result_content,
+            metadata: tool_completion_metadata(result),
+            result_data: result.data.clone(),
+        })
+        .await;
 }
 
 fn tool_execution_start_metadata(

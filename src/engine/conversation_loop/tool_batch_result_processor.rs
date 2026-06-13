@@ -8,11 +8,13 @@ use super::validation_runner::RequiredValidationController;
 use super::workflow_change_tracker::WorkflowChangeTracker;
 use super::ConversationLoop;
 use crate::engine::destructive_scope::DestructiveScopeContract;
+use crate::engine::streaming::StreamEvent;
 use crate::engine::task_context::{AgentTaskMode, TaskContextBundle};
 use crate::engine::trace::{TraceCollector, TraceEvent};
 use crate::services::api::{Message, ToolCall};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use tokio::sync::mpsc;
 
 pub(super) struct ToolBatchProcessingContext<'a> {
     pub(super) tool_calls: &'a [ToolCall],
@@ -34,6 +36,7 @@ pub(super) struct ToolBatchProcessingContext<'a> {
     pub(super) destructive_scope: &'a DestructiveScopeContract,
     pub(super) baseline_git_status_files: &'a HashSet<PathBuf>,
     pub(super) store: Option<&'a crate::session_store::SessionStore>,
+    pub(super) tx: Option<&'a mpsc::Sender<StreamEvent>>,
 }
 
 pub(super) struct ToolBatchProcessingOutcome {
@@ -78,6 +81,7 @@ impl ToolBatchResultProcessor {
             destructive_scope,
             baseline_git_status_files,
             store,
+            tx,
         } = context;
 
         let mut outcome = ToolBatchProcessingOutcome {
@@ -120,6 +124,13 @@ impl ToolBatchResultProcessor {
                 },
             )
             .await;
+            if let Some(tx) = tx {
+                let _ = tx
+                    .send(StreamEvent::ToolResultsReadyForModel {
+                        ids: vec![tc.id.clone()],
+                    })
+                    .await;
+            }
 
             if is_programming_workflow {
                 Self::append_companion_context_note(
@@ -510,6 +521,7 @@ mod tests {
             destructive_scope: &destructive_scope,
             baseline_git_status_files: &baseline,
             store: None,
+            tx: None,
         })
         .await;
 
@@ -572,6 +584,7 @@ mod tests {
             destructive_scope: &destructive_scope,
             baseline_git_status_files: &baseline,
             store: None,
+            tx: None,
         })
         .await;
 
@@ -634,6 +647,7 @@ mod tests {
             destructive_scope: &destructive_scope,
             baseline_git_status_files: &baseline,
             store: None,
+            tx: None,
         })
         .await;
 
@@ -700,6 +714,7 @@ mod tests {
             destructive_scope: &destructive_scope,
             baseline_git_status_files: &baseline,
             store: None,
+            tx: None,
         })
         .await;
         assert!(first_outcome
@@ -736,6 +751,7 @@ mod tests {
             destructive_scope: &destructive_scope,
             baseline_git_status_files: &baseline,
             store: None,
+            tx: None,
         })
         .await;
 
@@ -800,6 +816,7 @@ mod tests {
             destructive_scope: &destructive_scope,
             baseline_git_status_files: &baseline,
             store: None,
+            tx: None,
         })
         .await;
 
@@ -875,6 +892,7 @@ mod tests {
             destructive_scope: &destructive_scope,
             baseline_git_status_files: &baseline,
             store: None,
+            tx: None,
         })
         .await;
 

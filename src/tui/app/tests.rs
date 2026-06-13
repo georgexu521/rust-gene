@@ -1,6 +1,8 @@
 use super::*;
 use crate::engine::human_review::PermissionReviewDecision;
-use crate::engine::runtime_facade::{ProviderPhase, ProviderRequestLifecycle};
+use crate::engine::runtime_facade::{
+    ProviderPhase, ProviderRequestLifecycle, ToolTurnPhase, ToolTurnSnapshot,
+};
 use crate::services::api::{
     ChatRequest as LlmChatRequest, ChatResponse as LlmChatResponse, LlmProvider, Usage,
 };
@@ -63,10 +65,236 @@ fn render_command_palette_text(app: &TuiApp) -> String {
 #[test]
 fn test_cli_app_new() {
     let app = TuiApp::new();
-    assert_eq!(app.messages.len(), 1); // 欢迎消息
+    assert_eq!(app.messages.len(), 0); // no welcome message
     assert!(!app.is_querying);
     assert!(!app.paused);
     assert!(!app.focus_mode);
+}
+
+#[tokio::test]
+async fn cancel_active_run_interrupts_query_and_marks_tool_cancelled() {
+    let mut app = TuiApp::new();
+    app.is_querying = true;
+    app.stream_started_at = Some(std::time::Instant::now());
+    app.current_tool_anchor_id = Some("msg_0".to_string());
+    app.messages.push(MessageItem {
+        id: "msg_0".to_string(),
+        role: MessageRole::User,
+        content: "run pwd".to_string(),
+        timestamp: std::time::SystemTime::now(),
+        metadata: Default::default(),
+    });
+    app.messages.push(MessageItem {
+        id: "msg_1".to_string(),
+        role: MessageRole::Assistant,
+        content: String::new(),
+        timestamp: std::time::SystemTime::now(),
+        metadata: Default::default(),
+    });
+    {
+        let mut runs = app.tool_runs.lock().await;
+        runs.push(ToolRunView::new("call_1".to_string(), "bash".to_string()));
+    }
+
+    assert!(app.cancel_active_run("Run interrupted").await);
+
+    assert!(!app.is_querying);
+    assert!(app.stream_started_at.is_none());
+    assert!(app.current_tool_anchor_id.is_none());
+    assert!(app.messages[1].content.contains("Cancelled"));
+    assert_eq!(app.tool_runs_snapshot[0].status, ToolRunStatus::Cancelled);
+    assert_eq!(
+        app.tool_runs_by_message_id["msg_0"][0].status,
+        ToolRunStatus::Cancelled
+    );
+}
+
+#[tokio::test]
+async fn timeout_active_run_finishes_query_and_marks_tool_failed() {
+    let mut app = TuiApp::new();
+    app.is_querying = true;
+    app.stream_started_at = Some(std::time::Instant::now());
+    app.current_tool_anchor_id = Some("msg_0".to_string());
+    app.messages.push(MessageItem {
+        id: "msg_0".to_string(),
+        role: MessageRole::User,
+        content: "run pwd".to_string(),
+        timestamp: std::time::SystemTime::now(),
+        metadata: Default::default(),
+    });
+    app.messages.push(MessageItem {
+        id: "msg_1".to_string(),
+        role: MessageRole::Assistant,
+        content: String::new(),
+        timestamp: std::time::SystemTime::now(),
+        metadata: Default::default(),
+    });
+    {
+        let mut runs = app.tool_runs.lock().await;
+        runs.push(ToolRunView::new("call_1".to_string(), "bash".to_string()));
+    }
+
+    assert!(
+        app.timeout_active_run("provider request timed out after 120.0s")
+            .await
+    );
+
+    assert!(!app.is_querying);
+    assert!(app.stream_started_at.is_none());
+    assert!(app.current_tool_anchor_id.is_none());
+    assert_eq!(
+        app.messages[1].content,
+        "[Error: provider request timed out after 120.0s]"
+    );
+    assert_eq!(app.tool_runs_snapshot[0].status, ToolRunStatus::Failed);
+    assert!(app.tool_runs_snapshot[0]
+        .result_body
+        .as_deref()
+        .is_some_and(|result| result.contains("provider request timed out")));
+}
+
+#[test]
+fn timeout_active_run_immediate_writes_visible_error_without_await() {
+    let mut app = TuiApp::new();
+    app.is_querying = true;
+    app.stream_started_at = Some(std::time::Instant::now());
+    app.messages.push(MessageItem {
+        id: "msg_1".to_string(),
+        role: MessageRole::Assistant,
+        content: String::new(),
+        timestamp: std::time::SystemTime::now(),
+        metadata: Default::default(),
+    });
+
+    assert!(app.timeout_active_run_immediate("provider request timed out after 30.0s"));
+
+    assert!(!app.is_querying);
+    assert!(app.stream_started_at.is_none());
+    assert_eq!(
+        app.messages[0].content,
+        "[Error: provider request timed out after 30.0s]"
+    );
+}
+
+#[tokio::test]
+async fn refresh_response_times_out_stale_provider_wait() {
+    let mut app = TuiApp::new();
+    app.is_querying = true;
+    app.stream_started_at = Some(std::time::Instant::now() - std::time::Duration::from_secs(3));
+    app.runtime_facade_state
+        .process_diagnostic(&serde_json::json!({
+            "schema": "api_request_stage.v1",
+            "stage": "api_request_started",
+            "provider_family": "deepseek",
+            "model": "deepseek-v4-flash",
+            "timeout_ms": 1_000
+        }))
+        .await;
+    app.messages.push(MessageItem {
+        id: "msg_1".to_string(),
+        role: MessageRole::Assistant,
+        content: String::new(),
+        timestamp: std::time::SystemTime::now(),
+        metadata: Default::default(),
+    });
+
+    app.refresh_response().await;
+
+    assert!(!app.is_querying);
+    assert_eq!(
+        app.messages[0].content,
+        "[Error: provider request timed out after 1.0s]"
+    );
+}
+
+#[test]
+fn provider_watchdog_honors_explicit_shorter_timeout() {
+    let mut guard = crate::test_utils::env_guard::EnvVarGuard::acquire_blocking();
+    guard.set("PRIORITY_AGENT_LLM_REQUEST_TIMEOUT_SECS", "30");
+
+    let mut app = TuiApp::new();
+    app.is_querying = true;
+    app.stream_started_at = Some(std::time::Instant::now() - std::time::Duration::from_secs(31));
+    app.facade_snapshot.provider_request.phase = ProviderPhase::SlowWarning;
+    app.facade_snapshot.provider_request.provider_family = Some("deepseek".to_string());
+    app.facade_snapshot.provider_request.model = Some("deepseek-v4-flash".to_string());
+    app.facade_snapshot.provider_request.timeout_ms = 120_000;
+    app.facade_snapshot.provider_request.elapsed_ms = 31_000;
+
+    let reason = app
+        .provider_wait_timeout_reason()
+        .expect("provider wait should time out");
+
+    assert_eq!(reason, "provider request timed out after 30.0s");
+}
+
+#[test]
+fn provider_watchdog_times_out_query_when_provider_phase_is_lost() {
+    let mut guard = crate::test_utils::env_guard::EnvVarGuard::acquire_blocking();
+    guard.set("PRIORITY_AGENT_LLM_REQUEST_TIMEOUT_SECS", "30");
+
+    let mut app = TuiApp::new();
+    app.is_querying = true;
+    app.stream_started_at = Some(std::time::Instant::now() - std::time::Duration::from_secs(31));
+    app.facade_snapshot.provider_request.provider_family = Some("deepseek".to_string());
+    app.facade_snapshot.provider_request.model = Some("deepseek-v4-flash".to_string());
+    app.facade_snapshot.provider_request.timeout_ms = 120_000;
+
+    let reason = app
+        .provider_wait_timeout_reason()
+        .expect("stale query should still time out");
+
+    assert_eq!(reason, "provider request timed out after 30.0s");
+}
+
+#[test]
+fn provider_watchdog_ignores_queued_tool_placeholder() {
+    let mut guard = crate::test_utils::env_guard::EnvVarGuard::acquire_blocking();
+    guard.set("PRIORITY_AGENT_LLM_REQUEST_TIMEOUT_SECS", "30");
+
+    let mut app = TuiApp::new();
+    app.is_querying = true;
+    app.stream_started_at = Some(std::time::Instant::now() - std::time::Duration::from_secs(31));
+    app.tool_runs_snapshot
+        .push(ToolRunView::new("queued".to_string(), "bash".to_string()));
+
+    let reason = app
+        .provider_wait_timeout_reason()
+        .expect("queued tool placeholder must not block provider timeout");
+
+    assert_eq!(reason, "provider request timed out after 30.0s");
+}
+
+#[test]
+fn provider_watchdog_times_out_post_tool_result_stall() {
+    let mut guard = crate::test_utils::env_guard::EnvVarGuard::acquire_blocking();
+    guard.set("PRIORITY_AGENT_LLM_REQUEST_TIMEOUT_SECS", "30");
+
+    let mut app = TuiApp::new();
+    app.is_querying = true;
+    app.stream_started_at = Some(std::time::Instant::now() - std::time::Duration::from_secs(31));
+    app.facade_snapshot.provider_request.phase = ProviderPhase::Completed;
+    app.facade_snapshot.provider_request.provider_family = Some("deepseek".to_string());
+    app.facade_snapshot.provider_request.model = Some("deepseek-v4-flash".to_string());
+    app.facade_snapshot.provider_request.timeout_ms = 120_000;
+    app.facade_snapshot.tool_turns.push(ToolTurnSnapshot {
+        id: "call_1".to_string(),
+        name: "bash".to_string(),
+        parent_message_id: Some("user_1".to_string()),
+        phase: ToolTurnPhase::ResultObserved,
+        arguments_preview: None,
+        result_preview: Some("Result: OK".to_string()),
+        failure: None,
+    });
+
+    let reason = app
+        .provider_wait_timeout_reason()
+        .expect("post-tool result stall should time out");
+
+    assert_eq!(
+        reason,
+        "tool turn stalled after result observation for 30.0s"
+    );
 }
 
 #[test]
@@ -335,11 +563,216 @@ fn test_long_paste_uses_placeholder_and_expands() {
     app.insert_paste(pasted.clone());
 
     assert_eq!(app.pasted_block_count(), 1);
+    assert_eq!(
+        app.pasted_block_summaries(),
+        vec!["20 lines / 149 chars".to_string()]
+    );
     assert!(app.input.value().contains("[[paste:1 20 lines"));
+    assert!(app.open_paste_viewer(None));
+    assert_eq!(app.mode, AppMode::ToolViewer);
+    assert!(app.tool_viewer_title.contains("Paste 1"));
+    assert!(app.tool_viewer_content.contains("line 19"));
     assert_eq!(
         app.expand_paste_placeholders(app.input.value()),
         format!("please inspect {}", pasted)
     );
+}
+
+#[test]
+fn test_composer_attachments_add_remove_and_clear() {
+    let mut app = TuiApp::new();
+
+    let added = app.attach_context_path("Cargo.toml").unwrap();
+    assert!(added.contains("Attached context: Cargo.toml"));
+    assert_eq!(app.composer_attachment_count(), 1);
+    let summaries = app.composer_attachment_summaries();
+    assert_eq!(summaries.len(), 1);
+    assert!(summaries[0].contains("[1] Cargo.toml"));
+    assert!(summaries[0].contains("(file,"));
+
+    let duplicate = app.attach_context_path("Cargo.toml").unwrap();
+    assert!(duplicate.contains("Already attached"));
+    assert_eq!(app.composer_attachment_count(), 1);
+
+    assert_eq!(
+        app.remove_composer_attachment(1).as_deref(),
+        Some("Cargo.toml")
+    );
+    assert_eq!(app.composer_attachment_count(), 0);
+
+    app.attach_context_path("Cargo.toml").unwrap();
+    assert_eq!(app.clear_composer_attachments(), 1);
+    assert_eq!(app.composer_attachment_count(), 0);
+}
+
+#[test]
+fn test_attachment_preview_opens_tool_viewer_for_file_and_dir() {
+    let root = std::env::temp_dir().join(format!(
+        "priority-agent-attachment-preview-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::write(root.join("note.txt"), "preview body").unwrap();
+
+    let mut app = TuiApp::new();
+    app.attach_context_path(root.join("note.txt").to_str().unwrap())
+        .unwrap();
+    app.attach_context_path(root.to_str().unwrap()).unwrap();
+
+    assert!(app.open_attachment_viewer(Some(1)));
+    assert_eq!(app.mode, AppMode::ToolViewer);
+    assert!(app.tool_viewer_title.contains("Attachment 1"));
+    assert!(app.tool_viewer_content.contains("preview body"));
+
+    app.mode = AppMode::Chat;
+    assert!(app.open_attachment_viewer(Some(2)));
+    assert!(app.tool_viewer_title.contains("Attachment 2"));
+    assert!(app.tool_viewer_content.contains("Directory:"));
+    assert!(app.tool_viewer_content.contains("note.txt"));
+
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[tokio::test]
+async fn test_submit_message_injects_and_clears_composer_attachments() {
+    let mut app = TuiApp::new();
+    app.attach_context_path("Cargo.toml").unwrap();
+    app.input.insert_str("explain this config");
+
+    app.submit_message().await;
+
+    let user_message = app
+        .messages
+        .iter()
+        .find(|msg| msg.role == MessageRole::User)
+        .expect("user message should be recorded");
+    assert!(user_message.content.contains("Attached context:"));
+    assert!(user_message.content.contains("- Cargo.toml"));
+    assert!(user_message
+        .content
+        .contains("User request:\nexplain this config"));
+    assert_eq!(app.composer_attachment_count(), 0);
+}
+
+#[tokio::test]
+async fn test_attach_slash_updates_composer_attachments() {
+    let mut app = TuiApp::new();
+    app.input.insert_str("/attach Cargo.toml");
+
+    app.submit_message().await;
+
+    assert_eq!(app.composer_attachment_count(), 1);
+    assert_eq!(app.composer_attachments[0], "Cargo.toml");
+    let system_message = app
+        .messages
+        .iter()
+        .rev()
+        .find(|msg| msg.role == MessageRole::System)
+        .expect("slash response should be recorded as system message");
+    assert!(system_message.content.contains("Attached context"));
+
+    app.input.insert_str("/attach list");
+    app.submit_message().await;
+
+    let list_message = app
+        .messages
+        .iter()
+        .rev()
+        .find(|msg| msg.role == MessageRole::System)
+        .expect("slash list response should be recorded");
+    assert!(list_message.content.contains("[1] Cargo.toml"));
+    assert!(list_message.content.contains("(file,"));
+    assert!(list_message.content.contains("preview:/attach preview <n>"));
+    assert!(list_message.content.contains("remove:/attach remove <n>"));
+}
+
+#[tokio::test]
+async fn test_attach_preview_slash_opens_attachment_viewer() {
+    let root = std::env::temp_dir().join(format!(
+        "priority-agent-attach-preview-slash-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::write(root.join("note.txt"), "slash preview").unwrap();
+
+    let mut app = TuiApp::new();
+    app.attach_context_path(root.join("note.txt").to_str().unwrap())
+        .unwrap();
+    app.input.insert_str("/attach preview 1");
+
+    app.submit_message().await;
+
+    assert_eq!(app.mode, AppMode::ToolViewer);
+    assert!(app.tool_viewer_content.contains("slash preview"));
+
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[tokio::test]
+async fn test_attach_browse_slash_opens_file_picker() {
+    let mut app = TuiApp::new();
+    app.input.insert_str("/attach browse .");
+
+    app.submit_message().await;
+
+    assert_eq!(app.mode, AppMode::FilePicker);
+    assert!(app.file_picker_state.is_some());
+}
+
+#[test]
+fn test_file_picker_attaches_selected_file() {
+    let root =
+        std::env::temp_dir().join(format!("priority-agent-file-picker-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::write(root.join("note.txt"), "hello").unwrap();
+
+    let mut app = TuiApp::new();
+    let opened = app.open_composer_file_picker(Some(root.to_str().unwrap()));
+    assert!(opened.contains("File picker opened"));
+    assert_eq!(app.mode, AppMode::FilePicker);
+
+    app.file_picker_next();
+    let attached = app.accept_file_picker_selection();
+
+    assert!(attached.contains("Attached context"));
+    assert_eq!(app.mode, AppMode::Chat);
+    assert_eq!(app.composer_attachment_count(), 1);
+    assert!(app.composer_attachments[0].ends_with("note.txt"));
+
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn test_file_picker_filter_methods_update_selection() {
+    let root = std::env::temp_dir().join(format!(
+        "priority-agent-file-picker-filter-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::write(root.join("alpha.rs"), "a").unwrap();
+    std::fs::write(root.join("beta.rs"), "b").unwrap();
+
+    let mut app = TuiApp::new();
+    app.open_composer_file_picker(Some(root.to_str().unwrap()));
+    app.start_file_picker_filter();
+    app.push_file_picker_filter_char('a');
+    app.push_file_picker_filter_char('l');
+
+    let state = app.file_picker_state.as_ref().unwrap();
+    assert_eq!(state.filter_query(), "al");
+    assert!(state.selected_path().unwrap().ends_with("alpha.rs"));
+
+    app.pop_file_picker_filter_char();
+    assert_eq!(app.file_picker_state.as_ref().unwrap().filter_query(), "a");
+    app.clear_file_picker_filter();
+    assert_eq!(app.file_picker_state.as_ref().unwrap().filter_query(), "");
+    assert!(!app.file_picker_filtering);
+
+    let _ = std::fs::remove_dir_all(&root);
 }
 
 #[tokio::test]
@@ -375,7 +808,7 @@ async fn test_command_palette_accept_executes_no_arg_command() {
         .recent_palette_commands
         .iter()
         .any(|cmd| cmd == "/status"));
-    assert!(app.messages.len() > 1);
+    assert!(!app.messages.is_empty());
 }
 
 #[test]
@@ -436,20 +869,6 @@ fn test_provider_select_empty_filter_returns_no_choices() {
 }
 
 #[test]
-fn test_workspace_entries_preview_summarizes_top_level_entries() {
-    let dir = tempfile::tempdir().unwrap();
-    std::fs::create_dir(dir.path().join("src")).unwrap();
-    std::fs::write(dir.path().join("Cargo.toml"), "[package]\n").unwrap();
-
-    let preview = workspace_entries_preview(dir.path());
-
-    assert!(preview.contains("1 dirs"));
-    assert!(preview.contains("1 files"));
-    assert!(preview.contains("src/"));
-    assert!(preview.contains("Cargo.toml"));
-}
-
-#[test]
 fn test_contextual_palette_prioritizes_pending_permission_actions() {
     let mut app = TuiApp::new();
     app.pending_permission_request = Some(crate::engine::conversation_loop::ToolApprovalRequest {
@@ -489,6 +908,361 @@ fn test_contextual_palette_includes_session_actions_after_chat() {
     assert!(commands.iter().any(|command| command == "/search"));
     assert!(commands.iter().any(|command| command == "/session"));
     assert!(commands.iter().any(|command| command == "/export"));
+}
+
+#[test]
+fn test_prompt_history_and_stash_contextual_palette() {
+    let mut app = TuiApp::new();
+    app.history.push_back("first prompt".to_string());
+    app.input.set_value("draft prompt".to_string());
+
+    let commands = app.contextual_palette_commands();
+
+    assert!(commands.contains(&"/prompt-history".to_string()));
+    assert!(commands.contains(&"/prompt-stash".to_string()));
+}
+
+#[test]
+fn test_prompt_stash_save_restore_and_clear() {
+    let mut app = TuiApp::new();
+    app.input.set_value("draft prompt".to_string());
+
+    assert!(app.save_prompt_stash_from_input());
+    assert!(app.input.value().is_empty());
+    assert_eq!(app.prompt_stash_summary().as_deref(), Some("draft prompt"));
+
+    assert!(app.restore_prompt_stash_to_input());
+    assert_eq!(app.input.value(), "draft prompt");
+    assert!(app.prompt_stash.is_none());
+
+    app.input.set_value("second draft".to_string());
+    assert!(app.save_prompt_stash_from_input());
+    assert!(app.clear_prompt_stash());
+    assert!(app.prompt_stash.is_none());
+}
+
+#[test]
+fn test_jump_to_failed_and_edit_timeline_items() {
+    let mut app = TuiApp::new();
+    let first_user = MessageItem {
+        id: "user_1".to_string(),
+        role: MessageRole::User,
+        content: "first".to_string(),
+        timestamp: std::time::SystemTime::UNIX_EPOCH,
+        metadata: Default::default(),
+    };
+    let second_user = MessageItem {
+        id: "user_2".to_string(),
+        role: MessageRole::User,
+        content: "second".to_string(),
+        timestamp: std::time::SystemTime::UNIX_EPOCH,
+        metadata: Default::default(),
+    };
+    app.messages.push(first_user.clone());
+    app.messages.push(MessageItem {
+        id: "assistant_1".to_string(),
+        role: MessageRole::Assistant,
+        content: "reply".to_string(),
+        timestamp: std::time::SystemTime::UNIX_EPOCH,
+        metadata: Default::default(),
+    });
+    app.messages.push(second_user.clone());
+
+    let mut failed = ToolRunView::new("tool_failed".to_string(), "bash".to_string());
+    failed.mark_complete("Result: ERROR\nfailed".to_string());
+    app.tool_runs_by_message_id
+        .insert(first_user.id.clone(), vec![failed]);
+
+    let mut edit = ToolRunView::new("tool_edit".to_string(), "file_edit".to_string());
+    edit.mark_complete("Result: OK\nchanged".to_string());
+    app.tool_runs_by_message_id
+        .insert(second_user.id.clone(), vec![edit]);
+
+    let failed_result = app.jump_to_timeline_target("failed");
+    assert!(failed_result.contains("failed"));
+    assert_eq!(app.scroll_offset, 1);
+    assert!(!app.pinned_to_bottom);
+
+    let edit_result = app.jump_to_timeline_target("edit");
+    assert!(edit_result.contains("edit"));
+    assert_eq!(app.scroll_offset, 4);
+}
+
+#[test]
+fn test_scroll_down_uses_timeline_item_count_with_tool_groups() {
+    let mut app = TuiApp::new();
+    let user = MessageItem {
+        id: "user_1".to_string(),
+        role: MessageRole::User,
+        content: "run tests".to_string(),
+        timestamp: std::time::SystemTime::UNIX_EPOCH,
+        metadata: Default::default(),
+    };
+    app.messages.push(user.clone());
+    app.messages.push(MessageItem {
+        id: "assistant_1".to_string(),
+        role: MessageRole::Assistant,
+        content: "done".to_string(),
+        timestamp: std::time::SystemTime::UNIX_EPOCH,
+        metadata: Default::default(),
+    });
+    app.tool_runs_by_message_id.insert(
+        user.id.clone(),
+        vec![ToolRunView::new("tool_1".to_string(), "bash".to_string())],
+    );
+
+    assert_eq!(app.timeline_item_count(), 3);
+
+    app.scroll_offset = 2;
+    app.pinned_to_bottom = false;
+    app.scroll_down();
+
+    assert_eq!(app.scroll_offset, 3);
+    assert!(app.pinned_to_bottom);
+    assert!(app.scroll_anchor_id.is_none());
+}
+
+#[test]
+fn test_sync_tool_runs_from_spine_adds_missing_transcript_row() {
+    let mut app = TuiApp::new();
+    app.facade_snapshot.tool_turns.push(ToolTurnSnapshot {
+        id: "tool_1".to_string(),
+        name: "bash".to_string(),
+        parent_message_id: Some("user_1".to_string()),
+        phase: ToolTurnPhase::ResultObserved,
+        arguments_preview: Some(r#"{"command":"pwd"}"#.to_string()),
+        result_preview: Some("/Users/georgexu/Desktop/rust-agent".to_string()),
+        failure: None,
+    });
+
+    app.sync_tool_runs_from_spine_snapshot();
+
+    let runs = app
+        .tool_runs_by_message_id
+        .get("user_1")
+        .expect("spine-backed tool run should be inserted");
+    assert_eq!(runs.len(), 1);
+    assert_eq!(runs[0].name, "bash");
+    assert_eq!(runs[0].status, ToolRunStatus::Completed);
+    assert_eq!(
+        runs[0]
+            .arguments
+            .as_ref()
+            .and_then(|args| args.get("command"))
+            .and_then(serde_json::Value::as_str),
+        Some("pwd")
+    );
+    assert!(runs[0]
+        .result_preview
+        .as_deref()
+        .unwrap_or_default()
+        .contains("rust-agent"));
+}
+
+#[test]
+fn test_persisted_final_answer_matches_current_user_turn() {
+    let messages = vec![
+        MessageItem {
+            id: "user_old".to_string(),
+            role: MessageRole::User,
+            content: "old".to_string(),
+            timestamp: std::time::SystemTime::UNIX_EPOCH,
+            metadata: Default::default(),
+        },
+        MessageItem {
+            id: "assistant_old".to_string(),
+            role: MessageRole::Assistant,
+            content: "old answer".to_string(),
+            timestamp: std::time::SystemTime::UNIX_EPOCH,
+            metadata: Default::default(),
+        },
+        MessageItem {
+            id: "user_new".to_string(),
+            role: MessageRole::User,
+            content: "run pwd".to_string(),
+            timestamp: std::time::SystemTime::UNIX_EPOCH,
+            metadata: Default::default(),
+        },
+        MessageItem {
+            id: "assistant_new".to_string(),
+            role: MessageRole::Assistant,
+            content: "pwd output".to_string(),
+            timestamp: std::time::SystemTime::UNIX_EPOCH,
+            metadata: Default::default(),
+        },
+    ];
+
+    assert_eq!(
+        persisted_final_answer_for_user(&messages, "run pwd").as_deref(),
+        Some("pwd output")
+    );
+    assert_eq!(
+        persisted_final_answer_for_user(&messages, "missing").as_deref(),
+        Some("pwd output")
+    );
+    let error_messages = vec![
+        MessageItem {
+            id: "user_1".to_string(),
+            role: MessageRole::User,
+            content: "run pwd".to_string(),
+            timestamp: std::time::SystemTime::UNIX_EPOCH,
+            metadata: Default::default(),
+        },
+        MessageItem {
+            id: "assistant_error".to_string(),
+            role: MessageRole::Assistant,
+            content: "[Error: timed out]".to_string(),
+            timestamp: std::time::SystemTime::UNIX_EPOCH,
+            metadata: Default::default(),
+        },
+    ];
+    assert_eq!(
+        persisted_final_answer_for_user(&error_messages, "run pwd"),
+        None
+    );
+}
+
+#[test]
+fn test_toggle_collapse_maps_tool_group_anchor_to_parent_message() {
+    let mut app = TuiApp::new();
+    let user = MessageItem {
+        id: "user_1".to_string(),
+        role: MessageRole::User,
+        content: "inspect".to_string(),
+        timestamp: std::time::SystemTime::UNIX_EPOCH,
+        metadata: Default::default(),
+    };
+    app.messages.push(user.clone());
+    app.messages.push(MessageItem {
+        id: "assistant_1".to_string(),
+        role: MessageRole::Assistant,
+        content: "reply".to_string(),
+        timestamp: std::time::SystemTime::UNIX_EPOCH,
+        metadata: Default::default(),
+    });
+    app.tool_runs_by_message_id.insert(
+        user.id.clone(),
+        vec![ToolRunView::new(
+            "tool_1".to_string(),
+            "file_read".to_string(),
+        )],
+    );
+    app.scroll_offset = 1;
+
+    assert!(app.toggle_collapse_at_scroll_anchor());
+
+    assert!(app.collapsed_indices.contains(&0));
+    assert!(!app.collapsed_indices.contains(&1));
+}
+
+#[test]
+fn test_toggle_reasoning_uses_current_assistant_anchor() {
+    let mut app = TuiApp::new();
+    app.messages.push(MessageItem {
+        id: "user_1".to_string(),
+        role: MessageRole::User,
+        content: "question".to_string(),
+        timestamp: std::time::SystemTime::UNIX_EPOCH,
+        metadata: Default::default(),
+    });
+    app.messages.push(MessageItem {
+        id: "assistant_1".to_string(),
+        role: MessageRole::Assistant,
+        content: "<think>hidden reasoning</think>\nanswer".to_string(),
+        timestamp: std::time::SystemTime::UNIX_EPOCH,
+        metadata: Default::default(),
+    });
+    app.scroll_offset = 1;
+
+    assert!(app.toggle_reasoning_at_scroll_anchor());
+    assert_eq!(
+        app.expanded_reasoning_message_id.as_deref(),
+        Some("assistant_1")
+    );
+
+    assert!(app.toggle_reasoning_at_scroll_anchor());
+    assert!(app.expanded_reasoning_message_id.is_none());
+}
+
+#[test]
+fn test_manual_scroll_anchor_survives_inserted_timeline_items() {
+    let mut app = TuiApp::new();
+    app.messages.push(MessageItem {
+        id: "old_user_1".to_string(),
+        role: MessageRole::User,
+        content: "first".to_string(),
+        timestamp: std::time::SystemTime::UNIX_EPOCH,
+        metadata: Default::default(),
+    });
+    app.messages.push(MessageItem {
+        id: "assistant_1".to_string(),
+        role: MessageRole::Assistant,
+        content: "reply".to_string(),
+        timestamp: std::time::SystemTime::UNIX_EPOCH,
+        metadata: Default::default(),
+    });
+    app.messages.push(MessageItem {
+        id: "old_user_2".to_string(),
+        role: MessageRole::User,
+        content: "second".to_string(),
+        timestamp: std::time::SystemTime::UNIX_EPOCH,
+        metadata: Default::default(),
+    });
+
+    app.jump_to_timeline_target("user");
+    assert_eq!(app.scroll_anchor_id.as_deref(), Some("old_user_2"));
+    assert_eq!(app.current_timeline_anchor_index(), 2);
+
+    app.messages.insert(
+        0,
+        MessageItem {
+            id: "new_user".to_string(),
+            role: MessageRole::User,
+            content: "inserted".to_string(),
+            timestamp: std::time::SystemTime::UNIX_EPOCH,
+            metadata: Default::default(),
+        },
+    );
+
+    assert_eq!(app.scroll_anchor_id.as_deref(), Some("old_user_2"));
+    assert_eq!(app.current_timeline_anchor_index(), 3);
+}
+
+#[test]
+fn test_scroll_to_message_index_maps_through_timeline_tool_groups() {
+    let mut app = TuiApp::new();
+    let first_user = MessageItem {
+        id: "user_1".to_string(),
+        role: MessageRole::User,
+        content: "first".to_string(),
+        timestamp: std::time::SystemTime::UNIX_EPOCH,
+        metadata: Default::default(),
+    };
+    app.messages.push(first_user.clone());
+    app.messages.push(MessageItem {
+        id: "assistant_1".to_string(),
+        role: MessageRole::Assistant,
+        content: "reply".to_string(),
+        timestamp: std::time::SystemTime::UNIX_EPOCH,
+        metadata: Default::default(),
+    });
+    app.messages.push(MessageItem {
+        id: "user_2".to_string(),
+        role: MessageRole::User,
+        content: "second".to_string(),
+        timestamp: std::time::SystemTime::UNIX_EPOCH,
+        metadata: Default::default(),
+    });
+    app.tool_runs_by_message_id.insert(
+        first_user.id,
+        vec![ToolRunView::new("tool_1".to_string(), "bash".to_string())],
+    );
+
+    assert!(app.scroll_to_message_index(2));
+
+    assert_eq!(app.scroll_offset, 3);
+    assert_eq!(app.scroll_anchor_id.as_deref(), Some("user_2"));
+    assert!(!app.pinned_to_bottom);
 }
 
 #[test]
@@ -648,6 +1422,45 @@ fn test_cycle_expanded_tool_run_moves_through_visible_tools() {
     assert_eq!(app.expanded_tool_run_id.as_deref(), Some("tool_2"));
     app.cycle_expanded_tool_run();
     assert_eq!(app.expanded_tool_run_id, None);
+}
+
+#[test]
+fn test_visible_sidebar_sessions_filter_matches_model_and_id() {
+    let mut app = TuiApp::new();
+    app.session_manager = crate::tui::session_manager::TuiSessionManager::in_memory().unwrap();
+    let deepseek = app
+        .session_manager
+        .start_session("Work", "deepseek-v4-flash")
+        .unwrap();
+    let _other = app
+        .session_manager
+        .start_session("Other", "gpt-4o-mini")
+        .unwrap();
+
+    app.sidebar_filter = "v4-flash".to_string();
+    let sessions = app.visible_sidebar_sessions(10);
+    assert_eq!(sessions.len(), 1);
+    assert_eq!(sessions[0].id, deepseek);
+
+    app.sidebar_filter = deepseek[..8].to_string();
+    let sessions = app.visible_sidebar_sessions(10);
+    assert_eq!(sessions.len(), 1);
+    assert_eq!(sessions[0].id, deepseek);
+}
+
+#[test]
+fn test_toggle_pinned_session_list_pins_unpins_and_respects_limit() {
+    let mut pinned = Vec::new();
+
+    assert!(toggle_pinned_session_list(&mut pinned, "sess_a", 2));
+    assert_eq!(pinned, vec!["sess_a"]);
+    assert!(!toggle_pinned_session_list(&mut pinned, "sess_a", 2));
+    assert!(pinned.is_empty());
+
+    assert!(toggle_pinned_session_list(&mut pinned, "sess_a", 2));
+    assert!(toggle_pinned_session_list(&mut pinned, "sess_b", 2));
+    assert!(!toggle_pinned_session_list(&mut pinned, "sess_c", 2));
+    assert_eq!(pinned, vec!["sess_a", "sess_b"]);
 }
 
 #[test]

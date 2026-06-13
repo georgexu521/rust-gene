@@ -187,7 +187,9 @@ pub fn handle_connect(app: &mut TuiApp, args: &str) -> String {
             match crate::services::api::credentials::save_credential(&id, key) {
                 crate::services::api::credentials::CredentialSaveOutcome::Verified => {
                     let runtime_message = match app.activate_provider_runtime(&id) {
-                        Ok(model) => format!("Provider is active for this session with model {model}."),
+                        Ok(model) => {
+                            format!("Provider is active for this session with model {model}.")
+                        }
                         Err(err) => format!(
                             "Provider key was saved, but runtime activation failed: {err}.\nRestart Priority Agent or run /provider switch {id} after checking /provider status."
                         ),

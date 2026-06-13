@@ -115,7 +115,16 @@ impl ProviderCapabilities {
         } else {
             ProviderProtocolFamily::OpenAiCompatible
         };
-        Self::for_family(family)
+        let mut capabilities = Self::for_family(family);
+        if base.starts_with("test://")
+            || model.contains("test-fixture")
+            || base.contains("deepseek")
+            || model.contains("deepseek")
+        {
+            capabilities.supports_streaming_tool_calls = false;
+            capabilities.requires_nonstreaming_tool_calls = true;
+        }
+        capabilities
     }
 }
 
@@ -192,7 +201,7 @@ impl ProviderLatencyProfile {
             (ProviderProtocolFamily::MiniMax, ProviderRequestShape::NonStreamingToolCall) => {
                 (300, 90)
             }
-            (_, ProviderRequestShape::NonStreamingToolCall) => (240, 90),
+            (_, ProviderRequestShape::NonStreamingToolCall) => (120, 30),
             (_, ProviderRequestShape::FallbackNonStreaming) => (180, 60),
             (_, ProviderRequestShape::StreamingText) => (180, 45),
             (_, ProviderRequestShape::StreamingToolCall) => (180, 60),
@@ -685,6 +694,39 @@ mod tests {
             .diagnostics
             .iter()
             .any(|line| line.contains("standard OpenAI-compatible")));
+    }
+
+    #[test]
+    fn deepseek_tool_calls_use_nonstreaming_compatibility_path() {
+        let capabilities =
+            ProviderCapabilities::detect("https://api.deepseek.com", "deepseek-v4-flash");
+
+        assert_eq!(
+            capabilities.protocol_family,
+            ProviderProtocolFamily::OpenAiCompatible
+        );
+        assert!(capabilities.supports_tool_calls);
+        assert!(!capabilities.supports_streaming_tool_calls);
+        assert!(capabilities.requires_nonstreaming_tool_calls);
+
+        let facts = ProviderRuntimeFacts::from_capabilities("deepseek-v4-flash", capabilities);
+        assert!(facts
+            .diagnostics
+            .iter()
+            .any(|line| line.contains("non-streaming request path")));
+    }
+
+    #[test]
+    fn test_fixture_tool_calls_use_nonstreaming_compatibility_path() {
+        let capabilities = ProviderCapabilities::detect("test://provider", "test-fixture-model");
+
+        assert_eq!(
+            capabilities.protocol_family,
+            ProviderProtocolFamily::OpenAiCompatible
+        );
+        assert!(capabilities.supports_tool_calls);
+        assert!(!capabilities.supports_streaming_tool_calls);
+        assert!(capabilities.requires_nonstreaming_tool_calls);
     }
 
     #[test]

@@ -79,6 +79,16 @@ async fn normalize_after_execution_truncates_large_output_with_metadata() {
         normalized.structured_metadata["tool_result_context_policy"]["compaction_eligible"],
         true
     );
+    assert!(normalized
+        .observation
+        .raw_result_ref
+        .as_deref()
+        .unwrap_or_default()
+        .contains("tool-output://"));
+    assert!(!normalized
+        .observation
+        .quality_warnings
+        .contains(&"missing_truncation_artifact".to_string()));
 }
 
 #[test]
@@ -356,6 +366,42 @@ fn observes_unknown_bash_without_validation_evidence() {
     assert!(normalized
         .model_content
         .contains("not classified as validation"));
+}
+
+#[test]
+fn observes_large_successful_bash_validation_as_compact_observation() {
+    let result = ToolResult::success("x".repeat(5_000));
+    let normalized = ToolResultNormalizer::normalize(
+        &ToolCall {
+            id: "call_long".to_string(),
+            name: "bash".to_string(),
+            arguments: serde_json::json!({
+                "command": "python3 -c 'print(\"x\" * 5000)'"
+            }),
+        },
+        &result,
+    );
+
+    assert_eq!(normalized.observation.result_kind, "validation");
+    assert_eq!(
+        normalized.observation.validation_result.as_deref(),
+        Some("passed")
+    );
+    assert_eq!(normalized.context_policy.model_visibility, "observation");
+    assert!(normalized
+        .observation
+        .key_findings
+        .iter()
+        .any(|finding| finding.contains("Output was long (5000 chars)")));
+    assert!(normalized
+        .model_content
+        .contains("Observation (validation)"));
+    assert!(!normalized.model_content.contains("Raw excerpt:"));
+    assert!(
+        normalized.model_content.len() < 1_200,
+        "model-visible content should stay compact, got {} chars",
+        normalized.model_content.len()
+    );
 }
 
 #[test]

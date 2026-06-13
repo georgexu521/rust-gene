@@ -13,7 +13,7 @@ use anyhow::{bail, Context, Result};
 use async_openai::{config::OpenAIConfig, types::ChatCompletionResponseStream, Client};
 use async_trait::async_trait;
 use reqwest::StatusCode;
-use tracing::{debug, info};
+use tracing::info;
 
 /// MiniMax 客户端
 pub struct MiniMaxClient {
@@ -100,6 +100,30 @@ impl MiniMaxClient {
         let status = resp.status();
         let body = resp.text().await.ok()?;
         Some((status, body))
+    }
+
+    async fn send_chat_request(
+        &self,
+        req: &async_openai::types::CreateChatCompletionRequest,
+    ) -> Result<ChatResponse> {
+        let url = format!("{}/chat/completions", self.base_url.trim_end_matches('/'));
+        let resp = reqwest::Client::new()
+            .post(url)
+            .bearer_auth(&self.api_key)
+            .json(req)
+            .send()
+            .await?;
+        let status = resp.status();
+        let body = resp.text().await?;
+        if !status.is_success() {
+            anyhow::bail!(
+                "MiniMax chat request failed with status {} body: {}",
+                status,
+                body
+            );
+        }
+        parse_minimax_chat_response_body(&body)
+            .with_context(|| format!("failed to parse MiniMax chat response body: {body}"))
     }
 
     fn normalize_messages_for_minimax(messages: Vec<Message>) -> Vec<Message> {
@@ -216,51 +240,23 @@ fn parse_minimax_chat_response_body(body: &str) -> Result<ChatResponse> {
 impl LlmProvider for MiniMaxClient {
     async fn chat(&self, request: ChatRequest) -> Result<ChatResponse> {
         let retry_observer = request.retry_observer.clone();
-        use super::openai_compat::{
-            convert_request_for_capabilities, convert_response_for_capabilities,
-        };
+        use super::openai_compat::convert_request_for_capabilities;
         let mut request = request;
         request.messages = Self::normalize_messages_for_minimax(request.messages);
         let capabilities = ProviderCapabilities::for_family(ProviderProtocolFamily::MiniMax);
         let req = convert_request_for_capabilities(request, &self.model, capabilities);
-        let response = match ProviderRetryPolicy::from_env()
+        ProviderRetryPolicy::from_env()
             .retry_with_optional_observer(
                 "MiniMax",
                 "chat.completions",
                 || {
                     let req = req.clone();
-                    async move { self.client.chat().create(req).await }
+                    async move { self.send_chat_request(&req).await }
                 },
                 retry_observer.as_deref(),
             )
             .await
-        {
-            Ok(resp) => resp,
-            Err(e) => {
-                if let Some((status, body)) = self.fetch_error_body(&req).await {
-                    if status.is_success() {
-                        if let Ok(response) = parse_minimax_chat_response_body(&body) {
-                            debug!(
-                                "Recovered MiniMax chat response with manual parser after client error: {}",
-                                e
-                            );
-                            return Ok(response);
-                        }
-                    }
-                    anyhow::bail!(
-                        "Failed to get response from MiniMax API: {} (status {}) body: {}",
-                        e,
-                        status,
-                        body
-                    );
-                }
-                anyhow::bail!(
-                    "Failed to get response from MiniMax API: {} (error body unavailable)",
-                    e
-                );
-            }
-        };
-        convert_response_for_capabilities(response, capabilities)
+            .context("Failed to get response from MiniMax API")
     }
 
     async fn chat_stream(&self, request: ChatRequest) -> Result<ChatCompletionResponseStream> {

@@ -707,6 +707,10 @@ async fn run_turn(engine: Arc<StreamingQueryEngine>, message: String) -> anyhow:
                     println_tool_line(marker, color, &run.render_lines(false).join("\n"), true);
                 }
             }
+            StreamEvent::ToolResultsReadyForModel { .. } => {
+                show_status("Thinking...")?;
+                status_visible = true;
+            }
             StreamEvent::PermissionRequest {
                 tool_name,
                 arguments,
@@ -1195,6 +1199,7 @@ mod tests {
                 tool_calls: None,
                 tool_call_id: None,
                 reasoning: None,
+                metadata: None,
                 created_at: "now".to_string(),
             },
             MessageRecord {
@@ -1205,6 +1210,7 @@ mod tests {
                 tool_calls: None,
                 tool_call_id: None,
                 reasoning: None,
+                metadata: None,
                 created_at: "now".to_string(),
             },
         ];

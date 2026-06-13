@@ -10,6 +10,7 @@ pub struct MessageRecord {
     pub tool_calls: Option<serde_json::Value>,
     pub tool_call_id: Option<String>,
     pub reasoning: Option<String>,
+    pub metadata: Option<serde_json::Value>,
     pub created_at: String,
 }
 
@@ -19,6 +20,7 @@ pub struct MessageInsert {
     pub content: String,
     pub tool_calls: Option<serde_json::Value>,
     pub tool_call_id: Option<String>,
+    pub metadata: Option<serde_json::Value>,
 }
 
 impl From<crate::services::api::Message> for MessageInsert {
@@ -30,6 +32,7 @@ impl From<crate::services::api::Message> for MessageInsert {
                 content,
                 tool_calls: None,
                 tool_call_id: None,
+                metadata: None,
             },
             crate::services::api::Message::Assistant {
                 content,
@@ -39,6 +42,7 @@ impl From<crate::services::api::Message> for MessageInsert {
                 content,
                 tool_calls: tool_calls.map(|tc| serde_json::to_value(tc).unwrap_or_default()),
                 tool_call_id: None,
+                metadata: None,
             },
             crate::services::api::Message::Tool {
                 content,
@@ -48,6 +52,7 @@ impl From<crate::services::api::Message> for MessageInsert {
                 content,
                 tool_calls: None,
                 tool_call_id: Some(tool_call_id),
+                metadata: None,
             },
         }
     }

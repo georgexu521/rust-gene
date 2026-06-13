@@ -433,6 +433,9 @@ impl Keybindings {
                 if self.global_quit.matches(key) || self.global_quit_alt.matches(key) {
                     return AppAction::Quit;
                 }
+                if key.modifiers.is_empty() && key.code == KeyCode::Esc {
+                    return AppAction::Cancel;
+                }
                 if self.toggle_vim_mode.matches(key) {
                     return AppAction::ToggleVimMode;
                 }
@@ -451,8 +454,10 @@ impl Keybindings {
             }
             crate::tui::app::AppMode::CommandPalette
             | crate::tui::app::AppMode::ShortcutHelp
+            | crate::tui::app::AppMode::PromptHistory
             | crate::tui::app::AppMode::ModelSelect
-            | crate::tui::app::AppMode::ProviderSelect => {
+            | crate::tui::app::AppMode::ProviderSelect
+            | crate::tui::app::AppMode::FilePicker => {
                 // Overlay modes are handled directly in handle_key_event.
             }
         }
@@ -530,6 +535,13 @@ mod tests {
                 crate::tui::app::AppMode::Chat
             ),
             AppAction::Quit
+        );
+        assert_eq!(
+            kb.action_for(
+                ke(KeyCode::Esc, KeyModifiers::NONE),
+                crate::tui::app::AppMode::Chat
+            ),
+            AppAction::Cancel
         );
     }
 

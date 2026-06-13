@@ -298,6 +298,9 @@ pub enum DesktopRunEvent {
         result_preview: String,
         metadata: Option<serde_json::Value>,
     },
+    ToolResultsReadyForModel {
+        ids: Vec<String>,
+    },
     PermissionRequest {
         id: String,
         tool_name: String,
@@ -354,6 +357,7 @@ impl DesktopRunEvent {
                 result_preview: truncate_preview(&result, 2000),
                 metadata,
             },
+            StreamEvent::ToolResultsReadyForModel { ids } => Self::ToolResultsReadyForModel { ids },
             StreamEvent::ThinkingStart => Self::ThinkingStarted,
             StreamEvent::ThinkingChunk(text) => Self::ThinkingDelta { text },
             StreamEvent::ThinkingComplete => Self::ThinkingCompleted,

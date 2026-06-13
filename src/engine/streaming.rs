@@ -114,6 +114,8 @@ pub enum StreamEvent {
         /// Structured JSON data from the tool result (e.g. mutation_result).
         result_data: Option<serde_json::Value>,
     },
+    /// Tool results have been appended to the next model context.
+    ToolResultsReadyForModel { ids: Vec<String> },
     /// 思考开始（extended thinking 模型）
     ThinkingStart,
     /// 思考内容块（增量）

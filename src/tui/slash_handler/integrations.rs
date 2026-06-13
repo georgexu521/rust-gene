@@ -180,7 +180,11 @@ pub async fn handle_slack(_app: &mut TuiApp, args: &str) -> String {
         let connected = webhook.is_some();
         return format!(
             "Slack: {}\nDefault channel: {}\nUsage: /slack [status|connect <webhook_url> [channel]|disconnect|send [#channel] <message>]",
-            if connected { "connected" } else { "disconnected" },
+            if connected {
+                "connected"
+            } else {
+                "disconnected"
+            },
             prefs
                 .slack_default_channel
                 .as_deref()

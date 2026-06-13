@@ -90,6 +90,7 @@ pub struct FileBrowserState {
     flattened: Vec<FileNode>,
     list_state: ListState,
     selected_path: Option<PathBuf>,
+    filter_query: String,
 }
 
 impl FileBrowserState {
@@ -102,6 +103,7 @@ impl FileBrowserState {
             list_state: ListState::default(),
             root,
             selected_path: None,
+            filter_query: String::new(),
         };
         state.flatten();
         if !state.flattened.is_empty() {
@@ -117,7 +119,9 @@ impl FileBrowserState {
     }
 
     fn flatten_node(&mut self, node: &FileNode) {
-        self.flattened.push(node.clone());
+        if self.filter_query.is_empty() || node_matches_filter(node, &self.filter_query) {
+            self.flattened.push(node.clone());
+        }
         if node.is_expanded {
             for child in &node.children {
                 self.flatten_node(child);
@@ -131,6 +135,42 @@ impl FileBrowserState {
             .selected()
             .and_then(|i| self.flattened.get(i))
             .map(|n| &n.path)
+    }
+
+    pub fn selected_is_dir(&self) -> bool {
+        self.list_state
+            .selected()
+            .and_then(|i| self.flattened.get(i))
+            .map(|node| node.is_dir)
+            .unwrap_or(false)
+    }
+
+    pub fn filter_query(&self) -> &str {
+        &self.filter_query
+    }
+
+    pub fn set_filter_query(&mut self, query: impl Into<String>) {
+        self.filter_query = query.into();
+        self.flatten();
+        if self.flattened.is_empty() {
+            self.list_state.select(None);
+        } else {
+            self.list_state.select(Some(0));
+        }
+    }
+
+    pub fn push_filter_char(&mut self, ch: char) {
+        self.filter_query.push(ch);
+        self.set_filter_query(self.filter_query.clone());
+    }
+
+    pub fn pop_filter_char(&mut self) {
+        self.filter_query.pop();
+        self.set_filter_query(self.filter_query.clone());
+    }
+
+    pub fn clear_filter(&mut self) {
+        self.set_filter_query(String::new());
     }
 
     /// 向下移动
@@ -266,6 +306,16 @@ impl FileBrowserState {
     }
 }
 
+fn node_matches_filter(node: &FileNode, query: &str) -> bool {
+    let query = query.to_ascii_lowercase();
+    node.name.to_ascii_lowercase().contains(&query)
+        || node
+            .path
+            .to_string_lossy()
+            .to_ascii_lowercase()
+            .contains(&query)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -286,5 +336,28 @@ mod tests {
         browser.next();
         browser.prev();
         assert!(browser.selected_path().is_some());
+    }
+
+    #[test]
+    fn test_file_browser_filter_query() {
+        let root = std::env::temp_dir().join(format!(
+            "priority-agent-file-browser-filter-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("alpha.txt"), "a").unwrap();
+        std::fs::write(root.join("beta.log"), "b").unwrap();
+
+        let mut browser = FileBrowserState::new(&root);
+        browser.set_filter_query("alpha");
+
+        assert_eq!(browser.filter_query(), "alpha");
+        assert!(browser.selected_path().unwrap().ends_with("alpha.txt"));
+
+        browser.clear_filter();
+        assert!(browser.selected_path().is_some());
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

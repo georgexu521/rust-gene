@@ -99,6 +99,25 @@ mod tests {
     }
 
     #[test]
+    fn deepseek_nonstreaming_tool_call_keeps_interactive_timeout() {
+        let capabilities =
+            ProviderCapabilities::detect("https://api.deepseek.com", "deepseek-v4-flash");
+        let profile = ProviderLatencyProfile::for_request(
+            &capabilities,
+            "deepseek-v4-flash",
+            true,
+            false,
+            false,
+            5,
+            3,
+        );
+
+        assert_eq!(profile.timeout.as_secs(), 120);
+        assert_eq!(profile.slow_warning_threshold.as_secs(), 30);
+        assert!(profile.is_known_slow_path());
+    }
+
+    #[test]
     fn openai_streaming_text_gets_standard_timeout() {
         let capabilities =
             ProviderCapabilities::for_family(ProviderProtocolFamily::OpenAiCompatible);

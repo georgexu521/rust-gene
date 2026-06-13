@@ -3,12 +3,28 @@
 //! Reasonix 风格：Card header (glyph + role + metadata) + Card body
 
 use crate::state::{MessageItem, MessageRole};
-use crate::tui::components::markdown::parse_markdown;
 use ratatui::{
     style::{Color, Modifier, Style},
     text::{Line, Span, Text},
-    widgets::{Paragraph, Wrap},
+    widgets::Paragraph,
 };
+
+mod assistant;
+mod notice;
+mod reasoning;
+mod system_tool;
+mod text;
+mod user;
+
+use assistant::render_assistant_message;
+use notice::render_system_message;
+use system_tool::render_tool_message;
+use user::render_user_message;
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct MessageRenderOptions {
+    pub reasoning_expanded: bool,
+}
 
 /// Render a card header line: `glyph  ROLE  · meta`
 fn card_header(
@@ -47,21 +63,6 @@ pub struct StreamMeta {
     pub started_at: Option<std::time::Instant>,
 }
 
-/// Format relative time like Reasonix: "just now", "5s ago", "3m ago"
-fn format_relative_time(ts: std::time::SystemTime) -> String {
-    let elapsed = ts.elapsed().unwrap_or_default();
-    let secs = elapsed.as_secs();
-    if secs < 5 {
-        "just now".into()
-    } else if secs < 60 {
-        format!("{}s ago", secs)
-    } else if secs < 3600 {
-        format!("{}m ago", secs / 60)
-    } else {
-        format!("{}h ago", secs / 3600)
-    }
-}
-
 /// Detects card kind from message content for rich rendering.
 /// Uses conservative heuristics — prefers false-negative over false-positive.
 fn detect_card_kind(msg: &MessageItem) -> Option<CardKind> {
@@ -92,7 +93,8 @@ fn detect_card_kind(msg: &MessageItem) -> Option<CardKind> {
     }
 }
 
-enum CardKind {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum CardKind {
     Error,
     Warning,
     Search,
@@ -108,7 +110,9 @@ pub fn render_message<'a>(
     let kind = detect_card_kind(message);
     match message.role {
         MessageRole::User => render_user_message(message, theme),
-        MessageRole::Assistant => render_assistant_message(message, theme, None),
+        MessageRole::Assistant => {
+            render_assistant_message(message, theme, None, MessageRenderOptions::default())
+        }
         MessageRole::System => render_system_message(message, theme, kind),
         MessageRole::Tool => render_tool_message(message, theme, kind),
     }
@@ -124,174 +128,28 @@ pub fn render_message_with_stream<'a>(
     let kind = detect_card_kind(message);
     match message.role {
         MessageRole::User => render_user_message(message, theme),
-        MessageRole::Assistant => render_assistant_message(message, theme, stream),
+        MessageRole::Assistant => {
+            render_assistant_message(message, theme, stream, MessageRenderOptions::default())
+        }
         MessageRole::System => render_system_message(message, theme, kind),
         MessageRole::Tool => render_tool_message(message, theme, kind),
     }
 }
 
-fn render_user_message<'a>(
+pub fn render_message_with_options<'a>(
     message: &'a MessageItem,
-    theme: &'a crate::tui::theme::Theme,
-) -> Paragraph<'a> {
-    let card = &theme.tokens.card.user;
-    let time_str = format_relative_time(message.timestamp);
-    let mut lines = vec![card_header(
-        card.glyph,
-        "You",
-        card.color,
-        Some(time_str),
-        theme.tokens.fg.faint,
-    )];
-    lines.push(Line::from(""));
-
-    let markdown_text = parse_markdown(&message.content, theme);
-    for (i, line) in markdown_text.lines.into_iter().enumerate() {
-        let mut spans = if i == 0 {
-            vec![Span::styled("↳ ", Style::default().fg(theme.tokens.fg.sub))]
-        } else {
-            vec![Span::styled("  ", Style::default())]
-        };
-        spans.extend(line.spans);
-        lines.push(Line::from(spans));
-    }
-    Paragraph::new(Text::from(lines))
-        .wrap(Wrap { trim: true })
-        .style(Style::default().bg(theme.tokens.message_bg.user))
-}
-
-fn render_assistant_message<'a>(
-    message: &'a MessageItem,
+    _width: usize,
     theme: &'a crate::tui::theme::Theme,
     stream: Option<&StreamMeta>,
+    options: MessageRenderOptions,
 ) -> Paragraph<'a> {
-    let is_streaming = stream.map(|s| s.is_streaming).unwrap_or(false);
-    let tick = stream.map(|s| s.tick).unwrap_or(0);
-
-    // Header: pulse animation during streaming, static glyph when done
-    let (glyph, label, header_color) = if is_streaming {
-        let frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
-        (
-            frames[tick % frames.len()],
-            "Writing",
-            theme.tokens.tone.brand,
-        )
-    } else {
-        ("‹", "Reply", theme.tokens.tone.ok)
-    };
-
-    // Meta: token count + t/s rate if streaming
-    let meta = if is_streaming {
-        let tok = stream.and_then(|s| s.token_count).unwrap_or(0);
-        let tps = stream
-            .and_then(|s| s.started_at)
-            .map(|start| {
-                let elapsed = start.elapsed().as_secs_f64().max(0.5);
-                let rate = tok as f64 / elapsed;
-                format!("{} tok · {:.0} t/s", tok, rate)
-            })
-            .unwrap_or_else(|| format!("{} tok", tok));
-        Some(tps)
-    } else {
-        stream.and_then(|s| s.token_count.map(|n| format!("{} tok", n)))
-    };
-
-    // Model badge appended to meta
-    let meta = if let Some(model) = stream.and_then(|s| s.model_label.as_deref()) {
-        match meta {
-            Some(m) => Some(format!("{} · {}", m, model)),
-            None => Some(model.to_string()),
-        }
-    } else {
-        meta
-    };
-
-    let mut lines = vec![card_header(
-        glyph,
-        label,
-        header_color,
-        meta,
-        theme.tokens.fg.faint,
-    )];
-
-    let markdown_text = parse_markdown(&message.content, theme);
-    for line in markdown_text.lines {
-        let mut spans = vec![Span::styled("  ", Style::default())];
-        spans.extend(line.spans);
-        lines.push(Line::from(spans));
+    let kind = detect_card_kind(message);
+    match message.role {
+        MessageRole::User => render_user_message(message, theme),
+        MessageRole::Assistant => render_assistant_message(message, theme, stream, options),
+        MessageRole::System => render_system_message(message, theme, kind),
+        MessageRole::Tool => render_tool_message(message, theme, kind),
     }
-    Paragraph::new(Text::from(lines)).wrap(Wrap { trim: true })
-}
-
-fn render_system_message<'a>(
-    message: &'a MessageItem,
-    theme: &'a crate::tui::theme::Theme,
-    kind: Option<CardKind>,
-) -> Paragraph<'a> {
-    let (glyph, label, color) = match kind {
-        Some(CardKind::Error) => (
-            theme.tokens.card.error.glyph,
-            "Error",
-            theme.tokens.card.error.color,
-        ),
-        Some(CardKind::Warning) => (
-            theme.tokens.card.warn.glyph,
-            "Warning",
-            theme.tokens.card.warn.color,
-        ),
-        _ => (
-            theme.tokens.card.warn.glyph,
-            "System",
-            theme.tokens.card.warn.color,
-        ),
-    };
-    let mut lines = vec![
-        card_header(glyph, label, color, None, theme.tokens.fg.faint),
-        Line::from(""),
-    ];
-
-    let markdown_text = parse_markdown(&message.content, theme);
-    for line in markdown_text.lines {
-        let mut spans = vec![Span::styled("  ", Style::default())];
-        spans.extend(line.spans);
-        lines.push(Line::from(spans));
-    }
-    Paragraph::new(Text::from(lines))
-        .wrap(Wrap { trim: true })
-        .style(Style::default().add_modifier(Modifier::ITALIC))
-}
-
-fn render_tool_message<'a>(
-    message: &'a MessageItem,
-    theme: &'a crate::tui::theme::Theme,
-    kind: Option<CardKind>,
-) -> Paragraph<'a> {
-    let (glyph, label, color) = match kind {
-        Some(CardKind::Search) => (
-            theme.tokens.card.search.glyph,
-            "Search",
-            theme.tokens.card.search.color,
-        ),
-        Some(CardKind::SubAgent) => (
-            theme.tokens.card.subagent.glyph,
-            "Agent",
-            theme.tokens.card.subagent.color,
-        ),
-        _ => (
-            theme.tokens.card.tool.glyph,
-            "Tool",
-            theme.tokens.card.tool.color,
-        ),
-    };
-    let lines = vec![
-        card_header(glyph, label, color, None, theme.tokens.fg.faint),
-        Line::from(""),
-        Line::from(vec![
-            Span::styled("  ", Style::default()),
-            Span::styled(&message.content, Style::default().fg(theme.tokens.fg.faint)),
-        ]),
-    ];
-    Paragraph::new(Text::from(lines)).wrap(Wrap { trim: true })
 }
 
 /// 简化版本的消息渲染（用于紧凑显示）
@@ -345,6 +203,7 @@ pub fn role_icon(role: MessageRole) -> &'static str {
 mod tests {
     use super::*;
     use crate::tui::theme::Theme;
+    use ratatui::{backend::TestBackend, Terminal};
 
     fn make_msg(role: MessageRole, content: &str) -> MessageItem {
         MessageItem {
@@ -354,6 +213,32 @@ mod tests {
             timestamp: std::time::SystemTime::now(),
             metadata: Default::default(),
         }
+    }
+
+    fn render_message_text(message: &MessageItem) -> String {
+        render_message_text_with_options(message, MessageRenderOptions::default())
+    }
+
+    fn render_message_text_with_options(
+        message: &MessageItem,
+        options: MessageRenderOptions,
+    ) -> String {
+        let backend = TestBackend::new(120, 20);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|frame| {
+                let theme = Theme::graphite();
+                let paragraph = render_message_with_options(message, 120, &theme, None, options);
+                frame.render_widget(paragraph, frame.area());
+            })
+            .unwrap();
+        terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>()
     }
 
     #[test]
@@ -387,6 +272,73 @@ mod tests {
     }
 
     #[test]
+    fn assistant_reasoning_body_renders_only_when_expanded() {
+        let message = make_msg(
+            MessageRole::Assistant,
+            "<think>private chain\nsecond line</think>\nFinal answer",
+        );
+
+        let collapsed = render_message_text(&message);
+        let expanded = render_message_text_with_options(
+            &message,
+            MessageRenderOptions {
+                reasoning_expanded: true,
+            },
+        );
+
+        assert!(!collapsed.contains("private chain"));
+        assert!(expanded.contains("private chain"));
+        assert!(expanded.contains("Final answer"));
+    }
+
+    #[test]
+    fn assistant_completed_metadata_renders_in_header() {
+        let mut message = make_msg(MessageRole::Assistant, "Final answer");
+        message
+            .metadata
+            .insert("completion_tokens".to_string(), "63".to_string());
+        message
+            .metadata
+            .insert("reasoning_tokens".to_string(), "12".to_string());
+        message
+            .metadata
+            .insert("elapsed_ms".to_string(), "2730".to_string());
+        message
+            .metadata
+            .insert("validation_status".to_string(), "passed".to_string());
+        message
+            .metadata
+            .insert("tool_count".to_string(), "3".to_string());
+        message
+            .metadata
+            .insert("model_label".to_string(), "deepseek-v4-flash".to_string());
+
+        let rendered = render_message_text(&message);
+
+        assert!(rendered.contains("63 tok"));
+        assert!(rendered.contains("2.7s"));
+        assert!(rendered.contains("validation passed"));
+        assert!(rendered.contains("3 tools"));
+        assert!(rendered.contains("12 reasoning"));
+        assert!(rendered.contains("deepseek-v4-flash"));
+    }
+
+    #[test]
+    fn assistant_provider_error_uses_error_header_and_clean_body() {
+        let message = make_msg(
+            MessageRole::Assistant,
+            "[Error: Failed to get response from deepseek API]",
+        );
+
+        let rendered = render_message_text(&message);
+
+        assert!(rendered.contains("Error"));
+        assert!(rendered.contains("Failed to get response from deepseek API"));
+        assert!(!rendered.contains("Reply"));
+        assert!(!rendered.contains("[Error:"));
+    }
+
+    #[test]
     fn test_detect_card_kind_search() {
         assert!(matches!(
             detect_card_kind(&make_msg(MessageRole::Tool, "Found 5 matches in 3 files")),
@@ -411,5 +363,18 @@ mod tests {
         .is_none());
         // Regular system message
         assert!(detect_card_kind(&make_msg(MessageRole::System, "Session started.")).is_none());
+    }
+
+    #[test]
+    fn assistant_message_collapses_think_blocks() {
+        let rendered = render_message_text(&make_msg(
+            MessageRole::Assistant,
+            "<think>private reasoning</think>\nVisible answer",
+        ));
+
+        assert!(rendered.contains("Thinking hidden"));
+        assert!(rendered.contains("Visible answer"));
+        assert!(!rendered.contains("<think>"));
+        assert!(!rendered.contains("private reasoning"));
     }
 }

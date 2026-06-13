@@ -362,6 +362,9 @@ pub enum TurnEvent {
         result_preview: String,
         metadata: Option<serde_json::Value>,
     },
+    ToolResultsReadyForModel {
+        ids: Vec<String>,
+    },
     PermissionRequested {
         id: String,
         tool_name: String,
@@ -423,6 +426,9 @@ impl From<StreamEvent> for TurnEvent {
                 result_preview: truncate_preview(&result, 2000),
                 metadata,
             },
+            StreamEvent::ToolResultsReadyForModel { ids } => {
+                TurnEvent::ToolResultsReadyForModel { ids }
+            }
             StreamEvent::ThinkingStart => TurnEvent::ThinkingStarted,
             StreamEvent::ThinkingChunk(text) => TurnEvent::ThinkingDelta { text },
             StreamEvent::ThinkingComplete => TurnEvent::ThinkingCompleted,

@@ -1,7 +1,7 @@
 use super::{MessageInsert, MessageRecord, SessionStore};
 use crate::services::api::Message;
 use rusqlite::{params, Result as SqlResult};
-use tracing::debug;
+use tracing::{debug, warn};
 
 impl SessionStore {
     // ==================== 消息操作 ====================
@@ -15,13 +15,34 @@ impl SessionStore {
         tool_calls: Option<&serde_json::Value>,
         tool_call_id: Option<&str>,
     ) -> SqlResult<i64> {
+        self.add_message_with_metadata(session_id, role, content, tool_calls, tool_call_id, None)
+    }
+
+    /// 添加带 UI/runtime metadata 的消息。
+    pub fn add_message_with_metadata(
+        &self,
+        session_id: &str,
+        role: &str,
+        content: &str,
+        tool_calls: Option<&serde_json::Value>,
+        tool_call_id: Option<&str>,
+        metadata: Option<&serde_json::Value>,
+    ) -> SqlResult<i64> {
         let conn = self.conn();
         let tool_calls_str = tool_calls.map(|v| v.to_string());
+        let metadata_str = metadata.map(|v| v.to_string());
 
         conn.execute(
-            "INSERT INTO messages (session_id, role, content, tool_calls, tool_call_id)
-             VALUES (?1, ?2, ?3, ?4, ?5)",
-            params![session_id, role, content, tool_calls_str, tool_call_id],
+            "INSERT INTO messages (session_id, role, content, tool_calls, tool_call_id, metadata)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![
+                session_id,
+                role,
+                content,
+                tool_calls_str,
+                tool_call_id,
+                metadata_str
+            ],
         )?;
 
         let id = conn.last_insert_rowid();
@@ -39,13 +60,15 @@ impl SessionStore {
     pub fn get_messages(&self, session_id: &str) -> SqlResult<Vec<MessageRecord>> {
         let conn = self.conn();
         let mut stmt = conn.prepare(
-            "SELECT id, session_id, role, content, tool_calls, tool_call_id, reasoning, created_at
+            "SELECT id, session_id, role, content, tool_calls, tool_call_id, reasoning, metadata, created_at
              FROM messages WHERE session_id = ?1 ORDER BY id ASC",
         )?;
 
         let messages = stmt.query_map(params![session_id], |row| {
             let tool_calls_str: Option<String> = row.get(4)?;
             let tool_calls = tool_calls_str.and_then(|s| serde_json::from_str(&s).ok());
+            let metadata_str: Option<String> = row.get(7)?;
+            let metadata = metadata_str.and_then(|s| serde_json::from_str(&s).ok());
 
             Ok(MessageRecord {
                 id: row.get(0)?,
@@ -55,7 +78,8 @@ impl SessionStore {
                 tool_calls,
                 tool_call_id: row.get(5)?,
                 reasoning: row.get(6)?,
-                created_at: row.get(7)?,
+                metadata,
+                created_at: row.get(8)?,
             })
         })?;
 
@@ -121,15 +145,17 @@ impl SessionStore {
                 .tool_calls
                 .as_ref()
                 .map(serde_json::Value::to_string);
+            let metadata = message.metadata.as_ref().map(serde_json::Value::to_string);
             tx.execute(
-                "INSERT INTO messages (session_id, role, content, tool_calls, tool_call_id)
-                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                "INSERT INTO messages (session_id, role, content, tool_calls, tool_call_id, metadata)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
                 params![
                     session_id,
                     message.role,
                     message.content,
                     tool_calls,
-                    message.tool_call_id
+                    message.tool_call_id,
+                    metadata
                 ],
             )?;
         }
@@ -175,8 +201,8 @@ impl SessionStore {
                 } => ("tool", content.as_str(), None, Some(id.as_str())),
             };
             tx.execute(
-                "INSERT INTO messages (session_id, role, content, tool_calls, tool_call_id) VALUES (?1, ?2, ?3, ?4, ?5)",
-                params![session_id, role, content, tool_calls, tool_call_id],
+                "INSERT INTO messages (session_id, role, content, tool_calls, tool_call_id, metadata) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                params![session_id, role, content, tool_calls, tool_call_id, Option::<String>::None],
             )?;
             count += 1;
         }
@@ -250,6 +276,25 @@ pub fn persist_runtime_message(
         _ => {}
     }
     Ok(())
+}
+
+pub fn persist_runtime_message_background(
+    store: &SessionStore,
+    session_id: &str,
+    msg: &crate::services::api::Message,
+    context: &'static str,
+) {
+    let store = store.clone();
+    let session_id = session_id.to_string();
+    let msg = msg.clone();
+    tokio::task::spawn_blocking(move || {
+        if let Err(err) = persist_runtime_message(&store, &session_id, &msg) {
+            warn!(
+                "Failed to persist runtime message in background ({}): {}",
+                context, err
+            );
+        }
+    });
 }
 
 #[cfg(test)]

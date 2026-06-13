@@ -100,10 +100,10 @@ pub fn builtin_catalog() -> Vec<ProviderCatalogEntry> {
             base_url_env_vars: vec!["DEEPSEEK_BASE_URL".into()],
             model_env_vars: vec!["DEEPSEEK_MODEL".into()],
             default_base_url: "https://api.deepseek.com".into(),
-            default_model: "deepseek-v4-pro".into(),
+            default_model: "deepseek-v4-flash".into(),
             supported_models: vec![
-                "deepseek-v4-pro".into(),
                 "deepseek-v4-flash".into(),
+                "deepseek-v4-pro".into(),
                 "deepseek-chat".into(),
             ],
             docs_url: Some("https://platform.deepseek.com".into()),
@@ -276,7 +276,7 @@ mod tests {
     fn find_returns_entry_for_valid_id() {
         let entry = find("deepseek").expect("deepseek should exist");
         assert_eq!(entry.label, "DeepSeek");
-        assert_eq!(entry.default_model, "deepseek-v4-pro");
+        assert_eq!(entry.default_model, "deepseek-v4-flash");
     }
 
     #[test]

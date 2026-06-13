@@ -360,6 +360,46 @@ pub const CMD_HISTORY: CommandDef = CommandDef::new(
     "Show recent message history",
 );
 
+pub const CMD_PROMPT_HISTORY: CommandDef = CommandDef::new(
+    "/prompt-history",
+    &["/phistory"],
+    "Composer",
+    "/prompt-history [n]",
+    "Show recently submitted prompts",
+);
+
+pub const CMD_PROMPT_STASH: CommandDef = CommandDef::new(
+    "/prompt-stash",
+    &["/pstash"],
+    "Composer",
+    "/prompt-stash [save|restore|clear|show]",
+    "Save or restore the current prompt draft",
+);
+
+pub const CMD_PASTE: CommandDef = CommandDef::new(
+    "/paste",
+    &[],
+    "Composer",
+    "/paste [n]",
+    "Preview a collapsed paste block",
+);
+
+pub const CMD_ATTACH: CommandDef = CommandDef::new(
+    "/attach",
+    &[],
+    "Composer",
+    "/attach <path>|browse [root]|preview [n]|list|remove <n>|clear",
+    "Attach file context to the next prompt",
+);
+
+pub const CMD_JUMP: CommandDef = CommandDef::new(
+    "/jump",
+    &["/j"],
+    "Session",
+    "/jump [user|failed|edit|latest]",
+    "Jump to important timeline events",
+);
+
 pub const CMD_MODE: CommandDef = CommandDef::new(
     "/mode",
     &[],
@@ -1150,6 +1190,11 @@ pub const ALL_COMMANDS: &[&CommandDef] = &[
     &CMD_CONTEXT,
     &CMD_GIT,
     &CMD_HISTORY,
+    &CMD_PROMPT_HISTORY,
+    &CMD_PROMPT_STASH,
+    &CMD_PASTE,
+    &CMD_ATTACH,
+    &CMD_JUMP,
     &CMD_MODE,
     &CMD_PACKAGE,
     &CMD_TEAMMATE,

@@ -12,6 +12,7 @@ pub mod provider;
 pub mod provider_catalog;
 pub mod provider_protocol;
 pub mod retry;
+pub mod test_provider;
 pub mod tool_call_repair;
 
 use async_openai::types::ChatCompletionResponseStream;

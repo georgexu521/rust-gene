@@ -188,9 +188,38 @@ fn test_command_accept_behavior_inserts_required_args() {
         command_accept_behavior(&CMD_STATUS),
         CommandAcceptBehavior::Execute
     );
+    assert_eq!(
+        command_accept_behavior(&CMD_PROMPT_HISTORY),
+        CommandAcceptBehavior::Execute
+    );
+    assert_eq!(
+        command_accept_behavior(&CMD_PROMPT_STASH),
+        CommandAcceptBehavior::Execute
+    );
     let registry = default_command_registry();
     assert_eq!(
         registry.get("/desktop").map(command_accept_behavior),
         Some(CommandAcceptBehavior::Insert)
     );
+}
+
+#[test]
+fn test_prompt_composer_commands_are_registered() {
+    let registry = default_command_registry();
+    let history_items = registry.palette_items("prompt history", 20, &[]);
+    assert!(history_items
+        .iter()
+        .any(|cmd| cmd.name == "/prompt-history"));
+
+    let stash_items = registry.palette_items("stash", 20, &[]);
+    assert!(stash_items.iter().any(|cmd| cmd.name == "/prompt-stash"));
+
+    let paste_items = registry.palette_items("paste", 20, &[]);
+    assert!(paste_items.iter().any(|cmd| cmd.name == "/paste"));
+
+    let attach_items = registry.palette_items("attach", 20, &[]);
+    assert!(attach_items.iter().any(|cmd| cmd.name == "/attach"));
+
+    let jump_items = registry.palette_items("jump", 20, &[]);
+    assert!(jump_items.iter().any(|cmd| cmd.name == "/jump"));
 }

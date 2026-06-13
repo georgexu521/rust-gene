@@ -10,7 +10,7 @@ impl SessionStore {
 
         // FTS5 搜索
         let mut stmt = conn.prepare(
-            "SELECT m.id, m.session_id, m.role, m.content, m.tool_calls, m.tool_call_id, m.reasoning, m.created_at
+            "SELECT m.id, m.session_id, m.role, m.content, m.tool_calls, m.tool_call_id, m.reasoning, m.metadata, m.created_at
              FROM messages_fts fts
              JOIN messages m ON m.id = fts.rowid
              WHERE messages_fts MATCH ?1
@@ -21,6 +21,8 @@ impl SessionStore {
         let messages = stmt.query_map(params![query, limit], |row| {
             let tool_calls_str: Option<String> = row.get(4)?;
             let tool_calls = tool_calls_str.and_then(|s| serde_json::from_str(&s).ok());
+            let metadata_str: Option<String> = row.get(7)?;
+            let metadata = metadata_str.and_then(|s| serde_json::from_str(&s).ok());
 
             Ok(MessageRecord {
                 id: row.get(0)?,
@@ -30,7 +32,8 @@ impl SessionStore {
                 tool_calls,
                 tool_call_id: row.get(5)?,
                 reasoning: row.get(6)?,
-                created_at: row.get(7)?,
+                metadata,
+                created_at: row.get(8)?,
             })
         })?;
 

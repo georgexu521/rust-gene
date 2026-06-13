@@ -4,6 +4,7 @@
 //! 高密度思考 = 高密度 Q&A — Agent 应不断提问/解答来深化推理。
 
 use tracing::{debug, error, info};
+use tracing_subscriber::fmt::writer::BoxMakeWriter;
 use tracing_subscriber::EnvFilter;
 
 #[cfg(feature = "experimental-api-server")]
@@ -166,6 +167,22 @@ fn configure_eval_memory_isolation(output_file: Option<&str>, events_file: Optio
     }
 }
 
+fn default_log_level(startup_mode: StartupMode) -> &'static str {
+    match startup_mode {
+        StartupMode::Api => "info",
+        StartupMode::Tui => "off",
+        StartupMode::Help
+        | StartupMode::Cli
+        | StartupMode::EvalRun
+        | StartupMode::ProviderHealth
+        | StartupMode::ContextAttach => "warn",
+    }
+}
+
+fn suppress_terminal_logs(startup_mode: StartupMode) -> bool {
+    matches!(startup_mode, StartupMode::Tui)
+}
+
 async fn answer_pending_approval(
     engine: &std::sync::Arc<priority_agent::engine::streaming::StreamingQueryEngine>,
     approved: bool,
@@ -317,6 +334,10 @@ async fn run_eval_task(
                     "result_preview": truncate_chars(&result, 2000),
                     "metadata": metadata,
                 }),
+            )?,
+            StreamEvent::ToolResultsReadyForModel { ids } => write_eval_event(
+                &mut event_writer,
+                json!({"event": "tool_results_ready_for_model", "tool_call_ids": ids}),
             )?,
             StreamEvent::ThinkingStart => {
                 write_eval_event(&mut event_writer, json!({"event": "thinking_start"}))?
@@ -498,7 +519,13 @@ async fn init_app_or_exit(
     working_dir: &std::path::Path,
     mode: StartupMode,
 ) -> Option<bootstrap::AppComponents> {
-    match bootstrap::init_app(working_dir).await {
+    let init_result = if matches!(mode, StartupMode::Tui) {
+        bootstrap::init_tui_app(working_dir).await
+    } else {
+        bootstrap::init_app(working_dir).await
+    };
+
+    match init_result {
         Ok(components) => Some(components),
         Err(e) => {
             let msg = e.to_string();
@@ -552,20 +579,17 @@ async fn main() {
     let startup_mode = detect_startup_mode(&args);
 
     // 初始化日志（交互模式默认降噪，仍可通过 RUST_LOG 覆盖）
-    let default_level = match startup_mode {
-        StartupMode::Api => "info",
-        StartupMode::Help
-        | StartupMode::Cli
-        | StartupMode::Tui
-        | StartupMode::EvalRun
-        | StartupMode::ProviderHealth
-        | StartupMode::ContextAttach => "warn",
+    let default_level = default_log_level(startup_mode);
+    let log_writer = if suppress_terminal_logs(startup_mode) {
+        BoxMakeWriter::new(std::io::sink)
+    } else {
+        BoxMakeWriter::new(std::io::stderr)
     };
     tracing_subscriber::fmt()
         .with_env_filter(
             EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(default_level)),
         )
-        .with_writer(std::io::stderr)
+        .with_writer(log_writer)
         .init();
 
     info!("Priority Agent starting...");
@@ -697,7 +721,10 @@ async fn main() {
 
 #[cfg(test)]
 mod tests {
-    use super::{configure_eval_memory_isolation, detect_startup_mode, env_flag, StartupMode};
+    use super::{
+        configure_eval_memory_isolation, default_log_level, detect_startup_mode, env_flag,
+        suppress_terminal_logs, StartupMode,
+    };
     use std::collections::HashMap;
     use std::sync::{LazyLock, Mutex, MutexGuard};
 
@@ -799,6 +826,17 @@ mod tests {
             detect_startup_mode(&["priority-agent".into(), "--unknown".into()]),
             StartupMode::Cli
         );
+    }
+
+    #[test]
+    fn test_tui_startup_suppresses_terminal_logs_by_default() {
+        assert_eq!(default_log_level(StartupMode::Tui), "off");
+        assert!(suppress_terminal_logs(StartupMode::Tui));
+
+        assert_eq!(default_log_level(StartupMode::Cli), "warn");
+        assert!(!suppress_terminal_logs(StartupMode::Cli));
+        assert_eq!(default_log_level(StartupMode::Api), "info");
+        assert!(!suppress_terminal_logs(StartupMode::Api));
     }
 
     #[test]

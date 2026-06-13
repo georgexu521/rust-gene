@@ -93,11 +93,21 @@ pub async fn handle_assistant(app: &mut TuiApp, args: &str) -> String {
             let task = parts.get(1).map(|s| s.trim()).unwrap_or("");
 
             let domain_intro = match *domain {
-                "code_review" => "You are an expert code analyst. Provide deep insights into code structure, patterns, and potential issues.",
-                "security" => "You are a security expert. Focus on vulnerabilities, injection risks, authentication issues, and secure coding practices.",
-                "data" => "You are a data engineering expert. Focus on data pipelines, transformations, storage, and processing efficiency.",
-                "infrastructure" => "You are an infrastructure expert. Focus on DevOps, deployment, CI/CD, and infrastructure as code.",
-                "testing" => "You are a testing expert. Focus on test strategy, coverage, edge cases, and quality assurance.",
+                "code_review" => {
+                    "You are an expert code analyst. Provide deep insights into code structure, patterns, and potential issues."
+                }
+                "security" => {
+                    "You are a security expert. Focus on vulnerabilities, injection risks, authentication issues, and secure coding practices."
+                }
+                "data" => {
+                    "You are a data engineering expert. Focus on data pipelines, transformations, storage, and processing efficiency."
+                }
+                "infrastructure" => {
+                    "You are an infrastructure expert. Focus on DevOps, deployment, CI/CD, and infrastructure as code."
+                }
+                "testing" => {
+                    "You are a testing expert. Focus on test strategy, coverage, edge cases, and quality assurance."
+                }
                 _ => "You are a helpful specialized assistant.",
             };
 
@@ -157,7 +167,11 @@ pub async fn handle_remote(app: &mut TuiApp, args: &str) -> String {
                 bridge_source,
                 bridge.auth_token_configured,
                 bridge.tenant_id.as_deref().unwrap_or("none"),
-                if args.is_empty() { "What remote task would you like to execute?" } else { args }
+                if args.is_empty() {
+                    "What remote task would you like to execute?"
+                } else {
+                    args
+                }
             );
             app.send_message(prompt).await;
             String::new()

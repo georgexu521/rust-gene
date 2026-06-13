@@ -71,10 +71,11 @@ impl ToolRoundController {
         messages.push(Message::assistant_with_tools(content, tool_calls.to_vec()));
         // Persist the tool-call assistant message so resume/export see it.
         if let Some(ref store) = context.conversation.session_store {
-            let _ = crate::session_store::message_ops::persist_runtime_message(
+            crate::session_store::message_ops::persist_runtime_message_background(
                 store,
                 &context.conversation.session_id,
                 messages.last().unwrap(),
+                "assistant tool-call message",
             );
         }
         let has_changes_before_tools = is_programming_workflow
@@ -130,6 +131,7 @@ impl ToolRoundController {
             destructive_scope: runtime.destructive_scope,
             baseline_git_status_files: runtime.baseline_git_status_files,
             store: conversation.session_store.as_deref(),
+            tx: runtime.tx,
         })
         .await
     }

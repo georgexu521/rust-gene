@@ -32,9 +32,11 @@ pub(super) fn model_visibility_for(
                 "full_raw"
             }
         }
-        "validation" if !result.success || raw_chars > 2_000 => "raw_excerpt",
+        "validation" if !result.success => "raw_excerpt",
+        "validation" if raw_chars > 2_000 => "observation",
         "install" | "dev_server" => "observation",
-        "unknown_command" if raw_chars > 1_200 || !result.success => "raw_excerpt",
+        "unknown_command" if !result.success => "raw_excerpt",
+        "unknown_command" if raw_chars > 1_200 => "observation",
         "diff" if raw_chars > 2_000 => "raw_excerpt",
         "edit" if !result.success => "raw_excerpt",
         _ if tool_call.name == "run_tests" && raw_chars > 1_200 => "raw_excerpt",

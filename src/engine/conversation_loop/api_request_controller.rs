@@ -11,6 +11,7 @@ use crate::engine::streaming::StreamEvent;
 use crate::engine::trace::{TraceCollector, TraceEvent};
 use crate::services::api::provider_protocol::{
     provider_message_normalization_report, ProviderCapabilities, ProviderLatencyProfile,
+    ProviderProtocolFamily,
 };
 use crate::services::api::{ChatRequest, Message, ProviderRetryObserver, Tool, ToolCall};
 use crate::tools::{ToolRegistry, ToolResult};
@@ -47,6 +48,7 @@ pub(super) struct ApiRequestApplicationContext<'a> {
     pub(super) final_content: &'a mut String,
     pub(super) final_tool_calls: &'a mut Vec<ToolCall>,
     pub(super) tool_calls_made: &'a mut bool,
+    pub(super) tx: Option<&'a mpsc::Sender<StreamEvent>>,
     pub(super) trace: &'a TraceCollector,
     pub(super) iteration: usize,
 }
@@ -125,11 +127,15 @@ impl ApiRequestController {
             let nonstreaming_tool_request = context.tx.is_some()
                 && request_has_tools
                 && provider_capabilities.requires_nonstreaming_tool_calls;
+            let nonstreaming_provider_request = context.tx.is_some()
+                && provider_requires_nonstreaming_frontend_request(provider_capabilities);
+            let use_nonstreaming_request =
+                nonstreaming_tool_request || nonstreaming_provider_request;
             let latency_profile = ProviderLatencyProfile::for_request(
                 &provider_capabilities,
                 &request.model,
                 request_has_tools,
-                context.tx.is_some() && !nonstreaming_tool_request,
+                context.tx.is_some() && !use_nonstreaming_request,
                 fallback_attempted,
                 request.messages.len(),
                 request_tools.len(),
@@ -159,13 +165,14 @@ impl ApiRequestController {
                             "iteration": context.iteration,
                             "model": request.model.clone(),
                             "tools": request_tools.len(),
-                            "streaming": !nonstreaming_tool_request,
+                            "streaming": !use_nonstreaming_request,
                             "provider_family": provider_family_label.clone(),
                             "request_shape": request_shape_label.clone(),
                             "timeout_ms": actual_timeout_ms,
                             "slow_warning_threshold_ms": slow_warning_threshold_ms,
                             "is_known_slow_path": latency_profile.is_known_slow_path(),
                             "nonstreaming_tool_request": nonstreaming_tool_request,
+                            "nonstreaming_provider_request": nonstreaming_provider_request,
                         }),
                     })
                     .await;
@@ -215,9 +222,14 @@ impl ApiRequestController {
             let request_for_provider = request.clone();
             let provider_request = async {
                 if let Some(tx) = context.tx {
-                    if nonstreaming_tool_request {
+                    if use_nonstreaming_request {
+                        let reason = if nonstreaming_provider_request {
+                            "provider stream is incompatible with MiniMax SSE chunks; using non-streaming provider request"
+                        } else {
+                            "provider stream is incompatible with tool/usage chunks; using non-streaming tool request"
+                        };
                         context.trace.record(TraceEvent::WorkflowFallback {
-                            error: "provider stream is incompatible with tool/usage chunks; using non-streaming tool request".to_string(),
+                            error: reason.to_string(),
                         });
                         context
                             .conversation
@@ -337,7 +349,7 @@ impl ApiRequestController {
                         context.trace,
                         context.conversation.tool_registry.as_ref(),
                         provider_capabilities,
-                        !nonstreaming_tool_request && context.tx.is_some(),
+                        !use_nonstreaming_request && context.tx.is_some(),
                         elapsed_ms,
                         step,
                     );
@@ -660,6 +672,7 @@ impl ApiRequestController {
     ) -> ApiRequestApplication {
         let session_step = context.outcome.session_step;
         if let Some(report) = &session_step.tool_call_repair {
+            emit_tool_call_repair_diagnostic(context.tx, report);
             context
                 .trace
                 .record(TraceEvent::ProviderToolCallRepairApplied {
@@ -700,9 +713,10 @@ impl ApiRequestController {
             debug!("Context compressed due to size limits");
         }
 
-        *context.final_content = content.clone();
         *context.final_tool_calls = tool_calls.clone();
-        if !tool_calls.is_empty() {
+        if tool_calls.is_empty() {
+            *context.final_content = content.clone();
+        } else {
             *context.tool_calls_made = true;
         }
 
@@ -830,6 +844,36 @@ fn streaming_tool_execution_shadow_mode() -> Option<String> {
     crate::services::config::runtime_config().streaming_tool_execution_shadow()
 }
 
+fn provider_requires_nonstreaming_frontend_request(capabilities: ProviderCapabilities) -> bool {
+    matches!(
+        capabilities.protocol_family,
+        ProviderProtocolFamily::MiniMax
+    )
+}
+
+fn emit_tool_call_repair_diagnostic(
+    tx: Option<&mpsc::Sender<StreamEvent>>,
+    report: &crate::services::api::tool_call_repair::ToolCallRepairReport,
+) {
+    let Some(tx) = tx else {
+        return;
+    };
+    let _ = tx.try_send(StreamEvent::RuntimeDiagnostic {
+        diagnostic: serde_json::json!({
+            "schema": "provider_tool_call_repair.v1",
+            "provider_family": report.provider_family,
+            "schema_flattened_tools": report.schema_flattened_tools,
+            "schema_flattened_fields": report.schema_flattened_fields,
+            "scavenged_tool_calls": report.scavenged_tool_calls,
+            "argument_repairs": report.argument_repairs,
+            "unflattened_arguments": report.unflattened_arguments,
+            "dropped_duplicate_calls": report.dropped_duplicate_calls,
+            "malformed_tool_calls": report.malformed_tool_calls,
+            "warnings": report.warnings,
+        }),
+    });
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -931,6 +975,28 @@ mod tests {
     }
 
     #[test]
+    fn minimax_frontend_requests_use_nonstreaming_provider_path() {
+        assert!(provider_requires_nonstreaming_frontend_request(
+            ProviderCapabilities::for_family(ProviderProtocolFamily::MiniMax)
+        ));
+        assert!(!provider_requires_nonstreaming_frontend_request(
+            ProviderCapabilities::for_family(ProviderProtocolFamily::OpenAiCompatible)
+        ));
+    }
+
+    #[test]
+    fn deepseek_frontend_tool_requests_use_nonstreaming_tool_path() {
+        let capabilities =
+            ProviderCapabilities::detect("https://api.deepseek.com", "deepseek-v4-flash");
+
+        assert!(capabilities.requires_nonstreaming_tool_calls);
+        assert!(!capabilities.supports_streaming_tool_calls);
+        assert!(!provider_requires_nonstreaming_frontend_request(
+            capabilities
+        ));
+    }
+
+    #[test]
     fn apply_outcome_updates_loop_state_and_records_trace() {
         let trace = TraceCollector::new(TurnTrace::new("session", 1, "api request"));
         let tool_call = ToolCall {
@@ -961,6 +1027,7 @@ mod tests {
             final_content: &mut final_content,
             final_tool_calls: &mut final_tool_calls,
             tool_calls_made: &mut tool_calls_made,
+            tx: None,
             trace: &trace,
             iteration: 2,
         });
@@ -970,7 +1037,10 @@ mod tests {
         assert_eq!(application.tool_calls[0].id, tool_call.id);
         assert_eq!(application.tool_calls[0].name, tool_call.name);
         assert!(application.pre_executed.is_empty());
-        assert_eq!(final_content, "running check");
+        assert!(
+            final_content.is_empty(),
+            "tool-call responses must not be treated as final answers"
+        );
         assert_eq!(final_tool_calls.len(), 1);
         assert_eq!(final_tool_calls[0].id, "call-1");
         assert_eq!(final_tool_calls[0].name, "bash");
@@ -984,5 +1054,55 @@ mod tests {
                 content_chars: 13,
             }
         )));
+    }
+
+    #[test]
+    fn apply_outcome_emits_tool_call_repair_diagnostic() {
+        let trace = TraceCollector::new(TurnTrace::new("session", 1, "api request repair"));
+        let (tx, mut rx) = mpsc::channel(4);
+        let mut repair = crate::services::api::tool_call_repair::ToolCallRepairReport::new(
+            ProviderProtocolFamily::OpenAiCompatible,
+        );
+        repair.malformed_tool_calls = 1;
+        repair.argument_repairs = 1;
+        let outcome = ApiRequestOutcome {
+            session_step: SessionStepResult {
+                assistant_text: String::new(),
+                tool_calls: vec![ToolCall {
+                    id: "call-repaired".to_string(),
+                    name: "bash".to_string(),
+                    arguments: serde_json::json!({ "command": "echo repaired" }),
+                }],
+                pre_executed_results: HashMap::new(),
+                usage: None,
+                tool_call_repair: Some(repair),
+                finish_reason: None,
+                source: super::super::session_processor::SessionStepSource::NonStreaming,
+                cache_shape: None,
+            },
+            compressed_this_turn: false,
+            model: "mock-model".to_string(),
+        };
+        let mut final_content = String::new();
+        let mut final_tool_calls = Vec::new();
+        let mut tool_calls_made = false;
+
+        let _ = ApiRequestController::apply_outcome(ApiRequestApplicationContext {
+            outcome,
+            final_content: &mut final_content,
+            final_tool_calls: &mut final_tool_calls,
+            tool_calls_made: &mut tool_calls_made,
+            tx: Some(&tx),
+            trace: &trace,
+            iteration: 1,
+        });
+
+        let event = rx.try_recv().expect("repair diagnostic should be emitted");
+        let StreamEvent::RuntimeDiagnostic { diagnostic } = event else {
+            panic!("expected runtime diagnostic");
+        };
+        assert_eq!(diagnostic["schema"], "provider_tool_call_repair.v1");
+        assert_eq!(diagnostic["malformed_tool_calls"], 1);
+        assert_eq!(diagnostic["argument_repairs"], 1);
     }
 }

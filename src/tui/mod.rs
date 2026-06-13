@@ -13,6 +13,7 @@ pub mod session_manager;
 pub mod slash_handler;
 pub mod theme;
 pub mod tool_view;
+pub mod view_model;
 
 pub use app::TuiApp;
 
@@ -27,7 +28,7 @@ use ratatui::{
     backend::Backend,
     layout::{Constraint, Direction, Layout},
     style::{Color, Style},
-    widgets::{Block, Borders},
+    widgets::{Block, Borders, Clear},
     Frame, Terminal,
 };
 use std::io;
@@ -114,6 +115,9 @@ async fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut TuiApp) -> an
     let tick_rate = std::time::Duration::from_millis(250);
 
     loop {
+        if let Some(reason) = app.provider_wait_timeout_reason() {
+            app.timeout_active_run_immediate(&reason);
+        }
         // 绘制界面
         terminal.draw(|f| draw_ui(f, app))?;
 
@@ -141,7 +145,12 @@ async fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut TuiApp) -> an
 
         // 定时更新
         if last_tick.elapsed() >= tick_rate {
-            app.on_tick().await;
+            if tokio::time::timeout(std::time::Duration::from_millis(100), app.on_tick())
+                .await
+                .is_err()
+            {
+                tracing::warn!("TUI tick exceeded 100ms; yielding to input loop");
+            }
             last_tick = std::time::Instant::now();
         }
     }
@@ -222,29 +231,45 @@ fn draw_ui(f: &mut Frame, app: &TuiApp) {
         | app::AppMode::VimNormal
         | app::AppMode::CommandPalette
         | app::AppMode::ShortcutHelp
+        | app::AppMode::PromptHistory
         | app::AppMode::ModelSelect
-        | app::AppMode::ProviderSelect => {
+        | app::AppMode::ProviderSelect
+        | app::AppMode::FilePicker => {
             if app.sidebar_visible {
-                // 侧边栏 + 主区域布局
-                let h_chunks = Layout::default()
-                    .direction(Direction::Horizontal)
-                    .constraints([Constraint::Percentage(20), Constraint::Percentage(80)])
-                    .split(f.area());
+                match sidebar_layout(f.area()) {
+                    SidebarLayout::Inline { sidebar, main } => {
+                        screens::main_screen::render_sidebar(f, app, sidebar);
 
-                screens::main_screen::render_sidebar(f, app, h_chunks[0]);
+                        let main_chunks = Layout::default()
+                            .direction(Direction::Vertical)
+                            .constraints([
+                                Constraint::Min(3),
+                                Constraint::Length(5),
+                                Constraint::Length(1),
+                            ])
+                            .split(main);
 
-                let main_chunks = Layout::default()
-                    .direction(Direction::Vertical)
-                    .constraints([
-                        Constraint::Min(3),
-                        Constraint::Length(5),
-                        Constraint::Length(1),
-                    ])
-                    .split(h_chunks[1]);
+                        screens::main_screen::render_chat_area(f, app, main_chunks[0]);
+                        screens::main_screen::render_input_area(f, app, main_chunks[1]);
+                        screens::main_screen::render_status_bar(f, app, main_chunks[2]);
+                    }
+                    SidebarLayout::Overlay { sidebar, main } => {
+                        let main_chunks = Layout::default()
+                            .direction(Direction::Vertical)
+                            .constraints([
+                                Constraint::Min(3),
+                                Constraint::Length(5),
+                                Constraint::Length(1),
+                            ])
+                            .split(main);
 
-                screens::main_screen::render_chat_area(f, app, main_chunks[0]);
-                screens::main_screen::render_input_area(f, app, main_chunks[1]);
-                screens::main_screen::render_status_bar(f, app, main_chunks[2]);
+                        screens::main_screen::render_chat_area(f, app, main_chunks[0]);
+                        screens::main_screen::render_input_area(f, app, main_chunks[1]);
+                        screens::main_screen::render_status_bar(f, app, main_chunks[2]);
+                        f.render_widget(Clear, overlay_backdrop_area(sidebar, main));
+                        screens::main_screen::render_sidebar(f, app, sidebar);
+                    }
+                }
             } else {
                 // 主布局：垂直分为消息区和输入区
                 let main_chunks = Layout::default()
@@ -268,11 +293,17 @@ fn draw_ui(f: &mut Frame, app: &TuiApp) {
                 app::AppMode::ShortcutHelp => {
                     screens::main_screen::render_shortcut_help(f, app, f.area());
                 }
+                app::AppMode::PromptHistory => {
+                    screens::main_screen::render_prompt_picker(f, app, f.area());
+                }
                 app::AppMode::ModelSelect => {
                     screens::main_screen::render_model_select(f, app, f.area());
                 }
                 app::AppMode::ProviderSelect => {
                     screens::main_screen::render_provider_select(f, app, f.area());
+                }
+                app::AppMode::FilePicker => {
+                    screens::main_screen::render_file_picker(f, app, f.area());
                 }
                 _ => {}
             }
@@ -344,6 +375,73 @@ fn draw_ui(f: &mut Frame, app: &TuiApp) {
     }
 }
 
+fn overlay_backdrop_area(
+    sidebar: ratatui::layout::Rect,
+    main: ratatui::layout::Rect,
+) -> ratatui::layout::Rect {
+    ratatui::layout::Rect {
+        x: main.x,
+        y: sidebar.y,
+        width: main.width,
+        height: sidebar.height,
+    }
+}
+
+const INLINE_SIDEBAR_MIN_WIDTH: u16 = 140;
+const INLINE_SIDEBAR_WIDTH: u16 = 40;
+const OVERLAY_SIDEBAR_MAX_WIDTH: u16 = 44;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SidebarLayout {
+    Inline {
+        sidebar: ratatui::layout::Rect,
+        main: ratatui::layout::Rect,
+    },
+    Overlay {
+        sidebar: ratatui::layout::Rect,
+        main: ratatui::layout::Rect,
+    },
+}
+
+fn sidebar_layout(area: ratatui::layout::Rect) -> SidebarLayout {
+    if area.width >= INLINE_SIDEBAR_MIN_WIDTH {
+        let chunks = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([
+                Constraint::Length(INLINE_SIDEBAR_WIDTH),
+                Constraint::Min(80),
+            ])
+            .split(area);
+        SidebarLayout::Inline {
+            sidebar: chunks[0],
+            main: chunks[1],
+        }
+    } else {
+        let width = if area.width <= 28 {
+            area.width
+        } else {
+            area.width
+                .saturating_sub(4)
+                .min(OVERLAY_SIDEBAR_MAX_WIDTH)
+                .max(24)
+        };
+        let height = if area.height > 8 {
+            area.height.saturating_sub(6)
+        } else {
+            area.height
+        };
+        SidebarLayout::Overlay {
+            sidebar: ratatui::layout::Rect {
+                x: area.x,
+                y: area.y,
+                width,
+                height,
+            },
+            main: area,
+        }
+    }
+}
+
 /// 处理键盘事件
 /// 返回 true 表示退出应用
 async fn handle_key_event(key: KeyEvent, app: &mut TuiApp) -> anyhow::Result<bool> {
@@ -391,12 +489,35 @@ async fn handle_key_event(key: KeyEvent, app: &mut TuiApp) -> anyhow::Result<boo
         return Ok(false);
     }
 
+    if app.mode == app::AppMode::PromptHistory {
+        return handle_prompt_picker_key_event(key, app).await;
+    }
+
     if app.mode == app::AppMode::ModelSelect {
         return handle_model_select_key_event(key, app).await;
     }
 
     if app.mode == app::AppMode::ProviderSelect {
         return handle_provider_select_key_event(key, app).await;
+    }
+
+    if app.mode == app::AppMode::FilePicker {
+        return handle_file_picker_key_event(key, app).await;
+    }
+
+    if app.is_querying
+        && matches!(
+            app.mode,
+            app::AppMode::Chat
+                | app::AppMode::VimNormal
+                | app::AppMode::DiffViewer
+                | app::AppMode::ToolViewer
+        )
+        && (key.code == KeyCode::Esc
+            || (key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL)))
+    {
+        app.cancel_active_run("Run interrupted").await;
+        return Ok(false);
     }
 
     if app.mode == app::AppMode::PermissionApproval {
@@ -577,12 +698,23 @@ async fn handle_key_event(key: KeyEvent, app: &mut TuiApp) -> anyhow::Result<boo
         return Ok(false);
     }
 
-    if key.code == KeyCode::Char('m') && key.modifiers.contains(KeyModifiers::CONTROL) {
+    if key.code == KeyCode::Char('r') && key.modifiers.contains(KeyModifiers::CONTROL) {
+        app.open_prompt_picker();
+        return Ok(false);
+    }
+
+    if key.code == KeyCode::Char('m')
+        && (key.modifiers.contains(KeyModifiers::CONTROL)
+            || key.modifiers.contains(KeyModifiers::ALT))
+    {
         app.open_model_select();
         return Ok(false);
     }
 
-    if key.code == KeyCode::Char('l') && key.modifiers.contains(KeyModifiers::CONTROL) {
+    if key.code == KeyCode::Char('l')
+        && (key.modifiers.contains(KeyModifiers::CONTROL)
+            || key.modifiers.contains(KeyModifiers::ALT))
+    {
         app.open_provider_select();
         return Ok(false);
     }
@@ -594,7 +726,9 @@ async fn handle_key_event(key: KeyEvent, app: &mut TuiApp) -> anyhow::Result<boo
     }
 
     if key.code == KeyCode::Char('o') && key.modifiers.contains(KeyModifiers::CONTROL) {
-        app.cycle_expanded_tool_run();
+        if !app.toggle_reasoning_at_scroll_anchor() {
+            app.cycle_expanded_tool_run();
+        }
         return Ok(false);
     }
 
@@ -631,15 +765,7 @@ async fn handle_key_event(key: KeyEvent, app: &mut TuiApp) -> anyhow::Result<boo
             return Ok(false);
         }
         if key.code == KeyCode::Tab {
-            // Toggle collapse for the message at scroll_offset
-            let idx = app.scroll_offset;
-            if idx < app.messages.len() {
-                if app.collapsed_indices.contains(&idx) {
-                    app.collapsed_indices.remove(&idx);
-                } else {
-                    app.collapsed_indices.insert(idx);
-                }
-            }
+            app.toggle_collapse_at_scroll_anchor();
             return Ok(false);
         }
         if key.code == KeyCode::Char('b') {
@@ -706,12 +832,7 @@ async fn handle_key_event(key: KeyEvent, app: &mut TuiApp) -> anyhow::Result<boo
                 }
                 KeyCode::Char('p') => {
                     if let Some(session) = sessions.get(app.sidebar_selected) {
-                        let id = &session.id;
-                        if app.pinned_sessions.contains(id) {
-                            app.pinned_sessions.retain(|x| x != id);
-                        } else if app.pinned_sessions.len() < 9 {
-                            app.pinned_sessions.push(id.clone());
-                        }
+                        app.toggle_pinned_session(&session.id);
                     }
                     return Ok(false);
                 }
@@ -787,7 +908,7 @@ async fn handle_key_event(key: KeyEvent, app: &mut TuiApp) -> anyhow::Result<boo
             KeyCode::Enter => {
                 // Jump to selected result
                 if let Some(result) = app.message_search_state.selected_result() {
-                    app.scroll_offset = result.message_index;
+                    app.scroll_to_message_index(result.message_index);
                 }
                 app.message_search_state.deactivate();
                 app.mode = app::AppMode::VimNormal;
@@ -841,11 +962,14 @@ async fn handle_key_event(key: KeyEvent, app: &mut TuiApp) -> anyhow::Result<boo
     match action {
         AppAction::Quit => {
             info!("Quit keybinding pressed, exiting...");
+            let interrupted_active_run = app.cancel_active_run("Run interrupted before exit").await;
             // 退出前 flush 记忆
-            if let Some(ref engine) = app.streaming_engine {
-                engine
-                    .flush_memory_for_current_history(crate::memory::MemoryFlushReason::Exit)
-                    .await;
+            if !interrupted_active_run {
+                if let Some(ref engine) = app.streaming_engine {
+                    engine
+                        .flush_memory_for_current_history(crate::memory::MemoryFlushReason::Exit)
+                        .await;
+                }
             }
             // 退出前写入 telemetry 会话统计（仅用户开启时生效）
             if let Some(ref engine) = app.streaming_engine {
@@ -900,9 +1024,11 @@ async fn handle_key_event(key: KeyEvent, app: &mut TuiApp) -> anyhow::Result<boo
                 collector.record_session(session);
             }
             // 清理 Agent
-            if let Some(ref engine) = app.streaming_engine {
-                if let Some(manager) = engine.agent_manager() {
-                    manager.cleanup().await;
+            if !interrupted_active_run {
+                if let Some(ref engine) = app.streaming_engine {
+                    if let Some(manager) = engine.agent_manager() {
+                        manager.cleanup().await;
+                    }
                 }
             }
             return Ok(true);
@@ -924,13 +1050,16 @@ async fn handle_key_event(key: KeyEvent, app: &mut TuiApp) -> anyhow::Result<boo
             };
         }
         AppAction::Cancel => {
+            if app.cancel_active_run("Run interrupted").await {
+                return Ok(false);
+            }
             if app.vim_mode && app.mode == app::AppMode::Chat {
                 app.mode = app::AppMode::VimNormal;
             }
         }
         AppAction::ScrollUp => app.scroll_up(),
         AppAction::ScrollDown => app.scroll_down(),
-        AppAction::ScrollTop => app.scroll_offset = 0,
+        AppAction::ScrollTop => app.scroll_to_top(),
         AppAction::ScrollBottom => app.scroll_to_bottom(),
         AppAction::VimInsert => app.mode = app::AppMode::Chat,
         AppAction::VimCommand => {
@@ -1017,6 +1146,19 @@ async fn handle_command_palette_key_event(key: KeyEvent, app: &mut TuiApp) -> an
     Ok(false)
 }
 
+async fn handle_prompt_picker_key_event(key: KeyEvent, app: &mut TuiApp) -> anyhow::Result<bool> {
+    match key.code {
+        KeyCode::Esc | KeyCode::Char('q') => app.close_prompt_picker(),
+        KeyCode::Enter => {
+            app.accept_prompt_picker_selection();
+        }
+        KeyCode::Up | KeyCode::Char('k') => app.prompt_picker_prev(),
+        KeyCode::Down | KeyCode::Char('j') => app.prompt_picker_next(),
+        _ => {}
+    }
+    Ok(false)
+}
+
 async fn handle_model_select_key_event(key: KeyEvent, app: &mut TuiApp) -> anyhow::Result<bool> {
     match key.code {
         KeyCode::Esc => app.close_model_select(),
@@ -1024,7 +1166,10 @@ async fn handle_model_select_key_event(key: KeyEvent, app: &mut TuiApp) -> anyho
         KeyCode::Up => app.model_select_prev(),
         KeyCode::Down => app.model_select_next(),
         KeyCode::Backspace => app.model_select_backspace(),
-        KeyCode::Char('m') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+        KeyCode::Char('m')
+            if key.modifiers.contains(KeyModifiers::CONTROL)
+                || key.modifiers.contains(KeyModifiers::ALT) =>
+        {
             app.close_model_select();
         }
         KeyCode::Char(c) if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT => {
@@ -1045,11 +1190,51 @@ async fn handle_provider_select_key_event(key: KeyEvent, app: &mut TuiApp) -> an
         KeyCode::Up => app.provider_select_prev(),
         KeyCode::Down => app.provider_select_next(),
         KeyCode::Backspace => app.provider_select_backspace(),
-        KeyCode::Char('l') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+        KeyCode::Char('l')
+            if key.modifiers.contains(KeyModifiers::CONTROL)
+                || key.modifiers.contains(KeyModifiers::ALT) =>
+        {
             app.close_provider_select();
         }
         KeyCode::Char(c) if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT => {
             app.provider_select_push(c);
+        }
+        _ => {}
+    }
+    Ok(false)
+}
+
+async fn handle_file_picker_key_event(key: KeyEvent, app: &mut TuiApp) -> anyhow::Result<bool> {
+    if app.file_picker_filtering {
+        match key.code {
+            KeyCode::Esc => app.finish_file_picker_filter(),
+            KeyCode::Enter => app.finish_file_picker_filter(),
+            KeyCode::Backspace => app.pop_file_picker_filter_char(),
+            KeyCode::Char(c)
+                if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT =>
+            {
+                app.push_file_picker_filter_char(c);
+            }
+            _ => {}
+        }
+        return Ok(false);
+    }
+
+    match key.code {
+        KeyCode::Esc | KeyCode::Char('q') => app.close_composer_file_picker(),
+        KeyCode::Char('/') => app.start_file_picker_filter(),
+        KeyCode::Enter => {
+            let message = app.accept_file_picker_selection();
+            if app.mode != app::AppMode::FilePicker {
+                app.add_system_message(message);
+            }
+        }
+        KeyCode::Up | KeyCode::Char('k') => app.file_picker_prev(),
+        KeyCode::Down | KeyCode::Char('j') => app.file_picker_next(),
+        KeyCode::Right | KeyCode::Char('l') | KeyCode::Char(' ') => {
+            if let Some(state) = &mut app.file_picker_state {
+                state.toggle_current();
+            }
         }
         _ => {}
     }
@@ -1064,7 +1249,15 @@ async fn handle_fallback_key_event(key: KeyEvent, app: &mut TuiApp) -> anyhow::R
 
     match key.code {
         KeyCode::Char(c) => app.input.insert(c),
-        KeyCode::Backspace => app.input.delete_char_before_cursor(),
+        KeyCode::Backspace => {
+            if app.input.is_empty() {
+                if let Some(path) = app.remove_last_composer_attachment() {
+                    app.add_toast(format!("Removed attachment: {}", path), "-");
+                }
+            } else {
+                app.input.delete_char_before_cursor();
+            }
+        }
         KeyCode::Delete => app.input.delete_char_at_cursor(),
         KeyCode::Left => app.input.move_cursor_left(),
         KeyCode::Right => app.input.move_cursor_right(),
@@ -1217,9 +1410,371 @@ pub fn titled_block(title: &str) -> Block<'_> {
 mod tests {
     use super::*;
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    use ratatui::{backend::TestBackend, Terminal};
+    use std::path::Path;
+    use unicode_width::UnicodeWidthStr;
 
     fn key(code: KeyCode) -> KeyEvent {
         KeyEvent::new(code, KeyModifiers::NONE)
+    }
+
+    fn render_ui_text(app: &TuiApp, width: u16, height: u16) -> String {
+        render_ui_lines(app, width, height).join("\n")
+    }
+
+    fn render_ui_lines(app: &TuiApp, width: u16, height: u16) -> Vec<String> {
+        let backend = TestBackend::new(width, height);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|frame| draw_ui(frame, app))
+            .expect("render ui");
+        let buffer = terminal.backend().buffer();
+        (0..height)
+            .map(|y| rendered_buffer_line(buffer, width, y))
+            .collect()
+    }
+
+    fn rendered_cell_fg_for_text(
+        app: &TuiApp,
+        width: u16,
+        height: u16,
+        needle: &str,
+    ) -> Option<ratatui::style::Color> {
+        let backend = TestBackend::new(width, height);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|frame| draw_ui(frame, app))
+            .expect("render ui");
+        let buffer = terminal.backend().buffer();
+        for y in 0..height {
+            let line = rendered_buffer_line(buffer, width, y);
+            if let Some(byte_idx) = line.find(needle) {
+                let x = UnicodeWidthStr::width(&line[..byte_idx]) as u16;
+                return Some(buffer[(x, y)].fg);
+            }
+        }
+        None
+    }
+
+    fn rendered_buffer_line(buffer: &ratatui::buffer::Buffer, width: u16, y: u16) -> String {
+        let mut line = String::new();
+        let mut x = 0u16;
+        while x < width {
+            let symbol = buffer[(x, y)].symbol();
+            line.push_str(symbol);
+            let symbol_width = UnicodeWidthStr::width(symbol).max(1) as u16;
+            x = x.saturating_add(symbol_width);
+        }
+        line.trim_end().to_string()
+    }
+
+    fn write_snapshot_if_requested(name: &str, lines: &[String]) {
+        let Ok(dir) = std::env::var("PRIORITY_AGENT_TUI_SNAPSHOT_DIR") else {
+            return;
+        };
+        let dir = Path::new(&dir);
+        std::fs::create_dir_all(dir).expect("create snapshot directory");
+        let normalized = normalize_snapshot_lines(lines);
+        std::fs::write(dir.join(format!("{name}.txt")), normalized.join("\n"))
+            .expect("write snapshot");
+    }
+
+    fn normalize_snapshot_lines(lines: &[String]) -> Vec<String> {
+        lines
+            .iter()
+            .map(|line| normalize_snapshot_line(line))
+            .collect()
+    }
+
+    fn normalize_snapshot_line(line: &str) -> String {
+        let mut normalized = String::with_capacity(line.len());
+        let mut rest = line;
+        while let Some(idx) = rest.find("sess_") {
+            normalized.push_str(&rest[..idx]);
+            let candidate = &rest[idx..];
+            let suffix_len = candidate["sess_".len()..]
+                .chars()
+                .take_while(|ch| ch.is_ascii_alphanumeric())
+                .map(char::len_utf8)
+                .sum::<usize>();
+            if suffix_len == 0 {
+                normalized.push_str("sess_");
+                rest = &candidate["sess_".len()..];
+            } else {
+                normalized.push_str("sess_demo");
+                rest = &candidate["sess_".len() + suffix_len..];
+            }
+        }
+        normalized.push_str(rest);
+        normalized
+    }
+
+    fn assert_snapshot_display_width(lines: &[String], width: u16, height: u16) {
+        assert_eq!(lines.len(), usize::from(height));
+        for (line_index, line) in lines.iter().enumerate() {
+            let display_width = UnicodeWidthStr::width(line.as_str());
+            assert!(
+                display_width <= usize::from(width),
+                "{}x{} snapshot line {} has display width {}: {:?}",
+                width,
+                height,
+                line_index + 1,
+                display_width,
+                line
+            );
+        }
+    }
+
+    fn assert_no_sidebar_overlay_bleed(lines: &[String], width: u16, height: u16) {
+        if !matches!(
+            sidebar_layout(ratatui::layout::Rect {
+                x: 0,
+                y: 0,
+                width,
+                height,
+            }),
+            SidebarLayout::Overlay { .. }
+        ) {
+            return;
+        }
+
+        for line in lines {
+            let trimmed_start = line.trim_start();
+            if !trimmed_start.starts_with('│') {
+                continue;
+            }
+            let Some(right_border) = line.rfind('│') else {
+                continue;
+            };
+            assert!(
+                line[right_border + '│'.len_utf8()..]
+                    .chars()
+                    .all(char::is_whitespace),
+                "sidebar overlay should not leave transcript text after its right border: {line:?}"
+            );
+        }
+    }
+
+    fn opencode_alignment_fixture() -> TuiApp {
+        let mut app = TuiApp::new();
+        app.session_manager = crate::tui::session_manager::TuiSessionManager::in_memory().unwrap();
+        let _session_id = app
+            .session_manager
+            .start_session("TUI visual review", "deepseek-v4-flash")
+            .unwrap();
+        app.session_manager
+            .add_message(
+                crate::state::MessageRole::User,
+                "Please inspect the current TUI layout.",
+            )
+            .unwrap();
+        app.session_manager
+            .add_message(
+                crate::state::MessageRole::Assistant,
+                "I am checking the project status and terminal layout.",
+            )
+            .unwrap();
+        app.sidebar_visible = true;
+        app.is_querying = true;
+        app.facade_snapshot.provider_request.phase =
+            crate::engine::runtime_facade::ProviderPhase::Started;
+        app.facade_snapshot.provider_request.provider_family = Some("openai_compatible".into());
+        app.facade_snapshot.provider_request.model = Some("deepseek-v4-flash".into());
+        app.facade_snapshot.provider_request.elapsed_ms = 3_200;
+        app.history.push_back("cargo check current TUI".to_string());
+        app.prompt_stash = Some("review the latest TUI run".to_string());
+        app.composer_attachments.push("Cargo.toml".to_string());
+        app.input
+            .insert_str("Check the TUI layout and report any regressions.");
+        app.messages.push(crate::state::MessageItem {
+            id: "user_snapshot".to_string(),
+            role: crate::state::MessageRole::User,
+            content: "Please inspect the current TUI layout.".to_string(),
+            timestamp: std::time::SystemTime::UNIX_EPOCH,
+            metadata: Default::default(),
+        });
+        app.messages.push(crate::state::MessageItem {
+            id: "assistant_snapshot".to_string(),
+            role: crate::state::MessageRole::Assistant,
+            content: "<think>internal reasoning should not dominate the screen</think>\nI am checking the project status and terminal layout.".to_string(),
+            timestamp: std::time::SystemTime::UNIX_EPOCH,
+            metadata: [
+                ("model".to_string(), "deepseek-v4-flash".to_string()),
+                ("total_tokens".to_string(), "1889".to_string()),
+                ("elapsed_ms".to_string(), "2700".to_string()),
+            ]
+            .into_iter()
+            .collect(),
+        });
+
+        let mut running = crate::tui::tool_view::ToolRunView::new(
+            "tool_snapshot_check".to_string(),
+            "bash".to_string(),
+        );
+        running.push_args_delta(r#"{"command":"cargo check -q"}"#);
+        running.mark_running("bash".to_string());
+        running.push_progress("waiting for cargo metadata".to_string());
+        app.tool_runs_snapshot.push(running);
+        app.runtime_state_snapshot
+            .tool_uses
+            .push(crate::state::RuntimeToolUse {
+                id: "tool_snapshot_check".to_string(),
+                name: "bash".to_string(),
+                summary: "Running cargo".to_string(),
+                status: crate::state::RuntimeToolStatus::Running,
+                active: true,
+                arguments: None,
+                latest_progress: Some("waiting for cargo metadata".to_string()),
+                result_preview: None,
+                elapsed_ms: Some(1_200),
+                operation_kind: None,
+                ui_render_kind: None,
+                read_only: None,
+                concurrency_safe: None,
+                destructive: None,
+                input_paths: Vec::new(),
+                transcript_summary: Some("[Shell] Running cargo".to_string()),
+            });
+        app
+    }
+
+    fn completed_tool_turn_fixture() -> TuiApp {
+        let mut app = TuiApp::new();
+        app.session_manager = crate::tui::session_manager::TuiSessionManager::in_memory().unwrap();
+        let _session_id = app
+            .session_manager
+            .start_session("Cargo validation pass", "deepseek-v4-flash")
+            .unwrap();
+        app.session_manager
+            .add_message(
+                crate::state::MessageRole::User,
+                "Run cargo check and summarize the result.",
+            )
+            .unwrap();
+        app.session_manager
+            .add_message(
+                crate::state::MessageRole::Assistant,
+                "cargo check completed successfully.",
+            )
+            .unwrap();
+        app.sidebar_visible = false;
+        app.facade_snapshot.provider_request.provider_family = Some("openai_compatible".into());
+        app.facade_snapshot.provider_request.model = Some("deepseek-v4-flash".into());
+        app.history.push_back("cargo check -q".to_string());
+        app.messages.push(crate::state::MessageItem {
+            id: "user_completed_tool".to_string(),
+            role: crate::state::MessageRole::User,
+            content: "Run cargo check and summarize the result.".to_string(),
+            timestamp: std::time::SystemTime::UNIX_EPOCH,
+            metadata: Default::default(),
+        });
+
+        let mut completed = crate::tui::tool_view::ToolRunView::new(
+            "tool_completed_check".to_string(),
+            "bash".to_string(),
+        );
+        completed.push_args_delta(r#"{"command":"cargo check -q"}"#);
+        completed.mark_running("bash".to_string());
+        completed.mark_complete("Result: OK\ncargo check finished successfully".to_string());
+        app.tool_runs_by_message_id
+            .insert("user_completed_tool".to_string(), vec![completed]);
+
+        app.messages.push(crate::state::MessageItem {
+            id: "assistant_completed_tool".to_string(),
+            role: crate::state::MessageRole::Assistant,
+            content: "Done. `cargo check -q` completed successfully, and there are no compile errors in this validation pass.".to_string(),
+            timestamp: std::time::SystemTime::UNIX_EPOCH,
+            metadata: [
+                ("model_label".to_string(), "deepseek-v4-flash".to_string()),
+                ("completion_tokens".to_string(), "42".to_string()),
+                ("elapsed_ms".to_string(), "1800".to_string()),
+                ("tool_count".to_string(), "1".to_string()),
+                ("validation_status".to_string(), "passed".to_string()),
+            ]
+            .into_iter()
+            .collect(),
+        });
+        app
+    }
+
+    fn provider_failure_turn_fixture() -> TuiApp {
+        let mut app = TuiApp::new();
+        app.session_manager = crate::tui::session_manager::TuiSessionManager::in_memory().unwrap();
+        let _session_id = app
+            .session_manager
+            .start_session("DeepSeek provider failure", "deepseek-v4-flash")
+            .unwrap();
+        app.session_manager
+            .add_message(crate::state::MessageRole::User, "你好")
+            .unwrap();
+        app.session_manager
+            .add_message(
+                crate::state::MessageRole::Assistant,
+                "[Error: Failed to get response from deepseek API]",
+            )
+            .unwrap();
+        app.sidebar_visible = false;
+        app.facade_snapshot.provider_request.provider_family = Some("openai_compatible".into());
+        app.facade_snapshot.provider_request.model = Some("deepseek-v4-flash".into());
+        app.history.push_back("你好".to_string());
+        app.messages.push(crate::state::MessageItem {
+            id: "user_provider_failure".to_string(),
+            role: crate::state::MessageRole::User,
+            content: "你好".to_string(),
+            timestamp: std::time::SystemTime::UNIX_EPOCH,
+            metadata: Default::default(),
+        });
+        app.messages.push(crate::state::MessageItem {
+            id: "assistant_provider_failure".to_string(),
+            role: crate::state::MessageRole::Assistant,
+            content: "[Error: Failed to get response from deepseek API]".to_string(),
+            timestamp: std::time::SystemTime::UNIX_EPOCH,
+            metadata: [
+                ("model_label".to_string(), "deepseek-v4-flash".to_string()),
+                ("provider_phase".to_string(), "provider error".to_string()),
+            ]
+            .into_iter()
+            .collect(),
+        });
+        app
+    }
+
+    #[test]
+    fn snapshot_normalization_replaces_volatile_session_ids() {
+        let lines = vec![
+            "◈ sess_abc · deepseek-v4-flash · auto".to_string(),
+            "● auto · sess_123def · openai_compatible".to_string(),
+            "no session marker here".to_string(),
+        ];
+
+        let normalized = normalize_snapshot_lines(&lines).join("\n");
+
+        assert!(normalized.contains("sess_demo · deepseek-v4-flash"));
+        assert!(normalized.contains("● auto · sess_demo · openai_compatible"));
+        assert!(normalized.contains("no session marker here"));
+        assert!(!normalized.contains("sess_abc"));
+        assert!(!normalized.contains("sess_123def"));
+    }
+
+    #[test]
+    fn snapshot_width_assertion_uses_terminal_display_width() {
+        let cjk_wide_line = vec!["你好abc".to_string()];
+
+        assert!(std::panic::catch_unwind(|| {
+            assert_snapshot_display_width(&cjk_wide_line, 5, 1)
+        })
+        .is_err());
+        assert_snapshot_display_width(&cjk_wide_line, 7, 1);
+    }
+
+    #[test]
+    fn rendered_snapshot_lines_do_not_insert_placeholder_spaces_after_cjk() {
+        let app = provider_failure_turn_fixture();
+
+        let rendered = render_ui_text(&app, 100, 30);
+
+        assert!(rendered.contains("你好"));
+        assert!(!rendered.contains("你 好"));
     }
 
     #[tokio::test]
@@ -1238,6 +1793,95 @@ mod tests {
             .unwrap();
         assert_eq!(app.shortcut_help_filter, "d");
         assert_eq!(app.mode, app::AppMode::ShortcutHelp);
+    }
+
+    #[tokio::test]
+    async fn ctrl_c_cancels_active_query_without_quitting() {
+        let mut app = TuiApp::new();
+        app.is_querying = true;
+        app.messages.push(crate::state::MessageItem {
+            id: "assistant_active".to_string(),
+            role: crate::state::MessageRole::Assistant,
+            content: String::new(),
+            timestamp: std::time::SystemTime::UNIX_EPOCH,
+            metadata: Default::default(),
+        });
+
+        let should_quit = handle_key_event(
+            KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL),
+            &mut app,
+        )
+        .await
+        .unwrap();
+
+        assert!(!should_quit);
+        assert!(!app.is_querying);
+        assert_eq!(app.mode, app::AppMode::Chat);
+        assert!(app
+            .messages
+            .last()
+            .unwrap()
+            .content
+            .contains("[Cancelled: Run interrupted]"));
+    }
+
+    #[tokio::test]
+    async fn chat_backspace_removes_last_attachment_when_input_empty() {
+        let mut app = TuiApp::new();
+        app.attach_context_path("Cargo.toml").unwrap();
+
+        handle_key_event(key(KeyCode::Backspace), &mut app)
+            .await
+            .unwrap();
+
+        assert_eq!(app.composer_attachment_count(), 0);
+        assert!(app
+            .toasts
+            .iter()
+            .any(|toast| toast.message.contains("Removed attachment: Cargo.toml")));
+    }
+
+    #[tokio::test]
+    async fn chat_backspace_keeps_attachments_when_editing_text() {
+        let mut app = TuiApp::new();
+        app.attach_context_path("Cargo.toml").unwrap();
+        app.input.insert_str("abc");
+
+        handle_key_event(key(KeyCode::Backspace), &mut app)
+            .await
+            .unwrap();
+
+        assert_eq!(app.input.value(), "ab");
+        assert_eq!(app.composer_attachment_count(), 1);
+    }
+
+    #[tokio::test]
+    async fn ctrl_r_prompt_picker_restores_selected_prompt() {
+        let mut app = TuiApp::new();
+        app.prompt_stash = Some("stashed draft".to_string());
+        app.history.push_back("older prompt".to_string());
+        app.history.push_back("newer prompt".to_string());
+
+        handle_key_event(
+            KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL),
+            &mut app,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(app.mode, app::AppMode::PromptHistory);
+        assert_eq!(app.prompt_picker_items()[0].0, "stash");
+
+        handle_key_event(key(KeyCode::Down), &mut app)
+            .await
+            .unwrap();
+        handle_key_event(key(KeyCode::Enter), &mut app)
+            .await
+            .unwrap();
+
+        assert_eq!(app.mode, app::AppMode::Chat);
+        assert_eq!(app.input.value(), "newer prompt");
+        assert_eq!(app.prompt_stash.as_deref(), Some("stashed draft"));
     }
 
     #[tokio::test]
@@ -1269,6 +1913,287 @@ mod tests {
         assert_eq!(
             app.session_manager.current_session_id(),
             Some(beta.as_str())
+        );
+    }
+
+    #[test]
+    fn sidebar_layout_overlays_on_narrow_terminals() {
+        let area = ratatui::layout::Rect {
+            x: 0,
+            y: 0,
+            width: 100,
+            height: 30,
+        };
+
+        let layout = sidebar_layout(area);
+
+        match layout {
+            SidebarLayout::Overlay { sidebar, main } => {
+                assert_eq!(main, area);
+                assert!(sidebar.width <= 44);
+                assert_eq!(sidebar.height, 24);
+            }
+            SidebarLayout::Inline { .. } => panic!("narrow terminal should use overlay sidebar"),
+        }
+    }
+
+    #[test]
+    fn sidebar_layout_inlines_on_wide_terminals() {
+        let area = ratatui::layout::Rect {
+            x: 0,
+            y: 0,
+            width: 160,
+            height: 45,
+        };
+
+        let layout = sidebar_layout(area);
+
+        match layout {
+            SidebarLayout::Inline { sidebar, main } => {
+                assert_eq!(sidebar.width, INLINE_SIDEBAR_WIDTH);
+                assert!(main.width >= 120);
+            }
+            SidebarLayout::Overlay { .. } => panic!("wide terminal should use inline sidebar"),
+        }
+    }
+
+    #[test]
+    fn sidebar_layout_overlays_at_120_columns_to_protect_timeline() {
+        let area = ratatui::layout::Rect {
+            x: 0,
+            y: 0,
+            width: 120,
+            height: 35,
+        };
+
+        let layout = sidebar_layout(area);
+
+        match layout {
+            SidebarLayout::Overlay { sidebar, main } => {
+                assert_eq!(main, area);
+                assert!(sidebar.width >= 40);
+            }
+            SidebarLayout::Inline { .. } => {
+                panic!("120-column terminal should use overlay sidebar")
+            }
+        }
+    }
+
+    #[test]
+    fn rendered_query_state_has_one_active_wait_label_at_100x30() {
+        let mut app = TuiApp::new();
+        app.is_querying = true;
+        app.facade_snapshot.provider_request.phase =
+            crate::engine::runtime_facade::ProviderPhase::Started;
+        app.facade_snapshot.provider_request.provider_family =
+            Some("openai_compatible".to_string());
+        app.facade_snapshot.provider_request.model = Some("deepseek-v4-flash".to_string());
+        app.facade_snapshot.provider_request.elapsed_ms = 2_700;
+        app.sidebar_visible = true;
+
+        let rendered = render_ui_text(&app, 100, 30);
+
+        assert_eq!(rendered.matches("waiting on DeepSeek").count(), 1);
+        assert!(!rendered.contains("Thinking..."));
+        assert!(rendered.contains("? shortcuts"));
+    }
+
+    #[test]
+    fn rendered_mid_width_keeps_composer_footer_clear_at_120x35() {
+        let mut app = TuiApp::new();
+        app.is_querying = true;
+        app.facade_snapshot.provider_request.phase =
+            crate::engine::runtime_facade::ProviderPhase::Started;
+        app.facade_snapshot.provider_request.provider_family = Some("deepseek".to_string());
+        app.facade_snapshot.provider_request.model = Some("deepseek-v4-flash".to_string());
+        app.sidebar_visible = true;
+
+        let rendered = render_ui_text(&app, 120, 35);
+
+        assert_eq!(rendered.matches("waiting on DeepSeek").count(), 1);
+        assert!(!rendered.contains("Thinking..."));
+        assert!(rendered.contains("Message Priority Agent"));
+        assert!(rendered.contains("? shortcuts"));
+    }
+
+    #[test]
+    fn rendered_wide_sidebar_keeps_footer_and_composer_metadata() {
+        let mut app = TuiApp::new();
+        app.sidebar_visible = true;
+        app.history.push_back("previous prompt".to_string());
+        app.prompt_stash = Some("stashed prompt".to_string());
+
+        let rendered = render_ui_text(&app, 160, 45);
+
+        assert!(rendered.contains("hist:1"));
+        assert!(rendered.contains("stash"));
+        assert!(rendered.contains("? shortcuts"));
+    }
+
+    #[test]
+    fn rendered_turn_visual_state_stays_clean_across_common_viewports() {
+        for (width, height) in [(100, 30), (120, 35), (160, 45)] {
+            let app = opencode_alignment_fixture();
+            let rendered = render_ui_text(&app, width, height);
+
+            assert_eq!(
+                rendered.matches("Running cargo").count(),
+                1,
+                "{width}x{height} should have one active tool label"
+            );
+            assert_eq!(
+                rendered.matches("waiting on ").count(),
+                0,
+                "{width}x{height} should not duplicate provider wait while a concrete tool is active"
+            );
+            assert!(
+                !rendered.contains("Thinking..."),
+                "{width}x{height} should not show the old placeholder"
+            );
+            assert!(
+                !rendered.contains("internal reasoning should not dominate"),
+                "{width}x{height} should keep hidden reasoning collapsed"
+            );
+            assert!(
+                rendered.contains("files:1") && rendered.contains("/attach preview"),
+                "{width}x{height} should keep attachment affordances visible"
+            );
+            assert!(
+                rendered.contains("? shortcuts"),
+                "{width}x{height} should keep footer visible"
+            );
+        }
+    }
+
+    #[test]
+    fn opencode_alignment_snapshots_can_be_dumped_for_visual_review() {
+        for (width, height) in [(100, 30), (120, 35), (160, 45)] {
+            let app = opencode_alignment_fixture();
+            let lines = render_ui_lines(&app, width, height);
+            let rendered = lines.join("\n");
+            write_snapshot_if_requested(&format!("opencode-alignment-{width}x{height}"), &lines);
+
+            assert_snapshot_display_width(&lines, width, height);
+            assert_eq!(rendered.matches("Running cargo").count(), 1);
+            assert_eq!(rendered.matches("waiting on ").count(), 0);
+            assert!(rendered.contains("1.2s · esc to interrupt"));
+            assert!(!rendered.contains("ms · esc to interrupt"));
+            assert_no_sidebar_overlay_bleed(&lines, width, height);
+            assert!(!rendered.contains("failed deserialization of"));
+            assert!(!rendered.contains("async_openai::error"));
+            assert!(!rendered.contains("Thinking..."));
+            assert!(!rendered.contains("sess_demo · auto ·"));
+            assert!(!rendered.contains("auto · DeepSeek"));
+            assert!(!rendered.contains("deepseek-v4-flash · auto"));
+            assert!(!rendered.contains(&format!("v{}", env!("CARGO_PKG_VERSION"))));
+            assert!(!rendered.contains("openai_compatible"));
+            assert!(rendered.contains("deepseek-v4-flash"));
+            if width >= 140 {
+                assert!(rendered.lines().any(|line| {
+                    line.contains("◈ ") && line.contains(" · DeepSeek / deepseek-v4-flash")
+                }));
+            }
+            assert!(rendered.contains("DeepSeek / deepseek-v4-flash"));
+            assert!(rendered.contains("files:1"));
+            assert!(rendered.contains("? shortcuts"));
+        }
+    }
+
+    #[test]
+    fn completed_tool_turn_snapshots_can_be_dumped_for_visual_review() {
+        for (width, height) in [(100, 30), (120, 35), (160, 45)] {
+            let app = completed_tool_turn_fixture();
+            let lines = render_ui_lines(&app, width, height);
+            let rendered = lines.join("\n");
+            write_snapshot_if_requested(&format!("completed-tool-turn-{width}x{height}"), &lines);
+
+            assert_snapshot_display_width(&lines, width, height);
+            assert!(
+                rendered.matches("cargo check").count() >= 2,
+                "{width}x{height} should show the command and final summary"
+            );
+            assert!(rendered.contains("done"));
+            assert!(rendered.contains("validation passed"));
+            assert!(rendered.contains("1 tools"));
+            assert!(rendered.contains("deepseek-v4-flash"));
+            assert!(rendered.lines().any(|line| {
+                line.contains("◈ ") && line.contains(" · DeepSeek / deepseek-v4-flash")
+            }));
+            assert!(rendered.contains("DeepSeek / deepseek-v4-flash"));
+            assert!(!rendered.contains("unknown"));
+            assert!(!rendered.contains("sess_demo · auto ·"));
+            assert!(!rendered.contains("auto · DeepSeek"));
+            assert!(!rendered.contains("deepseek-v4-flash · auto"));
+            assert!(!rendered.contains(&format!("v{}", env!("CARGO_PKG_VERSION"))));
+            assert!(!rendered.contains("openai_compatible"));
+            assert!(!rendered.contains("waiting on "));
+            assert!(!rendered.contains("Thinking..."));
+            assert!(!rendered.contains("async_openai::error"));
+            assert!(rendered.contains("? shortcuts"));
+        }
+    }
+
+    #[test]
+    fn provider_failure_turn_snapshots_stay_product_shaped() {
+        for (width, height) in [(100, 30), (120, 35), (160, 45)] {
+            let app = provider_failure_turn_fixture();
+            let lines = render_ui_lines(&app, width, height);
+            let rendered = lines.join("\n");
+            write_snapshot_if_requested(&format!("provider-failure-turn-{width}x{height}"), &lines);
+
+            assert_snapshot_display_width(&lines, width, height);
+            assert!(rendered.contains("Error"));
+            assert!(rendered.contains("Failed to get response from deepseek API"));
+            assert!(rendered.contains("provider error"));
+            assert!(rendered.contains("deepseek-v4-flash"));
+            assert!(rendered.lines().any(|line| {
+                line.contains("◈ ") && line.contains(" · DeepSeek / deepseek-v4-flash")
+            }));
+            assert!(rendered.contains("DeepSeek / deepseek-v4-flash"));
+            assert!(!rendered.contains("Reply"));
+            assert!(!rendered.contains("[Error:"));
+            assert!(!rendered.contains("failed deserialization of"));
+            assert!(!rendered.contains("async_openai::error"));
+            assert!(!rendered.contains("Thinking..."));
+            assert!(!rendered.contains("sess_demo · auto ·"));
+            assert!(!rendered.contains("auto · DeepSeek"));
+            assert!(!rendered.contains("deepseek-v4-flash · auto"));
+            assert!(!rendered.contains(&format!("v{}", env!("CARGO_PKG_VERSION"))));
+            assert!(!rendered.contains("openai_compatible"));
+            assert!(!rendered.contains("waiting on "));
+            assert!(rendered.contains("? shortcuts"));
+        }
+    }
+
+    #[test]
+    fn completed_tool_turn_uses_semantic_styles() {
+        let app = completed_tool_turn_fixture();
+
+        assert_eq!(
+            rendered_cell_fg_for_text(&app, 120, 35, "Ran cargo"),
+            Some(app.theme.tokens.tone.ok)
+        );
+        assert_eq!(
+            rendered_cell_fg_for_text(&app, 120, 35, "Reply"),
+            Some(app.theme.tokens.tone.ok)
+        );
+        assert_eq!(
+            rendered_cell_fg_for_text(&app, 120, 35, "DeepSeek"),
+            Some(app.theme.tokens.fg.faint)
+        );
+    }
+
+    #[test]
+    fn provider_failure_turn_uses_error_semantic_style() {
+        let app = provider_failure_turn_fixture();
+
+        assert_eq!(
+            rendered_cell_fg_for_text(&app, 120, 35, "Error"),
+            Some(app.theme.tokens.card.error.color)
+        );
+        assert_ne!(
+            rendered_cell_fg_for_text(&app, 120, 35, "Error"),
+            Some(app.theme.tokens.tone.ok)
         );
     }
 }

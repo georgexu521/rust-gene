@@ -573,6 +573,11 @@ pub fn default_command_registry() -> CommandRegistry {
     registry.register(&CMD_CONTEXT);
     registry.register(&CMD_GIT);
     registry.register(&CMD_HISTORY);
+    registry.register(&CMD_PROMPT_HISTORY);
+    registry.register(&CMD_PROMPT_STASH);
+    registry.register(&CMD_PASTE);
+    registry.register(&CMD_ATTACH);
+    registry.register(&CMD_JUMP);
     registry.register(&CMD_MODE);
     registry.register(&CMD_PACKAGE);
     // Phase 9 Task 1: Advanced Agent Types

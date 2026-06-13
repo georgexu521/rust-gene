@@ -1,4 +1,6 @@
 use super::*;
+use crate::state::MessageItem;
+use crate::tui::view_model::timeline::estimate_tool_runs_height;
 use ratatui::{backend::TestBackend, Terminal};
 use std::{collections::HashMap, time::SystemTime};
 
@@ -33,11 +35,36 @@ fn render_permission_approval_text(
 }
 
 fn render_status_bar_text(app: &TuiApp) -> String {
-    let backend = TestBackend::new(260, 3);
+    render_status_bar_text_with_size(app, 260, 3)
+}
+
+fn render_status_bar_text_with_size(app: &TuiApp, width: u16, height: u16) -> String {
+    let backend = TestBackend::new(width, height);
     let mut terminal = Terminal::new(backend).unwrap();
     terminal
         .draw(|frame| {
             render_status_bar(frame, app, frame.area());
+        })
+        .unwrap();
+    terminal
+        .backend()
+        .buffer()
+        .content()
+        .iter()
+        .map(|cell| cell.symbol())
+        .collect::<String>()
+}
+
+fn render_input_area_text(app: &TuiApp) -> String {
+    render_input_area_text_with_size(app, 160, 8)
+}
+
+fn render_input_area_text_with_size(app: &TuiApp, width: u16, height: u16) -> String {
+    let backend = TestBackend::new(width, height);
+    let mut terminal = Terminal::new(backend).unwrap();
+    terminal
+        .draw(|frame| {
+            render_input_area(frame, app, frame.area());
         })
         .unwrap();
     terminal
@@ -66,6 +93,61 @@ fn render_tool_viewer_text(app: &TuiApp) -> String {
         .collect::<String>()
 }
 
+fn render_context_sidebar_text(app: &TuiApp) -> String {
+    render_sidebar_text(app, 80, 30)
+}
+
+fn render_sidebar_text(app: &TuiApp, width: u16, height: u16) -> String {
+    let backend = TestBackend::new(width, height);
+    let mut terminal = Terminal::new(backend).unwrap();
+    terminal
+        .draw(|frame| {
+            render_sidebar(frame, app, frame.area());
+        })
+        .unwrap();
+    terminal
+        .backend()
+        .buffer()
+        .content()
+        .iter()
+        .map(|cell| cell.symbol())
+        .collect::<String>()
+}
+
+fn render_shortcut_help_text(app: &TuiApp) -> String {
+    let backend = TestBackend::new(120, 80);
+    let mut terminal = Terminal::new(backend).unwrap();
+    terminal
+        .draw(|frame| {
+            render_shortcut_help(frame, app, frame.area());
+        })
+        .unwrap();
+    terminal
+        .backend()
+        .buffer()
+        .content()
+        .iter()
+        .map(|cell| cell.symbol())
+        .collect::<String>()
+}
+
+fn render_file_picker_text(app: &TuiApp) -> String {
+    let backend = TestBackend::new(120, 40);
+    let mut terminal = Terminal::new(backend).unwrap();
+    terminal
+        .draw(|frame| {
+            render_file_picker(frame, app, frame.area());
+        })
+        .unwrap();
+    terminal
+        .backend()
+        .buffer()
+        .content()
+        .iter()
+        .map(|cell| cell.symbol())
+        .collect::<String>()
+}
+
 #[test]
 fn transcript_window_prefers_active_turn_when_bottom_anchored() {
     let app = TuiApp::new();
@@ -76,7 +158,7 @@ fn transcript_window_prefers_active_turn_when_bottom_anchored() {
         msg(MessageRole::Assistant, "current answer"),
     ];
     let refs: Vec<_> = items.iter().collect();
-    let transcript = transcript_items(&refs, &app);
+    let transcript = timeline_items(&refs, &app);
 
     let window = transcript_window(&transcript, refs.len(), true, 6, 80, &app);
 
@@ -95,7 +177,7 @@ fn transcript_window_includes_recent_context_when_it_fits() {
         msg(MessageRole::Assistant, "current answer"),
     ];
     let refs: Vec<_> = items.iter().collect();
-    let transcript = transcript_items(&refs, &app);
+    let transcript = timeline_items(&refs, &app);
 
     let window = transcript_window(&transcript, refs.len(), true, 7, 80, &app);
 
@@ -115,7 +197,7 @@ fn transcript_window_keeps_recent_turn_context_when_answer_overflows() {
         msg(MessageRole::Assistant, &long_answer),
     ];
     let refs: Vec<_> = items.iter().collect();
-    let transcript = transcript_items(&refs, &app);
+    let transcript = timeline_items(&refs, &app);
 
     let window = transcript_window(&transcript, refs.len(), true, 8, 80, &app);
 
@@ -136,7 +218,7 @@ fn transcript_window_keeps_active_prompt_when_previous_turn_is_too_tall() {
         msg(MessageRole::Assistant, &long_answer),
     ];
     let refs: Vec<_> = items.iter().collect();
-    let transcript = transcript_items(&refs, &app);
+    let transcript = timeline_items(&refs, &app);
 
     let window = transcript_window(&transcript, refs.len(), true, 8, 80, &app);
 
@@ -154,7 +236,7 @@ fn transcript_window_preserves_manual_scroll_offset() {
         msg(MessageRole::User, "three"),
     ];
     let refs: Vec<_> = items.iter().collect();
-    let transcript = transcript_items(&refs, &app);
+    let transcript = timeline_items(&refs, &app);
 
     let window = transcript_window(&transcript, 1, false, 6, 80, &app);
 
@@ -180,10 +262,10 @@ fn transcript_items_insert_tool_runs_after_active_user() {
         .insert(items[2].id.clone(), vec![run]);
     let refs: Vec<_> = items.iter().collect();
 
-    let transcript = transcript_items(&refs, &app);
+    let transcript = timeline_items(&refs, &app);
 
     assert_eq!(transcript.len(), 5);
-    assert!(matches!(transcript[3], TranscriptItem::ToolRuns(_)));
+    assert!(matches!(transcript[3], TimelineItem::ToolRuns { .. }));
     let window = transcript_window(&transcript, refs.len(), true, 8, 80, &app);
     assert_eq!(window.start, 2);
 }
@@ -207,11 +289,11 @@ fn transcript_items_keep_tool_runs_for_previous_turns() {
     );
     let refs: Vec<_> = items.iter().collect();
 
-    let transcript = transcript_items(&refs, &app);
+    let transcript = timeline_items(&refs, &app);
 
     assert_eq!(transcript.len(), 6);
-    assert!(matches!(transcript[1], TranscriptItem::ToolRuns(_)));
-    assert!(matches!(transcript[4], TranscriptItem::ToolRuns(_)));
+    assert!(matches!(transcript[1], TimelineItem::ToolRuns { .. }));
+    assert!(matches!(transcript[4], TimelineItem::ToolRuns { .. }));
 }
 
 #[test]
@@ -242,10 +324,297 @@ fn render_status_bar_shows_debug_density_and_active_tools() {
 
     let rendered = render_status_bar_text(&app);
 
-    assert!(rendered.contains("esc to interrupt"));
+    assert!(!rendered.contains("esc to interrupt"));
     assert!(rendered.contains("tools:"));
     assert!(rendered.contains("msgs:"));
     assert!(rendered.contains("? shortcuts"));
+}
+
+#[test]
+fn render_status_bar_keeps_left_padding() {
+    let app = TuiApp::new();
+
+    let rendered = render_status_bar_text(&app);
+
+    assert!(rendered.starts_with(' '));
+    assert!(rendered.contains("● auto"));
+}
+
+#[test]
+fn render_status_bar_compacts_long_provider_model_without_losing_shortcuts() {
+    let mut app = TuiApp::new();
+    app.facade_snapshot.provider_request.provider_family = Some("openai_compatible".to_string());
+    app.facade_snapshot.provider_request.model =
+        Some("deepseek-v4-flash-with-a-very-long-routing-suffix".to_string());
+
+    let rendered = render_status_bar_text_with_size(&app, 56, 2);
+
+    assert!(rendered.starts_with(' '));
+    assert!(rendered.contains("● auto"));
+    assert!(rendered.contains("DeepSeek /"));
+    assert!(rendered.contains("? shortcuts"));
+    assert!(rendered.contains('…'));
+    assert!(!rendered.contains("v0.1.0"));
+    assert!(!rendered.contains("very-long-routing-suffix"));
+}
+
+#[test]
+fn render_status_bar_has_explicit_fallback_for_tiny_widths() {
+    let mut app = TuiApp::new();
+    app.facade_snapshot.provider_request.provider_family =
+        Some("openai_compatible_with_long_suffix".to_string());
+    app.facade_snapshot.provider_request.model =
+        Some("deepseek-v4-flash-with-a-very-long-routing-suffix".to_string());
+
+    let rendered = render_status_bar_text_with_size(&app, 24, 1);
+    let first_line = rendered.as_str();
+
+    assert!(first_line.starts_with(' '));
+    assert!(first_line.contains("● auto"));
+    assert!(first_line.contains('…'));
+    assert!(!first_line.contains("? shortcuts"));
+    assert!(unicode_width::UnicodeWidthStr::width(first_line) <= 24);
+}
+
+#[test]
+fn render_input_area_shows_single_active_status_without_replacing_prompt() {
+    let mut app = TuiApp::new();
+    app.is_querying = true;
+    app.facade_snapshot.provider_request.phase =
+        crate::engine::runtime_facade::ProviderPhase::Started;
+    app.facade_snapshot.provider_request.provider_family = Some("openai_compatible".to_string());
+    app.facade_snapshot.provider_request.model = Some("deepseek-v4-flash".to_string());
+    app.facade_snapshot.provider_request.elapsed_ms = 2_700;
+
+    let rendered = render_input_area_text(&app);
+
+    assert!(rendered.contains("waiting on DeepSeek"));
+    assert!(rendered.contains("esc to interrupt"));
+    assert!(rendered.contains("Message Priority Agent"));
+    assert!(!rendered.contains("Thinking..."));
+}
+
+#[test]
+fn render_input_area_shows_context_strip_and_paste_count() {
+    let mut app = TuiApp::new();
+    app.history.push_back("previous prompt".to_string());
+    app.prompt_stash = Some("stashed prompt".to_string());
+    app.composer_attachments.push("Cargo.toml".to_string());
+    app.insert_paste(
+        (0..20)
+            .map(|i| format!("line {i}"))
+            .collect::<Vec<_>>()
+            .join("\n"),
+    );
+
+    let rendered = render_input_area_text(&app);
+
+    assert!(rendered.contains(&app.current_provider_label()));
+    assert!(rendered.contains(&app.current_model_label()));
+    assert!(!rendered.contains("auto · DeepSeek"));
+    assert!(rendered.contains("hist:1"));
+    assert!(rendered.contains("stash"));
+    assert!(rendered.contains("files:1"));
+    assert!(rendered.contains("Cargo.toml"));
+    assert!(rendered.contains("(file,"));
+    assert!(rendered.contains("/attach preview"));
+    assert!(rendered.contains("backspace removes last"));
+    assert!(rendered.contains("paste:1"));
+    assert!(rendered.contains("20 lines"));
+    assert!(rendered.contains("149 chars"));
+}
+
+#[test]
+fn render_input_area_shows_non_default_mode_in_context_strip() {
+    let mut app = TuiApp::new();
+    app.set_agent_mode(crate::engine::agent_mode::AgentMode::Plan);
+
+    let rendered = render_input_area_text(&app);
+
+    assert!(rendered.contains("plan ·"));
+}
+
+#[test]
+fn render_input_area_truncates_long_attachment_but_keeps_preview_hint() {
+    let mut app = TuiApp::new();
+    app.composer_attachments
+        .push("very/long/path/with/many/segments/and-a-wide-name-你好你好/file.rs".to_string());
+
+    let rendered = render_input_area_text_with_size(&app, 72, 8);
+
+    assert!(rendered.contains("files:1"));
+    assert!(rendered.contains("/attach preview"));
+    assert!(rendered.contains('…'));
+    assert!(!rendered.contains("backspace removes last"));
+    assert!(!rendered.contains("and-a-wide-name-你好你好/file.rs"));
+}
+
+#[test]
+fn render_input_area_compacts_context_strip_but_keeps_action_counts() {
+    let mut app = TuiApp::new();
+    app.facade_snapshot.provider_request.provider_family =
+        Some("openai_compatible_with_an_extra_long_route_name".to_string());
+    app.facade_snapshot.provider_request.model =
+        Some("deepseek-v4-flash-with-a-very-long-routing-suffix".to_string());
+    app.history.push_back("previous prompt".to_string());
+    app.prompt_stash = Some("stashed prompt".to_string());
+    app.composer_attachments.push("Cargo.toml".to_string());
+    app.insert_paste(
+        (0..18)
+            .map(|i| format!("long pasted context line {i}"))
+            .collect::<Vec<_>>()
+            .join("\n"),
+    );
+
+    let rendered = render_input_area_text_with_size(&app, 84, 8);
+
+    assert!(rendered.contains("files:1"));
+    assert!(rendered.contains("paste:1"));
+    assert!(rendered.contains("hist:1"));
+    assert!(rendered.contains("stash"));
+    assert!(rendered.contains("DeepSeek"));
+    assert!(rendered.contains('…'));
+    assert!(!rendered.contains("very-long-routing-suffix"));
+    assert!(!rendered.contains("long pasted context line"));
+}
+
+#[test]
+fn render_input_area_uses_dedicated_attachment_row_for_multiple_files() {
+    let mut app = TuiApp::new();
+    app.composer_attachments.push("Cargo.toml".to_string());
+    app.composer_attachments.push("src".to_string());
+    app.composer_attachments.push("docs".to_string());
+
+    let rendered = render_input_area_text(&app);
+
+    assert!(rendered.contains("files:3"));
+    assert!(rendered.contains("[1] Cargo.toml"));
+    assert!(rendered.contains("[2] src"));
+    assert!(rendered.contains("+1"));
+    assert!(rendered.contains("/attach preview"));
+}
+
+#[test]
+fn render_context_sidebar_shows_runtime_summary() {
+    let mut app = TuiApp::new();
+    app.sidebar_panel = SidebarPanel::Context;
+    app.history.push_back("previous prompt".to_string());
+    app.prompt_stash = Some("draft".to_string());
+    app.composer_attachments.push("Cargo.toml".to_string());
+    app.insert_paste(
+        (0..20)
+            .map(|i| format!("line {i}"))
+            .collect::<Vec<_>>()
+            .join("\n"),
+    );
+    let mut failed = ToolRunView::new("tool_1".to_string(), "bash".to_string());
+    failed.mark_complete("Result: ERROR\nfailed".to_string());
+    app.tool_runs_snapshot.push(failed);
+
+    let rendered = render_context_sidebar_text(&app);
+
+    assert!(rendered.contains("Session"));
+    assert!(rendered.contains("Runtime"));
+    assert!(rendered.contains("Composer"));
+    assert!(rendered.contains("Tools"));
+    assert!(rendered.contains("hist:1"));
+    assert!(rendered.contains("stash:yes"));
+    assert!(rendered.contains("files:1"));
+    assert!(rendered.contains("Cargo.toml"));
+    assert!(rendered.contains("(file,"));
+    assert!(rendered.contains("paste:1"));
+    assert!(rendered.contains("1 total"));
+    assert!(rendered.contains("1 failed"));
+}
+
+#[test]
+fn render_sessions_sidebar_shows_richer_session_rows() {
+    let mut app = TuiApp::new();
+    app.session_manager = crate::tui::session_manager::TuiSessionManager::in_memory().unwrap();
+    let session_id = app
+        .session_manager
+        .start_session("DeepSeek Work", "deepseek-v4-flash")
+        .unwrap();
+    app.session_manager
+        .add_message(MessageRole::User, "Please inspect the TUI sidebar preview")
+        .unwrap();
+    app.sidebar_selected = 0;
+
+    let rendered = render_context_sidebar_text(&app);
+
+    assert!(rendered.contains("›"));
+    assert!(rendered.contains("DeepSeek Work"));
+    assert!(rendered.contains(&session_id[..8]));
+    assert!(rendered.contains("deepseek-v4"));
+    assert!(rendered.contains("msgs"));
+    assert!(rendered.contains("you"));
+    assert!(rendered.contains("Please inspect"));
+}
+
+#[test]
+fn render_sessions_sidebar_metadata_fits_inline_width() {
+    let mut app = TuiApp::new();
+    app.session_manager = crate::tui::session_manager::TuiSessionManager::in_memory().unwrap();
+    let session_id = app
+        .session_manager
+        .start_session("DeepSeek Work", "deepseek-v4-flash")
+        .unwrap();
+    app.session_manager
+        .add_message(MessageRole::User, "Please inspect the TUI sidebar preview")
+        .unwrap();
+    app.session_manager
+        .add_message(
+            MessageRole::Assistant,
+            "Checking the sidebar preview width with a deliberately long assistant summary",
+        )
+        .unwrap();
+    app.sidebar_selected = 0;
+
+    let rendered = render_sidebar_text(&app, 40, 30);
+
+    assert!(rendered.contains(&session_id[..8]));
+    assert!(rendered.contains("deepseek-v4"));
+    assert!(rendered.contains("2 msgs"));
+    assert!(rendered.contains("Checking the sidebar"));
+    assert!(rendered.contains('…'));
+    assert!(!rendered.contains("2 m│"));
+    assert!(!rendered.contains("Please inspect the TUI sidebar prev│"));
+}
+
+#[test]
+fn session_preview_truncation_uses_display_width() {
+    let truncated = truncate_chars_to_width("你好你好你好 sidebar preview", 9);
+
+    assert!(truncated.ends_with('…'));
+    assert!(unicode_width::UnicodeWidthStr::width(truncated.as_str()) <= 9);
+    assert!(!truncated.contains("sidebar"));
+}
+
+#[test]
+fn render_shortcut_help_explains_sidebar_and_reasoning_expand() {
+    let app = TuiApp::new();
+
+    let rendered = render_shortcut_help_text(&app);
+
+    assert!(rendered.contains("expand reasoning or tool details"));
+    assert!(rendered.contains("Sidebar"));
+    assert!(rendered.contains("switch Sessions/Context panel"));
+    assert!(rendered.contains("filter sessions by title/id/model"));
+}
+
+#[test]
+fn render_file_picker_shows_attachment_controls() {
+    let mut app = TuiApp::new();
+    app.open_composer_file_picker(Some("."));
+
+    let rendered = render_file_picker_text(&app);
+
+    assert!(rendered.contains("Attach File Context"));
+    assert!(rendered.contains("/ filter files"));
+    assert!(rendered.contains("/"));
+    assert!(rendered.contains("enter"));
+    assert!(rendered.contains("attach file"));
+    assert!(rendered.contains("esc/q"));
 }
 
 #[test]

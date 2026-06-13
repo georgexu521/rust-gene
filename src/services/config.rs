@@ -107,6 +107,7 @@ pub struct AppConfig {
     /// 存储配置
     pub storage: StorageConfig,
     /// 功能开关
+    #[serde(default)]
     pub features: FeatureFlags,
     /// 引擎配置
     #[serde(default)]
@@ -416,7 +417,11 @@ pub fn format_config_summary(config: &AppConfig) -> String {
         config.api.base_url,
         config.api.model,
         config.api.temperature,
-        config.api.max_tokens.map(|v| v.to_string()).unwrap_or_else(|| "none".to_string()),
+        config
+            .api
+            .max_tokens
+            .map(|v| v.to_string())
+            .unwrap_or_else(|| "none".to_string()),
         config.ui.theme,
         config.ui.show_token_usage,
         config.storage.persistence_enabled,
@@ -890,6 +895,8 @@ impl Default for ApiConfig {
 pub struct UiConfig {
     pub theme: String,
     pub show_token_usage: bool,
+    #[serde(default)]
+    pub pinned_sessions: Vec<String>,
 }
 
 impl Default for UiConfig {
@@ -897,6 +904,7 @@ impl Default for UiConfig {
         Self {
             theme: "light".to_string(),
             show_token_usage: true,
+            pinned_sessions: Vec::new(),
         }
     }
 }
@@ -1079,11 +1087,14 @@ impl Default for StorageConfig {
 /// 功能开关
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct FeatureFlags {
+    #[serde(default)]
     pub mcp_enabled: bool,
+    #[serde(default = "default_true")]
     pub skills_enabled: bool,
+    #[serde(default = "default_true")]
     pub web_search: bool,
     /// 启用 LLM 驱动的记忆提取
-    #[serde(default)]
+    #[serde(default = "default_true")]
     pub llm_memory_extraction: bool,
     /// 插件信任模式: strict | warn | off
     #[serde(default = "default_plugin_trust_mode")]
@@ -1294,6 +1305,31 @@ mod tests {
         assert_eq!(config.api.base_url, "");
         assert!(config.storage.persistence_enabled);
         assert_eq!(config.engine.max_iterations, 50);
+        assert!(config.ui.pinned_sessions.is_empty());
+    }
+
+    #[test]
+    fn ui_config_round_trips_pinned_sessions_and_defaults_legacy_configs() {
+        let ui: UiConfig = toml::from_str(
+            r#"
+theme = "graphite"
+show_token_usage = true
+pinned_sessions = ["sess_a", "sess_b"]
+"#,
+        )
+        .unwrap();
+
+        assert_eq!(ui.pinned_sessions, vec!["sess_a", "sess_b"]);
+
+        let legacy: UiConfig = toml::from_str(
+            r#"
+theme = "graphite"
+show_token_usage = true
+"#,
+        )
+        .unwrap();
+
+        assert!(legacy.pinned_sessions.is_empty());
     }
 
     #[test]
@@ -1323,6 +1359,18 @@ mod tests {
         assert!(keys
             .iter()
             .any(|item| item["key"] == "tool_output.preview_direction"));
+    }
+
+    #[test]
+    fn feature_flags_deserialize_legacy_partial_config_with_defaults() {
+        let flags: FeatureFlags = toml::from_str("plugin_trust_mode = \"warn\"").unwrap();
+
+        assert!(!flags.mcp_enabled);
+        assert!(flags.skills_enabled);
+        assert!(flags.web_search);
+        assert!(flags.llm_memory_extraction);
+        assert_eq!(flags.plugin_trust_mode, "warn");
+        assert!(!flags.goals);
     }
 
     #[test]

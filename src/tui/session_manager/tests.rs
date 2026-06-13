@@ -1,6 +1,7 @@
 use super::*;
 use crate::session_store::SessionStore;
 use crate::state::MessageRole;
+use std::collections::HashMap;
 use std::sync::Arc;
 
 #[test]
@@ -45,6 +46,140 @@ fn test_from_store_reuses_existing_session() {
     assert!(manager.is_current_session("shared-session"));
     manager.add_message(MessageRole::User, "hello").unwrap();
     assert_eq!(store.get_messages("shared-session").unwrap().len(), 1);
+}
+
+#[test]
+fn test_message_metadata_round_trips() {
+    let mut manager = TuiSessionManager::in_memory().unwrap();
+    let session_id = manager
+        .start_session("Metadata Session", "deepseek-v4-flash")
+        .unwrap();
+    let metadata = HashMap::from([
+        ("elapsed_ms".to_string(), "2730".to_string()),
+        ("validation_status".to_string(), "passed".to_string()),
+        ("model_label".to_string(), "deepseek-v4-flash".to_string()),
+    ]);
+
+    manager
+        .add_message_with_metadata(MessageRole::Assistant, "Done", &metadata)
+        .unwrap();
+
+    let messages = manager.load_messages(&session_id).unwrap();
+    assert_eq!(messages.len(), 1);
+    assert_eq!(
+        messages[0].metadata.get("elapsed_ms"),
+        Some(&"2730".to_string())
+    );
+    assert_eq!(
+        messages[0].metadata.get("validation_status"),
+        Some(&"passed".to_string())
+    );
+    assert_eq!(
+        messages[0].metadata.get("model_label"),
+        Some(&"deepseek-v4-flash".to_string())
+    );
+}
+
+#[test]
+fn test_export_session_preserves_tool_success_and_failure_stats() {
+    let mut manager = TuiSessionManager::in_memory().unwrap();
+    let session_id = manager
+        .start_session("Export Tool Stats", "test-fixture-model")
+        .unwrap();
+    manager
+        .add_message(MessageRole::User, "run partial tools")
+        .unwrap();
+    manager
+        .add_message(MessageRole::Assistant, "partial complete")
+        .unwrap();
+
+    manager
+        .write_session_event(
+            &session_id,
+            "tool_started",
+            &serde_json::json!({"tool_call_id": "call_ok", "tool_name": "bash"}),
+        )
+        .unwrap();
+    manager
+        .write_session_event(
+            &session_id,
+            "tool_result_completed",
+            &serde_json::json!({"tool_call_id": "call_ok", "result": "Result: OK\npartial-ok"}),
+        )
+        .unwrap();
+    manager
+        .write_session_event(
+            &session_id,
+            "tool_succeeded",
+            &serde_json::json!({"tool_call_id": "call_ok", "result_preview": "partial-ok"}),
+        )
+        .unwrap();
+    manager
+        .write_session_event(
+            &session_id,
+            "tool_started",
+            &serde_json::json!({"tool_call_id": "call_fail", "tool_name": "bash"}),
+        )
+        .unwrap();
+    manager
+        .write_session_event(
+            &session_id,
+            "tool_result_completed",
+            &serde_json::json!({"tool_call_id": "call_fail", "result": "Result: ERROR\npartial-fail"}),
+        )
+        .unwrap();
+    manager
+        .write_session_event(
+            &session_id,
+            "tool_failed",
+            &serde_json::json!({"tool_call_id": "call_fail", "error": "partial-fail"}),
+        )
+        .unwrap();
+
+    let export_json = manager.export_session(&session_id).unwrap();
+    let export: serde_json::Value = serde_json::from_str(&export_json).unwrap();
+
+    assert_eq!(export["tool_stats"]["calls"]["bash"], 2);
+    assert_eq!(export["tool_stats"]["successes"]["bash"], 1);
+    assert_eq!(export["tool_stats"]["failures"]["bash"], 1);
+    let statuses = export["parts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|part| part["status"].as_str())
+        .collect::<Vec<_>>();
+    assert!(statuses.contains(&"completed"));
+    assert!(statuses.contains(&"failed"));
+    assert!(export["unresolved_settlement"]
+        .as_array()
+        .unwrap()
+        .is_empty());
+}
+
+#[test]
+fn test_settle_unfinished_tool_parts_marks_running_tool_failed() {
+    let mut manager = TuiSessionManager::in_memory().unwrap();
+    let session_id = manager
+        .start_session("Interrupted Tool", "test-fixture-model")
+        .unwrap();
+    manager
+        .write_session_event(
+            &session_id,
+            "tool_started",
+            &serde_json::json!({"tool_call_id": "call_running", "tool_name": "bash"}),
+        )
+        .unwrap();
+
+    let settled = manager
+        .settle_unfinished_tool_parts(&session_id, "Run interrupted")
+        .unwrap();
+
+    assert_eq!(settled, 1);
+    let parts = manager.load_session_parts(&session_id).unwrap();
+    assert_eq!(parts[0].status.as_deref(), Some("failed"));
+    let events = manager.load_session_events(&session_id).unwrap();
+    assert!(events.iter().any(|event| event.event_type == "tool_failed"
+        && event.payload.contains("Run interrupted before settlement")));
 }
 
 #[test]

@@ -5,6 +5,7 @@
 pub use crate::session_store::SessionRecord;
 use crate::session_store::{PersistedSessionPart, SessionEventRow, SessionStore};
 use crate::state::{MessageItem, MessageRole};
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tracing::{debug, info};
@@ -141,6 +142,16 @@ impl TuiSessionManager {
 
     /// 添加消息到当前会话
     pub fn add_message(&self, role: MessageRole, content: &str) -> anyhow::Result<i64> {
+        self.add_message_with_metadata(role, content, &HashMap::new())
+    }
+
+    /// 添加带 UI/runtime metadata 的消息到当前会话。
+    pub fn add_message_with_metadata(
+        &self,
+        role: MessageRole,
+        content: &str,
+        metadata: &HashMap<String, String>,
+    ) -> anyhow::Result<i64> {
         let session_id = self
             .current_session_id
             .as_ref()
@@ -153,9 +164,15 @@ impl TuiSessionManager {
             MessageRole::Tool => "tool",
         };
 
-        let id = self
-            .store
-            .add_message(session_id, role_str, content, None, None)?;
+        let metadata_json = metadata_map_to_value(metadata);
+        let id = self.store.add_message_with_metadata(
+            session_id,
+            role_str,
+            content,
+            None,
+            None,
+            metadata_json.as_ref(),
+        )?;
         debug!("Added message {} to session {}", id, session_id);
         Ok(id)
     }
@@ -181,8 +198,15 @@ impl TuiSessionManager {
 
             // 检查消息是否已存在（通过内容简单判断）
             // 实际应用中可能需要更好的去重策略
-            self.store
-                .add_message(session_id, role_str, &msg.content, None, None)?;
+            let metadata_json = metadata_map_to_value(&msg.metadata);
+            self.store.add_message_with_metadata(
+                session_id,
+                role_str,
+                &msg.content,
+                None,
+                None,
+                metadata_json.as_ref(),
+            )?;
         }
 
         info!(
@@ -207,8 +231,15 @@ impl TuiSessionManager {
                 MessageRole::System => "system",
                 MessageRole::Tool => "tool",
             };
-            self.store
-                .add_message(session_id, role_str, &msg.content, None, None)?;
+            let metadata_json = metadata_map_to_value(&msg.metadata);
+            self.store.add_message_with_metadata(
+                session_id,
+                role_str,
+                &msg.content,
+                None,
+                None,
+                metadata_json.as_ref(),
+            )?;
         }
         Ok(())
     }
@@ -233,7 +264,7 @@ impl TuiSessionManager {
                     role,
                     content: record.content,
                     timestamp: std::time::SystemTime::now(), // 简化处理
-                    metadata: Default::default(),
+                    metadata: metadata_value_to_map(record.metadata),
                 }
             })
             .collect();
@@ -286,6 +317,35 @@ impl TuiSessionManager {
         session_id: &str,
     ) -> anyhow::Result<Vec<PersistedSessionPart>> {
         Ok(self.store.get_session_parts(session_id)?)
+    }
+
+    pub fn settle_unfinished_tool_parts(
+        &self,
+        session_id: &str,
+        reason: &str,
+    ) -> anyhow::Result<usize> {
+        self.store.refresh_session_parts(session_id)?;
+        let parts = self.store.get_session_parts(session_id)?;
+        let writer =
+            crate::session_store::SessionEventWriter::new(self.store.shared_conn(), session_id);
+        let mut settled = 0usize;
+        let mut seen = std::collections::HashSet::new();
+        for part in parts.iter().filter(|part| {
+            (part.kind == "tool" || part.kind == "shell")
+                && matches!(part.status.as_deref(), Some("running" | "pending"))
+        }) {
+            let tool_call_id = part.tool_call_id.as_deref().unwrap_or(&part.part_id);
+            if !seen.insert(tool_call_id.to_string()) {
+                continue;
+            }
+            let tool_name = part.tool_name.as_deref().unwrap_or("unknown");
+            writer.tool_failed(
+                tool_call_id,
+                &format!("{reason} before settlement ({tool_name}:{tool_call_id})"),
+            )?;
+            settled += 1;
+        }
+        Ok(settled)
     }
 
     pub fn write_session_event(
@@ -961,6 +1021,24 @@ impl TuiSessionManager {
         redo_edits.push(redo_record);
         self.save_edit_records(&redo_path, &redo_edits)
     }
+}
+
+fn metadata_map_to_value(metadata: &HashMap<String, String>) -> Option<serde_json::Value> {
+    if metadata.is_empty() {
+        return None;
+    }
+    serde_json::to_value(metadata).ok()
+}
+
+fn metadata_value_to_map(value: Option<serde_json::Value>) -> HashMap<String, String> {
+    let Some(serde_json::Value::Object(object)) = value else {
+        return HashMap::new();
+    };
+
+    object
+        .into_iter()
+        .filter_map(|(key, value)| value.as_str().map(|value| (key, value.to_string())))
+        .collect()
 }
 
 fn resolve_session_selection_with_store(

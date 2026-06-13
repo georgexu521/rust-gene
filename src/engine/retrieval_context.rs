@@ -1370,6 +1370,7 @@ mod tests {
             tool_calls: None,
             tool_call_id: None,
             reasoning: None,
+            metadata: None,
             created_at: "2026-04-26T00:00:00Z".to_string(),
         }];
         let session = RetrievalContext::from_session_messages(

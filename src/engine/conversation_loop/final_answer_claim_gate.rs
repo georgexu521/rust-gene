@@ -584,7 +584,9 @@ fn extract_command_mention(content: &str) -> Option<String> {
         Some("cargo clippy".to_string())
     } else if lower.contains("cargo check") {
         Some("cargo check".to_string())
-    } else if lower.contains("npm test") || lower.contains("yarn test") || lower.contains("pnpm test")
+    } else if lower.contains("npm test")
+        || lower.contains("yarn test")
+        || lower.contains("pnpm test")
     {
         Some("npm test".to_string())
     } else if lower.contains("pytest") || lower.contains("python -m pytest") {

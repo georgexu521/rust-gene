@@ -47,10 +47,23 @@ impl TuiApp {
             commands.push("/quick".to_string());
             commands.push("/reject".to_string());
         }
-        if self.messages.len() > 1 {
+        if !self.messages.is_empty() {
+            commands.push("/jump".to_string());
             commands.push("/search".to_string());
             commands.push("/session".to_string());
             commands.push("/export".to_string());
+        }
+        if !self.history.is_empty() {
+            commands.push("/prompt-history".to_string());
+        }
+        if !self.input.value().trim().is_empty() || self.prompt_stash.is_some() {
+            commands.push("/prompt-stash".to_string());
+        }
+        if self.pasted_block_count() > 0 {
+            commands.push("/paste".to_string());
+        }
+        if self.composer_attachment_count() > 0 {
+            commands.push("/attach".to_string());
         }
         dedupe_palette_commands(commands)
     }
@@ -377,7 +390,10 @@ impl TuiApp {
     pub fn switch_provider_by_name(&mut self, name: &str) -> String {
         let registry = crate::services::api::provider::ProviderRegistry::from_env();
         let Some(provider) = registry.get(name) else {
-            return format!("Provider '{}' is not configured. Use /provider list to inspect required environment variables.", name);
+            return format!(
+                "Provider '{}' is not configured. Use /provider list to inspect required environment variables.",
+                name
+            );
         };
         let Some(config) = registry.get_config(name).cloned() else {
             return format!("Provider '{}' has no config.", name);

@@ -164,9 +164,7 @@ impl GoalDecisionInput {
                         input.requires_user_decision = true;
                     }
                 }
-                crate::engine::trace::TraceEvent::FinalAnswerClaimGate {
-                    decision, ..
-                } => {
+                crate::engine::trace::TraceEvent::FinalAnswerClaimGate { decision, .. } => {
                     if decision == "downgrade" {
                         input.claim_gate_downgrade = true;
                     }

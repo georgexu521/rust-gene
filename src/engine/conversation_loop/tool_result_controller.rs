@@ -277,7 +277,12 @@ pub(super) async fn append_provider_tool_result(
     messages.push(tool_msg.clone());
     // Persist tool result so resume/export see it.
     if let (Some(s), Some(sid)) = (store, session_id) {
-        let _ = crate::session_store::message_ops::persist_runtime_message(s, sid, &tool_msg);
+        crate::session_store::message_ops::persist_runtime_message_background(
+            s,
+            sid,
+            &tool_msg,
+            "tool result message",
+        );
     }
     normalized
 }
@@ -759,7 +764,11 @@ fn observation_checkpoint_id(data: Option<&serde_json::Value>) -> Option<String>
 
 fn observation_artifact_path(data: Option<&serde_json::Value>) -> Option<String> {
     data.and_then(|value| value.get("output_truncation"))
-        .and_then(|truncation| truncation.get("stored_path"))
+        .and_then(|truncation| {
+            truncation
+                .get("stored_path")
+                .or_else(|| truncation.get("output_uri"))
+        })
         .and_then(serde_json::Value::as_str)
         .map(str::to_string)
 }
@@ -970,6 +979,12 @@ fn observation_key_findings(context: &ObservationFindingContext<'_>) -> Vec<Stri
             if let Some(line) = first_diagnostic_line(&result_output_body(context.result)) {
                 findings.push(format!("First diagnostic: {line}"));
             }
+            let output_chars = result_output_body(context.result).chars().count();
+            if context.result.success && output_chars > 1_200 {
+                findings.push(format!(
+                    "Output was long ({output_chars} chars); provider-visible context uses a compact observation."
+                ));
+            }
         }
         "edit" => {
             let target = if context.files_changed.is_empty() {
@@ -1044,6 +1059,12 @@ fn observation_key_findings(context: &ObservationFindingContext<'_>) -> Vec<Stri
                     "failed"
                 }
             ));
+            let output_chars = result_output_body(context.result).chars().count();
+            if output_chars > 1_200 {
+                findings.push(format!(
+                    "Output was long ({output_chars} chars); provider-visible context uses a compact observation."
+                ));
+            }
         }
         _ => {
             if !context.result.success {

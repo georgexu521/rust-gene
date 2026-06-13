@@ -5,7 +5,9 @@
 use crate::engine::agent_mode::AgentMode;
 use crate::engine::conversation_loop::ToolApprovalResponse;
 use crate::engine::runtime_controller::RuntimeController;
-use crate::engine::runtime_facade::{RuntimeFacadeState, RuntimeStateSnapshot};
+use crate::engine::runtime_facade::{
+    RuntimeFacadeState, RuntimeStateSnapshot, ToolTurnPhase, ToolTurnSnapshot,
+};
 use crate::engine::streaming::{StreamEvent, StreamingQueryEngine};
 use crate::permissions::RuleSource;
 use crate::state::{
@@ -19,6 +21,7 @@ use futures::StreamExt;
 use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::time::Instant;
 use tokio::sync::Mutex;
 use tracing::{debug, info, warn};
 
@@ -77,8 +80,10 @@ pub enum AppMode {
     MessageSearch,
     CommandPalette,
     ShortcutHelp,
+    PromptHistory,
     ModelSelect,
     ProviderSelect,
+    FilePicker,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -191,6 +196,8 @@ pub struct TuiApp {
     pub command_registry: CommandRegistry,
     /// 滚动位置
     pub scroll_offset: usize,
+    /// Stable timeline item id for manual scroll anchors.
+    pub scroll_anchor_id: Option<String>,
     /// 是否自动贴底（用户手动上滚后变为 false，滚到底或新消息时恢复）
     pub pinned_to_bottom: bool,
     /// 应用上下文
@@ -201,6 +208,10 @@ pub struct TuiApp {
     pub history: VecDeque<String>,
     /// 历史索引
     pub history_index: Option<usize>,
+    /// Temporarily stashed prompt draft for composer workflows.
+    pub prompt_stash: Option<String>,
+    /// Selected item in the prompt history/stash picker.
+    pub prompt_picker_selected: usize,
     /// 流式查询引擎
     pub streaming_engine: Option<Arc<StreamingQueryEngine>>,
     /// 当前流式响应缓冲
@@ -220,6 +231,8 @@ pub struct TuiApp {
     pub transcript_expanded: bool,
     /// 当前展开的单个工具 id；None 表示全部折叠
     pub expanded_tool_run_id: Option<String>,
+    /// 当前展开 reasoning 正文的 assistant message id；None 表示只显示摘要
+    pub expanded_reasoning_message_id: Option<String>,
     stream_usage: Arc<Mutex<Option<StreamUsageSnapshot>>>,
     pub stream_usage_snapshot: Option<StreamUsageSnapshot>,
     /// Cached facade snapshot for synchronous rendering
@@ -317,6 +330,12 @@ pub struct TuiApp {
     pub tick_count: usize,
     /// 被折叠的长粘贴块，发送时还原
     pasted_blocks: Vec<PastedBlock>,
+    /// Composer file/context attachments injected into the next user prompt.
+    pub composer_attachments: Vec<String>,
+    /// File picker state for composer attachments.
+    pub file_picker_state: Option<crate::tui::components::file_browser::FileBrowserState>,
+    /// Whether file picker keystrokes edit the filter query.
+    pub file_picker_filtering: bool,
     /// 命令面板搜索词
     pub command_palette_query: String,
     /// 命令面板选中项
@@ -349,6 +368,157 @@ fn parse_on_off(value: &str) -> Option<bool> {
     }
 }
 
+fn assistant_completion_metadata(
+    model_label: String,
+    usage: Option<StreamUsageSnapshot>,
+    elapsed_ms: Option<u64>,
+    provider_phase: crate::engine::runtime_facade::ProviderPhase,
+    tool_runs: &[ToolRunView],
+) -> HashMap<String, String> {
+    let mut metadata = HashMap::new();
+    metadata.insert("status".to_string(), "complete".to_string());
+    metadata.insert("model_label".to_string(), model_label);
+    if let Some(elapsed_ms) = elapsed_ms.filter(|value| *value > 0) {
+        metadata.insert("elapsed_ms".to_string(), elapsed_ms.to_string());
+    }
+    if provider_phase != crate::engine::runtime_facade::ProviderPhase::Idle {
+        metadata.insert(
+            "provider_phase".to_string(),
+            provider_phase.label().to_string(),
+        );
+    }
+    if !tool_runs.is_empty() {
+        metadata.insert("tool_count".to_string(), tool_runs.len().to_string());
+        let failed_tools = tool_runs
+            .iter()
+            .filter(|run| {
+                matches!(
+                    run.status,
+                    ToolRunStatus::Failed | ToolRunStatus::TimedOut | ToolRunStatus::Cancelled
+                )
+            })
+            .count();
+        if failed_tools > 0 {
+            metadata.insert("failed_tool_count".to_string(), failed_tools.to_string());
+        }
+
+        let validation_runs = tool_runs
+            .iter()
+            .filter(|run| is_validation_tool_name(&run.name))
+            .collect::<Vec<_>>();
+        if !validation_runs.is_empty() {
+            let failed_validation = validation_runs.iter().any(|run| {
+                matches!(
+                    run.status,
+                    ToolRunStatus::Failed | ToolRunStatus::TimedOut | ToolRunStatus::Cancelled
+                )
+            });
+            metadata.insert(
+                "validation_status".to_string(),
+                if failed_validation {
+                    "failed"
+                } else {
+                    "passed"
+                }
+                .to_string(),
+            );
+        }
+    }
+    if let Some(usage) = usage {
+        metadata.insert("prompt_tokens".to_string(), usage.prompt_tokens.to_string());
+        metadata.insert(
+            "completion_tokens".to_string(),
+            usage.completion_tokens.to_string(),
+        );
+        metadata.insert("total_tokens".to_string(), usage.total_tokens().to_string());
+        if let Some(reasoning_tokens) = usage.reasoning_tokens {
+            metadata.insert("reasoning_tokens".to_string(), reasoning_tokens.to_string());
+        }
+        if let Some(cached_tokens) = usage.cached_tokens {
+            metadata.insert("cached_tokens".to_string(), cached_tokens.to_string());
+        }
+    }
+    metadata
+}
+
+fn is_validation_tool_name(name: &str) -> bool {
+    matches!(name, "run_tests" | "git_status" | "git_diff")
+}
+
+#[cfg(test)]
+mod completion_metadata_tests {
+    use super::*;
+
+    #[test]
+    fn assistant_completion_metadata_includes_model_and_usage() {
+        let metadata = assistant_completion_metadata(
+            "deepseek-v4-flash".to_string(),
+            Some(StreamUsageSnapshot {
+                prompt_tokens: 100,
+                completion_tokens: 25,
+                reasoning_tokens: Some(5),
+                cached_tokens: Some(90),
+            }),
+            Some(2_730),
+            crate::engine::runtime_facade::ProviderPhase::Completed,
+            &[],
+        );
+
+        assert_eq!(metadata.get("status").map(String::as_str), Some("complete"));
+        assert_eq!(
+            metadata.get("model_label").map(String::as_str),
+            Some("deepseek-v4-flash")
+        );
+        assert_eq!(
+            metadata.get("completion_tokens").map(String::as_str),
+            Some("25")
+        );
+        assert_eq!(
+            metadata.get("total_tokens").map(String::as_str),
+            Some("125")
+        );
+        assert_eq!(
+            metadata.get("reasoning_tokens").map(String::as_str),
+            Some("5")
+        );
+        assert_eq!(
+            metadata.get("cached_tokens").map(String::as_str),
+            Some("90")
+        );
+        assert_eq!(metadata.get("elapsed_ms").map(String::as_str), Some("2730"));
+        assert_eq!(
+            metadata.get("provider_phase").map(String::as_str),
+            Some("provider done")
+        );
+    }
+
+    #[test]
+    fn assistant_completion_metadata_includes_tool_and_validation_status() {
+        let mut validation = ToolRunView::new("tool_1".to_string(), "run_tests".to_string());
+        validation.mark_complete("Result: OK\npassed".to_string());
+        let mut failed = ToolRunView::new("tool_2".to_string(), "bash".to_string());
+        failed.status = ToolRunStatus::Failed;
+
+        let metadata = assistant_completion_metadata(
+            "deepseek-v4-flash".to_string(),
+            None,
+            None,
+            crate::engine::runtime_facade::ProviderPhase::Completed,
+            &[validation, failed],
+        );
+
+        assert_eq!(metadata.get("tool_count").map(String::as_str), Some("2"));
+        assert_eq!(
+            metadata.get("failed_tool_count").map(String::as_str),
+            Some("1")
+        );
+        assert_eq!(
+            metadata.get("validation_status").map(String::as_str),
+            Some("passed")
+        );
+    }
+}
+
 impl TuiApp {
     pub fn visible_sidebar_sessions(
         &self,
@@ -363,7 +533,13 @@ impl TuiApp {
         let mut unpinned = Vec::new();
 
         for session in sessions {
-            if !filter.is_empty() && !session.title.to_lowercase().contains(&filter) {
+            let searchable = format!(
+                "{} {} {}",
+                session.title.to_lowercase(),
+                session.id.to_lowercase(),
+                session.model.to_lowercase()
+            );
+            if !filter.is_empty() && !searchable.contains(&filter) {
                 continue;
             }
             if self.pinned_sessions.contains(&session.id) {
@@ -500,35 +676,15 @@ impl TuiApp {
             warn!("Failed to pause active goals on startup: {}", e);
         }
 
-        // 检测首次启动
-        let onboarding_manager = crate::onboarding::OnboardingManager::new();
-        let is_first_run = onboarding_manager.is_first_run();
-
-        // 添加欢迎消息
-        let welcome_content = build_welcome_content(is_first_run);
-        let welcome_message = MessageItem {
-            id: "welcome".to_string(),
-            role: MessageRole::System,
-            content: welcome_content,
-            timestamp: std::time::SystemTime::now(),
-            metadata: Default::default(),
-        };
-
-        let onboarding_state = if is_first_run {
-            Some(crate::onboarding::OnboardingState::new())
-        } else {
-            None
-        };
+        let app_config = crate::services::config::AppConfig::load().unwrap_or_default();
+        let pinned_sessions = app_config.ui.pinned_sessions.clone();
+        let theme_name = app_config.ui.theme.clone();
 
         Self {
-            mode: if is_first_run {
-                AppMode::Onboarding
-            } else {
-                AppMode::Chat
-            },
+            mode: AppMode::Chat,
             agent_mode: AgentMode::Auto,
             input: InputState::new(),
-            messages: vec![welcome_message],
+            messages: Vec::new(),
             tasks: Vec::new(),
             is_querying: false,
             stream_started_at: None,
@@ -542,11 +698,14 @@ impl TuiApp {
             run_coordinator: crate::engine::run_coordinator::SessionRunCoordinator::new(),
             command_registry: default_command_registry(),
             scroll_offset: 0,
+            scroll_anchor_id: None,
             pinned_to_bottom: true,
             context,
             error_message: None,
             history: VecDeque::with_capacity(100),
             history_index: None,
+            prompt_stash: None,
+            prompt_picker_selected: 0,
             streaming_engine: engine,
             current_response: Arc::new(Mutex::new(String::new())),
             tool_runs: Arc::new(Mutex::new(Vec::new())),
@@ -557,6 +716,7 @@ impl TuiApp {
             current_tool_anchor_id: None,
             transcript_expanded: false,
             expanded_tool_run_id: None,
+            expanded_reasoning_message_id: None,
             stream_usage: Arc::new(Mutex::new(None)),
             stream_usage_snapshot: None,
             facade_snapshot: RuntimeStateSnapshot::default(),
@@ -584,7 +744,7 @@ impl TuiApp {
             sidebar_visible: false,
             sidebar_selected: 0,
             sidebar_filter: String::new(),
-            pinned_sessions: Vec::new(),
+            pinned_sessions,
             confirm_delete_session_id: None,
             renaming_session_id: None,
             rename_buffer: String::new(),
@@ -609,12 +769,12 @@ impl TuiApp {
             ),
             vim_mode: false,
             keybindings: crate::tui::keybindings::Keybindings::load(),
-            theme: {
-                let config = crate::services::config::AppConfig::load().unwrap_or_default();
-                Arc::new(crate::tui::theme::Theme::from_name(&config.ui.theme))
-            },
-            onboarding_state,
+            theme: { Arc::new(crate::tui::theme::Theme::from_name(&theme_name)) },
+            onboarding_state: None,
             pasted_blocks: Vec::new(),
+            composer_attachments: Vec::new(),
+            file_picker_state: None,
+            file_picker_filtering: false,
             command_palette_query: String::new(),
             command_palette_selected: 0,
             recent_palette_commands: VecDeque::with_capacity(16),
@@ -714,7 +874,6 @@ impl TuiApp {
 
         // 清空输入
         self.input.clear();
-        self.pasted_blocks.clear();
 
         // 处理斜杠命令
         if content.starts_with('/') {
@@ -725,6 +884,9 @@ impl TuiApp {
             return;
         }
 
+        let content = self.compose_message_with_attachments(content);
+        self.pasted_blocks.clear();
+        self.composer_attachments.clear();
         self.send_message(content).await;
     }
 
@@ -758,6 +920,175 @@ impl TuiApp {
             .iter()
             .filter(|block| self.input.value().contains(&block.placeholder))
             .count()
+    }
+
+    pub fn pasted_block_summaries(&self) -> Vec<String> {
+        self.pasted_blocks
+            .iter()
+            .filter(|block| self.input.value().contains(&block.placeholder))
+            .map(|block| {
+                let line_count = block.content.lines().count().max(1);
+                let char_count = block.content.chars().count();
+                format!("{} lines / {} chars", line_count, char_count)
+            })
+            .collect()
+    }
+
+    pub fn open_paste_viewer(&mut self, index: Option<usize>) -> bool {
+        let active_blocks = self
+            .pasted_blocks
+            .iter()
+            .filter(|block| self.input.value().contains(&block.placeholder))
+            .collect::<Vec<_>>();
+        if active_blocks.is_empty() {
+            return false;
+        }
+        let selected = index.unwrap_or(1).saturating_sub(1);
+        let Some(block) = active_blocks.get(selected) else {
+            return false;
+        };
+        let line_count = block.content.lines().count().max(1);
+        let char_count = block.content.chars().count();
+        self.tool_viewer_title = format!(
+            "Paste {} ({} lines / {} chars)",
+            selected + 1,
+            line_count,
+            char_count
+        );
+        self.tool_viewer_content = block.content.clone();
+        self.tool_viewer_scroll_offset = 0;
+        self.mode = AppMode::ToolViewer;
+        true
+    }
+
+    pub fn attach_context_path(&mut self, raw_path: &str) -> Result<String, String> {
+        let raw_path = raw_path.trim();
+        if raw_path.is_empty() {
+            return Err("Usage: /attach <path>|remove <n>|clear|list".to_string());
+        }
+        if self.composer_attachments.len() >= 12 {
+            return Err("Attachment limit reached for this prompt.".to_string());
+        }
+
+        let path = std::path::Path::new(raw_path);
+        let absolute = if path.is_absolute() {
+            path.to_path_buf()
+        } else {
+            std::env::current_dir()
+                .unwrap_or_else(|_| std::path::PathBuf::from("."))
+                .join(path)
+        };
+        let canonical = absolute
+            .canonicalize()
+            .map_err(|_| format!("Attachment not found: {raw_path}"))?;
+        let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+        let display = canonical
+            .strip_prefix(&cwd)
+            .map(|path| path.to_string_lossy().to_string())
+            .unwrap_or_else(|_| canonical.to_string_lossy().to_string());
+        if self
+            .composer_attachments
+            .iter()
+            .any(|path| path == &display)
+        {
+            return Ok(format!("Already attached: {display}"));
+        }
+
+        self.composer_attachments.push(display.clone());
+        Ok(format!("Attached context: {display}"))
+    }
+
+    pub fn remove_composer_attachment(&mut self, one_based_index: usize) -> Option<String> {
+        if one_based_index == 0 || one_based_index > self.composer_attachments.len() {
+            return None;
+        }
+        Some(self.composer_attachments.remove(one_based_index - 1))
+    }
+
+    pub fn remove_last_composer_attachment(&mut self) -> Option<String> {
+        self.composer_attachments.pop()
+    }
+
+    pub fn clear_composer_attachments(&mut self) -> usize {
+        let count = self.composer_attachments.len();
+        self.composer_attachments.clear();
+        count
+    }
+
+    pub fn composer_attachment_summaries(&self) -> Vec<String> {
+        self.composer_attachments
+            .iter()
+            .enumerate()
+            .map(|(idx, path)| format!("[{}] {}", idx + 1, attachment_summary(path, 44)))
+            .collect()
+    }
+
+    pub fn composer_attachment_count(&self) -> usize {
+        self.composer_attachments.len()
+    }
+
+    pub fn toggle_pinned_session(&mut self, session_id: &str) -> bool {
+        let pinned = toggle_pinned_session_list(&mut self.pinned_sessions, session_id, 9);
+        if let Err(err) = self.persist_pinned_sessions() {
+            warn!("Failed to persist pinned sessions: {}", err);
+            self.add_toast(
+                format!("Pinned sessions kept for this run; save failed: {}", err),
+                "!",
+            );
+        }
+        pinned
+    }
+
+    fn persist_pinned_sessions(&self) -> anyhow::Result<()> {
+        let mut config = crate::services::config::AppConfig::load().unwrap_or_default();
+        config.ui.pinned_sessions = self.pinned_sessions.clone();
+        config.save()?;
+        crate::services::config::init_runtime_config(config);
+        Ok(())
+    }
+
+    pub fn open_attachment_viewer(&mut self, index: Option<usize>) -> bool {
+        if self.composer_attachments.is_empty() {
+            return false;
+        }
+        let selected = index.unwrap_or(1).saturating_sub(1);
+        let Some(path) = self.composer_attachments.get(selected).cloned() else {
+            return false;
+        };
+        let absolute = resolve_attachment_path(&path);
+        let Ok(metadata) = std::fs::metadata(&absolute) else {
+            self.tool_viewer_title = format!("Attachment {}: {}", selected + 1, path);
+            self.tool_viewer_content = format!("Attachment path is no longer available:\n{path}");
+            self.tool_viewer_scroll_offset = 0;
+            self.mode = AppMode::ToolViewer;
+            return true;
+        };
+
+        self.tool_viewer_title = format!("Attachment {}: {}", selected + 1, path);
+        self.tool_viewer_content = if metadata.is_dir() {
+            attachment_directory_preview(&absolute)
+        } else {
+            attachment_file_preview(&absolute, metadata.len())
+        };
+        self.tool_viewer_scroll_offset = 0;
+        self.mode = AppMode::ToolViewer;
+        true
+    }
+
+    fn compose_message_with_attachments(&self, content: String) -> String {
+        if self.composer_attachments.is_empty() {
+            return content;
+        }
+
+        let mut composed = String::from("Attached context:\n");
+        for path in &self.composer_attachments {
+            composed.push_str("- ");
+            composed.push_str(&attachment_summary(path, 96));
+            composed.push('\n');
+        }
+        composed.push_str("\nUser request:\n");
+        composed.push_str(&content);
+        composed
     }
 
     fn expand_paste_placeholders(&self, content: &str) -> String {
@@ -898,7 +1229,7 @@ impl TuiApp {
             self.runtime_facade_state.set_querying(true).await;
             self.runtime_facade_state.set_stream_usage(None).await;
             self.tool_runs_snapshot.clear();
-            self.current_tool_anchor_id = Some(user_msg_id);
+            self.current_tool_anchor_id = Some(user_msg_id.clone());
             self.stream_usage_snapshot = None;
             self.runtime_state_snapshot = self.build_runtime_state_snapshot();
             self.sync_context_runtime_state().await;
@@ -927,6 +1258,7 @@ impl TuiApp {
             let runtime_facade_state_clone = self.runtime_facade_state.clone();
             let done_flag = self.stream_done.clone();
             let user_msg = content.clone();
+            let parent_message_id = user_msg_id.clone();
             let agent_mode = self.agent_mode;
 
             controller.set_memory_policy(
@@ -941,6 +1273,9 @@ impl TuiApp {
                     .await;
 
                 while let Some(event) = stream.next().await {
+                    runtime_facade_state_clone
+                        .process_stream_event_with_parent(&event, Some(&parent_message_id))
+                        .await;
                     match event {
                         StreamEvent::TextChunk(text) => {
                             let mut resp = response_clone.lock().await;
@@ -970,14 +1305,11 @@ impl TuiApp {
                         } => {
                             let mut runs = tool_runs_clone.lock().await;
                             with_tool_run(&mut runs, &id, |run| {
-                                run.mark_complete_with_metadata(result, metadata)
-                            });
-                            if let Some(data) = result_data {
-                                let mut runs = tool_runs_clone.lock().await;
-                                with_tool_run(&mut runs, &id, |run| {
+                                run.mark_complete_with_metadata(result, metadata);
+                                if let Some(data) = result_data {
                                     run.result_data = Some(data);
-                                });
-                            }
+                                }
+                            });
                         }
                         StreamEvent::Complete => {
                             runtime_facade_state_clone.set_querying(false).await;
@@ -1153,9 +1485,26 @@ impl TuiApp {
         }
         self.stream_usage_snapshot = *self.stream_usage.lock().await;
         self.runtime_facade_state.check_slow_warning().await;
+        if self.runtime_facade_state.check_timeout().await {
+            self.facade_snapshot = self.runtime_facade_state.snapshot().await;
+            let reason = self
+                .facade_snapshot
+                .provider_request
+                .message
+                .clone()
+                .unwrap_or_else(|| "provider request timed out".to_string());
+            self.timeout_active_run(&reason).await;
+            return;
+        }
         self.facade_snapshot = self.runtime_facade_state.snapshot().await;
-        self.runtime_state_snapshot = self.build_runtime_state_snapshot();
-        self.sync_context_runtime_state().await;
+        self.sync_tool_runs_from_spine_snapshot();
+        if self.recover_persisted_final_answer_if_available().await {
+            return;
+        }
+        if let Some(reason) = self.provider_wait_timeout_reason() {
+            self.timeout_active_run(&reason).await;
+            return;
+        }
 
         // 更新最后一条助手消息
         if let Some(last_msg) = self.messages.last_mut() {
@@ -1167,11 +1516,225 @@ impl TuiApp {
         self.scroll_to_bottom();
     }
 
+    fn sync_tool_runs_from_spine_snapshot(&mut self) {
+        let turns = self.facade_snapshot.tool_turns.clone();
+        for turn in turns {
+            let Some(parent_message_id) = turn.parent_message_id.clone() else {
+                continue;
+            };
+            let runs = self
+                .tool_runs_by_message_id
+                .entry(parent_message_id)
+                .or_default();
+            if let Some(run) = runs.iter_mut().find(|run| run.id == turn.id) {
+                apply_tool_turn_snapshot(run, &turn);
+            } else {
+                runs.push(tool_run_from_turn_snapshot(&turn));
+            }
+        }
+    }
+
+    async fn recover_persisted_final_answer_if_available(&mut self) -> bool {
+        if std::env::var("PRIORITY_AGENT_TUI_DISABLE_DB_FINAL_RECOVERY")
+            .ok()
+            .is_some_and(|value| matches!(value.trim(), "1" | "true" | "TRUE" | "on" | "ON"))
+        {
+            return false;
+        }
+        if !self.is_querying || !self.has_observed_tool_result_in_spine() {
+            return false;
+        }
+
+        let Some(current_user_content) = self
+            .messages
+            .iter()
+            .rev()
+            .find(|message| message.role == MessageRole::User)
+            .map(|message| message.content.trim().to_string())
+        else {
+            return false;
+        };
+        let Some(final_answer) = self.recoverable_persisted_final_answer(&current_user_content)
+        else {
+            return false;
+        };
+
+        if let Some(handle) = self.stream_handle.take() {
+            handle.abort();
+        }
+        {
+            let mut response = self.current_response.lock().await;
+            *response = final_answer.clone();
+        }
+        self.typewriter_position = final_answer.chars().count();
+        if let Some(last_msg) = self.messages.last_mut() {
+            if last_msg.role == MessageRole::Assistant {
+                last_msg.content = final_answer;
+            }
+        }
+        self.runtime_facade_state.mark_tool_turns_persisted().await;
+        self.runtime_facade_state.set_querying(false).await;
+        self.facade_snapshot = self.runtime_facade_state.snapshot().await;
+        self.sync_tool_runs_from_spine_snapshot();
+        self.stream_done.store(true, Ordering::SeqCst);
+        self.is_querying = false;
+        self.run_coordinator.finish_run();
+        self.stream_started_at = None;
+        self.current_tool_anchor_id = None;
+        self.scroll_to_bottom();
+        true
+    }
+
+    fn has_observed_tool_result_in_spine(&self) -> bool {
+        self.facade_snapshot.tool_turns.iter().any(|turn| {
+            matches!(
+                turn.phase,
+                ToolTurnPhase::ResultObserved
+                    | ToolTurnPhase::SentBackToModel
+                    | ToolTurnPhase::FinalAnswer
+                    | ToolTurnPhase::Persisted
+            )
+        })
+    }
+
+    fn recoverable_persisted_final_answer(&self, current_user_content: &str) -> Option<String> {
+        if let Some(messages) = self.load_bound_session_messages_for_recovery() {
+            if let Some(answer) = persisted_final_answer_for_user(&messages, current_user_content) {
+                return Some(answer);
+            }
+        }
+
+        let current_prompt = normalize_turn_prompt(current_user_content);
+        for session in self.session_manager.list_sessions(8).ok()? {
+            if normalize_turn_prompt(&session.title) != current_prompt {
+                continue;
+            }
+            let messages = self.session_manager.load_messages(&session.id).ok()?;
+            if let Some(answer) = persisted_final_answer_for_user(&messages, current_user_content) {
+                return Some(answer);
+            }
+        }
+        None
+    }
+
+    fn load_bound_session_messages_for_recovery(&self) -> Option<Vec<MessageItem>> {
+        if let Some(engine) = &self.streaming_engine {
+            if let Some((store, session_id)) = engine.session_binding() {
+                let records = store.get_messages(&session_id).ok()?;
+                return Some(
+                    records
+                        .into_iter()
+                        .map(|record| MessageItem {
+                            id: format!("msg_{}", record.id),
+                            role: match record.role.as_str() {
+                                "user" => MessageRole::User,
+                                "assistant" => MessageRole::Assistant,
+                                "tool" => MessageRole::Tool,
+                                _ => MessageRole::System,
+                            },
+                            content: record.content,
+                            timestamp: std::time::SystemTime::now(),
+                            metadata: Default::default(),
+                        })
+                        .collect(),
+                );
+            }
+        }
+        let session_id = self.session_manager.current_session_id()?.to_string();
+        self.session_manager.load_messages(&session_id).ok()
+    }
+
+    pub(crate) fn provider_wait_timeout_reason(&self) -> Option<String> {
+        let provider = &self.facade_snapshot.provider_request;
+        if !self.is_querying && self.stream_handle.is_none() {
+            return None;
+        }
+        if self.tool_runs_snapshot.iter().any(|run| {
+            matches!(
+                run.status,
+                ToolRunStatus::Running | ToolRunStatus::WaitingPermission
+            )
+        }) {
+            return None;
+        }
+        let runtime_config = crate::services::config::runtime_config();
+        let explicit_timeout_ms = runtime_config
+            .explicit_llm_request_timeout()
+            .map(|timeout| timeout.as_millis() as u64);
+        let fallback_timeout_ms = runtime_config.llm_request_timeout().as_millis() as u64;
+        let timeout_ms = if provider.timeout_ms > 0 {
+            explicit_timeout_ms
+                .map(|explicit| explicit.min(provider.timeout_ms))
+                .unwrap_or(provider.timeout_ms)
+        } else {
+            explicit_timeout_ms.unwrap_or(fallback_timeout_ms)
+        };
+        if timeout_ms == 0 {
+            return None;
+        }
+        if matches!(
+            provider.phase,
+            crate::engine::runtime_facade::ProviderPhase::Completed
+                | crate::engine::runtime_facade::ProviderPhase::Cancelled
+        ) {
+            if !self.post_tool_turn_wait_has_timed_out(timeout_ms) {
+                return None;
+            }
+            return Some(format!(
+                "tool turn stalled after result observation for {:.1}s",
+                timeout_ms as f64 / 1000.0
+            ));
+        }
+        let local_elapsed_ms = self
+            .stream_started_at
+            .map(|started| started.elapsed().as_millis() as u64)
+            .unwrap_or_default();
+        let elapsed_ms = provider.elapsed_ms.max(local_elapsed_ms);
+        if elapsed_ms < timeout_ms {
+            return None;
+        }
+        Some(provider.message.clone().unwrap_or_else(|| {
+            format!(
+                "provider request timed out after {:.1}s",
+                timeout_ms as f64 / 1000.0
+            )
+        }))
+    }
+
+    fn post_tool_turn_wait_has_timed_out(&self, timeout_ms: u64) -> bool {
+        if timeout_ms == 0 {
+            return false;
+        }
+        let has_waiting_tool_turn = self.facade_snapshot.tool_turns.iter().any(|turn| {
+            matches!(
+                turn.phase,
+                crate::engine::runtime_facade::ToolTurnPhase::ResultObserved
+                    | crate::engine::runtime_facade::ToolTurnPhase::SentBackToModel
+            )
+        });
+        if !has_waiting_tool_turn {
+            return false;
+        }
+        self.stream_started_at
+            .map(|started| started.elapsed().as_millis() as u64 >= timeout_ms)
+            .unwrap_or(false)
+    }
+
     /// 定时更新 - 处理流式响应刷新和计划审批检查
     pub async fn on_tick(&mut self) {
         self.tick_count += 1;
         // Clean up expired toasts
         self.toasts.retain(|t| t.expires_at_tick > self.tick_count);
+
+        self.facade_snapshot = self.runtime_facade_state.snapshot().await;
+        self.sync_tool_runs_from_spine_snapshot();
+        if self.recover_persisted_final_answer_if_available().await {
+            return;
+        }
+        if let Some(reason) = self.provider_wait_timeout_reason() {
+            self.timeout_active_run(&reason).await;
+            return;
+        }
 
         if self.is_querying {
             self.refresh_response().await;
@@ -1180,10 +1743,28 @@ impl TuiApp {
             if self.stream_done.load(Ordering::SeqCst) {
                 // 确保显示完整内容（跳过打字机效果的剩余部分）
                 let mut final_response_to_persist = None;
+                self.stream_usage_snapshot = *self.stream_usage.lock().await;
+                self.facade_snapshot = self.runtime_facade_state.snapshot().await;
+                let elapsed_ms = self
+                    .stream_started_at
+                    .map(|started| started.elapsed().as_millis() as u64)
+                    .or_else(|| {
+                        (self.facade_snapshot.provider_request.elapsed_ms > 0)
+                            .then_some(self.facade_snapshot.provider_request.elapsed_ms)
+                    });
+                let model_label = self.current_model_label();
+                let provider_phase = self.facade_snapshot.provider_request.phase;
                 if let Some(last_msg) = self.messages.last_mut() {
                     if last_msg.role == MessageRole::Assistant {
                         let response = self.current_response.lock().await.clone();
                         self.tool_runs_snapshot = self.tool_runs.lock().await.clone();
+                        let final_metadata = assistant_completion_metadata(
+                            model_label,
+                            self.stream_usage_snapshot,
+                            elapsed_ms,
+                            provider_phase,
+                            &self.tool_runs_snapshot,
+                        );
                         if let Some(anchor_id) = &self.current_tool_anchor_id {
                             if self.tool_runs_snapshot.is_empty() {
                                 self.tool_runs_by_message_id.remove(anchor_id);
@@ -1192,26 +1773,33 @@ impl TuiApp {
                                     .insert(anchor_id.clone(), self.tool_runs_snapshot.clone());
                             }
                         }
-                        self.stream_usage_snapshot = *self.stream_usage.lock().await;
                         last_msg.content = response;
-                        final_response_to_persist = Some(last_msg.content.clone());
+                        last_msg.metadata.extend(final_metadata);
+                        final_response_to_persist =
+                            Some((last_msg.content.clone(), last_msg.metadata.clone()));
                     }
                 }
                 self.runtime_state_snapshot = self.build_runtime_state_snapshot();
                 self.sync_context_runtime_state().await;
-                let final_response_for_outcome =
-                    final_response_to_persist.clone().unwrap_or_default();
+                let final_response_for_outcome = final_response_to_persist
+                    .as_ref()
+                    .map(|(response, _metadata)| response.clone())
+                    .unwrap_or_default();
                 if self.should_persist_messages_from_tui() {
-                    if let Some(response) = final_response_to_persist {
-                        if let Err(e) = self
-                            .session_manager
-                            .add_message(MessageRole::Assistant, &response)
-                        {
+                    if let Some((response, metadata)) = final_response_to_persist {
+                        if let Err(e) = self.session_manager.add_message_with_metadata(
+                            MessageRole::Assistant,
+                            &response,
+                            &metadata,
+                        ) {
                             warn!("Failed to save assistant message: {}", e);
                         }
                     }
                 }
                 self.record_pending_skill_outcomes(&final_response_for_outcome);
+                self.runtime_facade_state.mark_tool_turns_persisted().await;
+                self.facade_snapshot = self.runtime_facade_state.snapshot().await;
+                self.sync_tool_runs_from_spine_snapshot();
                 self.typewriter_position = 0;
                 // 流式响应完成，发送终端通知
                 crate::tui::notify::send_notification("Priority Agent", "Response ready");
@@ -1420,6 +2008,211 @@ impl Default for TuiApp {
     fn default() -> Self {
         Self::new()
     }
+}
+
+fn compact_attachment_line(path: &str, max_chars: usize) -> String {
+    let mut out = String::new();
+    for ch in path.chars().take(max_chars) {
+        out.push(ch);
+    }
+    if path.chars().count() > max_chars {
+        out.push('…');
+    }
+    out
+}
+
+fn attachment_summary(path: &str, max_path_chars: usize) -> String {
+    let compact_path = compact_attachment_line(path, max_path_chars);
+    let absolute = resolve_attachment_path(path);
+    match std::fs::metadata(&absolute) {
+        Ok(metadata) if metadata.is_dir() => {
+            format!(
+                "{compact_path} (dir, {} items)",
+                directory_item_count(&absolute)
+            )
+        }
+        Ok(metadata) => format!(
+            "{compact_path} (file, {})",
+            format_byte_size(metadata.len())
+        ),
+        Err(_) => format!("{compact_path} (missing)"),
+    }
+}
+
+fn format_byte_size(bytes: u64) -> String {
+    const KIB: f64 = 1024.0;
+    const MIB: f64 = KIB * 1024.0;
+    let bytes_f = bytes as f64;
+    if bytes < 1024 {
+        format!("{bytes} B")
+    } else if bytes_f < MIB {
+        format!("{:.1} KiB", bytes_f / KIB)
+    } else {
+        format!("{:.1} MiB", bytes_f / MIB)
+    }
+}
+
+fn directory_item_count(path: &std::path::Path) -> usize {
+    std::fs::read_dir(path)
+        .map(|entries| entries.filter_map(Result::ok).count())
+        .unwrap_or(0)
+}
+
+fn toggle_pinned_session_list(
+    pinned_sessions: &mut Vec<String>,
+    session_id: &str,
+    max: usize,
+) -> bool {
+    if pinned_sessions.iter().any(|id| id == session_id) {
+        pinned_sessions.retain(|id| id != session_id);
+        return false;
+    }
+    if pinned_sessions.len() >= max {
+        return false;
+    }
+    pinned_sessions.push(session_id.to_string());
+    true
+}
+
+fn tool_run_from_turn_snapshot(turn: &ToolTurnSnapshot) -> ToolRunView {
+    let mut run = ToolRunView::new(turn.id.clone(), tool_turn_name(turn));
+    apply_tool_turn_snapshot(&mut run, turn);
+    run
+}
+
+fn apply_tool_turn_snapshot(run: &mut ToolRunView, turn: &ToolTurnSnapshot) {
+    if !turn.name.trim().is_empty() {
+        run.name = turn.name.clone();
+    }
+    run.status = tool_run_status_from_turn_phase(turn.phase);
+    if let Some(args) = &turn.arguments_preview {
+        if run.arguments.is_none() {
+            run.args_buffer = args.clone();
+            run.arguments = serde_json::from_str(args).ok();
+        }
+    }
+    if let Some(result) = &turn.result_preview {
+        if run.result_body.is_none() {
+            run.result_body = Some(result.clone());
+        }
+        run.result_preview = Some(result.clone());
+    }
+    if let Some(failure) = &turn.failure {
+        run.result_preview = Some(failure.clone());
+        if run.result_body.is_none() {
+            run.result_body = Some(failure.clone());
+        }
+    }
+    if matches!(
+        run.status,
+        ToolRunStatus::Backgrounded
+            | ToolRunStatus::TimedOut
+            | ToolRunStatus::Cancelled
+            | ToolRunStatus::Completed
+            | ToolRunStatus::Failed
+    ) && run.completed_at.is_none()
+    {
+        run.completed_at = Some(Instant::now());
+    }
+}
+
+fn tool_turn_name(turn: &ToolTurnSnapshot) -> String {
+    if turn.name.trim().is_empty() {
+        "tool".to_string()
+    } else {
+        turn.name.clone()
+    }
+}
+
+fn tool_run_status_from_turn_phase(phase: ToolTurnPhase) -> ToolRunStatus {
+    match phase {
+        ToolTurnPhase::Requested | ToolTurnPhase::Accepted => ToolRunStatus::Queued,
+        ToolTurnPhase::Executing => ToolRunStatus::Running,
+        ToolTurnPhase::ResultObserved
+        | ToolTurnPhase::SentBackToModel
+        | ToolTurnPhase::FinalAnswer
+        | ToolTurnPhase::Persisted => ToolRunStatus::Completed,
+        ToolTurnPhase::Failed => ToolRunStatus::Failed,
+        ToolTurnPhase::Cancelled => ToolRunStatus::Cancelled,
+        ToolTurnPhase::TimedOut => ToolRunStatus::TimedOut,
+    }
+}
+
+fn persisted_final_answer_for_user(
+    messages: &[MessageItem],
+    current_user_content: &str,
+) -> Option<String> {
+    let assistant_idx = messages.iter().rposition(|message| {
+        message.role == MessageRole::Assistant
+            && !message.content.trim().is_empty()
+            && !message.content.trim_start().starts_with("[Error:")
+            && !message.content.trim_start().starts_with("[Cancelled:")
+    })?;
+    let prior_user_idx = messages[..assistant_idx]
+        .iter()
+        .rposition(|message| message.role == MessageRole::User)?;
+    let prior_user = &messages[prior_user_idx];
+    let latest_user_idx = messages
+        .iter()
+        .rposition(|message| message.role == MessageRole::User)?;
+    (latest_user_idx == prior_user_idx
+        && (normalize_turn_prompt(&prior_user.content)
+            == normalize_turn_prompt(current_user_content)
+            || assistant_idx > latest_user_idx))
+        .then(|| messages[assistant_idx].content.clone())
+}
+
+fn normalize_turn_prompt(prompt: &str) -> String {
+    prompt.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn resolve_attachment_path(path: &str) -> std::path::PathBuf {
+    let candidate = std::path::Path::new(path);
+    if candidate.is_absolute() {
+        candidate.to_path_buf()
+    } else {
+        std::env::current_dir()
+            .unwrap_or_else(|_| std::path::PathBuf::from("."))
+            .join(candidate)
+    }
+}
+
+fn attachment_file_preview(path: &std::path::Path, byte_len: u64) -> String {
+    const MAX_PREVIEW_BYTES: usize = 64 * 1024;
+    match std::fs::read(path) {
+        Ok(bytes) => {
+            let shown_len = bytes.len().min(MAX_PREVIEW_BYTES);
+            let mut preview = String::from_utf8_lossy(&bytes[..shown_len]).to_string();
+            if bytes.len() > shown_len {
+                preview.push_str(&format!(
+                    "\n\n... truncated: showing {} of {} bytes",
+                    shown_len, byte_len
+                ));
+            }
+            preview
+        }
+        Err(err) => format!("Failed to read attachment:\n{}", err),
+    }
+}
+
+fn attachment_directory_preview(path: &std::path::Path) -> String {
+    let mut lines = vec![format!("Directory: {}", path.display())];
+    match std::fs::read_dir(path) {
+        Ok(entries) => {
+            let mut entries = entries.filter_map(Result::ok).collect::<Vec<_>>();
+            entries.sort_by_key(|entry| entry.file_name());
+            for entry in entries.into_iter().take(200) {
+                let kind = if entry.path().is_dir() {
+                    "dir "
+                } else {
+                    "file"
+                };
+                lines.push(format!("{}  {}", kind, entry.file_name().to_string_lossy()));
+            }
+        }
+        Err(err) => lines.push(format!("Failed to read directory: {}", err)),
+    }
+    lines.join("\n")
 }
 
 #[cfg(test)]

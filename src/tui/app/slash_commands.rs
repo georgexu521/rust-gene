@@ -76,16 +76,30 @@ impl TuiApp {
                         "Memory generation is off. The agent will not propose memory updates."
                     };
                     let recall_explanation = match recall_status.as_str() {
-                        "off" => "Active recall is disabled. Memory is only loaded from pinned and static sources.",
-                        "strict" => "Strict recall: only high-confidence, directly relevant memories are retrieved.",
-                        "balanced" => "Balanced recall: relevant memories are retrieved with moderate filtering.",
-                        "preference-only" => "Only explicit user preferences are recalled, not project facts.",
+                        "off" => {
+                            "Active recall is disabled. Memory is only loaded from pinned and static sources."
+                        }
+                        "strict" => {
+                            "Strict recall: only high-confidence, directly relevant memories are retrieved."
+                        }
+                        "balanced" => {
+                            "Balanced recall: relevant memories are retrieved with moderate filtering."
+                        }
+                        "preference-only" => {
+                            "Only explicit user preferences are recalled, not project facts."
+                        }
                         _ => "Unknown recall mode.",
                     };
                     let write_explanation = match write_policy.as_str() {
-                        "review_only" => "All memory proposals require manual review before persistence.",
-                        "narrow" => "Only explicit user preference statements are auto-persisted during closeout.",
-                        "legacy" => "Legacy auto-write: memory proposals are auto-persisted without review.",
+                        "review_only" => {
+                            "All memory proposals require manual review before persistence."
+                        }
+                        "narrow" => {
+                            "Only explicit user preference statements are auto-persisted during closeout."
+                        }
+                        "legacy" => {
+                            "Legacy auto-write: memory proposals are auto-persisted without review."
+                        }
                         _ => &write_policy,
                     };
                     let active_explanation = if active_memory {
@@ -684,7 +698,7 @@ impl TuiApp {
                     let provider = self.current_provider_label();
                     let base = self.current_provider_base_url();
                     format!(
-                        "Model: {} (via {})\nBase URL: {}\n\nUse Ctrl+M for the model picker, /model list, or /model set <name>.",
+                        "Model: {} (via {})\nBase URL: {}\n\nUse Ctrl+M (or Alt+M) for the model picker, /model list, or /model set <name>.",
                         model, provider, base
                     )
                 } else {
@@ -744,7 +758,7 @@ impl TuiApp {
                     format!("Providers:\n{}", lines)
                 } else if self.streaming_engine.is_some() {
                     format!(
-                        "Provider: {}\nModel: {}\nBase URL: {}\n\nUse Ctrl+L for the provider picker, /provider list, or /provider switch <name>.",
+                        "Provider: {}\nModel: {}\nBase URL: {}\n\nUse Ctrl+L (or Alt+L) for the provider picker, /provider list, or /provider switch <name>.",
                         self.current_provider_label(),
                         self.current_model_label(),
                         self.current_provider_base_url()
@@ -967,6 +981,17 @@ impl TuiApp {
             "/context" => slash::handle_context(self).await,
             "/git" => slash::handle_git(self, args).await,
             "/history" => slash::handle_history(self, args),
+            "/prompt-history" | "/phistory" => slash::handle_prompt_history(self, args),
+            "/prompt-stash" | "/pstash" => slash::handle_prompt_stash(self, args),
+            "/paste" => {
+                let index = args.trim().parse::<usize>().ok();
+                if self.open_paste_viewer(index) {
+                    return;
+                }
+                "No collapsed paste block to preview.".to_string()
+            }
+            "/attach" => slash::handle_attach(self, args),
+            "/jump" | "/j" => self.jump_to_timeline_target(args),
             "/mode" => slash::handle_mode(self, args),
             "/package" => slash::handle_package(self, args).await,
             // Phase 9 Task 1: Advanced Agent Types

@@ -269,6 +269,7 @@ pub fn render_shortcut_help(f: &mut Frame, app: &TuiApp, area: Rect) {
         AppMode::PermissionApproval => "Approval",
         AppMode::DiffViewer => "Diff",
         AppMode::CommandPalette => "Palette",
+        AppMode::FilePicker => "Attach",
         _ => "",
     };
     let title = if app.shortcut_help_filter.is_empty() {
@@ -297,9 +298,10 @@ pub fn render_shortcut_help(f: &mut Frame, app: &TuiApp, area: Rect) {
         Line::from(format!("  {}        send message", kb.chat_submit)),
         Line::from(format!("  {}   insert newline", kb.chat_newline)),
         Line::from("  ctrl+p       command palette"),
-        Line::from("  ctrl+m       model picker"),
-        Line::from("  ctrl+l       provider picker"),
-        Line::from("  ctrl+o       expand/collapse tool details"),
+        Line::from("  ctrl+r       prompt history/stash picker"),
+        Line::from("  ctrl+m       model picker (alt+m if ctrl+m sends Enter)"),
+        Line::from("  ctrl+l       provider picker (alt+l if ctrl+l sends Enter)"),
+        Line::from("  ctrl+o       expand reasoning or tool details"),
         Line::from("  ctrl+t       open full tool output"),
         Line::from("  ctrl+shift+s cycle status bar density"),
         Line::from(format!("  {}       quit", kb.global_quit)),
@@ -313,8 +315,20 @@ pub fn render_shortcut_help(f: &mut Frame, app: &TuiApp, area: Rect) {
         Line::from("  ↑/↓          move cursor or scroll at edge"),
         Line::from("  pageup/down  half-page scroll"),
         Line::from(format!("  {}       toggle vim mode", kb.toggle_vim_mode)),
-        Line::from("  vim: j/k scroll, g top, G bottom, / search, b sidebar"),
-        Line::from("  vim: Enter switch session, P pin, D delete, R rename"),
+        Line::from("  vim: j/k scroll, g top, G bottom, / search"),
+        Line::from(""),
+        Line::from(vec![Span::styled(
+            "Sidebar",
+            Style::default()
+                .fg(app.theme.tokens.fg.strong)
+                .add_modifier(Modifier::BOLD),
+        )]),
+        Line::from("  b            show/hide sidebar"),
+        Line::from("  ctrl+tab     switch Sessions/Context panel"),
+        Line::from("  j/k or ↑/↓   move selected session"),
+        Line::from("  /            filter sessions by title/id/model"),
+        Line::from("  enter        switch session"),
+        Line::from("  P / D / R    pin, delete, rename session"),
         Line::from(""),
         Line::from(vec![Span::styled(
             "Approvals",
@@ -361,7 +375,14 @@ pub fn render_shortcut_help(f: &mut Frame, app: &TuiApp, area: Rect) {
         AppMode::PermissionApproval => &["Approvals"],
         AppMode::DiffViewer => &["Diff Viewer"],
         AppMode::CommandPalette => &["Core"],
-        _ => &["Core", "Vim / Navigation", "Approvals", "Diff Viewer"],
+        AppMode::FilePicker => &["Core"],
+        _ => &[
+            "Core",
+            "Vim / Navigation",
+            "Sidebar",
+            "Approvals",
+            "Diff Viewer",
+        ],
     };
     let mut context_filtered: Vec<Line> = Vec::new();
     for line in all_lines {
@@ -409,6 +430,62 @@ pub fn render_shortcut_help(f: &mut Frame, app: &TuiApp, area: Rect) {
     f.render_widget(Clear, popup_area);
     f.render_widget(
         Paragraph::new(Text::from(filtered))
+            .wrap(Wrap { trim: true })
+            .block(block),
+        popup_area,
+    );
+}
+
+pub fn render_prompt_picker(f: &mut Frame, app: &TuiApp, area: Rect) {
+    let popup_area = centered_rect(68, 42, area);
+    let block = Block::default()
+        .title(" Prompt History (enter use, esc close) ")
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(app.theme.tokens.tone.info))
+        .style(Style::default().bg(Color::Black));
+
+    let items = app.prompt_picker_items();
+    let mut lines = Vec::new();
+    if items.is_empty() {
+        lines.push(Line::from(vec![Span::styled(
+            "No prompt history or stash yet.",
+            Style::default().fg(app.theme.tokens.fg.faint),
+        )]));
+    } else {
+        for (idx, (kind, label, _content)) in items.iter().enumerate() {
+            let selected = idx == app.prompt_picker_selected;
+            let marker = if selected { "›" } else { " " };
+            let style = if selected {
+                Style::default()
+                    .fg(app.theme.tokens.tone.brand)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(app.theme.tokens.fg.meta)
+            };
+            lines.push(Line::from(vec![
+                Span::styled(format!("{marker} "), style),
+                Span::styled(format!("{kind:<7} "), style),
+                Span::styled(label.clone(), Style::default().fg(app.theme.tokens.fg.body)),
+            ]));
+        }
+    }
+
+    lines.push(Line::from(""));
+    lines.push(Line::from(vec![
+        Span::styled("↑/↓", Style::default().fg(app.theme.tokens.tone.info)),
+        Span::styled(" select  ", Style::default().fg(app.theme.tokens.fg.faint)),
+        Span::styled("enter", Style::default().fg(app.theme.tokens.tone.info)),
+        Span::styled(
+            " copy into composer  ",
+            Style::default().fg(app.theme.tokens.fg.faint),
+        ),
+        Span::styled("esc", Style::default().fg(app.theme.tokens.tone.info)),
+        Span::styled(" close", Style::default().fg(app.theme.tokens.fg.faint)),
+    ]));
+
+    f.render_widget(Clear, popup_area);
+    f.render_widget(
+        Paragraph::new(Text::from(lines))
             .wrap(Wrap { trim: true })
             .block(block),
         popup_area,
@@ -794,4 +871,73 @@ pub fn render_provider_select(f: &mut Frame, app: &TuiApp, area: Rect) {
             .block(block),
         popup_area,
     );
+}
+
+pub fn render_file_picker(f: &mut Frame, app: &TuiApp, area: Rect) {
+    let popup_area = centered_rect(72, 70, area);
+    f.render_widget(Clear, popup_area);
+
+    let Some(state) = app.file_picker_state.as_ref() else {
+        let block = Block::default()
+            .title(" Attach File ")
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(app.theme.tokens.tone.info))
+            .style(Style::default().bg(app.theme.tokens.surface.bg_elev));
+        f.render_widget(block, popup_area);
+        return;
+    };
+
+    let block = Block::default()
+        .title(" Attach File Context ")
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(app.theme.tokens.tone.info))
+        .style(Style::default().bg(app.theme.tokens.surface.bg_elev));
+    let inner = block.inner(popup_area);
+    f.render_widget(block, popup_area);
+
+    let chunks = ratatui::layout::Layout::default()
+        .direction(ratatui::layout::Direction::Vertical)
+        .constraints([
+            ratatui::layout::Constraint::Length(1),
+            ratatui::layout::Constraint::Min(3),
+            ratatui::layout::Constraint::Length(1),
+        ])
+        .split(inner);
+
+    let filter_label = if app.file_picker_filtering {
+        format!(" /{}_", state.filter_query())
+    } else if state.filter_query().is_empty() {
+        " / filter files".to_string()
+    } else {
+        format!(" /{}  (/ edit, esc/q close)", state.filter_query())
+    };
+    let filter_style = if app.file_picker_filtering {
+        Style::default().fg(app.theme.tokens.tone.info)
+    } else {
+        Style::default().fg(app.theme.tokens.fg.faint)
+    };
+    f.render_widget(
+        Paragraph::new(Line::from(Span::styled(filter_label, filter_style)))
+            .style(Style::default().bg(app.theme.tokens.surface.bg_elev)),
+        chunks[0],
+    );
+
+    let (list, mut list_state) = state.render(chunks[1]);
+    f.render_stateful_widget(list, chunks[1], &mut list_state);
+
+    let hint = Paragraph::new(Line::from(vec![
+        Span::styled("/", Style::default().fg(app.theme.tokens.tone.info)),
+        Span::styled(" filter  ", Style::default().fg(app.theme.tokens.fg.faint)),
+        Span::styled("enter", Style::default().fg(app.theme.tokens.tone.info)),
+        Span::styled(
+            " attach file/open dir  ",
+            Style::default().fg(app.theme.tokens.fg.faint),
+        ),
+        Span::styled("space", Style::default().fg(app.theme.tokens.tone.info)),
+        Span::styled(" toggle  ", Style::default().fg(app.theme.tokens.fg.faint)),
+        Span::styled("esc/q", Style::default().fg(app.theme.tokens.tone.info)),
+        Span::styled(" close", Style::default().fg(app.theme.tokens.fg.faint)),
+    ]))
+    .style(Style::default().bg(app.theme.tokens.surface.bg_elev));
+    f.render_widget(hint, chunks[2]);
 }

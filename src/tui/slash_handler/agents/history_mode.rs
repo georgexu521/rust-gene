@@ -32,6 +32,123 @@ pub fn handle_history(app: &TuiApp, args: &str) -> String {
     }
     lines.join("\n")
 }
+
+/// /prompt-history - submitted prompt history for composer reuse.
+pub fn handle_prompt_history(app: &TuiApp, args: &str) -> String {
+    let limit = args.trim().parse::<usize>().unwrap_or(20);
+    let lines = app.prompt_history_lines(limit);
+    if lines.is_empty() {
+        return "No submitted prompts in this TUI session.".to_string();
+    }
+
+    let mut output = vec![format!("Recent {} submitted prompts:", lines.len())];
+    output.extend(lines);
+    output.push("Use Ctrl+J / Ctrl+K to cycle prompt history in the composer.".to_string());
+    output.join("\n")
+}
+
+/// /prompt-stash - save or restore the current composer draft.
+pub fn handle_prompt_stash(app: &mut TuiApp, args: &str) -> String {
+    match args.trim() {
+        "" => {
+            if !app.input.value().trim().is_empty() {
+                if app.save_prompt_stash_from_input() {
+                    "Prompt draft stashed. Run /prompt-stash again to restore it.".to_string()
+                } else {
+                    "No prompt draft to stash.".to_string()
+                }
+            } else if app.restore_prompt_stash_to_input() {
+                "Prompt draft restored to the composer.".to_string()
+            } else {
+                "No stashed prompt draft.".to_string()
+            }
+        }
+        "save" => {
+            if app.save_prompt_stash_from_input() {
+                "Prompt draft stashed.".to_string()
+            } else {
+                "No prompt draft to stash.".to_string()
+            }
+        }
+        "restore" => {
+            if app.restore_prompt_stash_to_input() {
+                "Prompt draft restored to the composer.".to_string()
+            } else {
+                "No stashed prompt draft.".to_string()
+            }
+        }
+        "clear" => {
+            if app.clear_prompt_stash() {
+                "Prompt stash cleared.".to_string()
+            } else {
+                "Prompt stash is already empty.".to_string()
+            }
+        }
+        "show" => app
+            .prompt_stash_summary()
+            .map(|summary| format!("Stashed prompt: {}", summary))
+            .unwrap_or_else(|| "No stashed prompt draft.".to_string()),
+        other => {
+            format!("Unknown prompt-stash action: {other}. Use save, restore, clear, or show.")
+        }
+    }
+}
+
+/// /attach - attach file/context paths to the next composer prompt.
+pub fn handle_attach(app: &mut TuiApp, args: &str) -> String {
+    let args = args.trim();
+    if args.is_empty() || args == "list" {
+        if app.composer_attachments.is_empty() {
+            return "No composer attachments. Use /attach <path> to add one.".to_string();
+        }
+        let mut lines = vec![format!(
+            "Composer attachments ({}):",
+            app.composer_attachment_count()
+        )];
+        for summary in app.composer_attachment_summaries() {
+            lines.push(format!(
+                "- {}  preview:/attach preview <n>  remove:/attach remove <n>",
+                summary
+            ));
+        }
+        return lines.join("\n");
+    }
+
+    if args == "browse" || args.starts_with("browse ") {
+        let root = args.strip_prefix("browse").map(str::trim);
+        return app.open_composer_file_picker(root.filter(|value| !value.is_empty()));
+    }
+
+    if args == "preview" || args.starts_with("preview ") {
+        let index = args
+            .strip_prefix("preview")
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .and_then(|value| value.parse::<usize>().ok());
+        if app.open_attachment_viewer(index) {
+            return "Opened attachment preview.".to_string();
+        }
+        return "No composer attachment to preview.".to_string();
+    }
+
+    if args == "clear" {
+        let removed = app.clear_composer_attachments();
+        return format!("Cleared {removed} composer attachment(s).");
+    }
+
+    if let Some(rest) = args.strip_prefix("remove ") {
+        let Some(index) = rest.trim().parse::<usize>().ok() else {
+            return "Usage: /attach remove <n>".to_string();
+        };
+        return app
+            .remove_composer_attachment(index)
+            .map(|path| format!("Removed attachment: {path}"))
+            .unwrap_or_else(|| format!("No attachment at index {index}."));
+    }
+
+    app.attach_context_path(args)
+        .unwrap_or_else(|message| message)
+}
 /// /mode - 切换交互模式
 pub fn handle_mode(app: &mut TuiApp, args: &str) -> String {
     let current_agent_mode = app.current_agent_mode_label();
