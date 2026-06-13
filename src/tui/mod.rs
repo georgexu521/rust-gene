@@ -443,10 +443,53 @@ fn sidebar_layout(area: ratatui::layout::Rect) -> SidebarLayout {
 }
 
 /// 处理键盘事件
+fn handle_leader_sequence(key: KeyEvent, app: &mut TuiApp) -> Option<bool> {
+    use crossterm::event::KeyCode;
+
+    if let Some(state) = &app.leader_state {
+        if state.started_at.elapsed().as_millis() as u64 >= app.keybindings.leader_timeout_ms {
+            app.clear_leader_sequence();
+            return None;
+        }
+        app.clear_leader_sequence();
+        match key.code {
+            KeyCode::Char('p') => {
+                app.open_command_palette();
+                return Some(false);
+            }
+            KeyCode::Char('s') => {
+                app.sidebar_visible = true;
+                app.sidebar_panel = app::SidebarPanel::Sessions;
+                return Some(false);
+            }
+            KeyCode::Char('d') => {
+                if !app.open_tool_viewer() {
+                    app.add_system_message("No diff/tool output to view yet.".to_string());
+                }
+                return Some(false);
+            }
+            _ => return None,
+        }
+    }
+
+    if app.keybindings.leader.matches(key)
+        && matches!(app.mode, app::AppMode::Chat | app::AppMode::VimNormal)
+    {
+        app.begin_leader_sequence();
+        return Some(false);
+    }
+
+    None
+}
+
 /// 返回 true 表示退出应用
 async fn handle_key_event(key: KeyEvent, app: &mut TuiApp) -> anyhow::Result<bool> {
     debug!("Key event: {:?}", key);
     use crate::tui::keybindings::AppAction;
+
+    if let Some(handled) = handle_leader_sequence(key, app) {
+        return Ok(handled);
+    }
 
     // AskUser 模式特殊处理
     if app.mode == app::AppMode::AskUser {

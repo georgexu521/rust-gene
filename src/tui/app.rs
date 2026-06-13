@@ -84,6 +84,12 @@ pub enum AppMode {
     FilePicker,
 }
 
+/// Pending leader-key sequence state.
+#[derive(Debug, Clone)]
+pub struct LeaderState {
+    pub started_at: std::time::Instant,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ModelChoice {
     pub provider: String,
@@ -166,6 +172,8 @@ pub struct TuiApp {
     pub mode: AppMode,
     /// 模式栈，用于 overlay 的进入/返回
     pub mode_stack: Vec<AppMode>,
+    /// Leader-key 等待状态
+    pub leader_state: Option<LeaderState>,
     /// 当前 coding agent 产品模式
     pub agent_mode: AgentMode,
     /// 输入状态
@@ -542,6 +550,28 @@ impl TuiApp {
         self.mode = mode;
     }
 
+    /// Start a leader-key sequence if the leader key was pressed.
+    pub fn begin_leader_sequence(&mut self) {
+        self.leader_state = Some(LeaderState {
+            started_at: std::time::Instant::now(),
+        });
+    }
+
+    /// Clear an expired or consumed leader-key sequence.
+    pub fn clear_leader_sequence(&mut self) {
+        self.leader_state = None;
+    }
+
+    /// Check whether the leader sequence has expired.
+    pub fn leader_expired(&self) -> bool {
+        self.leader_state
+            .as_ref()
+            .map(|s| {
+                s.started_at.elapsed().as_millis() as u64 >= self.keybindings.leader_timeout_ms
+            })
+            .unwrap_or(true)
+    }
+
     pub fn visible_sidebar_sessions(
         &self,
         limit: usize,
@@ -705,6 +735,7 @@ impl TuiApp {
         Self {
             mode: AppMode::Chat,
             mode_stack: Vec::new(),
+            leader_state: None,
             agent_mode: AgentMode::Auto,
             input: InputState::new(),
             messages: Vec::new(),

@@ -59,6 +59,8 @@ impl KeyBinding {
                 "space" => KeyCode::Char(' '),
                 "pageup" => KeyCode::PageUp,
                 "pagedown" => KeyCode::PageDown,
+                "backslash" => KeyCode::Char('\\'),
+                "comma" => KeyCode::Char(','),
                 _ => return Err(format!("Unknown key: {}", key_part)),
             }
         };
@@ -141,6 +143,9 @@ pub enum AppAction {
     SettingsPrevItem,
     SettingsEdit,
     SettingsToggleBool,
+    LeaderCommandPalette,
+    LeaderSessionSidebar,
+    LeaderDiffPanel,
 }
 
 /// TOML 配置结构（字符串形式）
@@ -194,6 +199,10 @@ pub struct KeybindingsFile {
     pub settings_edit: Option<String>,
     #[serde(default)]
     pub settings_toggle_bool: Option<String>,
+    #[serde(default)]
+    pub leader: Option<String>,
+    #[serde(default)]
+    pub leader_timeout_ms: Option<u64>,
 }
 
 /// 键位映射表
@@ -223,6 +232,8 @@ pub struct Keybindings {
     pub settings_prev_item: KeyBinding,
     pub settings_edit: KeyBinding,
     pub settings_toggle_bool: KeyBinding,
+    pub leader: KeyBinding,
+    pub leader_timeout_ms: u64,
 }
 
 impl Default for Keybindings {
@@ -256,6 +267,11 @@ impl Default for Keybindings {
             settings_edit: KeyBinding::parse("enter").expect("invalid built-in keybinding: enter"),
             settings_toggle_bool: KeyBinding::parse("space")
                 .expect("invalid built-in keybinding: space"),
+            leader: KeyBinding {
+                modifiers: KeyModifiers::NONE,
+                code: KeyCode::Char('\\'),
+            },
+            leader_timeout_ms: 500,
         }
     }
 }
@@ -336,6 +352,8 @@ impl Keybindings {
             settings_prev_item: override_binding!(settings_prev_item),
             settings_edit: override_binding!(settings_edit),
             settings_toggle_bool: override_binding!(settings_toggle_bool),
+            leader: override_binding!(leader),
+            leader_timeout_ms: file.leader_timeout_ms.unwrap_or(500),
         }
     }
 
@@ -598,14 +616,38 @@ chat_submit = "alt+enter"
     }
 
     #[test]
-    fn test_invalid_keybinding_ignored() {
+    fn test_leader_binding_defaults_to_backslash() {
+        let kb = Keybindings::default();
+        assert!(kb
+            .leader
+            .matches(ke(KeyCode::Char('\\'), KeyModifiers::NONE)));
+        assert_eq!(kb.leader_timeout_ms, 500);
+    }
+
+    #[test]
+    fn test_leader_binding_override_from_toml() {
         let toml = r#"
-global_quit = "unknown+key"
+leader = "comma"
+leader_timeout_ms = 1200
 "#;
         let kb = Keybindings::from_toml(toml);
-        // Falls back to default
         assert!(kb
-            .global_quit
-            .matches(ke(KeyCode::Char('c'), KeyModifiers::CONTROL)));
+            .leader
+            .matches(ke(KeyCode::Char(','), KeyModifiers::NONE)));
+        assert_eq!(kb.leader_timeout_ms, 1200);
+    }
+
+    #[test]
+    fn test_backslash_alias_parses() {
+        let kb = KeyBinding::parse("backslash").unwrap();
+        assert_eq!(kb.code, KeyCode::Char('\\'));
+        assert!(kb.modifiers.is_empty());
+    }
+
+    #[test]
+    fn test_comma_alias_parses() {
+        let kb = KeyBinding::parse("comma").unwrap();
+        assert_eq!(kb.code, KeyCode::Char(','));
+        assert!(kb.modifiers.is_empty());
     }
 }
