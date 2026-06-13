@@ -13,6 +13,7 @@ pub enum RuntimePanelKind {
     Mcp,
     Bridge,
     Trace,
+    Skills,
 }
 
 impl RuntimePanelKind {
@@ -29,12 +30,13 @@ impl RuntimePanelKind {
             "mcp" | "servers" => Some(Self::Mcp),
             "bridge" | "remote" | "remotes" => Some(Self::Bridge),
             "trace" | "traces" | "replay" => Some(Self::Trace),
+            "skill" | "skills" => Some(Self::Skills),
             _ => None,
         }
     }
 
     pub const fn usage() -> &'static str {
-        "Usage: /panel [all|diff|approval|hooks|context|tasks|agents|mcp|bridge|trace]"
+        "Usage: /panel [all|diff|approval|hooks|context|tasks|agents|mcp|bridge|trace|skills]"
     }
 }
 
@@ -51,6 +53,7 @@ pub async fn render_runtime_panel(app: &TuiApp, kind: RuntimePanelKind) -> Strin
                 render_bridge_panel(app),
                 render_trace_panel(app),
                 render_diff_panel(app),
+                render_skills_panel(app),
             ];
             sections.retain(|section| !section.trim().is_empty());
             sections.join("\n\n")
@@ -64,6 +67,7 @@ pub async fn render_runtime_panel(app: &TuiApp, kind: RuntimePanelKind) -> Strin
         RuntimePanelKind::Mcp => render_mcp_panel(app).await,
         RuntimePanelKind::Bridge => render_bridge_panel(app),
         RuntimePanelKind::Trace => render_trace_panel(app),
+        RuntimePanelKind::Skills => render_skills_panel(app),
     }
 }
 
@@ -825,6 +829,37 @@ fn abbreviate_id(id: &str) -> String {
     id.chars().take(8).collect()
 }
 
+fn render_skills_panel(app: &TuiApp) -> String {
+    let mut lines = vec!["# Skills Panel".to_string()];
+    let skills: Vec<_> = app
+        .skill_runtime
+        .list()
+        .into_iter()
+        .filter(|s| s.meta.panel.is_some())
+        .collect();
+    if skills.is_empty() {
+        lines.push("No skills declare a panel.".to_string());
+        lines.push(
+            "Add `panel = \"name\"` to a skill's frontmatter to contribute here.".to_string(),
+        );
+        return lines.join("\n");
+    }
+
+    for skill in skills {
+        let panel = skill.meta.panel.as_deref().unwrap_or("");
+        lines.push(format!("\n## {} (panel: {})", skill.meta.name, panel));
+        let content = skill.content.trim();
+        for line in content.lines().take(24) {
+            lines.push(format!("  {}", compact_panel_line(line, 140)));
+        }
+        if content.lines().count() > 24 {
+            lines.push("  ...".to_string());
+        }
+    }
+
+    lines.join("\n")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1014,14 +1049,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn renders_trace_panel_without_engine() {
+    async fn renders_skills_panel_without_engine() {
         let app = TuiApp::new();
 
-        let panel = render_runtime_panel(&app, RuntimePanelKind::Trace).await;
+        let panel = render_runtime_panel(&app, RuntimePanelKind::Skills).await;
 
-        assert!(panel.contains("# Trace Panel"));
-        assert!(panel.contains("In-memory traces: engine unavailable"));
-        assert!(panel.contains("Recent traces:"));
-        assert!(panel.contains("Replay:"));
+        assert!(panel.contains("# Skills Panel"));
+        assert!(panel.contains("No skills declare a panel"));
     }
 }

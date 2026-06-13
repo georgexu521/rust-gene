@@ -154,6 +154,9 @@ pub struct SkillMeta {
     /// Whether users can invoke this skill directly as `/skill-name`.
     #[serde(default = "default_user_invocable", alias = "user-invocable")]
     pub user_invocable: bool,
+    /// Optional panel name; if set, the skill contributes to `/panel skills`.
+    #[serde(default)]
+    pub panel: Option<String>,
 }
 
 fn default_version() -> String {
@@ -179,6 +182,7 @@ impl Default for SkillMeta {
             effort: None,
             context: None,
             user_invocable: true,
+            panel: None,
         }
     }
 }
