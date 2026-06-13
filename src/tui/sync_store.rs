@@ -6,10 +6,11 @@
 
 use crate::{
     engine::streaming::StreamEvent,
+    session_store::SessionProjectionEvent,
     state::{MessageItem, MessageRole},
     tui::{
         app::StreamUsageSnapshot,
-        tool_view::{upsert_tool_run, with_tool_run, ToolRunView},
+        tool_view::{upsert_tool_run, with_tool_run, ToolRunStatus, ToolRunView},
     },
 };
 use std::collections::HashMap;
@@ -338,118 +339,243 @@ impl TuiSyncStore {
         Self::default()
     }
 
+    pub fn from_snapshot(snapshot: TuiSyncSnapshot) -> Self {
+        Self { snapshot }
+    }
+
     pub fn snapshot(&self) -> TuiSyncSnapshot {
         self.snapshot.clone()
     }
 
     pub fn start_turn(&mut self, user_message_id: String, assistant_message_id: String) {
-        let messages = vec![
-            TuiMessageProjection {
-                id: user_message_id.clone(),
-                role: TuiMessageRole::User,
-                part_ids: Vec::new(),
-            },
-            TuiMessageProjection {
-                id: assistant_message_id.clone(),
-                role: TuiMessageRole::Assistant,
-                part_ids: Vec::new(),
-            },
-        ];
-        self.snapshot = TuiSyncSnapshot {
-            phase: TuiSessionPhase::Running,
-            active_user_message_id: Some(user_message_id),
-            active_assistant_message_id: Some(assistant_message_id),
-            messages,
-            ..TuiSyncSnapshot::default()
-        };
+        self.apply_projection_event(&SessionProjectionEvent::TurnStarted {
+            user_message_id,
+            assistant_message_id,
+        });
     }
 
     pub fn apply_stream_event(&mut self, event: &StreamEvent) {
+        let projection_event = SessionProjectionEvent::from_stream_event(
+            event,
+            self.snapshot.active_user_message_id.as_deref(),
+            self.snapshot.active_assistant_message_id.as_deref(),
+        );
+        self.apply_projection_event(&projection_event);
+    }
+
+    pub fn apply_projection_event(&mut self, event: &SessionProjectionEvent) {
         match event {
-            StreamEvent::Start => {
+            SessionProjectionEvent::RunStarted => {
                 self.snapshot.phase = TuiSessionPhase::Running;
             }
-            StreamEvent::TextChunk(text) => {
+            SessionProjectionEvent::TurnStarted {
+                user_message_id,
+                assistant_message_id,
+            } => {
+                let messages = vec![
+                    TuiMessageProjection {
+                        id: user_message_id.clone(),
+                        role: TuiMessageRole::User,
+                        part_ids: Vec::new(),
+                    },
+                    TuiMessageProjection {
+                        id: assistant_message_id.clone(),
+                        role: TuiMessageRole::Assistant,
+                        part_ids: Vec::new(),
+                    },
+                ];
+                self.snapshot = TuiSyncSnapshot {
+                    phase: TuiSessionPhase::Running,
+                    active_user_message_id: Some(user_message_id.clone()),
+                    active_assistant_message_id: Some(assistant_message_id.clone()),
+                    messages,
+                    ..TuiSyncSnapshot::default()
+                };
+            }
+            SessionProjectionEvent::AssistantTextDelta { message_id, text } => {
                 if !text.is_empty() {
-                    if let Some(part) = self.active_assistant_part(TuiPartKind::Text) {
+                    let Some(message_id) = self.assistant_message_id(message_id.as_deref()) else {
+                        return;
+                    };
+                    if let Some(part) =
+                        self.assistant_part_for_message(&message_id, TuiPartKind::Text)
+                    {
                         part.text.push_str(text);
                         part.streaming = true;
                     }
-                    self.rebuild_active_assistant_projection();
+                    self.rebuild_assistant_projection_for(&message_id);
                     self.snapshot.assistant_streaming = true;
                 }
             }
-            StreamEvent::ThinkingStart => {
-                if let Some(part) = self.active_assistant_part(TuiPartKind::Thinking) {
+            SessionProjectionEvent::AssistantTextUpdated {
+                message_id,
+                text,
+                streaming,
+            } => {
+                let Some(message_id) = self.assistant_message_id(message_id.as_deref()) else {
+                    return;
+                };
+                self.snapshot.set_message_text_part(
+                    &message_id,
+                    TuiMessageRole::Assistant,
+                    TuiPartKind::Text,
+                    text.clone(),
+                    *streaming,
+                );
+                self.snapshot.assistant_streaming = *streaming;
+            }
+            SessionProjectionEvent::ThinkingStarted { message_id } => {
+                let Some(message_id) = self.assistant_message_id(message_id.as_deref()) else {
+                    return;
+                };
+                if let Some(part) =
+                    self.assistant_part_for_message(&message_id, TuiPartKind::Thinking)
+                {
                     part.streaming = true;
                 }
                 self.snapshot.thinking_streaming = true;
-                self.rebuild_active_assistant_projection();
+                self.rebuild_assistant_projection_for(&message_id);
             }
-            StreamEvent::ThinkingChunk(text) => {
-                if let Some(part) = self.active_assistant_part(TuiPartKind::Thinking) {
+            SessionProjectionEvent::ThinkingDelta { message_id, text } => {
+                let Some(message_id) = self.assistant_message_id(message_id.as_deref()) else {
+                    return;
+                };
+                if let Some(part) =
+                    self.assistant_part_for_message(&message_id, TuiPartKind::Thinking)
+                {
                     part.text.push_str(text);
                     part.streaming = true;
                 }
-                self.rebuild_active_assistant_projection();
+                self.rebuild_assistant_projection_for(&message_id);
                 self.snapshot.thinking_streaming = true;
             }
-            StreamEvent::ThinkingComplete => {
-                if let Some(part) = self.active_assistant_part(TuiPartKind::Thinking) {
+            SessionProjectionEvent::ThinkingCompleted { message_id } => {
+                let Some(message_id) = self.assistant_message_id(message_id.as_deref()) else {
+                    return;
+                };
+                if let Some(part) =
+                    self.assistant_part_for_message(&message_id, TuiPartKind::Thinking)
+                {
                     part.streaming = false;
                 }
                 self.snapshot.thinking_streaming = false;
-                self.rebuild_active_assistant_projection();
+                self.rebuild_assistant_projection_for(&message_id);
             }
-            StreamEvent::ToolCallStart { id, name } => {
+            SessionProjectionEvent::ThinkingUpdated {
+                message_id,
+                text,
+                streaming,
+            } => {
+                let Some(message_id) = self.assistant_message_id(message_id.as_deref()) else {
+                    return;
+                };
+                self.snapshot.set_message_text_part(
+                    &message_id,
+                    TuiMessageRole::Assistant,
+                    TuiPartKind::Thinking,
+                    text.clone(),
+                    *streaming,
+                );
+                self.snapshot.thinking_streaming = *streaming;
+            }
+            SessionProjectionEvent::ToolCallStarted {
+                message_id,
+                tool_call_id,
+                tool_name,
+            } => {
                 self.snapshot.assistant_streaming = false;
-                upsert_tool_run(&mut self.snapshot.tool_runs, id.clone(), name.clone());
-                self.upsert_tool_part(id, name);
+                upsert_tool_run(
+                    &mut self.snapshot.tool_runs,
+                    tool_call_id.clone(),
+                    tool_name.clone(),
+                );
+                self.upsert_tool_part_for_message(message_id.as_deref(), tool_call_id, tool_name);
             }
-            StreamEvent::ToolCallArgs { id, args_delta } => {
-                with_tool_run(&mut self.snapshot.tool_runs, id, |run| {
-                    run.push_args_delta(args_delta)
+            SessionProjectionEvent::ToolArgumentsDelta {
+                tool_call_id,
+                arguments_delta,
+            } => {
+                with_tool_run(&mut self.snapshot.tool_runs, tool_call_id, |run| {
+                    run.push_args_delta(arguments_delta)
                 });
-                self.snapshot.sync_tool_part(id);
+                self.snapshot.sync_tool_part(tool_call_id);
             }
-            StreamEvent::ToolExecutionStart { id, name, .. } => {
-                with_tool_run(&mut self.snapshot.tool_runs, id, |run| {
-                    run.mark_running(name.clone())
+            SessionProjectionEvent::ToolCallAccepted { tool_call_id } => {
+                self.snapshot.sync_tool_part(tool_call_id);
+            }
+            SessionProjectionEvent::ToolExecutionStarted {
+                tool_call_id,
+                tool_name,
+                ..
+            } => {
+                with_tool_run(&mut self.snapshot.tool_runs, tool_call_id, |run| {
+                    run.mark_running(tool_name.clone())
                 });
-                self.snapshot.sync_tool_part(id);
+                self.snapshot.sync_tool_part(tool_call_id);
             }
-            StreamEvent::ToolExecutionProgress { id, progress } => {
-                with_tool_run(&mut self.snapshot.tool_runs, id, |run| {
+            SessionProjectionEvent::ToolExecutionProgress {
+                tool_call_id,
+                progress,
+            } => {
+                with_tool_run(&mut self.snapshot.tool_runs, tool_call_id, |run| {
                     run.push_progress(progress.clone())
                 });
-                self.snapshot.sync_tool_part(id);
+                self.snapshot.sync_tool_part(tool_call_id);
             }
-            StreamEvent::ToolExecutionComplete {
-                id,
+            SessionProjectionEvent::ToolExecutionCompleted {
+                tool_call_id,
                 result,
                 metadata,
                 result_data,
             } => {
-                with_tool_run(&mut self.snapshot.tool_runs, id, |run| {
+                with_tool_run(&mut self.snapshot.tool_runs, tool_call_id, |run| {
                     run.mark_complete_with_metadata(result.clone(), metadata.clone());
                     if let Some(data) = result_data.clone() {
                         run.result_data = Some(data);
                     }
                 });
-                self.snapshot.sync_tool_part(id);
+                self.snapshot.sync_tool_part(tool_call_id);
             }
-            StreamEvent::PermissionRequest {
-                id,
+            SessionProjectionEvent::ToolPartUpdated {
+                message_id,
+                tool_call_id,
+                tool_name,
+                status,
+                input_args,
+                result,
+                metadata,
+                result_data,
+            } => {
+                self.upsert_tool_run_snapshot(
+                    message_id.as_deref(),
+                    tool_call_id,
+                    tool_name,
+                    status.as_deref(),
+                    input_args.as_deref(),
+                    result.as_deref(),
+                    metadata.clone(),
+                    result_data.clone(),
+                );
+            }
+            SessionProjectionEvent::PermissionRequested {
+                message_id,
+                tool_call_id,
                 tool_name,
                 arguments,
                 ..
             } => {
-                with_tool_run(&mut self.snapshot.tool_runs, id, |run| {
+                upsert_tool_run(
+                    &mut self.snapshot.tool_runs,
+                    tool_call_id.clone(),
+                    tool_name.clone(),
+                );
+                with_tool_run(&mut self.snapshot.tool_runs, tool_call_id, |run| {
                     run.mark_waiting_permission(tool_name.clone(), arguments.clone())
                 });
-                self.snapshot.sync_tool_part(id);
+                self.upsert_tool_part_for_message(message_id.as_deref(), tool_call_id, tool_name);
+                self.snapshot.sync_tool_part(tool_call_id);
             }
-            StreamEvent::Usage {
+            SessionProjectionEvent::Usage {
                 prompt_tokens,
                 completion_tokens,
                 reasoning_tokens,
@@ -462,19 +588,18 @@ impl TuiSyncStore {
                     cached_tokens: *cached_tokens,
                 });
             }
-            StreamEvent::RuntimeDiagnostic { .. }
-            | StreamEvent::Closeout { .. }
-            | StreamEvent::ToolCallComplete { .. }
-            | StreamEvent::ToolResultsReadyForModel { .. }
-            | StreamEvent::OutputTruncated => {}
-            StreamEvent::Complete => {
+            SessionProjectionEvent::RuntimeDiagnostic { .. }
+            | SessionProjectionEvent::Closeout { .. }
+            | SessionProjectionEvent::ToolResultsReadyForModel { .. }
+            | SessionProjectionEvent::OutputTruncated => {}
+            SessionProjectionEvent::Completed => {
                 self.snapshot.phase = TuiSessionPhase::Completed;
                 self.snapshot.assistant_streaming = false;
                 self.snapshot.thinking_streaming = false;
                 self.mark_active_parts_not_streaming();
                 self.rebuild_active_assistant_projection();
             }
-            StreamEvent::Error(message) => {
+            SessionProjectionEvent::Error { message } => {
                 self.snapshot.phase = TuiSessionPhase::Failed;
                 self.snapshot.assistant_streaming = false;
                 self.snapshot.thinking_streaming = false;
@@ -533,20 +658,31 @@ impl TuiSyncStore {
         }
     }
 
-    fn active_assistant_part(&mut self, kind: TuiPartKind) -> Option<&mut TuiMessagePart> {
-        let message_id = self.snapshot.active_assistant_message_id.clone()?;
-        let part_id = part_id_for(&message_id, kind);
+    fn assistant_message_id(&self, message_id: Option<&str>) -> Option<String> {
+        message_id
+            .map(str::to_string)
+            .or_else(|| self.snapshot.active_assistant_message_id.clone())
+    }
+
+    fn assistant_part_for_message(
+        &mut self,
+        message_id: &str,
+        kind: TuiPartKind,
+    ) -> Option<&mut TuiMessagePart> {
+        self.snapshot
+            .upsert_message_projection(message_id, TuiMessageRole::Assistant);
+        let part_id = part_id_for(message_id, kind);
         let parts = self
             .snapshot
             .parts_by_message_id
-            .entry(message_id.clone())
+            .entry(message_id.to_string())
             .or_default();
         if let Some(index) = parts.iter().position(|part| part.kind == kind) {
             return parts.get_mut(index);
         }
         parts.push(TuiMessagePart {
             id: part_id.clone(),
-            message_id: message_id.clone(),
+            message_id: message_id.to_string(),
             kind,
             text: String::new(),
             tool_run: None,
@@ -558,18 +694,88 @@ impl TuiSyncStore {
             .iter_mut()
             .find(|message| message.id == message_id)
         {
-            message.part_ids.push(part_id);
+            if !message.part_ids.iter().any(|id| id == &part_id) {
+                message.part_ids.push(part_id);
+            }
         }
         parts.last_mut()
     }
 
-    fn upsert_tool_part(&mut self, tool_id: &str, name: &str) {
-        let Some(message_id) = self.snapshot.active_user_message_id.clone() else {
+    fn upsert_tool_part_for_message(
+        &mut self,
+        message_id: Option<&str>,
+        tool_id: &str,
+        name: &str,
+    ) {
+        let Some(message_id) = message_id
+            .map(str::to_string)
+            .or_else(|| self.snapshot.active_user_message_id.clone())
+        else {
             return;
         };
         self.snapshot
             .upsert_tool_part_for_message(&message_id, tool_id, name);
         self.snapshot.sync_tool_part(tool_id);
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn upsert_tool_run_snapshot(
+        &mut self,
+        message_id: Option<&str>,
+        tool_id: &str,
+        tool_name: &str,
+        status: Option<&str>,
+        input_args: Option<&str>,
+        result: Option<&str>,
+        metadata: Option<serde_json::Value>,
+        result_data: Option<serde_json::Value>,
+    ) {
+        upsert_tool_run(
+            &mut self.snapshot.tool_runs,
+            tool_id.to_string(),
+            tool_name.to_string(),
+        );
+        with_tool_run(&mut self.snapshot.tool_runs, tool_id, |run| {
+            if let Some(input_args) = input_args {
+                run.args_buffer = input_args.to_string();
+                run.arguments = serde_json::from_str(input_args).ok();
+            }
+            match status {
+                Some("failed") => {
+                    run.mark_complete_with_metadata(
+                        result.unwrap_or_default().to_string(),
+                        metadata.or_else(|| Some(serde_json::json!({"success": false}))),
+                    );
+                    run.status = ToolRunStatus::Failed;
+                }
+                Some("timed_out") => {
+                    run.mark_complete_with_metadata(
+                        result.unwrap_or_default().to_string(),
+                        metadata.or_else(|| Some(serde_json::json!({"status": "timed_out"}))),
+                    );
+                    run.status = ToolRunStatus::TimedOut;
+                }
+                Some("cancelled") => {
+                    run.mark_complete_with_metadata(
+                        result.unwrap_or_default().to_string(),
+                        metadata.or_else(|| Some(serde_json::json!({"status": "cancelled"}))),
+                    );
+                    run.status = ToolRunStatus::Cancelled;
+                }
+                Some("completed") => {
+                    run.mark_complete_with_metadata(
+                        result.unwrap_or_default().to_string(),
+                        metadata.or_else(|| Some(serde_json::json!({"success": true}))),
+                    );
+                }
+                Some("running") => run.mark_running(tool_name.to_string()),
+                _ if result.is_some() => run
+                    .mark_complete_with_metadata(result.unwrap_or_default().to_string(), metadata),
+                _ => {}
+            }
+            run.result_data = result_data;
+        });
+        self.upsert_tool_part_for_message(message_id, tool_id, tool_name);
     }
 
     fn mark_active_parts_not_streaming(&mut self) {
@@ -587,7 +793,11 @@ impl TuiSyncStore {
         let Some(message_id) = self.snapshot.active_assistant_message_id.clone() else {
             return;
         };
-        self.snapshot.rebuild_assistant_projection_for(&message_id);
+        self.rebuild_assistant_projection_for(&message_id);
+    }
+
+    fn rebuild_assistant_projection_for(&mut self, message_id: &str) {
+        self.snapshot.rebuild_assistant_projection_for(message_id);
     }
 }
 
@@ -675,6 +885,47 @@ mod tests {
                 .expect("anchored tool runs")
                 .len(),
             1
+        );
+    }
+
+    #[test]
+    fn sync_store_consumes_projection_events_directly() {
+        let mut store = TuiSyncStore::new();
+        store.apply_projection_event(&SessionProjectionEvent::TurnStarted {
+            user_message_id: "user_1".to_string(),
+            assistant_message_id: "assistant_1".to_string(),
+        });
+        store.apply_projection_event(&SessionProjectionEvent::AssistantTextDelta {
+            message_id: Some("assistant_1".to_string()),
+            text: "working".to_string(),
+        });
+        store.apply_projection_event(&SessionProjectionEvent::ToolCallStarted {
+            message_id: Some("user_1".to_string()),
+            tool_call_id: "call_1".to_string(),
+            tool_name: "bash".to_string(),
+        });
+        store.apply_projection_event(&SessionProjectionEvent::ToolArgumentsDelta {
+            tool_call_id: "call_1".to_string(),
+            arguments_delta: "{\"command\":\"pwd\"}".to_string(),
+        });
+        store.apply_projection_event(&SessionProjectionEvent::ToolExecutionCompleted {
+            tool_call_id: "call_1".to_string(),
+            result: "Result: OK\n/tmp/project".to_string(),
+            metadata: None,
+            result_data: None,
+        });
+        store.apply_projection_event(&SessionProjectionEvent::Completed);
+
+        let snapshot = store.snapshot();
+        assert_eq!(snapshot.phase, TuiSessionPhase::Completed);
+        assert_eq!(snapshot.assistant_text, "working");
+        assert_eq!(
+            snapshot
+                .tool_runs_for_message("user_1")
+                .expect("tool part anchored to user message")[0]
+                .result_body
+                .as_deref(),
+            Some("/tmp/project")
         );
     }
 

@@ -547,15 +547,12 @@ impl TuiApp {
     ) -> TuiProjectionHydration {
         let fallback_user_id = self.fallback_user_message_id(session_id);
         let fallback_assistant_id = self.fallback_assistant_message_id();
-        let mut grouped_tool_runs = std::collections::BTreeMap::<String, Vec<ToolRunView>>::new();
+        let mut sync_store = TuiSyncStore::from_snapshot(self.sync_snapshot.clone());
         let mut hydration = TuiProjectionHydration::default();
 
         for part in parts {
             match part.kind.as_str() {
                 "assistant_text" => {
-                    let Some(text) = part.payload["content"].as_str() else {
-                        continue;
-                    };
                     let Some(message_id) = part
                         .message_id
                         .as_deref()
@@ -564,19 +561,17 @@ impl TuiApp {
                     else {
                         continue;
                     };
-                    self.sync_snapshot.set_message_text_part(
-                        &message_id,
-                        TuiMessageRole::Assistant,
-                        TuiPartKind::Text,
-                        text.to_string(),
-                        false,
-                    );
+                    if let Some(event) =
+                        crate::session_store::SessionProjectionEvent::from_persisted_part(
+                            part,
+                            Some(message_id),
+                        )
+                    {
+                        sync_store.apply_projection_event(&event);
+                    }
                     hydration.assistant_text_parts += 1;
                 }
                 "reasoning" => {
-                    let Some(text) = part.payload["content"].as_str() else {
-                        continue;
-                    };
                     let Some(message_id) = part
                         .message_id
                         .as_deref()
@@ -585,32 +580,34 @@ impl TuiApp {
                     else {
                         continue;
                     };
-                    self.sync_snapshot.set_message_text_part(
-                        &message_id,
-                        TuiMessageRole::Assistant,
-                        TuiPartKind::Thinking,
-                        text.to_string(),
-                        false,
-                    );
+                    if let Some(event) =
+                        crate::session_store::SessionProjectionEvent::from_persisted_part(
+                            part,
+                            Some(message_id),
+                        )
+                    {
+                        sync_store.apply_projection_event(&event);
+                    }
                     hydration.reasoning_parts += 1;
                 }
                 "tool" | "shell" => {
-                    let Some(run) = persisted_part_to_tool_run(part.clone()) else {
-                        continue;
-                    };
                     let anchor_id = self
                         .tool_anchor_for_part_message(part.message_id.as_deref())
                         .unwrap_or_else(|| fallback_user_id.clone());
-                    grouped_tool_runs.entry(anchor_id).or_default().push(run);
+                    if let Some(event) =
+                        crate::session_store::SessionProjectionEvent::from_persisted_part(
+                            part,
+                            Some(anchor_id),
+                        )
+                    {
+                        sync_store.apply_projection_event(&event);
+                    }
                 }
                 _ => {}
             }
         }
 
-        for (message_id, runs) in grouped_tool_runs {
-            self.sync_snapshot
-                .set_tool_runs_for_message(message_id, runs);
-        }
+        self.sync_snapshot = sync_store.snapshot();
         hydration.tool_runs = self.projected_tool_runs().len();
         hydration
     }
@@ -653,66 +650,6 @@ impl TuiApp {
                 .map(|message| message.id.clone()),
         }
     }
-}
-
-fn persisted_part_to_tool_run(
-    part: crate::session_store::PersistedSessionPart,
-) -> Option<ToolRunView> {
-    if part.kind != "tool" && part.kind != "shell" {
-        return None;
-    }
-
-    let payload = part.payload;
-    let tool_name = part
-        .tool_name
-        .clone()
-        .or_else(|| payload["tool_name"].as_str().map(str::to_string))
-        .unwrap_or_else(|| {
-            if part.kind == "shell" {
-                "bash".to_string()
-            } else {
-                "tool".to_string()
-            }
-        });
-    let run_id = part
-        .tool_call_id
-        .clone()
-        .filter(|id| !id.trim().is_empty())
-        .unwrap_or(part.part_id);
-    let mut run = ToolRunView::new(run_id, tool_name.clone());
-    if let Some(input_args) = payload["input_args"].as_str() {
-        run.args_buffer = input_args.to_string();
-        run.arguments = serde_json::from_str(input_args).ok();
-    }
-    let body = payload["result_preview"]
-        .as_str()
-        .or_else(|| payload["error"].as_str())
-        .or_else(|| payload["output_uri"].as_str())
-        .or_else(|| payload["input_args"].as_str())
-        .unwrap_or("")
-        .to_string();
-    let success = !matches!(
-        part.status.as_deref(),
-        Some("failed" | "timed_out" | "cancelled")
-    );
-    let metadata = serde_json::json!({
-        "tool": tool_name,
-        "success": success,
-        "output_uri": payload["output_uri"].as_str(),
-        "error_preview": payload["error"].as_str(),
-        "persisted_session_part_id": part.id,
-        "projected_to_seq": part.projected_to_seq,
-    });
-    run.mark_complete_with_metadata(body, Some(metadata));
-    run.status = match part.status.as_deref() {
-        Some("pending") => ToolRunStatus::Queued,
-        Some("running") => ToolRunStatus::Running,
-        Some("failed") => ToolRunStatus::Failed,
-        Some("timed_out") => ToolRunStatus::TimedOut,
-        Some("cancelled") => ToolRunStatus::Cancelled,
-        _ => run.status,
-    };
-    Some(run)
 }
 
 fn display_provider_label(provider_family: &str, model: Option<&str>) -> String {

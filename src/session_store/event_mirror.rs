@@ -6,6 +6,7 @@
 
 use crate::engine::streaming::StreamEvent;
 use crate::session_store::event_store::SessionEventWriter;
+use crate::session_store::SessionProjectionEvent;
 use crate::session_store::SessionStore;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -47,18 +48,31 @@ impl StreamEventMirror {
 
     /// Mirror a StreamEvent to the session_events table.
     pub fn mirror(&mut self, event: &StreamEvent) {
+        let projection_event = SessionProjectionEvent::from_stream_event(event, None, None);
+        self.mirror_projection_event(&projection_event);
+    }
+
+    /// Mirror a SessionProjectionEvent to the session_events table.
+    pub fn mirror_projection_event(&mut self, event: &SessionProjectionEvent) {
         let _ = match event {
-            StreamEvent::Start => self.writer.step_started(),
-            StreamEvent::TextChunk(text) => {
+            SessionProjectionEvent::RunStarted => self.writer.step_started(),
+            SessionProjectionEvent::TurnStarted { .. } => Ok(()),
+            SessionProjectionEvent::AssistantTextDelta { text, .. } => {
                 self.accumulated_text.push_str(text);
                 self.writer.text_delta(text)
             }
-            StreamEvent::ThinkingStart => self.writer.write_event("reasoning_started", "{}"),
-            StreamEvent::ThinkingChunk(text) => {
+            SessionProjectionEvent::AssistantTextUpdated { text, .. } => {
+                self.accumulated_text.clear();
+                self.writer.text_completed(text)
+            }
+            SessionProjectionEvent::ThinkingStarted { .. } => {
+                self.writer.write_event("reasoning_started", "{}")
+            }
+            SessionProjectionEvent::ThinkingDelta { text, .. } => {
                 self.accumulated_reasoning.push_str(text);
                 self.writer.reasoning_delta(text)
             }
-            StreamEvent::ThinkingComplete => {
+            SessionProjectionEvent::ThinkingCompleted { .. } => {
                 if self.accumulated_reasoning.is_empty() {
                     self.writer.write_event("reasoning_completed", "{}")
                 } else {
@@ -67,66 +81,118 @@ impl StreamEventMirror {
                     result
                 }
             }
-            StreamEvent::ToolCallStart { id, name } => {
-                self.tool_names.insert(id.clone(), name.clone());
-                self.writer.tool_called(id, name)
+            SessionProjectionEvent::ThinkingUpdated { text, .. } => {
+                self.accumulated_reasoning.clear();
+                self.writer.reasoning_completed(text)
             }
-            StreamEvent::ToolCallArgs { id, args_delta } => {
+            SessionProjectionEvent::ToolCallStarted {
+                tool_call_id,
+                tool_name,
+                ..
+            } => {
+                self.tool_names
+                    .insert(tool_call_id.clone(), tool_name.clone());
+                self.writer.tool_called(tool_call_id, tool_name)
+            }
+            SessionProjectionEvent::ToolArgumentsDelta {
+                tool_call_id,
+                arguments_delta,
+            } => {
                 self.tool_args
-                    .entry(id.clone())
+                    .entry(tool_call_id.clone())
                     .or_default()
-                    .push_str(args_delta);
-                self.writer.tool_args_delta(id, args_delta)
+                    .push_str(arguments_delta);
+                self.writer.tool_args_delta(tool_call_id, arguments_delta)
             }
-            StreamEvent::ToolCallComplete { id } => {
-                let result = self.writer.tool_call_ready(id);
-                if let Some(args) = self.tool_args.get(id) {
-                    let _ = self.writer.tool_input_completed(id, args);
+            SessionProjectionEvent::ToolCallAccepted { tool_call_id } => {
+                let result = self.writer.tool_call_ready(tool_call_id);
+                if let Some(args) = self.tool_args.get(tool_call_id) {
+                    let _ = self.writer.tool_input_completed(tool_call_id, args);
                 }
                 result
             }
-            StreamEvent::ToolExecutionStart { id, name, .. } => {
-                self.tool_names.insert(id.clone(), name.clone());
-                self.writer.tool_started(id, name)
+            SessionProjectionEvent::ToolExecutionStarted {
+                tool_call_id,
+                tool_name,
+                ..
+            } => {
+                self.tool_names
+                    .insert(tool_call_id.clone(), tool_name.clone());
+                self.writer.tool_started(tool_call_id, tool_name)
             }
-            StreamEvent::ToolExecutionProgress { id, progress } => {
-                self.writer.tool_progress(id, progress)
-            }
-            StreamEvent::ToolExecutionComplete {
-                id,
+            SessionProjectionEvent::ToolExecutionProgress {
+                tool_call_id,
+                progress,
+            } => self.writer.tool_progress(tool_call_id, progress),
+            SessionProjectionEvent::ToolExecutionCompleted {
+                tool_call_id,
                 result,
                 metadata,
                 result_data,
             } => {
                 let tool_succeeded = tool_execution_succeeded(metadata, result_data, result);
-                let _ = self.writer.tool_result_completed(id, result);
-                if is_shell_tool(self.tool_names.get(id).map(String::as_str)) {
+                let _ = self.writer.tool_result_completed(tool_call_id, result);
+                if is_shell_tool(self.tool_names.get(tool_call_id).map(String::as_str)) {
                     let command = self
                         .tool_args
-                        .get(id)
+                        .get(tool_call_id)
                         .and_then(|args| extract_command(args));
-                    let _ = self
-                        .writer
-                        .shell_output_completed(id, command.as_deref(), result);
+                    let _ = self.writer.shell_output_completed(
+                        tool_call_id,
+                        command.as_deref(),
+                        result,
+                    );
                 }
                 let status_event = if tool_succeeded {
-                    self.writer.tool_succeeded(id, &safe_preview(result, 256))
+                    self.writer
+                        .tool_succeeded(tool_call_id, &safe_preview(result, 256))
                 } else {
-                    self.writer.tool_failed(id, &safe_preview(result, 512))
+                    self.writer
+                        .tool_failed(tool_call_id, &safe_preview(result, 512))
                 };
-                self.tool_args.remove(id);
-                self.tool_names.remove(id);
+                self.tool_args.remove(tool_call_id);
+                self.tool_names.remove(tool_call_id);
                 status_event
             }
-            StreamEvent::ToolResultsReadyForModel { ids } => self.writer.write_event(
-                "tool_results_ready_for_model",
-                &serde_json::json!({ "tool_call_ids": ids }).to_string(),
-            ),
-            StreamEvent::Closeout {
+            SessionProjectionEvent::ToolPartUpdated {
+                tool_call_id,
+                tool_name,
+                status,
+                input_args,
+                result,
+                ..
+            } => {
+                let _ = self.writer.tool_called(tool_call_id, tool_name);
+                if let Some(input_args) = input_args {
+                    let _ = self.writer.tool_input_completed(tool_call_id, input_args);
+                }
+                if let Some(result) = result {
+                    let _ = self.writer.tool_result_completed(tool_call_id, result);
+                    if matches!(
+                        status.as_deref(),
+                        Some("failed" | "timed_out" | "cancelled")
+                    ) {
+                        self.writer
+                            .tool_failed(tool_call_id, &safe_preview(result, 512))
+                    } else {
+                        self.writer
+                            .tool_succeeded(tool_call_id, &safe_preview(result, 256))
+                    }
+                } else {
+                    self.writer.tool_started(tool_call_id, tool_name)
+                }
+            }
+            SessionProjectionEvent::ToolResultsReadyForModel { tool_call_ids } => {
+                self.writer.write_event(
+                    "tool_results_ready_for_model",
+                    &serde_json::json!({ "tool_call_ids": tool_call_ids }).to_string(),
+                )
+            }
+            SessionProjectionEvent::Closeout {
                 status,
                 evidence_summary,
             } => self.writer.closeout(status, evidence_summary.as_deref()),
-            StreamEvent::Usage {
+            SessionProjectionEvent::Usage {
                 prompt_tokens,
                 completion_tokens,
                 cached_tokens,
@@ -136,21 +202,23 @@ impl StreamEventMirror {
                 *completion_tokens as u64,
                 cached_tokens.unwrap_or(0) as u64,
             ),
-            StreamEvent::RuntimeDiagnostic { diagnostic } => {
+            SessionProjectionEvent::RuntimeDiagnostic { diagnostic } => {
                 let payload = serde_json::json!({ "diagnostic": diagnostic }).to_string();
                 self.writer.write_event("runtime_diagnostic", &payload)
             }
-            StreamEvent::PermissionRequest {
-                id,
+            SessionProjectionEvent::PermissionRequested {
+                tool_call_id,
                 tool_name,
                 arguments,
                 prompt,
                 ..
             } => self
                 .writer
-                .permission_requested(id, tool_name, arguments, prompt),
-            StreamEvent::OutputTruncated => self.writer.write_event("output_truncated", "{}"),
-            StreamEvent::Complete => {
+                .permission_requested(tool_call_id, tool_name, arguments, prompt),
+            SessionProjectionEvent::OutputTruncated => {
+                self.writer.write_event("output_truncated", "{}")
+            }
+            SessionProjectionEvent::Completed => {
                 if !self.accumulated_text.is_empty() {
                     let _ = self.writer.text_completed(&self.accumulated_text);
                 }
@@ -160,7 +228,7 @@ impl StreamEventMirror {
                 self.tool_names.clear();
                 self.writer.step_ended()
             }
-            StreamEvent::Error(message) => self.writer.runtime_error(message),
+            SessionProjectionEvent::Error { message } => self.writer.runtime_error(message),
         };
     }
 }

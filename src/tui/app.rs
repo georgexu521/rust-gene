@@ -8,7 +8,7 @@ use crate::engine::runtime_controller::RuntimeController;
 use crate::engine::runtime_facade::{
     RuntimeFacadeState, RuntimeStateSnapshot, ToolTurnPhase, ToolTurnSnapshot,
 };
-use crate::engine::streaming::{StreamEvent, StreamingQueryEngine};
+use crate::engine::streaming::StreamingQueryEngine;
 use crate::permissions::RuleSource;
 use crate::state::{
     select_runtime_status, select_tool_viewer_tool_id, AppContext, AppState, MessageItem,
@@ -1263,27 +1263,26 @@ impl TuiApp {
                     .await;
 
                 while let Some(event) = stream.next().await {
+                    let projection_event =
+                        crate::session_store::SessionProjectionEvent::from_stream_event(
+                            &event,
+                            Some(&parent_message_id),
+                            None,
+                        );
                     {
                         let mut sync = sync_store_clone.lock().await;
-                        sync.apply_stream_event(&event);
+                        sync.apply_projection_event(&projection_event);
                     }
                     runtime_facade_state_clone
-                        .process_stream_event_with_parent(&event, Some(&parent_message_id))
+                        .process_projection_event(&projection_event)
                         .await;
-                    match event {
-                        StreamEvent::TextChunk(_) => {}
-                        StreamEvent::ToolCallStart { .. }
-                        | StreamEvent::ToolCallArgs { .. }
-                        | StreamEvent::ToolExecutionStart { .. }
-                        | StreamEvent::ToolExecutionProgress { .. }
-                        | StreamEvent::ToolExecutionComplete { .. } => {}
-                        StreamEvent::Complete => {
+                    match projection_event {
+                        crate::session_store::SessionProjectionEvent::Completed => {
                             runtime_facade_state_clone.set_querying(false).await;
                             done_flag.store(true, Ordering::SeqCst);
                             break;
                         }
-                        StreamEvent::PermissionRequest { .. } => {}
-                        StreamEvent::Usage {
+                        crate::session_store::SessionProjectionEvent::Usage {
                             prompt_tokens,
                             completion_tokens,
                             reasoning_tokens,
@@ -1307,17 +1306,18 @@ impl TuiApp {
                                 ))
                                 .await;
                         }
-                        StreamEvent::Error(_) => {
+                        crate::session_store::SessionProjectionEvent::Error { .. } => {
                             runtime_facade_state_clone.set_querying(false).await;
                             done_flag.store(true, Ordering::SeqCst);
                             break;
                         }
-                        StreamEvent::RuntimeDiagnostic { diagnostic } => {
+                        crate::session_store::SessionProjectionEvent::RuntimeDiagnostic {
+                            diagnostic,
+                        } => {
                             runtime_facade_state_clone
                                 .process_diagnostic(&diagnostic)
                                 .await;
                         }
-                        StreamEvent::Closeout { .. } => {}
                         _ => {}
                     }
                 }

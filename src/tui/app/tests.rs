@@ -3,6 +3,7 @@ use crate::engine::human_review::PermissionReviewDecision;
 use crate::engine::runtime_facade::{
     ProviderPhase, ProviderRequestLifecycle, ToolTurnPhase, ToolTurnSnapshot,
 };
+use crate::engine::streaming::StreamEvent;
 use crate::services::api::{
     ChatRequest as LlmChatRequest, ChatResponse as LlmChatResponse, LlmProvider, Usage,
 };

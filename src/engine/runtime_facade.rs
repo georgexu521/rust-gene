@@ -4,6 +4,7 @@
 //! should be shared across frontends. TUI and desktop render facade events
 //! rather than duplicating runtime policy.
 
+use crate::session_store::SessionProjectionEvent;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -460,60 +461,83 @@ impl RuntimeFacadeState {
         event: &crate::engine::streaming::StreamEvent,
         parent_message_id: Option<&str>,
     ) {
+        let projection_event =
+            SessionProjectionEvent::from_stream_event(event, parent_message_id, None);
+        self.process_projection_event(&projection_event).await;
+    }
+
+    pub async fn process_projection_event(&self, event: &SessionProjectionEvent) {
         let mut inner = self.inner.lock().await;
         match event {
-            crate::engine::streaming::StreamEvent::ToolCallStart { id, name } => {
+            SessionProjectionEvent::ToolCallStarted {
+                message_id,
+                tool_call_id,
+                tool_name,
+            } => {
                 inner.state.assistant_streaming = false;
-                upsert_tool_turn(&mut inner.state.tool_turns, id, name, parent_message_id)
-                    .advance_to(ToolTurnPhase::Requested);
+                upsert_tool_turn(
+                    &mut inner.state.tool_turns,
+                    tool_call_id,
+                    tool_name,
+                    message_id.as_deref(),
+                )
+                .advance_to(ToolTurnPhase::Requested);
             }
-            crate::engine::streaming::StreamEvent::ToolCallArgs { id, args_delta } => {
-                let turn = upsert_tool_turn(&mut inner.state.tool_turns, id, "", parent_message_id);
+            SessionProjectionEvent::ToolArgumentsDelta {
+                tool_call_id,
+                arguments_delta,
+            } => {
+                let turn = upsert_tool_turn(&mut inner.state.tool_turns, tool_call_id, "", None);
                 turn.arguments_preview = Some(append_preview(
                     turn.arguments_preview.take().unwrap_or_default(),
-                    args_delta,
+                    arguments_delta,
                     240,
                 ));
             }
-            crate::engine::streaming::StreamEvent::ToolCallComplete { id } => {
-                upsert_tool_turn(&mut inner.state.tool_turns, id, "", parent_message_id)
+            SessionProjectionEvent::ToolCallAccepted { tool_call_id } => {
+                upsert_tool_turn(&mut inner.state.tool_turns, tool_call_id, "", None)
                     .advance_to(ToolTurnPhase::Accepted);
             }
-            crate::engine::streaming::StreamEvent::ToolExecutionStart { id, name, .. } => {
+            SessionProjectionEvent::ToolExecutionStarted {
+                tool_call_id,
+                tool_name,
+                ..
+            } => {
                 let turn =
-                    upsert_tool_turn(&mut inner.state.tool_turns, id, name, parent_message_id);
-                if !name.is_empty() {
-                    turn.name = name.clone();
+                    upsert_tool_turn(&mut inner.state.tool_turns, tool_call_id, tool_name, None);
+                if !tool_name.is_empty() {
+                    turn.name = tool_name.clone();
                 }
                 turn.advance_to(ToolTurnPhase::Executing);
             }
-            crate::engine::streaming::StreamEvent::ToolExecutionProgress { id, .. } => {
-                upsert_tool_turn(&mut inner.state.tool_turns, id, "", parent_message_id)
+            SessionProjectionEvent::ToolExecutionProgress { tool_call_id, .. } => {
+                upsert_tool_turn(&mut inner.state.tool_turns, tool_call_id, "", None)
                     .advance_to(ToolTurnPhase::Executing);
             }
-            crate::engine::streaming::StreamEvent::PermissionRequest {
-                id,
+            SessionProjectionEvent::PermissionRequested {
+                message_id,
+                tool_call_id,
                 tool_name,
                 arguments,
                 ..
             } => {
                 let turn = upsert_tool_turn(
                     &mut inner.state.tool_turns,
-                    id,
+                    tool_call_id,
                     tool_name,
-                    parent_message_id,
+                    message_id.as_deref(),
                 );
                 turn.name = tool_name.clone();
                 turn.arguments_preview = Some(truncate_text(&arguments.to_string(), 240));
                 turn.advance_to(ToolTurnPhase::Accepted);
             }
-            crate::engine::streaming::StreamEvent::ToolExecutionComplete {
-                id,
+            SessionProjectionEvent::ToolExecutionCompleted {
+                tool_call_id,
                 result,
                 metadata,
                 ..
             } => {
-                let turn = upsert_tool_turn(&mut inner.state.tool_turns, id, "", parent_message_id);
+                let turn = upsert_tool_turn(&mut inner.state.tool_turns, tool_call_id, "", None);
                 turn.result_preview = Some(truncate_text(result, 300));
                 let terminal = tool_terminal_phase(result, metadata.as_ref());
                 turn.advance_to(terminal.unwrap_or(ToolTurnPhase::ResultObserved));
@@ -524,10 +548,44 @@ impl RuntimeFacadeState {
                     turn.failure = turn.result_preview.clone();
                 }
             }
-            crate::engine::streaming::StreamEvent::ToolResultsReadyForModel { ids } => {
+            SessionProjectionEvent::ToolPartUpdated {
+                message_id,
+                tool_call_id,
+                tool_name,
+                status,
+                result,
+                ..
+            } => {
+                let turn = upsert_tool_turn(
+                    &mut inner.state.tool_turns,
+                    tool_call_id,
+                    tool_name,
+                    message_id.as_deref(),
+                );
+                if let Some(result) = result {
+                    turn.result_preview = Some(truncate_text(result, 300));
+                }
+                let phase = match status.as_deref() {
+                    Some("failed") => ToolTurnPhase::Failed,
+                    Some("timed_out") => ToolTurnPhase::TimedOut,
+                    Some("cancelled") => ToolTurnPhase::Cancelled,
+                    Some("completed") => ToolTurnPhase::Persisted,
+                    Some("running") => ToolTurnPhase::Executing,
+                    _ if result.is_some() => ToolTurnPhase::Persisted,
+                    _ => ToolTurnPhase::Requested,
+                };
+                turn.advance_to(phase);
+                if matches!(
+                    turn.phase,
+                    ToolTurnPhase::Failed | ToolTurnPhase::Cancelled | ToolTurnPhase::TimedOut
+                ) {
+                    turn.failure = turn.result_preview.clone();
+                }
+            }
+            SessionProjectionEvent::ToolResultsReadyForModel { tool_call_ids } => {
                 if !mark_tool_turns_by_id(
                     &mut inner.state.tool_turns,
-                    ids,
+                    tool_call_ids,
                     ToolTurnPhase::SentBackToModel,
                 ) {
                     mark_result_observed_turns(
@@ -536,7 +594,7 @@ impl RuntimeFacadeState {
                     );
                 }
             }
-            crate::engine::streaming::StreamEvent::RuntimeDiagnostic { diagnostic } => {
+            SessionProjectionEvent::RuntimeDiagnostic { diagnostic } => {
                 let schema = diagnostic
                     .get("schema")
                     .and_then(|value| value.as_str())
@@ -557,15 +615,21 @@ impl RuntimeFacadeState {
                     );
                 }
             }
-            crate::engine::streaming::StreamEvent::TextChunk(text) if !text.trim().is_empty() => {
+            SessionProjectionEvent::AssistantTextDelta { text, .. } if !text.trim().is_empty() => {
                 inner.state.assistant_streaming = true;
                 mark_result_observed_turns(&mut inner.state.tool_turns, ToolTurnPhase::FinalAnswer);
             }
-            crate::engine::streaming::StreamEvent::Complete => {
+            SessionProjectionEvent::AssistantTextUpdated {
+                text, streaming, ..
+            } if !text.trim().is_empty() => {
+                inner.state.assistant_streaming = *streaming;
+                mark_result_observed_turns(&mut inner.state.tool_turns, ToolTurnPhase::FinalAnswer);
+            }
+            SessionProjectionEvent::Completed => {
                 inner.state.assistant_streaming = false;
                 mark_result_observed_turns(&mut inner.state.tool_turns, ToolTurnPhase::FinalAnswer);
             }
-            crate::engine::streaming::StreamEvent::Error(message) => {
+            SessionProjectionEvent::Error { message } => {
                 inner.state.assistant_streaming = false;
                 for turn in inner
                     .state
@@ -1100,6 +1164,46 @@ mod tests {
         let turn = snapshot.tool_turns.first().expect("tool turn");
         assert_eq!(turn.parent_message_id.as_deref(), Some("user_1"));
         assert_eq!(turn.phase, ToolTurnPhase::Executing);
+    }
+
+    #[tokio::test]
+    async fn tool_turn_spine_consumes_projection_events_directly() {
+        let facade = RuntimeFacadeState::new();
+        facade
+            .process_projection_event(&SessionProjectionEvent::ToolCallStarted {
+                message_id: Some("user_1".to_string()),
+                tool_call_id: "call_1".to_string(),
+                tool_name: "bash".to_string(),
+            })
+            .await;
+        facade
+            .process_projection_event(&SessionProjectionEvent::ToolPartUpdated {
+                message_id: Some("user_1".to_string()),
+                tool_call_id: "call_1".to_string(),
+                tool_name: "bash".to_string(),
+                status: Some("completed".to_string()),
+                input_args: Some("{\"command\":\"pwd\"}".to_string()),
+                result: Some("Result: OK\n/tmp/project".to_string()),
+                metadata: None,
+                result_data: None,
+            })
+            .await;
+        facade
+            .process_projection_event(&SessionProjectionEvent::AssistantTextUpdated {
+                message_id: Some("assistant_1".to_string()),
+                text: "done".to_string(),
+                streaming: false,
+            })
+            .await;
+
+        let snapshot = facade.snapshot().await;
+        let turn = snapshot.tool_turns.first().expect("tool turn");
+        assert_eq!(turn.parent_message_id.as_deref(), Some("user_1"));
+        assert_eq!(turn.phase, ToolTurnPhase::Persisted);
+        assert_eq!(
+            turn.result_preview.as_deref(),
+            Some("Result: OK\n/tmp/project")
+        );
     }
 
     #[tokio::test]

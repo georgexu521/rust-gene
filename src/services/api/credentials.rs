@@ -325,6 +325,8 @@ mod tests {
     #[test]
     fn connect_message_for_unconfigured_includes_setup() {
         // Without DEEPSEEK_API_KEY set, this provider is unconfigured.
+        let mut env = crate::test_utils::env_guard::EnvVarGuard::acquire_blocking();
+        env.remove("DEEPSEEK_API_KEY");
         let msg = connect_message("deepseek").expect("should have message");
         assert!(msg.contains("export DEEPSEEK_API_KEY"));
         assert!(msg.contains("source ~/.zshrc"));
@@ -346,7 +348,9 @@ mod tests {
     #[test]
     fn load_product_credential_env_returns_ok_when_file_missing() {
         // File shouldn't exist under a temp home
-        std::env::set_var("HOME", "/tmp/priority-agent-test-nonexistent");
+        let mut env = crate::test_utils::env_guard::EnvVarGuard::acquire_blocking();
+        env.set("HOME", "/tmp/priority-agent-test-nonexistent");
+        env.remove("PRIORITY_AGENT_CREDENTIAL_ENV_PATH");
         let result = load_product_credential_env();
         assert!(result.is_ok());
     }

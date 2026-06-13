@@ -1,6 +1,6 @@
 //! Narrow validation facade over safe test/check command families.
 
-use crate::tools::bash_tool::command_classifier::{classify_command, CommandKind};
+use crate::tools::bash_tool::command_classifier::{classify_command_with_working_dir, CommandKind};
 use crate::tools::{Tool, ToolContext, ToolErrorCode, ToolOperationKind, ToolResult};
 use async_trait::async_trait;
 use serde_json::json;
@@ -54,7 +54,7 @@ impl Tool for RunTestsTool {
         let normalized_command =
             normalize_validation_command(requested_command, &context.working_dir);
         let command = normalized_command.as_str();
-        let classification = classify_command(command);
+        let classification = classify_command_with_working_dir(command, &context.working_dir);
         if !command_allowed_for_run_tests(&classification) {
             let mut result = ToolResult::error(format!(
                 "run_tests only accepts safe validation commands; rejected: {requested_command}"

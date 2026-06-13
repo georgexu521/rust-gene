@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::path::Path;
 
 use super::arity;
 use super::shell_parser::ShellAstObservation;
@@ -248,14 +249,21 @@ impl CommandClassification {
 }
 
 pub fn classify_command(command: &str) -> CommandClassification {
+    let cwd = std::env::current_dir().unwrap_or_default();
+    classify_command_with_working_dir(command, &cwd)
+}
+
+pub fn classify_command_with_working_dir(
+    command: &str,
+    working_dir: &Path,
+) -> CommandClassification {
     let normalized = normalize_command_for_match(command);
     let shell_wrapped = normalized.trim() != command.trim();
     let (base_command, env_prefixed) = strip_env_prefix(&normalized);
     let base_command = base_command.to_string();
 
     // Shadow AST observation — best-effort, never gate execution.
-    let ast =
-        ShellAstObservation::parse(&base_command, &std::env::current_dir().unwrap_or_default());
+    let ast = ShellAstObservation::parse(&base_command, working_dir);
     let ast_obs = Some(ast);
 
     if crate::security::is_dangerous_command(command) {

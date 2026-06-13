@@ -19,6 +19,7 @@ pub mod export;
 mod goal_store;
 mod learning_store;
 pub mod message_ops;
+pub mod projection_event;
 mod records;
 mod revert_store;
 mod search;
@@ -33,6 +34,7 @@ pub use todo_store::{PersistedTodoItem, TodoItem};
 pub use event_store::{
     query_session_events, query_session_events_after, SessionEventRow, SessionEventWriter,
 };
+pub use projection_event::SessionProjectionEvent;
 pub use session_parts::PersistedSessionPart;
 
 /// 会话存储
