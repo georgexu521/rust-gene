@@ -693,6 +693,11 @@ async fn handle_key_event(key: KeyEvent, app: &mut TuiApp) -> anyhow::Result<boo
         return handle_settings_key_event(key, app).await;
     }
 
+    if key.code == KeyCode::Tab && key.modifiers.contains(KeyModifiers::CONTROL) {
+        app.sidebar_panel = app.sidebar_panel.next();
+        return Ok(false);
+    }
+
     if key.code == KeyCode::Char('p') && key.modifiers.contains(KeyModifiers::CONTROL) {
         app.open_command_palette();
         return Ok(false);
@@ -764,17 +769,12 @@ async fn handle_key_event(key: KeyEvent, app: &mut TuiApp) -> anyhow::Result<boo
             app.mode = app::AppMode::MessageSearch;
             return Ok(false);
         }
-        if key.code == KeyCode::Tab {
+        if key.code == KeyCode::Tab && key.modifiers.is_empty() {
             app.toggle_collapse_at_scroll_anchor();
             return Ok(false);
         }
         if key.code == KeyCode::Char('b') {
             app.sidebar_visible = !app.sidebar_visible;
-            return Ok(false);
-        }
-        // Sidebar panel switching (Ctrl+Tab)
-        if key.code == KeyCode::Tab && key.modifiers.contains(KeyModifiers::CONTROL) {
-            app.sidebar_panel = app.sidebar_panel.next();
             return Ok(false);
         }
         // Sidebar navigation (only when sidebar is visible)
@@ -1824,6 +1824,28 @@ mod tests {
             .unwrap()
             .content
             .contains("[Cancelled: Run interrupted]"));
+    }
+
+    #[tokio::test]
+    async fn ctrl_tab_switches_sidebar_panel_before_plain_tab_collapse() {
+        let mut app = TuiApp::new();
+        assert_eq!(app.sidebar_panel, app::SidebarPanel::Sessions);
+
+        handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::CONTROL), &mut app)
+            .await
+            .unwrap();
+
+        assert_eq!(app.sidebar_panel, app::SidebarPanel::Context);
+    }
+
+    #[tokio::test]
+    async fn plain_tab_does_not_switch_sidebar_panel() {
+        let mut app = TuiApp::new();
+        assert_eq!(app.sidebar_panel, app::SidebarPanel::Sessions);
+
+        handle_key_event(key(KeyCode::Tab), &mut app).await.unwrap();
+
+        assert_eq!(app.sidebar_panel, app::SidebarPanel::Sessions);
     }
 
     #[tokio::test]
