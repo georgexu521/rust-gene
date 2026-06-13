@@ -957,7 +957,14 @@ pub async fn handle_compact(app: &mut TuiApp) -> String {
     let after_msgs = compacted.len();
     let after_tokens = crate::engine::context_compressor::estimate_messages_tokens(&compacted);
 
-    app.messages = compacted
+    let boundary = format!(
+        "... {} messages summarized ({} -> {} tokens) ...",
+        attempt.messages_before.saturating_sub(after_msgs),
+        attempt.before_tokens,
+        after_tokens
+    );
+
+    let mut compacted_items: Vec<crate::state::MessageItem> = compacted
         .into_iter()
         .enumerate()
         .map(|(idx, m)| {
@@ -984,11 +991,33 @@ pub async fn handle_compact(app: &mut TuiApp) -> String {
             }
         })
         .collect();
+
+    compacted_items.insert(
+        0,
+        crate::state::MessageItem {
+            id: "compact_boundary".to_string(),
+            role: crate::state::MessageRole::System,
+            content: boundary,
+            timestamp: std::time::SystemTime::now(),
+            metadata: Default::default(),
+        },
+    );
+
+    app.messages = compacted_items;
     if let Some(session_id) = app.session_manager.current_session_id() {
         let _ = app
             .session_manager
             .replace_messages(session_id, &app.messages);
     }
+
+    app.add_toast(
+        format!(
+            "Compacted {} -> {} messages ({} -> {} tokens)",
+            attempt.messages_before, after_msgs, attempt.before_tokens, after_tokens
+        ),
+        "✓",
+    );
+
     format!(
         "Context compacted: messages {} -> {}, tokens {} -> {}.",
         attempt.messages_before, after_msgs, attempt.before_tokens, after_tokens
