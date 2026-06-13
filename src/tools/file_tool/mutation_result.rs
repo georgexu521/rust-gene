@@ -161,7 +161,7 @@ pub struct TextFormatInfo {
 impl FileMutationResult {
     /// Build a `ui_summary` string from the result fields.
     ///
-    /// Format: "<op> <N> file(s): +<add>/<del>, <bytes>B"
+    /// Format: `"<op> <N> file(s): +<add>/<del>, <bytes>B"`
     pub fn build_ui_summary(&self) -> String {
         let file_label = if self.files.len() == 1 {
             "file"

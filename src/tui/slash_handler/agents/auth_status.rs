@@ -149,7 +149,7 @@ pub fn handle_logout(_app: &mut TuiApp, _args: &str) -> String {
     }
 }
 
-/// /connect <provider> — guided provider setup with catalog DTO.
+/// `/connect <provider>` — guided provider setup with catalog DTO.
 pub fn handle_connect(app: &mut TuiApp, args: &str) -> String {
     let trimmed = args.trim();
     if trimmed.is_empty() || trimmed == "list" {

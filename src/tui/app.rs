@@ -306,7 +306,7 @@ pub struct TuiApp {
     pub bundled_skills: std::collections::HashMap<String, crate::skills::Skill>,
     /// Goal runner (lazily initialized when engine is available)
     pub goal_runner: Option<crate::engine::goal::runner::GoalRunner>,
-    /// Pending goal prompt — set by /goal <objective> to trigger first turn
+    /// Pending goal prompt — set by `/goal <objective>` to trigger first turn
     pub pending_goal_prompt: Option<String>,
     /// Unified skill runtime for bundled, project, and user skills.
     pub skill_runtime: crate::skills::SkillRuntime,
