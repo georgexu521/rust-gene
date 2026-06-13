@@ -181,7 +181,10 @@ pub fn render_chat_area(f: &mut Frame, app: &TuiApp, area: Rect) {
 
         match item {
             TimelineItem::Message {
-                message_index, msg, ..
+                message_index,
+                msg,
+                parts,
+                ..
             } => {
                 let collapsed = app.collapsed_indices.contains(message_index);
                 // Streaming state for last assistant message
@@ -212,6 +215,7 @@ pub fn render_chat_area(f: &mut Frame, app: &TuiApp, area: Rect) {
                             reasoning_expanded: app.expanded_reasoning_message_id.as_deref()
                                 == Some(msg.id.as_str()),
                         },
+                        *parts,
                     )
                 };
                 f.render_widget(paragraph, msg_area);

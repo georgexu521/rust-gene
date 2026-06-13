@@ -2,9 +2,9 @@ use crate::{
     state::{MessageItem, MessageRole},
     tui::{
         app::TuiApp,
+        sync_store::TuiMessagePart,
         tool_view::ToolRunView,
         view_model::reasoning::assistant_reasoning_view,
-        view_model::reasoning::expanded_reasoning_height,
         view_model::tool_rows::{tool_row_height, tool_rows_for_runs_with_spine},
     },
 };
@@ -15,6 +15,7 @@ pub enum TimelineItem<'a> {
         message_index: usize,
         id: &'a str,
         msg: &'a MessageItem,
+        parts: Option<&'a [TuiMessagePart]>,
     },
     ToolRuns {
         id: String,
@@ -64,10 +65,15 @@ pub fn timeline_items<'a>(messages: &[&'a MessageItem], app: &'a TuiApp) -> Vec<
     let mut items = Vec::with_capacity(messages.len() + tool_group_count);
 
     for (idx, msg) in messages.iter().enumerate() {
+        let parts = (msg.role == MessageRole::Assistant)
+            .then(|| app.sync_snapshot.parts_for_message(&msg.id))
+            .flatten()
+            .map(|v| v.as_slice());
         items.push(TimelineItem::Message {
             message_index: idx,
             id: &msg.id,
             msg,
+            parts,
         });
         if !app.focus_mode && msg.role == MessageRole::User {
             if let Some(runs) = app.tool_runs_for_message(&msg.id) {
@@ -97,23 +103,29 @@ pub fn timeline_item_heights(items: &[TimelineItem<'_>], width: usize, app: &Tui
 pub fn estimate_timeline_item_height(item: &TimelineItem<'_>, width: usize, app: &TuiApp) -> usize {
     match item {
         TimelineItem::Message {
-            message_index, msg, ..
+            message_index,
+            msg,
+            parts,
+            ..
         } => {
             let collapsed = app.collapsed_indices.contains(message_index);
             let reasoning_expanded =
                 app.expanded_reasoning_message_id.as_deref() == Some(msg.id.as_str());
-            estimate_message_height_with_reasoning(msg, width, collapsed, reasoning_expanded)
+            estimate_message_height_with_parts_or_reasoning(
+                msg,
+                *parts,
+                width,
+                collapsed,
+                reasoning_expanded,
+            )
         }
         TimelineItem::ToolRuns { runs, .. } => estimate_tool_runs_height(runs, app),
     }
 }
 
-pub fn estimate_message_height(msg: &MessageItem, width: usize, collapsed: bool) -> usize {
-    estimate_message_height_with_reasoning(msg, width, collapsed, false)
-}
-
-pub fn estimate_message_height_with_reasoning(
+pub fn estimate_message_height_with_parts_or_reasoning(
     msg: &MessageItem,
+    parts: Option<&[TuiMessagePart]>,
     width: usize,
     collapsed: bool,
     reasoning_expanded: bool,
@@ -122,21 +134,37 @@ pub fn estimate_message_height_with_reasoning(
         return 2;
     }
 
-    let reasoning =
-        (msg.role == MessageRole::Assistant).then(|| assistant_reasoning_view(&msg.content));
-    let visible_content = reasoning
-        .as_ref()
-        .map(|view| view.visible_answer.as_str())
-        .unwrap_or(msg.content.as_str());
-    let reasoning_summary_height = reasoning
-        .as_ref()
-        .is_some_and(|view| view.has_hidden_reasoning())
-        as usize;
-    let reasoning_body_height = reasoning
-        .as_ref()
-        .filter(|view| reasoning_expanded && view.has_hidden_reasoning())
-        .map(expanded_reasoning_height)
-        .unwrap_or(0);
+    let (visible_content, reasoning_text_owned, has_reasoning) = if let Some(parts) = parts {
+        let text = parts
+            .iter()
+            .find(|p| p.kind == crate::tui::sync_store::TuiPartKind::Text)
+            .map(|p| p.text.clone())
+            .unwrap_or_default();
+        let reasoning = parts
+            .iter()
+            .find(|p| p.kind == crate::tui::sync_store::TuiPartKind::Thinking)
+            .map(|p| p.text.clone())
+            .unwrap_or_default();
+        let has_reasoning = !reasoning.trim().is_empty();
+        (text, reasoning, has_reasoning)
+    } else {
+        let view = assistant_reasoning_view(&msg.content);
+        (
+            view.visible_answer.clone(),
+            view.hidden_reasoning.clone(),
+            view.has_hidden_reasoning(),
+        )
+    };
+
+    let visible_content = visible_content.as_str();
+    let reasoning_text = reasoning_text_owned.as_str();
+
+    let reasoning_summary_height = usize::from(has_reasoning);
+    let reasoning_body_height = if reasoning_expanded && has_reasoning {
+        expanded_reasoning_height_for_text(reasoning_text)
+    } else {
+        0
+    };
 
     let base_height = 1 + reasoning_summary_height + reasoning_body_height;
     let effective_width = width.saturating_sub(4).max(1);
@@ -174,6 +202,30 @@ pub fn estimate_message_height_with_reasoning(
     }
 
     base_height + lines.max(1)
+}
+
+pub fn estimate_message_height(msg: &MessageItem, width: usize, collapsed: bool) -> usize {
+    estimate_message_height_with_parts_or_reasoning(msg, None, width, collapsed, false)
+}
+
+fn expanded_reasoning_height_for_text(reasoning: &str) -> usize {
+    let shown = reasoning
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .take(crate::tui::view_model::reasoning::EXPANDED_REASONING_MAX_LINES)
+        .count();
+    if shown == 0 {
+        0
+    } else {
+        shown
+            + usize::from(
+                reasoning
+                    .lines()
+                    .filter(|line| !line.trim().is_empty())
+                    .count()
+                    > crate::tui::view_model::reasoning::EXPANDED_REASONING_MAX_LINES,
+            )
+    }
 }
 
 pub fn estimate_tool_runs_height(runs: &[ToolRunView], app: &TuiApp) -> usize {
@@ -301,7 +353,8 @@ mod tests {
         );
 
         let collapsed_reasoning = estimate_message_height(&item, 80, false);
-        let expanded_reasoning = estimate_message_height_with_reasoning(&item, 80, false, true);
+        let expanded_reasoning =
+            estimate_message_height_with_parts_or_reasoning(&item, None, 80, false, true);
 
         assert!(expanded_reasoning > collapsed_reasoning);
     }

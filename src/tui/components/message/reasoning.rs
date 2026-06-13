@@ -4,6 +4,8 @@ use ratatui::{
     text::{Line, Span},
 };
 
+/// Render a collapsed reasoning summary line.
+#[allow(dead_code)]
 pub(super) fn render_reasoning_summary(
     reasoning: &AssistantReasoningView,
     theme: &crate::tui::theme::Theme,
@@ -21,6 +23,8 @@ pub(super) fn render_reasoning_summary(
     })
 }
 
+/// Append the expanded reasoning body to the message lines.
+#[allow(dead_code)]
 pub(super) fn append_reasoning_body(
     lines: &mut Vec<Line<'static>>,
     reasoning: &AssistantReasoningView,

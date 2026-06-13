@@ -734,12 +734,10 @@ impl TuiApp {
                 .take(anchor + 1)
                 .rev()
                 .find_map(|item| match item {
-                    crate::tui::view_model::timeline::TimelineItem::Message { msg, .. }
-                        if msg.role == crate::state::MessageRole::Assistant
-                            && crate::tui::view_model::reasoning::assistant_reasoning_view(
-                                &msg.content,
-                            )
-                            .has_hidden_reasoning() =>
+                    crate::tui::view_model::timeline::TimelineItem::Message {
+                        msg, parts, ..
+                    } if msg.role == crate::state::MessageRole::Assistant
+                        && assistant_has_hidden_reasoning(msg, *parts) =>
                     {
                         Some(msg.id.clone())
                     }
@@ -826,6 +824,20 @@ impl TuiApp {
     /// 清除错误
     pub fn clear_error(&mut self) {
         self.error_message = None;
+    }
+}
+
+fn assistant_has_hidden_reasoning(
+    msg: &crate::state::MessageItem,
+    parts: Option<&[crate::tui::sync_store::TuiMessagePart]>,
+) -> bool {
+    if let Some(parts) = parts {
+        parts.iter().any(|p| {
+            p.kind == crate::tui::sync_store::TuiPartKind::Thinking && !p.text.trim().is_empty()
+        })
+    } else {
+        crate::tui::view_model::reasoning::assistant_reasoning_view(&msg.content)
+            .has_hidden_reasoning()
     }
 }
 

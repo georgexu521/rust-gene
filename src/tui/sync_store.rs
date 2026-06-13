@@ -86,18 +86,21 @@ impl TuiSyncSnapshot {
             }
         }
         if let Some(assistant_id) = self.active_assistant_message_id.as_deref() {
-            if let Some(message) = projected.iter_mut().find(|message| {
-                message.id == assistant_id && message.role == MessageRole::Assistant
-            }) {
-                message.content = self.assistant_message_content.clone();
-            } else if !self.assistant_message_content.is_empty() {
-                projected.push(MessageItem {
-                    id: assistant_id.to_string(),
-                    role: MessageRole::Assistant,
-                    content: self.assistant_message_content.clone(),
-                    timestamp: std::time::SystemTime::now(),
-                    metadata: Default::default(),
-                });
+            if !projected
+                .iter()
+                .any(|message| message.id == assistant_id && message.role == MessageRole::Assistant)
+            {
+                if let Some(content) = self.rendered_assistant_content_for(assistant_id) {
+                    if !content.is_empty() {
+                        projected.push(MessageItem {
+                            id: assistant_id.to_string(),
+                            role: MessageRole::Assistant,
+                            content,
+                            timestamp: std::time::SystemTime::now(),
+                            metadata: Default::default(),
+                        });
+                    }
+                }
             }
         }
         projected
@@ -137,6 +140,10 @@ impl TuiSyncSnapshot {
         if Some(message_id) == self.active_assistant_message_id.as_deref() {
             self.rebuild_assistant_projection_for(message_id);
         }
+    }
+
+    pub fn parts_for_message(&self, message_id: &str) -> Option<&Vec<TuiMessagePart>> {
+        self.parts_by_message_id.get(message_id)
     }
 
     pub fn tool_runs_for_message(&self, message_id: &str) -> Option<Vec<ToolRunView>> {
@@ -631,12 +638,37 @@ impl TuiSyncStore {
                 self.snapshot.thinking_streaming = false;
                 self.mark_active_parts_not_streaming();
                 self.snapshot.last_error = Some(message.clone());
-                if !self.snapshot.assistant_message_content.is_empty() {
-                    self.snapshot.assistant_message_content.push('\n');
+                if let Some(assistant_id) = self.snapshot.active_assistant_message_id.clone() {
+                    self.snapshot
+                        .upsert_message_projection(&assistant_id, TuiMessageRole::Assistant);
+                    let parts = self
+                        .snapshot
+                        .parts_by_message_id
+                        .entry(assistant_id.clone())
+                        .or_default();
+                    let error_text = format!("[Error: {message}]");
+                    if let Some(text_part) = parts.iter_mut().find(|p| p.kind == TuiPartKind::Text)
+                    {
+                        if !text_part.text.ends_with(&error_text) {
+                            if !text_part.text.is_empty() {
+                                text_part.text.push('\n');
+                            }
+                            text_part.text.push_str(&error_text);
+                        }
+                    } else {
+                        let part_id = part_id_for(&assistant_id, TuiPartKind::Text);
+                        parts.push(TuiMessagePart {
+                            id: part_id.clone(),
+                            message_id: assistant_id.clone(),
+                            kind: TuiPartKind::Text,
+                            text: error_text,
+                            tool_run: None,
+                            streaming: false,
+                        });
+                        self.snapshot.push_message_part_id(&assistant_id, part_id);
+                    }
+                    self.rebuild_assistant_projection_for(&assistant_id);
                 }
-                self.snapshot
-                    .assistant_message_content
-                    .push_str(&format!("[Error: {message}]"));
             }
         }
     }

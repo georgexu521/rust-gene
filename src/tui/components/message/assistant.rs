@@ -1,21 +1,76 @@
-use crate::{state::MessageItem, tui::view_model::reasoning::assistant_reasoning_view};
+use crate::{
+    state::MessageItem,
+    tui::{
+        sync_store::{TuiMessagePart, TuiPartKind},
+        view_model::reasoning::assistant_reasoning_view,
+    },
+};
 use ratatui::{
     text::Text,
     widgets::{Paragraph, Wrap},
 };
 
 use super::MessageRenderOptions;
-use super::{reasoning::render_reasoning_summary, text::append_markdown_lines, StreamMeta};
+use super::{text::append_markdown_lines, StreamMeta};
 
 pub(super) fn render_assistant_message<'a>(
     message: &'a MessageItem,
+    parts: Option<&[TuiMessagePart]>,
     theme: &'a crate::tui::theme::Theme,
     stream: Option<&StreamMeta>,
     options: MessageRenderOptions,
 ) -> Paragraph<'a> {
     let is_streaming = stream.map(|s| s.is_streaming).unwrap_or(false);
     let tick = stream.map(|s| s.tick).unwrap_or(0);
-    let is_error = !is_streaming && assistant_message_is_error(&message.content);
+
+    let (reasoning_view, visible_answer, is_error) = if let Some(parts) = parts {
+        let text = parts
+            .iter()
+            .find(|p| p.kind == TuiPartKind::Text)
+            .map(|p| p.text.as_str())
+            .unwrap_or("");
+        let reasoning = parts
+            .iter()
+            .find(|p| p.kind == TuiPartKind::Thinking)
+            .map(|p| p.text.as_str())
+            .unwrap_or("");
+        let is_error = !is_streaming && assistant_message_is_error(text);
+        let visible_answer = if is_error {
+            assistant_error_body(text)
+        } else {
+            text.to_string()
+        };
+        (
+            AssistantReasoningViewForParts {
+                hidden_reasoning: reasoning.to_string(),
+                has_hidden_reasoning: !reasoning.trim().is_empty(),
+                has_unclosed_reasoning: parts
+                    .iter()
+                    .find(|p| p.kind == TuiPartKind::Thinking)
+                    .map(|p| p.streaming)
+                    .unwrap_or(false),
+            },
+            visible_answer,
+            is_error,
+        )
+    } else {
+        let view = assistant_reasoning_view(&message.content);
+        let is_error = !is_streaming && assistant_message_is_error(&view.visible_answer);
+        let visible_answer = if is_error {
+            assistant_error_body(&view.visible_answer)
+        } else {
+            view.visible_answer.clone()
+        };
+        (
+            AssistantReasoningViewForParts {
+                hidden_reasoning: view.hidden_reasoning.clone(),
+                has_hidden_reasoning: view.has_hidden_reasoning(),
+                has_unclosed_reasoning: view.has_unclosed_reasoning,
+            },
+            visible_answer,
+            is_error,
+        )
+    };
 
     let (glyph, label, header_color) = if is_streaming {
         let frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
@@ -66,21 +121,95 @@ pub(super) fn render_assistant_message<'a>(
         theme.tokens.fg.faint,
     )];
 
-    let reasoning = assistant_reasoning_view(&message.content);
-    if let Some(line) = render_reasoning_summary(&reasoning, theme) {
+    if let Some(line) = render_reasoning_summary_for_parts(&reasoning_view, theme) {
         lines.push(line);
     }
-    if options.reasoning_expanded && reasoning.has_hidden_reasoning() {
-        super::reasoning::append_reasoning_body(&mut lines, &reasoning, theme);
+    if options.reasoning_expanded && reasoning_view.has_hidden_reasoning {
+        append_reasoning_body_for_parts(&mut lines, &reasoning_view, theme);
     }
 
-    if is_error {
-        let error_body = assistant_error_body(&reasoning.visible_answer);
-        append_markdown_lines(&mut lines, &error_body, theme, "  ");
-    } else {
-        append_markdown_lines(&mut lines, &reasoning.visible_answer, theme, "  ");
-    }
+    append_markdown_lines(&mut lines, &visible_answer, theme, "  ");
     Paragraph::new(Text::from(lines)).wrap(Wrap { trim: true })
+}
+
+struct AssistantReasoningViewForParts {
+    hidden_reasoning: String,
+    has_hidden_reasoning: bool,
+    has_unclosed_reasoning: bool,
+}
+
+impl AssistantReasoningViewForParts {
+    fn reasoning_label(&self) -> String {
+        if self.has_unclosed_reasoning {
+            "Thinking...".to_string()
+        } else {
+            format!(
+                "Thinking hidden · {} lines",
+                self.hidden_reasoning
+                    .lines()
+                    .filter(|l| !l.trim().is_empty())
+                    .count()
+                    .max(1)
+            )
+        }
+    }
+}
+
+fn render_reasoning_summary_for_parts(
+    reasoning: &AssistantReasoningViewForParts,
+    theme: &crate::tui::theme::Theme,
+) -> Option<ratatui::text::Line<'static>> {
+    reasoning.has_hidden_reasoning.then(|| {
+        ratatui::text::Line::from(vec![
+            ratatui::text::Span::styled("  ", ratatui::style::Style::default()),
+            ratatui::text::Span::styled(
+                reasoning.reasoning_label(),
+                ratatui::style::Style::default()
+                    .fg(theme.tokens.fg.faint)
+                    .add_modifier(ratatui::style::Modifier::ITALIC),
+            ),
+        ])
+    })
+}
+
+fn append_reasoning_body_for_parts(
+    lines: &mut Vec<ratatui::text::Line<'static>>,
+    reasoning: &AssistantReasoningViewForParts,
+    theme: &crate::tui::theme::Theme,
+) {
+    use crate::tui::view_model::reasoning::EXPANDED_REASONING_MAX_LINES;
+    let shown: Vec<&str> = reasoning
+        .hidden_reasoning
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .take(EXPANDED_REASONING_MAX_LINES)
+        .collect();
+    for line in &shown {
+        lines.push(ratatui::text::Line::from(vec![
+            ratatui::text::Span::styled("    ", ratatui::style::Style::default()),
+            ratatui::text::Span::styled(
+                line.to_string(),
+                ratatui::style::Style::default().fg(theme.tokens.fg.sub),
+            ),
+        ]));
+    }
+
+    let total = reasoning
+        .hidden_reasoning
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .count();
+    if total > shown.len() {
+        lines.push(ratatui::text::Line::from(vec![
+            ratatui::text::Span::styled("    ", ratatui::style::Style::default()),
+            ratatui::text::Span::styled(
+                format!("... {} more reasoning lines", total - shown.len()),
+                ratatui::style::Style::default()
+                    .fg(theme.tokens.fg.faint)
+                    .add_modifier(ratatui::style::Modifier::ITALIC),
+            ),
+        ]));
+    }
 }
 
 fn assistant_message_is_error(content: &str) -> bool {

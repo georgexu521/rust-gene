@@ -2,7 +2,10 @@
 //!
 //! Reasonix 风格：Card header (glyph + role + metadata) + Card body
 
-use crate::state::{MessageItem, MessageRole};
+use crate::{
+    state::{MessageItem, MessageRole},
+    tui::sync_store::TuiMessagePart,
+};
 use ratatui::{
     style::{Color, Modifier, Style},
     text::{Line, Span, Text},
@@ -111,7 +114,7 @@ pub fn render_message<'a>(
     match message.role {
         MessageRole::User => render_user_message(message, theme),
         MessageRole::Assistant => {
-            render_assistant_message(message, theme, None, MessageRenderOptions::default())
+            render_assistant_message(message, None, theme, None, MessageRenderOptions::default())
         }
         MessageRole::System => render_system_message(message, theme, kind),
         MessageRole::Tool => render_tool_message(message, theme, kind),
@@ -128,9 +131,13 @@ pub fn render_message_with_stream<'a>(
     let kind = detect_card_kind(message);
     match message.role {
         MessageRole::User => render_user_message(message, theme),
-        MessageRole::Assistant => {
-            render_assistant_message(message, theme, stream, MessageRenderOptions::default())
-        }
+        MessageRole::Assistant => render_assistant_message(
+            message,
+            None,
+            theme,
+            stream,
+            MessageRenderOptions::default(),
+        ),
         MessageRole::System => render_system_message(message, theme, kind),
         MessageRole::Tool => render_tool_message(message, theme, kind),
     }
@@ -142,11 +149,12 @@ pub fn render_message_with_options<'a>(
     theme: &'a crate::tui::theme::Theme,
     stream: Option<&StreamMeta>,
     options: MessageRenderOptions,
+    parts: Option<&[TuiMessagePart]>,
 ) -> Paragraph<'a> {
     let kind = detect_card_kind(message);
     match message.role {
         MessageRole::User => render_user_message(message, theme),
-        MessageRole::Assistant => render_assistant_message(message, theme, stream, options),
+        MessageRole::Assistant => render_assistant_message(message, parts, theme, stream, options),
         MessageRole::System => render_system_message(message, theme, kind),
         MessageRole::Tool => render_tool_message(message, theme, kind),
     }
@@ -228,7 +236,8 @@ mod tests {
         terminal
             .draw(|frame| {
                 let theme = Theme::graphite();
-                let paragraph = render_message_with_options(message, 120, &theme, None, options);
+                let paragraph =
+                    render_message_with_options(message, 120, &theme, None, options, None);
                 frame.render_widget(paragraph, frame.area());
             })
             .unwrap();
