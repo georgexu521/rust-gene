@@ -357,6 +357,7 @@ fn activity_line(app: &TuiApp) -> Line<'static> {
         ActivePhase::ProviderRetrying | ActivePhase::ProviderWaiting | ActivePhase::Thinking => {
             app.theme.tokens.tone.warn
         }
+        ActivePhase::Writing => app.theme.tokens.tone.info,
         ActivePhase::ToolRunning => app.theme.tokens.tone.brand,
         ActivePhase::PermissionWaiting => app.theme.tokens.tone.warn,
     };

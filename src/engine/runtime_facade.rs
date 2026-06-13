@@ -333,6 +333,7 @@ pub struct RuntimeStateSnapshot {
     pub provider_request: ProviderRequestLifecycle,
     pub tool_turns: Vec<ToolTurnSnapshot>,
     pub is_querying: bool,
+    pub assistant_streaming: bool,
     pub current_tool_label: Option<String>,
     pub stream_usage: Option<StreamUsageSnapshot>,
     pub turn_counter: u64,
@@ -462,6 +463,7 @@ impl RuntimeFacadeState {
         let mut inner = self.inner.lock().await;
         match event {
             crate::engine::streaming::StreamEvent::ToolCallStart { id, name } => {
+                inner.state.assistant_streaming = false;
                 upsert_tool_turn(&mut inner.state.tool_turns, id, name, parent_message_id)
                     .advance_to(ToolTurnPhase::Requested);
             }
@@ -548,6 +550,7 @@ impl RuntimeFacadeState {
                     ("api_request_stage.v1", "api_request_started")
                         | ("provider_request.v1", "provider_request_started")
                 ) {
+                    inner.state.assistant_streaming = false;
                     mark_result_observed_turns(
                         &mut inner.state.tool_turns,
                         ToolTurnPhase::SentBackToModel,
@@ -555,12 +558,15 @@ impl RuntimeFacadeState {
                 }
             }
             crate::engine::streaming::StreamEvent::TextChunk(text) if !text.trim().is_empty() => {
+                inner.state.assistant_streaming = true;
                 mark_result_observed_turns(&mut inner.state.tool_turns, ToolTurnPhase::FinalAnswer);
             }
             crate::engine::streaming::StreamEvent::Complete => {
+                inner.state.assistant_streaming = false;
                 mark_result_observed_turns(&mut inner.state.tool_turns, ToolTurnPhase::FinalAnswer);
             }
             crate::engine::streaming::StreamEvent::Error(message) => {
+                inner.state.assistant_streaming = false;
                 for turn in inner
                     .state
                     .tool_turns
@@ -1020,10 +1026,16 @@ mod tests {
                 "pwd returned the project path.".to_string(),
             ))
             .await;
-        assert_eq!(
-            facade.snapshot().await.tool_turns[0].phase,
-            ToolTurnPhase::FinalAnswer
-        );
+        let snapshot = facade.snapshot().await;
+        assert!(snapshot.assistant_streaming);
+        assert_eq!(snapshot.tool_turns[0].phase, ToolTurnPhase::FinalAnswer);
+
+        facade
+            .process_stream_event(&crate::engine::streaming::StreamEvent::Complete)
+            .await;
+        let snapshot = facade.snapshot().await;
+        assert!(!snapshot.assistant_streaming);
+        assert_eq!(snapshot.tool_turns[0].phase, ToolTurnPhase::FinalAnswer);
 
         facade.mark_tool_turns_persisted().await;
         assert_eq!(

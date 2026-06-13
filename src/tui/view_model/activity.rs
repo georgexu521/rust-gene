@@ -12,6 +12,7 @@ pub enum ActivePhase {
     ProviderTimedOut,
     ToolRunning,
     PermissionWaiting,
+    Writing,
     Thinking,
 }
 
@@ -127,9 +128,13 @@ pub fn active_turn_status(app: &TuiApp) -> Option<ActiveTurnStatus> {
 
     let provider = &app.facade_snapshot.provider_request;
     if app.is_querying || provider.phase.is_active() {
-        let elapsed_ms = local_elapsed_ms
-            .or((provider.elapsed_ms > 0).then_some(provider.elapsed_ms))
-            .unwrap_or_default();
+        let elapsed_ms = if provider.phase.is_active() {
+            provider.elapsed_ms
+        } else {
+            local_elapsed_ms
+                .or((provider.elapsed_ms > 0).then_some(provider.elapsed_ms))
+                .unwrap_or_default()
+        };
         if let Some(timeout_ms) = effective_provider_timeout_ms(provider.timeout_ms) {
             if elapsed_ms >= timeout_ms {
                 let label = format!(
@@ -150,8 +155,8 @@ pub fn active_turn_status(app: &TuiApp) -> Option<ActiveTurnStatus> {
         }
     }
     if provider.phase == ProviderPhase::TimedOut {
-        let elapsed_ms = local_elapsed_ms
-            .or((provider.elapsed_ms > 0).then_some(provider.elapsed_ms))
+        let elapsed_ms = (provider.elapsed_ms > 0)
+            .then_some(provider.elapsed_ms)
             .or((provider.timeout_ms > 0).then_some(provider.timeout_ms));
         return Some(
             ActiveTurnStatus::new(
@@ -174,9 +179,7 @@ pub fn active_turn_status(app: &TuiApp) -> Option<ActiveTurnStatus> {
         );
     }
     if provider.phase.is_active() {
-        let elapsed_ms = local_elapsed_ms
-            .or((provider.elapsed_ms > 0).then_some(provider.elapsed_ms))
-            .unwrap_or(provider.elapsed_ms);
+        let elapsed_ms = provider.elapsed_ms;
         let phase = match provider.phase {
             ProviderPhase::Retrying => ActivePhase::ProviderRetrying,
             ProviderPhase::SlowWarning => ActivePhase::ProviderSlow,
@@ -204,6 +207,12 @@ pub fn active_turn_status(app: &TuiApp) -> Option<ActiveTurnStatus> {
             ActiveTurnStatus::new(phase, label)
                 .with_detail(detail.unwrap_or_default())
                 .with_elapsed(Some(elapsed_ms)),
+        );
+    }
+
+    if app.facade_snapshot.assistant_streaming {
+        return Some(
+            ActiveTurnStatus::new(ActivePhase::Writing, "Writing").with_elapsed(local_elapsed_ms),
         );
     }
 
@@ -430,7 +439,7 @@ mod tests {
     }
 
     #[test]
-    fn selector_promotes_stale_provider_started_wait_to_slow_provider() {
+    fn selector_uses_current_provider_elapsed_for_active_provider_phase() {
         let mut app = TuiApp::new();
         app.is_querying = true;
         app.stream_started_at =
@@ -442,9 +451,9 @@ mod tests {
 
         let status = active_turn_status(&app).expect("active status");
 
-        assert_eq!(status.phase, ActivePhase::ProviderSlow);
-        assert!(status.label.starts_with("slow DeepSeek"));
-        assert!(status.elapsed_ms.is_some_and(|elapsed| elapsed >= 11_000));
+        assert_eq!(status.phase, ActivePhase::ProviderWaiting);
+        assert_eq!(status.label, "waiting on DeepSeek");
+        assert_eq!(status.elapsed_ms, Some(1_000));
     }
 
     #[test]
@@ -522,5 +531,19 @@ mod tests {
         assert_eq!(status.phase, ActivePhase::ProviderWaiting);
         assert_eq!(status.label, "sent tool result to model (bash)");
         assert_eq!(status.detail.as_deref(), Some("sent back to model"));
+    }
+
+    #[test]
+    fn selector_renders_assistant_streaming_as_writing() {
+        let mut app = TuiApp::new();
+        app.is_querying = true;
+        app.stream_started_at = Some(std::time::Instant::now() - std::time::Duration::from_secs(2));
+        app.facade_snapshot.assistant_streaming = true;
+
+        let status = active_turn_status(&app).expect("active status");
+
+        assert_eq!(status.phase, ActivePhase::Writing);
+        assert_eq!(status.label, "Writing");
+        assert!(status.elapsed_ms.is_some_and(|elapsed| elapsed >= 2_000));
     }
 }
