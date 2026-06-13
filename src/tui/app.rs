@@ -205,6 +205,8 @@ pub struct TuiApp {
     pub run_coordinator: crate::engine::run_coordinator::SessionRunCoordinator,
     /// 命令注册表
     pub command_registry: CommandRegistry,
+    /// 轻量 KV 偏好存储
+    pub kv_store: crate::services::kv::KvStore,
     /// 滚动位置
     pub scroll_offset: usize,
     /// Stable timeline item id for manual scroll anchors.
@@ -724,6 +726,16 @@ impl TuiApp {
         let pinned_sessions = app_config.ui.pinned_sessions.clone();
         let theme_name = app_config.ui.theme.clone();
 
+        let kv_store = crate::services::kv::KvStore::load().unwrap_or_else(|err| {
+            tracing::warn!("Failed to load KV store: {err}");
+            crate::services::kv::KvStore::in_memory()
+        });
+
+        let status_bar_density = kv_store
+            .get_string("ui.status_bar_density")
+            .and_then(|v| StatusBarDensity::parse(&v))
+            .unwrap_or(StatusBarDensity::Normal);
+
         let workspace = Workspace::detect(
             std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")),
         );
@@ -753,9 +765,10 @@ impl TuiApp {
             memory_recall_mode: "balanced".to_string(),
             paused: false,
             focus_mode: false,
-            status_bar_density: StatusBarDensity::Normal,
+            status_bar_density,
             run_coordinator: crate::engine::run_coordinator::SessionRunCoordinator::new(),
             command_registry: default_command_registry(),
+            kv_store,
             scroll_offset: 0,
             scroll_anchor_id: None,
             pinned_to_bottom: true,

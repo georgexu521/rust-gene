@@ -206,6 +206,9 @@ impl TuiApp {
 
     pub fn cycle_status_bar_density(&mut self) -> StatusBarDensity {
         self.status_bar_density = self.status_bar_density.next();
+        let _ = self
+            .kv_store
+            .set_string("ui.status_bar_density", self.status_bar_density.name());
         self.status_bar_density
     }
 
