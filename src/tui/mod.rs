@@ -626,7 +626,7 @@ async fn handle_key_event(key: KeyEvent, app: &mut TuiApp) -> anyhow::Result<boo
                 app.diff_scroll_offset = app.diff_scroll_offset.saturating_add(10);
             }
             KeyCode::Char('n') => {
-                if let Some(line) = components::diff_viewer::find_next_hunk_line(
+                if let Some(line) = components::diff_renderer::find_next_hunk_line(
                     &app.diff_content,
                     app.diff_scroll_offset,
                 ) {
@@ -634,7 +634,7 @@ async fn handle_key_event(key: KeyEvent, app: &mut TuiApp) -> anyhow::Result<boo
                 }
             }
             KeyCode::Char('p') => {
-                if let Some(line) = components::diff_viewer::find_prev_hunk_line(
+                if let Some(line) = components::diff_renderer::find_prev_hunk_line(
                     &app.diff_content,
                     app.diff_scroll_offset,
                 ) {
@@ -642,7 +642,7 @@ async fn handle_key_event(key: KeyEvent, app: &mut TuiApp) -> anyhow::Result<boo
                 }
             }
             KeyCode::Tab => {
-                if let Some(line) = components::diff_viewer::find_next_file_line(
+                if let Some(line) = components::diff_renderer::find_next_file_line(
                     &app.diff_content,
                     app.diff_scroll_offset,
                 ) {
