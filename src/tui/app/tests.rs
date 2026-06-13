@@ -1254,6 +1254,11 @@ fn test_hydrate_persisted_projection_parts_replays_message_parts() {
     assert_eq!(runs[0].id, "call_1");
     assert_eq!(runs[0].name, "bash");
     assert_eq!(runs[0].status, ToolRunStatus::Completed);
+    assert_eq!(app.sync_snapshot.last_projection_seq, 3);
+    assert_eq!(
+        app.sync_snapshot.last_projection_event_id.as_deref(),
+        Some("session-projection:3:call_1:tool_part_updated")
+    );
 
     let hydration = app.hydrate_persisted_projection_parts("session_1", &parts);
     assert_eq!(hydration.tool_runs, 1);
@@ -1262,6 +1267,11 @@ fn test_hydrate_persisted_projection_parts_replays_message_parts() {
             .expect("tool runs after replay")
             .len(),
         1
+    );
+    assert_eq!(app.sync_snapshot.last_projection_seq, 6);
+    assert_eq!(
+        app.sync_snapshot.last_projection_event_id.as_deref(),
+        Some("session-projection:6:call_1:tool_part_updated")
     );
 }
 

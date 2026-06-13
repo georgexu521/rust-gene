@@ -97,7 +97,11 @@ fn test_export_session_preserves_tool_success_and_failure_stats() {
         .write_session_event(
             &session_id,
             "tool_started",
-            &serde_json::json!({"tool_call_id": "call_ok", "tool_name": "bash"}),
+            &serde_json::json!({
+                "tool_call_id": "call_ok",
+                "tool_name": "bash",
+                "message_id": "user_export_1"
+            }),
         )
         .unwrap();
     manager
@@ -138,6 +142,11 @@ fn test_export_session_preserves_tool_success_and_failure_stats() {
 
     let export_json = manager.export_session(&session_id).unwrap();
     let export: serde_json::Value = serde_json::from_str(&export_json).unwrap();
+    let final_event_seq = manager
+        .load_session_events(&session_id)
+        .unwrap()
+        .last()
+        .map(|event| event.seq);
 
     assert_eq!(export["tool_stats"]["calls"]["bash"], 2);
     assert_eq!(export["tool_stats"]["successes"]["bash"], 1);
@@ -154,6 +163,21 @@ fn test_export_session_preserves_tool_success_and_failure_stats() {
         .as_array()
         .unwrap()
         .is_empty());
+    let ok_part = export["parts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|part| part["tool_call_id"].as_str() == Some("call_ok"))
+        .expect("successful tool part is exported");
+    assert_eq!(ok_part["part_id"].as_str(), Some("tool_call_ok"));
+    assert_eq!(ok_part["message_id"].as_str(), Some("user_export_1"));
+    assert_eq!(ok_part["projected_to_seq"].as_i64(), final_event_seq);
+    assert!(
+        ok_part["updated_at"]
+            .as_str()
+            .is_some_and(|value| !value.is_empty()),
+        "exported part should include an update timestamp"
+    );
 }
 
 #[test]

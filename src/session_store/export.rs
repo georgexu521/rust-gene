@@ -64,9 +64,12 @@ pub struct ExportMessage {
 pub struct ExportPart {
     pub part_id: String,
     pub kind: String,
+    pub tool_call_id: Option<String>,
     pub tool_name: Option<String>,
     pub status: Option<String>,
     pub message_id: Option<String>,
+    pub projected_to_seq: i64,
+    pub updated_at: String,
 }
 
 /// The complete export payload.
@@ -413,9 +416,12 @@ mod tests {
             parts: vec![ExportPart {
                 part_id: "tool_c1".into(),
                 kind: "tool".into(),
+                tool_call_id: Some("c1".into()),
                 tool_name: Some("bash".into()),
                 status: Some("completed".into()),
                 message_id: None,
+                projected_to_seq: 3,
+                updated_at: "2026-06-09T00:00:00Z".into(),
             }],
             changed_files: vec!["src/main.rs".into()],
             reverts: vec![ExportRevert {

@@ -572,9 +572,12 @@ impl TuiSessionManager {
                     .map(|part| crate::session_store::export::ExportPart {
                         part_id: part.part_id,
                         kind: part.kind,
+                        tool_call_id: part.tool_call_id,
                         tool_name: part.tool_name,
                         status: part.status,
                         message_id: part.message_id,
+                        projected_to_seq: part.projected_to_seq,
+                        updated_at: part.updated_at,
                     })
                     .collect();
                 let unresolved_settlement = all_parts
