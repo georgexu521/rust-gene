@@ -26,7 +26,11 @@ impl KvStore {
         } else {
             serde_json::Map::new()
         };
-        Ok(Self { path, data, persist: true })
+        Ok(Self {
+            path,
+            data,
+            persist: true,
+        })
     }
 
     /// Create an in-memory store for tests.

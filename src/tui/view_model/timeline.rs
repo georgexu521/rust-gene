@@ -17,18 +17,12 @@ pub enum TimelineItem<'a> {
         msg: &'a MessageItem,
         parts: Option<&'a [TuiMessagePart]>,
     },
-    ToolRuns {
-        id: String,
-        parent_message_id: &'a str,
-        runs: Vec<ToolRunView>,
-    },
 }
 
 impl<'a> TimelineItem<'a> {
     pub fn stable_id(&self) -> &str {
         match self {
             Self::Message { id, .. } => id,
-            Self::ToolRuns { id, .. } => id.as_str(),
         }
     }
 
@@ -52,20 +46,10 @@ pub fn resolve_scroll_offset(
 }
 
 pub fn timeline_items<'a>(messages: &[&'a MessageItem], app: &'a TuiApp) -> Vec<TimelineItem<'a>> {
-    let tool_group_count = if app.focus_mode {
-        0
-    } else {
-        messages
-            .iter()
-            .filter(|msg| {
-                msg.role == MessageRole::User && app.tool_runs_for_message(&msg.id).is_some()
-            })
-            .count()
-    };
-    let mut items = Vec::with_capacity(messages.len() + tool_group_count);
+    let mut items = Vec::with_capacity(messages.len());
 
     for (idx, msg) in messages.iter().enumerate() {
-        let parts = (msg.role == MessageRole::Assistant)
+        let parts = (msg.role == MessageRole::Assistant || !app.focus_mode)
             .then(|| app.sync_snapshot.parts_for_message(&msg.id))
             .flatten()
             .map(|v| v.as_slice());
@@ -75,19 +59,6 @@ pub fn timeline_items<'a>(messages: &[&'a MessageItem], app: &'a TuiApp) -> Vec<
             msg,
             parts,
         });
-        if !app.focus_mode && msg.role == MessageRole::User {
-            if let Some(runs) = app.tool_runs_for_message(&msg.id) {
-                let first_run_id = runs
-                    .first()
-                    .map(|run| run.id.clone())
-                    .unwrap_or_else(|| "tools".to_string());
-                items.push(TimelineItem::ToolRuns {
-                    id: first_run_id,
-                    parent_message_id: &msg.id,
-                    runs,
-                });
-            }
-        }
     }
 
     items
@@ -111,15 +82,22 @@ pub fn estimate_timeline_item_height(item: &TimelineItem<'_>, width: usize, app:
             let collapsed = app.collapsed_indices.contains(message_index);
             let reasoning_expanded =
                 app.expanded_reasoning_message_id.as_deref() == Some(msg.id.as_str());
-            estimate_message_height_with_parts_or_reasoning(
+            let message_parts = (msg.role == MessageRole::Assistant)
+                .then_some(*parts)
+                .flatten();
+            let base_height = estimate_message_height_with_parts_or_reasoning(
                 msg,
-                *parts,
+                message_parts,
                 width,
                 collapsed,
                 reasoning_expanded,
-            )
+            );
+            if collapsed || msg.role != MessageRole::User {
+                base_height
+            } else {
+                base_height + estimate_tool_parts_height(*parts, app)
+            }
         }
-        TimelineItem::ToolRuns { runs, .. } => estimate_tool_runs_height(runs, app),
     }
 }
 
@@ -241,6 +219,22 @@ pub fn estimate_tool_runs_height(runs: &[ToolRunView], app: &TuiApp) -> usize {
     lines.max(1) + 1
 }
 
+pub fn estimate_tool_parts_height(parts: Option<&[TuiMessagePart]>, app: &TuiApp) -> usize {
+    parts
+        .map(tool_runs_from_parts)
+        .filter(|runs| !runs.is_empty())
+        .map(|runs| estimate_tool_runs_height(&runs, app))
+        .unwrap_or(0)
+}
+
+pub fn tool_runs_from_parts(parts: &[TuiMessagePart]) -> Vec<ToolRunView> {
+    parts
+        .iter()
+        .filter(|part| part.kind == crate::tui::sync_store::TuiPartKind::Tool)
+        .filter_map(|part| part.tool_run.clone())
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -258,7 +252,7 @@ mod tests {
     }
 
     #[test]
-    fn inserts_tool_runs_after_parent_user_message() {
+    fn keeps_tool_runs_inside_parent_user_message_parts() {
         let mut app = TuiApp::new();
         let items = [
             msg(MessageRole::User, "user_1"),
@@ -272,21 +266,18 @@ mod tests {
 
         let timeline = timeline_items(&refs, &app);
 
-        assert_eq!(timeline.len(), 3);
-        assert!(matches!(
-            timeline[0],
-            TimelineItem::Message { id: "user_1", .. }
-        ));
-        match &timeline[1] {
-            TimelineItem::ToolRuns {
-                id,
-                parent_message_id,
+        assert_eq!(timeline.len(), 2);
+        match &timeline[0] {
+            TimelineItem::Message {
+                id: "user_1",
+                parts: Some(parts),
                 ..
             } => {
-                assert_eq!(id, "tool_1");
-                assert_eq!(*parent_message_id, "user_1");
+                let runs = tool_runs_from_parts(parts);
+                assert_eq!(runs.len(), 1);
+                assert_eq!(runs[0].id, "tool_1");
             }
-            item => panic!("expected tool runs item, got {item:?}"),
+            item => panic!("expected user message with tool parts, got {item:?}"),
         }
     }
 

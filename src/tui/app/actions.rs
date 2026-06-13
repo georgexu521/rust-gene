@@ -588,8 +588,10 @@ impl TuiApp {
                 "failed" | "failure" | "error" => timeline.iter().rposition(|item| {
                     matches!(
                         item,
-                        crate::tui::view_model::timeline::TimelineItem::ToolRuns { runs, .. }
-                            if runs.iter().any(|run| matches!(
+                        crate::tui::view_model::timeline::TimelineItem::Message { parts: Some(parts), .. }
+                            if crate::tui::view_model::timeline::tool_runs_from_parts(parts)
+                                .iter()
+                                .any(|run| matches!(
                                 run.status,
                                 crate::tui::tool_view::ToolRunStatus::Failed
                                     | crate::tui::tool_view::ToolRunStatus::TimedOut
@@ -600,8 +602,10 @@ impl TuiApp {
                 "edit" | "change" | "write" => timeline.iter().rposition(|item| {
                     matches!(
                         item,
-                        crate::tui::view_model::timeline::TimelineItem::ToolRuns { runs, .. }
-                            if runs.iter().any(|run| matches!(
+                        crate::tui::view_model::timeline::TimelineItem::Message { parts: Some(parts), .. }
+                            if crate::tui::view_model::timeline::tool_runs_from_parts(parts)
+                                .iter()
+                                .any(|run| matches!(
                                 run.name.as_str(),
                                 "file_write" | "file_edit" | "file_patch" | "format"
                             ))
@@ -685,13 +689,13 @@ impl TuiApp {
                 .iter()
                 .take(anchor + 1)
                 .rev()
-                .find_map(|item| match item {
+                .map(|item| match item {
                     crate::tui::view_model::timeline::TimelineItem::Message {
                         message_index,
                         ..
-                    } => Some(*message_index),
-                    crate::tui::view_model::timeline::TimelineItem::ToolRuns { .. } => None,
+                    } => *message_index,
                 })
+                .next()
         };
 
         let Some(idx) = message_index else {
@@ -733,8 +737,7 @@ impl TuiApp {
                     {
                         Some(msg.id.clone())
                     }
-                    crate::tui::view_model::timeline::TimelineItem::Message { .. }
-                    | crate::tui::view_model::timeline::TimelineItem::ToolRuns { .. } => None,
+                    crate::tui::view_model::timeline::TimelineItem::Message { .. } => None,
                 })
         };
 

@@ -9,8 +9,9 @@ use crate::{
         components::{message, tool_renderers::render_tool_lines},
         tool_view::ToolRunView,
         view_model::timeline::{
-            estimate_timeline_item_height, resolve_scroll_offset, timeline_item_heights,
-            timeline_items, TimelineItem,
+            estimate_message_height_with_parts_or_reasoning, estimate_timeline_item_height,
+            estimate_tool_parts_height, resolve_scroll_offset, timeline_item_heights,
+            timeline_items, tool_runs_from_parts, TimelineItem,
         },
         view_model::tool_rows::{tool_row_lines, tool_rows_for_runs_with_spine, ToolRowSeverity},
     },
@@ -179,52 +180,84 @@ pub fn render_chat_area(f: &mut Frame, app: &TuiApp, area: Rect) {
             height: msg_height,
         };
 
-        match item {
-            TimelineItem::Message {
-                message_index,
-                msg,
-                parts,
-                ..
-            } => {
-                let collapsed = app.collapsed_indices.contains(message_index);
-                // Streaming state for last assistant message
-                let stream_meta = if app.is_querying
-                    && msg.role == MessageRole::Assistant
-                    && *message_index == messages.len() - 1
-                {
-                    let tokens = app.stream_usage_snapshot.map(|u| u.completion_tokens);
-                    Some(message::StreamMeta {
-                        is_streaming: true,
-                        tick: app.tick_count,
-                        token_count: tokens,
-                        model_label: Some(app.current_model_label()),
-                        started_at: app.stream_started_at,
-                    })
-                } else {
-                    None
-                };
-                let paragraph = if collapsed {
-                    message::render_message_compact(msg, &app.theme)
-                } else {
-                    message::render_message_with_options(
-                        msg,
-                        inner_area.width as usize,
-                        &app.theme,
-                        stream_meta.as_ref(),
-                        message::MessageRenderOptions {
-                            reasoning_expanded: app.expanded_reasoning_message_id.as_deref()
-                                == Some(msg.id.as_str()),
-                        },
-                        *parts,
-                    )
-                };
-                f.render_widget(paragraph, msg_area);
-            }
-            TimelineItem::ToolRuns { runs, .. } => {
-                let paragraph = render_tool_runs_message(runs, app, msg_area.width as usize);
-                f.render_widget(paragraph, msg_area);
-            }
+        let TimelineItem::Message {
+            message_index,
+            msg,
+            parts,
+            ..
+        } = item;
+        let collapsed = app.collapsed_indices.contains(message_index);
+        // Streaming state for last assistant message
+        let stream_meta = if app.is_querying
+            && msg.role == MessageRole::Assistant
+            && *message_index == messages.len() - 1
+        {
+            let tokens = app.stream_usage_snapshot.map(|u| u.completion_tokens);
+            Some(message::StreamMeta {
+                is_streaming: true,
+                tick: app.tick_count,
+                token_count: tokens,
+                model_label: Some(app.current_model_label()),
+                started_at: app.stream_started_at,
+            })
+        } else {
+            None
         };
+        let tool_height = if collapsed || msg.role != MessageRole::User {
+            0
+        } else {
+            estimate_tool_parts_height(*parts, app)
+        };
+        let message_parts = (msg.role == MessageRole::Assistant)
+            .then_some(*parts)
+            .flatten();
+        let message_height = estimate_message_height_with_parts_or_reasoning(
+            msg,
+            message_parts,
+            inner_area.width as usize,
+            collapsed,
+            app.expanded_reasoning_message_id.as_deref() == Some(msg.id.as_str()),
+        )
+        .min(msg_height as usize)
+        .max(1) as u16;
+        let paragraph = if collapsed {
+            message::render_message_compact(msg, &app.theme)
+        } else {
+            message::render_message_with_options(
+                msg,
+                inner_area.width as usize,
+                &app.theme,
+                stream_meta.as_ref(),
+                message::MessageRenderOptions {
+                    reasoning_expanded: app.expanded_reasoning_message_id.as_deref()
+                        == Some(msg.id.as_str()),
+                },
+                message_parts,
+            )
+        };
+        f.render_widget(
+            paragraph,
+            Rect {
+                height: message_height,
+                ..msg_area
+            },
+        );
+        if tool_height > 0 && message_height < msg_height {
+            if let Some(parts) = parts {
+                let runs = tool_runs_from_parts(parts);
+                if !runs.is_empty() {
+                    let paragraph = render_tool_runs_message(&runs, app, msg_area.width as usize);
+                    f.render_widget(
+                        paragraph,
+                        Rect {
+                            y: msg_area.y + message_height,
+                            height: msg_height - message_height,
+                            ..msg_area
+                        },
+                    );
+                }
+            }
+        }
 
         current_y += msg_height;
     }

@@ -1115,16 +1115,16 @@ fn test_jump_to_failed_and_edit_timeline_items() {
 
     let failed_result = app.jump_to_timeline_target("failed");
     assert!(failed_result.contains("failed"));
-    assert_eq!(app.scroll_offset, 1);
+    assert_eq!(app.scroll_offset, 0);
     assert!(!app.pinned_to_bottom);
 
     let edit_result = app.jump_to_timeline_target("edit");
     assert!(edit_result.contains("edit"));
-    assert_eq!(app.scroll_offset, 4);
+    assert_eq!(app.scroll_offset, 2);
 }
 
 #[test]
-fn test_scroll_down_uses_timeline_item_count_with_tool_groups() {
+fn test_scroll_down_uses_message_part_timeline_item_count() {
     let mut app = TuiApp::new();
     let user = MessageItem {
         id: "user_1".to_string(),
@@ -1146,13 +1146,13 @@ fn test_scroll_down_uses_timeline_item_count_with_tool_groups() {
         vec![ToolRunView::new("tool_1".to_string(), "bash".to_string())],
     );
 
-    assert_eq!(app.timeline_item_count(), 3);
+    assert_eq!(app.timeline_item_count(), 2);
 
-    app.scroll_offset = 2;
+    app.scroll_offset = 1;
     app.pinned_to_bottom = false;
     app.scroll_down();
 
-    assert_eq!(app.scroll_offset, 3);
+    assert_eq!(app.scroll_offset, 2);
     assert!(app.pinned_to_bottom);
     assert!(app.scroll_anchor_id.is_none());
 }
@@ -1451,7 +1451,7 @@ fn test_persisted_final_answer_matches_current_user_turn() {
 }
 
 #[test]
-fn test_toggle_collapse_maps_tool_group_anchor_to_parent_message() {
+fn test_toggle_collapse_uses_parent_message_with_tool_parts() {
     let mut app = TuiApp::new();
     let user = MessageItem {
         id: "user_1".to_string(),
@@ -1475,7 +1475,7 @@ fn test_toggle_collapse_maps_tool_group_anchor_to_parent_message() {
             "file_read".to_string(),
         )],
     );
-    app.scroll_offset = 1;
+    app.scroll_offset = 0;
 
     assert!(app.toggle_collapse_at_scroll_anchor());
 
@@ -1588,7 +1588,7 @@ fn test_scroll_to_message_index_maps_through_timeline_tool_groups() {
 
     assert!(app.scroll_to_message_index(2));
 
-    assert_eq!(app.scroll_offset, 3);
+    assert_eq!(app.scroll_offset, 2);
     assert_eq!(app.scroll_anchor_id.as_deref(), Some("user_2"));
     assert!(!app.pinned_to_bottom);
 }

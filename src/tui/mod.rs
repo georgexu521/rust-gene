@@ -7,6 +7,7 @@ pub mod commands;
 pub mod components;
 pub mod keybindings;
 pub mod notify;
+pub(crate) mod part_projection;
 pub mod runtime_panels;
 pub mod screens;
 pub mod session_manager;

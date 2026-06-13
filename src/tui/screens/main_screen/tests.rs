@@ -1,6 +1,6 @@
 use super::*;
 use crate::state::MessageItem;
-use crate::tui::view_model::timeline::estimate_tool_runs_height;
+use crate::tui::view_model::timeline::{estimate_tool_runs_height, tool_runs_from_parts};
 use ratatui::{backend::TestBackend, Terminal};
 use std::{collections::HashMap, time::SystemTime};
 
@@ -246,7 +246,7 @@ fn transcript_window_preserves_manual_scroll_offset() {
 }
 
 #[test]
-fn transcript_items_insert_tool_runs_after_active_user() {
+fn transcript_items_keep_tool_runs_inside_active_user_message_parts() {
     let mut app = TuiApp::new();
     let items = [
         msg(MessageRole::User, "old question"),
@@ -264,14 +264,23 @@ fn transcript_items_insert_tool_runs_after_active_user() {
 
     let transcript = timeline_items(&refs, &app);
 
-    assert_eq!(transcript.len(), 5);
-    assert!(matches!(transcript[3], TimelineItem::ToolRuns { .. }));
+    assert_eq!(transcript.len(), 4);
+    match &transcript[2] {
+        TimelineItem::Message {
+            parts: Some(parts), ..
+        } => {
+            let runs = tool_runs_from_parts(parts);
+            assert_eq!(runs.len(), 1);
+            assert_eq!(runs[0].id, "tool_1");
+        }
+        item => panic!("expected active user message with tool parts, got {item:?}"),
+    }
     let window = transcript_window(&transcript, refs.len(), true, 8, 80, &app);
     assert_eq!(window.start, 2);
 }
 
 #[test]
-fn transcript_items_keep_tool_runs_for_previous_turns() {
+fn transcript_items_keep_tool_parts_for_previous_turns() {
     let mut app = TuiApp::new();
     let items = [
         msg(MessageRole::User, "first question"),
@@ -291,9 +300,27 @@ fn transcript_items_keep_tool_runs_for_previous_turns() {
 
     let transcript = timeline_items(&refs, &app);
 
-    assert_eq!(transcript.len(), 6);
-    assert!(matches!(transcript[1], TimelineItem::ToolRuns { .. }));
-    assert!(matches!(transcript[4], TimelineItem::ToolRuns { .. }));
+    assert_eq!(transcript.len(), 4);
+    match &transcript[0] {
+        TimelineItem::Message {
+            parts: Some(parts), ..
+        } => {
+            let runs = tool_runs_from_parts(parts);
+            assert_eq!(runs.len(), 1);
+            assert_eq!(runs[0].id, "tool_1");
+        }
+        item => panic!("expected first user message with tool parts, got {item:?}"),
+    }
+    match &transcript[2] {
+        TimelineItem::Message {
+            parts: Some(parts), ..
+        } => {
+            let runs = tool_runs_from_parts(parts);
+            assert_eq!(runs.len(), 1);
+            assert_eq!(runs[0].id, "tool_2");
+        }
+        item => panic!("expected second user message with tool parts, got {item:?}"),
+    }
 }
 
 #[test]
