@@ -16,7 +16,8 @@ use crate::state::{
     RuntimeStatusSnapshot, RuntimeToolStatus, TaskItem,
 };
 use crate::tui::components::input::InputState;
-use crate::tui::tool_view::{upsert_tool_run, with_tool_run, ToolRunStatus, ToolRunView};
+use crate::tui::sync_store::{TuiSyncSnapshot, TuiSyncStore};
+use crate::tui::tool_view::{ToolRunStatus, ToolRunView};
 use futures::StreamExt;
 use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -214,16 +215,16 @@ pub struct TuiApp {
     pub prompt_picker_selected: usize,
     /// 流式查询引擎
     pub streaming_engine: Option<Arc<StreamingQueryEngine>>,
-    /// 当前流式响应缓冲
-    current_response: Arc<Mutex<String>>,
-    /// 工具运行视图状态（后台流更新，前台 tick 同步快照）
-    tool_runs: Arc<Mutex<Vec<ToolRunView>>>,
     /// 当前工具运行视图快照
     pub tool_runs_snapshot: Vec<ToolRunView>,
     /// Shared runtime-state snapshot used by status/tool selectors.
     pub runtime_state_snapshot: RuntimeAppState,
     /// Shared product runtime facade snapshot for cross-frontend migration.
     pub runtime_facade_state: RuntimeFacadeState,
+    /// TUI-local sync/projection store. Runtime stream events feed this store;
+    /// render-compatible fields are refreshed from its snapshot.
+    sync_store: Arc<Mutex<TuiSyncStore>>,
+    pub sync_snapshot: TuiSyncSnapshot,
     /// 历史工具运行视图，按触发该轮的用户消息 id 锚定
     pub tool_runs_by_message_id: HashMap<String, Vec<ToolRunView>>,
     current_tool_anchor_id: Option<String>,
@@ -707,11 +708,11 @@ impl TuiApp {
             prompt_stash: None,
             prompt_picker_selected: 0,
             streaming_engine: engine,
-            current_response: Arc::new(Mutex::new(String::new())),
-            tool_runs: Arc::new(Mutex::new(Vec::new())),
             tool_runs_snapshot: Vec::new(),
             runtime_state_snapshot: RuntimeAppState::default(),
             runtime_facade_state: RuntimeFacadeState::default(),
+            sync_store: Arc::new(Mutex::new(TuiSyncStore::new())),
+            sync_snapshot: TuiSyncSnapshot::default(),
             tool_runs_by_message_id: HashMap::new(),
             current_tool_anchor_id: None,
             transcript_expanded: false,
@@ -1212,15 +1213,6 @@ impl TuiApp {
 
         // 使用流式引擎发送查询
         if let Some(engine) = self.streaming_engine.clone() {
-            // 清空当前响应缓冲
-            {
-                let mut resp = self.current_response.lock().await;
-                resp.clear();
-            }
-            {
-                let mut tool_runs = self.tool_runs.lock().await;
-                tool_runs.clear();
-            }
             {
                 let mut usage = self.stream_usage.lock().await;
                 *usage = None;
@@ -1244,16 +1236,21 @@ impl TuiApp {
                 timestamp: std::time::SystemTime::now(),
                 metadata: Default::default(),
             };
+            let assistant_msg_id = assistant_msg.id.clone();
             self.messages.push(assistant_msg);
             self.scroll_to_bottom();
+            {
+                let mut sync = self.sync_store.lock().await;
+                sync.start_turn(user_msg_id.clone(), assistant_msg_id);
+                self.sync_snapshot = sync.snapshot();
+            }
 
             // 启动流式查询（在后台任务中）
             let controller = RuntimeController::with_runtime_state(
                 engine.clone(),
                 Arc::new(self.runtime_facade_state.clone()),
             );
-            let response_clone = self.current_response.clone();
-            let tool_runs_clone = self.tool_runs.clone();
+            let sync_store_clone = self.sync_store.clone();
             let usage_clone = self.stream_usage.clone();
             let runtime_facade_state_clone = self.runtime_facade_state.clone();
             let done_flag = self.stream_done.clone();
@@ -1273,61 +1270,26 @@ impl TuiApp {
                     .await;
 
                 while let Some(event) = stream.next().await {
+                    {
+                        let mut sync = sync_store_clone.lock().await;
+                        sync.apply_stream_event(&event);
+                    }
                     runtime_facade_state_clone
                         .process_stream_event_with_parent(&event, Some(&parent_message_id))
                         .await;
                     match event {
-                        StreamEvent::TextChunk(text) => {
-                            let mut resp = response_clone.lock().await;
-                            resp.push_str(&text);
-                        }
-                        StreamEvent::ToolCallStart { id, name } => {
-                            let mut runs = tool_runs_clone.lock().await;
-                            upsert_tool_run(&mut runs, id, name);
-                        }
-                        StreamEvent::ToolCallArgs { id, args_delta } => {
-                            let mut runs = tool_runs_clone.lock().await;
-                            with_tool_run(&mut runs, &id, |run| run.push_args_delta(&args_delta));
-                        }
-                        StreamEvent::ToolExecutionStart { id, name, .. } => {
-                            let mut runs = tool_runs_clone.lock().await;
-                            with_tool_run(&mut runs, &id, |run| run.mark_running(name));
-                        }
-                        StreamEvent::ToolExecutionProgress { id, progress } => {
-                            let mut runs = tool_runs_clone.lock().await;
-                            with_tool_run(&mut runs, &id, |run| run.push_progress(progress));
-                        }
-                        StreamEvent::ToolExecutionComplete {
-                            id,
-                            result,
-                            metadata,
-                            result_data,
-                        } => {
-                            let mut runs = tool_runs_clone.lock().await;
-                            with_tool_run(&mut runs, &id, |run| {
-                                run.mark_complete_with_metadata(result, metadata);
-                                if let Some(data) = result_data {
-                                    run.result_data = Some(data);
-                                }
-                            });
-                        }
+                        StreamEvent::TextChunk(_) => {}
+                        StreamEvent::ToolCallStart { .. }
+                        | StreamEvent::ToolCallArgs { .. }
+                        | StreamEvent::ToolExecutionStart { .. }
+                        | StreamEvent::ToolExecutionProgress { .. }
+                        | StreamEvent::ToolExecutionComplete { .. } => {}
                         StreamEvent::Complete => {
                             runtime_facade_state_clone.set_querying(false).await;
                             done_flag.store(true, Ordering::SeqCst);
                             break;
                         }
-                        StreamEvent::PermissionRequest {
-                            id,
-                            tool_name,
-                            arguments,
-                            prompt: _,
-                            ..
-                        } => {
-                            let mut runs = tool_runs_clone.lock().await;
-                            with_tool_run(&mut runs, &id, |run| {
-                                run.mark_waiting_permission(tool_name, arguments)
-                            });
-                        }
+                        StreamEvent::PermissionRequest { .. } => {}
                         StreamEvent::Usage {
                             prompt_tokens,
                             completion_tokens,
@@ -1352,9 +1314,7 @@ impl TuiApp {
                                 ))
                                 .await;
                         }
-                        StreamEvent::Error(e) => {
-                            let mut resp = response_clone.lock().await;
-                            resp.push_str(&format!("\n[Error: {}]", e));
+                        StreamEvent::Error(_) => {
                             runtime_facade_state_clone.set_querying(false).await;
                             done_flag.store(true, Ordering::SeqCst);
                             break;
@@ -1369,6 +1329,10 @@ impl TuiApp {
                     }
                 }
                 // 确保即使流结束也标记完成
+                {
+                    let mut sync = sync_store_clone.lock().await;
+                    sync.mark_stream_closed();
+                }
                 runtime_facade_state_clone.set_querying(false).await;
                 done_flag.store(true, Ordering::SeqCst);
             });
@@ -1455,11 +1419,9 @@ impl TuiApp {
             return;
         }
 
+        self.sync_snapshot = self.sync_store.lock().await.snapshot();
         // 读取响应长度（最小化锁持有时间，避免克隆整个字符串）
-        let total_chars = {
-            let resp = self.current_response.lock().await;
-            resp.chars().count()
-        };
+        let total_chars = self.sync_snapshot.assistant_message_content.chars().count();
 
         // 更新打字机位置
         if self.typewriter_position < total_chars {
@@ -1468,22 +1430,15 @@ impl TuiApp {
         }
 
         // 读取需要显示的内容和工具状态
-        let (display_response, tool_runs_snapshot) = {
-            let resp = self.current_response.lock().await;
-            let tool_runs = self.tool_runs.lock().await;
-            let display: String = resp.chars().take(self.typewriter_position).collect();
-            (display, tool_runs.clone())
-        };
-        self.tool_runs_snapshot = tool_runs_snapshot;
-        if let Some(anchor_id) = &self.current_tool_anchor_id {
-            if self.tool_runs_snapshot.is_empty() {
-                self.tool_runs_by_message_id.remove(anchor_id);
-            } else {
-                self.tool_runs_by_message_id
-                    .insert(anchor_id.clone(), self.tool_runs_snapshot.clone());
-            }
-        }
-        self.stream_usage_snapshot = *self.stream_usage.lock().await;
+        let display_response: String = self
+            .sync_snapshot
+            .assistant_message_content
+            .chars()
+            .take(self.typewriter_position)
+            .collect();
+        self.tool_runs_snapshot = self.sync_snapshot.tool_runs.clone();
+        self.tool_runs_by_message_id = self.sync_snapshot.tool_runs_by_message_id.clone();
+        self.stream_usage_snapshot = self.sync_snapshot.usage;
         self.runtime_facade_state.check_slow_warning().await;
         if self.runtime_facade_state.check_timeout().await {
             self.facade_snapshot = self.runtime_facade_state.snapshot().await;
@@ -1561,10 +1516,6 @@ impl TuiApp {
 
         if let Some(handle) = self.stream_handle.take() {
             handle.abort();
-        }
-        {
-            let mut response = self.current_response.lock().await;
-            *response = final_answer.clone();
         }
         self.typewriter_position = final_answer.chars().count();
         if let Some(last_msg) = self.messages.last_mut() {
@@ -1745,7 +1696,8 @@ impl TuiApp {
             if self.stream_done.load(Ordering::SeqCst) {
                 // 确保显示完整内容（跳过打字机效果的剩余部分）
                 let mut final_response_to_persist = None;
-                self.stream_usage_snapshot = *self.stream_usage.lock().await;
+                self.sync_snapshot = self.sync_store.lock().await.snapshot();
+                self.stream_usage_snapshot = self.sync_snapshot.usage;
                 self.facade_snapshot = self.runtime_facade_state.snapshot().await;
                 let elapsed_ms = self
                     .stream_started_at
@@ -1758,8 +1710,10 @@ impl TuiApp {
                 let provider_phase = self.facade_snapshot.provider_request.phase;
                 if let Some(last_msg) = self.messages.last_mut() {
                     if last_msg.role == MessageRole::Assistant {
-                        let response = self.current_response.lock().await.clone();
-                        self.tool_runs_snapshot = self.tool_runs.lock().await.clone();
+                        let response = self.sync_snapshot.assistant_message_content.clone();
+                        self.tool_runs_snapshot = self.sync_snapshot.tool_runs.clone();
+                        self.tool_runs_by_message_id =
+                            self.sync_snapshot.tool_runs_by_message_id.clone();
                         let final_metadata = assistant_completion_metadata(
                             model_label,
                             self.stream_usage_snapshot,
@@ -1767,14 +1721,6 @@ impl TuiApp {
                             provider_phase,
                             &self.tool_runs_snapshot,
                         );
-                        if let Some(anchor_id) = &self.current_tool_anchor_id {
-                            if self.tool_runs_snapshot.is_empty() {
-                                self.tool_runs_by_message_id.remove(anchor_id);
-                            } else {
-                                self.tool_runs_by_message_id
-                                    .insert(anchor_id.clone(), self.tool_runs_snapshot.clone());
-                            }
-                        }
                         last_msg.content = response;
                         last_msg.metadata.extend(final_metadata);
                         final_response_to_persist =

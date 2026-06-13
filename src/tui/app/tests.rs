@@ -92,8 +92,12 @@ async fn cancel_active_run_interrupts_query_and_marks_tool_cancelled() {
         metadata: Default::default(),
     });
     {
-        let mut runs = app.tool_runs.lock().await;
-        runs.push(ToolRunView::new("call_1".to_string(), "bash".to_string()));
+        let mut sync = app.sync_store.lock().await;
+        sync.start_turn("msg_0".to_string(), "msg_1".to_string());
+        sync.apply_stream_event(&StreamEvent::ToolCallStart {
+            id: "call_1".to_string(),
+            name: "bash".to_string(),
+        });
     }
 
     assert!(app.cancel_active_run("Run interrupted").await);
@@ -130,8 +134,12 @@ async fn timeout_active_run_finishes_query_and_marks_tool_failed() {
         metadata: Default::default(),
     });
     {
-        let mut runs = app.tool_runs.lock().await;
-        runs.push(ToolRunView::new("call_1".to_string(), "bash".to_string()));
+        let mut sync = app.sync_store.lock().await;
+        sync.start_turn("msg_0".to_string(), "msg_1".to_string());
+        sync.apply_stream_event(&StreamEvent::ToolCallStart {
+            id: "call_1".to_string(),
+            name: "bash".to_string(),
+        });
     }
 
     assert!(
@@ -435,8 +443,13 @@ async fn test_tui_persists_streaming_assistant_when_engine_has_no_session_bindin
         metadata: Default::default(),
     });
     {
-        let mut response = app.current_response.lock().await;
-        *response = "final answer".to_string();
+        let mut sync = app.sync_store.lock().await;
+        sync.start_turn(
+            "user-placeholder".to_string(),
+            "assistant-placeholder".to_string(),
+        );
+        sync.apply_stream_event(&StreamEvent::TextChunk("final answer".to_string()));
+        sync.apply_stream_event(&StreamEvent::Complete);
     }
     app.is_querying = true;
     app.stream_done.store(true, Ordering::SeqCst);
@@ -1101,6 +1114,31 @@ fn test_sync_tool_runs_from_spine_adds_missing_transcript_row() {
         .as_deref()
         .unwrap_or_default()
         .contains("rust-agent"));
+}
+
+#[test]
+fn test_tool_runs_for_message_prefers_sync_snapshot_projection() {
+    let mut app = TuiApp::new();
+    app.tool_runs_by_message_id.insert(
+        "user_1".to_string(),
+        vec![ToolRunView::new(
+            "legacy_call".to_string(),
+            "bash".to_string(),
+        )],
+    );
+    app.sync_snapshot.tool_runs_by_message_id.insert(
+        "user_1".to_string(),
+        vec![ToolRunView::new(
+            "sync_call".to_string(),
+            "file_read".to_string(),
+        )],
+    );
+
+    let runs = app.tool_runs_for_message("user_1").expect("tool runs");
+
+    assert_eq!(runs.len(), 1);
+    assert_eq!(runs[0].id, "sync_call");
+    assert_eq!(runs[0].name, "file_read");
 }
 
 #[test]

@@ -22,20 +22,12 @@ impl TuiApp {
         self.stream_started_at = None;
 
         {
-            let mut runs = self.tool_runs.lock().await;
-            for run in runs.iter_mut().filter(|run| run.is_active()) {
-                run.mark_complete("Result: ERROR\nTool run is cancelled.".to_string());
-            }
-            self.tool_runs_snapshot = runs.clone();
+            let mut sync = self.sync_store.lock().await;
+            sync.mark_active_tools_with_result("Result: ERROR\nTool run is cancelled.".to_string());
+            self.sync_snapshot = sync.snapshot();
         }
-        if let Some(anchor_id) = &self.current_tool_anchor_id {
-            if self.tool_runs_snapshot.is_empty() {
-                self.tool_runs_by_message_id.remove(anchor_id);
-            } else {
-                self.tool_runs_by_message_id
-                    .insert(anchor_id.clone(), self.tool_runs_snapshot.clone());
-            }
-        }
+        self.tool_runs_snapshot = self.sync_snapshot.tool_runs.clone();
+        self.tool_runs_by_message_id = self.sync_snapshot.tool_runs_by_message_id.clone();
         self.current_tool_anchor_id = None;
         self.settle_unfinished_tool_parts(reason);
 
@@ -80,30 +72,16 @@ impl TuiApp {
         self.stream_started_at = None;
 
         {
-            let mut runs = self.tool_runs.lock().await;
-            for run in runs.iter_mut().filter(|run| run.is_active()) {
-                run.mark_complete(format!("Result: ERROR\n{reason}"));
-            }
-            self.tool_runs_snapshot = runs.clone();
+            let mut sync = self.sync_store.lock().await;
+            sync.mark_active_tools_with_result(format!("Result: ERROR\n{reason}"));
+            self.sync_snapshot = sync.snapshot();
         }
-        if let Some(anchor_id) = &self.current_tool_anchor_id {
-            if self.tool_runs_snapshot.is_empty() {
-                self.tool_runs_by_message_id.remove(anchor_id);
-            } else {
-                self.tool_runs_by_message_id
-                    .insert(anchor_id.clone(), self.tool_runs_snapshot.clone());
-            }
-        }
+        self.tool_runs_snapshot = self.sync_snapshot.tool_runs.clone();
+        self.tool_runs_by_message_id = self.sync_snapshot.tool_runs_by_message_id.clone();
         self.current_tool_anchor_id = None;
         self.settle_unfinished_tool_parts(reason);
 
-        {
-            let mut response = self.current_response.lock().await;
-            if response.trim().is_empty() {
-                response.push_str(&error_message);
-                self.typewriter_position = error_message.chars().count();
-            }
-        }
+        self.typewriter_position = error_message.chars().count();
         self.add_toast(reason.to_string(), "!");
         true
     }

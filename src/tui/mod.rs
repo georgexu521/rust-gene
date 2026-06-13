@@ -11,6 +11,7 @@ pub mod runtime_panels;
 pub mod screens;
 pub mod session_manager;
 pub mod slash_handler;
+pub mod sync_store;
 pub mod theme;
 pub mod tool_view;
 pub mod view_model;

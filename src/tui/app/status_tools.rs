@@ -527,8 +527,10 @@ impl TuiApp {
     }
 
     pub fn tool_runs_for_message(&self, message_id: &str) -> Option<&[ToolRunView]> {
-        self.tool_runs_by_message_id
+        self.sync_snapshot
+            .tool_runs_by_message_id
             .get(message_id)
+            .or_else(|| self.tool_runs_by_message_id.get(message_id))
             .map(Vec::as_slice)
     }
 }
