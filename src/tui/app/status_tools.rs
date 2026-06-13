@@ -352,7 +352,7 @@ impl TuiApp {
         self.tool_viewer_title = title;
         self.tool_viewer_content = content;
         self.tool_viewer_scroll_offset = 0;
-        self.mode = AppMode::ToolViewer;
+        self.push_mode(AppMode::ToolViewer);
         true
     }
 
@@ -370,7 +370,7 @@ impl TuiApp {
         self.tool_viewer_title = title;
         self.tool_viewer_content = content;
         self.tool_viewer_scroll_offset = 0;
-        self.mode = AppMode::ToolViewer;
+        self.push_mode(AppMode::ToolViewer);
         true
     }
 

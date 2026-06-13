@@ -4,17 +4,13 @@ impl TuiApp {
     pub fn open_command_palette(&mut self) {
         self.command_palette_query.clear();
         self.command_palette_selected = 0;
-        self.mode = AppMode::CommandPalette;
+        self.push_mode(AppMode::CommandPalette);
     }
 
     pub fn close_command_palette(&mut self) {
         self.command_palette_query.clear();
         self.command_palette_selected = 0;
-        self.mode = if self.vim_mode {
-            AppMode::VimNormal
-        } else {
-            AppMode::Chat
-        };
+        self.pop_mode();
     }
 
     pub fn command_palette_items(&self) -> Vec<&crate::tui::commands::CommandDef> {
@@ -142,17 +138,13 @@ impl TuiApp {
     pub fn open_shortcut_help(&mut self) {
         self.shortcut_help_filter.clear();
         self.filtering_shortcut_help = false;
-        self.mode = AppMode::ShortcutHelp;
+        self.push_mode(AppMode::ShortcutHelp);
     }
 
     pub fn close_shortcut_help(&mut self) {
         self.shortcut_help_filter.clear();
         self.filtering_shortcut_help = false;
-        self.mode = if self.vim_mode {
-            AppMode::VimNormal
-        } else {
-            AppMode::Chat
-        };
+        self.pop_mode();
     }
 
     pub fn open_model_select(&mut self) {
@@ -162,15 +154,11 @@ impl TuiApp {
             .iter()
             .position(|choice| choice.active)
             .unwrap_or(0);
-        self.mode = AppMode::ModelSelect;
+        self.push_mode(AppMode::ModelSelect);
     }
 
     pub fn close_model_select(&mut self) {
-        self.mode = if self.vim_mode {
-            AppMode::VimNormal
-        } else {
-            AppMode::Chat
-        };
+        self.pop_mode();
     }
 
     pub fn model_choices(&self) -> Vec<ModelChoice> {
@@ -288,15 +276,11 @@ impl TuiApp {
             .iter()
             .position(|choice| choice.active)
             .unwrap_or(0);
-        self.mode = AppMode::ProviderSelect;
+        self.push_mode(AppMode::ProviderSelect);
     }
 
     pub fn close_provider_select(&mut self) {
-        self.mode = if self.vim_mode {
-            AppMode::VimNormal
-        } else {
-            AppMode::Chat
-        };
+        self.pop_mode();
     }
 
     pub fn provider_choices(&self) -> Vec<ProviderChoice> {

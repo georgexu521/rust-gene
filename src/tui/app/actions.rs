@@ -338,16 +338,12 @@ impl TuiApp {
 
     pub fn open_prompt_picker(&mut self) {
         self.prompt_picker_selected = 0;
-        self.mode = AppMode::PromptHistory;
+        self.push_mode(AppMode::PromptHistory);
     }
 
     pub fn close_prompt_picker(&mut self) {
         self.prompt_picker_selected = 0;
-        self.mode = if self.vim_mode {
-            AppMode::VimNormal
-        } else {
-            AppMode::Chat
-        };
+        self.pop_mode();
     }
 
     pub fn prompt_picker_items(&self) -> Vec<(String, String, String)> {
@@ -407,18 +403,14 @@ impl TuiApp {
             path,
         ));
         self.file_picker_filtering = false;
-        self.mode = AppMode::FilePicker;
+        self.push_mode(AppMode::FilePicker);
         format!("File picker opened at {root}.")
     }
 
     pub fn close_composer_file_picker(&mut self) {
         self.file_picker_state = None;
         self.file_picker_filtering = false;
-        self.mode = if self.vim_mode {
-            AppMode::VimNormal
-        } else {
-            AppMode::Chat
-        };
+        self.pop_mode();
     }
 
     pub fn file_picker_next(&mut self) {

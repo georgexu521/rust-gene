@@ -162,8 +162,10 @@ impl StatusBarDensity {
 
 /// 交互式 CLI 应用状态
 pub struct TuiApp {
-    /// 当前模式
+    /// 当前模式（兼容字段；正在迁移到 `mode_stack`）
     pub mode: AppMode,
+    /// 模式栈，用于 overlay 的进入/返回
+    pub mode_stack: Vec<AppMode>,
     /// 当前 coding agent 产品模式
     pub agent_mode: AgentMode,
     /// 输入状态
@@ -514,6 +516,32 @@ mod completion_metadata_tests {
 }
 
 impl TuiApp {
+    /// Push a new mode onto the mode stack and expose it via `self.mode`.
+    pub fn push_mode(&mut self, mode: AppMode) {
+        if self.mode != mode {
+            self.mode_stack.push(self.mode);
+        }
+        self.mode = mode;
+    }
+
+    /// Pop the current mode off the stack, returning to the previous mode.
+    /// Falls back to Chat (or VimNormal if vim mode is active) when the stack is empty.
+    pub fn pop_mode(&mut self) -> AppMode {
+        self.mode = self.mode_stack.pop().unwrap_or({
+            if self.vim_mode {
+                AppMode::VimNormal
+            } else {
+                AppMode::Chat
+            }
+        });
+        self.mode
+    }
+
+    /// Replace the current mode without pushing a new stack frame.
+    pub fn replace_mode(&mut self, mode: AppMode) {
+        self.mode = mode;
+    }
+
     pub fn visible_sidebar_sessions(
         &self,
         limit: usize,
@@ -676,6 +704,7 @@ impl TuiApp {
 
         Self {
             mode: AppMode::Chat,
+            mode_stack: Vec::new(),
             agent_mode: AgentMode::Auto,
             input: InputState::new(),
             messages: Vec::new(),

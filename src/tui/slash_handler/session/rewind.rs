@@ -134,7 +134,7 @@ pub async fn handle_diff(app: &mut TuiApp, args: &str) -> String {
         app.diff_title = title;
         app.diff_content = content;
         app.diff_scroll_offset = 0;
-        app.mode = crate::tui::app::AppMode::DiffViewer;
+        app.push_mode(crate::tui::app::AppMode::DiffViewer);
         return String::new();
     }
 
@@ -158,7 +158,7 @@ pub async fn handle_diff(app: &mut TuiApp, args: &str) -> String {
         app.diff_content = result.error.unwrap_or_else(|| "Unknown error".to_string());
     }
     app.diff_scroll_offset = 0;
-    app.mode = crate::tui::app::AppMode::DiffViewer;
+    app.push_mode(crate::tui::app::AppMode::DiffViewer);
     String::new()
 }
 

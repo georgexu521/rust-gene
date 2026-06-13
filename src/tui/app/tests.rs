@@ -2293,3 +2293,82 @@ fn provider_lifecycle_clears_timer_on_terminal_diagnostic() {
     assert_eq!(lifecycle.phase, ProviderPhase::Completed);
     assert_eq!(lifecycle.elapsed_ms, 12);
 }
+
+#[test]
+fn mode_stack_starts_empty_with_chat_mode() {
+    let app = TuiApp::with_engine(None, None, None);
+    assert_eq!(app.mode, AppMode::Chat);
+    assert!(app.mode_stack.is_empty());
+}
+
+#[test]
+fn push_mode_saves_current_and_updates_mode() {
+    let mut app = TuiApp::with_engine(None, None, None);
+    app.push_mode(AppMode::CommandPalette);
+    assert_eq!(app.mode, AppMode::CommandPalette);
+    assert_eq!(app.mode_stack, vec![AppMode::Chat]);
+
+    app.push_mode(AppMode::ShortcutHelp);
+    assert_eq!(app.mode, AppMode::ShortcutHelp);
+    assert_eq!(app.mode_stack, vec![AppMode::Chat, AppMode::CommandPalette]);
+}
+
+#[test]
+fn pop_mode_restores_previous_mode() {
+    let mut app = TuiApp::with_engine(None, None, None);
+    app.push_mode(AppMode::CommandPalette);
+    app.push_mode(AppMode::ShortcutHelp);
+    app.pop_mode();
+    assert_eq!(app.mode, AppMode::CommandPalette);
+    assert_eq!(app.mode_stack, vec![AppMode::Chat]);
+    app.pop_mode();
+    assert_eq!(app.mode, AppMode::Chat);
+    assert!(app.mode_stack.is_empty());
+}
+
+#[test]
+fn pop_mode_falls_back_to_chat_or_vim_normal() {
+    let mut app = TuiApp::with_engine(None, None, None);
+    app.mode_stack.clear();
+    assert_eq!(app.pop_mode(), AppMode::Chat);
+
+    app.vim_mode = true;
+    app.mode_stack.clear();
+    assert_eq!(app.pop_mode(), AppMode::VimNormal);
+}
+
+#[test]
+fn replace_mode_updates_current_without_pushing() {
+    let mut app = TuiApp::with_engine(None, None, None);
+    app.push_mode(AppMode::CommandPalette);
+    app.replace_mode(AppMode::ShortcutHelp);
+    assert_eq!(app.mode, AppMode::ShortcutHelp);
+    assert_eq!(app.mode_stack, vec![AppMode::Chat]);
+    app.pop_mode();
+    assert_eq!(app.mode, AppMode::Chat);
+}
+
+#[test]
+fn command_palette_uses_mode_stack() {
+    let mut app = TuiApp::with_engine(None, None, None);
+    app.open_command_palette();
+    assert_eq!(app.mode, AppMode::CommandPalette);
+    assert_eq!(app.mode_stack, vec![AppMode::Chat]);
+
+    app.close_command_palette();
+    assert_eq!(app.mode, AppMode::Chat);
+    assert!(app.mode_stack.is_empty());
+}
+
+#[test]
+fn command_palette_from_vim_normal_returns_to_vim_normal() {
+    let mut app = TuiApp::with_engine(None, None, None);
+    app.vim_mode = true;
+    app.mode = AppMode::VimNormal;
+    app.open_command_palette();
+    assert_eq!(app.mode, AppMode::CommandPalette);
+    assert_eq!(app.mode_stack, vec![AppMode::VimNormal]);
+
+    app.close_command_palette();
+    assert_eq!(app.mode, AppMode::VimNormal);
+}

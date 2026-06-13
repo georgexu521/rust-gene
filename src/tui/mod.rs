@@ -565,11 +565,7 @@ async fn handle_key_event(key: KeyEvent, app: &mut TuiApp) -> anyhow::Result<boo
     if app.mode == app::AppMode::ToolViewer {
         match key.code {
             KeyCode::Esc | KeyCode::Char('q') => {
-                app.mode = if app.vim_mode {
-                    app::AppMode::VimNormal
-                } else {
-                    app::AppMode::Chat
-                };
+                app.pop_mode();
             }
             KeyCode::Up => {
                 app.tool_viewer_scroll_offset = app.tool_viewer_scroll_offset.saturating_sub(1)
@@ -595,11 +591,7 @@ async fn handle_key_event(key: KeyEvent, app: &mut TuiApp) -> anyhow::Result<boo
         let action = app.keybindings.action_for(key, app.mode);
         match action {
             AppAction::Cancel | AppAction::Quit => {
-                if app.pending_permission_request.is_some() {
-                    app.mode = app::AppMode::PermissionApproval;
-                } else {
-                    app.mode = app::AppMode::Chat;
-                }
+                app.pop_mode();
             }
             AppAction::ScrollUp => {
                 app.diff_scroll_offset = app.diff_scroll_offset.saturating_sub(1);
@@ -766,7 +758,7 @@ async fn handle_key_event(key: KeyEvent, app: &mut TuiApp) -> anyhow::Result<boo
         }
         if key.code == KeyCode::Char('/') {
             app.message_search_state.activate();
-            app.mode = app::AppMode::MessageSearch;
+            app.push_mode(app::AppMode::MessageSearch);
             return Ok(false);
         }
         if key.code == KeyCode::Tab && key.modifiers.is_empty() {
@@ -902,7 +894,7 @@ async fn handle_key_event(key: KeyEvent, app: &mut TuiApp) -> anyhow::Result<boo
         match key.code {
             KeyCode::Esc => {
                 app.message_search_state.deactivate();
-                app.mode = app::AppMode::VimNormal;
+                app.pop_mode();
                 return Ok(false);
             }
             KeyCode::Enter => {
@@ -911,7 +903,7 @@ async fn handle_key_event(key: KeyEvent, app: &mut TuiApp) -> anyhow::Result<boo
                     app.scroll_to_message_index(result.message_index);
                 }
                 app.message_search_state.deactivate();
-                app.mode = app::AppMode::VimNormal;
+                app.pop_mode();
                 return Ok(false);
             }
             KeyCode::Up => {
@@ -1083,7 +1075,7 @@ async fn handle_key_event(key: KeyEvent, app: &mut TuiApp) -> anyhow::Result<boo
             if let Some((title, diff)) = app.compute_permission_diff() {
                 app.diff_title = title;
                 app.diff_content = diff;
-                app.mode = app::AppMode::DiffViewer;
+                app.push_mode(app::AppMode::DiffViewer);
             }
         }
         AppAction::None => {
