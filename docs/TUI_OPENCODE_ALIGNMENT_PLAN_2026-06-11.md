@@ -584,6 +584,22 @@ or a completed assistant/tool result, and the smoke harness still had to clean
 up the live process after observing the visible error. Successful real DeepSeek
 tool-turn completion and full background task teardown remain open.
 
+Real-provider nightly/soak wrapper:
+
+```bash
+TUI_TOOL_TURN_SPINE_NIGHTLY_ROUNDS=3 \
+  bash scripts/tui_tool_turn_spine_nightly.sh target/tui-tool-turn-spine-nightly
+```
+
+This runs `scripts/tui_tool_turn_spine_matrix.sh` repeatedly and writes each
+round under `target/tui-tool-turn-spine-nightly/<run-id>/round-N/`, then emits
+one combined readiness report at
+`target/tui-tool-turn-spine-nightly/<run-id>/_readiness/readiness.md`. The
+wrapper records provider/model/timeout settings in `manifest.json`, so a
+failed nightly has the same contract fields as local PTY matrix results:
+session events, terminal contract, persistence, projection, raw provider-log
+leak checks, and provider label checks.
+
 Latest PTY interrupt smoke:
 
 ```bash
