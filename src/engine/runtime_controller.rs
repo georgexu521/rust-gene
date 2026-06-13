@@ -89,7 +89,7 @@ impl RuntimeController {
         user_message: impl Into<String>,
     ) -> Pin<Box<dyn Stream<Item = StreamEvent> + Send>> {
         let stream = self.engine.query_stream(user_message).await;
-        self.mirror_stream(stream)
+        self.mirror_stream(stream, None)
     }
 
     /// Submit a full agent turn with an explicit agent mode, preserving the
@@ -103,12 +103,30 @@ impl RuntimeController {
             .engine
             .query_stream_with_agent_mode(user_message, agent_mode)
             .await;
-        self.mirror_stream(stream)
+        self.mirror_stream(stream, None)
+    }
+
+    /// Submit a full agent turn with the caller's message projection id.
+    ///
+    /// TUI uses this to keep durable session event mirrors anchored to the same
+    /// message/part projection consumed by the renderer.
+    pub async fn submit_stream_turn_with_agent_mode_and_parent_message_id(
+        &self,
+        user_message: impl Into<String>,
+        agent_mode: AgentMode,
+        parent_message_id: impl Into<String>,
+    ) -> Pin<Box<dyn Stream<Item = StreamEvent> + Send>> {
+        let stream = self
+            .engine
+            .query_stream_with_agent_mode(user_message, agent_mode)
+            .await;
+        self.mirror_stream(stream, Some(parent_message_id.into()))
     }
 
     fn mirror_stream(
         &self,
         stream: Pin<Box<dyn Stream<Item = StreamEvent> + Send>>,
+        parent_message_id: Option<String>,
     ) -> Pin<Box<dyn Stream<Item = StreamEvent> + Send>> {
         let mirror = self.engine.session_binding().and_then(|(store, sid)| {
             crate::session_store::event_mirror::StreamEventMirror::shared(&store, &sid)
@@ -117,6 +135,7 @@ impl RuntimeController {
             Some(mirror) => Box::pin(MirroredStream {
                 inner: stream,
                 mirror,
+                parent_message_id,
             }),
             None => stream,
         }
@@ -507,6 +526,7 @@ impl Stream for StreamEventToTurnEvent {
 struct MirroredStream {
     inner: Pin<Box<dyn Stream<Item = StreamEvent> + Send>>,
     mirror: Arc<std::sync::Mutex<crate::session_store::event_mirror::StreamEventMirror>>,
+    parent_message_id: Option<String>,
 }
 
 impl Stream for MirroredStream {
@@ -516,7 +536,13 @@ impl Stream for MirroredStream {
         match self.inner.as_mut().poll_next(cx) {
             Poll::Ready(Some(event)) => {
                 if let Ok(mut mirror) = self.mirror.lock() {
-                    mirror.mirror(&event);
+                    let projection_event =
+                        crate::session_store::SessionProjectionEvent::from_stream_event(
+                            &event,
+                            self.parent_message_id.as_deref(),
+                            None,
+                        );
+                    mirror.mirror_projection_event(&projection_event);
                 }
                 Poll::Ready(Some(event))
             }

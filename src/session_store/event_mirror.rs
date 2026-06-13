@@ -86,13 +86,16 @@ impl StreamEventMirror {
                 self.writer.reasoning_completed(text)
             }
             SessionProjectionEvent::ToolCallStarted {
+                message_id,
                 tool_call_id,
                 tool_name,
-                ..
             } => {
                 self.tool_names
                     .insert(tool_call_id.clone(), tool_name.clone());
-                self.writer.tool_called(tool_call_id, tool_name)
+                self.writer.write_event(
+                    "tool_called",
+                    &tool_event_payload(tool_call_id, tool_name, message_id.as_deref()).to_string(),
+                )
             }
             SessionProjectionEvent::ToolArgumentsDelta {
                 tool_call_id,
@@ -112,13 +115,17 @@ impl StreamEventMirror {
                 result
             }
             SessionProjectionEvent::ToolExecutionStarted {
+                message_id,
                 tool_call_id,
                 tool_name,
                 ..
             } => {
                 self.tool_names
                     .insert(tool_call_id.clone(), tool_name.clone());
-                self.writer.tool_started(tool_call_id, tool_name)
+                self.writer.write_event(
+                    "tool_started",
+                    &tool_event_payload(tool_call_id, tool_name, message_id.as_deref()).to_string(),
+                )
             }
             SessionProjectionEvent::ToolExecutionProgress {
                 tool_call_id,
@@ -155,6 +162,7 @@ impl StreamEventMirror {
                 status_event
             }
             SessionProjectionEvent::ToolPartUpdated {
+                message_id,
                 tool_call_id,
                 tool_name,
                 status,
@@ -162,12 +170,36 @@ impl StreamEventMirror {
                 result,
                 ..
             } => {
-                let _ = self.writer.tool_called(tool_call_id, tool_name);
+                let _ = self.writer.write_event(
+                    "tool_called",
+                    &tool_event_payload(tool_call_id, tool_name, message_id.as_deref()).to_string(),
+                );
                 if let Some(input_args) = input_args {
-                    let _ = self.writer.tool_input_completed(tool_call_id, input_args);
+                    let _ = self.writer.write_event(
+                        "tool_input_completed",
+                        &serde_json::json!({
+                            "tool_call_id": tool_call_id,
+                            "input_args": input_args,
+                            "replay_source": "completed_event",
+                            "length": input_args.len(),
+                            "message_id": message_id,
+                        })
+                        .to_string(),
+                    );
                 }
                 if let Some(result) = result {
-                    let _ = self.writer.tool_result_completed(tool_call_id, result);
+                    let _ = self.writer.write_event(
+                        "tool_result_completed",
+                        &serde_json::json!({
+                            "tool_call_id": tool_call_id,
+                            "result": result,
+                            "result_preview": safe_preview(result, 512),
+                            "replay_source": "completed_event",
+                            "length": result.len(),
+                            "message_id": message_id,
+                        })
+                        .to_string(),
+                    );
                     if matches!(
                         status.as_deref(),
                         Some("failed" | "timed_out" | "cancelled")
@@ -179,7 +211,11 @@ impl StreamEventMirror {
                             .tool_succeeded(tool_call_id, &safe_preview(result, 256))
                     }
                 } else {
-                    self.writer.tool_started(tool_call_id, tool_name)
+                    self.writer.write_event(
+                        "tool_started",
+                        &tool_event_payload(tool_call_id, tool_name, message_id.as_deref())
+                            .to_string(),
+                    )
                 }
             }
             SessionProjectionEvent::ToolResultsReadyForModel { tool_call_ids } => {
@@ -231,6 +267,18 @@ impl StreamEventMirror {
             SessionProjectionEvent::Error { message } => self.writer.runtime_error(message),
         };
     }
+}
+
+fn tool_event_payload(
+    tool_call_id: &str,
+    tool_name: &str,
+    message_id: Option<&str>,
+) -> serde_json::Value {
+    serde_json::json!({
+        "tool_call_id": tool_call_id,
+        "tool_name": tool_name,
+        "message_id": message_id,
+    })
 }
 
 fn tool_execution_succeeded(

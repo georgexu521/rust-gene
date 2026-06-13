@@ -137,6 +137,15 @@ def session_event_types(db_path: Path, session_id: str) -> list[str]:
     return [str(row[0]) for row in rows]
 
 
+def session_event_seq_values(db_path: Path, session_id: str) -> list[int]:
+    with sqlite3.connect(db_path) as conn:
+        rows = conn.execute(
+            "SELECT seq FROM session_events WHERE session_id = ? ORDER BY seq ASC",
+            (session_id,),
+        ).fetchall()
+    return [int(row[0]) for row in rows]
+
+
 def session_runtime_diagnostics(db_path: Path, session_id: str) -> list[dict[str, object]]:
     with sqlite3.connect(db_path) as conn:
         rows = conn.execute(
@@ -173,7 +182,7 @@ def session_part_rows(db_path: Path, session_id: str) -> list[dict[str, object]]
     with sqlite3.connect(db_path) as conn:
         rows = conn.execute(
             """
-            SELECT kind, tool_name, status
+            SELECT kind, tool_call_id, tool_name, status, projected_to_seq, message_id
             FROM session_parts
             WHERE session_id = ? AND kind = 'tool'
             ORDER BY part_index ASC, id ASC
@@ -181,8 +190,15 @@ def session_part_rows(db_path: Path, session_id: str) -> list[dict[str, object]]
             (session_id,),
         ).fetchall()
     return [
-        {"kind": str(kind), "tool_name": tool_name, "status": status}
-        for kind, tool_name, status in rows
+        {
+            "kind": str(kind),
+            "tool_call_id": tool_call_id,
+            "tool_name": tool_name,
+            "status": status,
+            "projected_to_seq": int(projected_to_seq or 0),
+            "message_id": message_id,
+        }
+        for kind, tool_call_id, tool_name, status, projected_to_seq, message_id in rows
     ]
 
 
@@ -300,6 +316,57 @@ def assert_persistence_contract(
         "persistence_error": None if not errors else "; ".join(errors),
         "message_roles": roles,
         "session_tool_parts": parts,
+    }
+
+
+def assert_projection_contract(
+    *,
+    db_path: Path,
+    session_id: str | None,
+    expected_tool_part_count: int | None,
+) -> dict[str, object]:
+    if not session_id:
+        return {
+            "projection_contract": "failed",
+            "projection_error": "no session id available",
+        }
+    seqs = session_event_seq_values(db_path, session_id)
+    parts = session_part_rows(db_path, session_id)
+    errors: list[str] = []
+    if not seqs:
+        errors.append("missing session event sequence")
+    else:
+        expected = list(range(1, len(seqs) + 1))
+        if seqs != expected:
+            errors.append(f"session event seq is not contiguous from 1: {seqs[:12]}")
+    max_seq = max(seqs) if seqs else 0
+    if expected_tool_part_count is not None and len(parts) != expected_tool_part_count:
+        errors.append(
+            f"expected {expected_tool_part_count} projected tool parts, got {len(parts)}"
+        )
+    if parts:
+        stale = [
+            part
+            for part in parts
+            if int(part.get("projected_to_seq") or 0) < max_seq
+        ]
+        if stale:
+            errors.append(f"tool parts not projected to latest event seq {max_seq}: {stale}")
+        unanchored = [
+            part
+            for part in parts
+            if not part.get("message_id") or not part.get("tool_call_id")
+        ]
+        if unanchored:
+            errors.append(f"tool parts missing message/tool anchors: {unanchored}")
+    return {
+        "projection_contract": "passed" if not errors else "failed",
+        "projection_error": None if not errors else "; ".join(errors),
+        "projection_event_seq_count": len(seqs),
+        "projection_event_max_seq": max_seq,
+        "projection_tool_part_projected_to_seq": [
+            part.get("projected_to_seq") for part in parts
+        ],
     }
 
 
@@ -544,6 +611,16 @@ def run_smoke(args: argparse.Namespace, size: tuple[int, int]) -> dict[str, obje
                 expected_tool_part_count=args.expect_tool_part_count,
             )
         )
+    if args.assert_projection:
+        result.update(
+            assert_projection_contract(
+                db_path=Path(args.session_db).expanduser(),
+                session_id=result.get("session_id")
+                if isinstance(result.get("session_id"), str)
+                else None,
+                expected_tool_part_count=args.expect_tool_part_count,
+            )
+        )
     if args.assert_provider_repair_diagnostic:
         result.update(
             assert_provider_repair_diagnostic(
@@ -611,6 +688,11 @@ def main() -> int:
         help="verify persisted messages and session_parts are consistent with the outcome",
     )
     parser.add_argument(
+        "--assert-projection",
+        action="store_true",
+        help="verify session event sequence and projected message/tool parts stay in sync",
+    )
+    parser.add_argument(
         "--expect-tool-part-count",
         type=int,
         default=None,
@@ -651,6 +733,10 @@ def main() -> int:
         return 1
     if args.assert_persistence and any(
         result.get("persistence_contract") == "failed" for result in results
+    ):
+        return 1
+    if args.assert_projection and any(
+        result.get("projection_contract") == "failed" for result in results
     ):
         return 1
     if args.assert_provider_repair_diagnostic and any(

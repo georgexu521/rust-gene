@@ -8,6 +8,67 @@
 use crate::engine::streaming::StreamEvent;
 
 #[derive(Debug, Clone, PartialEq)]
+pub struct SessionProjectionEnvelope {
+    pub id: String,
+    pub seq: u64,
+    pub aggregate_id: String,
+    pub event_type: &'static str,
+    pub event: SessionProjectionEvent,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct SessionProjectionEventBus {
+    next_seq: u64,
+    events: Vec<SessionProjectionEnvelope>,
+}
+
+impl SessionProjectionEventBus {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn from_seq(seq: u64) -> Self {
+        Self {
+            next_seq: seq,
+            events: Vec::new(),
+        }
+    }
+
+    pub fn publish(&mut self, event: SessionProjectionEvent) -> SessionProjectionEnvelope {
+        self.next_seq = self.next_seq.saturating_add(1);
+        let seq = self.next_seq;
+        let event_type = event.event_type();
+        let aggregate_id = event.aggregate_id();
+        let id = format!("session-projection:{seq}:{aggregate_id}:{event_type}");
+        let envelope = SessionProjectionEnvelope {
+            id,
+            seq,
+            aggregate_id,
+            event_type,
+            event,
+        };
+        self.events.push(envelope.clone());
+        envelope
+    }
+
+    pub fn last_seq(&self) -> u64 {
+        self.next_seq
+    }
+
+    pub fn events(&self) -> &[SessionProjectionEnvelope] {
+        &self.events
+    }
+
+    pub fn drain_after(&self, after_seq: u64) -> Vec<SessionProjectionEnvelope> {
+        self.events
+            .iter()
+            .filter(|event| event.seq > after_seq)
+            .cloned()
+            .collect()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub enum SessionProjectionEvent {
     RunStarted,
     TurnStarted {
@@ -51,6 +112,7 @@ pub enum SessionProjectionEvent {
         tool_call_id: String,
     },
     ToolExecutionStarted {
+        message_id: Option<String>,
         tool_call_id: String,
         tool_name: String,
         metadata: Option<serde_json::Value>,
@@ -107,6 +169,70 @@ pub enum SessionProjectionEvent {
 }
 
 impl SessionProjectionEvent {
+    pub fn event_type(&self) -> &'static str {
+        match self {
+            Self::RunStarted => "run_started",
+            Self::TurnStarted { .. } => "turn_started",
+            Self::AssistantTextDelta { .. } => "assistant_text_delta",
+            Self::AssistantTextUpdated { .. } => "assistant_text_updated",
+            Self::ThinkingStarted { .. } => "thinking_started",
+            Self::ThinkingDelta { .. } => "thinking_delta",
+            Self::ThinkingCompleted { .. } => "thinking_completed",
+            Self::ThinkingUpdated { .. } => "thinking_updated",
+            Self::ToolCallStarted { .. } => "tool_call_started",
+            Self::ToolArgumentsDelta { .. } => "tool_arguments_delta",
+            Self::ToolCallAccepted { .. } => "tool_call_accepted",
+            Self::ToolExecutionStarted { .. } => "tool_execution_started",
+            Self::ToolExecutionProgress { .. } => "tool_execution_progress",
+            Self::ToolExecutionCompleted { .. } => "tool_execution_completed",
+            Self::ToolPartUpdated { .. } => "tool_part_updated",
+            Self::ToolResultsReadyForModel { .. } => "tool_results_ready_for_model",
+            Self::PermissionRequested { .. } => "permission_requested",
+            Self::Usage { .. } => "usage",
+            Self::RuntimeDiagnostic { .. } => "runtime_diagnostic",
+            Self::Closeout { .. } => "closeout",
+            Self::Completed => "completed",
+            Self::OutputTruncated => "output_truncated",
+            Self::Error { .. } => "error",
+        }
+    }
+
+    pub fn aggregate_id(&self) -> String {
+        match self {
+            Self::TurnStarted {
+                assistant_message_id,
+                ..
+            } => assistant_message_id.clone(),
+            Self::AssistantTextDelta { message_id, .. }
+            | Self::AssistantTextUpdated { message_id, .. }
+            | Self::ThinkingStarted { message_id }
+            | Self::ThinkingDelta { message_id, .. }
+            | Self::ThinkingCompleted { message_id }
+            | Self::ThinkingUpdated { message_id, .. } => message_id
+                .clone()
+                .unwrap_or_else(|| "assistant".to_string()),
+            Self::ToolCallStarted { tool_call_id, .. }
+            | Self::ToolArgumentsDelta { tool_call_id, .. }
+            | Self::ToolCallAccepted { tool_call_id }
+            | Self::ToolExecutionStarted { tool_call_id, .. }
+            | Self::ToolExecutionProgress { tool_call_id, .. }
+            | Self::ToolExecutionCompleted { tool_call_id, .. }
+            | Self::ToolPartUpdated { tool_call_id, .. }
+            | Self::PermissionRequested { tool_call_id, .. } => tool_call_id.clone(),
+            Self::ToolResultsReadyForModel { tool_call_ids } => tool_call_ids
+                .first()
+                .cloned()
+                .unwrap_or_else(|| "tools".to_string()),
+            Self::RuntimeDiagnostic { .. }
+            | Self::Usage { .. }
+            | Self::Closeout { .. }
+            | Self::RunStarted
+            | Self::Completed
+            | Self::OutputTruncated
+            | Self::Error { .. } => "runtime".to_string(),
+        }
+    }
+
     pub fn from_stream_event(
         event: &StreamEvent,
         active_user_message_id: Option<&str>,
@@ -141,6 +267,7 @@ impl SessionProjectionEvent {
                 tool_call_id: id.clone(),
             },
             StreamEvent::ToolExecutionStart { id, name, metadata } => Self::ToolExecutionStarted {
+                message_id: active_user_message_id.map(str::to_string),
                 tool_call_id: id.clone(),
                 tool_name: name.clone(),
                 metadata: metadata.clone(),
@@ -311,6 +438,25 @@ mod tests {
                 text: "hello".to_string(),
             }
         );
+    }
+
+    #[test]
+    fn projection_bus_assigns_ordered_envelopes() {
+        let mut bus = SessionProjectionEventBus::from_seq(41);
+        let envelope = bus.publish(SessionProjectionEvent::AssistantTextDelta {
+            message_id: Some("assistant_1".to_string()),
+            text: "hello".to_string(),
+        });
+
+        assert_eq!(envelope.seq, 42);
+        assert_eq!(envelope.aggregate_id, "assistant_1");
+        assert_eq!(envelope.event_type, "assistant_text_delta");
+        assert_eq!(
+            envelope.id,
+            "session-projection:42:assistant_1:assistant_text_delta"
+        );
+        assert_eq!(bus.last_seq(), 42);
+        assert_eq!(bus.drain_after(41), vec![envelope]);
     }
 
     #[test]

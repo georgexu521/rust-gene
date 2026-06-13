@@ -1498,6 +1498,7 @@ show_token_usage = true
 
     #[test]
     fn config_accessor_turn_timeout_clamps_range() {
+        let _env = EnvOverride::unset("PRIORITY_AGENT_TURN_TIMEOUT_SECS");
         let mut config = AppConfig::default();
         config.engine.turn_timeout_secs = 30;
         assert_eq!(config.turn_timeout().as_secs(), 60);
@@ -1520,6 +1521,7 @@ show_token_usage = true
 
     #[test]
     fn config_accessor_session_end_flush_timeout_clamps_range() {
+        let _env = EnvOverride::unset("PRIORITY_AGENT_SESSION_END_MEMORY_FLUSH_TIMEOUT_SECS");
         let mut config = AppConfig::default();
         config.engine.session_end_memory_flush_timeout_secs = 0;
         assert_eq!(config.session_end_memory_flush_timeout().as_secs(), 1);

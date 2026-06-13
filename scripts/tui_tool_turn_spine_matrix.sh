@@ -15,6 +15,7 @@ common=(
   --assert-session-events
   --assert-terminal-contract
   --assert-persistence
+  --assert-projection
 )
 
 run_case() {

@@ -5,9 +5,7 @@
 use crate::engine::agent_mode::AgentMode;
 use crate::engine::conversation_loop::ToolApprovalResponse;
 use crate::engine::runtime_controller::RuntimeController;
-use crate::engine::runtime_facade::{
-    RuntimeFacadeState, RuntimeStateSnapshot, ToolTurnPhase, ToolTurnSnapshot,
-};
+use crate::engine::runtime_facade::{RuntimeFacadeState, RuntimeStateSnapshot, ToolTurnPhase};
 use crate::engine::streaming::StreamingQueryEngine;
 use crate::permissions::RuleSource;
 use crate::state::{
@@ -16,13 +14,12 @@ use crate::state::{
     RuntimeStatusSnapshot, RuntimeToolStatus, TaskItem,
 };
 use crate::tui::components::input::InputState;
-use crate::tui::sync_store::{TuiMessageRole, TuiPartKind, TuiSyncSnapshot, TuiSyncStore};
+use crate::tui::sync_store::{TuiSyncSnapshot, TuiSyncStore};
 use crate::tui::tool_view::{ToolRunStatus, ToolRunView};
 use futures::StreamExt;
 use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::time::Instant;
 use tokio::sync::Mutex;
 use tracing::{debug, info, warn};
 
@@ -1259,8 +1256,13 @@ impl TuiApp {
 
             let handle = tokio::spawn(async move {
                 let mut stream = controller
-                    .submit_stream_turn_with_agent_mode(user_msg, agent_mode)
+                    .submit_stream_turn_with_agent_mode_and_parent_message_id(
+                        user_msg,
+                        agent_mode,
+                        parent_message_id.clone(),
+                    )
                     .await;
+                let mut projection_bus = crate::session_store::SessionProjectionEventBus::new();
 
                 while let Some(event) = stream.next().await {
                     let projection_event =
@@ -1269,14 +1271,15 @@ impl TuiApp {
                             Some(&parent_message_id),
                             None,
                         );
+                    let projection_envelope = projection_bus.publish(projection_event);
                     {
                         let mut sync = sync_store_clone.lock().await;
-                        sync.apply_projection_event(&projection_event);
+                        sync.apply_projection_envelope(&projection_envelope);
                     }
                     runtime_facade_state_clone
-                        .process_projection_event(&projection_event)
+                        .process_projection_event(&projection_envelope.event)
                         .await;
-                    match projection_event {
+                    match &projection_envelope.event {
                         crate::session_store::SessionProjectionEvent::Completed => {
                             runtime_facade_state_clone.set_querying(false).await;
                             done_flag.store(true, Ordering::SeqCst);
@@ -1290,18 +1293,18 @@ impl TuiApp {
                         } => {
                             let mut usage = usage_clone.lock().await;
                             *usage = Some(StreamUsageSnapshot {
-                                prompt_tokens,
-                                completion_tokens,
-                                reasoning_tokens,
-                                cached_tokens,
+                                prompt_tokens: *prompt_tokens,
+                                completion_tokens: *completion_tokens,
+                                reasoning_tokens: *reasoning_tokens,
+                                cached_tokens: *cached_tokens,
                             });
                             runtime_facade_state_clone
                                 .set_stream_usage(Some(
                                     crate::engine::runtime_facade::StreamUsageSnapshot {
-                                        prompt_tokens,
-                                        completion_tokens,
-                                        reasoning_tokens,
-                                        cached_tokens,
+                                        prompt_tokens: *prompt_tokens,
+                                        completion_tokens: *completion_tokens,
+                                        reasoning_tokens: *reasoning_tokens,
+                                        cached_tokens: *cached_tokens,
                                     },
                                 ))
                                 .await;
@@ -1315,7 +1318,7 @@ impl TuiApp {
                             diagnostic,
                         } => {
                             runtime_facade_state_clone
-                                .process_diagnostic(&diagnostic)
+                                .process_diagnostic(diagnostic)
                                 .await;
                         }
                         _ => {}
@@ -1464,25 +1467,35 @@ impl TuiApp {
 
     fn sync_tool_runs_from_spine_snapshot(&mut self) {
         let turns = self.facade_snapshot.tool_turns.clone();
+        let mut sync_store = TuiSyncStore::from_snapshot(self.sync_snapshot.clone());
+        let mut projection_bus = crate::session_store::SessionProjectionEventBus::from_seq(
+            self.sync_snapshot.last_projection_seq,
+        );
         for turn in turns {
             let Some(parent_message_id) = turn.parent_message_id.clone() else {
                 continue;
             };
-            let mut runs = self
-                .sync_snapshot
-                .tool_runs_for_message(&parent_message_id)
-                .unwrap_or_default();
-            let run = if let Some(run) = runs.iter_mut().find(|run| run.id == turn.id) {
-                apply_tool_turn_snapshot(run, &turn);
-                run.clone()
-            } else {
-                let run = tool_run_from_turn_snapshot(&turn);
-                runs.push(run.clone());
-                run
+            let event = crate::session_store::SessionProjectionEvent::ToolPartUpdated {
+                message_id: Some(parent_message_id),
+                tool_call_id: turn.id.clone(),
+                tool_name: turn.name.clone(),
+                status: Some(tool_part_status_from_turn_phase(turn.phase).to_string()),
+                input_args: turn.arguments_preview.clone(),
+                result: turn.result_preview.clone().or_else(|| turn.failure.clone()),
+                metadata: Some(serde_json::json!({
+                    "replay_source": "runtime_facade_spine",
+                    "phase": turn.phase.label(),
+                    "success": !matches!(
+                        turn.phase,
+                        ToolTurnPhase::Failed | ToolTurnPhase::Cancelled | ToolTurnPhase::TimedOut
+                    ),
+                })),
+                result_data: None,
             };
-            self.sync_snapshot
-                .upsert_tool_run_for_message(parent_message_id, run);
+            let envelope = projection_bus.publish(event);
+            sync_store.apply_projection_envelope(&envelope);
         }
+        self.sync_snapshot = sync_store.snapshot();
     }
 
     async fn recover_persisted_final_answer_if_available(&mut self) -> bool {
@@ -1517,13 +1530,19 @@ impl TuiApp {
         if let Some(last_msg) = self.messages.last_mut() {
             if last_msg.role == MessageRole::Assistant {
                 last_msg.content = final_answer.clone();
-                self.sync_snapshot.set_message_text_part(
-                    &last_msg.id,
-                    TuiMessageRole::Assistant,
-                    TuiPartKind::Text,
-                    final_answer.clone(),
-                    false,
+                let mut sync_store = TuiSyncStore::from_snapshot(self.sync_snapshot.clone());
+                let mut projection_bus = crate::session_store::SessionProjectionEventBus::from_seq(
+                    self.sync_snapshot.last_projection_seq,
                 );
+                let envelope = projection_bus.publish(
+                    crate::session_store::SessionProjectionEvent::AssistantTextUpdated {
+                        message_id: Some(last_msg.id.clone()),
+                        text: final_answer.clone(),
+                        streaming: false,
+                    },
+                );
+                sync_store.apply_projection_envelope(&envelope);
+                self.sync_snapshot = sync_store.snapshot();
             }
         }
         self.runtime_facade_state.mark_tool_turns_persisted().await;
@@ -2037,67 +2056,16 @@ fn toggle_pinned_session_list(
     true
 }
 
-fn tool_run_from_turn_snapshot(turn: &ToolTurnSnapshot) -> ToolRunView {
-    let mut run = ToolRunView::new(turn.id.clone(), tool_turn_name(turn));
-    apply_tool_turn_snapshot(&mut run, turn);
-    run
-}
-
-fn apply_tool_turn_snapshot(run: &mut ToolRunView, turn: &ToolTurnSnapshot) {
-    if !turn.name.trim().is_empty() {
-        run.name = turn.name.clone();
-    }
-    run.status = tool_run_status_from_turn_phase(turn.phase);
-    if let Some(args) = &turn.arguments_preview {
-        if run.arguments.is_none() {
-            run.args_buffer = args.clone();
-            run.arguments = serde_json::from_str(args).ok();
-        }
-    }
-    if let Some(result) = &turn.result_preview {
-        if run.result_body.is_none() {
-            run.result_body = Some(result.clone());
-        }
-        run.result_preview = Some(result.clone());
-    }
-    if let Some(failure) = &turn.failure {
-        run.result_preview = Some(failure.clone());
-        if run.result_body.is_none() {
-            run.result_body = Some(failure.clone());
-        }
-    }
-    if matches!(
-        run.status,
-        ToolRunStatus::Backgrounded
-            | ToolRunStatus::TimedOut
-            | ToolRunStatus::Cancelled
-            | ToolRunStatus::Completed
-            | ToolRunStatus::Failed
-    ) && run.completed_at.is_none()
-    {
-        run.completed_at = Some(Instant::now());
-    }
-}
-
-fn tool_turn_name(turn: &ToolTurnSnapshot) -> String {
-    if turn.name.trim().is_empty() {
-        "tool".to_string()
-    } else {
-        turn.name.clone()
-    }
-}
-
-fn tool_run_status_from_turn_phase(phase: ToolTurnPhase) -> ToolRunStatus {
+fn tool_part_status_from_turn_phase(phase: ToolTurnPhase) -> &'static str {
     match phase {
-        ToolTurnPhase::Requested | ToolTurnPhase::Accepted => ToolRunStatus::Queued,
-        ToolTurnPhase::Executing => ToolRunStatus::Running,
+        ToolTurnPhase::Requested | ToolTurnPhase::Accepted | ToolTurnPhase::Executing => "running",
         ToolTurnPhase::ResultObserved
         | ToolTurnPhase::SentBackToModel
         | ToolTurnPhase::FinalAnswer
-        | ToolTurnPhase::Persisted => ToolRunStatus::Completed,
-        ToolTurnPhase::Failed => ToolRunStatus::Failed,
-        ToolTurnPhase::Cancelled => ToolRunStatus::Cancelled,
-        ToolTurnPhase::TimedOut => ToolRunStatus::TimedOut,
+        | ToolTurnPhase::Persisted => "completed",
+        ToolTurnPhase::Failed => "failed",
+        ToolTurnPhase::Cancelled => "cancelled",
+        ToolTurnPhase::TimedOut => "timed_out",
     }
 }
 

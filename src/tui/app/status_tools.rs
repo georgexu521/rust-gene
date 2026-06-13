@@ -548,6 +548,9 @@ impl TuiApp {
         let fallback_user_id = self.fallback_user_message_id(session_id);
         let fallback_assistant_id = self.fallback_assistant_message_id();
         let mut sync_store = TuiSyncStore::from_snapshot(self.sync_snapshot.clone());
+        let mut projection_bus = crate::session_store::SessionProjectionEventBus::from_seq(
+            self.sync_snapshot.last_projection_seq,
+        );
         let mut hydration = TuiProjectionHydration::default();
 
         for part in parts {
@@ -567,7 +570,8 @@ impl TuiApp {
                             Some(message_id),
                         )
                     {
-                        sync_store.apply_projection_event(&event);
+                        let envelope = projection_bus.publish(event);
+                        sync_store.apply_projection_envelope(&envelope);
                     }
                     hydration.assistant_text_parts += 1;
                 }
@@ -586,7 +590,8 @@ impl TuiApp {
                             Some(message_id),
                         )
                     {
-                        sync_store.apply_projection_event(&event);
+                        let envelope = projection_bus.publish(event);
+                        sync_store.apply_projection_envelope(&envelope);
                     }
                     hydration.reasoning_parts += 1;
                 }
@@ -600,7 +605,8 @@ impl TuiApp {
                             Some(anchor_id),
                         )
                     {
-                        sync_store.apply_projection_event(&event);
+                        let envelope = projection_bus.publish(event);
+                        sync_store.apply_projection_envelope(&envelope);
                     }
                 }
                 _ => {}

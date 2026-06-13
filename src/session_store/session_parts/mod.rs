@@ -204,6 +204,7 @@ pub fn project_session_parts(events: &[super::SessionEventRow]) -> Vec<SessionPa
             }
             "tool_called" => {
                 let call_id = payload["tool_call_id"].as_str().unwrap_or("").to_string();
+                let message_id = payload_message_id(&payload);
                 parts.push(SessionPart::Tool {
                     part_id: format!("tool_{call_id}"),
                     tool_call_id: call_id,
@@ -215,7 +216,7 @@ pub fn project_session_parts(events: &[super::SessionEventRow]) -> Vec<SessionPa
                     input_replay_source: None,
                     result_replay_source: None,
                     error: None,
-                    message_id: None,
+                    message_id,
                 });
             }
             "tool_args_delta" => {
@@ -257,6 +258,7 @@ pub fn project_session_parts(events: &[super::SessionEventRow]) -> Vec<SessionPa
             }
             "tool_input_completed" => {
                 let call_id = payload["tool_call_id"].as_str().unwrap_or("").to_string();
+                let message_id = payload_message_id(&payload);
                 let input = payload["input_args"].as_str().unwrap_or("").to_string();
                 let replay_source = payload["replay_source"]
                     .as_str()
@@ -267,8 +269,12 @@ pub fn project_session_parts(events: &[super::SessionEventRow]) -> Vec<SessionPa
                         tool_call_id,
                         input_args,
                         input_replay_source,
+                        message_id: current_message_id,
                         ..
                     } if tool_call_id == &call_id => {
+                        if current_message_id.is_none() {
+                            *current_message_id = message_id.clone();
+                        }
                         *input_args = Some(input.clone());
                         *input_replay_source = Some(replay_source.clone());
                         true
@@ -287,20 +293,25 @@ pub fn project_session_parts(events: &[super::SessionEventRow]) -> Vec<SessionPa
                         input_replay_source: Some(replay_source),
                         result_replay_source: None,
                         error: None,
-                        message_id: None,
+                        message_id,
                     });
                 }
             }
             "tool_started" => {
                 let call_id = payload["tool_call_id"].as_str().unwrap_or("").to_string();
                 let name = payload["tool_name"].as_str().unwrap_or("").to_string();
+                let message_id = payload_message_id(&payload);
                 let found = parts.iter_mut().rev().any(|p| match p {
                     SessionPart::Tool {
                         tool_call_id,
                         tool_name,
                         status,
+                        message_id: current_message_id,
                         ..
                     } if tool_call_id == &call_id => {
+                        if current_message_id.is_none() {
+                            *current_message_id = message_id.clone();
+                        }
                         if !name.is_empty() {
                             *tool_name = name.clone();
                         }
@@ -321,7 +332,7 @@ pub fn project_session_parts(events: &[super::SessionEventRow]) -> Vec<SessionPa
                         input_replay_source: None,
                         result_replay_source: None,
                         error: None,
-                        message_id: None,
+                        message_id,
                     });
                 }
             }
@@ -360,6 +371,7 @@ pub fn project_session_parts(events: &[super::SessionEventRow]) -> Vec<SessionPa
             }
             "tool_result_completed" => {
                 let call_id = payload["tool_call_id"].as_str().unwrap_or("").to_string();
+                let message_id = payload_message_id(&payload);
                 let result_preview = payload["result_preview"]
                     .as_str()
                     .or_else(|| payload["result"].as_str())
@@ -376,8 +388,12 @@ pub fn project_session_parts(events: &[super::SessionEventRow]) -> Vec<SessionPa
                         result_preview: current_preview,
                         output_uri: current_uri,
                         result_replay_source,
+                        message_id: current_message_id,
                         ..
                     } if tool_call_id == &call_id => {
+                        if current_message_id.is_none() {
+                            *current_message_id = message_id.clone();
+                        }
                         *status = ToolPartStatus::Completed;
                         *current_preview = result_preview.clone();
                         *current_uri = output_uri.clone();
@@ -398,7 +414,7 @@ pub fn project_session_parts(events: &[super::SessionEventRow]) -> Vec<SessionPa
                         input_replay_source: None,
                         result_replay_source: Some(replay_source),
                         error: None,
-                        message_id: None,
+                        message_id,
                     });
                 }
             }
@@ -508,6 +524,13 @@ pub fn project_session_parts(events: &[super::SessionEventRow]) -> Vec<SessionPa
     }
 
     parts
+}
+
+fn payload_message_id(payload: &serde_json::Value) -> Option<String> {
+    payload["message_id"]
+        .as_str()
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -633,6 +656,7 @@ fn apply_event_to_session_parts(
         }
         "tool_called" => {
             let call_id = payload["tool_call_id"].as_str().unwrap_or("").to_string();
+            let message_id = payload_message_id(&payload);
             let part_id = format!("tool_{call_id}");
             let part = SessionPart::Tool {
                 part_id: part_id.clone(),
@@ -645,7 +669,7 @@ fn apply_event_to_session_parts(
                 input_replay_source: None,
                 result_replay_source: None,
                 error: None,
-                message_id: None,
+                message_id,
             };
             insert_session_part(conn, session_id, part_id, part, event.seq)
         }
@@ -667,11 +691,13 @@ fn apply_event_to_session_parts(
         }
         "tool_input_completed" => {
             let call_id = payload["tool_call_id"].as_str().unwrap_or("").to_string();
+            let message_id = payload_message_id(&payload);
             let input = payload["input_args"].as_str().unwrap_or("");
             let replay_source = payload["replay_source"]
                 .as_str()
                 .unwrap_or("completed_event");
             ensure_tool_part(conn, session_id, &call_id, event.seq)?;
+            set_tool_message_id(conn, session_id, &call_id, message_id.as_deref())?;
             upsert_tool_field(conn, session_id, &call_id, "input_args", input, false)?;
             upsert_tool_field(
                 conn,
@@ -685,6 +711,7 @@ fn apply_event_to_session_parts(
         "tool_started" => {
             let call_id = payload["tool_call_id"].as_str().unwrap_or("").to_string();
             let name = payload["tool_name"].as_str().unwrap_or("").to_string();
+            let message_id = payload_message_id(&payload);
             let part_id = format!("tool_{call_id}");
             match find_part_id_by_part_id(conn, session_id, &part_id) {
                 Some(_) => {
@@ -710,7 +737,7 @@ fn apply_event_to_session_parts(
                 None => {
                     let part = SessionPart::Tool {
                         part_id: part_id.clone(),
-                        tool_call_id: call_id,
+                        tool_call_id: call_id.clone(),
                         tool_name: name,
                         status: ToolPartStatus::Running,
                         input_args: None,
@@ -719,11 +746,12 @@ fn apply_event_to_session_parts(
                         input_replay_source: None,
                         result_replay_source: None,
                         error: None,
-                        message_id: None,
+                        message_id: message_id.clone(),
                     };
                     insert_session_part(conn, session_id, part_id, part, event.seq)?;
                 }
             }
+            set_tool_message_id(conn, session_id, &call_id, message_id.as_deref())?;
             Ok(())
         }
         "tool_succeeded" => {
@@ -755,6 +783,7 @@ fn apply_event_to_session_parts(
         }
         "tool_result_completed" => {
             let call_id = payload["tool_call_id"].as_str().unwrap_or("").to_string();
+            let message_id = payload_message_id(&payload);
             let result_preview = payload["result_preview"]
                 .as_str()
                 .or_else(|| payload["result"].as_str())
@@ -764,6 +793,7 @@ fn apply_event_to_session_parts(
                 .unwrap_or("completed_event");
             let part_id = format!("tool_{call_id}");
             ensure_tool_part(conn, session_id, &call_id, event.seq)?;
+            set_tool_message_id(conn, session_id, &call_id, message_id.as_deref())?;
             upsert_tool_field(
                 conn,
                 session_id,
@@ -1121,6 +1151,32 @@ fn upsert_tool_field(
         conn.execute(
             "UPDATE session_parts SET payload = ?1, updated_at = datetime('now') WHERE id = ?2",
             rusqlite::params![payload.to_string(), row_id],
+        )?;
+    }
+    Ok(())
+}
+
+fn set_tool_message_id(
+    conn: &Connection,
+    session_id: &str,
+    tool_call_id: &str,
+    message_id: Option<&str>,
+) -> Result<(), rusqlite::Error> {
+    let Some(message_id) = message_id.filter(|value| !value.is_empty()) else {
+        return Ok(());
+    };
+    let part_id = format!("tool_{tool_call_id}");
+    if let Some(row_id) = find_part_id_by_part_id(conn, session_id, &part_id) {
+        let existing: String = conn.query_row(
+            "SELECT payload FROM session_parts WHERE id = ?1",
+            [row_id],
+            |row| row.get(0),
+        )?;
+        let mut payload: serde_json::Value = serde_json::from_str(&existing).unwrap_or_default();
+        payload["message_id"] = serde_json::Value::String(message_id.to_string());
+        conn.execute(
+            "UPDATE session_parts SET message_id = COALESCE(message_id, ?1), payload = ?2, updated_at = datetime('now') WHERE id = ?3",
+            rusqlite::params![message_id, payload.to_string(), row_id],
         )?;
     }
     Ok(())

@@ -15,6 +15,7 @@ CONTRACT_KEYS = (
     "session_event_contract",
     "terminal_contract",
     "persistence_contract",
+    "projection_contract",
     "provider_repair_diagnostic_contract",
 )
 
@@ -105,6 +106,10 @@ def summarize_case(matrix: MatrixSpec, result_path: Path) -> dict[str, Any]:
         "tool_results": sum(
             int(row.get("session_event_tool_result_completed_count") or 0) for row in rows
         ),
+        "projection_event_seq_max": max(
+            (int(row.get("projection_event_max_seq") or 0) for row in rows),
+            default=0,
+        ),
         "tool_parts": tool_parts,
         "failures": failures,
     }
@@ -175,13 +180,13 @@ def render_markdown(report: dict[str, Any]) -> str:
         "",
         "## Tool Turn Spine Matrix",
         "",
-        "| Matrix | Case | Status | Outcome | Tools | Contracts | Notes |",
-        "|---|---|---:|---|---:|---|---|",
+        "| Matrix | Case | Status | Outcome | Tools | Seq | Contracts | Notes |",
+        "|---|---|---:|---|---:|---:|---|---|",
     ]
     for matrix in report["matrices"]:
         for error in matrix["errors"]:
             lines.append(
-                f"| {matrix['name']} | - | failed | - | - | - | {error.replace('|', '/') } |"
+                f"| {matrix['name']} | - | failed | - | - | - | - | {error.replace('|', '/') } |"
             )
         for case in matrix["cases"]:
             contracts = []
@@ -191,12 +196,13 @@ def render_markdown(report: dict[str, Any]) -> str:
                     contracts.append(f"{key.replace('_contract', '')}:{'/'.join(states)}")
             notes = "; ".join(case["failures"]) if case["failures"] else "-"
             lines.append(
-                "| {matrix} | {case} | {status} | {outcome} | {tools} | {contracts} | {notes} |".format(
+                "| {matrix} | {case} | {status} | {outcome} | {tools} | {seq} | {contracts} | {notes} |".format(
                     matrix=case["matrix"],
                     case=case["case"],
                     status=case["status"],
                     outcome=markdown_table_value(case["expected_outcomes"]),
                     tools=case["tool_results"],
+                    seq=case["projection_event_seq_max"],
                     contracts=", ".join(contracts) if contracts else "-",
                     notes=notes.replace("|", "/"),
                 )
@@ -208,6 +214,7 @@ def render_markdown(report: dict[str, Any]) -> str:
             "",
             "- `passed` means the selected PTY run observed the requested tool turn contract for its expected outcome.",
             "- `provider-timeout` is allowed only when the tool result was observed and persisted before the provider timed out.",
+            "- `projection` checks that durable event seq is contiguous and projected tool parts are anchored and current.",
             "- Any raw provider deserialization noise in the terminal fails the report.",
             "",
         ]

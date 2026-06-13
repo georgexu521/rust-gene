@@ -39,6 +39,33 @@ fn projects_tool_lifecycle() {
 }
 
 #[test]
+fn projects_tool_message_anchor_from_event_payload() {
+    let events = vec![
+        row(
+            1,
+            "tool_called",
+            r#"{"tool_call_id":"c1","tool_name":"bash","message_id":"user_1"}"#,
+        ),
+        row(
+            2,
+            "tool_result_completed",
+            r#"{"tool_call_id":"c1","result_preview":"ok","message_id":"user_1"}"#,
+        ),
+    ];
+
+    let parts = project_session_parts(&events);
+
+    assert!(matches!(
+        &parts[0],
+        SessionPart::Tool {
+            message_id,
+            status: ToolPartStatus::Completed,
+            ..
+        } if message_id.as_deref() == Some("user_1")
+    ));
+}
+
+#[test]
 fn projects_closeout() {
     let events = vec![row(
         1,
@@ -300,6 +327,34 @@ fn insert_event(conn: &Connection, event: &SessionEventRow) {
         ],
     )
     .unwrap();
+}
+
+#[test]
+fn incremental_projection_persists_tool_message_anchor() {
+    let conn = test_conn();
+    let events = vec![
+        row(
+            1,
+            "tool_started",
+            r#"{"tool_call_id":"c1","tool_name":"bash","message_id":"user_1"}"#,
+        ),
+        row(
+            2,
+            "tool_result_completed",
+            r#"{"tool_call_id":"c1","result_preview":"ok","message_id":"user_1"}"#,
+        ),
+    ];
+    for event in &events {
+        insert_event(&conn, event);
+        incremental_refresh_session_parts(&conn, &event.session_id).unwrap();
+    }
+
+    let parts = query_persisted_session_parts(&conn, "sess-1").unwrap();
+
+    assert_eq!(parts.len(), 1);
+    assert_eq!(parts[0].message_id.as_deref(), Some("user_1"));
+    assert_eq!(parts[0].payload["message_id"].as_str(), Some("user_1"));
+    assert_eq!(parts[0].projected_to_seq, 2);
 }
 
 #[test]

@@ -11,6 +11,7 @@ common=(
   --assert-session-events
   --assert-terminal-contract
   --assert-persistence
+  --assert-projection
   --expect-provider-label "Custom / test-fixture-model"
 )
 

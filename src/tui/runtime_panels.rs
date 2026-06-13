@@ -269,6 +269,15 @@ pub async fn render_context_panel(app: &TuiApp) -> String {
             runtime.messages, runtime.is_querying
         ),
         format!(
+            "Projection: seq={} event={}",
+            app.sync_snapshot.last_projection_seq,
+            app.sync_snapshot
+                .last_projection_event_id
+                .as_deref()
+                .map(|id| compact_panel_line(id, 80))
+                .unwrap_or_else(|| "none".to_string())
+        ),
+        format!(
             "Tools: {} active / {} total, failed={}, backgrounded={}",
             runtime.active_tool_count,
             runtime.total_tools,
@@ -853,6 +862,16 @@ mod tests {
             Some(RuntimePanelKind::Trace)
         );
         assert_eq!(RuntimePanelKind::parse("unknown"), None);
+    }
+
+    #[tokio::test]
+    async fn renders_context_panel_projection_cursor() {
+        let app = TuiApp::new();
+
+        let panel = render_runtime_panel(&app, RuntimePanelKind::Context).await;
+
+        assert!(panel.contains("# Context Panel"));
+        assert!(panel.contains("Projection: seq=0 event=none"));
     }
 
     #[test]

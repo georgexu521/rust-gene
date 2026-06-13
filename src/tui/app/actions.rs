@@ -21,19 +21,33 @@ impl TuiApp {
         .await;
         self.stream_started_at = None;
 
+        let cancellation_message = self
+            .messages
+            .last()
+            .filter(|message| {
+                message.role == crate::state::MessageRole::Assistant && message.content.is_empty()
+            })
+            .map(|_| format!("[Cancelled: {reason}]"));
         {
             let mut sync = self.sync_store.lock().await;
             sync.mark_active_tools_with_result("Result: ERROR\nTool run is cancelled.".to_string());
+            if let Some(text) = cancellation_message.as_ref() {
+                let message_id = sync.snapshot().active_assistant_message_id;
+                sync.apply_projection_event(
+                    &crate::session_store::SessionProjectionEvent::AssistantTextUpdated {
+                        message_id,
+                        text: text.clone(),
+                        streaming: false,
+                    },
+                );
+            }
             self.sync_snapshot = sync.snapshot();
         }
         self.current_tool_anchor_id = None;
         self.settle_unfinished_tool_parts(reason);
 
-        if let Some(last_msg) = self.messages.last_mut() {
-            if last_msg.role == crate::state::MessageRole::Assistant && last_msg.content.is_empty()
-            {
-                last_msg.content = format!("[Cancelled: {reason}]");
-            }
+        if let (Some(last_msg), Some(text)) = (self.messages.last_mut(), cancellation_message) {
+            last_msg.content = text;
         }
         self.add_toast(reason.to_string(), "!");
         true
@@ -69,9 +83,22 @@ impl TuiApp {
         .await;
         self.stream_started_at = None;
 
+        let should_project_error = self.messages.last().is_some_and(|message| {
+            message.role == crate::state::MessageRole::Assistant && message.content == error_message
+        });
         {
             let mut sync = self.sync_store.lock().await;
             sync.mark_active_tools_with_result(format!("Result: ERROR\n{reason}"));
+            if should_project_error {
+                let message_id = sync.snapshot().active_assistant_message_id;
+                sync.apply_projection_event(
+                    &crate::session_store::SessionProjectionEvent::AssistantTextUpdated {
+                        message_id,
+                        text: error_message.clone(),
+                        streaming: false,
+                    },
+                );
+            }
             self.sync_snapshot = sync.snapshot();
         }
         self.current_tool_anchor_id = None;

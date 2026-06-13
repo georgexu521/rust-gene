@@ -34,7 +34,9 @@ pub use todo_store::{PersistedTodoItem, TodoItem};
 pub use event_store::{
     query_session_events, query_session_events_after, SessionEventRow, SessionEventWriter,
 };
-pub use projection_event::SessionProjectionEvent;
+pub use projection_event::{
+    SessionProjectionEnvelope, SessionProjectionEvent, SessionProjectionEventBus,
+};
 pub use session_parts::PersistedSessionPart;
 
 /// 会话存储

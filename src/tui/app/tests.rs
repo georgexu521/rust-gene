@@ -107,6 +107,9 @@ async fn cancel_active_run_interrupts_query_and_marks_tool_cancelled() {
     assert!(app.stream_started_at.is_none());
     assert!(app.current_tool_anchor_id.is_none());
     assert!(app.messages[1].content.contains("Cancelled"));
+    assert!(app.visible_timeline_messages()[1]
+        .content
+        .contains("[Cancelled: Run interrupted]"));
     assert_eq!(
         app.projected_tool_runs()[0].status,
         ToolRunStatus::Cancelled

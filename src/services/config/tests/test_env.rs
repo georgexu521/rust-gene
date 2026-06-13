@@ -19,6 +19,19 @@ impl EnvOverride {
             _guard: guard,
         }
     }
+
+    pub(super) fn unset(key: &'static str) -> Self {
+        let guard = ENV_LOCK.lock().expect("env lock poisoned");
+        let previous = std::env::var_os(key);
+        unsafe {
+            std::env::remove_var(key);
+        }
+        Self {
+            key,
+            previous,
+            _guard: guard,
+        }
+    }
 }
 
 impl Drop for EnvOverride {
