@@ -4,7 +4,7 @@ use crate::tui::{
 };
 use ratatui::{
     layout::Rect,
-    style::Style,
+    style::{Color, Modifier, Style},
     text::{Line, Span, Text},
     widgets::Paragraph,
     Frame,
@@ -308,27 +308,16 @@ fn input_lines(
     prompt_color: ratatui::style::Color,
     app: &TuiApp,
 ) -> Vec<Line<'static>> {
+    let selection = app.input.selection_range();
+    let mut char_offset = 0usize;
     let mut lines: Vec<Line> = input_text
-        .lines()
+        .split('\n')
         .enumerate()
         .map(|(i, line)| {
-            if i == 0 {
-                Line::from(vec![
-                    Span::styled("› ", Style::default().fg(prompt_color)),
-                    Span::styled(
-                        line.to_string(),
-                        Style::default().fg(app.theme.tokens.fg.body),
-                    ),
-                ])
-            } else {
-                Line::from(vec![
-                    Span::styled("  ", Style::default()),
-                    Span::styled(
-                        line.to_string(),
-                        Style::default().fg(app.theme.tokens.fg.body),
-                    ),
-                ])
-            }
+            let line_len = line.chars().count();
+            let spans = line_spans(line, i == 0, prompt_color, app, char_offset, selection);
+            char_offset += line_len + 1; // include '\n'
+            Line::from(spans)
         })
         .collect();
     if lines.is_empty() {
@@ -338,6 +327,61 @@ fn input_lines(
         )]));
     }
     lines
+}
+
+fn line_spans(
+    line: &str,
+    is_first: bool,
+    prompt_color: ratatui::style::Color,
+    app: &TuiApp,
+    line_start_char: usize,
+    selection: Option<(usize, usize)>,
+) -> Vec<Span<'static>> {
+    let mut spans = Vec::new();
+    spans.push(Span::styled(
+        if is_first { "› " } else { "  " },
+        Style::default().fg(prompt_color),
+    ));
+
+    let body_style = Style::default().fg(app.theme.tokens.fg.body);
+    let select_style = Style::default()
+        .fg(Color::Black)
+        .bg(app.theme.tokens.tone.brand)
+        .add_modifier(Modifier::BOLD);
+
+    let Some((sel_start, sel_end)) = selection else {
+        spans.push(Span::styled(line.to_string(), body_style));
+        return spans;
+    };
+
+    let line_end_char = line_start_char + line.chars().count();
+    if sel_end <= line_start_char || sel_start >= line_end_char {
+        spans.push(Span::styled(line.to_string(), body_style));
+        return spans;
+    }
+
+    let local_start = sel_start.saturating_sub(line_start_char);
+    let local_end = sel_end.min(line_end_char) - line_start_char;
+
+    let chars: Vec<char> = line.chars().collect();
+    if local_start > 0 {
+        spans.push(Span::styled(
+            chars[..local_start].iter().collect::<String>(),
+            body_style,
+        ));
+    }
+    spans.push(Span::styled(
+        chars[local_start..local_end].iter().collect::<String>(),
+        select_style,
+    ));
+    if local_end < chars.len() {
+        spans.push(Span::styled(
+            chars[local_end..].iter().collect::<String>(),
+            body_style,
+        ));
+    }
+
+    spans
 }
 
 fn activity_line(app: &TuiApp) -> Line<'static> {

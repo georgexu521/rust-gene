@@ -992,6 +992,10 @@ async fn handle_key_event(key: KeyEvent, app: &mut TuiApp) -> anyhow::Result<boo
     }
 
     // 其他模式统一通过 action_for 分发
+    if let Some(handled) = handle_rich_input_shortcuts(key, app) {
+        return Ok(handled);
+    }
+
     let action = app.keybindings.action_for(key, app.mode);
 
     match action {
@@ -1274,6 +1278,69 @@ async fn handle_file_picker_key_event(key: KeyEvent, app: &mut TuiApp) -> anyhow
         _ => {}
     }
     Ok(false)
+}
+
+/// 富文本输入快捷键（选择、剪贴板、撤销/重做）。
+/// 仅当处于 Chat 或 VimNormal 模式且没有 overlay 时生效。
+fn handle_rich_input_shortcuts(key: KeyEvent, app: &mut TuiApp) -> Option<bool> {
+    use crossterm::event::{KeyCode, KeyModifiers};
+
+    if !matches!(app.mode, app::AppMode::Chat | app::AppMode::VimNormal) {
+        return None;
+    }
+
+    let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+    let shift = key.modifiers.contains(KeyModifiers::SHIFT);
+
+    match key.code {
+        KeyCode::Char('a') if ctrl => {
+            app.input.select_all();
+            return Some(false);
+        }
+        KeyCode::Char('z') if ctrl && shift => {
+            app.input.redo();
+            return Some(false);
+        }
+        KeyCode::Char('z') if ctrl => {
+            app.input.undo();
+            return Some(false);
+        }
+        KeyCode::Char('c') if ctrl => {
+            if app.input.has_selection() {
+                let _ = app.input.copy_selection();
+                return Some(false);
+            }
+        }
+        KeyCode::Char('x') if ctrl => {
+            if app.input.has_selection() {
+                let _ = app.input.cut_selection();
+                return Some(false);
+            }
+        }
+        KeyCode::Char('v') if ctrl => {
+            let _ = app.input.paste_from_clipboard();
+            return Some(false);
+        }
+        KeyCode::Left if shift => {
+            app.input.select_left();
+            return Some(false);
+        }
+        KeyCode::Right if shift => {
+            app.input.select_right();
+            return Some(false);
+        }
+        KeyCode::Up if shift => {
+            app.input.select_up();
+            return Some(false);
+        }
+        KeyCode::Down if shift => {
+            app.input.select_down();
+            return Some(false);
+        }
+        _ => {}
+    }
+
+    None
 }
 
 /// 未被 action_for 捕获的键走默认行为（主要用于 Chat 模式的字符输入和光标移动）
