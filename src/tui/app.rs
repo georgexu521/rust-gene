@@ -611,7 +611,10 @@ impl TuiApp {
     }
 
     pub fn new() -> Self {
-        Self::create(None, None, None)
+        let mut app = Self::create(None, None, None);
+        app.kv_store = crate::services::kv::KvStore::in_memory();
+        app.status_bar_density = StatusBarDensity::Normal;
+        app
     }
 
     /// 创建带流式引擎的 TuiApp
