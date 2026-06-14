@@ -1165,10 +1165,10 @@ mod tests {
     fn session_selection_accepts_index_id_and_title() {
         let store = SessionStore::in_memory().expect("store");
         store
-            .create_session("session-alpha", "Fix login bug", "model-a")
+            .create_session("session-alpha", "Fix login bug", "model-a", None)
             .unwrap();
         store
-            .create_session("session-beta", "Build dashboard", "model-b")
+            .create_session("session-beta", "Build dashboard", "model-b", None)
             .unwrap();
         let sessions = store.list_sessions(10).unwrap();
 

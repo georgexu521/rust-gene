@@ -315,7 +315,7 @@ impl StreamingQueryEngine {
         if self.config.session_id.read().is_none() {
             let sid = format!("session-{}", uuid::Uuid::new_v4());
             let model = self.model_name();
-            let _ = store.create_session(&sid, "Session", &model);
+            let _ = store.create_session(&sid, "Session", &model, None);
             *self.config.session_id.write() = Some(sid);
         }
         let session_id = self.current_session_id()?;

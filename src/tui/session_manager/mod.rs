@@ -73,11 +73,12 @@ impl TuiSessionManager {
         session_id: impl Into<String>,
         title: impl Into<String>,
         model: &str,
+        workspace_root: Option<&str>,
     ) -> anyhow::Result<Self> {
         let session_id = session_id.into();
         let title = title.into();
         if store.get_session(&session_id)?.is_none() {
-            store.create_session(&session_id, &title, model)?;
+            store.create_session(&session_id, &title, model, workspace_root)?;
         }
         Ok(Self {
             store,
@@ -102,11 +103,13 @@ impl TuiSessionManager {
         &mut self,
         title: impl Into<String>,
         model: &str,
+        workspace_root: Option<&str>,
     ) -> anyhow::Result<String> {
         let session_id = format!("sess_{}", Uuid::new_v4().simple());
         let title = title.into();
 
-        self.store.create_session(&session_id, &title, model)?;
+        self.store
+            .create_session(&session_id, &title, model, workspace_root)?;
         self.current_session_id = Some(session_id.clone());
         self.current_session_title = title;
 
@@ -461,8 +464,13 @@ impl TuiSessionManager {
             .ok_or_else(|| anyhow::anyhow!("Current session not found: {}", parent_id))?;
 
         let child_id = format!("sess_{}", Uuid::new_v4().simple());
-        self.store
-            .create_child_session(&child_id, title, &parent.model, &parent_id)?;
+        self.store.create_child_session(
+            &child_id,
+            title,
+            &parent.model,
+            &parent_id,
+            Some(workspace_root),
+        )?;
 
         let records = self.store.get_messages(&parent_id)?;
         for record in records {
@@ -487,6 +495,29 @@ impl TuiSessionManager {
     /// 列出会话
     pub fn list_sessions(&self, limit: i64) -> anyhow::Result<Vec<SessionRecord>> {
         Ok(self.store.list_sessions(limit)?)
+    }
+
+    /// 列出所有已知的 workspace root（最近的在前）。
+    pub fn list_workspaces(&self) -> anyhow::Result<Vec<String>> {
+        Ok(self.store.list_workspaces()?)
+    }
+
+    /// 列出指定 workspace 下的会话（最近的在前）。
+    pub fn list_sessions_by_workspace(
+        &self,
+        workspace_root: &str,
+        limit: i64,
+    ) -> anyhow::Result<Vec<SessionRecord>> {
+        Ok(self
+            .store
+            .list_sessions_by_workspace(workspace_root, limit)?)
+    }
+
+    /// 回填当前 workspace 到无 workspace_root 的历史会话。
+    pub fn backfill_workspace_root(&self, workspace_root: &str) -> anyhow::Result<usize> {
+        let count = self.store.backfill_workspace_root(workspace_root)?;
+        info!("Backfilled workspace_root for {} sessions", count);
+        Ok(count)
     }
 
     /// 列出有消息的可恢复会话

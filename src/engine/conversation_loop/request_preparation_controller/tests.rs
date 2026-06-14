@@ -160,7 +160,7 @@ async fn prepare_injects_context_ledger_hint_before_user_message() {
     ));
     let store = Arc::new(SessionStore::in_memory().unwrap());
     store
-        .create_session("session-ledger", "Ledger", "model")
+        .create_session("session-ledger", "Ledger", "model", None)
         .unwrap();
     store
         .add_learning_event(
@@ -480,7 +480,7 @@ async fn prepare_injects_structured_tool_evidence_from_context_ledger() {
     ));
     let store = Arc::new(SessionStore::in_memory().unwrap());
     store
-        .create_session("session-ledger-evidence", "Ledger", "model")
+        .create_session("session-ledger-evidence", "Ledger", "model", None)
         .unwrap();
     store
         .add_learning_event(

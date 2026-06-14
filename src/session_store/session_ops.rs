@@ -6,11 +6,17 @@ impl SessionStore {
     // ==================== 会话操作 ====================
 
     /// 创建会话
-    pub fn create_session(&self, id: &str, title: &str, model: &str) -> SqlResult<()> {
+    pub fn create_session(
+        &self,
+        id: &str,
+        title: &str,
+        model: &str,
+        workspace_root: Option<&str>,
+    ) -> SqlResult<()> {
         let conn = self.conn();
         conn.execute(
-            "INSERT INTO sessions (id, title, model) VALUES (?1, ?2, ?3)",
-            params![id, title, model],
+            "INSERT INTO sessions (id, title, model, workspace_root) VALUES (?1, ?2, ?3, ?4)",
+            params![id, title, model, workspace_root],
         )?;
         debug!("Created session: {}", id);
         Ok(())
@@ -20,7 +26,7 @@ impl SessionStore {
     pub fn get_session(&self, id: &str) -> SqlResult<Option<SessionRecord>> {
         let conn = self.conn();
         let result = conn.query_row(
-            "SELECT id, title, parent_session_id, created_at, updated_at, model, total_input_tokens, total_output_tokens
+            "SELECT id, title, parent_session_id, created_at, updated_at, model, total_input_tokens, total_output_tokens, workspace_root
              FROM sessions WHERE id = ?1",
             params![id],
             |row| {
@@ -33,6 +39,7 @@ impl SessionStore {
                     model: row.get(5)?,
                     total_input_tokens: row.get(6)?,
                     total_output_tokens: row.get(7)?,
+                    workspace_root: row.get(8)?,
                 })
             },
         );
@@ -48,7 +55,7 @@ impl SessionStore {
     pub fn list_sessions(&self, limit: i64) -> SqlResult<Vec<SessionRecord>> {
         let conn = self.conn();
         let mut stmt = conn.prepare(
-            "SELECT id, title, parent_session_id, created_at, updated_at, model, total_input_tokens, total_output_tokens
+            "SELECT id, title, parent_session_id, created_at, updated_at, model, total_input_tokens, total_output_tokens, workspace_root
              FROM sessions ORDER BY updated_at DESC LIMIT ?1"
         )?;
 
@@ -62,10 +69,65 @@ impl SessionStore {
                 model: row.get(5)?,
                 total_input_tokens: row.get(6)?,
                 total_output_tokens: row.get(7)?,
+                workspace_root: row.get(8)?,
             })
         })?;
 
         sessions.collect()
+    }
+
+    /// 列出所有非空 workspace_root（按最近使用时间排序）。
+    pub fn list_workspaces(&self) -> SqlResult<Vec<String>> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare(
+            "SELECT DISTINCT workspace_root FROM sessions
+             WHERE workspace_root IS NOT NULL AND workspace_root != ''
+             ORDER BY MAX(updated_at) OVER (PARTITION BY workspace_root) DESC",
+        )?;
+        let rows = stmt.query_map([], |row| row.get(0))?;
+        rows.collect()
+    }
+
+    /// 列出指定 workspace 下的会话（最近的在前）。
+    pub fn list_sessions_by_workspace(
+        &self,
+        workspace_root: &str,
+        limit: i64,
+    ) -> SqlResult<Vec<SessionRecord>> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare(
+            "SELECT id, title, parent_session_id, created_at, updated_at, model, total_input_tokens, total_output_tokens, workspace_root
+             FROM sessions
+             WHERE workspace_root = ?1
+                OR (workspace_root IS NULL OR workspace_root = '')
+             ORDER BY updated_at DESC LIMIT ?2"
+        )?;
+
+        let sessions = stmt.query_map(params![workspace_root, limit], |row| {
+            Ok(SessionRecord {
+                id: row.get(0)?,
+                title: row.get(1)?,
+                parent_session_id: row.get(2)?,
+                created_at: row.get(3)?,
+                updated_at: row.get(4)?,
+                model: row.get(5)?,
+                total_input_tokens: row.get(6)?,
+                total_output_tokens: row.get(7)?,
+                workspace_root: row.get(8)?,
+            })
+        })?;
+
+        sessions.collect()
+    }
+
+    /// 回填缺失的 workspace_root 为给定值。
+    pub fn backfill_workspace_root(&self, workspace_root: &str) -> SqlResult<usize> {
+        let conn = self.conn();
+        conn.execute(
+            "UPDATE sessions SET workspace_root = ?1
+             WHERE workspace_root IS NULL OR workspace_root = ''",
+            params![workspace_root],
+        )
     }
 
     /// 更新会话标题
@@ -95,11 +157,12 @@ impl SessionStore {
         title: &str,
         model: &str,
         parent_id: &str,
+        workspace_root: Option<&str>,
     ) -> SqlResult<()> {
         let conn = self.conn();
         conn.execute(
-            "INSERT INTO sessions (id, title, model, parent_session_id) VALUES (?1, ?2, ?3, ?4)",
-            params![id, title, model, parent_id],
+            "INSERT INTO sessions (id, title, model, parent_session_id, workspace_root) VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![id, title, model, parent_id, workspace_root],
         )?;
         debug!("Created child session: {} (parent: {})", id, parent_id);
         Ok(())

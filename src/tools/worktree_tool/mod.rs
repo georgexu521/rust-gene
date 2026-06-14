@@ -1144,7 +1144,7 @@ mod tests {
 
         let store = Arc::new(crate::session_store::SessionStore::in_memory().expect("store"));
         store
-            .create_session("s1", "agent worktree test", "test-model")
+            .create_session("s1", "agent worktree test", "test-model", None)
             .expect("create session");
         store
             .upsert_agent_task_state(&isolated_agent_state("agent_1", &worktree_path, branch))

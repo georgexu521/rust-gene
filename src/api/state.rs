@@ -114,7 +114,7 @@ impl RuntimeControllerApiAgentRuntime {
     async fn ensure_session_record(&self, session_id: &str) -> anyhow::Result<()> {
         let store = self.session_store.read().await;
         if store.get_session(session_id)?.is_none() {
-            store.create_session(session_id, "API Session", &self.model)?;
+            store.create_session(session_id, "API Session", &self.model, None)?;
         }
         Ok(())
     }
@@ -315,7 +315,7 @@ impl RuntimeControllerApiAgentRuntime {
         self.controller.set_session(input.session_id.clone());
         if let Some((store, _)) = self.controller.engine().session_binding() {
             if store.get_session(&input.session_id)?.is_none() {
-                store.create_session(&input.session_id, "API Session", &self.model)?;
+                store.create_session(&input.session_id, "API Session", &self.model, None)?;
             }
         }
 
@@ -717,7 +717,7 @@ impl ApiState {
         let title = title.unwrap_or_else(|| "New Session".to_string());
 
         let store = self.session_store.read().await;
-        store.create_session(&id, &title, &self.model)?;
+        store.create_session(&id, &title, &self.model, None)?;
 
         // 获取创建的会话
         let session = store

@@ -257,7 +257,7 @@ fn agent_tool_schema_exposes_lifecycle_actions() {
 async fn agent_list_reads_durable_progress_without_manager() {
     let store = Arc::new(crate::session_store::SessionStore::in_memory().unwrap());
     store
-        .create_session("s1", "agent list test", "test-model")
+        .create_session("s1", "agent list test", "test-model", None)
         .unwrap();
     store
         .upsert_agent_task_state(&crate::session_store::AgentTaskStateUpsert {
@@ -299,7 +299,7 @@ async fn agent_list_reads_durable_progress_without_manager() {
 async fn agent_read_does_not_require_manager() {
     let store = Arc::new(crate::session_store::SessionStore::in_memory().unwrap());
     store
-        .create_session("s1", "agent read test", "test-model")
+        .create_session("s1", "agent read test", "test-model", None)
         .unwrap();
     store
         .upsert_agent_task_state(&crate::session_store::AgentTaskStateUpsert {

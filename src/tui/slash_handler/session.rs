@@ -175,7 +175,11 @@ pub async fn handle_new(app: &mut TuiApp) -> String {
         .as_ref()
         .map(|_| "kimi-k2.5")
         .unwrap_or("unknown");
-    match app.session_manager.start_session("New Session", model) {
+    match app.session_manager.start_session(
+        "New Session",
+        model,
+        Some(&app.workspace.root.to_string_lossy()),
+    ) {
         Ok(id) => {
             app.messages.clear();
             app.clear_tool_transcript();
@@ -1198,7 +1202,11 @@ pub async fn handle_session_cmd(app: &mut TuiApp, args: &str) -> String {
             .map(str::trim)
             .filter(|v| !v.is_empty())
             .unwrap_or("New Session");
-        match app.session_manager.start_session(title, "kimi-k2.5") {
+        match app.session_manager.start_session(
+            title,
+            "kimi-k2.5",
+            Some(&app.workspace.root.to_string_lossy()),
+        ) {
             Ok(id) => {
                 let _ = app.restore_session(&id).await;
                 format!("Created new session: {}", title)

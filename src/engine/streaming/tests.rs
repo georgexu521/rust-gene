@@ -230,7 +230,7 @@ fn test_runtime_provider_switch_updates_provider_and_model() {
 async fn streaming_restore_injects_persisted_history_once() {
     let store = Arc::new(crate::session_store::SessionStore::in_memory().unwrap());
     store
-        .create_session("restore-once", "Restore Once", "MiniMax-M2.7")
+        .create_session("restore-once", "Restore Once", "MiniMax-M2.7", None)
         .unwrap();
     store
         .add_message("restore-once", "user", "previous turn", None, None)
@@ -570,7 +570,7 @@ async fn agent_manager_is_constructed_on_demand() {
 async fn context_long_session_manual_compact_persists_boundary_for_restore() {
     let store = Arc::new(crate::session_store::SessionStore::in_memory().unwrap());
     store
-        .create_session("long-session", "Long Session", "MiniMax-M2.7")
+        .create_session("long-session", "Long Session", "MiniMax-M2.7", None)
         .unwrap();
     let provider = Arc::new(ToolTurnProvider {
         responses: StdMutex::new(VecDeque::from([crate::services::api::ChatResponse {

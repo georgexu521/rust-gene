@@ -236,7 +236,8 @@ fn draw_ui(f: &mut Frame, app: &TuiApp) {
         | app::AppMode::PromptHistory
         | app::AppMode::ModelSelect
         | app::AppMode::ProviderSelect
-        | app::AppMode::FilePicker => {
+        | app::AppMode::FilePicker
+        | app::AppMode::WorkspaceSwitcher => {
             if app.sidebar_visible {
                 match sidebar_layout(f.area()) {
                     SidebarLayout::Inline { sidebar, main } => {
@@ -306,6 +307,9 @@ fn draw_ui(f: &mut Frame, app: &TuiApp) {
                 }
                 app::AppMode::FilePicker => {
                     screens::main_screen::render_file_picker(f, app, f.area());
+                }
+                app::AppMode::WorkspaceSwitcher => {
+                    screens::main_screen::render_workspace_switcher(f, app, f.area());
                 }
                 _ => {}
             }
@@ -469,6 +473,10 @@ fn handle_leader_sequence(key: KeyEvent, app: &mut TuiApp) -> Option<bool> {
                 }
                 return Some(false);
             }
+            KeyCode::Char('w') => {
+                app.open_workspace_switcher();
+                return Some(false);
+            }
             _ => return None,
         }
     }
@@ -547,6 +555,10 @@ async fn handle_key_event(key: KeyEvent, app: &mut TuiApp) -> anyhow::Result<boo
 
     if app.mode == app::AppMode::FilePicker {
         return handle_file_picker_key_event(key, app).await;
+    }
+
+    if app.mode == app::AppMode::WorkspaceSwitcher {
+        return handle_workspace_switcher_key_event(key, app).await;
     }
 
     if app.is_querying
@@ -1254,6 +1266,27 @@ async fn handle_provider_select_key_event(key: KeyEvent, app: &mut TuiApp) -> an
     Ok(false)
 }
 
+async fn handle_workspace_switcher_key_event(
+    key: KeyEvent,
+    app: &mut TuiApp,
+) -> anyhow::Result<bool> {
+    use crossterm::event::KeyCode;
+
+    match key.code {
+        KeyCode::Esc | KeyCode::Char('q') => {
+            app.close_workspace_switcher();
+        }
+        KeyCode::Enter => {
+            let message = app.accept_workspace_switcher();
+            app.add_system_message(message);
+        }
+        KeyCode::Up | KeyCode::Char('k') => app.workspace_switcher_prev(),
+        KeyCode::Down | KeyCode::Char('j') => app.workspace_switcher_next(),
+        _ => {}
+    }
+    Ok(false)
+}
+
 async fn handle_file_picker_key_event(key: KeyEvent, app: &mut TuiApp) -> anyhow::Result<bool> {
     if app.file_picker_filtering {
         match key.code {
@@ -1687,7 +1720,7 @@ mod tests {
         app.session_manager = crate::tui::session_manager::TuiSessionManager::in_memory().unwrap();
         let _session_id = app
             .session_manager
-            .start_session("TUI visual review", "deepseek-v4-flash")
+            .start_session("TUI visual review", "deepseek-v4-flash", None)
             .unwrap();
         app.session_manager
             .add_message(
@@ -1771,7 +1804,7 @@ mod tests {
         app.session_manager = crate::tui::session_manager::TuiSessionManager::in_memory().unwrap();
         let _session_id = app
             .session_manager
-            .start_session("Cargo validation pass", "deepseek-v4-flash")
+            .start_session("Cargo validation pass", "deepseek-v4-flash", None)
             .unwrap();
         app.session_manager
             .add_message(
@@ -1830,7 +1863,7 @@ mod tests {
         app.session_manager = crate::tui::session_manager::TuiSessionManager::in_memory().unwrap();
         let _session_id = app
             .session_manager
-            .start_session("DeepSeek provider failure", "deepseek-v4-flash")
+            .start_session("DeepSeek provider failure", "deepseek-v4-flash", None)
             .unwrap();
         app.session_manager
             .add_message(crate::state::MessageRole::User, "你好")
@@ -2040,15 +2073,15 @@ mod tests {
         app.session_manager = crate::tui::session_manager::TuiSessionManager::in_memory().unwrap();
         let _alpha = app
             .session_manager
-            .start_session("Alpha Session", "model")
+            .start_session("Alpha Session", "model", None)
             .unwrap();
         let beta = app
             .session_manager
-            .start_session("Beta Session", "model")
+            .start_session("Beta Session", "model", None)
             .unwrap();
         let _gamma = app
             .session_manager
-            .start_session("Gamma Session", "model")
+            .start_session("Gamma Session", "model", None)
             .unwrap();
 
         app.mode = app::AppMode::VimNormal;

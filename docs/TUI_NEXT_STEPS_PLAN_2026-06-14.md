@@ -321,11 +321,11 @@ Split this into two slices so the UI does not sit on top of non-durable state.
 
 ### Acceptance
 
-- [ ] New sessions persist their workspace root.
-- [ ] Existing sessions without durable workspace metadata get a deterministic fallback/backfill path.
-- [ ] `<leader>w` opens a workspace switcher.
-- [ ] Switching workspace filters the sidebar to that workspace (or shows all).
-- [ ] Loading a session from another workspace updates the active workspace and shows a toast.
+- [x] New sessions persist their workspace root.
+- [x] Existing sessions without durable workspace metadata get a deterministic fallback/backfill path.
+- [x] `<leader>w` opens a workspace switcher.
+- [x] Switching workspace filters the sidebar to that workspace (or shows all).
+- [x] Loading a session from another workspace updates the active workspace and shows a toast.
 - [ ] Restarting the TUI preserves workspace grouping.
 
 ### Validation

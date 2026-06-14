@@ -69,6 +69,7 @@ pub struct SessionRecord {
     pub model: String,
     pub total_input_tokens: i64,
     pub total_output_tokens: i64,
+    pub workspace_root: Option<String>,
 }
 
 /// Durable event extracted from completed turns for future routing/tool tuning.

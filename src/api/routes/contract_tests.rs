@@ -211,7 +211,7 @@ async fn session_parts_returns_cursor_shape() {
     let state = api_test_state();
     {
         let store = state.session_store.read().await;
-        let _ = store.create_session("test", "Test Session", "mock-model");
+        let _ = store.create_session("test", "Test Session", "mock-model", None);
     }
     let app = create_routes(state);
     let value = json_get_response(&app, "/api/sessions/test/parts?limit=10").await;
@@ -229,7 +229,7 @@ async fn session_reverts_reads_durable_parts() {
     let state = api_test_state();
     {
         let store = state.session_store.read().await;
-        let _ = store.create_session("test", "Test Session", "mock-model");
+        let _ = store.create_session("test", "Test Session", "mock-model", None);
     }
     let app = create_routes(state);
     let value = json_get_response(&app, "/api/sessions/test/reverts?limit=5").await;
@@ -256,7 +256,7 @@ async fn session_events_returns_cursor_shape() {
     let state = api_test_state();
     {
         let store = state.session_store.read().await;
-        let _ = store.create_session("test", "Test Session", "mock-model");
+        let _ = store.create_session("test", "Test Session", "mock-model", None);
     }
     let app = create_routes(state);
     let value = json_get_response(&app, "/api/sessions/test/events?limit=10").await;

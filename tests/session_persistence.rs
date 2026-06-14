@@ -19,7 +19,7 @@ fn session_create_and_retrieve() {
 
     let id = Uuid::new_v4().to_string();
     store
-        .create_session(&id, "Test Session", "mock-model")
+        .create_session(&id, "Test Session", "mock-model", None)
         .expect("create session");
 
     let session = store
@@ -40,7 +40,7 @@ fn session_add_and_list_messages() {
 
     let id = Uuid::new_v4().to_string();
     store
-        .create_session(&id, "Chat Session", "mock-model")
+        .create_session(&id, "Chat Session", "mock-model", None)
         .expect("create session");
 
     store
@@ -81,7 +81,7 @@ fn session_fts_search_finds_messages() {
 
     let id = Uuid::new_v4().to_string();
     store
-        .create_session(&id, "Dev Session", "mock-model")
+        .create_session(&id, "Dev Session", "mock-model", None)
         .expect("create session");
 
     store
@@ -126,10 +126,10 @@ fn session_list_recent() {
     let id1 = Uuid::new_v4().to_string();
     let id2 = Uuid::new_v4().to_string();
     store
-        .create_session(&id1, "First Session", "mock-model")
+        .create_session(&id1, "First Session", "mock-model", None)
         .expect("create session 1");
     store
-        .create_session(&id2, "Second Session", "mock-model")
+        .create_session(&id2, "Second Session", "mock-model", None)
         .expect("create session 2");
 
     let sessions = store.list_sessions(10).expect("list sessions");

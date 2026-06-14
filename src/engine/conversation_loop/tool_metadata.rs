@@ -937,7 +937,7 @@ mod tests {
     #[test]
     fn persist_tool_outcome_also_records_context_ledger_evidence() {
         let store = Arc::new(crate::session_store::SessionStore::in_memory().unwrap());
-        store.create_session("s1", "test", "model").unwrap();
+        store.create_session("s1", "test", "model", None).unwrap();
         let call = tool_call("bash");
         let result = ToolResult::success_with_data(
             "ok",
@@ -968,7 +968,7 @@ mod tests {
     #[test]
     fn persist_session_job_if_shell_records_shell_metadata() {
         let store = Arc::new(crate::session_store::SessionStore::in_memory().unwrap());
-        store.create_session("s1", "test", "model").unwrap();
+        store.create_session("s1", "test", "model", None).unwrap();
         let call = tool_call("bash");
         let result = ToolResult::success_with_data(
             "ok",
@@ -1002,7 +1002,7 @@ mod tests {
     #[test]
     fn persist_session_job_if_shell_records_cancelled_status() {
         let store = Arc::new(crate::session_store::SessionStore::in_memory().unwrap());
-        store.create_session("s1", "test", "model").unwrap();
+        store.create_session("s1", "test", "model", None).unwrap();
         let call = tool_call("bash");
         let mut result = ToolResult::error("cancelled");
         result.data = Some(serde_json::json!({

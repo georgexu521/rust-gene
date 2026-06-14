@@ -84,6 +84,7 @@ pub enum AppMode {
     ModelSelect,
     ProviderSelect,
     FilePicker,
+    WorkspaceSwitcher,
 }
 
 /// Pending leader-key sequence state.
@@ -314,6 +315,12 @@ pub struct TuiApp {
     pub filtering_shortcut_help: bool,
     /// 侧边栏面板类型
     pub sidebar_panel: SidebarPanel,
+    /// 侧边栏 workspace 过滤（None 表示全部）。
+    pub sidebar_workspace_filter: Option<String>,
+    /// Workspace switcher overlay items.
+    pub workspace_switcher_items: Vec<String>,
+    /// Workspace switcher selected index.
+    pub workspace_switcher_selected: usize,
     /// 打字机效果当前显示位置（字符数）
     pub typewriter_position: usize,
     /// LSP 管理器
@@ -557,6 +564,59 @@ impl TuiApp {
         self.mode
     }
 
+    pub fn open_workspace_switcher(&mut self) {
+        match self.session_manager.list_workspaces() {
+            Ok(mut workspaces) => {
+                if workspaces.is_empty() {
+                    workspaces.push(self.workspace.root.to_string_lossy().to_string());
+                }
+                self.workspace_switcher_items = workspaces;
+                self.workspace_switcher_selected = 0;
+                self.push_mode(AppMode::WorkspaceSwitcher);
+            }
+            Err(e) => {
+                self.add_system_message(format!("Failed to list workspaces: {e}"));
+            }
+        }
+    }
+
+    pub fn close_workspace_switcher(&mut self) {
+        self.pop_mode();
+    }
+
+    pub fn workspace_switcher_next(&mut self) {
+        if self.workspace_switcher_items.is_empty() {
+            return;
+        }
+        self.workspace_switcher_selected =
+            (self.workspace_switcher_selected + 1) % self.workspace_switcher_items.len();
+    }
+
+    pub fn workspace_switcher_prev(&mut self) {
+        if self.workspace_switcher_items.is_empty() {
+            return;
+        }
+        if self.workspace_switcher_selected == 0 {
+            self.workspace_switcher_selected = self.workspace_switcher_items.len() - 1;
+        } else {
+            self.workspace_switcher_selected -= 1;
+        }
+    }
+
+    pub fn accept_workspace_switcher(&mut self) -> String {
+        let Some(root) = self
+            .workspace_switcher_items
+            .get(self.workspace_switcher_selected)
+        else {
+            return "No workspace selected.".to_string();
+        };
+        let root = root.clone();
+        self.workspace = crate::workspace::Workspace::detect(&root);
+        self.sidebar_workspace_filter = Some(root.clone());
+        self.close_workspace_switcher();
+        format!("Switched workspace to {}", self.workspace.display_name)
+    }
+
     /// Replace the current mode without pushing a new stack frame.
     pub fn replace_mode(&mut self, mode: AppMode) {
         self.mode = mode;
@@ -588,10 +648,15 @@ impl TuiApp {
         &self,
         limit: usize,
     ) -> Vec<crate::session_store::SessionRecord> {
-        let sessions = self
-            .session_manager
-            .list_sessions(limit.min(i64::MAX as usize) as i64)
-            .unwrap_or_default();
+        let sessions = if let Some(ref workspace_root) = self.sidebar_workspace_filter {
+            self.session_manager
+                .list_sessions_by_workspace(workspace_root, limit.min(i64::MAX as usize) as i64)
+                .unwrap_or_default()
+        } else {
+            self.session_manager
+                .list_sessions(limit.min(i64::MAX as usize) as i64)
+                .unwrap_or_default()
+        };
         let filter = self.sidebar_filter.to_lowercase();
         let mut pinned = Vec::new();
         let mut unpinned = Vec::new();
@@ -715,6 +780,7 @@ impl TuiApp {
                 session_id,
                 "New Session",
                 &model,
+                None,
             )
             .unwrap_or_else(|e| {
                 warn!("Failed to bind TUI session to engine session: {}", e);
@@ -751,9 +817,15 @@ impl TuiApp {
         );
 
         if session_manager.current_session_id().is_none() {
-            if let Ok(id) = session_manager.start_session("New Session", &model) {
-                session_manager.tag_session_workspace(&id, &workspace.root.to_string_lossy());
+            if let Ok(_id) = session_manager.start_session(
+                "New Session",
+                &model,
+                Some(&workspace.root.to_string_lossy()),
+            ) {
+                let _ = session_manager.backfill_workspace_root(&workspace.root.to_string_lossy());
             }
+        } else {
+            let _ = session_manager.backfill_workspace_root(&workspace.root.to_string_lossy());
         }
 
         // Restart safety: mark any active goals as paused so they don't auto-resume
@@ -834,6 +906,9 @@ impl TuiApp {
             shortcut_help_filter: String::new(),
             filtering_shortcut_help: false,
             sidebar_panel: SidebarPanel::Sessions,
+            sidebar_workspace_filter: None,
+            workspace_switcher_items: Vec::new(),
+            workspace_switcher_selected: 0,
             typewriter_position: 0,
             tick_count: 0,
             lsp_manager,

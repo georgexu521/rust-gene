@@ -469,6 +469,7 @@ fn session_from_row(row: &Row<'_>) -> SqlResult<SessionRecord> {
         model: row.get(5)?,
         total_input_tokens: row.get(6)?,
         total_output_tokens: row.get(7)?,
+        workspace_root: row.get(8)?,
     })
 }
 
@@ -494,7 +495,7 @@ mod tests {
 
         // 创建
         store
-            .create_session("s1", "Test Session", "kimi-k2.5")
+            .create_session("s1", "Test Session", "kimi-k2.5", None)
             .unwrap();
 
         // 获取
@@ -515,7 +516,7 @@ mod tests {
     #[test]
     fn test_message_crud() {
         let store = SessionStore::in_memory().unwrap();
-        store.create_session("s1", "Test", "model").unwrap();
+        store.create_session("s1", "Test", "model", None).unwrap();
 
         // 添加消息
         let id = store
@@ -541,7 +542,7 @@ mod tests {
     #[test]
     fn test_message_with_tool_calls() {
         let store = SessionStore::in_memory().unwrap();
-        store.create_session("s1", "Test", "model").unwrap();
+        store.create_session("s1", "Test", "model", None).unwrap();
 
         let tool_calls = serde_json::json!([{
             "id": "call_1",
@@ -566,7 +567,7 @@ mod tests {
     #[test]
     fn test_turn_trace_persistence() {
         let store = SessionStore::in_memory().unwrap();
-        store.create_session("s1", "Test", "model").unwrap();
+        store.create_session("s1", "Test", "model", None).unwrap();
 
         let mut trace = crate::engine::trace::TurnTrace::new("s1", 1, "hello trace");
         trace
@@ -592,8 +593,8 @@ mod tests {
     #[test]
     fn test_recent_turn_traces_are_session_scoped_newest_first() {
         let store = SessionStore::in_memory().unwrap();
-        store.create_session("s1", "Test", "model").unwrap();
-        store.create_session("s2", "Other", "model").unwrap();
+        store.create_session("s1", "Test", "model", None).unwrap();
+        store.create_session("s2", "Other", "model", None).unwrap();
 
         for turn_index in 1..=3 {
             let mut trace = crate::engine::trace::TurnTrace::new("s1", turn_index, "session one");
@@ -645,7 +646,7 @@ mod tests {
     #[test]
     fn test_learning_event_persistence() {
         let store = SessionStore::in_memory().unwrap();
-        store.create_session("s1", "Test", "model").unwrap();
+        store.create_session("s1", "Test", "model", None).unwrap();
 
         let id = store
             .add_learning_event(
@@ -669,8 +670,8 @@ mod tests {
     #[test]
     fn test_context_ledger_event_queries() {
         let store = SessionStore::in_memory().unwrap();
-        store.create_session("s1", "Test", "model").unwrap();
-        store.create_session("s2", "Other", "model").unwrap();
+        store.create_session("s1", "Test", "model", None).unwrap();
+        store.create_session("s2", "Other", "model", None).unwrap();
 
         store
             .add_learning_event(
@@ -719,7 +720,7 @@ mod tests {
     #[test]
     fn test_agent_artifact_persistence() {
         let store = SessionStore::in_memory().unwrap();
-        store.create_session("s1", "Test", "model").unwrap();
+        store.create_session("s1", "Test", "model", None).unwrap();
 
         let id = store
             .add_agent_artifact(
@@ -750,7 +751,7 @@ mod tests {
     #[test]
     fn test_agent_task_state_upsert() {
         let store = SessionStore::in_memory().unwrap();
-        store.create_session("s1", "Test", "model").unwrap();
+        store.create_session("s1", "Test", "model", None).unwrap();
 
         let state = AgentTaskStateUpsert {
             session_id: "s1".to_string(),
@@ -806,14 +807,16 @@ mod tests {
     fn test_child_session() {
         let store = SessionStore::in_memory().unwrap();
 
-        store.create_session("parent", "Parent", "model").unwrap();
+        store
+            .create_session("parent", "Parent", "model", None)
+            .unwrap();
         store
             .add_message("parent", "user", "Old message", None, None)
             .unwrap();
 
         // 创建子会话（压缩后）
         store
-            .create_child_session("child", "Child (compressed)", "model", "parent")
+            .create_child_session("child", "Child (compressed)", "model", "parent", None)
             .unwrap();
 
         let child = store.get_session("child").unwrap().unwrap();
@@ -823,9 +826,9 @@ mod tests {
     #[test]
     fn test_delete_session_removes_related_runtime_records() {
         let store = SessionStore::in_memory().unwrap();
-        store.create_session("s1", "Test", "model").unwrap();
+        store.create_session("s1", "Test", "model", None).unwrap();
         store
-            .create_child_session("child", "Child", "model", "s1")
+            .create_child_session("child", "Child", "model", "s1", None)
             .unwrap();
         store
             .add_message("s1", "user", "hello", None, None)
@@ -894,7 +897,7 @@ mod tests {
     #[test]
     fn test_compact_boundary_persistence() {
         let store = SessionStore::in_memory().unwrap();
-        store.create_session("s1", "Test", "model").unwrap();
+        store.create_session("s1", "Test", "model", None).unwrap();
 
         let id = store
             .add_compact_boundary(&CompactBoundaryInsert {
@@ -932,7 +935,7 @@ mod tests {
     #[test]
     fn test_delete_messages_before() {
         let store = SessionStore::in_memory().unwrap();
-        store.create_session("s1", "Test", "model").unwrap();
+        store.create_session("s1", "Test", "model", None).unwrap();
 
         let id1 = store.add_message("s1", "user", "msg1", None, None).unwrap();
         let _id2 = store.add_message("s1", "user", "msg2", None, None).unwrap();
@@ -953,7 +956,7 @@ mod tests {
     #[test]
     fn test_rewrite_and_restore_compacted_messages() {
         let store = SessionStore::in_memory().unwrap();
-        store.create_session("s1", "Test", "model").unwrap();
+        store.create_session("s1", "Test", "model", None).unwrap();
         store.add_message("s1", "user", "old", None, None).unwrap();
         store
             .add_compact_boundary(&CompactBoundaryInsert {
@@ -1013,7 +1016,7 @@ mod tests {
     #[test]
     fn test_search_messages() {
         let store = SessionStore::in_memory().unwrap();
-        store.create_session("s1", "Test", "model").unwrap();
+        store.create_session("s1", "Test", "model", None).unwrap();
 
         store
             .add_message(
@@ -1045,9 +1048,11 @@ mod tests {
     #[test]
     fn test_search_sessions_matches_title_and_message_fts() {
         let store = SessionStore::in_memory().unwrap();
-        store.create_session("s1", "Auth Plan", "model").unwrap();
         store
-            .create_session("s2", "Migration Notes", "model")
+            .create_session("s1", "Auth Plan", "model", None)
+            .unwrap();
+        store
+            .create_session("s2", "Migration Notes", "model", None)
             .unwrap();
         store
             .add_message("s2", "user", "How should I implement oauth?", None, None)
@@ -1063,7 +1068,7 @@ mod tests {
     #[test]
     fn test_token_tracking() {
         let store = SessionStore::in_memory().unwrap();
-        store.create_session("s1", "Test", "model").unwrap();
+        store.create_session("s1", "Test", "model", None).unwrap();
 
         store.update_tokens("s1", 100, 50).unwrap();
         store.update_tokens("s1", 200, 80).unwrap();
@@ -1076,8 +1081,8 @@ mod tests {
     #[test]
     fn test_stats() {
         let store = SessionStore::in_memory().unwrap();
-        store.create_session("s1", "Test1", "model").unwrap();
-        store.create_session("s2", "Test2", "model").unwrap();
+        store.create_session("s1", "Test1", "model", None).unwrap();
+        store.create_session("s2", "Test2", "model", None).unwrap();
         store
             .add_message("s1", "user", "hello", None, None)
             .unwrap();

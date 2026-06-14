@@ -57,7 +57,7 @@ impl SessionStore {
 
         {
             let mut stmt = conn.prepare(
-                "SELECT id, title, parent_session_id, created_at, updated_at, model, total_input_tokens, total_output_tokens
+                "SELECT id, title, parent_session_id, created_at, updated_at, model, total_input_tokens, total_output_tokens, workspace_root
                  FROM sessions
                  WHERE title LIKE ?1
                  ORDER BY updated_at DESC
@@ -74,7 +74,7 @@ impl SessionStore {
         if sessions.len() < clamped_limit as usize {
             let remaining = clamped_limit - sessions.len() as i64;
             let mut stmt = conn.prepare(
-                "SELECT DISTINCT s.id, s.title, s.parent_session_id, s.created_at, s.updated_at, s.model, s.total_input_tokens, s.total_output_tokens
+                "SELECT DISTINCT s.id, s.title, s.parent_session_id, s.created_at, s.updated_at, s.model, s.total_input_tokens, s.total_output_tokens, s.workspace_root
                  FROM messages_fts fts
                  JOIN messages m ON m.id = fts.rowid
                  JOIN sessions s ON s.id = m.session_id

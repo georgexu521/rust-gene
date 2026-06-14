@@ -873,6 +873,77 @@ pub fn render_provider_select(f: &mut Frame, app: &TuiApp, area: Rect) {
     );
 }
 
+pub fn render_workspace_switcher(f: &mut Frame, app: &TuiApp, area: Rect) {
+    let popup_area = centered_rect(72, 60, area);
+    let block = Block::default()
+        .title(" Workspaces ")
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(app.theme.tokens.tone.info))
+        .style(Style::default().bg(app.theme.tokens.surface.bg_elev));
+
+    let inner = block.inner(popup_area);
+    f.render_widget(Clear, popup_area);
+    f.render_widget(block, popup_area);
+
+    let items = &app.workspace_switcher_items;
+    if items.is_empty() {
+        let empty = Paragraph::new("No workspaces found.").style(
+            Style::default()
+                .fg(app.theme.tokens.fg.faint)
+                .bg(app.theme.tokens.surface.bg_elev),
+        );
+        f.render_widget(empty, inner);
+        return;
+    }
+
+    let mut lines = Vec::new();
+    lines.push(Line::from(vec![
+        Span::styled("Current ", Style::default().fg(app.theme.tokens.fg.faint)),
+        Span::styled(
+            app.workspace.display_name.clone(),
+            Style::default()
+                .fg(app.theme.tokens.fg.strong)
+                .add_modifier(Modifier::BOLD),
+        ),
+    ]));
+    lines.push(Line::from(""));
+
+    for (idx, root) in items.iter().enumerate() {
+        let selected = idx == app.workspace_switcher_selected;
+        let marker = if selected { "› " } else { "  " };
+        let display = std::path::Path::new(root)
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_else(|| root.clone());
+        let style = if selected {
+            Style::default()
+                .fg(app.theme.tokens.fg.strong)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(app.theme.tokens.fg.body)
+        };
+        lines.push(Line::from(vec![
+            Span::styled(marker, style),
+            Span::styled(display, style),
+        ]));
+    }
+
+    lines.push(Line::from(""));
+    lines.push(Line::from(vec![
+        Span::styled("enter", Style::default().fg(app.theme.tokens.tone.info)),
+        Span::styled(" switch  ", Style::default().fg(app.theme.tokens.fg.faint)),
+        Span::styled("esc/q", Style::default().fg(app.theme.tokens.tone.info)),
+        Span::styled(" close", Style::default().fg(app.theme.tokens.fg.faint)),
+    ]));
+
+    f.render_widget(
+        Paragraph::new(Text::from(lines))
+            .wrap(Wrap { trim: true })
+            .style(Style::default().bg(app.theme.tokens.surface.bg_elev)),
+        inner,
+    );
+}
+
 pub fn render_file_picker(f: &mut Frame, app: &TuiApp, area: Rect) {
     let popup_area = centered_rect(72, 70, area);
     f.render_widget(Clear, popup_area);

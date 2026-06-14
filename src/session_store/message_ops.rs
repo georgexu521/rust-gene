@@ -309,7 +309,9 @@ mod tests {
     #[test]
     fn persist_assistant_with_tool_calls() {
         let store = test_store();
-        store.create_session("s1", "test", "test-model").unwrap();
+        store
+            .create_session("s1", "test", "test-model", None)
+            .unwrap();
         let tc = ToolCall {
             id: "call_1".to_string(),
             name: "file_read".to_string(),
@@ -328,7 +330,9 @@ mod tests {
     #[test]
     fn persist_tool_result() {
         let store = test_store();
-        store.create_session("s1", "test", "test-model").unwrap();
+        store
+            .create_session("s1", "test", "test-model", None)
+            .unwrap();
         let msg = Message::tool("call_1", "file content here");
         persist_runtime_message(&store, "s1", &msg).unwrap();
 
@@ -341,7 +345,9 @@ mod tests {
     #[test]
     fn skip_system_and_user() {
         let store = test_store();
-        store.create_session("s1", "test", "test-model").unwrap();
+        store
+            .create_session("s1", "test", "test-model", None)
+            .unwrap();
         persist_runtime_message(&store, "s1", &Message::system("system prompt")).unwrap();
         persist_runtime_message(&store, "s1", &Message::user("hello")).unwrap();
         assert!(store.get_messages("s1").unwrap().is_empty());

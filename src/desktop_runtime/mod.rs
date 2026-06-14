@@ -571,7 +571,7 @@ mod tests {
     async fn restores_session_id_and_history_from_store() {
         let store = SessionStore::in_memory().unwrap();
         store
-            .create_session("session-1", "Desktop Session", "mock-desktop")
+            .create_session("session-1", "Desktop Session", "mock-desktop", None)
             .unwrap();
         store
             .add_message("session-1", "user", "hello", None, None)
@@ -602,7 +602,7 @@ mod tests {
     async fn desktop_runtime_restored_compact_session_reports_boundary_state() {
         let store = Arc::new(SessionStore::in_memory().unwrap());
         store
-            .create_session("session-compact", "Desktop Session", "mock-desktop")
+            .create_session("session-compact", "Desktop Session", "mock-desktop", None)
             .unwrap();
         store
             .add_message("session-compact", "user", "hello", None, None)
@@ -658,7 +658,7 @@ mod tests {
         });
         let store = Arc::new(SessionStore::in_memory().unwrap());
         store
-            .create_session("session-light", "CLI Session", "recording-model")
+            .create_session("session-light", "CLI Session", "recording-model", None)
             .unwrap();
         let engine = Arc::new(
             StreamingQueryEngine::new(

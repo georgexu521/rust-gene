@@ -9,7 +9,9 @@ fn test_session_lifecycle() {
     let mut manager = TuiSessionManager::in_memory().unwrap();
 
     // 开始新会话
-    let _session_id = manager.start_session("Test Session", "gpt-4").unwrap();
+    let _session_id = manager
+        .start_session("Test Session", "gpt-4", None)
+        .unwrap();
     assert!(manager.current_session_id().is_some());
 
     // 添加消息
@@ -35,12 +37,17 @@ fn test_session_lifecycle() {
 fn test_from_store_reuses_existing_session() {
     let store = Arc::new(SessionStore::in_memory().unwrap());
     store
-        .create_session("shared-session", "Shared", "mock-model")
+        .create_session("shared-session", "Shared", "mock-model", None)
         .unwrap();
 
-    let manager =
-        TuiSessionManager::from_store(store.clone(), "shared-session", "Shared", "mock-model")
-            .unwrap();
+    let manager = TuiSessionManager::from_store(
+        store.clone(),
+        "shared-session",
+        "Shared",
+        "mock-model",
+        None,
+    )
+    .unwrap();
 
     assert_eq!(manager.current_session_id(), Some("shared-session"));
     assert!(manager.is_current_session("shared-session"));
@@ -52,7 +59,7 @@ fn test_from_store_reuses_existing_session() {
 fn test_message_metadata_round_trips() {
     let mut manager = TuiSessionManager::in_memory().unwrap();
     let session_id = manager
-        .start_session("Metadata Session", "deepseek-v4-flash")
+        .start_session("Metadata Session", "deepseek-v4-flash", None)
         .unwrap();
     let metadata = HashMap::from([
         ("elapsed_ms".to_string(), "2730".to_string()),
@@ -84,7 +91,7 @@ fn test_message_metadata_round_trips() {
 fn test_export_session_preserves_tool_success_and_failure_stats() {
     let mut manager = TuiSessionManager::in_memory().unwrap();
     let session_id = manager
-        .start_session("Export Tool Stats", "test-fixture-model")
+        .start_session("Export Tool Stats", "test-fixture-model", None)
         .unwrap();
     manager
         .add_message(MessageRole::User, "run partial tools")
@@ -184,7 +191,7 @@ fn test_export_session_preserves_tool_success_and_failure_stats() {
 fn test_settle_unfinished_tool_parts_marks_running_tool_failed() {
     let mut manager = TuiSessionManager::in_memory().unwrap();
     let session_id = manager
-        .start_session("Interrupted Tool", "test-fixture-model")
+        .start_session("Interrupted Tool", "test-fixture-model", None)
         .unwrap();
     manager
         .write_session_event(
@@ -210,10 +217,10 @@ fn test_settle_unfinished_tool_parts_marks_running_tool_failed() {
 fn test_recent_traces_use_current_session_scope() {
     let store = Arc::new(SessionStore::in_memory().unwrap());
     store
-        .create_session("shared-session", "Shared", "mock-model")
+        .create_session("shared-session", "Shared", "mock-model", None)
         .unwrap();
     store
-        .create_session("other-session", "Other", "mock-model")
+        .create_session("other-session", "Other", "mock-model", None)
         .unwrap();
 
     for turn_index in 1..=2 {
@@ -227,7 +234,8 @@ fn test_recent_traces_use_current_session_scope() {
     store.add_turn_trace(&other_trace).unwrap();
 
     let manager =
-        TuiSessionManager::from_store(store, "shared-session", "Shared", "mock-model").unwrap();
+        TuiSessionManager::from_store(store, "shared-session", "Shared", "mock-model", None)
+            .unwrap();
     let traces = manager.recent_traces(10).unwrap();
 
     assert_eq!(traces.len(), 2);

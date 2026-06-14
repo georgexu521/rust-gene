@@ -1185,7 +1185,7 @@ mod tests {
     #[test]
     fn records_validation_and_user_confirmation_from_tool_result() {
         let store = SessionStore::in_memory().unwrap();
-        store.create_session("s1", "test", "model").unwrap();
+        store.create_session("s1", "test", "model", None).unwrap();
         let call = tool_call("bash", json!({"command": "cargo test -q"}));
         let result = ToolResult::success_with_data(
             "test result",
@@ -1237,7 +1237,7 @@ mod tests {
     #[test]
     fn records_file_edit_and_diff_from_tool_result() {
         let store = SessionStore::in_memory().unwrap();
-        store.create_session("s1", "test", "model").unwrap();
+        store.create_session("s1", "test", "model", None).unwrap();
         let edit_call = tool_call("file_edit", json!({"path": "src/lib.rs"}));
         let edit_result = ToolResult::success_with_data(
             "edited",
@@ -1287,7 +1287,7 @@ mod tests {
     #[test]
     fn records_tool_observation_from_result_metadata() {
         let store = SessionStore::in_memory().unwrap();
-        store.create_session("s1", "test", "model").unwrap();
+        store.create_session("s1", "test", "model", None).unwrap();
         let call = tool_call("file_edit", json!({"path": "src/lib.rs"}));
         let result = ToolResult::success_with_data(
             "edited",

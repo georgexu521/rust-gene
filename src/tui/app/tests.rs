@@ -403,7 +403,7 @@ fn test_memory_snapshot_panel_includes_skip_reasons() {
 fn test_tui_reuses_engine_session_binding() {
     let store = Arc::new(crate::session_store::SessionStore::in_memory().unwrap());
     store
-        .create_session("engine-session", "Engine Session", "mock-model")
+        .create_session("engine-session", "Engine Session", "mock-model", None)
         .unwrap();
     let engine = Arc::new(
         crate::engine::streaming::StreamingQueryEngine::new(
@@ -688,7 +688,9 @@ fn test_paste_image_data_uses_image_placeholder() {
 #[tokio::test]
 async fn test_fork_current_session_copies_messages() {
     let mut app = TuiApp::new();
-    app.session_manager.start_session("Parent", "mock").unwrap();
+    app.session_manager
+        .start_session("Parent", "mock", None)
+        .unwrap();
     app.session_manager
         .add_message(crate::state::MessageRole::User, "hello")
         .unwrap();
@@ -1818,11 +1820,11 @@ fn test_visible_sidebar_sessions_filter_matches_model_and_id() {
     app.session_manager = crate::tui::session_manager::TuiSessionManager::in_memory().unwrap();
     let deepseek = app
         .session_manager
-        .start_session("Work", "deepseek-v4-flash")
+        .start_session("Work", "deepseek-v4-flash", None)
         .unwrap();
     let _other = app
         .session_manager
-        .start_session("Other", "gpt-4o-mini")
+        .start_session("Other", "gpt-4o-mini", None)
         .unwrap();
 
     app.sidebar_filter = "v4-flash".to_string();
@@ -2092,7 +2094,7 @@ async fn test_restore_session() {
     // 创建一个测试会话并添加消息
     let session_id = app
         .session_manager
-        .start_session("Test Session", "kimi-k2.5")
+        .start_session("Test Session", "kimi-k2.5", None)
         .unwrap();
     app.session_manager
         .add_message(MessageRole::User, "Hello")

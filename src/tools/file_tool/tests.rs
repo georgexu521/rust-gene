@@ -909,7 +909,7 @@ async fn file_read_persists_context_ledger_fact() {
 
     let store = std::sync::Arc::new(crate::session_store::SessionStore::in_memory().unwrap());
     store
-        .create_session("session-ledger", "Ledger", "model")
+        .create_session("session-ledger", "Ledger", "model", None)
         .unwrap();
     let context = ToolContext::new(".", "session-ledger").with_session_store(store.clone());
 

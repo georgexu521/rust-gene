@@ -587,7 +587,7 @@ fn render_sessions_sidebar_shows_richer_session_rows() {
     app.session_manager = crate::tui::session_manager::TuiSessionManager::in_memory().unwrap();
     let session_id = app
         .session_manager
-        .start_session("DeepSeek Work", "deepseek-v4-flash")
+        .start_session("DeepSeek Work", "deepseek-v4-flash", None)
         .unwrap();
     app.session_manager
         .add_message(MessageRole::User, "Please inspect the TUI sidebar preview")
@@ -611,7 +611,7 @@ fn render_sessions_sidebar_metadata_fits_inline_width() {
     app.session_manager = crate::tui::session_manager::TuiSessionManager::in_memory().unwrap();
     let session_id = app
         .session_manager
-        .start_session("DeepSeek Work", "deepseek-v4-flash")
+        .start_session("DeepSeek Work", "deepseek-v4-flash", None)
         .unwrap();
     app.session_manager
         .add_message(MessageRole::User, "Please inspect the TUI sidebar preview")

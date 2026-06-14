@@ -1225,6 +1225,30 @@ impl TuiApp {
                         0
                     });
 
+                // 如果会话存储了不同的 workspace，则切换并提示。
+                let workspace_toast = if let Ok(Some(record)) =
+                    self.session_manager.store().get_session(session_id)
+                {
+                    if let Some(ref stored_root) = record.workspace_root {
+                        let stored_root = std::path::Path::new(stored_root);
+                        if stored_root != self.workspace.root {
+                            self.workspace = crate::workspace::Workspace::detect(stored_root);
+                            self.sidebar_workspace_filter =
+                                Some(self.workspace.root.to_string_lossy().to_string());
+                            Some(format!(
+                                "Switched workspace to {}",
+                                self.workspace.display_name
+                            ))
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
+
                 // 同步恢复引擎的对话历史
                 if let Some(ref engine) = self.streaming_engine {
                     match self.session_manager.load_api_messages(session_id) {
@@ -1244,6 +1268,9 @@ impl TuiApp {
                     self.messages.len(),
                     restored_tool_runs
                 )];
+                if let Some(toast) = workspace_toast {
+                    lines.push(toast);
+                }
                 if let Ok(preview) = self.session_manager.recent_preview_lines(session_id, 4) {
                     if !preview.is_empty() {
                         lines.push("Recent context:".to_string());

@@ -480,7 +480,7 @@ mod tests {
 
     fn test_runner() -> (SessionStore, GoalRunner) {
         let store = SessionStore::in_memory().unwrap();
-        store.create_session("s1", "Test", "model").unwrap();
+        store.create_session("s1", "Test", "model", None).unwrap();
         let runner = GoalRunner::new(store.clone(), Arc::new(SessionGoalManager::new()));
         (store, runner)
     }
