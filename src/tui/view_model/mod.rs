@@ -6,5 +6,6 @@
 pub mod activity;
 pub mod footer;
 pub mod reasoning;
+pub mod session_list;
 pub mod timeline;
 pub mod tool_rows;

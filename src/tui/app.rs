@@ -750,6 +750,39 @@ impl TuiApp {
             .unwrap_or(true)
     }
 
+    pub fn session_list_view_model(
+        &self,
+        sidebar_width: u16,
+    ) -> crate::tui::view_model::session_list::SessionListViewModel {
+        use crate::tui::view_model::session_list::{RenameState, SessionListViewModel};
+        let sessions = self.visible_sidebar_sessions(50);
+        let current_id = self.session_manager.current_session_id();
+        let current_workspace = self.workspace.root.to_string_lossy().to_string();
+        let rename = self.renaming_session_id.as_ref().map(|id| RenameState {
+            session_id: id.clone(),
+            buffer: self.rename_buffer.clone(),
+        });
+        let mut message_counts = std::collections::HashMap::new();
+        for session in &sessions {
+            if let Ok(count) = self.session_manager.message_count(&session.id) {
+                message_counts.insert(session.id.clone(), count);
+            }
+        }
+        SessionListViewModel::build(
+            &sessions,
+            current_id,
+            &current_workspace,
+            &self.pinned_sessions,
+            self.sidebar_selected,
+            self.confirm_delete_session_id.as_deref(),
+            rename.as_ref(),
+            &self.sidebar_filter,
+            self.filtering_sidebar,
+            sidebar_width,
+            &message_counts,
+        )
+    }
+
     pub fn visible_sidebar_sessions(
         &self,
         limit: usize,

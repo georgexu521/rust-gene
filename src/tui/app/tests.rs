@@ -2286,6 +2286,61 @@ async fn test_restore_session_preserves_ui_state() {
 }
 
 #[tokio::test]
+async fn test_restore_session_hydrates_projection_parts_before_timeline() {
+    use crate::session_store::SessionEventWriter;
+
+    let mut app = TuiApp::new();
+
+    let session_id = app
+        .session_manager
+        .start_session("Projection Session", "kimi-k2.5", None)
+        .unwrap();
+    app.session_manager
+        .add_message(MessageRole::User, "run a command")
+        .unwrap();
+    app.session_manager
+        .add_message(MessageRole::Assistant, "done")
+        .unwrap();
+
+    // Write a tool lifecycle so persisted session parts exist.
+    let writer = SessionEventWriter::new(app.session_manager.store().shared_conn(), &session_id);
+    writer.tool_called("call_1", "bash").unwrap();
+    writer
+        .tool_input_completed("call_1", "{\"command\":\"pwd\"}")
+        .unwrap();
+    writer
+        .tool_succeeded("call_1", "/Users/gex/project")
+        .unwrap();
+
+    // Verify parts were persisted.
+    let parts_before = app.session_manager.load_session_parts(&session_id).unwrap();
+    assert!(!parts_before.is_empty());
+
+    // Reset UI state.
+    app.messages.clear();
+    app.clear_tool_transcript();
+    let other_id = app
+        .session_manager
+        .start_session("Other Session", "kimi-k2.5", None)
+        .unwrap();
+    app.push_recent_session(&other_id);
+
+    // Restore should hydrate projection parts before returning.
+    let result = app.restore_session(&session_id).await;
+    assert!(result.contains("Restored session"));
+
+    let runs = app.projected_tool_runs();
+    assert!(
+        !runs.is_empty(),
+        "restored session should hydrate tool runs into sync_snapshot"
+    );
+    assert!(
+        app.sync_snapshot.last_projection_seq > 0,
+        "projection sequence should advance during hydration"
+    );
+}
+
+#[tokio::test]
 async fn test_back_command_returns_to_previous_session() {
     let mut app = TuiApp::new();
 

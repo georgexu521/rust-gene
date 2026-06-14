@@ -6,6 +6,7 @@ use crate::tui::{
     app::{SidebarPanel, TuiApp},
     components::{message, tool_renderers::render_tool_lines},
     tool_view::ToolRunView,
+    view_model::session_list::{SessionListRow, WorkspaceGroupStatus},
     view_model::timeline::{
         estimate_message_height_with_parts_or_reasoning, estimate_timeline_item_height,
         estimate_tool_parts_height, resolve_scroll_offset, timeline_item_heights, timeline_items,
@@ -17,7 +18,7 @@ use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Modifier, Style},
     text::{Line, Span, Text},
-    widgets::{Block, Borders, Clear, ListItem, Paragraph, Wrap},
+    widgets::{Block, Borders, Clear, Paragraph, Wrap},
     Frame,
 };
 
@@ -626,15 +627,20 @@ pub fn render_sidebar(f: &mut Frame, app: &TuiApp, area: Rect) {
 fn render_sessions_panel(f: &mut Frame, app: &TuiApp, area: Rect) {
     use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph};
 
-    let title = if let Some(ref id) = app.renaming_session_id {
-        format!(" Rename: {} ", &id[..8.min(id.len())])
+    let view_model = app.session_list_view_model(area.width);
+
+    let title = if let Some(ref rename) = view_model.rename {
+        format!(
+            " Rename: {} ",
+            &rename.session_id[..8.min(rename.session_id.len())]
+        )
     } else {
         format!(
             " Sessions {} ",
-            if app.sidebar_filter.is_empty() {
+            if view_model.filter_text.is_empty() {
                 String::new()
             } else {
-                format!("(filter: {})", app.sidebar_filter)
+                format!("(filter: {})", view_model.filter_text)
             }
         )
     };
@@ -649,27 +655,25 @@ fn render_sessions_panel(f: &mut Frame, app: &TuiApp, area: Rect) {
     f.render_widget(block, area);
 
     // Rename input bar
-    if app.renaming_session_id.is_some() {
+    if let Some(ref rename) = view_model.rename {
         let rename_para = Paragraph::new(Line::from(vec![
             Span::styled(" › ", Style::default().fg(app.theme.tokens.tone.brand)),
             Span::styled(
-                &app.rename_buffer,
+                &rename.buffer,
                 Style::default().fg(app.theme.tokens.fg.body),
             ),
         ]))
         .style(Style::default().bg(app.theme.tokens.surface.bg_elev));
         f.render_widget(rename_para, inner);
-        // Set cursor at end of rename buffer
-        let cursor_x = inner.x + 3 + app.rename_buffer.chars().count() as u16;
+        let cursor_x = inner.x + 3 + rename.buffer.chars().count() as u16;
         f.set_cursor_position((cursor_x.min(inner.x + inner.width - 1), inner.y));
         return;
     }
 
-    // 搜索栏
-    let filter_text = if app.sidebar_filter.is_empty() {
+    let filter_text = if view_model.filter_text.is_empty() {
         "/ to filter"
     } else {
-        &app.sidebar_filter
+        &view_model.filter_text
     };
 
     let search_chunks = ratatui::layout::Layout::default()
@@ -683,7 +687,7 @@ fn render_sessions_panel(f: &mut Frame, app: &TuiApp, area: Rect) {
     let search_para = Paragraph::new(Line::from(Span::styled(
         format!(" {filter_text} "),
         Style::default()
-            .fg(if app.sidebar_filter.is_empty() {
+            .fg(if view_model.filter_text.is_empty() {
                 app.theme.tokens.fg.faint
             } else {
                 app.theme.tokens.fg.body
@@ -692,113 +696,131 @@ fn render_sessions_panel(f: &mut Frame, app: &TuiApp, area: Rect) {
     )));
     f.render_widget(search_para, search_chunks[0]);
 
-    let visible_sessions = app.visible_sidebar_sessions(50);
-    let current_id = app.session_manager.current_session_id().unwrap_or("");
-    let current_workspace = app.workspace.root.to_string_lossy().to_string();
-
     let mut items: Vec<ListItem> = Vec::new();
-
-    // 已固定分组（按 workspace 再分组）
-    let pinned: Vec<_> = visible_sessions
-        .iter()
-        .filter(|s| app.pinned_sessions.contains(&s.id))
-        .collect();
-    if !pinned.is_empty() {
+    if view_model.groups.is_empty() {
         items.push(ListItem::new(Line::from(Span::styled(
-            "─ Pinned ─".to_string(),
-            Style::default()
-                .fg(app.theme.tokens.tone.accent)
-                .add_modifier(Modifier::BOLD),
-        ))));
-        push_grouped_sessions(
-            &mut items,
-            app,
-            &pinned,
-            current_id,
-            0,
-            true,
-            &current_workspace,
-            search_chunks[1].width,
-        );
-    }
-
-    // 未固定分组（按 workspace 再分组）
-    let unpinned: Vec<_> = visible_sessions
-        .iter()
-        .filter(|s| !app.pinned_sessions.contains(&s.id))
-        .collect();
-    if !unpinned.is_empty() {
-        if !pinned.is_empty() {
-            items.push(ListItem::new(Line::from("")));
-        }
-        push_grouped_sessions(
-            &mut items,
-            app,
-            &unpinned,
-            current_id,
-            pinned.len(),
-            false,
-            &current_workspace,
-            search_chunks[1].width,
-        );
-    }
-
-    if items.is_empty() {
-        items.push(ListItem::new(Line::from(Span::styled(
-            "No sessions found",
+            view_model.empty_hint,
             Style::default().fg(app.theme.tokens.fg.faint),
         ))));
+    } else {
+        for group in &view_model.groups {
+            items.push(ListItem::new(Line::from(Span::styled(
+                format!("{} {}", workspace_status_glyph(group.status), group.name),
+                Style::default()
+                    .fg(workspace_status_color(group.status, app))
+                    .add_modifier(Modifier::BOLD),
+            ))));
+            for row in &group.rows {
+                items.push(build_session_item_from_row(
+                    app,
+                    row,
+                    search_chunks[1].width,
+                ));
+            }
+        }
     }
 
     let list = List::new(items);
     f.render_widget(list, search_chunks[1]);
 }
 
-#[allow(clippy::too_many_arguments)]
-fn push_grouped_sessions<'a>(
-    items: &mut Vec<ListItem<'a>>,
-    app: &'a TuiApp,
-    sessions: &[&crate::session_store::SessionRecord],
-    current_id: &str,
-    start_index: usize,
-    is_pinned: bool,
-    current_workspace: &str,
-    width: u16,
-) {
-    use std::collections::BTreeMap;
-    let mut groups: BTreeMap<String, Vec<&crate::session_store::SessionRecord>> = BTreeMap::new();
-    for session in sessions {
-        let ws = app
-            .session_manager
-            .session_workspace(&session.id, current_workspace);
-        groups.entry(ws).or_default().push(session);
+fn workspace_status_glyph(status: WorkspaceGroupStatus) -> &'static str {
+    match status {
+        WorkspaceGroupStatus::Current => "●",
+        WorkspaceGroupStatus::Known => "○",
+        WorkspaceGroupStatus::MissingPath => "⚠",
+        WorkspaceGroupStatus::UntaggedLegacy => "◌",
     }
+}
 
-    let mut index = start_index;
-    for (workspace, group) in groups {
-        let name = std::path::Path::new(&workspace)
-            .file_name()
-            .map(|n| n.to_string_lossy().to_string())
-            .unwrap_or_else(|| workspace.clone());
-        items.push(ListItem::new(Line::from(Span::styled(
-            format!("  {name}"),
-            Style::default()
-                .fg(app.theme.tokens.fg.meta)
-                .add_modifier(Modifier::BOLD),
-        ))));
-        for session in group {
-            items.push(build_session_item(
-                app,
-                session,
-                current_id,
-                index,
-                is_pinned,
-                sessions.len(),
-                width,
-            ));
-            index += 1;
+fn workspace_status_color(status: WorkspaceGroupStatus, app: &TuiApp) -> ratatui::style::Color {
+    match status {
+        WorkspaceGroupStatus::Current => app.theme.tokens.tone.ok,
+        WorkspaceGroupStatus::Known => app.theme.tokens.fg.meta,
+        WorkspaceGroupStatus::MissingPath => app.theme.tokens.tone.warn,
+        WorkspaceGroupStatus::UntaggedLegacy => app.theme.tokens.fg.faint,
+    }
+}
+
+fn build_session_item_from_row<'a>(
+    app: &'a TuiApp,
+    row: &'a SessionListRow,
+    sidebar_width: u16,
+) -> ratatui::widgets::ListItem<'a> {
+    let row_bg = row.is_selected.then_some(app.theme.tokens.surface.bg_elev);
+    let base = if row.is_current {
+        Style::default()
+            .fg(app.theme.tokens.tone.ok)
+            .add_modifier(Modifier::BOLD)
+    } else if row.is_selected {
+        Style::default()
+            .fg(app.theme.tokens.fg.strong)
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(app.theme.tokens.fg.body)
+    };
+    let base = if let Some(bg) = row_bg {
+        base.bg(bg)
+    } else {
+        base
+    };
+
+    let prefix = if row.is_current {
+        "●"
+    } else if row.is_pinned {
+        "◆"
+    } else {
+        "○"
+    };
+
+    let indent = if row.has_parent { "  " } else { "" };
+    let selection = if row.is_selected { "› " } else { "  " };
+    let delete_hint = if row.delete_hint {
+        " · D again deletes"
+    } else {
+        ""
+    };
+    let meta = format!(
+        "{} · {} · {} msgs{}",
+        row.short_id, row.model_short, row.msg_count, delete_hint
+    );
+    let meta_style = Style::default()
+        .fg(if row.is_selected {
+            app.theme.tokens.fg.sub
+        } else {
+            app.theme.tokens.fg.faint
+        })
+        .bg(row_bg.unwrap_or(app.theme.tokens.surface.bg));
+
+    let title_line = Line::from(vec![
+        Span::styled(format!("{indent}{selection}"), base),
+        Span::styled(format!("{prefix} "), base),
+        Span::styled(row.display_title.clone(), base),
+    ]);
+    let meta_line = Line::from(vec![
+        Span::styled("    ", meta_style),
+        Span::styled(meta, meta_style),
+    ]);
+
+    let mut lines = vec![title_line, meta_line];
+    if row.is_selected {
+        let sidebar_width = usize::from(sidebar_width);
+        let preview_budget = sidebar_width.saturating_sub(4).max(8);
+        if let Some(preview) = app
+            .session_manager
+            .recent_preview_lines(&row.id, 1)
+            .ok()
+            .and_then(|lines| lines.into_iter().next())
+            .map(|line| truncate_chars_to_width(line.trim(), preview_budget))
+        {
+            lines.push(Line::from(vec![
+                Span::styled("    ", meta_style),
+                Span::styled(preview, Style::default().fg(app.theme.tokens.fg.faint)),
+            ]));
         }
     }
+
+    ratatui::widgets::ListItem::new(lines)
 }
 
 fn render_context_panel(f: &mut Frame, app: &TuiApp, area: Rect) {
@@ -977,102 +999,6 @@ fn context_row(label: &'static str, value: impl Into<String>, app: &TuiApp) -> L
     ])
 }
 
-fn build_session_item<'a>(
-    app: &'a TuiApp,
-    session: &crate::session_store::SessionRecord,
-    current_id: &str,
-    index: usize,
-    is_pinned: bool,
-    _total: usize,
-    sidebar_width: u16,
-) -> ratatui::widgets::ListItem<'a> {
-    let is_current = session.id == current_id;
-    let is_selected = index == app.sidebar_selected;
-
-    let row_bg = is_selected.then_some(app.theme.tokens.surface.bg_elev);
-    let base = if is_current {
-        Style::default()
-            .fg(app.theme.tokens.tone.ok)
-            .add_modifier(Modifier::BOLD)
-    } else if is_selected {
-        Style::default()
-            .fg(app.theme.tokens.fg.strong)
-            .add_modifier(Modifier::BOLD)
-    } else {
-        Style::default().fg(app.theme.tokens.fg.body)
-    };
-    let base = if let Some(bg) = row_bg {
-        base.bg(bg)
-    } else {
-        base
-    };
-
-    let prefix = if is_current {
-        "●"
-    } else if is_pinned {
-        "◆"
-    } else {
-        "○"
-    };
-
-    let indent = if session.parent_session_id.is_some() {
-        "  "
-    } else {
-        ""
-    };
-
-    let title = if session.title.is_empty() {
-        format!("Session {}", &session.id[..8.min(session.id.len())])
-    } else {
-        session.title.clone()
-    };
-
-    let sidebar_width = usize::from(sidebar_width);
-    let title_budget = sidebar_width.saturating_sub(6).max(8);
-    let display_title = truncate_chars_to_width(&title, title_budget);
-
-    let model_short = compact_model_label(&session.model);
-    let msg_count = app.session_manager.message_count(&session.id).unwrap_or(0);
-    let short_id = &session.id[..8.min(session.id.len())];
-    let delete_hint = if app.confirm_delete_session_id.as_deref() == Some(session.id.as_str()) {
-        " · D again deletes"
-    } else {
-        ""
-    };
-
-    let selection = if is_selected { "› " } else { "  " };
-    let meta = format!("{short_id} · {model_short} · {msg_count} msgs{delete_hint}");
-    let meta_style = Style::default()
-        .fg(if is_selected {
-            app.theme.tokens.fg.sub
-        } else {
-            app.theme.tokens.fg.faint
-        })
-        .bg(row_bg.unwrap_or(app.theme.tokens.surface.bg));
-
-    let title_line = Line::from(vec![
-        Span::styled(format!("{indent}{selection}"), base),
-        Span::styled(format!("{prefix} "), base),
-        Span::styled(display_title, base),
-    ]);
-    let meta_line = Line::from(vec![
-        Span::styled("    ", meta_style),
-        Span::styled(meta, meta_style),
-    ]);
-
-    let mut lines = vec![title_line, meta_line];
-    if is_selected {
-        if let Some(preview) = selected_session_preview(app, &session.id, sidebar_width) {
-            lines.push(Line::from(vec![
-                Span::styled("    ", meta_style),
-                Span::styled(preview, Style::default().fg(app.theme.tokens.fg.faint)),
-            ]));
-        }
-    }
-
-    ratatui::widgets::ListItem::new(lines)
-}
-
 pub(super) fn truncate_chars_with_ellipsis(value: &str, max_chars: usize) -> String {
     let mut out = value.chars().take(max_chars).collect::<String>();
     if value.chars().count() > max_chars {
@@ -1103,42 +1029,6 @@ fn truncate_chars_to_width(value: &str, max_chars: usize) -> String {
         }
         out.push('…');
         out
-    }
-}
-
-fn selected_session_preview(
-    app: &TuiApp,
-    session_id: &str,
-    sidebar_width: usize,
-) -> Option<String> {
-    let preview_budget = sidebar_width.saturating_sub(4).max(8);
-    app.session_manager
-        .recent_preview_lines(session_id, 1)
-        .ok()
-        .and_then(|lines| lines.into_iter().next())
-        .map(|line| truncate_chars_to_width(line.trim(), preview_budget))
-}
-
-fn compact_model_label(model: &str) -> String {
-    let lower = model.to_ascii_lowercase();
-    if lower.contains("deepseek") {
-        "deepseek-v4".to_string()
-    } else if lower.contains("minimax") {
-        "minimax".to_string()
-    } else if lower.contains("claude") {
-        if lower.contains("haiku") {
-            "claude-haiku".to_string()
-        } else if lower.contains("sonnet") {
-            "claude-sonnet".to_string()
-        } else {
-            "claude".to_string()
-        }
-    } else if lower.contains("gpt-5") {
-        "gpt-5".to_string()
-    } else if lower.contains("gpt-4") {
-        "gpt-4".to_string()
-    } else {
-        truncate_chars_with_ellipsis(model, 12)
     }
 }
 
