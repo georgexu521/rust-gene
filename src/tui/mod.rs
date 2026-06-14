@@ -1279,9 +1279,20 @@ async fn handle_file_picker_key_event(key: KeyEvent, app: &mut TuiApp) -> anyhow
                 app.add_system_message(message);
             }
         }
+        KeyCode::Char(' ') => {
+            if let Some(state) = &mut app.file_picker_state {
+                if state.selection_mode()
+                    == crate::tui::components::file_browser::FileSelectionMode::Multi
+                {
+                    state.toggle_selection();
+                } else {
+                    state.toggle_current();
+                }
+            }
+        }
         KeyCode::Up | KeyCode::Char('k') => app.file_picker_prev(),
         KeyCode::Down | KeyCode::Char('j') => app.file_picker_next(),
-        KeyCode::Right | KeyCode::Char('l') | KeyCode::Char(' ') => {
+        KeyCode::Right | KeyCode::Char('l') => {
             if let Some(state) = &mut app.file_picker_state {
                 state.toggle_current();
             }
@@ -1362,8 +1373,7 @@ async fn handle_fallback_key_event(key: KeyEvent, app: &mut TuiApp) -> anyhow::R
 
     match key.code {
         KeyCode::Char('@') => {
-            app.open_composer_file_picker(Some("."));
-            return Ok(false);
+            app.open_composer_file_picker(Some("."), true);
         }
         KeyCode::Backspace => {
             if app.input.is_empty() {

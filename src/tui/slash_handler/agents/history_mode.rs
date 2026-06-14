@@ -116,7 +116,7 @@ pub fn handle_attach(app: &mut TuiApp, args: &str) -> String {
 
     if args == "browse" || args.starts_with("browse ") {
         let root = args.strip_prefix("browse").map(str::trim);
-        return app.open_composer_file_picker(root.filter(|value| !value.is_empty()));
+        return app.open_composer_file_picker(root.filter(|value| !value.is_empty()), false);
     }
 
     if args == "preview" || args.starts_with("preview ") {

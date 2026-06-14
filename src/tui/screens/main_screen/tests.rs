@@ -659,7 +659,7 @@ fn render_shortcut_help_explains_sidebar_and_reasoning_expand() {
 #[test]
 fn render_file_picker_shows_attachment_controls() {
     let mut app = TuiApp::new();
-    app.open_composer_file_picker(Some("."));
+    app.open_composer_file_picker(Some("."), false);
 
     let rendered = render_file_picker_text(&app);
 

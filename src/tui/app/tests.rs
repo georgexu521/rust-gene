@@ -876,7 +876,7 @@ fn test_file_picker_attaches_selected_file() {
     std::fs::write(root.join("note.txt"), "hello").unwrap();
 
     let mut app = TuiApp::new();
-    let opened = app.open_composer_file_picker(Some(root.to_str().unwrap()));
+    let opened = app.open_composer_file_picker(Some(root.to_str().unwrap()), false);
     assert!(opened.contains("File picker opened"));
     assert_eq!(app.mode, AppMode::FilePicker);
 
@@ -903,7 +903,7 @@ fn test_file_picker_filter_methods_update_selection() {
     std::fs::write(root.join("beta.rs"), "b").unwrap();
 
     let mut app = TuiApp::new();
-    app.open_composer_file_picker(Some(root.to_str().unwrap()));
+    app.open_composer_file_picker(Some(root.to_str().unwrap()), false);
     app.start_file_picker_filter();
     app.push_file_picker_filter_char('a');
     app.push_file_picker_filter_char('l');

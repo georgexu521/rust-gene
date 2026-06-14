@@ -416,9 +416,9 @@ The file picker (`/attach`, `AppMode::FilePicker`) only selects one file at a ti
 
 ### Acceptance
 
-- [ ] Multi-select file picker adds several files at once.
-- [ ] Single-select mode remains default for `/attach`.
-- [ ] Selected files render as inline pills in the composer.
+- [x] Multi-select file picker adds several files at once.
+- [x] Single-select mode remains default for `/attach`.
+- [x] Selected files render as inline pills in the composer.
 
 ### Validation
 

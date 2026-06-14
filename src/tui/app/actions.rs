@@ -390,7 +390,7 @@ impl TuiApp {
         true
     }
 
-    pub fn open_composer_file_picker(&mut self, root: Option<&str>) -> String {
+    pub fn open_composer_file_picker(&mut self, root: Option<&str>, multi_select: bool) -> String {
         let root = root
             .map(str::trim)
             .filter(|value| !value.is_empty())
@@ -399,12 +399,24 @@ impl TuiApp {
         if !path.exists() {
             return format!("File picker root not found: {root}");
         }
-        self.file_picker_state = Some(crate::tui::components::file_browser::FileBrowserState::new(
-            path,
-        ));
+        let mut state = crate::tui::components::file_browser::FileBrowserState::new(path);
+        state.set_selection_mode(if multi_select {
+            crate::tui::components::file_browser::FileSelectionMode::Multi
+        } else {
+            crate::tui::components::file_browser::FileSelectionMode::Single
+        });
+        self.file_picker_state = Some(state);
         self.file_picker_filtering = false;
         self.push_mode(AppMode::FilePicker);
-        format!("File picker opened at {root}.")
+        if multi_select {
+            format!("Multi-select file picker opened at {root}. Space toggles, Enter confirms.")
+        } else {
+            format!("File picker opened at {root}.")
+        }
+    }
+
+    pub fn open_composer_multi_file_picker(&mut self, root: Option<&str>) -> String {
+        self.open_composer_file_picker(root, true)
     }
 
     pub fn close_composer_file_picker(&mut self) {
@@ -433,6 +445,34 @@ impl TuiApp {
         if state.selected_is_dir() {
             state.toggle_current();
             return "Toggled directory.".to_string();
+        }
+
+        if state.selection_mode() == crate::tui::components::file_browser::FileSelectionMode::Multi
+        {
+            let paths: Vec<std::path::PathBuf> = state.selected_paths().iter().cloned().collect();
+            if paths.is_empty() {
+                let Some(path) = state.selected_path().cloned() else {
+                    return "No file selected.".to_string();
+                };
+                let result =
+                    self.add_attachment_token_from_path(path, AttachmentSource::Autocomplete);
+                self.close_composer_file_picker();
+                return match result {
+                    Some(label) => format!("Attached context: {label}"),
+                    None => "File already attached.".to_string(),
+                };
+            }
+            let mut attached = 0;
+            for path in paths {
+                if self
+                    .add_attachment_token_from_path(path, AttachmentSource::Autocomplete)
+                    .is_some()
+                {
+                    attached += 1;
+                }
+            }
+            self.close_composer_file_picker();
+            return format!("Attached {attached} file(s).");
         }
 
         let Some(path) = state.selected_path().cloned() else {

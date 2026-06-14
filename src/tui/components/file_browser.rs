@@ -8,6 +8,7 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, Borders, List, ListItem, ListState},
 };
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 /// 文件树节点
@@ -83,6 +84,12 @@ impl FileNode {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FileSelectionMode {
+    Single,
+    Multi,
+}
+
 /// 文件浏览器状态
 #[derive(Debug)]
 pub struct FileBrowserState {
@@ -90,7 +97,9 @@ pub struct FileBrowserState {
     flattened: Vec<FileNode>,
     list_state: ListState,
     selected_path: Option<PathBuf>,
+    selected_paths: HashSet<PathBuf>,
     filter_query: String,
+    selection_mode: FileSelectionMode,
 }
 
 impl FileBrowserState {
@@ -103,7 +112,9 @@ impl FileBrowserState {
             list_state: ListState::default(),
             root,
             selected_path: None,
+            selected_paths: HashSet::new(),
             filter_query: String::new(),
+            selection_mode: FileSelectionMode::Single,
         };
         state.flatten();
         if !state.flattened.is_empty() {
@@ -147,6 +158,38 @@ impl FileBrowserState {
 
     pub fn filter_query(&self) -> &str {
         &self.filter_query
+    }
+
+    pub fn selection_mode(&self) -> FileSelectionMode {
+        self.selection_mode
+    }
+
+    pub fn set_selection_mode(&mut self, mode: FileSelectionMode) {
+        self.selection_mode = mode;
+        if mode == FileSelectionMode::Single {
+            self.selected_paths.clear();
+        }
+    }
+
+    pub fn selected_paths(&self) -> &HashSet<PathBuf> {
+        &self.selected_paths
+    }
+
+    pub fn toggle_selection(&mut self) -> Option<PathBuf> {
+        let path = self.selected_path().cloned()?;
+        if path.is_dir() {
+            return None;
+        }
+        if self.selected_paths.contains(&path) {
+            self.selected_paths.remove(&path);
+        } else {
+            self.selected_paths.insert(path.clone());
+        }
+        Some(path)
+    }
+
+    pub fn selected_count(&self) -> usize {
+        self.selected_paths.len()
     }
 
     pub fn set_filter_query(&mut self, query: impl Into<String>) {
@@ -273,6 +316,12 @@ impl FileBrowserState {
                     "📄 "
                 };
 
+                let selected_marker = if self.selected_paths.contains(&node.path) {
+                    "✓ "
+                } else {
+                    "  "
+                };
+
                 let style = if Some(&node.path) == self.selected_path.as_ref() {
                     Style::default()
                         .fg(Color::Green)
@@ -285,6 +334,7 @@ impl FileBrowserState {
 
                 let line = Line::from(vec![
                     Span::raw(indent),
+                    Span::raw(selected_marker),
                     Span::raw(icon),
                     Span::styled(&node.name, style),
                 ]);
@@ -293,8 +343,12 @@ impl FileBrowserState {
             })
             .collect();
 
+        let title = match self.selection_mode {
+            FileSelectionMode::Single => "Files".to_string(),
+            FileSelectionMode::Multi => format!("Files (selected {})", self.selected_paths.len()),
+        };
         let list = List::new(items)
-            .block(Block::default().borders(Borders::ALL).title("Files"))
+            .block(Block::default().borders(Borders::ALL).title(title))
             .highlight_style(
                 Style::default()
                     .bg(Color::DarkGray)
@@ -357,6 +411,29 @@ mod tests {
 
         browser.clear_filter();
         assert!(browser.selected_path().is_some());
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn test_multi_select_toggles_files() {
+        let root = std::env::temp_dir().join(format!(
+            "priority-agent-file-browser-multi-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("one.txt"), "a").unwrap();
+        std::fs::write(root.join("two.txt"), "b").unwrap();
+
+        let mut browser = FileBrowserState::new(&root);
+        browser.set_selection_mode(FileSelectionMode::Multi);
+        browser.next(); // skip root directory entry
+        browser.toggle_selection();
+        browser.next();
+        browser.toggle_selection();
+
+        assert_eq!(browser.selected_count(), 2);
 
         let _ = std::fs::remove_dir_all(&root);
     }
