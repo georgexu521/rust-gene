@@ -1,6 +1,7 @@
 # TUI Next Steps Plan
 
 Date: 2026-06-14
+Status: Complete
 Scope: `src/tui/` and supporting services/plugins
 Goal: Close the remaining interaction and extensibility gaps with OpenCode's TUI while keeping `priority-agent`'s runtime-panel and validation strengths.
 
