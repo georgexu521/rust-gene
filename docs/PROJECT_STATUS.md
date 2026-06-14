@@ -14,10 +14,10 @@ See `docs/TUI_NEXT_STEPS_PLAN_2026-06-14.md` for the full gap analysis.
 - **Priority 2**: Composer attachment pills and `@` file autocomplete (`cb4995d6`).
 - **Priority 7**: Multi-select file picker (`5b855dfc`).
 - **Priority 5**: Workspace switcher and durable workspace metadata (`291a60a6`).
+- **Priority 6**: Per-session UI state cache, `/back`, and leader+g cycling (`e0aaf8da`).
 
 ### Remaining
 
-- **Priority 6**: Child-session independent views/tabs.
 - **Priority 4**: Static plugin UI slot rendering.
 
 ## Codex Goal Mode — Implemented (2026-06-11)
