@@ -13,10 +13,10 @@ See `docs/TUI_NEXT_STEPS_PLAN_2026-06-14.md` for the full gap analysis.
 - **Priority 3**: Leader-key pending state in status bar (`59e5751f`).
 - **Priority 2**: Composer attachment pills and `@` file autocomplete (`cb4995d6`).
 - **Priority 7**: Multi-select file picker (`5b855dfc`).
+- **Priority 5**: Workspace switcher and durable workspace metadata (`291a60a6`).
 
 ### Remaining
 
-- **Priority 5**: Workspace switcher and session migration.
 - **Priority 6**: Child-session independent views/tabs.
 - **Priority 4**: Static plugin UI slot rendering.
 
