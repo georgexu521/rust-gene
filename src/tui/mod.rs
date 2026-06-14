@@ -1097,6 +1097,15 @@ async fn handle_key_event(key: KeyEvent, app: &mut TuiApp) -> anyhow::Result<boo
                     }
                 }
             }
+
+            // Persist current workspace so the next TUI restart restores grouping.
+            if let Err(err) = app.kv_store.set_string(
+                "ui.last_workspace_root",
+                &app.workspace.root.to_string_lossy(),
+            ) {
+                tracing::warn!("Failed to persist workspace on exit: {err}");
+            }
+
             return Ok(true);
         }
         AppAction::Submit => {

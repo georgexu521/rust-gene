@@ -634,6 +634,9 @@ impl TuiApp {
         self.workspace = crate::workspace::Workspace::detect(&root);
         self.sidebar_workspace_filter = Some(root.clone());
         self.close_workspace_switcher();
+        if let Err(err) = self.kv_store.set_string("ui.last_workspace_root", &root) {
+            tracing::warn!("Failed to persist workspace switch: {err}");
+        }
         format!("Switched workspace to {}", self.workspace.display_name)
     }
 
@@ -921,9 +924,18 @@ impl TuiApp {
             .and_then(|v| StatusBarDensity::parse(&v))
             .unwrap_or(StatusBarDensity::Normal);
 
-        let workspace = Workspace::detect(
-            std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")),
-        );
+        let current_dir = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+        let workspace = kv_store
+            .get_string("ui.last_workspace_root")
+            .and_then(|root| {
+                let path = std::path::PathBuf::from(&root);
+                if path.is_absolute() && path.exists() {
+                    Some(crate::workspace::Workspace::detect(&path))
+                } else {
+                    None
+                }
+            })
+            .unwrap_or_else(|| Workspace::detect(&current_dir));
 
         if session_manager.current_session_id().is_none() {
             if let Ok(_id) = session_manager.start_session(

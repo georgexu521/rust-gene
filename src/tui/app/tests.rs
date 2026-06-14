@@ -619,6 +619,28 @@ fn test_status_bar_density_cycle_and_parse() {
 }
 
 #[test]
+fn test_workspace_switcher_persists_last_workspace_root() {
+    let mut app = TuiApp::new();
+    let root =
+        std::env::temp_dir().join(format!("pa-workspace-persist-test-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(root.join(".git")).unwrap();
+
+    app.workspace_switcher_items = vec![root.to_string_lossy().to_string()];
+    app.workspace_switcher_selected = 0;
+
+    let toast = app.accept_workspace_switcher();
+    assert!(toast.contains("Switched workspace to"));
+    assert_eq!(app.workspace.root, root);
+    assert_eq!(
+        app.kv_store.get_string("ui.last_workspace_root"),
+        Some(root.to_string_lossy().to_string())
+    );
+
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
 fn test_short_paste_inserts_directly() {
     let mut app = TuiApp::new();
     app.input.insert_str("prefix ");

@@ -326,7 +326,7 @@ Split this into two slices so the UI does not sit on top of non-durable state.
 - [x] `<leader>w` opens a workspace switcher.
 - [x] Switching workspace filters the sidebar to that workspace (or shows all).
 - [x] Loading a session from another workspace updates the active workspace and shows a toast.
-- [ ] Restarting the TUI preserves workspace grouping.
+- [x] Restarting the TUI preserves workspace grouping.
 
 ### Validation
 
