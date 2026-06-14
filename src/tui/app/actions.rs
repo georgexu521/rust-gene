@@ -438,9 +438,12 @@ impl TuiApp {
         let Some(path) = state.selected_path().cloned() else {
             return "No file selected.".to_string();
         };
-        let result = self.attach_context_path(&path.to_string_lossy());
+        let result = self.add_attachment_token_from_path(path, AttachmentSource::Autocomplete);
         self.close_composer_file_picker();
-        result.unwrap_or_else(|message| message)
+        match result {
+            Some(label) => format!("Attached context: {label}"),
+            None => "File already attached.".to_string(),
+        }
     }
 
     pub fn start_file_picker_filter(&mut self) {

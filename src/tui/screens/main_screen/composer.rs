@@ -1,5 +1,6 @@
 use crate::tui::{
     app::{AppMode, TuiApp},
+    components::attachment_token::AttachmentToken,
     view_model::activity::{active_turn_status, format_elapsed, ActivePhase},
 };
 use ratatui::{
@@ -21,6 +22,7 @@ pub fn render_input_area(f: &mut Frame, app: &TuiApp, area: Rect) {
     };
 
     let input_text = app.input.value();
+    let tokens = app.composer_attachment_tokens();
 
     let prompt_color = match app.agent_mode {
         crate::engine::agent_mode::AgentMode::Auto
@@ -38,7 +40,7 @@ pub fn render_input_area(f: &mut Frame, app: &TuiApp, area: Rect) {
                 Style::default().fg(app.theme.tokens.fg.faint),
             ),
         ])])
-    } else if input_text.is_empty() {
+    } else if input_text.is_empty() && tokens.is_empty() {
         Text::from(vec![Line::from(vec![
             Span::styled("› ", Style::default().fg(prompt_color)),
             Span::styled(
@@ -47,7 +49,12 @@ pub fn render_input_area(f: &mut Frame, app: &TuiApp, area: Rect) {
             ),
         ])])
     } else {
-        Text::from(input_lines(input_text, prompt_color, app))
+        Text::from(input_lines_with_pills(
+            input_text,
+            prompt_color,
+            app,
+            tokens,
+        ))
     };
 
     let (display_text, style, prefix_line_count) = if app.is_querying {
@@ -84,7 +91,15 @@ pub fn render_input_area(f: &mut Frame, app: &TuiApp, area: Rect) {
 
     if !app.is_querying {
         let (cursor_line, cursor_col) = app.input.cursor_line_column();
-        let cursor_x = inner_area.x + cursor_col as u16 + 2;
+        let pill_offset = if tokens.is_empty() {
+            0
+        } else {
+            tokens
+                .iter()
+                .map(|t| display_width(&t.pill_label()) + 1)
+                .sum()
+        };
+        let cursor_x = inner_area.x + pill_offset as u16 + cursor_col as u16 + 2;
         let cursor_y = inner_area.y + prefix_line_count as u16 + cursor_line as u16;
         let actual_cursor_x = if cursor_line == 0 {
             cursor_x
@@ -303,10 +318,11 @@ fn memory_label(mode: &str) -> &'static str {
     }
 }
 
-fn input_lines(
+fn input_lines_with_pills(
     input_text: &str,
     prompt_color: ratatui::style::Color,
     app: &TuiApp,
+    tokens: &[AttachmentToken],
 ) -> Vec<Line<'static>> {
     let selection = app.input.selection_range();
     let mut char_offset = 0usize;
@@ -325,6 +341,20 @@ fn input_lines(
             "› ",
             Style::default().fg(prompt_color),
         )]));
+    }
+    if !tokens.is_empty() && !lines.is_empty() {
+        let first = lines.first_mut().expect("non-empty");
+        let mut pill_spans: Vec<Span<'static>> = tokens
+            .iter()
+            .map(|t| {
+                Span::styled(
+                    format!("{} ", t.pill_label()),
+                    Style::default().fg(app.theme.tokens.tone.info),
+                )
+            })
+            .collect();
+        pill_spans.append(&mut first.spans);
+        *first = Line::from(pill_spans);
     }
     lines
 }

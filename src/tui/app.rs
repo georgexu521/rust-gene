@@ -13,6 +13,7 @@ use crate::state::{
     MessageRole, RuntimeAppState, RuntimeBridgeState, RuntimeMcpState, RuntimePermissionState,
     RuntimeStatusSnapshot, RuntimeToolStatus, TaskItem,
 };
+use crate::tui::components::attachment_token::{AttachmentSource, AttachmentToken};
 use crate::tui::components::input::InputState;
 use crate::tui::sync_store::{TuiSyncSnapshot, TuiSyncStore};
 use crate::tui::tool_view::{ToolRunStatus, ToolRunView};
@@ -53,9 +54,9 @@ const LONG_PASTE_CHAR_THRESHOLD: usize = 600;
 const LONG_PASTE_LINE_THRESHOLD: usize = 12;
 
 #[derive(Debug, Clone)]
-struct PastedBlock {
-    placeholder: String,
-    content: String,
+pub struct PastedBlock {
+    pub placeholder: String,
+    pub content: String,
 }
 
 #[derive(Debug, Clone)]
@@ -342,9 +343,11 @@ pub struct TuiApp {
     /// Tick 计数器（用于 spinner 等动画）
     pub tick_count: usize,
     /// 被折叠的长粘贴块，发送时还原
-    pasted_blocks: Vec<PastedBlock>,
+    pub pasted_blocks: Vec<PastedBlock>,
     /// Composer file/context attachments injected into the next user prompt.
     pub composer_attachments: Vec<String>,
+    /// Inline attachment tokens displayed as pills in the composer.
+    pub composer_attachment_tokens: Vec<AttachmentToken>,
     /// File picker state for composer attachments.
     pub file_picker_state: Option<crate::tui::components::file_browser::FileBrowserState>,
     /// Whether file picker keystrokes edit the filter query.
@@ -852,6 +855,7 @@ impl TuiApp {
             onboarding_state: None,
             pasted_blocks: Vec::new(),
             composer_attachments: Vec::new(),
+            composer_attachment_tokens: Vec::new(),
             file_picker_state: None,
             file_picker_filtering: false,
             command_palette_query: String::new(),
@@ -966,6 +970,7 @@ impl TuiApp {
         let content = self.compose_message_with_attachments(content);
         self.pasted_blocks.clear();
         self.composer_attachments.clear();
+        self.composer_attachment_tokens.clear();
         self.send_message(content).await;
     }
 
@@ -977,19 +982,21 @@ impl TuiApp {
         }
 
         let trimmed = text.trim();
-        if trimmed.lines().count() == 1 && !trimmed.is_empty() {
-            if trimmed.starts_with("data:image") {
-                return self.insert_image_paste(text);
-            }
-            let path = std::path::Path::new(trimmed);
-            if path.exists() {
-                let _ = self.attach_context_path(trimmed);
+        let char_count = text.chars().count();
+        let line_count = text.lines().count().max(1);
+
+        if trimmed.starts_with("data:image") {
+            return self.insert_image_paste(text);
+        }
+
+        if line_count == 1 && !trimmed.is_empty() {
+            if let Some(_label) =
+                self.add_attachment_token_from_path(trimmed, AttachmentSource::Pasted)
+            {
                 return;
             }
         }
 
-        let char_count = text.chars().count();
-        let line_count = text.lines().count().max(1);
         if char_count < LONG_PASTE_CHAR_THRESHOLD && line_count < LONG_PASTE_LINE_THRESHOLD {
             self.input.insert_str(&text);
             return;
@@ -1069,34 +1076,27 @@ impl TuiApp {
         if raw_path.is_empty() {
             return Err("Usage: /attach <path>|remove <n>|clear|list".to_string());
         }
-        if self.composer_attachments.len() >= 12 {
+        if self.composer_attachment_tokens.len() + self.composer_attachments.len() >= 12 {
             return Err("Attachment limit reached for this prompt.".to_string());
         }
 
-        let path = std::path::Path::new(raw_path);
-        let absolute = if path.is_absolute() {
-            path.to_path_buf()
-        } else {
-            std::env::current_dir()
-                .unwrap_or_else(|_| std::path::PathBuf::from("."))
-                .join(path)
-        };
-        let canonical = absolute
-            .canonicalize()
-            .map_err(|_| format!("Attachment not found: {raw_path}"))?;
-        let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-        let display = canonical
-            .strip_prefix(&cwd)
-            .map(|path| path.to_string_lossy().to_string())
-            .unwrap_or_else(|_| canonical.to_string_lossy().to_string());
+        let token = AttachmentToken::from_path(raw_path, AttachmentSource::File);
+        let display = token.label.clone();
         if self
-            .composer_attachments
+            .composer_attachment_tokens
             .iter()
-            .any(|path| path == &display)
+            .any(|t| t.path == token.path)
+            || self.composer_attachments.iter().any(|p| p == &display)
         {
             return Ok(format!("Already attached: {display}"));
         }
 
+        self.composer_attachments.retain(|p| {
+            !self
+                .composer_attachment_tokens
+                .iter()
+                .any(|t| t.label == *p)
+        });
         self.composer_attachments.push(display.clone());
         Ok(format!("Attached context: {display}"))
     }
@@ -1109,21 +1109,35 @@ impl TuiApp {
     }
 
     pub fn remove_last_composer_attachment(&mut self) -> Option<String> {
-        self.composer_attachments.pop()
+        if let Some(token) = self.composer_attachment_tokens.pop() {
+            self.composer_attachments.retain(|p| p != &token.label);
+            Some(token.label)
+        } else {
+            self.composer_attachments.pop()
+        }
     }
 
     pub fn clear_composer_attachments(&mut self) -> usize {
-        let count = self.composer_attachments.len();
+        let count = self.composer_attachment_tokens.len() + self.composer_attachments.len();
+        self.composer_attachment_tokens.clear();
         self.composer_attachments.clear();
         count
     }
 
     pub fn composer_attachment_summaries(&self) -> Vec<String> {
-        self.composer_attachments
+        let mut summaries: Vec<String> = self
+            .composer_attachment_tokens
             .iter()
             .enumerate()
-            .map(|(idx, path)| format!("[{}] {}", idx + 1, attachment_summary(path, 44)))
-            .collect()
+            .map(|(idx, t)| format!("[{}] {}", idx + 1, attachment_summary(&t.label, 44)))
+            .collect();
+        summaries.extend(
+            self.composer_attachments
+                .iter()
+                .enumerate()
+                .map(|(idx, path)| format!("[{}] {}", idx + 1, attachment_summary(path, 44))),
+        );
+        summaries
     }
 
     pub fn composer_attachment_count(&self) -> usize {
@@ -1148,6 +1162,42 @@ impl TuiApp {
         config.save()?;
         crate::services::config::init_runtime_config(config);
         Ok(())
+    }
+
+    pub fn composer_attachment_tokens(&self) -> &[AttachmentToken] {
+        &self.composer_attachment_tokens
+    }
+
+    /// Insert an attachment token (for paste/autocomplete intake) if not duplicate.
+    pub fn add_attachment_token_from_path(
+        &mut self,
+        path: impl AsRef<std::path::Path>,
+        source: AttachmentSource,
+    ) -> Option<String> {
+        let token = AttachmentToken::from_path(path, source);
+        if self
+            .composer_attachment_tokens
+            .iter()
+            .any(|t| t.path == token.path)
+        {
+            return None;
+        }
+        let label = token.label.clone();
+        self.composer_attachment_tokens.push(token);
+        if !self.composer_attachments.contains(&label) {
+            self.composer_attachments.push(label.clone());
+        }
+        Some(label)
+    }
+
+    pub fn remove_composer_attachment_token(&mut self, id: &str) -> Option<AttachmentToken> {
+        let pos = self
+            .composer_attachment_tokens
+            .iter()
+            .position(|t| t.id == id)?;
+        let token = self.composer_attachment_tokens.remove(pos);
+        self.composer_attachments.retain(|p| p != &token.label);
+        Some(token)
     }
 
     pub fn open_attachment_viewer(&mut self, index: Option<usize>) -> bool {

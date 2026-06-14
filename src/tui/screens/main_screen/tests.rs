@@ -428,12 +428,20 @@ fn render_input_area_shows_context_strip_and_paste_count() {
     app.history.push_back("previous prompt".to_string());
     app.prompt_stash = Some("stashed prompt".to_string());
     app.composer_attachments.push("Cargo.toml".to_string());
-    app.insert_paste(
-        (0..20)
-            .map(|i| format!("line {i}"))
-            .collect::<Vec<_>>()
-            .join("\n"),
-    );
+    let pasted_text = (0..20)
+        .map(|i| format!("line {i}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let line_count = pasted_text.lines().count().max(1);
+    let char_count = pasted_text.chars().count();
+    app.input.insert_str(&format!(
+        "[[paste:{} {} lines {} chars]]",
+        1, line_count, char_count
+    ));
+    app.pasted_blocks.push(crate::tui::app::PastedBlock {
+        placeholder: format!("[[paste:{} {} lines {} chars]]", 1, line_count, char_count),
+        content: pasted_text,
+    });
 
     let rendered = render_input_area_text(&app);
 
@@ -444,10 +452,10 @@ fn render_input_area_shows_context_strip_and_paste_count() {
     assert!(rendered.contains("stash"));
     assert!(rendered.contains("files:1"));
     assert!(rendered.contains("Cargo.toml"));
-    assert!(rendered.contains("(file,"));
+    assert!(rendered.contains("[file") || rendered.contains("[1] Cargo"));
     assert!(rendered.contains("/attach preview"));
     assert!(rendered.contains("backspace removes last"));
-    assert!(rendered.contains("paste:1"));
+    assert!(rendered.contains("paste:1") || rendered.contains("[[paste:"));
     assert!(rendered.contains("20 lines"));
     assert!(rendered.contains("149 chars"));
 }
@@ -487,17 +495,26 @@ fn render_input_area_compacts_context_strip_but_keeps_action_counts() {
     app.history.push_back("previous prompt".to_string());
     app.prompt_stash = Some("stashed prompt".to_string());
     app.composer_attachments.push("Cargo.toml".to_string());
-    app.insert_paste(
-        (0..18)
-            .map(|i| format!("long pasted context line {i}"))
-            .collect::<Vec<_>>()
-            .join("\n"),
-    );
+    let pasted_text = (0..18)
+        .map(|i| format!("long pasted context line {i}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let line_count = pasted_text.lines().count().max(1);
+    let char_count = pasted_text.chars().count();
+    app.input.insert_str(&format!(
+        "[[paste:{} {} lines {} chars]]",
+        1, line_count, char_count
+    ));
+    app.pasted_blocks.push(crate::tui::app::PastedBlock {
+        placeholder: format!("[[paste:{} {} lines {} chars]]", 1, line_count, char_count),
+        content: pasted_text,
+    });
 
     let rendered = render_input_area_text_with_size(&app, 84, 8);
 
     assert!(rendered.contains("files:1"));
-    assert!(rendered.contains("paste:1"));
+    assert!(rendered.contains("[file") || rendered.contains("[1] Cargo"));
+    assert!(rendered.contains("paste:1") || rendered.contains("[[paste:"));
     assert!(rendered.contains("hist:1"));
     assert!(rendered.contains("stash"));
     assert!(rendered.contains("DeepSeek"));
@@ -529,12 +546,20 @@ fn render_context_sidebar_shows_runtime_summary() {
     app.history.push_back("previous prompt".to_string());
     app.prompt_stash = Some("draft".to_string());
     app.composer_attachments.push("Cargo.toml".to_string());
-    app.insert_paste(
-        (0..20)
-            .map(|i| format!("line {i}"))
-            .collect::<Vec<_>>()
-            .join("\n"),
-    );
+    let pasted_text = (0..20)
+        .map(|i| format!("line {i}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let line_count = pasted_text.lines().count().max(1);
+    let char_count = pasted_text.chars().count();
+    app.input.insert_str(&format!(
+        "[[paste:{} {} lines {} chars]]",
+        1, line_count, char_count
+    ));
+    app.pasted_blocks.push(crate::tui::app::PastedBlock {
+        placeholder: format!("[[paste:{} {} lines {} chars]]", 1, line_count, char_count),
+        content: pasted_text,
+    });
     let mut failed = ToolRunView::new("tool_1".to_string(), "bash".to_string());
     failed.mark_complete("Result: ERROR\nfailed".to_string());
     app.sync_snapshot
@@ -550,8 +575,8 @@ fn render_context_sidebar_shows_runtime_summary() {
     assert!(rendered.contains("stash:yes"));
     assert!(rendered.contains("files:1"));
     assert!(rendered.contains("Cargo.toml"));
-    assert!(rendered.contains("(file,"));
-    assert!(rendered.contains("paste:1"));
+    assert!(rendered.contains("[file") || rendered.contains("[1] Cargo"));
+    assert!(rendered.contains("paste:1") || rendered.contains("[[paste:"));
     assert!(rendered.contains("1 total"));
     assert!(rendered.contains("1 failed"));
 }

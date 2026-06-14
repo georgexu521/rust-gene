@@ -629,6 +629,17 @@ fn test_short_paste_inserts_directly() {
 }
 
 #[test]
+fn test_paste_existing_file_path_attaches_as_token() {
+    let mut app = TuiApp::new();
+    app.insert_paste("Cargo.toml".to_string());
+    assert!(app
+        .composer_attachment_tokens
+        .iter()
+        .any(|t| t.path.ends_with("Cargo.toml")));
+    assert!(!app.input.value().contains("Cargo.toml"));
+}
+
+#[test]
 fn test_long_paste_uses_placeholder_and_expands() {
     let mut app = TuiApp::new();
     let pasted = (0..20)
@@ -660,9 +671,9 @@ fn test_paste_file_path_attaches_as_context() {
     let mut app = TuiApp::new();
     app.insert_paste("Cargo.toml".to_string());
     assert!(app
-        .composer_attachments
+        .composer_attachment_tokens
         .iter()
-        .any(|p| p.contains("Cargo.toml")));
+        .any(|t| t.path.ends_with("Cargo.toml")));
     assert!(!app.input.value().contains("Cargo.toml"));
 }
 

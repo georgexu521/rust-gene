@@ -1361,7 +1361,10 @@ async fn handle_fallback_key_event(key: KeyEvent, app: &mut TuiApp) -> anyhow::R
     }
 
     match key.code {
-        KeyCode::Char(c) => app.input.insert(c),
+        KeyCode::Char('@') => {
+            app.open_composer_file_picker(Some("."));
+            return Ok(false);
+        }
         KeyCode::Backspace => {
             if app.input.is_empty() {
                 if let Some(path) = app.remove_last_composer_attachment() {
@@ -1396,6 +1399,7 @@ async fn handle_fallback_key_event(key: KeyEvent, app: &mut TuiApp) -> anyhow::R
         }
         KeyCode::PageUp => app.scroll_up_half_page(),
         KeyCode::PageDown => app.scroll_down_half_page(),
+        KeyCode::Char(c) => app.input.insert(c),
         _ => {}
     }
     Ok(false)

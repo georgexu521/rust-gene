@@ -147,11 +147,11 @@ Attachments are shown only in the context strip above the input (`files:N`). The
 
 ### Acceptance
 
-- [ ] Typing `@` opens a fuzzy file autocomplete overlay.
-- [ ] Selected files become inline `[file path]` pills in the composer.
-- [ ] Pasted/dropped file paths become pills and are sent as attachments.
-- [ ] Backspace removes a pill when the cursor is immediately after it.
-- [ ] Submitted messages still send the union of text and attachments.
+- [x] Typing `@` opens a fuzzy file autocomplete overlay.
+- [x] Selected files become inline `[file path]` pills in the composer.
+- [x] Pasted/dropped file paths become pills and are sent as attachments.
+- [x] Backspace removes a pill when the cursor is immediately after it.
+- [x] Submitted messages still send the union of text and attachments.
 
 ### Validation
 
