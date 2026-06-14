@@ -18,6 +18,15 @@ pub enum TuiSlot {
     ToolCard,
 }
 
+/// Runtime content for a static plugin UI slot contribution.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PluginUiSlotContent {
+    pub plugin_id: String,
+    pub slot: TuiSlot,
+    pub title: String,
+    pub content: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct PluginTuiContribution {
     #[serde(default)]
@@ -145,6 +154,112 @@ pub fn discover_plugins(plugin_roots: &[PathBuf]) -> Vec<InstalledPlugin> {
 
     out.sort_by(|a, b| a.id.cmp(&b.id));
     out
+}
+
+/// Load static `panel.md` contributions for enabled plugins.
+///
+/// Only safe display slots are supported: `SidebarFooter` and `StatusBar`.
+/// `MessageBeforeSend`, `ToolCard`, and `SidebarTitle` are explicitly deferred.
+pub fn load_static_ui_contributions(plugins: &[InstalledPlugin]) -> Vec<PluginUiSlotContent> {
+    let mut contributions = Vec::new();
+
+    for plugin in plugins {
+        if !plugin.manifest.enabled {
+            continue;
+        }
+
+        let panel_path = plugin.source_dir.join("panel.md");
+        let content = match std::fs::read_to_string(&panel_path) {
+            Ok(text) => text,
+            Err(_) => {
+                // No panel.md: only render if exactly one declared slot is supported.
+                let supported: Vec<_> = plugin
+                    .manifest
+                    .tui
+                    .slots
+                    .iter()
+                    .filter(|slot| matches!(slot, TuiSlot::SidebarFooter | TuiSlot::StatusBar))
+                    .collect();
+                if supported.len() == 1 {
+                    contributions.push(PluginUiSlotContent {
+                        plugin_id: plugin.id.clone(),
+                        slot: supported[0].clone(),
+                        title: plugin.manifest.name.clone(),
+                        content: String::new(),
+                    });
+                }
+                continue;
+            }
+        };
+
+        let (frontmatter, body) = parse_panel_md(&content);
+        let explicit_slots: Vec<_> = frontmatter
+            .slot
+            .as_ref()
+            .map(|name| match name.as_str() {
+                "sidebar_footer" => vec![TuiSlot::SidebarFooter],
+                "status_bar" => vec![TuiSlot::StatusBar],
+                _ => Vec::new(),
+            })
+            .unwrap_or_default();
+
+        let target_slots: Vec<_> = if !explicit_slots.is_empty() {
+            explicit_slots
+                .into_iter()
+                .filter(|slot| {
+                    plugin.manifest.tui.slots.contains(slot)
+                        && matches!(slot, TuiSlot::SidebarFooter | TuiSlot::StatusBar)
+                })
+                .collect()
+        } else {
+            plugin
+                .manifest
+                .tui
+                .slots
+                .iter()
+                .filter(|slot| matches!(slot, TuiSlot::SidebarFooter | TuiSlot::StatusBar))
+                .cloned()
+                .collect()
+        };
+
+        for slot in target_slots {
+            contributions.push(PluginUiSlotContent {
+                plugin_id: plugin.id.clone(),
+                slot,
+                title: frontmatter
+                    .title
+                    .clone()
+                    .unwrap_or_else(|| plugin.manifest.name.clone()),
+                content: body.clone(),
+            });
+        }
+    }
+
+    contributions
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+struct PanelFrontmatter {
+    pub slot: Option<String>,
+    pub title: Option<String>,
+}
+
+fn parse_panel_md(content: &str) -> (PanelFrontmatter, String) {
+    let trimmed = content.trim();
+    if !trimmed.starts_with("+++") {
+        return (PanelFrontmatter::default(), trimmed.to_string());
+    }
+
+    let end = match trimmed[3..].find("+++") {
+        Some(idx) => idx + 3,
+        None => return (PanelFrontmatter::default(), trimmed.to_string()),
+    };
+
+    let frontmatter_text = &trimmed[3..end];
+    let body = trimmed[end + 3..].trim().to_string();
+
+    let frontmatter = toml::from_str(frontmatter_text).unwrap_or_default();
+    (frontmatter, body)
 }
 
 pub fn validate_manifest(manifest: &PluginManifest) -> Vec<PluginValidationIssue> {
@@ -504,16 +619,89 @@ enabled = true
     }
 
     #[test]
-    fn manifest_tui_slots_are_parsed_and_validated() {
+    fn load_static_ui_contributions_reads_panel_md_frontmatter() {
         let temp_dir =
-            std::env::temp_dir().join(format!("pa-plugin-tui-test-{}", std::process::id()));
+            std::env::temp_dir().join(format!("pa-plugin-panel-test-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&temp_dir);
-        let ui_dir = temp_dir.join("ui-plugin");
-        std::fs::create_dir_all(&ui_dir).unwrap();
+        let plugin_dir = temp_dir.join("panel-plugin");
+        std::fs::create_dir_all(&plugin_dir).unwrap();
         std::fs::write(
-            ui_dir.join("plugin.toml"),
+            plugin_dir.join("plugin.toml"),
             r#"
-name = "ui-plugin"
+name = "panel-plugin"
+version = "0.1.0"
+enabled = true
+entry_command = "sh"
+
+[tui]
+slots = ["sidebar_footer"]
+"#,
+        )
+        .unwrap();
+        std::fs::write(
+            plugin_dir.join("panel.md"),
+            r#"+++
+slot = "sidebar_footer"
+title = "Panel Title"
++++
+
+Hello from plugin panel.
+"#,
+        )
+        .unwrap();
+
+        let discovered = discover_plugins(std::slice::from_ref(&temp_dir));
+        let contributions = load_static_ui_contributions(&discovered);
+
+        assert_eq!(contributions.len(), 1);
+        assert_eq!(contributions[0].plugin_id, "panel-plugin");
+        assert_eq!(contributions[0].slot, TuiSlot::SidebarFooter);
+        assert_eq!(contributions[0].title, "Panel Title");
+        assert!(contributions[0].content.contains("Hello from plugin panel"));
+
+        let _ = std::fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn load_static_ui_contributions_ignores_unsupported_slots() {
+        let temp_dir =
+            std::env::temp_dir().join(format!("pa-plugin-defer-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        let plugin_dir = temp_dir.join("unsafe-plugin");
+        std::fs::create_dir_all(&plugin_dir).unwrap();
+        std::fs::write(
+            plugin_dir.join("plugin.toml"),
+            r#"
+name = "unsafe-plugin"
+version = "0.1.0"
+enabled = true
+entry_command = "sh"
+
+[tui]
+slots = ["message_before_send", "tool_card"]
+"#,
+        )
+        .unwrap();
+
+        let discovered = discover_plugins(std::slice::from_ref(&temp_dir));
+        let contributions = load_static_ui_contributions(&discovered);
+
+        assert!(contributions.is_empty());
+
+        let _ = std::fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn load_static_ui_contributions_falls_back_to_declared_slot_without_panel_md() {
+        let temp_dir =
+            std::env::temp_dir().join(format!("pa-plugin-fallback-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        let plugin_dir = temp_dir.join("status-plugin");
+        std::fs::create_dir_all(&plugin_dir).unwrap();
+        std::fs::write(
+            plugin_dir.join("plugin.toml"),
+            r#"
+name = "status-plugin"
 version = "0.1.0"
 enabled = true
 entry_command = "sh"
@@ -525,10 +713,13 @@ slots = ["status_bar"]
         .unwrap();
 
         let discovered = discover_plugins(std::slice::from_ref(&temp_dir));
-        let facts = runtime_facts(&discovered, trust::TrustMode::Off);
-        let ui = facts.iter().find(|f| f.id == "ui-plugin").unwrap();
-        assert_eq!(ui.tui_slots, vec![TuiSlot::StatusBar]);
-        assert!(ui.contributions.contains(&"tui:StatusBar".to_string()));
+        let contributions = load_static_ui_contributions(&discovered);
+
+        assert_eq!(contributions.len(), 1);
+        assert_eq!(contributions[0].plugin_id, "status-plugin");
+        assert_eq!(contributions[0].slot, TuiSlot::StatusBar);
+        assert_eq!(contributions[0].title, "status-plugin");
+        assert!(contributions[0].content.is_empty());
 
         let _ = std::fs::remove_dir_all(temp_dir);
     }

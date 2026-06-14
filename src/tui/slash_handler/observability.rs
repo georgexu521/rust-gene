@@ -39,6 +39,65 @@ pub fn handle_profiling(app: &TuiApp) -> String {
     lines.join("\n")
 }
 
+/// /plugins - List discovered plugins, their runtime status, declared slots, and active static UI contributions.
+pub fn handle_plugins(app: &TuiApp) -> String {
+    if app.plugin_facts.is_empty() {
+        return "No plugins discovered.".to_string();
+    }
+
+    let mut lines = vec!["Discovered plugins:".to_string()];
+    for fact in &app.plugin_facts {
+        let status_glyph = match fact.status {
+            crate::plugins::PluginRuntimeStatus::Ready => "●",
+            crate::plugins::PluginRuntimeStatus::UsableWithWarnings => "◐",
+            crate::plugins::PluginRuntimeStatus::Disabled => "○",
+            crate::plugins::PluginRuntimeStatus::Blocked => "✗",
+        };
+        lines.push(format!(
+            "{} {} ({}) — {}",
+            status_glyph, fact.name, fact.version, fact.diagnostic
+        ));
+        if !fact.tui_slots.is_empty() {
+            let slot_names: Vec<String> = fact
+                .tui_slots
+                .iter()
+                .map(|slot| format!("{:?}", slot))
+                .collect();
+            lines.push(format!("    declared slots: {}", slot_names.join(", ")));
+        }
+        let active_slots: Vec<&crate::plugins::PluginUiSlotContent> = app
+            .plugin_ui_contributions
+            .iter()
+            .filter(|c| c.plugin_id == fact.id)
+            .collect();
+        if !active_slots.is_empty() {
+            let active_names: Vec<String> = active_slots
+                .iter()
+                .map(|c| format!("{:?}", c.slot))
+                .collect();
+            lines.push(format!(
+                "    active static slots: {}",
+                active_names.join(", ")
+            ));
+        }
+        let deferred: Vec<String> = fact
+            .tui_slots
+            .iter()
+            .filter(|slot| {
+                !matches!(
+                    slot,
+                    crate::plugins::TuiSlot::SidebarFooter | crate::plugins::TuiSlot::StatusBar
+                )
+            })
+            .map(|slot| format!("{:?}", slot))
+            .collect();
+        if !deferred.is_empty() {
+            lines.push(format!("    deferred slots: {}", deferred.join(", ")));
+        }
+    }
+    lines.join("\n")
+}
+
 /// /debug - Toggle debug mode
 pub fn handle_debug_cmd(_app: &mut TuiApp, args: &str) -> String {
     if args.is_empty() || args == "on" {

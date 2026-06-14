@@ -254,11 +254,11 @@ Keep the scope **safe but real**: do not run arbitrary plugin UI code. Add a sma
 
 ### Acceptance
 
-- [ ] A plugin with `tui.slots = ["sidebar_footer"]` and a `panel.md` renders its content in the session sidebar.
-- [ ] A plugin with `tui.slots = ["status_bar"]` appends a segment to the status bar.
-- [ ] `/plugins` lists discovered plugins and their declared slots.
-- [ ] No plugin code is executed; only static markdown is rendered.
-- [ ] Unsupported slots are reported as declared-but-not-rendered, not silently ignored.
+- [x] A plugin with `tui.slots = ["sidebar_footer"]` and a `panel.md` renders its content in the session sidebar.
+- [x] A plugin with `tui.slots = ["status_bar"]` appends a segment to the status bar.
+- [x] `/plugins` lists discovered plugins and their declared slots.
+- [x] No plugin code is executed; only static markdown is rendered.
+- [x] Unsupported slots are reported as declared-but-not-rendered, not silently ignored.
 
 ### Validation
 

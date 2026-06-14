@@ -947,6 +947,7 @@ impl TuiApp {
             // Phase 10 Batch 2: hooks, profiling, prompt, migrate, focus, pause, install, skeleton, branch, color
             "/hooks" => slash::handle_hooks(self),
             "/profiling" => slash::handle_profiling(self),
+            "/plugins" => slash::handle_plugins(self),
             "/prompt" => slash::handle_prompt(self, args).await,
             "/migrate" => slash::handle_migrate(self, args).await,
             "/focus" => slash::handle_focus(self, args),

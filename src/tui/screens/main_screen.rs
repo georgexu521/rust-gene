@@ -837,7 +837,7 @@ fn render_context_panel(f: &mut Frame, app: &TuiApp, area: Rect) {
         "off".to_string()
     };
 
-    let lines = vec![
+    let mut lines = vec![
         context_heading("Session", app),
         context_row(
             "id",
@@ -892,6 +892,33 @@ fn render_context_panel(f: &mut Frame, app: &TuiApp, area: Rect) {
         Line::from(""),
         context_row("keys", "Ctrl+Tab panel · b sidebar", app),
     ];
+
+    // Append static plugin sidebar_footer contributions (safe display only).
+    let footer_contributions: Vec<_> = app
+        .plugin_ui_contributions
+        .iter()
+        .filter(|c| matches!(c.slot, crate::plugins::TuiSlot::SidebarFooter))
+        .collect();
+    if !footer_contributions.is_empty() {
+        lines.push(Line::from(""));
+        lines.push(context_heading("Plugins", app));
+        for contribution in footer_contributions {
+            let text = contribution
+                .content
+                .lines()
+                .next()
+                .unwrap_or(&contribution.title)
+                .trim()
+                .to_string();
+            if !text.is_empty() {
+                lines.push(context_row(
+                    "plugin",
+                    format!("{}: {}", contribution.plugin_id, text),
+                    app,
+                ));
+            }
+        }
+    }
 
     f.render_widget(
         Paragraph::new(Text::from(lines))

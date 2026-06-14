@@ -15,10 +15,40 @@ See `docs/TUI_NEXT_STEPS_PLAN_2026-06-14.md` for the full gap analysis.
 - **Priority 7**: Multi-select file picker (`5b855dfc`).
 - **Priority 5**: Workspace switcher and durable workspace metadata (`291a60a6`).
 - **Priority 6**: Per-session UI state cache, `/back`, and leader+g cycling (`e0aaf8da`).
+- **Priority 4**: Static plugin UI slot rendering.
 
 ### Remaining
 
-- **Priority 4**: Static plugin UI slot rendering.
+- (none)
+
+## Priority 4 — Static Plugin UI Slot Rendering (2026-06-14)
+
+Implemented static plugin UI slots for safe display-only surfaces:
+
+- Added `PluginUiSlotContent` runtime content type in `src/plugins/mod.rs`.
+- Plugins declare TUI slots in `plugin.toml` under `[tui] slots` and may provide
+  `panel.md` with TOML frontmatter (`slot`, `title`) plus markdown body.
+- Only `SidebarFooter` and `StatusBar` slots are rendered; `MessageBeforeSend`,
+  `ToolCard`, and `SidebarTitle` are explicitly deferred.
+- `TuiApp` discovers plugin facts on startup and stores static contributions in
+  `plugin_ui_contributions`.
+- `SidebarFooter` contributions render inside the context panel.
+- `StatusBar` contributions append as `plugin:<text>` footer items.
+- New `/plugins` slash command lists discovered plugins, status, declared slots,
+  active static slots, and deferred slots.
+- Added unit tests for `load_static_ui_contributions` covering panel.md parsing,
+  unsupported-slot filtering, and fallback without panel.md.
+
+Key source files:
+
+```
+src/plugins/mod.rs                     — slot types, panel.md loader, tests
+src/tui/app.rs                         — plugin discovery on startup
+src/tui/screens/main_screen.rs         — SidebarFooter rendering
+src/tui/view_model/footer.rs           — StatusBar slot footer items
+src/tui/slash_handler/observability.rs — /plugins command
+src/tui/app/slash_commands.rs          — /plugins dispatch
+```
 
 ## Codex Goal Mode — Implemented (2026-06-11)
 

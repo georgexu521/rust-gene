@@ -397,6 +397,10 @@ pub struct TuiApp {
     pub provider_notice: Option<String>,
     /// Skill invocations waiting for final assistant outcome attribution.
     pending_skill_invocations: Vec<PendingSkillInvocation>,
+    /// Discovered plugins and their runtime facts.
+    pub plugin_facts: Vec<crate::plugins::PluginRuntimeFacts>,
+    /// Static plugin UI slot contributions (sidebar_footer, status_bar).
+    pub plugin_ui_contributions: Vec<crate::plugins::PluginUiSlotContent>,
 }
 
 fn parse_on_off(value: &str) -> Option<bool> {
@@ -935,7 +939,7 @@ impl TuiApp {
 
         // Restart safety: mark any active goals as paused so they don't auto-resume
 
-        Self {
+        let mut app = Self {
             mode: AppMode::Chat,
             mode_stack: Vec::new(),
             leader_state: None,
@@ -1051,9 +1055,26 @@ impl TuiApp {
             provider_select_query: String::new(),
             provider_notice: None,
             pending_skill_invocations: Vec::new(),
+            plugin_facts: Vec::new(),
+            plugin_ui_contributions: Vec::new(),
             goal_runner: None,
             pending_goal_prompt: None,
-        }
+        };
+
+        app.refresh_plugin_facts();
+
+        app
+    }
+
+    /// Rediscover plugins and refresh runtime facts + static UI contributions.
+    pub fn refresh_plugin_facts(&mut self) {
+        let roots = crate::plugins::default_plugin_roots(
+            &std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")),
+        );
+        let plugins = crate::plugins::discover_plugins(&roots);
+        let trust_mode = crate::plugins::trust::TrustMode::Off;
+        self.plugin_facts = crate::plugins::runtime_facts(&plugins, trust_mode);
+        self.plugin_ui_contributions = crate::plugins::load_static_ui_contributions(&plugins);
     }
 
     pub(crate) fn lazy_goal_runner(&mut self) -> Option<&crate::engine::goal::runner::GoalRunner> {

@@ -110,6 +110,26 @@ pub fn footer_items(app: &TuiApp) -> Vec<FooterItem> {
 
     items.push(FooterItem::new("? shortcuts", FooterTone::Faint));
 
+    // Append static plugin status-bar contributions (safe display only).
+    for contribution in app
+        .plugin_ui_contributions
+        .iter()
+        .filter(|c| matches!(c.slot, crate::plugins::TuiSlot::StatusBar))
+    {
+        let text = contribution
+            .content
+            .lines()
+            .next()
+            .unwrap_or(&contribution.title)
+            .trim();
+        if !text.is_empty() {
+            items.push(FooterItem::new(
+                format!("plugin:{}", text),
+                FooterTone::Info,
+            ));
+        }
+    }
+
     items
 }
 
