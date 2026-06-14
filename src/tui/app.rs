@@ -1291,7 +1291,7 @@ impl TuiApp {
         if raw_path.is_empty() {
             return Err("Usage: /attach <path>|remove <n>|clear|list".to_string());
         }
-        if self.composer_attachment_tokens.len() + self.composer_attachments.len() >= 12 {
+        if self.composer_attachment_count() >= 12 {
             return Err("Attachment limit reached for this prompt.".to_string());
         }
 
@@ -1301,31 +1301,49 @@ impl TuiApp {
             .composer_attachment_tokens
             .iter()
             .any(|t| t.path == token.path)
-            || self.composer_attachments.iter().any(|p| p == &display)
+            || self
+                .composer_attachments
+                .iter()
+                .any(|p| p == &display || p == &token.path)
         {
             return Ok(format!("Already attached: {display}"));
         }
 
-        self.composer_attachments.retain(|p| {
-            !self
-                .composer_attachment_tokens
-                .iter()
-                .any(|t| t.label == *p)
-        });
-        self.composer_attachments.push(display.clone());
+        self.composer_attachment_tokens.push(token);
         Ok(format!("Attached context: {display}"))
     }
 
     pub fn remove_composer_attachment(&mut self, one_based_index: usize) -> Option<String> {
-        if one_based_index == 0 || one_based_index > self.composer_attachments.len() {
+        if one_based_index == 0 {
             return None;
         }
-        Some(self.composer_attachments.remove(one_based_index - 1))
+        let target = self
+            .composer_attachment_paths()
+            .get(one_based_index - 1)
+            .cloned()?;
+
+        if let Some(pos) = self
+            .composer_attachment_tokens
+            .iter()
+            .position(|token| token.label == target || token.path == target)
+        {
+            let token = self.composer_attachment_tokens.remove(pos);
+            self.composer_attachments
+                .retain(|path| path != &token.label && path != &token.path);
+            return Some(token.label);
+        }
+
+        let pos = self
+            .composer_attachments
+            .iter()
+            .position(|path| path == &target)?;
+        Some(self.composer_attachments.remove(pos))
     }
 
     pub fn remove_last_composer_attachment(&mut self) -> Option<String> {
         if let Some(token) = self.composer_attachment_tokens.pop() {
-            self.composer_attachments.retain(|p| p != &token.label);
+            self.composer_attachments
+                .retain(|p| p != &token.label && p != &token.path);
             Some(token.label)
         } else {
             self.composer_attachments.pop()
@@ -1333,30 +1351,22 @@ impl TuiApp {
     }
 
     pub fn clear_composer_attachments(&mut self) -> usize {
-        let count = self.composer_attachment_tokens.len() + self.composer_attachments.len();
+        let count = self.composer_attachment_count();
         self.composer_attachment_tokens.clear();
         self.composer_attachments.clear();
         count
     }
 
     pub fn composer_attachment_summaries(&self) -> Vec<String> {
-        let mut summaries: Vec<String> = self
-            .composer_attachment_tokens
+        self.composer_attachment_paths()
             .iter()
             .enumerate()
-            .map(|(idx, t)| format!("[{}] {}", idx + 1, attachment_summary(&t.label, 44)))
-            .collect();
-        summaries.extend(
-            self.composer_attachments
-                .iter()
-                .enumerate()
-                .map(|(idx, path)| format!("[{}] {}", idx + 1, attachment_summary(path, 44))),
-        );
-        summaries
+            .map(|(idx, path)| format!("[{}] {}", idx + 1, attachment_summary(path, 44)))
+            .collect()
     }
 
     pub fn composer_attachment_count(&self) -> usize {
-        self.composer_attachments.len()
+        self.composer_attachment_paths().len()
     }
 
     pub fn toggle_pinned_session(&mut self, session_id: &str) -> bool {
@@ -1389,6 +1399,9 @@ impl TuiApp {
         path: impl AsRef<std::path::Path>,
         source: AttachmentSource,
     ) -> Option<String> {
+        if self.composer_attachment_count() >= 12 {
+            return None;
+        }
         let token = AttachmentToken::from_path(path, source);
         if self
             .composer_attachment_tokens
@@ -1399,9 +1412,6 @@ impl TuiApp {
         }
         let label = token.label.clone();
         self.composer_attachment_tokens.push(token);
-        if !self.composer_attachments.contains(&label) {
-            self.composer_attachments.push(label.clone());
-        }
         Some(label)
     }
 
@@ -1411,16 +1421,18 @@ impl TuiApp {
             .iter()
             .position(|t| t.id == id)?;
         let token = self.composer_attachment_tokens.remove(pos);
-        self.composer_attachments.retain(|p| p != &token.label);
+        self.composer_attachments
+            .retain(|p| p != &token.label && p != &token.path);
         Some(token)
     }
 
     pub fn open_attachment_viewer(&mut self, index: Option<usize>) -> bool {
-        if self.composer_attachments.is_empty() {
+        let paths = self.composer_attachment_paths();
+        if paths.is_empty() {
             return false;
         }
         let selected = index.unwrap_or(1).saturating_sub(1);
-        let Some(path) = self.composer_attachments.get(selected).cloned() else {
+        let Some(path) = paths.get(selected).cloned() else {
             return false;
         };
         let absolute = resolve_attachment_path(&path);
@@ -1444,12 +1456,13 @@ impl TuiApp {
     }
 
     fn compose_message_with_attachments(&self, content: String) -> String {
-        if self.composer_attachments.is_empty() {
+        let paths = self.composer_attachment_paths();
+        if paths.is_empty() {
             return content;
         }
 
         let mut composed = String::from("Attached context:\n");
-        for path in &self.composer_attachments {
+        for path in &paths {
             composed.push_str("- ");
             composed.push_str(&attachment_summary(path, 96));
             composed.push('\n');
@@ -1457,6 +1470,25 @@ impl TuiApp {
         composed.push_str("\nUser request:\n");
         composed.push_str(&content);
         composed
+    }
+
+    fn composer_attachment_paths(&self) -> Vec<String> {
+        let mut seen = BTreeSet::new();
+        let mut paths = Vec::new();
+        for token in &self.composer_attachment_tokens {
+            let was_seen = seen.contains(&token.path) || seen.contains(&token.label);
+            seen.insert(token.path.clone());
+            seen.insert(token.label.clone());
+            if !was_seen {
+                paths.push(token.label.clone());
+            }
+        }
+        for path in &self.composer_attachments {
+            if seen.insert(path.clone()) {
+                paths.push(path.clone());
+            }
+        }
+        paths
     }
 
     fn expand_paste_placeholders(&self, content: &str) -> String {

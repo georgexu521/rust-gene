@@ -104,11 +104,11 @@ cargo test -q message --lib
 
 ---
 
-## Priority 2: Composer attachment pills and `@` file autocomplete
+## Priority 2: Composer attachment pills and `@` file picker
 
 ### Gap
 
-Attachments are shown only in the context strip above the input (`files:N`). There are no inline attachment tokens/pills, no `@filename` autocomplete, and pasted file paths go straight to `composer_attachments` without visual feedback in the input.
+Attachments are shown only in the context strip above the input (`files:N`). There are no inline attachment tokens/pills, no quick `@` file picker/filter entry, and pasted file paths go straight to `composer_attachments` without visual feedback in the input.
 
 ### OpenCode reference
 
@@ -132,7 +132,7 @@ Attachments are shown only in the context strip above the input (`files:N`). The
    - `composer_attachment_tokens: Vec<AttachmentToken>` in `TuiApp`
    - compatibility helpers that still expose the current string paths to submission code.
 3. Render attachment pills inline in `composer.rs` using bracketed spans (for example `[file Cargo.toml]`). Avoid storing those visual pills in the text buffer.
-4. Add `@` detection in `handle_fallback_key_event`: when the user types `@`, open a file autocomplete overlay. Prefer extending the existing file picker with an `AttachmentAutocomplete` mode over adding file matching logic to `InputState`.
+4. Add `@` detection in `handle_fallback_key_event`: when the user types `@`, open the reusable file picker in attachment mode. The current MVP supports picker filtering; full inline `@foo` fuzzy query editing can remain a follow-up once the projection store is stable.
 5. Pasted file paths and dropped paths create attachment tokens with visible feedback in the composer.
 6. Backspace near an attachment pill removes the token at the composer layer; regular Backspace edits text.
 
@@ -147,7 +147,7 @@ Attachments are shown only in the context strip above the input (`files:N`). The
 
 ### Acceptance
 
-- [x] Typing `@` opens a fuzzy file autocomplete overlay.
+- [x] Typing `@` opens a reusable file picker/filter overlay for attachment intake.
 - [x] Selected files become inline `[file path]` pills in the composer.
 - [x] Pasted/dropped file paths become pills and are sent as attachments.
 - [x] Backspace removes a pill when the cursor is immediately after it.

@@ -178,11 +178,7 @@ pub async fn handle_new(app: &mut TuiApp) -> String {
             .flush_memory_for_current_history(crate::memory::MemoryFlushReason::ResumeSwitch)
             .await;
     }
-    let model = app
-        .streaming_engine
-        .as_ref()
-        .map(|_| "kimi-k2.5")
-        .unwrap_or("unknown");
+    let model = app.current_model_label();
 
     if let Some(current) = app.session_manager.current_session_id().map(str::to_string) {
         app.save_session_ui_state(&current);
@@ -190,7 +186,7 @@ pub async fn handle_new(app: &mut TuiApp) -> String {
 
     match app.session_manager.start_session(
         "New Session",
-        model,
+        &model,
         Some(&app.workspace.root.to_string_lossy()),
     ) {
         Ok(id) => {
@@ -1219,7 +1215,7 @@ pub async fn handle_session_cmd(app: &mut TuiApp, args: &str) -> String {
             .unwrap_or("New Session");
         match app.session_manager.start_session(
             title,
-            "kimi-k2.5",
+            &app.current_model_label(),
             Some(&app.workspace.root.to_string_lossy()),
         ) {
             Ok(id) => {

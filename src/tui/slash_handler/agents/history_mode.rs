@@ -98,7 +98,7 @@ pub fn handle_prompt_stash(app: &mut TuiApp, args: &str) -> String {
 pub fn handle_attach(app: &mut TuiApp, args: &str) -> String {
     let args = args.trim();
     if args.is_empty() || args == "list" {
-        if app.composer_attachments.is_empty() {
+        if app.composer_attachment_count() == 0 {
             return "No composer attachments. Use /attach <path> to add one.".to_string();
         }
         let mut lines = vec![format!(

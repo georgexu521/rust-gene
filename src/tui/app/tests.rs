@@ -658,6 +658,8 @@ fn test_paste_existing_file_path_attaches_as_token() {
         .composer_attachment_tokens
         .iter()
         .any(|t| t.path.ends_with("Cargo.toml")));
+    assert_eq!(app.composer_attachment_count(), 1);
+    assert_eq!(app.composer_attachment_summaries().len(), 1);
     assert!(!app.input.value().contains("Cargo.toml"));
 }
 
@@ -755,6 +757,8 @@ fn test_composer_attachments_add_remove_and_clear() {
     let added = app.attach_context_path("Cargo.toml").unwrap();
     assert!(added.contains("Attached context: Cargo.toml"));
     assert_eq!(app.composer_attachment_count(), 1);
+    assert_eq!(app.composer_attachment_tokens.len(), 1);
+    assert!(app.composer_attachments.is_empty());
     let summaries = app.composer_attachment_summaries();
     assert_eq!(summaries.len(), 1);
     assert!(summaries[0].contains("[1] Cargo.toml"));
@@ -768,9 +772,39 @@ fn test_composer_attachments_add_remove_and_clear() {
         app.remove_composer_attachment(1).as_deref(),
         Some("Cargo.toml")
     );
+    assert!(app.composer_attachment_tokens.is_empty());
     assert_eq!(app.composer_attachment_count(), 0);
 
     app.attach_context_path("Cargo.toml").unwrap();
+    assert_eq!(app.clear_composer_attachments(), 1);
+    assert_eq!(app.composer_attachment_count(), 0);
+}
+
+#[test]
+fn test_token_attachments_remove_clear_and_summarize_once() {
+    let mut app = TuiApp::new();
+
+    let label = app
+        .add_attachment_token_from_path("Cargo.toml", AttachmentSource::Autocomplete)
+        .expect("attachment should be added");
+
+    assert_eq!(label, "Cargo.toml");
+    assert_eq!(app.composer_attachment_count(), 1);
+    assert_eq!(app.composer_attachment_summaries().len(), 1);
+    assert!(app.composer_attachments.is_empty());
+
+    app.composer_attachments.push("Cargo.toml".to_string());
+    assert_eq!(app.composer_attachment_count(), 1);
+    assert_eq!(app.composer_attachment_summaries().len(), 1);
+
+    assert_eq!(
+        app.remove_composer_attachment(1).as_deref(),
+        Some("Cargo.toml")
+    );
+    assert_eq!(app.composer_attachment_count(), 0);
+
+    app.add_attachment_token_from_path("Cargo.toml", AttachmentSource::Autocomplete)
+        .unwrap();
     assert_eq!(app.clear_composer_attachments(), 1);
     assert_eq!(app.composer_attachment_count(), 0);
 }
@@ -833,7 +867,7 @@ async fn test_attach_slash_updates_composer_attachments() {
     app.submit_message().await;
 
     assert_eq!(app.composer_attachment_count(), 1);
-    assert_eq!(app.composer_attachments[0], "Cargo.toml");
+    assert_eq!(app.composer_attachment_tokens[0].label, "Cargo.toml");
     let system_message = app
         .messages
         .iter()
@@ -910,7 +944,9 @@ fn test_file_picker_attaches_selected_file() {
     assert!(attached.contains("Attached context"));
     assert_eq!(app.mode, AppMode::Chat);
     assert_eq!(app.composer_attachment_count(), 1);
-    assert!(app.composer_attachments[0].ends_with("note.txt"));
+    assert!(app.composer_attachment_tokens[0]
+        .label
+        .ends_with("note.txt"));
 
     let _ = std::fs::remove_dir_all(&root);
 }
@@ -2078,6 +2114,55 @@ fn test_model_selection_updates_engine_model() {
 
     assert_eq!(app.current_model_label(), "gpt-4o-mini");
     assert_eq!(app.mode, AppMode::Chat);
+}
+
+#[tokio::test]
+async fn test_new_session_uses_current_model_label() {
+    let mut app = TuiApp::new();
+    app.streaming_engine = Some(Arc::new(
+        crate::engine::streaming::StreamingQueryEngine::new(
+            Arc::new(MockProvider),
+            Arc::new(crate::tools::ToolRegistry::new()),
+            "deepseek-v4-flash",
+        ),
+    ));
+
+    let result = crate::tui::slash_handler::session::handle_new(&mut app).await;
+
+    assert!(result.contains("New session started"));
+    let session_id = app.session_manager.current_session_id().unwrap();
+    let record = app
+        .session_manager
+        .store()
+        .get_session(session_id)
+        .unwrap()
+        .unwrap();
+    assert_eq!(record.model, "deepseek-v4-flash");
+}
+
+#[tokio::test]
+async fn test_session_new_command_uses_current_model_label() {
+    let mut app = TuiApp::new();
+    app.streaming_engine = Some(Arc::new(
+        crate::engine::streaming::StreamingQueryEngine::new(
+            Arc::new(MockProvider),
+            Arc::new(crate::tools::ToolRegistry::new()),
+            "deepseek-v4-flash",
+        ),
+    ));
+
+    let result =
+        crate::tui::slash_handler::session::handle_session_cmd(&mut app, "new DeepSeek Work").await;
+
+    assert!(result.contains("Created new session: DeepSeek Work"));
+    let session_id = app.session_manager.current_session_id().unwrap();
+    let record = app
+        .session_manager
+        .store()
+        .get_session(session_id)
+        .unwrap()
+        .unwrap();
+    assert_eq!(record.model, "deepseek-v4-flash");
 }
 
 #[tokio::test]
