@@ -1,5 +1,9 @@
 //! Grep / glob / web_search / json_query tool inline renderer.
 
+use crate::tui::components::collapsible::{
+    collapse_footer, collapse_lines, tool_body_budget, wrap_line_to_width,
+    DEFAULT_TOOL_BODY_MAX_LINES,
+};
 use crate::tui::tool_view::ToolRunView;
 use ratatui::{
     style::{Modifier, Style},
@@ -10,6 +14,7 @@ pub fn render_search_tool(
     run: &ToolRunView,
     theme: &crate::tui::theme::Theme,
     width: usize,
+    inline_expanded: bool,
 ) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
 
@@ -88,55 +93,48 @@ pub fn render_search_tool(
             Style::default().fg(theme.tokens.fg.faint),
         )]));
     } else {
-        let effective_width = width.saturating_sub(6).max(1);
-        for raw in output.lines().take(20) {
-            let trimmed = raw.trim_end();
-            if trimmed.is_empty() {
-                lines.push(Line::from(""));
-                continue;
-            }
-            let wrapped = wrap_line(trimmed, effective_width);
-            for (idx, piece) in wrapped.iter().enumerate() {
-                let prefix = if idx == 0 { "  " } else { "     " };
-                lines.push(Line::from(vec![
-                    Span::styled(prefix, Style::default()),
-                    Span::styled(piece.to_string(), Style::default().fg(theme.tokens.fg.body)),
-                ]));
-            }
-        }
-        let total = output.lines().count();
-        if total > 20 {
-            lines.push(Line::from(vec![Span::styled(
-                format!("  ... ({} more lines)", total - 20),
-                Style::default().fg(theme.tokens.fg.faint),
-            )]));
+        let output_lines = render_search_output(output, width, theme);
+        let collapsed = if inline_expanded {
+            collapse_lines(output_lines, usize::MAX, usize::MAX)
+        } else {
+            collapse_lines(
+                output_lines,
+                DEFAULT_TOOL_BODY_MAX_LINES,
+                tool_body_budget(width.saturating_sub(6).max(1), DEFAULT_TOOL_BODY_MAX_LINES),
+            )
+        };
+        lines.extend(collapsed.visible);
+        if collapsed.is_truncated {
+            lines.push(collapse_footer(collapsed.hidden_lines, theme));
         }
     }
 
     lines
 }
 
-fn wrap_line(line: &str, width: usize) -> Vec<String> {
-    if width == 0 || line.chars().count() <= width {
-        return vec![line.to_string()];
-    }
-    let mut pieces = Vec::new();
-    let mut current = String::new();
-    let mut current_width = 0usize;
-    for ch in line.chars() {
-        let w = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0);
-        if current_width + w > width && !current.is_empty() {
-            pieces.push(current.clone());
-            current.clear();
-            current_width = 0;
+fn render_search_output(
+    output: &str,
+    width: usize,
+    theme: &crate::tui::theme::Theme,
+) -> Vec<Line<'static>> {
+    let mut lines = Vec::new();
+    let effective_width = width.saturating_sub(6).max(1);
+    for raw in output.lines() {
+        let trimmed = raw.trim_end();
+        if trimmed.is_empty() {
+            lines.push(Line::from(""));
+            continue;
         }
-        current.push(ch);
-        current_width += w;
+        let wrapped = wrap_line_to_width(trimmed, effective_width);
+        for (idx, piece) in wrapped.iter().enumerate() {
+            let prefix = if idx == 0 { "  " } else { "     " };
+            lines.push(Line::from(vec![
+                Span::styled(prefix, Style::default()),
+                Span::styled(piece.to_string(), Style::default().fg(theme.tokens.fg.body)),
+            ]));
+        }
     }
-    if !current.is_empty() {
-        pieces.push(current);
-    }
-    pieces
+    lines
 }
 
 #[cfg(test)]
@@ -151,12 +149,36 @@ mod tests {
         run.arguments = Some(serde_json::json!({"pattern": "TODO", "path": "src"}));
         run.mark_complete("src/lib.rs:10: TODO: fix bug".to_string());
 
-        let lines = render_search_tool(&run, &theme, 80);
+        let lines = render_search_tool(&run, &theme, 80, false);
         let text: String = lines
             .iter()
             .flat_map(|l| l.spans.iter().map(|s| s.content.to_string()))
             .collect();
         assert!(text.contains("TODO"));
         assert!(text.contains("src/lib.rs:10"));
+    }
+
+    #[test]
+    fn grep_renderer_collapses_long_output() {
+        let theme = Theme::default();
+        let mut run = ToolRunView::new("call_1".to_string(), "grep".to_string());
+        run.arguments = Some(serde_json::json!({"pattern": "TODO", "path": "src"}));
+        run.result_body = Some(
+            (1..=100)
+                .map(|i| format!("src/{}.rs: TODO {}", i, i))
+                .collect::<Vec<_>>()
+                .join("\n"),
+        );
+        run.mark_complete(run.result_body.clone().unwrap());
+
+        let collapsed = render_search_tool(&run, &theme, 80, false);
+        let expanded = render_search_tool(&run, &theme, 80, true);
+
+        assert!(collapsed.len() < expanded.len());
+        let text: String = collapsed
+            .iter()
+            .flat_map(|l| l.spans.iter().map(|s| s.content.to_string()))
+            .collect();
+        assert!(text.contains("more lines"));
     }
 }

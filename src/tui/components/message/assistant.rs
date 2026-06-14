@@ -1,6 +1,9 @@
 use crate::{
     state::MessageItem,
     tui::{
+        components::collapsible::{
+            collapse_footer, collapse_lines, flatten_line_breaks, DEFAULT_TEXT_PART_MAX_LINES,
+        },
         sync_store::{TuiMessagePart, TuiPartKind},
         view_model::reasoning::assistant_reasoning_view,
     },
@@ -19,6 +22,7 @@ pub(super) fn render_assistant_message<'a>(
     theme: &'a crate::tui::theme::Theme,
     stream: Option<&StreamMeta>,
     options: MessageRenderOptions,
+    width: usize,
 ) -> Paragraph<'a> {
     let is_streaming = stream.map(|s| s.is_streaming).unwrap_or(false);
     let tick = stream.map(|s| s.tick).unwrap_or(0);
@@ -128,7 +132,24 @@ pub(super) fn render_assistant_message<'a>(
         append_reasoning_body_for_parts(&mut lines, &reasoning_view, theme);
     }
 
-    append_markdown_lines(&mut lines, &visible_answer, theme, "  ");
+    let text_expanded = is_streaming || options.text_part_expanded;
+    let mut answer_lines = Vec::new();
+    append_markdown_lines(&mut answer_lines, &visible_answer, theme, "  ");
+    let answer_lines = flatten_line_breaks(answer_lines);
+    let collapsed = if text_expanded {
+        collapse_lines(answer_lines, usize::MAX, usize::MAX)
+    } else {
+        collapse_lines(
+            answer_lines,
+            DEFAULT_TEXT_PART_MAX_LINES,
+            width.saturating_mul(DEFAULT_TEXT_PART_MAX_LINES),
+        )
+    };
+    lines.extend(collapsed.visible);
+    if collapsed.is_truncated {
+        lines.push(collapse_footer(collapsed.hidden_lines, theme));
+    }
+
     Paragraph::new(Text::from(lines)).wrap(Wrap { trim: true })
 }
 

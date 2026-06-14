@@ -21,19 +21,33 @@ pub fn render_tool_lines(
     run: &ToolRunView,
     theme: &crate::tui::theme::Theme,
     width: usize,
+    inline_expanded: bool,
 ) -> Vec<Line<'static>> {
     match run.name.as_str() {
-        "bash" | "powershell" | "repl" => bash::render_bash_tool(run, theme, width),
+        "bash" | "powershell" | "repl" => {
+            bash::render_bash_tool(run, theme, width, inline_expanded)
+        }
         "file_edit" | "format" | "rewind" => file_edit::render_file_edit_tool(run, theme, width),
         "file_patch" => file_patch::render_file_patch_tool(run, theme, width),
         "file_read" | "git_status" | "git_diff" | "diff" | "lsp" | "context" => {
-            file_read::render_file_read_tool(run, theme, width)
+            file_read::render_file_read_tool(run, theme, width, inline_expanded)
         }
         "grep" | "glob" | "web_search" | "json_query" => {
-            grep::render_search_tool(run, theme, width)
+            grep::render_search_tool(run, theme, width, inline_expanded)
         }
         _ => render_fallback(run, theme, width),
     }
+}
+
+/// Estimate the visible height of a tool body in lines.
+pub fn estimate_tool_body_height(run: &ToolRunView, width: usize, inline_expanded: bool) -> usize {
+    render_tool_lines(
+        run,
+        &crate::tui::theme::Theme::default(),
+        width,
+        inline_expanded,
+    )
+    .len()
 }
 
 fn render_fallback(
@@ -95,7 +109,7 @@ mod tests {
         run.arguments = Some(serde_json::json!({"key": "value"}));
         run.result_body = Some("result line".to_string());
 
-        let lines = render_tool_lines(&run, &theme, 80);
+        let lines = render_tool_lines(&run, &theme, 80, false);
 
         let text: String = lines
             .iter()

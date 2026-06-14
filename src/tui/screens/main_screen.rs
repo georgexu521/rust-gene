@@ -211,12 +211,28 @@ pub fn render_chat_area(f: &mut Frame, app: &TuiApp, area: Rect) {
         let message_parts = (msg.role == MessageRole::Assistant)
             .then_some(*parts)
             .flatten();
+        let text_part_id = message_parts.and_then(|parts| {
+            parts
+                .iter()
+                .find(|p| p.kind == crate::tui::sync_store::TuiPartKind::Text)
+                .map(|p| p.id.clone())
+        });
+        let text_part_expanded = text_part_id
+            .map(|id| app.expanded_inline_message_part_ids.contains(&id))
+            .unwrap_or_else(|| {
+                app.expanded_inline_message_part_ids
+                    .contains(&crate::tui::sync_store::part_id_for(
+                        &msg.id,
+                        crate::tui::sync_store::TuiPartKind::Text,
+                    ))
+            });
         let message_height = estimate_message_height_with_parts_or_reasoning(
             msg,
             message_parts,
             inner_area.width as usize,
             collapsed,
             app.expanded_reasoning_message_id.as_deref() == Some(msg.id.as_str()),
+            text_part_expanded,
         )
         .min(msg_height as usize)
         .max(1) as u16;
@@ -231,6 +247,7 @@ pub fn render_chat_area(f: &mut Frame, app: &TuiApp, area: Rect) {
                 message::MessageRenderOptions {
                     reasoning_expanded: app.expanded_reasoning_message_id.as_deref()
                         == Some(msg.id.as_str()),
+                    text_part_expanded,
                 },
                 message_parts,
             )
@@ -471,7 +488,8 @@ fn render_tool_runs_message<'a>(
             ]));
         }
         if expanded {
-            let rendered = render_tool_lines(run, &app.theme, width);
+            let inline_expanded = app.expanded_inline_tool_ids.contains(&run.id);
+            let rendered = render_tool_lines(run, &app.theme, width, inline_expanded);
             for mut rendered_line in rendered {
                 for span in rendered_line.spans.iter_mut() {
                     span.style = span.style.patch(Style::default());

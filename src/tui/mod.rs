@@ -997,6 +997,16 @@ async fn handle_key_event(key: KeyEvent, app: &mut TuiApp) -> anyhow::Result<boo
         return Ok(handled);
     }
 
+    // Toggle inline expand/collapse for the focused message or tool body when
+    // the composer is empty.
+    if key.code == KeyCode::Enter
+        && app.input.is_empty()
+        && matches!(app.mode, app::AppMode::Chat | app::AppMode::VimNormal)
+        && app.toggle_collapsible_at_scroll_anchor()
+    {
+        return Ok(false);
+    }
+
     let action = app.keybindings.action_for(key, app.mode);
 
     match action {

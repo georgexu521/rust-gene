@@ -2,6 +2,7 @@
 //!
 //! 可复用的 UI 组件
 
+pub mod collapsible;
 pub mod diff_renderer;
 pub mod diff_viewer;
 pub mod file_browser;

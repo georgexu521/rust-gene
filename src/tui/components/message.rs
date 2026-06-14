@@ -27,6 +27,7 @@ use user::render_user_message;
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct MessageRenderOptions {
     pub reasoning_expanded: bool,
+    pub text_part_expanded: bool,
 }
 
 /// Render a card header line: `glyph  ROLE  · meta`
@@ -113,9 +114,14 @@ pub fn render_message<'a>(
     let kind = detect_card_kind(message);
     match message.role {
         MessageRole::User => render_user_message(message, theme),
-        MessageRole::Assistant => {
-            render_assistant_message(message, None, theme, None, MessageRenderOptions::default())
-        }
+        MessageRole::Assistant => render_assistant_message(
+            message,
+            None,
+            theme,
+            None,
+            MessageRenderOptions::default(),
+            _width,
+        ),
         MessageRole::System => render_system_message(message, theme, kind),
         MessageRole::Tool => render_tool_message(message, theme, kind),
     }
@@ -137,6 +143,7 @@ pub fn render_message_with_stream<'a>(
             theme,
             stream,
             MessageRenderOptions::default(),
+            _width,
         ),
         MessageRole::System => render_system_message(message, theme, kind),
         MessageRole::Tool => render_tool_message(message, theme, kind),
@@ -154,7 +161,9 @@ pub fn render_message_with_options<'a>(
     let kind = detect_card_kind(message);
     match message.role {
         MessageRole::User => render_user_message(message, theme),
-        MessageRole::Assistant => render_assistant_message(message, parts, theme, stream, options),
+        MessageRole::Assistant => {
+            render_assistant_message(message, parts, theme, stream, options, _width)
+        }
         MessageRole::System => render_system_message(message, theme, kind),
         MessageRole::Tool => render_tool_message(message, theme, kind),
     }
@@ -292,6 +301,7 @@ mod tests {
             &message,
             MessageRenderOptions {
                 reasoning_expanded: true,
+                text_part_expanded: false,
             },
         );
 
@@ -375,15 +385,41 @@ mod tests {
     }
 
     #[test]
-    fn assistant_message_collapses_think_blocks() {
-        let rendered = render_message_text(&make_msg(
-            MessageRole::Assistant,
-            "<think>private reasoning</think>\nVisible answer",
-        ));
+    fn assistant_long_text_collapses_and_expands() {
+        use ratatui::{backend::TestBackend, Terminal};
 
-        assert!(rendered.contains("Thinking hidden"));
-        assert!(rendered.contains("Visible answer"));
-        assert!(!rendered.contains("<think>"));
-        assert!(!rendered.contains("private reasoning"));
+        let content = (0..60)
+            .map(|i| format!("line {}", i))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let message = make_msg(MessageRole::Assistant, &content);
+        let theme = Theme::default();
+
+        let render_text = |options| {
+            let paragraph =
+                assistant::render_assistant_message(&message, None, &theme, None, options, 120);
+            let backend = TestBackend::new(120, 64);
+            let mut terminal = Terminal::new(backend).unwrap();
+            terminal
+                .draw(|frame| frame.render_widget(paragraph, frame.area()))
+                .unwrap();
+            terminal
+                .backend()
+                .buffer()
+                .content()
+                .iter()
+                .map(|cell| cell.symbol())
+                .collect::<String>()
+        };
+
+        let collapsed = render_text(MessageRenderOptions::default());
+        assert!(collapsed.contains("more lines"));
+
+        let expanded = render_text(MessageRenderOptions {
+            reasoning_expanded: false,
+            text_part_expanded: true,
+        });
+        assert!(!expanded.contains("more lines"));
+        assert!(expanded.contains("line 59"));
     }
 }

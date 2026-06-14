@@ -1513,6 +1513,55 @@ fn test_toggle_reasoning_uses_current_assistant_anchor() {
 }
 
 #[test]
+fn test_toggle_collapsible_expands_assistant_text_part() {
+    let mut app = TuiApp::new();
+    app.messages.push(MessageItem {
+        id: "assistant_1".to_string(),
+        role: MessageRole::Assistant,
+        content: (0..100)
+            .map(|i| format!("line {}", i))
+            .collect::<Vec<_>>()
+            .join("\n"),
+        timestamp: std::time::SystemTime::UNIX_EPOCH,
+        metadata: Default::default(),
+    });
+    app.scroll_offset = 0;
+
+    assert!(app.toggle_collapsible_at_scroll_anchor());
+    let part_id = crate::tui::sync_store::part_id_for(
+        "assistant_1",
+        crate::tui::sync_store::TuiPartKind::Text,
+    );
+    assert!(app.expanded_inline_message_part_ids.contains(&part_id));
+
+    assert!(app.toggle_collapsible_at_scroll_anchor());
+    assert!(!app.expanded_inline_message_part_ids.contains(&part_id));
+}
+
+#[test]
+fn test_toggle_collapsible_expands_inline_tool_body() {
+    let mut app = TuiApp::new();
+    app.messages.push(MessageItem {
+        id: "user_1".to_string(),
+        role: MessageRole::User,
+        content: "run tool".to_string(),
+        timestamp: std::time::SystemTime::UNIX_EPOCH,
+        metadata: Default::default(),
+    });
+    app.sync_snapshot.set_tool_runs_for_message(
+        "user_1".to_string(),
+        vec![ToolRunView::new("tool_1".to_string(), "bash".to_string())],
+    );
+    app.scroll_offset = 0;
+
+    assert!(app.toggle_collapsible_at_scroll_anchor());
+    assert!(app.expanded_inline_tool_ids.contains("tool_1"));
+
+    assert!(app.toggle_collapsible_at_scroll_anchor());
+    assert!(!app.expanded_inline_tool_ids.contains("tool_1"));
+}
+
+#[test]
 fn test_manual_scroll_anchor_survives_inserted_timeline_items() {
     let mut app = TuiApp::new();
     app.messages.push(MessageItem {

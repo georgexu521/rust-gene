@@ -753,6 +753,71 @@ impl TuiApp {
         true
     }
 
+    pub fn toggle_collapsible_at_scroll_anchor(&mut self) -> bool {
+        let projected_messages = self.visible_timeline_messages();
+        let messages = projected_messages.iter().collect::<Vec<_>>();
+        let timeline = crate::tui::view_model::timeline::timeline_items(&messages, self);
+        if timeline.is_empty() {
+            return false;
+        }
+
+        let anchor = crate::tui::view_model::timeline::resolve_scroll_offset(
+            &timeline,
+            self.scroll_offset,
+            self.scroll_anchor_id.as_deref(),
+        )
+        .min(timeline.len().saturating_sub(1));
+
+        for item in timeline.iter().take(anchor + 1).rev() {
+            match item {
+                crate::tui::view_model::timeline::TimelineItem::Message { msg, parts, .. } => {
+                    if msg.role == crate::state::MessageRole::Assistant
+                        && !msg.content.trim().is_empty()
+                    {
+                        let part_id = parts
+                            .and_then(|ps| {
+                                ps.iter()
+                                    .find(|p| p.kind == crate::tui::sync_store::TuiPartKind::Text)
+                                    .map(|p| p.id.clone())
+                            })
+                            .unwrap_or_else(|| {
+                                crate::tui::sync_store::part_id_for(
+                                    &msg.id,
+                                    crate::tui::sync_store::TuiPartKind::Text,
+                                )
+                            });
+                        if self.expanded_inline_message_part_ids.contains(&part_id) {
+                            self.expanded_inline_message_part_ids.remove(&part_id);
+                        } else {
+                            self.expanded_inline_message_part_ids.insert(part_id);
+                        }
+                        return true;
+                    }
+
+                    if msg.role == crate::state::MessageRole::User {
+                        if let Some(parts) = parts {
+                            let runs =
+                                crate::tui::view_model::timeline::tool_runs_from_parts(parts);
+                            if let Some(run) = runs.iter().find(|r| {
+                                crate::tui::view_model::tool_rows::tool_row_for_run(r, 100).visible
+                            }) {
+                                let id = run.id.clone();
+                                if self.expanded_inline_tool_ids.contains(&id) {
+                                    self.expanded_inline_tool_ids.remove(&id);
+                                } else {
+                                    self.expanded_inline_tool_ids.insert(id);
+                                }
+                                return true;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        false
+    }
+
     pub fn current_timeline_anchor_index(&self) -> usize {
         let projected_messages = self.visible_timeline_messages();
         let messages = projected_messages.iter().collect::<Vec<_>>();

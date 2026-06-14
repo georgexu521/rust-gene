@@ -18,7 +18,7 @@ use crate::tui::sync_store::{TuiSyncSnapshot, TuiSyncStore};
 use crate::tui::tool_view::{ToolRunStatus, ToolRunView};
 use crate::workspace::Workspace;
 use futures::StreamExt;
-use std::collections::{HashMap, VecDeque};
+use std::collections::{BTreeSet, HashMap, VecDeque};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -242,6 +242,10 @@ pub struct TuiApp {
     pub expanded_tool_run_id: Option<String>,
     /// 当前展开 reasoning 正文的 assistant message id；None 表示只显示摘要
     pub expanded_reasoning_message_id: Option<String>,
+    /// Inline-expanded tool bodies keyed by `tool_call_id`.
+    pub expanded_inline_tool_ids: BTreeSet<String>,
+    /// Inline-expanded assistant text parts keyed by `TuiMessagePart.id`.
+    pub expanded_inline_message_part_ids: BTreeSet<String>,
     stream_usage: Arc<Mutex<Option<StreamUsageSnapshot>>>,
     pub stream_usage_snapshot: Option<StreamUsageSnapshot>,
     /// Cached facade snapshot for synchronous rendering
@@ -790,6 +794,8 @@ impl TuiApp {
             transcript_expanded: false,
             expanded_tool_run_id: None,
             expanded_reasoning_message_id: None,
+            expanded_inline_tool_ids: BTreeSet::new(),
+            expanded_inline_message_part_ids: BTreeSet::new(),
             stream_usage: Arc::new(Mutex::new(None)),
             stream_usage_snapshot: None,
             facade_snapshot: RuntimeStateSnapshot::default(),

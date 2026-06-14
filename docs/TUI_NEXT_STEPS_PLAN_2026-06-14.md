@@ -8,21 +8,23 @@ Goal: Close the remaining interaction and extensibility gaps with OpenCode's TUI
 
 ## Background
 
-The previous optimization plan (Phases 1–5) brought the TUI to parity on architecture:
+The previous optimization plan (Phases 1–5) moved the TUI much closer to OpenCode's architecture, but it should not be treated as fully mature parity yet:
 
-- Message/part projection is canonical.
+- Message/part projection is now the preferred live rendering path.
 - Tool runs have per-type inline renderers.
 - Input supports selection, clipboard, undo/redo.
 - Keybindings use a mode stack and leader key.
 - Sessions support fork/share/compact and workspace grouping.
 - KV preferences and plugin/skill UI declarations are wired.
 
-This plan focuses on the polish and extension points that are still rough or missing compared to OpenCode:
+The recent reducer and tool-part migration still need normal readiness proof: targeted TUI tests, PTY/readiness matrix runs, and some real sessions. This plan therefore focuses on incremental UX polish and extension points, not another broad rewrite.
+
+The remaining polish and extension gaps are:
 
 1. Collapsible long message/tool output.
 2. Composer attachment pills and `@` file autocomplete.
 3. Leader-key pending state UI feedback.
-4. Actually executing plugin UI slots (not just validating manifest fields).
+4. Rendering static plugin UI slot contributions (not arbitrary plugin UI code).
 5. Workspace switcher and session migration.
 6. Child-session independent views/tabs.
 7. Multi-select file picker.
@@ -63,10 +65,17 @@ Tool renderers already truncate (`... (N more lines)`), but the user cannot expa
 
 ### Proposed change
 
-1. Add a `CollapsibleBlock` helper in `src/tui/components/collapsible.rs` that takes a list of `Line`s, a max-visible-lines budget, and a toggle callback.
-2. Use it inside each tool renderer's expanded body.
-3. Add per-`tool_call_id` expansion state keyed by `expanded_inline_tool_id` in `TuiApp`, separate from `expanded_tool_run_id`.
-4. For assistant text parts, add a `max_lines` config (default 48) and a `message_part_expanded_id` state; long parts render a "... (N more lines) — press Enter to expand" footer.
+1. Add a pure `CollapsibleBlock` helper in `src/tui/components/collapsible.rs`.
+   - Input: rendered `Line`s plus max line / max char budget.
+   - Output: visible lines plus overflow metadata (`hidden_lines`, `hidden_chars`, `is_truncated`).
+   - Do **not** put callbacks inside the renderer. Ratatui rendering should stay pure; input handling remains in `TuiApp` / `src/tui/mod.rs`.
+2. Use the helper inside each tool renderer's expanded body.
+3. Add expansion state in `TuiApp` keyed by canonical ids:
+   - `expanded_inline_tool_ids: BTreeSet<String>` keyed by `tool_call_id`.
+   - `expanded_message_part_ids: BTreeSet<String>` keyed by `TuiMessagePart.id`.
+4. Keep `expanded_tool_run_id` for the summary row focus behavior; do not overload it for inline body truncation.
+5. For assistant text parts, add a max-lines budget (default 48) and a footer such as `... N more lines - press Enter to expand`.
+6. Add focused-block navigation only if needed for `Enter`; otherwise start with expanding the currently focused tool/message part near the scroll anchor. Mouse click support can remain future work.
 
 ### Files
 
@@ -74,14 +83,16 @@ Tool renderers already truncate (`... (N more lines)`), but the user cannot expa
 - `src/tui/components/tool_renderers/{bash,file_read,grep}.rs`
 - `src/tui/components/message/assistant.rs`
 - `src/tui/app.rs` (new expand states)
-- `src/tui/mod.rs` (Enter/click to toggle focused collapsible)
+- `src/tui/screens/main_screen.rs` (pass expansion state into renderers)
+- `src/tui/mod.rs` (Enter to toggle the focused/anchored collapsible)
 
 ### Acceptance
 
-- [ ] Bash/file_read/grep tool bodies can expand/collapse inline.
-- [ ] Long assistant text/code blocks can expand/collapse inline.
-- [ ] Focused block toggles with `Enter`; `ctrl+t` still opens the full popup.
-- [ ] State is keyed per part/tool so toggling one does not expand everything.
+- [x] Bash/file_read/grep tool bodies can expand/collapse inline.
+- [x] Long assistant text/code blocks can expand/collapse inline.
+- [x] Focused block toggles with `Enter`; `ctrl+t` still opens the full popup.
+- [x] State is keyed per part/tool so toggling one does not expand everything.
+- [x] Rendering helpers remain pure and testable without TUI event callbacks.
 
 ### Validation
 
@@ -115,24 +126,29 @@ Attachments are shown only in the context strip above the input (`files:N`). The
 
 ### Proposed change
 
-1. Keep `InputState` as the text buffer, but add a parallel `composer_attachments: Vec<AttachmentToken>` to the composer state in `TuiApp`.
-2. Render attachment pills inline after the text in `composer.rs` using bracketed spans (e.g. `[📎 Cargo.toml]`).
-3. Add `@` detection in `handle_fallback_key_event`: when the user types `@`, open a file autocomplete overlay (`AppMode::FilePicker` variant or new `AppMode::AttachmentAutocomplete`).
-4. Pasted file paths and dropped paths insert an attachment token at the cursor instead of silently populating `composer_attachments`.
-5. Backspace on an attachment pill removes it; regular Backspace edits text.
+1. Keep `InputState` as a plain text editor. It should continue to own cursor movement, selection, clipboard, undo/redo, and text mutation only.
+2. Introduce a small composer-level model:
+   - `AttachmentToken { id, path, label, source }`
+   - `composer_attachment_tokens: Vec<AttachmentToken>` in `TuiApp`
+   - compatibility helpers that still expose the current string paths to submission code.
+3. Render attachment pills inline in `composer.rs` using bracketed spans (for example `[file Cargo.toml]`). Avoid storing those visual pills in the text buffer.
+4. Add `@` detection in `handle_fallback_key_event`: when the user types `@`, open a file autocomplete overlay. Prefer extending the existing file picker with an `AttachmentAutocomplete` mode over adding file matching logic to `InputState`.
+5. Pasted file paths and dropped paths create attachment tokens with visible feedback in the composer.
+6. Backspace near an attachment pill removes the token at the composer layer; regular Backspace edits text.
 
 ### Files
 
-- `src/tui/components/input.rs` (track attachment tokens separately from text)
+- `src/tui/components/attachment_token.rs` (new pure token helpers)
+- `src/tui/components/input.rs` (only if cursor/selection hooks are needed; do not store tokens here)
 - `src/tui/screens/main_screen/composer.rs` (inline pills)
-- `src/tui/app.rs` (`AttachmentToken` type, token list)
+- `src/tui/app.rs` (`AttachmentToken` list and compatibility helpers)
 - `src/tui/mod.rs` (`@` autocomplete, paste attachment tokenization)
 - `src/tui/components/file_browser.rs` (reuse for autocomplete list)
 
 ### Acceptance
 
 - [ ] Typing `@` opens a fuzzy file autocomplete overlay.
-- [ ] Selected files become inline `[📎 path]` pills in the composer.
+- [ ] Selected files become inline `[file path]` pills in the composer.
 - [ ] Pasted/dropped file paths become pills and are sent as attachments.
 - [ ] Backspace removes a pill when the cursor is immediately after it.
 - [ ] Submitted messages still send the union of text and attachments.
@@ -141,6 +157,7 @@ Attachments are shown only in the context strip above the input (`files:N`). The
 
 ```bash
 cargo test -q input --lib
+cargo test -q attachment_token --lib
 cargo test -q app --lib
 ```
 
@@ -191,11 +208,11 @@ cargo test -q app --lib
 
 ---
 
-## Priority 4: Execute plugin UI slots (not just validate)
+## Priority 4: Render static plugin UI slot contributions
 
 ### Gap
 
-We parse `tui.slots` in plugin manifests and expose them in `PluginRuntimeFacts`, but we never render anything contributed by a plugin.
+We parse `tui.slots` in plugin manifests and expose them in `PluginRuntimeFacts`, but we never render anything contributed by a plugin. The first implementation should prove the slot path without executing arbitrary plugin UI code or adding a full frontend plugin runtime.
 
 ### OpenCode reference
 
@@ -211,17 +228,21 @@ We parse `tui.slots` in plugin manifests and expose them in `PluginRuntimeFacts`
 
 ### Proposed change
 
-Keep the scope **safe but real**: do not run arbitrary plugin UI code; instead, add a small plugin contribution registry and let plugins contribute static markdown/routes to known slots.
+Keep the scope **safe but real**: do not run arbitrary plugin UI code. Add a small static contribution registry and support only low-risk display slots first.
 
-1. Add `PluginUiContribution` struct in `src/plugins/mod.rs`: `{ slot: TuiSlot, title: String, content: String, route: Option<String> }`.
-2. Load a `CONTRIBUTION.md` (or `panel.md`) from the plugin directory next to `plugin.toml`.
+1. Keep the existing `PluginTuiContribution` manifest type for declared slots. Add a separate runtime content type, for example `PluginUiSlotContent { plugin_id, slot, title, content }`, to avoid overloading the manifest struct.
+2. Load a small static `panel.md` from the plugin directory next to `plugin.toml`.
+   - Frontmatter may specify `slot = "sidebar_footer"` or `slot = "status_bar"`.
+   - If no frontmatter exists, only render it when exactly one declared slot is safe and supported.
 3. Store contributions in `TuiApp` after plugin discovery.
-4. Render contributions in the matching slots:
-   - `SidebarTitle`/`SidebarFooter`: append text to the session sidebar.
-   - `StatusBar`: append a segment to the status bar when active.
-   - `MessageBeforeSend`: show a confirmation/warning line before submitting a message that matches a plugin pattern.
-   - `ToolCard`: for now, only a placeholder; actual tool card injection is future work.
-5. Add `/plugins` or `/plugin list` command showing registered contributions.
+4. First supported slots:
+   - `SidebarFooter`: append concise static text to the session sidebar.
+   - `StatusBar`: append one short status segment.
+5. Explicitly defer:
+   - `MessageBeforeSend`: requires a safe pre-submit policy boundary.
+   - `ToolCard`: requires tool-card renderer injection and conflict rules.
+   - `SidebarTitle` replacement: avoid changing core navigation labels until slot ordering is tested.
+6. Add `/plugins` or `/plugin list` command showing discovered plugins, declared slots, and active static slot content.
 
 ### Files
 
@@ -229,7 +250,6 @@ Keep the scope **safe but real**: do not run arbitrary plugin UI code; instead, 
 - `src/tui/app.rs` (store contributions)
 - `src/tui/screens/main_screen.rs` (sidebar footer slot)
 - `src/tui/screens/main_screen/status_bar.rs` (status bar slot)
-- `src/tui/screens/main_screen/composer.rs` (message-before-send slot)
 - `src/tui/slash_handler/observability.rs` or new `/plugins` handler
 
 ### Acceptance
@@ -238,6 +258,7 @@ Keep the scope **safe but real**: do not run arbitrary plugin UI code; instead, 
 - [ ] A plugin with `tui.slots = ["status_bar"]` appends a segment to the status bar.
 - [ ] `/plugins` lists discovered plugins and their declared slots.
 - [ ] No plugin code is executed; only static markdown is rendered.
+- [ ] Unsupported slots are reported as declared-but-not-rendered, not silently ignored.
 
 ### Validation
 
@@ -271,16 +292,27 @@ We detect the workspace and group sessions by it, but there is no UI to switch w
 
 ### Proposed change
 
-1. Populate `workspace_root` in `SessionStore::create_session` and `create_child_session`.
-2. Add `SessionStore::list_workspaces()` and `list_sessions_by_workspace()`.
-3. Add `TuiSessionManager::sessions_by_workspace()`.
-4. Add a new overlay `AppMode::WorkspaceSwitcher` bound to `<leader>w`.
-5. Render a list of distinct workspace roots; `Enter` switches the current workspace context and sidebar filter.
-6. When switching to a session whose stored workspace differs from the current one, show a toast "Switched workspace to ...".
+Split this into two slices so the UI does not sit on top of non-durable state.
+
+**Slice A: durable workspace metadata**
+
+1. Populate `workspace_root` in session creation and child-session creation.
+2. Backfill `workspace_root` for existing sessions when possible:
+   - current workspace for sessions without a stored root;
+   - preserve `NULL`/unknown only when no local root can be inferred.
+3. Add `SessionStore::list_workspaces()` and `list_sessions_by_workspace()`.
+4. Keep `TuiSessionManager`'s in-memory tags only as a compatibility cache; durable store data should win.
+
+**Slice B: workspace switcher UI**
+
+5. Add `TuiSessionManager::sessions_by_workspace()` backed by store queries.
+6. Add a new overlay `AppMode::WorkspaceSwitcher` bound to `<leader>w`.
+7. Render a list of distinct workspace roots; `Enter` switches the current workspace context and sidebar filter.
+8. When switching to a session whose stored workspace differs from the current one, show a toast `Switched workspace to ...`.
 
 ### Files
 
-- `src/session_store/session_ops.rs` (workspace column writes/queries)
+- `src/session_store/` session creation/query code (workspace column writes/queries)
 - `src/tui/session_manager/mod.rs` (queries)
 - `src/tui/app.rs` (`Workspace` state + switch method)
 - `src/tui/mod.rs` (workspace switcher keymap + handler)
@@ -290,9 +322,11 @@ We detect the workspace and group sessions by it, but there is no UI to switch w
 ### Acceptance
 
 - [ ] New sessions persist their workspace root.
+- [ ] Existing sessions without durable workspace metadata get a deterministic fallback/backfill path.
 - [ ] `<leader>w` opens a workspace switcher.
 - [ ] Switching workspace filters the sidebar to that workspace (or shows all).
 - [ ] Loading a session from another workspace updates the active workspace and shows a toast.
+- [ ] Restarting the TUI preserves workspace grouping.
 
 ### Validation
 
@@ -414,6 +448,16 @@ For each item add:
 - `TestBackend` rendering assertions for overlays and composer pills.
 - One integration test in `tui::app::tests` verifying the end-to-end keymap path.
 
+### Readiness proof
+
+After the reducer/tool-part migration and after any priority that touches rendering or session switching, run the focused readiness path before marking it done:
+
+```bash
+bash scripts/tui_tool_turn_spine_readiness.sh
+```
+
+If the full script is too expensive for a small slice, run the relevant narrow PTY/readiness smoke and record the skipped scope in the commit or plan update.
+
 ### Feature flags
 
 No new native dependencies are expected. If plugin slot rendering pulls in a markdown parser, gate it behind `experimental-api-server` or a new `plugin-ui` feature.
@@ -432,7 +476,7 @@ These changes stay on the TUI side. The engine/runtime contract remains unchange
 4. **Priority 7 (multi-select picker)** — natural follow-up to attachment pills.
 5. **Priority 5 (workspace switcher)** — builds on existing workspace tag.
 6. **Priority 6 (child-session tabs)** — depends on workspace switcher being stable.
-7. **Priority 4 (plugin slot execution)** — largest architectural change; do last.
+7. **Priority 4 (static plugin slot rendering)** — largest architectural change; do last.
 
 ---
 
@@ -443,7 +487,7 @@ These changes stay on the TUI side. The engine/runtime contract remains unchange
 | 1 | Collapsible output | Reduces clutter; keeps context | Low | tool_renderers, message/assistant, app state |
 | 2 | Attachment pills + `@` | Modern composer UX | Medium | input, composer, file_browser, app |
 | 3 | Leader feedback | Discoverability | Low | app, status_bar |
-| 4 | Plugin slot execution | Extensibility | High | plugins, app, renderers |
+| 4 | Static plugin slot rendering | Extensibility | High | plugins, app, renderers |
 | 5 | Workspace switcher | Multi-project workflow | Medium | session_store, session_manager, keybindings |
 | 6 | Child-session tabs | Easier fork navigation | Medium | session_manager, app state, keybindings |
 | 7 | Multi-select picker | Batch attachments | Low | file_browser, actions |

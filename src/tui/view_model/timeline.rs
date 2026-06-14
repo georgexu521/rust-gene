@@ -85,12 +85,28 @@ pub fn estimate_timeline_item_height(item: &TimelineItem<'_>, width: usize, app:
             let message_parts = (msg.role == MessageRole::Assistant)
                 .then_some(*parts)
                 .flatten();
+            let text_part_id = message_parts.and_then(|ps| {
+                ps.iter()
+                    .find(|p| p.kind == crate::tui::sync_store::TuiPartKind::Text)
+                    .map(|p| p.id.clone())
+            });
+            let text_part_expanded = text_part_id
+                .map(|id| app.expanded_inline_message_part_ids.contains(&id))
+                .unwrap_or_else(|| {
+                    app.expanded_inline_message_part_ids.contains(
+                        &crate::tui::sync_store::part_id_for(
+                            &msg.id,
+                            crate::tui::sync_store::TuiPartKind::Text,
+                        ),
+                    )
+                });
             let base_height = estimate_message_height_with_parts_or_reasoning(
                 msg,
                 message_parts,
                 width,
                 collapsed,
                 reasoning_expanded,
+                text_part_expanded,
             );
             if collapsed || msg.role != MessageRole::User {
                 base_height
@@ -107,6 +123,7 @@ pub fn estimate_message_height_with_parts_or_reasoning(
     width: usize,
     collapsed: bool,
     reasoning_expanded: bool,
+    text_part_expanded: bool,
 ) -> usize {
     if collapsed {
         return 2;
@@ -179,11 +196,18 @@ pub fn estimate_message_height_with_parts_or_reasoning(
         }
     }
 
+    if !text_part_expanded {
+        let max_lines = crate::tui::components::collapsible::DEFAULT_TEXT_PART_MAX_LINES;
+        if lines > max_lines {
+            return base_height + max_lines + 1;
+        }
+    }
+
     base_height + lines.max(1)
 }
 
 pub fn estimate_message_height(msg: &MessageItem, width: usize, collapsed: bool) -> usize {
-    estimate_message_height_with_parts_or_reasoning(msg, None, width, collapsed, false)
+    estimate_message_height_with_parts_or_reasoning(msg, None, width, collapsed, false, false)
 }
 
 fn expanded_reasoning_height_for_text(reasoning: &str) -> usize {
@@ -213,7 +237,20 @@ pub fn estimate_tool_runs_height(runs: &[ToolRunView], app: &TuiApp) -> usize {
         .iter()
         .zip(runs.iter())
         .filter(|(row, _)| row.visible)
-        .map(|(row, run)| tool_row_height(row, app.is_tool_run_expanded(run), run))
+        .map(|(row, run)| {
+            let row_height = tool_row_height(row, app.is_tool_run_expanded(run), run);
+            let body_height = if app.is_tool_run_expanded(run) {
+                let inline_expanded = app.expanded_inline_tool_ids.contains(&run.id);
+                crate::tui::components::tool_renderers::estimate_tool_body_height(
+                    run,
+                    100,
+                    inline_expanded,
+                )
+            } else {
+                0
+            };
+            row_height + body_height
+        })
         .sum::<usize>()
         + usize::from(view.hidden_routine_count > 0);
     lines.max(1) + 1
@@ -345,7 +382,7 @@ mod tests {
 
         let collapsed_reasoning = estimate_message_height(&item, 80, false);
         let expanded_reasoning =
-            estimate_message_height_with_parts_or_reasoning(&item, None, 80, false, true);
+            estimate_message_height_with_parts_or_reasoning(&item, None, 80, false, true, false);
 
         assert!(expanded_reasoning > collapsed_reasoning);
     }
