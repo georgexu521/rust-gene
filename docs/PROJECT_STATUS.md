@@ -1,7 +1,24 @@
 # Project Status
 Status: Current
 
-Last updated: 2026-06-11
+Last updated: 2026-06-14
+
+## TUI Next Steps — Priorities 1–7 In Progress (2026-06-14)
+
+See `docs/TUI_NEXT_STEPS_PLAN_2026-06-14.md` for the full gap analysis.
+
+### Completed
+
+- **Priority 1**: Inline collapsible tool bodies and assistant text parts (`90e5b310`).
+- **Priority 3**: Leader-key pending state in status bar (`59e5751f`).
+- **Priority 2**: Composer attachment pills and `@` file autocomplete (`cb4995d6`).
+- **Priority 7**: Multi-select file picker (`5b855dfc`).
+
+### Remaining
+
+- **Priority 5**: Workspace switcher and session migration.
+- **Priority 6**: Child-session independent views/tabs.
+- **Priority 4**: Static plugin UI slot rendering.
 
 ## Codex Goal Mode — Implemented (2026-06-11)
 
