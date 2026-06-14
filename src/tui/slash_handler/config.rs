@@ -646,7 +646,27 @@ pub fn handle_theme(app: &mut TuiApp, args: &str) -> String {
 pub fn handle_shortcuts(app: &TuiApp) -> String {
     let kb = &app.keybindings;
     format!(
-        "Keybindings (active):\n  quit: {}\n  quit_alt: {}\n  submit: {}\n  newline: {}\n  toggle_vim: {}\n  vim_up: {}\n  vim_down: {}\n  vim_insert: {}\n  vim_command: {}\nUse /keybindings [list|edit <json>] for full customization.",
+        "Keybindings (active):\n\
+          quit: {}\n\
+          quit_alt: {}\n\
+          submit: {}\n\
+          newline: {}\n\
+          toggle_vim: {}\n\
+          vim_up: {}\n\
+          vim_down: {}\n\
+          vim_insert: {}\n\
+          vim_command: {}\n\
+          command_palette: {}\n\
+          prompt_history: {}\n\
+          model_select: {}\n\
+          provider_select: {}\n\
+          shortcut_help: {}\n\
+          expand_details: {}\n\
+          tool_output: {}\n\
+          status_bar_density: {}\n\
+          sidebar_toggle: {}\n\
+          message_search: {}\n\
+        Use /keybindings [list|edit <json>] for full customization.",
         kb.global_quit,
         kb.global_quit_alt,
         kb.chat_submit,
@@ -655,6 +675,16 @@ pub fn handle_shortcuts(app: &TuiApp) -> String {
         kb.vim_scroll_up,
         kb.vim_scroll_down,
         kb.vim_insert,
-        kb.vim_command
+        kb.vim_command,
+        kb.global_command_palette,
+        kb.global_prompt_history,
+        kb.global_model_select,
+        kb.global_provider_select,
+        kb.global_shortcut_help,
+        kb.global_expand_details,
+        kb.global_tool_output,
+        kb.global_status_bar_density,
+        kb.global_sidebar_toggle,
+        kb.global_message_search,
     )
 }

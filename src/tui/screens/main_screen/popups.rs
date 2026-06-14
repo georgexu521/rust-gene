@@ -295,16 +295,36 @@ pub fn render_shortcut_help(f: &mut Frame, app: &TuiApp, area: Rect) {
                 .fg(app.theme.tokens.fg.strong)
                 .add_modifier(Modifier::BOLD),
         )]),
-        Line::from(format!("  {}        send message", kb.chat_submit)),
-        Line::from(format!("  {}   insert newline", kb.chat_newline)),
-        Line::from("  ctrl+p       command palette"),
-        Line::from("  ctrl+r       prompt history/stash picker"),
-        Line::from("  ctrl+m       model picker (alt+m if ctrl+m sends Enter)"),
-        Line::from("  ctrl+l       provider picker (alt+l if ctrl+l sends Enter)"),
-        Line::from("  ctrl+o       expand reasoning or tool details"),
-        Line::from("  ctrl+t       open full tool output"),
-        Line::from("  ctrl+shift+s cycle status bar density"),
-        Line::from(format!("  {}       quit", kb.global_quit)),
+        Line::from(format!("  {:<12} send message", kb.chat_submit)),
+        Line::from(format!("  {:<12} insert newline", kb.chat_newline)),
+        Line::from(format!(
+            "  {:<12} command palette",
+            kb.global_command_palette
+        )),
+        Line::from(format!(
+            "  {:<12} prompt history/stash picker",
+            kb.global_prompt_history
+        )),
+        Line::from(format!("  {:<12} model picker", kb.global_model_select)),
+        Line::from(format!(
+            "  {:<12} provider picker",
+            kb.global_provider_select
+        )),
+        Line::from(format!(
+            "  {:<12} expand reasoning or tool details",
+            kb.global_expand_details
+        )),
+        Line::from(format!(
+            "  {:<12} open full tool output",
+            kb.global_tool_output
+        )),
+        Line::from(format!(
+            "  {:<12} cycle status bar density",
+            kb.global_status_bar_density
+        )),
+        Line::from(format!("  {:<12} quit", kb.global_quit)),
+        Line::from(format!("  {:<12} show this help", kb.global_shortcut_help)),
+        Line::from(format!("  {:<12} message search", kb.global_message_search)),
         Line::from(""),
         Line::from(vec![Span::styled(
             "Vim / Navigation",
@@ -314,7 +334,7 @@ pub fn render_shortcut_help(f: &mut Frame, app: &TuiApp, area: Rect) {
         )]),
         Line::from("  ↑/↓          move cursor or scroll at edge"),
         Line::from("  pageup/down  half-page scroll"),
-        Line::from(format!("  {}       toggle vim mode", kb.toggle_vim_mode)),
+        Line::from(format!("  {:<12} toggle vim mode", kb.toggle_vim_mode)),
         Line::from("  vim: j/k scroll, g top, G bottom, / search"),
         Line::from(""),
         Line::from(vec![Span::styled(
@@ -323,7 +343,10 @@ pub fn render_shortcut_help(f: &mut Frame, app: &TuiApp, area: Rect) {
                 .fg(app.theme.tokens.fg.strong)
                 .add_modifier(Modifier::BOLD),
         )]),
-        Line::from("  b            show/hide sidebar"),
+        Line::from(format!(
+            "  {:<12} show/hide sidebar",
+            kb.global_sidebar_toggle
+        )),
         Line::from("  ctrl+tab     switch Sessions/Context panel"),
         Line::from("  j/k or ↑/↓   move selected session"),
         Line::from("  /            filter sessions by title/id/model"),
@@ -336,16 +359,10 @@ pub fn render_shortcut_help(f: &mut Frame, app: &TuiApp, area: Rect) {
                 .fg(app.theme.tokens.fg.strong)
                 .add_modifier(Modifier::BOLD),
         )]),
+        Line::from(format!("  {:<12} allow / approve", kb.permission_approve)),
+        Line::from(format!("  {:<12} deny / reject", kb.permission_reject)),
         Line::from(format!(
-            "  {}            allow / approve",
-            kb.permission_approve
-        )),
-        Line::from(format!(
-            "  {}            deny / reject",
-            kb.permission_reject
-        )),
-        Line::from(format!(
-            "  {}            view diff or preview",
+            "  {:<12} view diff or preview",
             kb.permission_view_diff
         )),
         Line::from("  s/p/a/x       session/project/global allow/deny"),

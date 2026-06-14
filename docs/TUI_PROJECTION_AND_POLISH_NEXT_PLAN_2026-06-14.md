@@ -1,7 +1,7 @@
 # TUI Projection And Polish Next Plan
 
 Date: 2026-06-14
-Status: Proposed
+Status: Complete
 Scope: `src/tui/`, `src/session_store/`, `src/engine/runtime_facade.rs`, TUI PTY/readiness scripts
 
 ## Goal

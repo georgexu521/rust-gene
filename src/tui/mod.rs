@@ -514,6 +514,18 @@ async fn handle_key_event(key: KeyEvent, app: &mut TuiApp) -> anyhow::Result<boo
         return handle_command_palette_key_event(key, app).await;
     }
 
+    if app.mode == app::AppMode::PromptHistory {
+        return handle_prompt_picker_key_event(key, app).await;
+    }
+
+    if app.mode == app::AppMode::ModelSelect {
+        return handle_model_select_key_event(key, app).await;
+    }
+
+    if app.mode == app::AppMode::ProviderSelect {
+        return handle_provider_select_key_event(key, app).await;
+    }
+
     if app.mode == app::AppMode::ShortcutHelp {
         if key.code == KeyCode::Char('/') && !app.filtering_shortcut_help {
             app.shortcut_help_filter.clear();
@@ -748,62 +760,6 @@ async fn handle_key_event(key: KeyEvent, app: &mut TuiApp) -> anyhow::Result<boo
 
     if key.code == KeyCode::Tab && key.modifiers.contains(KeyModifiers::CONTROL) {
         app.sidebar_panel = app.sidebar_panel.next();
-        return Ok(false);
-    }
-
-    if key.code == KeyCode::Char('p') && key.modifiers.contains(KeyModifiers::CONTROL) {
-        app.open_command_palette();
-        return Ok(false);
-    }
-
-    if key.code == KeyCode::Char('r') && key.modifiers.contains(KeyModifiers::CONTROL) {
-        app.open_prompt_picker();
-        return Ok(false);
-    }
-
-    if key.code == KeyCode::Char('m')
-        && (key.modifiers.contains(KeyModifiers::CONTROL)
-            || key.modifiers.contains(KeyModifiers::ALT))
-    {
-        app.open_model_select();
-        return Ok(false);
-    }
-
-    if key.code == KeyCode::Char('l')
-        && (key.modifiers.contains(KeyModifiers::CONTROL)
-            || key.modifiers.contains(KeyModifiers::ALT))
-    {
-        app.open_provider_select();
-        return Ok(false);
-    }
-
-    if matches!(key.code, KeyCode::F(1))
-        || (key.code == KeyCode::Char('?') && app.composer.text.is_empty())
-    {
-        app.open_shortcut_help();
-        return Ok(false);
-    }
-
-    if key.code == KeyCode::Char('o') && key.modifiers.contains(KeyModifiers::CONTROL) {
-        if !app.toggle_reasoning_at_scroll_anchor() {
-            app.cycle_expanded_tool_run();
-        }
-        return Ok(false);
-    }
-
-    if key.code == KeyCode::Char('t') && key.modifiers.contains(KeyModifiers::CONTROL) {
-        if !app.open_tool_viewer() {
-            app.add_system_message("No tool output to view yet.".to_string());
-        }
-        return Ok(false);
-    }
-
-    if key.code == KeyCode::Char('S')
-        && key.modifiers.contains(KeyModifiers::CONTROL)
-        && key.modifiers.contains(KeyModifiers::SHIFT)
-    {
-        let density = app.cycle_status_bar_density();
-        app.add_system_message(format!("Status bar density: {}", density.name()));
         return Ok(false);
     }
 
@@ -1163,6 +1119,48 @@ async fn handle_key_event(key: KeyEvent, app: &mut TuiApp) -> anyhow::Result<boo
                 app.push_mode(app::AppMode::DiffViewer);
             }
         }
+        AppAction::OpenCommandPalette => app.open_command_palette(),
+        AppAction::OpenPromptHistory => app.open_prompt_picker(),
+        AppAction::OpenModelSelect => app.open_model_select(),
+        AppAction::OpenProviderSelect => app.open_provider_select(),
+        AppAction::OpenShortcutHelp => app.open_shortcut_help(),
+        AppAction::ToggleExpandDetails => {
+            if !app.toggle_reasoning_at_scroll_anchor() {
+                app.cycle_expanded_tool_run();
+            }
+        }
+        AppAction::OpenToolOutput => {
+            if !app.open_tool_viewer() {
+                app.add_system_message("No tool output to view yet.".to_string());
+            }
+        }
+        AppAction::CycleStatusBarDensity => {
+            let density = app.cycle_status_bar_density();
+            app.add_system_message(format!("Status bar density: {}", density.name()));
+        }
+        AppAction::ToggleSidebar => app.sidebar_visible = !app.sidebar_visible,
+        AppAction::OpenMessageSearch => {
+            app.message_search_state.activate();
+            app.push_mode(app::AppMode::MessageSearch);
+        }
+        AppAction::LeaderPalette => {
+            app.begin_leader_sequence();
+            return Ok(false);
+        }
+        AppAction::LeaderSidebar => {
+            app.sidebar_visible = !app.sidebar_visible;
+            return Ok(false);
+        }
+        AppAction::LeaderToolDiff => {
+            if !app.toggle_reasoning_at_scroll_anchor() {
+                app.cycle_expanded_tool_run();
+            }
+            return Ok(false);
+        }
+        AppAction::LeaderSessionCycle => {
+            app.cycle_recent_session_forward().await;
+            return Ok(false);
+        }
         AppAction::None => {
             return handle_fallback_key_event(key, app).await;
         }
@@ -1206,15 +1204,16 @@ async fn handle_ask_user_key_event(key: KeyEvent, app: &mut TuiApp) -> anyhow::R
 }
 
 async fn handle_command_palette_key_event(key: KeyEvent, app: &mut TuiApp) -> anyhow::Result<bool> {
+    if app.keybindings.global_command_palette.matches(key) {
+        app.close_command_palette();
+        return Ok(false);
+    }
     match key.code {
         KeyCode::Esc => app.close_command_palette(),
         KeyCode::Enter => app.accept_command_palette_selection().await,
         KeyCode::Up => app.command_palette_prev(),
         KeyCode::Down => app.command_palette_next(),
         KeyCode::Backspace => app.command_palette_backspace(),
-        KeyCode::Char('p') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-            app.close_command_palette();
-        }
         KeyCode::Char(c) if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT => {
             app.command_palette_push(c);
         }
@@ -1224,6 +1223,10 @@ async fn handle_command_palette_key_event(key: KeyEvent, app: &mut TuiApp) -> an
 }
 
 async fn handle_prompt_picker_key_event(key: KeyEvent, app: &mut TuiApp) -> anyhow::Result<bool> {
+    if app.keybindings.global_prompt_history.matches(key) {
+        app.close_prompt_picker();
+        return Ok(false);
+    }
     match key.code {
         KeyCode::Esc | KeyCode::Char('q') => app.close_prompt_picker(),
         KeyCode::Enter => {
@@ -1237,18 +1240,16 @@ async fn handle_prompt_picker_key_event(key: KeyEvent, app: &mut TuiApp) -> anyh
 }
 
 async fn handle_model_select_key_event(key: KeyEvent, app: &mut TuiApp) -> anyhow::Result<bool> {
+    if app.keybindings.global_model_select.matches(key) {
+        app.close_model_select();
+        return Ok(false);
+    }
     match key.code {
         KeyCode::Esc => app.close_model_select(),
         KeyCode::Enter => app.accept_model_selection(),
         KeyCode::Up => app.model_select_prev(),
         KeyCode::Down => app.model_select_next(),
         KeyCode::Backspace => app.model_select_backspace(),
-        KeyCode::Char('m')
-            if key.modifiers.contains(KeyModifiers::CONTROL)
-                || key.modifiers.contains(KeyModifiers::ALT) =>
-        {
-            app.close_model_select();
-        }
         KeyCode::Char(c) if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT => {
             app.model_select_push(c);
         }
@@ -1258,6 +1259,10 @@ async fn handle_model_select_key_event(key: KeyEvent, app: &mut TuiApp) -> anyho
 }
 
 async fn handle_provider_select_key_event(key: KeyEvent, app: &mut TuiApp) -> anyhow::Result<bool> {
+    if app.keybindings.global_provider_select.matches(key) {
+        app.close_provider_select();
+        return Ok(false);
+    }
     match key.code {
         KeyCode::Esc => app.close_provider_select(),
         KeyCode::Enter => {
@@ -1267,12 +1272,6 @@ async fn handle_provider_select_key_event(key: KeyEvent, app: &mut TuiApp) -> an
         KeyCode::Up => app.provider_select_prev(),
         KeyCode::Down => app.provider_select_next(),
         KeyCode::Backspace => app.provider_select_backspace(),
-        KeyCode::Char('l')
-            if key.modifiers.contains(KeyModifiers::CONTROL)
-                || key.modifiers.contains(KeyModifiers::ALT) =>
-        {
-            app.close_provider_select();
-        }
         KeyCode::Char(c) if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT => {
             app.provider_select_push(c);
         }
@@ -1987,6 +1986,115 @@ cargo check finished successfully"
             store.snapshot()
         };
         app
+    }
+
+    fn empty_state_fixture() -> TuiApp {
+        let mut app = TuiApp::new();
+        app.session_manager = crate::tui::session_manager::TuiSessionManager::in_memory().unwrap();
+        let _session_id = app
+            .session_manager
+            .start_session("Empty state", "deepseek-v4-flash", None)
+            .unwrap();
+        app.facade_snapshot.provider_request.provider_family = Some("openai_compatible".into());
+        app.facade_snapshot.provider_request.model = Some("deepseek-v4-flash".into());
+        app
+    }
+
+    fn sidebar_sessions_fixture() -> TuiApp {
+        let mut app = TuiApp::new();
+        app.session_manager = crate::tui::session_manager::TuiSessionManager::in_memory().unwrap();
+        let current_id = app
+            .session_manager
+            .start_session("Current work", "deepseek-v4-flash", Some("/tmp"))
+            .unwrap();
+        app.session_manager
+            .add_message(crate::state::MessageRole::User, "Current task")
+            .unwrap();
+        let _other_id = app
+            .session_manager
+            .start_session("Other project", "claude-sonnet", Some("/home"))
+            .unwrap();
+        app.session_manager
+            .add_message(crate::state::MessageRole::User, "Other task")
+            .unwrap();
+        app.session_manager.switch_to_session(&current_id).unwrap();
+        app.sidebar_visible = true;
+        app.sidebar_selected = 0;
+        app.workspace = crate::workspace::Workspace::detect(std::path::Path::new("/tmp"));
+        app
+    }
+
+    fn composer_with_attachments_fixture() -> TuiApp {
+        let mut app = TuiApp::new();
+        app.session_manager = crate::tui::session_manager::TuiSessionManager::in_memory().unwrap();
+        let _session_id = app
+            .session_manager
+            .start_session("Composer test", "deepseek-v4-flash", None)
+            .unwrap();
+        app.facade_snapshot.provider_request.provider_family = Some("openai_compatible".into());
+        app.facade_snapshot.provider_request.model = Some("deepseek-v4-flash".into());
+        app.composer.add_file(
+            "Cargo.toml",
+            crate::tui::components::attachment_token::AttachmentSource::File,
+        );
+        app.composer.add_file(
+            "src/main.rs",
+            crate::tui::components::attachment_token::AttachmentSource::File,
+        );
+        app.composer
+            .text
+            .insert_str("Check these files and report any issues.");
+        app
+    }
+
+    #[test]
+    fn empty_state_snapshot_is_clean_and_hides_raw_provider_names() {
+        for (width, height) in [(80, 24), (120, 35)] {
+            let app = empty_state_fixture();
+            let lines = render_ui_lines(&app, width, height);
+            let rendered = lines.join("\n");
+            write_snapshot_if_requested(&format!("empty-state-{width}x{height}"), &lines);
+
+            assert_snapshot_display_width(&lines, width, height);
+            assert!(!rendered.contains("openai_compatible"));
+            assert!(!rendered.contains("async_openai::error"));
+            assert!(!rendered.contains("failed deserialization of"));
+            assert!(rendered.contains("? shortcuts"));
+            assert!(
+                rendered.contains("DeepSeek / deepseek-v4-flash")
+                    || rendered.contains("deepseek-v4-flash")
+            );
+        }
+    }
+
+    #[test]
+    fn sidebar_sessions_snapshot_groups_by_workspace_and_shows_status() {
+        let app = sidebar_sessions_fixture();
+        let lines = render_ui_lines(&app, 40, 20);
+        let rendered = lines.join("\n");
+        write_snapshot_if_requested("sidebar-sessions-40x20", &lines);
+
+        assert_snapshot_display_width(&lines, 40, 20);
+        assert!(rendered.contains("Current work"));
+        assert!(rendered.contains("Other project"));
+        assert!(rendered.contains("deepseek-v4"));
+        assert!(rendered.contains("claude-sonnet"));
+        assert!(rendered.contains("●") || rendered.contains("◆") || rendered.contains("○"));
+    }
+
+    #[test]
+    fn composer_with_attachments_snapshot_shows_pills_and_prompt() {
+        let app = composer_with_attachments_fixture();
+        let lines = render_ui_lines(&app, 120, 20);
+        let rendered = lines.join("\n");
+        write_snapshot_if_requested("composer-with-attachments-120x20", &lines);
+
+        assert_snapshot_display_width(&lines, 120, 20);
+        assert!(rendered.contains("Cargo.toml"));
+        assert!(rendered.contains("src/main.rs"));
+        assert!(rendered.contains("Check these files"));
+        assert!(rendered.contains("files:2"));
+        assert!(!rendered.contains("[[file:"));
     }
 
     #[test]

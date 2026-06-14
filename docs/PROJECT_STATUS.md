@@ -3,6 +3,56 @@ Status: Current
 
 Last updated: 2026-06-14
 
+## TUI Projection And Polish — Phases 1–6 Complete (2026-06-14)
+
+The TUI projection-and-polish pass documented in
+`docs/TUI_PROJECTION_AND_POLISH_NEXT_PLAN_2026-06-14.md` is complete.
+
+### Completed phases
+
+| Phase | Theme | Commit |
+|-------|-------|--------|
+| Phase 1 | Projection render model (`TuiRenderSession`) as timeline source of truth | `faeeb944` |
+| Phase 2 | Real-provider soak readiness reporting (nightly manifest + report sections) | `1609c729` |
+| Phase 3 | Composer parity (`ComposerState`/`ComposerPart`, focused `@` picker, fuzzy file filter) | `45245994` |
+| Phase 4 | Session/workspace view model (`SessionListViewModel`, workspace status, restore hydration) | `0a171ae7` |
+| Phase 5 | Plugin UI slot boundaries (active static vs deferred slots, panel.md warnings) | `689d5a5f` |
+| Phase 6 | Polish and release readiness (snapshot tests, `PROJECT_STATUS.md` section) | this change |
+
+### What changed
+
+- Timeline rendering consumes a single `TuiRenderSession` produced from projection events.
+- Tool rows are derived from message parts, not parallel TUI state.
+- Composer has one fact source: `ComposerState` with `File`, `PastedText`, and `Image` parts.
+- Session sidebar uses a pure `SessionListViewModel` with workspace grouping and status.
+- Restoring a session hydrates projection parts before the timeline is inspected.
+- Plugin TUI slots are classified as active static (`SidebarFooter`, `StatusBar`) or deferred (`SidebarTitle`, `MessageBeforeSend`, `ToolCard`); unsupported declarations fail safely.
+- Visual text snapshots cover empty state, sidebar sessions, composer attachments, completed tool turn, and provider failure.
+- Fixture TUI readiness passes 9/9 cases.
+
+### Validation gates
+
+```bash
+cargo fmt --check
+cargo check -q
+cargo test -q
+cargo clippy --all-targets --all-features -- -D warnings
+cargo check --features experimental-api-server -q
+bash scripts/tui_tool_turn_spine_readiness.sh  # 9/9 fixture cases passed
+```
+
+### Real-provider gate
+
+Run only when API keys/network are intentionally available:
+
+```bash
+TUI_TOOL_TURN_SPINE_NIGHTLY_ROUNDS=1 bash scripts/tui_tool_turn_spine_nightly.sh
+```
+
+### Remaining
+
+- (none in this plan)
+
 ## TUI Next Steps — Priorities 1–7 In Progress (2026-06-14)
 
 See `docs/TUI_NEXT_STEPS_PLAN_2026-06-14.md` for the full gap analysis.

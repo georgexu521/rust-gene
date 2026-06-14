@@ -61,6 +61,18 @@ impl KeyBinding {
                 "pagedown" => KeyCode::PageDown,
                 "backslash" => KeyCode::Char('\\'),
                 "comma" => KeyCode::Char(','),
+                "f1" => KeyCode::F(1),
+                "f2" => KeyCode::F(2),
+                "f3" => KeyCode::F(3),
+                "f4" => KeyCode::F(4),
+                "f5" => KeyCode::F(5),
+                "f6" => KeyCode::F(6),
+                "f7" => KeyCode::F(7),
+                "f8" => KeyCode::F(8),
+                "f9" => KeyCode::F(9),
+                "f10" => KeyCode::F(10),
+                "f11" => KeyCode::F(11),
+                "f12" => KeyCode::F(12),
                 _ => return Err(format!("Unknown key: {}", key_part)),
             }
         };
@@ -109,6 +121,7 @@ impl std::fmt::Display for KeyBinding {
             KeyCode::PageDown => "pagedown",
             KeyCode::Char(' ') => "space",
             KeyCode::Char(c) => return write!(f, "{}{}", prefix, c),
+            KeyCode::F(n) => return write!(f, "{}f{}", prefix, n),
             _ => "unknown",
         };
         write!(f, "{}{}", prefix, key_str)
@@ -120,9 +133,9 @@ impl std::fmt::Display for KeyBinding {
 pub enum AppAction {
     None,
     Quit,
+    Cancel,
     Submit,
     InsertNewline,
-    Cancel,
     ToggleVimMode,
     ScrollUp,
     ScrollDown,
@@ -143,10 +156,19 @@ pub enum AppAction {
     SettingsPrevItem,
     SettingsEdit,
     SettingsToggleBool,
-    LeaderCommandPalette,
-    LeaderSessionSidebar,
-    LeaderDiffPanel,
-    LeaderWorkspaceSwitcher,
+    OpenCommandPalette,
+    OpenPromptHistory,
+    OpenModelSelect,
+    OpenProviderSelect,
+    OpenShortcutHelp,
+    ToggleExpandDetails,
+    OpenToolOutput,
+    CycleStatusBarDensity,
+    ToggleSidebar,
+    OpenMessageSearch,
+    LeaderPalette,
+    LeaderSidebar,
+    LeaderToolDiff,
     LeaderSessionCycle,
 }
 
@@ -205,6 +227,26 @@ pub struct KeybindingsFile {
     pub leader: Option<String>,
     #[serde(default)]
     pub leader_timeout_ms: Option<u64>,
+    #[serde(default)]
+    pub global_command_palette: Option<String>,
+    #[serde(default)]
+    pub global_prompt_history: Option<String>,
+    #[serde(default)]
+    pub global_model_select: Option<String>,
+    #[serde(default)]
+    pub global_provider_select: Option<String>,
+    #[serde(default)]
+    pub global_shortcut_help: Option<String>,
+    #[serde(default)]
+    pub global_expand_details: Option<String>,
+    #[serde(default)]
+    pub global_tool_output: Option<String>,
+    #[serde(default)]
+    pub global_status_bar_density: Option<String>,
+    #[serde(default)]
+    pub global_sidebar_toggle: Option<String>,
+    #[serde(default)]
+    pub global_message_search: Option<String>,
 }
 
 /// 键位映射表
@@ -234,6 +276,16 @@ pub struct Keybindings {
     pub settings_prev_item: KeyBinding,
     pub settings_edit: KeyBinding,
     pub settings_toggle_bool: KeyBinding,
+    pub global_command_palette: KeyBinding,
+    pub global_prompt_history: KeyBinding,
+    pub global_model_select: KeyBinding,
+    pub global_provider_select: KeyBinding,
+    pub global_shortcut_help: KeyBinding,
+    pub global_expand_details: KeyBinding,
+    pub global_tool_output: KeyBinding,
+    pub global_status_bar_density: KeyBinding,
+    pub global_sidebar_toggle: KeyBinding,
+    pub global_message_search: KeyBinding,
     pub leader: KeyBinding,
     pub leader_timeout_ms: u64,
 }
@@ -269,10 +321,25 @@ impl Default for Keybindings {
             settings_edit: KeyBinding::parse("enter").expect("invalid built-in keybinding: enter"),
             settings_toggle_bool: KeyBinding::parse("space")
                 .expect("invalid built-in keybinding: space"),
-            leader: KeyBinding {
-                modifiers: KeyModifiers::NONE,
-                code: KeyCode::Char('\\'),
-            },
+            global_command_palette: KeyBinding::parse("ctrl+p")
+                .expect("invalid built-in keybinding: ctrl+p"),
+            global_prompt_history: KeyBinding::parse("ctrl+r")
+                .expect("invalid built-in keybinding: ctrl+r"),
+            global_model_select: KeyBinding::parse("ctrl+m")
+                .expect("invalid built-in keybinding: ctrl+m"),
+            global_provider_select: KeyBinding::parse("ctrl+l")
+                .expect("invalid built-in keybinding: ctrl+l"),
+            global_shortcut_help: KeyBinding::parse("f1").expect("invalid built-in keybinding: f1"),
+            global_expand_details: KeyBinding::parse("ctrl+o")
+                .expect("invalid built-in keybinding: ctrl+o"),
+            global_tool_output: KeyBinding::parse("ctrl+t")
+                .expect("invalid built-in keybinding: ctrl+t"),
+            global_status_bar_density: KeyBinding::parse("ctrl+shift+s")
+                .expect("invalid built-in keybinding: ctrl+shift+s"),
+            global_sidebar_toggle: KeyBinding::parse("b").expect("invalid built-in keybinding: b"),
+            global_message_search: KeyBinding::parse("ctrl+f")
+                .expect("invalid built-in keybinding: ctrl+f"),
+            leader: KeyBinding::parse("backslash").expect("invalid built-in keybinding: backslash"),
             leader_timeout_ms: 500,
         }
     }
@@ -354,6 +421,16 @@ impl Keybindings {
             settings_prev_item: override_binding!(settings_prev_item),
             settings_edit: override_binding!(settings_edit),
             settings_toggle_bool: override_binding!(settings_toggle_bool),
+            global_command_palette: override_binding!(global_command_palette),
+            global_prompt_history: override_binding!(global_prompt_history),
+            global_model_select: override_binding!(global_model_select),
+            global_provider_select: override_binding!(global_provider_select),
+            global_shortcut_help: override_binding!(global_shortcut_help),
+            global_expand_details: override_binding!(global_expand_details),
+            global_tool_output: override_binding!(global_tool_output),
+            global_status_bar_density: override_binding!(global_status_bar_density),
+            global_sidebar_toggle: override_binding!(global_sidebar_toggle),
+            global_message_search: override_binding!(global_message_search),
             leader: override_binding!(leader),
             leader_timeout_ms: file.leader_timeout_ms.unwrap_or(500),
         }
@@ -455,6 +532,39 @@ impl Keybindings {
                 }
                 if key.modifiers.is_empty() && key.code == KeyCode::Esc {
                     return AppAction::Cancel;
+                }
+                if self.global_command_palette.matches(key) {
+                    return AppAction::OpenCommandPalette;
+                }
+                if self.global_prompt_history.matches(key) {
+                    return AppAction::OpenPromptHistory;
+                }
+                if self.global_model_select.matches(key) {
+                    return AppAction::OpenModelSelect;
+                }
+                if self.global_provider_select.matches(key) {
+                    return AppAction::OpenProviderSelect;
+                }
+                if self.global_shortcut_help.matches(key) {
+                    return AppAction::OpenShortcutHelp;
+                }
+                if self.global_expand_details.matches(key) {
+                    return AppAction::ToggleExpandDetails;
+                }
+                if self.global_tool_output.matches(key) {
+                    return AppAction::OpenToolOutput;
+                }
+                if self.global_status_bar_density.matches(key) {
+                    return AppAction::CycleStatusBarDensity;
+                }
+                if self.global_sidebar_toggle.matches(key) {
+                    return AppAction::ToggleSidebar;
+                }
+                if self.global_message_search.matches(key) {
+                    return AppAction::OpenMessageSearch;
+                }
+                if self.leader.matches(key) {
+                    return AppAction::LeaderPalette;
                 }
                 if self.toggle_vim_mode.matches(key) {
                     return AppAction::ToggleVimMode;
