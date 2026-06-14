@@ -370,6 +370,41 @@ fn provider_watchdog_does_not_reuse_whole_turn_elapsed_for_post_tool_wait() {
 }
 
 #[test]
+fn provider_watchdog_uses_post_tool_wait_clock_when_provider_elapsed_freezes() {
+    let mut guard = crate::test_utils::env_guard::EnvVarGuard::acquire_blocking();
+    guard.set("PRIORITY_AGENT_LLM_REQUEST_TIMEOUT_SECS", "30");
+
+    let mut app = TuiApp::new();
+    app.is_querying = true;
+    app.stream_started_at = Some(std::time::Instant::now() - std::time::Duration::from_secs(31));
+    app.post_tool_turn_wait_started_at =
+        Some(std::time::Instant::now() - std::time::Duration::from_secs(31));
+    app.facade_snapshot.provider_request.phase = ProviderPhase::Completed;
+    app.facade_snapshot.provider_request.provider_family = Some("deepseek".to_string());
+    app.facade_snapshot.provider_request.model = Some("deepseek-v4-flash".to_string());
+    app.facade_snapshot.provider_request.timeout_ms = 120_000;
+    app.facade_snapshot.provider_request.elapsed_ms = 3_000;
+    app.facade_snapshot.tool_turns.push(ToolTurnSnapshot {
+        id: "call_1".to_string(),
+        name: "file_read".to_string(),
+        parent_message_id: Some("user_1".to_string()),
+        phase: ToolTurnPhase::SentBackToModel,
+        arguments_preview: None,
+        result_preview: Some("Result: OK".to_string()),
+        failure: None,
+    });
+
+    let reason = app
+        .provider_wait_timeout_reason()
+        .expect("post-tool wait clock should time out frozen provider elapsed");
+
+    assert_eq!(
+        reason,
+        "tool turn stalled after result observation for 30.0s"
+    );
+}
+
+#[test]
 fn test_memory_snapshot_panel_includes_skip_reasons() {
     let snapshot = crate::memory::MemorySnapshotReport {
         frozen: true,

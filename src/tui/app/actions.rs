@@ -1,8 +1,53 @@
 use super::*;
 
 impl TuiApp {
+    pub fn has_interruptible_run(&self) -> bool {
+        self.is_querying
+            || self.stream_handle.is_some()
+            || self.run_coordinator.is_active()
+            || self
+                .sync_snapshot
+                .all_tool_runs()
+                .iter()
+                .any(crate::tui::tool_view::ToolRunView::is_active)
+            || self.facade_snapshot.tool_turns.iter().any(|turn| {
+                !matches!(
+                    turn.phase,
+                    crate::engine::runtime_facade::ToolTurnPhase::Persisted
+                        | crate::engine::runtime_facade::ToolTurnPhase::Failed
+                        | crate::engine::runtime_facade::ToolTurnPhase::Cancelled
+                        | crate::engine::runtime_facade::ToolTurnPhase::TimedOut
+                        | crate::engine::runtime_facade::ToolTurnPhase::FinalAnswer
+                )
+            })
+    }
+
+    pub(in crate::tui::app) fn upsert_assistant_message(
+        &mut self,
+        message_id: String,
+        content: String,
+    ) {
+        if let Some(message) = self
+            .messages
+            .iter_mut()
+            .find(|message| message.id == message_id)
+        {
+            if message.role == crate::state::MessageRole::Assistant {
+                message.content = content;
+            }
+        } else {
+            self.messages.push(crate::state::MessageItem {
+                id: message_id,
+                role: crate::state::MessageRole::Assistant,
+                content,
+                timestamp: std::time::SystemTime::now(),
+                metadata: Default::default(),
+            });
+        }
+    }
+
     pub async fn cancel_active_run(&mut self, reason: &str) -> bool {
-        if !self.is_querying && self.stream_handle.is_none() {
+        if !self.has_interruptible_run() {
             return false;
         }
 
@@ -20,41 +65,44 @@ impl TuiApp {
         })
         .await;
         self.stream_started_at = None;
+        self.post_tool_turn_wait_started_at = None;
+        self.current_turn_event_start_seq = None;
 
-        let cancellation_message = self
-            .messages
-            .last()
-            .filter(|message| {
-                message.role == crate::state::MessageRole::Assistant && message.content.is_empty()
+        let cancellation_message = format!("[Cancelled: {reason}]");
+        let assistant_message_id = self
+            .sync_snapshot
+            .active_assistant_message_id
+            .clone()
+            .or_else(|| {
+                self.messages
+                    .iter()
+                    .rev()
+                    .find(|message| message.role == crate::state::MessageRole::Assistant)
+                    .map(|message| message.id.clone())
             })
-            .map(|_| format!("[Cancelled: {reason}]"));
+            .unwrap_or_else(|| format!("msg_{}", self.messages.len()));
         {
             let mut sync = self.sync_store.lock().await;
             sync.mark_active_tools_with_result("Result: ERROR\nTool run is cancelled.".to_string());
-            if let Some(text) = cancellation_message.as_ref() {
-                let message_id = sync.snapshot().active_assistant_message_id;
-                sync.apply_projection_event(
-                    &crate::session_store::SessionProjectionEvent::AssistantTextUpdated {
-                        message_id,
-                        text: text.clone(),
-                        streaming: false,
-                    },
-                );
-            }
+            sync.apply_projection_event(
+                &crate::session_store::SessionProjectionEvent::AssistantTextUpdated {
+                    message_id: Some(assistant_message_id.clone()),
+                    text: cancellation_message.clone(),
+                    streaming: false,
+                },
+            );
             self.sync_snapshot = sync.snapshot();
         }
         self.current_tool_anchor_id = None;
         self.settle_unfinished_tool_parts(reason);
 
-        if let (Some(last_msg), Some(text)) = (self.messages.last_mut(), cancellation_message) {
-            last_msg.content = text;
-        }
+        self.upsert_assistant_message(assistant_message_id, cancellation_message);
         self.add_toast(reason.to_string(), "!");
         true
     }
 
     pub async fn timeout_active_run(&mut self, reason: &str) -> bool {
-        if !self.is_querying && self.stream_handle.is_none() {
+        if !self.has_interruptible_run() {
             return false;
         }
 
@@ -66,12 +114,18 @@ impl TuiApp {
         self.is_querying = false;
         self.run_coordinator.finish_run();
         let error_message = format!("[Error: {reason}]");
-        if let Some(last_msg) = self.messages.last_mut() {
-            if last_msg.role == crate::state::MessageRole::Assistant && last_msg.content.is_empty()
-            {
-                last_msg.content = error_message.clone();
-            }
-        }
+        let assistant_message_id = self
+            .sync_snapshot
+            .active_assistant_message_id
+            .clone()
+            .or_else(|| {
+                self.messages
+                    .iter()
+                    .rev()
+                    .find(|message| message.role == crate::state::MessageRole::Assistant)
+                    .map(|message| message.id.clone())
+            })
+            .unwrap_or_else(|| format!("msg_{}", self.messages.len()));
         let runtime_state = self.runtime_facade_state.clone();
         let reason_for_runtime = reason.to_string();
         let _ = tokio::time::timeout(std::time::Duration::from_millis(75), async move {
@@ -82,28 +136,25 @@ impl TuiApp {
         })
         .await;
         self.stream_started_at = None;
+        self.post_tool_turn_wait_started_at = None;
+        self.current_turn_event_start_seq = None;
 
-        let should_project_error = self.messages.last().is_some_and(|message| {
-            message.role == crate::state::MessageRole::Assistant && message.content == error_message
-        });
         {
             let mut sync = self.sync_store.lock().await;
             sync.mark_active_tools_with_result(format!("Result: ERROR\n{reason}"));
-            if should_project_error {
-                let message_id = sync.snapshot().active_assistant_message_id;
-                sync.apply_projection_event(
-                    &crate::session_store::SessionProjectionEvent::AssistantTextUpdated {
-                        message_id,
-                        text: error_message.clone(),
-                        streaming: false,
-                    },
-                );
-            }
+            sync.apply_projection_event(
+                &crate::session_store::SessionProjectionEvent::AssistantTextUpdated {
+                    message_id: Some(assistant_message_id.clone()),
+                    text: error_message.clone(),
+                    streaming: false,
+                },
+            );
             self.sync_snapshot = sync.snapshot();
         }
         self.current_tool_anchor_id = None;
         self.settle_unfinished_tool_parts(reason);
 
+        self.upsert_assistant_message(assistant_message_id, error_message.clone());
         self.typewriter_position = error_message.chars().count();
         self.add_toast(reason.to_string(), "!");
         true
@@ -127,7 +178,7 @@ impl TuiApp {
     }
 
     pub fn timeout_active_run_immediate(&mut self, reason: &str) -> bool {
-        if !self.is_querying && self.stream_handle.is_none() {
+        if !self.has_interruptible_run() {
             return false;
         }
 
@@ -139,15 +190,35 @@ impl TuiApp {
         self.is_querying = false;
         self.run_coordinator.finish_run();
         self.stream_started_at = None;
+        self.post_tool_turn_wait_started_at = None;
+        self.current_turn_event_start_seq = None;
         self.current_tool_anchor_id = None;
         self.settle_unfinished_tool_parts(reason);
 
         let error_message = format!("[Error: {reason}]");
-        if let Some(last_msg) = self.messages.last_mut() {
-            if last_msg.role == crate::state::MessageRole::Assistant {
-                last_msg.content = error_message;
-            }
+        let assistant_message_id = self
+            .sync_snapshot
+            .active_assistant_message_id
+            .clone()
+            .or_else(|| {
+                self.messages
+                    .iter()
+                    .rev()
+                    .find(|message| message.role == crate::state::MessageRole::Assistant)
+                    .map(|message| message.id.clone())
+            })
+            .unwrap_or_else(|| format!("msg_{}", self.messages.len()));
+        if let Ok(mut sync) = self.sync_store.try_lock() {
+            sync.apply_projection_event(
+                &crate::session_store::SessionProjectionEvent::AssistantTextUpdated {
+                    message_id: Some(assistant_message_id.clone()),
+                    text: error_message.clone(),
+                    streaming: false,
+                },
+            );
+            self.sync_snapshot = sync.snapshot();
         }
+        self.upsert_assistant_message(assistant_message_id, error_message);
         self.add_toast(reason.to_string(), "!");
         true
     }

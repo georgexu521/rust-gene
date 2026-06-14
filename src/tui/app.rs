@@ -203,6 +203,10 @@ pub struct TuiApp {
     pub is_querying: bool,
     /// Streaming start time for t/s calculation
     pub stream_started_at: Option<std::time::Instant>,
+    /// Local watchdog clock for the post-tool provider round.
+    pub post_tool_turn_wait_started_at: Option<std::time::Instant>,
+    /// Last persisted session event seq before the active turn started.
+    pub current_turn_event_start_seq: Option<i64>,
     /// Toast notifications (auto-dismiss)
     pub toasts: Vec<Toast>,
     /// Session memory controls (Phase 1)
@@ -989,6 +993,8 @@ impl TuiApp {
             tasks: Vec::new(),
             is_querying: false,
             stream_started_at: None,
+            post_tool_turn_wait_started_at: None,
+            current_turn_event_start_seq: None,
             toasts: Vec::new(),
             memory_use: true,
             memory_generate: true,
@@ -1637,6 +1643,8 @@ impl TuiApp {
         }
         self.is_querying = true;
         self.stream_started_at = Some(std::time::Instant::now());
+        self.post_tool_turn_wait_started_at = None;
+        self.current_turn_event_start_seq = Some(self.current_session_max_event_seq());
 
         // Only auto-scroll when pinned
         if self.pinned_to_bottom {
@@ -1672,7 +1680,7 @@ impl TuiApp {
             self.scroll_to_bottom();
             {
                 let mut sync = self.sync_store.lock().await;
-                sync.start_turn(user_msg_id.clone(), assistant_msg_id);
+                sync.start_turn(user_msg_id.clone(), assistant_msg_id.clone());
                 self.sync_snapshot = sync.snapshot();
             }
 
@@ -1687,6 +1695,7 @@ impl TuiApp {
             let done_flag = self.stream_done.clone();
             let user_msg = content.clone();
             let parent_message_id = user_msg_id.clone();
+            let assistant_message_id = assistant_msg_id.clone();
             let agent_mode = self.agent_mode;
 
             controller.set_memory_policy(
@@ -1750,7 +1759,16 @@ impl TuiApp {
                                 ))
                                 .await;
                         }
-                        crate::session_store::SessionProjectionEvent::Error { .. } => {
+                        crate::session_store::SessionProjectionEvent::Error { message } => {
+                            let mut sync = sync_store_clone.lock().await;
+                            sync.apply_projection_event(
+                                &crate::session_store::SessionProjectionEvent::AssistantTextUpdated {
+                                    message_id: Some(assistant_message_id.clone()),
+                                    text: format!("[Error: {message}]"),
+                                    streaming: false,
+                                },
+                            );
+                            drop(sync);
                             runtime_facade_state_clone.set_querying(false).await;
                             done_flag.store(true, Ordering::SeqCst);
                             break;
@@ -2100,12 +2118,19 @@ impl TuiApp {
         if timeout_ms == 0 {
             return None;
         }
+        let local_post_tool_elapsed_ms = self
+            .post_tool_turn_wait_started_at
+            .map(|started| started.elapsed().as_millis() as u64)
+            .unwrap_or_default();
         if matches!(
             provider.phase,
             crate::engine::runtime_facade::ProviderPhase::Completed
                 | crate::engine::runtime_facade::ProviderPhase::Cancelled
         ) {
-            if !self.post_tool_turn_wait_has_timed_out(timeout_ms, provider.elapsed_ms) {
+            if !self.post_tool_turn_wait_has_timed_out(
+                timeout_ms,
+                provider.elapsed_ms.max(local_post_tool_elapsed_ms),
+            ) {
                 return None;
             }
             return Some(format!(
@@ -2150,6 +2175,120 @@ impl TuiApp {
         provider_elapsed_ms >= timeout_ms
     }
 
+    fn refresh_post_tool_turn_wait_clock(&mut self) {
+        if !self.is_querying {
+            self.post_tool_turn_wait_started_at = None;
+            return;
+        }
+        let has_waiting_post_tool_turn = self.facade_snapshot.tool_turns.iter().any(|turn| {
+            matches!(
+                turn.phase,
+                crate::engine::runtime_facade::ToolTurnPhase::ResultObserved
+                    | crate::engine::runtime_facade::ToolTurnPhase::SentBackToModel
+            )
+        });
+        if has_waiting_post_tool_turn {
+            self.post_tool_turn_wait_started_at
+                .get_or_insert_with(std::time::Instant::now);
+        } else {
+            self.post_tool_turn_wait_started_at = None;
+        }
+    }
+
+    fn current_session_max_event_seq(&self) -> i64 {
+        let Some(session_id) = self.session_manager.current_session_id() else {
+            return 0;
+        };
+        self.session_manager
+            .store()
+            .get_session_events_after(session_id, 0)
+            .ok()
+            .and_then(|events| events.last().map(|event| event.seq))
+            .unwrap_or(0)
+    }
+
+    fn latest_persisted_session_error_for_current_turn(&self) -> Option<String> {
+        let session_id = self.session_manager.current_session_id()?;
+        let after_seq = self.current_turn_event_start_seq.unwrap_or(0);
+        let events = self
+            .session_manager
+            .store()
+            .get_session_events_after(session_id, after_seq)
+            .ok()?;
+        events
+            .iter()
+            .rev()
+            .find(|event| event.event_type == "error")
+            .and_then(|event| serde_json::from_str::<serde_json::Value>(&event.payload).ok())
+            .and_then(|payload| {
+                payload
+                    .get("error")
+                    .or_else(|| payload.get("message"))
+                    .and_then(|value| value.as_str())
+                    .map(str::to_string)
+            })
+    }
+
+    async fn recover_persisted_error_if_available(&mut self) -> bool {
+        if !self.is_querying {
+            return false;
+        }
+        let Some(error) = self.latest_persisted_session_error_for_current_turn() else {
+            return false;
+        };
+
+        if let Some(handle) = self.stream_handle.take() {
+            handle.abort();
+        }
+        self.stream_done
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        self.is_querying = false;
+        self.run_coordinator.finish_run();
+        self.runtime_facade_state.set_querying(false).await;
+        self.stream_started_at = None;
+        self.post_tool_turn_wait_started_at = None;
+        self.current_turn_event_start_seq = None;
+        self.current_tool_anchor_id = None;
+
+        let error_text = format!("[Error: {error}]");
+        let assistant_message_id = self
+            .sync_snapshot
+            .active_assistant_message_id
+            .clone()
+            .or_else(|| {
+                self.messages
+                    .iter()
+                    .rev()
+                    .find(|message| message.role == MessageRole::Assistant)
+                    .map(|message| message.id.clone())
+            })
+            .unwrap_or_else(|| format!("msg_{}", self.messages.len()));
+
+        {
+            let mut sync = self.sync_store.lock().await;
+            sync.apply_projection_event(&crate::session_store::SessionProjectionEvent::Error {
+                message: error.clone(),
+            });
+            sync.apply_projection_event(
+                &crate::session_store::SessionProjectionEvent::AssistantTextUpdated {
+                    message_id: Some(assistant_message_id.clone()),
+                    text: error_text.clone(),
+                    streaming: false,
+                },
+            );
+            self.sync_snapshot = sync.snapshot();
+        }
+
+        self.upsert_assistant_message(assistant_message_id, error_text.clone());
+        self.typewriter_position = error_text.chars().count();
+        if self.error_message.as_deref() != Some(error.as_str()) {
+            self.add_toast(error.clone(), "!");
+        }
+        self.error_message = Some(error);
+        self.scroll_to_bottom();
+        true
+    }
+
     /// 定时更新 - 处理流式响应刷新和计划审批检查
     pub async fn on_tick(&mut self) {
         self.tick_count += 1;
@@ -2163,6 +2302,10 @@ impl TuiApp {
 
         self.facade_snapshot = self.runtime_facade_state.snapshot().await;
         self.sync_tool_runs_from_spine_snapshot();
+        self.refresh_post_tool_turn_wait_clock();
+        if self.recover_persisted_error_if_available().await {
+            return;
+        }
         if self.recover_persisted_final_answer_if_available().await {
             return;
         }

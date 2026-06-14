@@ -578,7 +578,7 @@ async fn handle_key_event(key: KeyEvent, app: &mut TuiApp) -> anyhow::Result<boo
         return handle_workspace_switcher_key_event(key, app).await;
     }
 
-    if app.is_querying
+    if app.has_interruptible_run()
         && matches!(
             app.mode,
             app::AppMode::Chat
