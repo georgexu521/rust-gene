@@ -195,9 +195,9 @@ Pressing the leader key (`\` by default) enters a sequence, but the status bar g
 
 ### Acceptance
 
-- [ ] Status bar shows a leader indicator while a sequence is pending.
-- [ ] Indicator lists the available next keys.
-- [ ] Expired leader state clears automatically.
+- [x] Status bar shows a leader indicator while a sequence is pending.
+- [x] Indicator lists the available next keys.
+- [x] Expired leader state clears automatically.
 
 ### Validation
 

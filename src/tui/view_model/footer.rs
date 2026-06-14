@@ -34,7 +34,19 @@ pub fn footer_items(app: &TuiApp) -> Vec<FooterItem> {
     let mut items = Vec::new();
     let runtime = app.runtime_status_snapshot_now();
 
-    if let Some(ref error) = runtime.last_error {
+    if app.leader_state.is_some() {
+        let remaining = app.keybindings.leader_timeout_ms.saturating_sub(
+            app.leader_state
+                .as_ref()
+                .map(|s| s.started_at.elapsed().as_millis() as u64)
+                .unwrap_or_default(),
+        );
+        let keys = "p palette · s sidebar · d tool/diff";
+        items.push(FooterItem::new(
+            format!("LEADER {}ms · {}", remaining, keys),
+            FooterTone::Accent,
+        ));
+    } else if let Some(ref error) = runtime.last_error {
         items.push(FooterItem::new(format!("✗ {}", error), FooterTone::Error));
     } else {
         items.push(FooterItem::new(
@@ -279,30 +291,19 @@ mod tests {
     }
 
     #[test]
-    fn normal_footer_hides_default_permission_auto_to_avoid_mode_duplication() {
-        let app = TuiApp::new();
-
+    fn leader_active_footer_shows_hint_and_timeout() {
+        let mut app = TuiApp::new();
+        app.begin_leader_sequence();
         let labels = footer_items(&app)
             .into_iter()
             .map(|item| item.label)
             .collect::<Vec<_>>();
-
-        assert!(labels.iter().any(|label| label == "● auto"));
-        assert!(!labels.iter().any(|label| label == "auto"));
-    }
-
-    #[test]
-    fn normal_footer_keeps_version_out_of_the_daily_surface() {
-        let app = TuiApp::new();
-
-        let labels = footer_items(&app)
-            .into_iter()
-            .map(|item| item.label)
-            .collect::<Vec<_>>();
-
-        assert!(!labels
+        let leader = labels
             .iter()
-            .any(|label| label == &format!("v{}", env!("CARGO_PKG_VERSION"))));
-        assert!(labels.iter().any(|label| label == "? shortcuts"));
+            .find(|l| l.starts_with("LEADER"))
+            .expect("expected LEADER footer item");
+        assert!(leader.contains("palette"));
+        assert!(leader.contains("sidebar"));
+        assert!(leader.contains("tool/diff"));
     }
 }

@@ -1826,6 +1826,11 @@ impl TuiApp {
         // Clean up expired toasts
         self.toasts.retain(|t| t.expires_at_tick > self.tick_count);
 
+        // Auto-clear expired leader-key sequence so the UI does not get stuck.
+        if self.leader_expired() {
+            self.leader_state = None;
+        }
+
         self.facade_snapshot = self.runtime_facade_state.snapshot().await;
         self.sync_tool_runs_from_spine_snapshot();
         if self.recover_persisted_final_answer_if_available().await {
