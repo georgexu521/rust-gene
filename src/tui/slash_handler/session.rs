@@ -164,6 +164,14 @@ pub async fn handle_session(app: &mut TuiApp, args: &str) -> String {
     }
 }
 
+pub async fn handle_back(app: &mut TuiApp) -> String {
+    let previous = app.previous_recent_session().map(str::to_string);
+    match previous {
+        Some(id) => app.restore_session(&id).await,
+        None => "No previous session to go back to.".to_string(),
+    }
+}
+
 pub async fn handle_new(app: &mut TuiApp) -> String {
     if let Some(ref engine) = app.streaming_engine {
         engine
@@ -175,6 +183,11 @@ pub async fn handle_new(app: &mut TuiApp) -> String {
         .as_ref()
         .map(|_| "kimi-k2.5")
         .unwrap_or("unknown");
+
+    if let Some(current) = app.session_manager.current_session_id().map(str::to_string) {
+        app.save_session_ui_state(&current);
+    }
+
     match app.session_manager.start_session(
         "New Session",
         model,
@@ -183,6 +196,8 @@ pub async fn handle_new(app: &mut TuiApp) -> String {
         Ok(id) => {
             app.messages.clear();
             app.clear_tool_transcript();
+            app.push_recent_session(&id);
+            app.restore_session_ui_state(&id);
             if let Some(ref engine) = app.streaming_engine {
                 engine.set_session_id(id.clone());
                 engine.set_history(Vec::new()).await;

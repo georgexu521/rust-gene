@@ -448,7 +448,7 @@ fn sidebar_layout(area: ratatui::layout::Rect) -> SidebarLayout {
 }
 
 /// 处理键盘事件
-fn handle_leader_sequence(key: KeyEvent, app: &mut TuiApp) -> Option<bool> {
+async fn handle_leader_sequence(key: KeyEvent, app: &mut TuiApp) -> Option<bool> {
     use crossterm::event::KeyCode;
 
     if let Some(state) = &app.leader_state {
@@ -471,6 +471,10 @@ fn handle_leader_sequence(key: KeyEvent, app: &mut TuiApp) -> Option<bool> {
                 if !app.open_tool_viewer() {
                     app.add_system_message("No diff/tool output to view yet.".to_string());
                 }
+                return Some(false);
+            }
+            KeyCode::Char('g') => {
+                app.cycle_recent_session_forward().await;
                 return Some(false);
             }
             KeyCode::Char('w') => {
@@ -496,7 +500,7 @@ async fn handle_key_event(key: KeyEvent, app: &mut TuiApp) -> anyhow::Result<boo
     debug!("Key event: {:?}", key);
     use crate::tui::keybindings::AppAction;
 
-    if let Some(handled) = handle_leader_sequence(key, app) {
+    if let Some(handled) = handle_leader_sequence(key, app).await {
         return Ok(handled);
     }
 

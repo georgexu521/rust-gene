@@ -19,6 +19,7 @@ impl TuiApp {
                 help.push_str("  /sessions    - List recent sessions\n");
                 help.push_str("  /session     - Show current session or restore by number/ID\n");
                 help.push_str("  /new         - Start a new session\n");
+                help.push_str("  /back        - Return to the previous session\n");
                 help.push_str("  /export      - Export current session to JSON\n");
                 help.push_str("  /search      - Search through all sessions\n");
                 help.push_str("  /stats       - Show session statistics\n");
@@ -869,6 +870,7 @@ impl TuiApp {
             }
             "/sessions" => slash::handle_sessions(self, args),
             "/new" => slash::handle_new(self).await,
+            "/back" => slash::handle_back(self).await,
             "/stats" => slash::handle_stats(self),
             "/checkpoints" => slash::handle_checkpoints(self).await,
             "/restore" | "/r" => slash::handle_restore(self, args).await,
@@ -1203,6 +1205,14 @@ impl TuiApp {
 
     /// 恢复会话
     pub(crate) async fn restore_session(&mut self, session_id: &str) -> String {
+        let current_opt = self
+            .session_manager
+            .current_session_id()
+            .map(str::to_string);
+        if let Some(current) = current_opt {
+            self.save_session_ui_state(&current);
+        }
+
         if let Some(ref engine) = self.streaming_engine {
             engine
                 .flush_memory_for_current_history(crate::memory::MemoryFlushReason::ResumeSwitch)
@@ -1224,6 +1234,9 @@ impl TuiApp {
                         warn!("Failed to restore persisted tool runs: {}", err);
                         0
                     });
+
+                self.push_recent_session(session_id);
+                self.restore_session_ui_state(session_id);
 
                 // 如果会话存储了不同的 workspace，则切换并提示。
                 let workspace_toast = if let Ok(Some(record)) =

@@ -147,6 +147,7 @@ pub enum AppAction {
     LeaderSessionSidebar,
     LeaderDiffPanel,
     LeaderWorkspaceSwitcher,
+    LeaderSessionCycle,
 }
 
 /// TOML 配置结构（字符串形式）

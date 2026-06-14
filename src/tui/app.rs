@@ -169,6 +169,18 @@ impl StatusBarDensity {
     }
 }
 
+/// Per-session UI state cached in memory so switching sessions preserves scroll position, expanded tools, etc.
+#[derive(Debug, Clone, Default)]
+pub struct SessionUiState {
+    pub scroll_offset: usize,
+    pub scroll_anchor_id: Option<String>,
+    pub pinned_to_bottom: bool,
+    pub expanded_tool_run_id: Option<String>,
+    pub expanded_reasoning_message_id: Option<String>,
+    pub expanded_inline_tool_ids: BTreeSet<String>,
+    pub expanded_inline_message_part_ids: BTreeSet<String>,
+}
+
 /// 交互式 CLI 应用状态
 pub struct TuiApp {
     /// 当前模式（兼容字段；正在迁移到 `mode_stack`）
@@ -248,6 +260,10 @@ pub struct TuiApp {
     pub expanded_inline_tool_ids: BTreeSet<String>,
     /// Inline-expanded assistant text parts keyed by `TuiMessagePart.id`.
     pub expanded_inline_message_part_ids: BTreeSet<String>,
+    /// Per-session UI state cache.
+    pub session_ui_states: HashMap<String, SessionUiState>,
+    /// Recent session navigation stack (most recent at the end).
+    pub recent_session_stack: Vec<String>,
     stream_usage: Arc<Mutex<Option<StreamUsageSnapshot>>>,
     pub stream_usage_snapshot: Option<StreamUsageSnapshot>,
     /// Cached facade snapshot for synchronous rendering
@@ -617,9 +633,98 @@ impl TuiApp {
         format!("Switched workspace to {}", self.workspace.display_name)
     }
 
+    /// Save the current UI state for `session_id` into the in-memory cache.
+    pub fn save_session_ui_state(&mut self, session_id: &str) {
+        self.session_ui_states.insert(
+            session_id.to_string(),
+            SessionUiState {
+                scroll_offset: self.scroll_offset,
+                scroll_anchor_id: self.scroll_anchor_id.clone(),
+                pinned_to_bottom: self.pinned_to_bottom,
+                expanded_tool_run_id: self.expanded_tool_run_id.clone(),
+                expanded_reasoning_message_id: self.expanded_reasoning_message_id.clone(),
+                expanded_inline_tool_ids: self.expanded_inline_tool_ids.clone(),
+                expanded_inline_message_part_ids: self.expanded_inline_message_part_ids.clone(),
+            },
+        );
+    }
+
+    /// Restore the cached UI state for `session_id`, if any.
+    pub fn restore_session_ui_state(&mut self, session_id: &str) {
+        if let Some(state) = self.session_ui_states.get(session_id).cloned() {
+            self.scroll_offset = state.scroll_offset;
+            self.scroll_anchor_id = state.scroll_anchor_id;
+            self.pinned_to_bottom = state.pinned_to_bottom;
+            self.expanded_tool_run_id = state.expanded_tool_run_id;
+            self.expanded_reasoning_message_id = state.expanded_reasoning_message_id;
+            self.expanded_inline_tool_ids = state.expanded_inline_tool_ids;
+            self.expanded_inline_message_part_ids = state.expanded_inline_message_part_ids;
+        } else {
+            // Default state for a freshly restored session: pinned to bottom.
+            self.scroll_offset = 0;
+            self.scroll_anchor_id = None;
+            self.pinned_to_bottom = true;
+            self.expanded_tool_run_id = None;
+            self.expanded_reasoning_message_id = None;
+            self.expanded_inline_tool_ids.clear();
+            self.expanded_inline_message_part_ids.clear();
+        }
+    }
+
+    /// Push `session_id` onto the recent session navigation stack.
+    pub fn push_recent_session(&mut self, session_id: &str) {
+        // Remove existing entry so the most recent instance is at the end.
+        self.recent_session_stack.retain(|id| id != session_id);
+        self.recent_session_stack.push(session_id.to_string());
+        // Keep a bounded history.
+        if self.recent_session_stack.len() > 32 {
+            self.recent_session_stack.remove(0);
+        }
+    }
+
+    /// Return the previous session in the recent stack, if any.
+    pub fn previous_recent_session(&self) -> Option<&str> {
+        // The current session is at the end; the one before it is the previous.
+        if self.recent_session_stack.len() >= 2 {
+            self.recent_session_stack
+                .get(self.recent_session_stack.len() - 2)
+                .map(String::as_str)
+        } else {
+            None
+        }
+    }
+
+    /// Replace the current session id on top of the recent stack (e.g. after fork).
+    pub fn replace_recent_session(&mut self, session_id: &str) {
+        if let Some(last) = self.recent_session_stack.last_mut() {
+            *last = session_id.to_string();
+        } else {
+            self.recent_session_stack.push(session_id.to_string());
+        }
+    }
+
     /// Replace the current mode without pushing a new stack frame.
     pub fn replace_mode(&mut self, mode: AppMode) {
         self.mode = mode;
+    }
+
+    /// Cycle to the next recent session in the stack.
+    pub async fn cycle_recent_session_forward(&mut self) {
+        let current = self
+            .session_manager
+            .current_session_id()
+            .map(str::to_string);
+        if self.recent_session_stack.len() < 2 {
+            return;
+        }
+        // Rotate the stack forward: move oldest to end.
+        let oldest = self.recent_session_stack.remove(0);
+        self.recent_session_stack.push(oldest.clone());
+        // The new end is the target; restore it unless it's already current.
+        let target = self.recent_session_stack.last().cloned().unwrap_or(oldest);
+        if current.as_deref() != Some(&target) {
+            let _ = self.restore_session(&target).await;
+        }
     }
 
     /// Start a leader-key sequence if the leader key was pressed.
@@ -871,6 +976,8 @@ impl TuiApp {
             expanded_reasoning_message_id: None,
             expanded_inline_tool_ids: BTreeSet::new(),
             expanded_inline_message_part_ids: BTreeSet::new(),
+            session_ui_states: HashMap::new(),
+            recent_session_stack: Vec::new(),
             stream_usage: Arc::new(Mutex::new(None)),
             stream_usage_snapshot: None,
             facade_snapshot: RuntimeStateSnapshot::default(),

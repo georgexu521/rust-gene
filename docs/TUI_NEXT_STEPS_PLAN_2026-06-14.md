@@ -371,9 +371,9 @@ cargo test -q app --lib
 
 ### Acceptance
 
-- [ ] Restoring a session restores its previous scroll position.
-- [ ] Recent session cycling works without losing place.
-- [ ] `/back` returns to the previously active session.
+- [x] Restoring a session restores its previous scroll position.
+- [x] Recent session cycling works without losing place.
+- [x] `/back` returns to the previously active session.
 
 ### Validation
 

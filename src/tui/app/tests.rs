@@ -2137,6 +2137,67 @@ async fn test_restore_session() {
         app.session_manager.current_session_id(),
         Some(session_id.as_str())
     );
+
+    // 验证 recent session stack 已更新
+    assert!(app.recent_session_stack.contains(&session_id));
+}
+
+#[tokio::test]
+async fn test_restore_session_preserves_ui_state() {
+    let mut app = TuiApp::new();
+
+    let session_id = app
+        .session_manager
+        .start_session("UI State Session", "kimi-k2.5", None)
+        .unwrap();
+    app.scroll_offset = 42;
+    app.pinned_to_bottom = false;
+    app.expanded_tool_run_id = Some("tool_1".to_string());
+    app.save_session_ui_state(&session_id);
+
+    // 切换到另一个会话
+    let other_id = app
+        .session_manager
+        .start_session("Other Session", "kimi-k2.5", None)
+        .unwrap();
+    app.push_recent_session(&other_id);
+    app.restore_session_ui_state(&other_id);
+
+    // 修改当前状态
+    app.scroll_offset = 0;
+    app.pinned_to_bottom = true;
+    app.expanded_tool_run_id = None;
+
+    // 恢复原始会话，UI 状态应被恢复
+    app.restore_session(&session_id).await;
+    assert_eq!(app.scroll_offset, 42);
+    assert!(!app.pinned_to_bottom);
+    assert_eq!(app.expanded_tool_run_id, Some("tool_1".to_string()));
+}
+
+#[tokio::test]
+async fn test_back_command_returns_to_previous_session() {
+    let mut app = TuiApp::new();
+
+    let first = app
+        .session_manager
+        .start_session("First", "kimi-k2.5", None)
+        .unwrap();
+    app.push_recent_session(&first);
+
+    let second = app
+        .session_manager
+        .start_session("Second", "kimi-k2.5", None)
+        .unwrap();
+    app.push_recent_session(&second);
+
+    // 模拟 /back
+    let result = crate::tui::slash_handler::session::handle_back(&mut app).await;
+    assert!(result.contains("Restored session"));
+    assert_eq!(
+        app.session_manager.current_session_id(),
+        Some(first.as_str())
+    );
 }
 
 #[tokio::test]

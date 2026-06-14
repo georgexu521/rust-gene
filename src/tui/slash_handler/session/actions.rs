@@ -238,16 +238,25 @@ pub async fn handle_fork(app: &mut TuiApp, args: &str) -> String {
         title.to_string()
     };
 
+    let previous_id = app.session_manager.current_session_id().map(str::to_string);
     match app
         .session_manager
         .fork_current_session(&title, &app.workspace.root.to_string_lossy())
         .await
     {
-        Ok(id) => format!(
-            "Forked into new session: {} ({}). Switched to it automatically.",
-            title,
-            &id[..8.min(id.len())]
-        ),
+        Ok(id) => {
+            if let Some(previous) = previous_id {
+                app.save_session_ui_state(&previous);
+            }
+            app.save_session_ui_state(&id);
+            app.replace_recent_session(&id);
+            app.restore_session_ui_state(&id);
+            format!(
+                "Forked into new session: {} ({}). Switched to it automatically.",
+                title,
+                &id[..8.min(id.len())]
+            )
+        }
         Err(err) => format!("Fork failed: {err}"),
     }
 }
