@@ -21,7 +21,7 @@ pub fn render_input_area(f: &mut Frame, app: &TuiApp, area: Rect) {
         height: area.height,
     };
 
-    let input_text = app.input.value();
+    let input_text = app.composer.text.value();
     let tokens = app.composer_attachment_tokens();
 
     let prompt_color = match app.agent_mode {
@@ -53,7 +53,7 @@ pub fn render_input_area(f: &mut Frame, app: &TuiApp, area: Rect) {
             input_text,
             prompt_color,
             app,
-            tokens,
+            &tokens,
         ))
     };
 
@@ -90,7 +90,7 @@ pub fn render_input_area(f: &mut Frame, app: &TuiApp, area: Rect) {
     f.render_widget(Paragraph::new(display_text).style(style), inner_area);
 
     if !app.is_querying {
-        let (cursor_line, cursor_col) = app.input.cursor_line_column();
+        let (cursor_line, cursor_col) = app.composer.text.cursor_line_column();
         let pill_offset = if tokens.is_empty() {
             0
         } else {
@@ -324,7 +324,7 @@ fn input_lines_with_pills(
     app: &TuiApp,
     tokens: &[AttachmentToken],
 ) -> Vec<Line<'static>> {
-    let selection = app.input.selection_range();
+    let selection = app.composer.text.selection_range();
     let mut char_offset = 0usize;
     let mut lines: Vec<Line> = input_text
         .split('\n')

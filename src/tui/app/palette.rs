@@ -52,7 +52,7 @@ impl TuiApp {
         if !self.history.is_empty() {
             commands.push("/prompt-history".to_string());
         }
-        if !self.input.value().trim().is_empty() || self.prompt_stash.is_some() {
+        if !self.composer.text.value().trim().is_empty() || self.prompt_stash.is_some() {
             commands.push("/prompt-stash".to_string());
         }
         if self.pasted_block_count() > 0 {
@@ -120,7 +120,7 @@ impl TuiApp {
                     return;
                 }
                 crate::tui::commands::CommandAcceptBehavior::Insert => {
-                    self.input.set_value(format!("{} ", cmd.name));
+                    self.composer.text.set_value(format!("{} ", cmd.name));
                 }
             }
         }

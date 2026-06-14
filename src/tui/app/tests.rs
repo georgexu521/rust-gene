@@ -643,10 +643,10 @@ fn test_workspace_switcher_persists_last_workspace_root() {
 #[test]
 fn test_short_paste_inserts_directly() {
     let mut app = TuiApp::new();
-    app.input.insert_str("prefix ");
+    app.composer.text.insert_str("prefix ");
     app.insert_paste("你好\nworld".to_string());
 
-    assert_eq!(app.input.value(), "prefix 你好\nworld");
+    assert_eq!(app.composer.text.value(), "prefix 你好\nworld");
     assert_eq!(app.pasted_block_count(), 0);
 }
 
@@ -655,12 +655,12 @@ fn test_paste_existing_file_path_attaches_as_token() {
     let mut app = TuiApp::new();
     app.insert_paste("Cargo.toml".to_string());
     assert!(app
-        .composer_attachment_tokens
+        .composer_attachment_tokens()
         .iter()
         .any(|t| t.path.ends_with("Cargo.toml")));
     assert_eq!(app.composer_attachment_count(), 1);
     assert_eq!(app.composer_attachment_summaries().len(), 1);
-    assert!(!app.input.value().contains("Cargo.toml"));
+    assert!(!app.composer.text.value().contains("Cargo.toml"));
 }
 
 #[test]
@@ -671,7 +671,7 @@ fn test_long_paste_uses_placeholder_and_expands() {
         .collect::<Vec<_>>()
         .join("\n");
 
-    app.input.insert_str("please inspect ");
+    app.composer.text.insert_str("please inspect ");
     app.insert_paste(pasted.clone());
 
     assert_eq!(app.pasted_block_count(), 1);
@@ -679,13 +679,13 @@ fn test_long_paste_uses_placeholder_and_expands() {
         app.pasted_block_summaries(),
         vec!["20 lines / 149 chars".to_string()]
     );
-    assert!(app.input.value().contains("[[paste:1 20 lines"));
+    assert!(app.composer.text.value().contains("[[paste:1 20 lines"));
     assert!(app.open_paste_viewer(None));
     assert_eq!(app.mode, AppMode::ToolViewer);
     assert!(app.tool_viewer_title.contains("Paste 1"));
     assert!(app.tool_viewer_content.contains("line 19"));
     assert_eq!(
-        app.expand_paste_placeholders(app.input.value()),
+        app.expand_paste_placeholders(app.composer.text.value()),
         format!("please inspect {}", pasted)
     );
 }
@@ -695,10 +695,10 @@ fn test_paste_file_path_attaches_as_context() {
     let mut app = TuiApp::new();
     app.insert_paste("Cargo.toml".to_string());
     assert!(app
-        .composer_attachment_tokens
+        .composer_attachment_tokens()
         .iter()
         .any(|t| t.path.ends_with("Cargo.toml")));
-    assert!(!app.input.value().contains("Cargo.toml"));
+    assert!(!app.composer.text.value().contains("Cargo.toml"));
 }
 
 #[test]
@@ -706,7 +706,7 @@ fn test_paste_image_data_uses_image_placeholder() {
     let mut app = TuiApp::new();
     app.insert_paste("data:image/png;base64,abcd".to_string());
     assert_eq!(app.pasted_block_count(), 1);
-    assert!(app.input.value().contains("[[image:1"));
+    assert!(app.composer.text.value().contains("[[image:1"));
 }
 
 #[tokio::test]
@@ -757,8 +757,8 @@ fn test_composer_attachments_add_remove_and_clear() {
     let added = app.attach_context_path("Cargo.toml").unwrap();
     assert!(added.contains("Attached context: Cargo.toml"));
     assert_eq!(app.composer_attachment_count(), 1);
-    assert_eq!(app.composer_attachment_tokens.len(), 1);
-    assert!(app.composer_attachments.is_empty());
+    assert_eq!(app.composer_attachment_tokens().len(), 1);
+    assert_eq!(app.composer_attachments().len(), 1);
     let summaries = app.composer_attachment_summaries();
     assert_eq!(summaries.len(), 1);
     assert!(summaries[0].contains("[1] Cargo.toml"));
@@ -772,7 +772,7 @@ fn test_composer_attachments_add_remove_and_clear() {
         app.remove_composer_attachment(1).as_deref(),
         Some("Cargo.toml")
     );
-    assert!(app.composer_attachment_tokens.is_empty());
+    assert!(app.composer_attachment_tokens().is_empty());
     assert_eq!(app.composer_attachment_count(), 0);
 
     app.attach_context_path("Cargo.toml").unwrap();
@@ -791,9 +791,12 @@ fn test_token_attachments_remove_clear_and_summarize_once() {
     assert_eq!(label, "Cargo.toml");
     assert_eq!(app.composer_attachment_count(), 1);
     assert_eq!(app.composer_attachment_summaries().len(), 1);
-    assert!(app.composer_attachments.is_empty());
+    assert_eq!(app.composer_attachments().len(), 1);
 
-    app.composer_attachments.push("Cargo.toml".to_string());
+    app.composer.add_file(
+        "Cargo.toml",
+        crate::tui::components::attachment_token::AttachmentSource::File,
+    );
     assert_eq!(app.composer_attachment_count(), 1);
     assert_eq!(app.composer_attachment_summaries().len(), 1);
 
@@ -842,7 +845,7 @@ fn test_attachment_preview_opens_tool_viewer_for_file_and_dir() {
 async fn test_submit_message_injects_and_clears_composer_attachments() {
     let mut app = TuiApp::new();
     app.attach_context_path("Cargo.toml").unwrap();
-    app.input.insert_str("explain this config");
+    app.composer.text.insert_str("explain this config");
 
     app.submit_message().await;
 
@@ -862,12 +865,12 @@ async fn test_submit_message_injects_and_clears_composer_attachments() {
 #[tokio::test]
 async fn test_attach_slash_updates_composer_attachments() {
     let mut app = TuiApp::new();
-    app.input.insert_str("/attach Cargo.toml");
+    app.composer.text.insert_str("/attach Cargo.toml");
 
     app.submit_message().await;
 
     assert_eq!(app.composer_attachment_count(), 1);
-    assert_eq!(app.composer_attachment_tokens[0].label, "Cargo.toml");
+    assert_eq!(app.composer_attachment_tokens()[0].label, "Cargo.toml");
     let system_message = app
         .messages
         .iter()
@@ -876,7 +879,7 @@ async fn test_attach_slash_updates_composer_attachments() {
         .expect("slash response should be recorded as system message");
     assert!(system_message.content.contains("Attached context"));
 
-    app.input.insert_str("/attach list");
+    app.composer.text.insert_str("/attach list");
     app.submit_message().await;
 
     let list_message = app
@@ -904,7 +907,7 @@ async fn test_attach_preview_slash_opens_attachment_viewer() {
     let mut app = TuiApp::new();
     app.attach_context_path(root.join("note.txt").to_str().unwrap())
         .unwrap();
-    app.input.insert_str("/attach preview 1");
+    app.composer.text.insert_str("/attach preview 1");
 
     app.submit_message().await;
 
@@ -917,7 +920,7 @@ async fn test_attach_preview_slash_opens_attachment_viewer() {
 #[tokio::test]
 async fn test_attach_browse_slash_opens_file_picker() {
     let mut app = TuiApp::new();
-    app.input.insert_str("/attach browse .");
+    app.composer.text.insert_str("/attach browse .");
 
     app.submit_message().await;
 
@@ -944,7 +947,7 @@ fn test_file_picker_attaches_selected_file() {
     assert!(attached.contains("Attached context"));
     assert_eq!(app.mode, AppMode::Chat);
     assert_eq!(app.composer_attachment_count(), 1);
-    assert!(app.composer_attachment_tokens[0]
+    assert!(app.composer_attachment_tokens()[0]
         .label
         .ends_with("note.txt"));
 
@@ -992,7 +995,7 @@ async fn test_command_palette_accept_inserts_command_that_needs_args() {
     app.accept_command_palette_selection().await;
 
     assert_eq!(app.mode, AppMode::Chat);
-    assert_eq!(app.input.value(), "/save ");
+    assert_eq!(app.composer.text.value(), "/save ");
     assert!(app.recent_palette_commands.iter().any(|cmd| cmd == "/save"));
 }
 
@@ -1009,7 +1012,7 @@ async fn test_command_palette_accept_executes_no_arg_command() {
     app.accept_command_palette_selection().await;
 
     assert_eq!(app.mode, AppMode::Chat);
-    assert!(app.input.value().is_empty());
+    assert!(app.composer.text.value().is_empty());
     assert!(app
         .recent_palette_commands
         .iter()
@@ -1120,7 +1123,7 @@ fn test_contextual_palette_includes_session_actions_after_chat() {
 fn test_prompt_history_and_stash_contextual_palette() {
     let mut app = TuiApp::new();
     app.history.push_back("first prompt".to_string());
-    app.input.set_value("draft prompt".to_string());
+    app.composer.text.set_value("draft prompt".to_string());
 
     let commands = app.contextual_palette_commands();
 
@@ -1131,17 +1134,17 @@ fn test_prompt_history_and_stash_contextual_palette() {
 #[test]
 fn test_prompt_stash_save_restore_and_clear() {
     let mut app = TuiApp::new();
-    app.input.set_value("draft prompt".to_string());
+    app.composer.text.set_value("draft prompt".to_string());
 
     assert!(app.save_prompt_stash_from_input());
-    assert!(app.input.value().is_empty());
+    assert!(app.composer.text.value().is_empty());
     assert_eq!(app.prompt_stash_summary().as_deref(), Some("draft prompt"));
 
     assert!(app.restore_prompt_stash_to_input());
-    assert_eq!(app.input.value(), "draft prompt");
+    assert_eq!(app.composer.text.value(), "draft prompt");
     assert!(app.prompt_stash.is_none());
 
-    app.input.set_value("second draft".to_string());
+    app.composer.text.set_value("second draft".to_string());
     assert!(app.save_prompt_stash_from_input());
     assert!(app.clear_prompt_stash());
     assert!(app.prompt_stash.is_none());

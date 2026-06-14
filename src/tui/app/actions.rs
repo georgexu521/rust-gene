@@ -167,7 +167,7 @@ impl TuiApp {
             self.pending_question_options = options;
             self.question_response_tx = Some(tx);
             self.mode = AppMode::AskUser;
-            self.input.clear();
+            self.composer.text.clear();
         }
     }
 
@@ -179,7 +179,7 @@ impl TuiApp {
         self.pending_question = None;
         self.pending_question_options.clear();
         self.mode = AppMode::Chat;
-        self.input.clear();
+        self.composer.text.clear();
     }
 
     /// 构建工具上下文（复用 LSP / Worktree 管理器注入）
@@ -270,7 +270,7 @@ impl TuiApp {
         if let Some(idx) = new_index {
             self.history_index = new_index;
             if let Some(cmd) = self.history.get(idx) {
-                self.input.set_value(cmd.clone());
+                self.composer.text.set_value(cmd.clone());
             }
         }
     }
@@ -285,13 +285,13 @@ impl TuiApp {
             None => {}
             Some(i) if i + 1 >= self.history.len() => {
                 self.history_index = None;
-                self.input.set_value(String::new());
+                self.composer.text.set_value(String::new());
             }
             Some(i) => {
                 let new_i = i + 1;
                 self.history_index = Some(new_i);
                 if let Some(cmd) = self.history.get(new_i) {
-                    self.input.set_value(cmd.clone());
+                    self.composer.text.set_value(cmd.clone());
                 }
             }
         }
@@ -309,12 +309,12 @@ impl TuiApp {
     }
 
     pub fn save_prompt_stash_from_input(&mut self) -> bool {
-        let draft = self.input.value().trim();
+        let draft = self.composer.text.value().trim();
         if draft.is_empty() || draft.starts_with("/prompt-stash") {
             return false;
         }
-        self.prompt_stash = Some(self.input.value().to_string());
-        self.input.clear();
+        self.prompt_stash = Some(self.composer.text.value().to_string());
+        self.composer.text.clear();
         true
     }
 
@@ -322,7 +322,7 @@ impl TuiApp {
         let Some(stash) = self.prompt_stash.take() else {
             return false;
         };
-        self.input.set_value(stash);
+        self.composer.text.set_value(stash);
         true
     }
 
@@ -385,7 +385,7 @@ impl TuiApp {
             self.close_prompt_picker();
             return false;
         };
-        self.input.set_value(content);
+        self.composer.text.set_value(content);
         self.close_prompt_picker();
         true
     }
@@ -417,6 +417,16 @@ impl TuiApp {
 
     pub fn open_composer_multi_file_picker(&mut self, root: Option<&str>) -> String {
         self.open_composer_file_picker(root, true)
+    }
+
+    pub fn open_composer_file_picker_with_filter(
+        &mut self,
+        root: Option<&str>,
+        multi_select: bool,
+    ) -> String {
+        let message = self.open_composer_file_picker(root, multi_select);
+        self.start_file_picker_filter();
+        message
     }
 
     pub fn close_composer_file_picker(&mut self) {

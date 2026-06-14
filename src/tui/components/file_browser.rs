@@ -11,6 +11,8 @@ use ratatui::{
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
+use super::fuzzy;
+
 /// 文件树节点
 #[derive(Debug, Clone)]
 pub struct FileNode {
@@ -361,13 +363,13 @@ impl FileBrowserState {
 }
 
 fn node_matches_filter(node: &FileNode, query: &str) -> bool {
-    let query = query.to_ascii_lowercase();
-    node.name.to_ascii_lowercase().contains(&query)
-        || node
-            .path
-            .to_string_lossy()
+    if node.is_dir {
+        node.name
             .to_ascii_lowercase()
-            .contains(&query)
+            .contains(&query.to_ascii_lowercase())
+    } else {
+        fuzzy::fuzzy_matches(&node.name, query)
+    }
 }
 
 #[cfg(test)]

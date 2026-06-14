@@ -4,9 +4,11 @@
 
 pub mod attachment_token;
 pub mod collapsible;
+pub mod composer;
 pub mod diff_renderer;
 pub mod diff_viewer;
 pub mod file_browser;
+pub mod fuzzy;
 pub mod input;
 pub mod markdown;
 pub mod message;

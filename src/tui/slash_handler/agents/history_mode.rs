@@ -51,7 +51,7 @@ pub fn handle_prompt_history(app: &TuiApp, args: &str) -> String {
 pub fn handle_prompt_stash(app: &mut TuiApp, args: &str) -> String {
     match args.trim() {
         "" => {
-            if !app.input.value().trim().is_empty() {
+            if !app.composer.text.value().trim().is_empty() {
                 if app.save_prompt_stash_from_input() {
                     "Prompt draft stashed. Run /prompt-stash again to restore it.".to_string()
                 } else {

@@ -14,7 +14,7 @@ use crate::state::{
     RuntimeStatusSnapshot, RuntimeToolStatus, TaskItem,
 };
 use crate::tui::components::attachment_token::{AttachmentSource, AttachmentToken};
-use crate::tui::components::input::InputState;
+use crate::tui::components::composer::{ComposerPart, ComposerState};
 use crate::tui::sync_store::{TuiSyncSnapshot, TuiSyncStore};
 use crate::tui::tool_view::{ToolRunStatus, ToolRunView};
 use crate::workspace::Workspace;
@@ -193,8 +193,8 @@ pub struct TuiApp {
     pub workspace: Workspace,
     /// 当前 coding agent 产品模式
     pub agent_mode: AgentMode,
-    /// 输入状态
-    pub input: InputState,
+    /// Composer state (text + structured prompt parts).
+    pub composer: ComposerState,
     /// 消息列表
     pub messages: Vec<MessageItem>,
     /// 任务列表
@@ -365,12 +365,6 @@ pub struct TuiApp {
     pub plan_mode_label: Option<String>,
     /// Tick 计数器（用于 spinner 等动画）
     pub tick_count: usize,
-    /// 被折叠的长粘贴块，发送时还原
-    pub pasted_blocks: Vec<PastedBlock>,
-    /// Composer file/context attachments injected into the next user prompt.
-    pub composer_attachments: Vec<String>,
-    /// Inline attachment tokens displayed as pills in the composer.
-    pub composer_attachment_tokens: Vec<AttachmentToken>,
     /// File picker state for composer attachments.
     pub file_picker_state: Option<crate::tui::components::file_browser::FileBrowserState>,
     /// Whether file picker keystrokes edit the filter query.
@@ -957,7 +951,7 @@ impl TuiApp {
             leader_state: None,
             workspace,
             agent_mode: AgentMode::Auto,
-            input: InputState::new(),
+            composer: ComposerState::new(),
             messages: Vec::new(),
             tasks: Vec::new(),
             is_querying: false,
@@ -1051,9 +1045,6 @@ impl TuiApp {
             keybindings: crate::tui::keybindings::Keybindings::load(),
             theme: { Arc::new(crate::tui::theme::Theme::from_name(&theme_name)) },
             onboarding_state: None,
-            pasted_blocks: Vec::new(),
-            composer_attachments: Vec::new(),
-            composer_attachment_tokens: Vec::new(),
             file_picker_state: None,
             file_picker_filtering: false,
             command_palette_query: String::new(),
@@ -1165,27 +1156,27 @@ impl TuiApp {
 
     /// 提交用户消息
     pub async fn submit_message(&mut self) {
-        let content = self.expand_paste_placeholders(self.input.value());
-        if content.trim().is_empty() {
+        let raw_text = self.composer.text.value().to_string();
+        let trimmed = raw_text.trim();
+        if trimmed.is_empty() && self.composer.parts.is_empty() {
             return;
         }
 
-        // 清空输入
-        self.input.clear();
-
         // 处理斜杠命令
-        if content.starts_with('/') {
-            self.handle_slash_command(&content).await;
+        if trimmed.starts_with('/') {
+            self.handle_slash_command(trimmed).await;
             if let Some(prompt) = self.pending_goal_prompt.take() {
                 self.send_message(prompt).await;
             }
+            self.composer.text.clear();
             return;
         }
 
-        let content = self.compose_message_with_attachments(content);
-        self.pasted_blocks.clear();
-        self.composer_attachments.clear();
-        self.composer_attachment_tokens.clear();
+        let content = self.composer.build_submission();
+        if content.trim().is_empty() {
+            return;
+        }
+        self.composer.clear();
         self.send_message(content).await;
     }
 
@@ -1213,58 +1204,92 @@ impl TuiApp {
         }
 
         if char_count < LONG_PASTE_CHAR_THRESHOLD && line_count < LONG_PASTE_LINE_THRESHOLD {
-            self.input.insert_str(&text);
+            self.composer.text.insert_str(&text);
             return;
         }
 
-        let paste_id = self.pasted_blocks.len() + 1;
+        let paste_id = self
+            .composer
+            .parts
+            .iter()
+            .filter(|part| matches!(part, ComposerPart::PastedText { .. }))
+            .count()
+            + 1;
         let placeholder = format!(
             "[[paste:{} {} lines {} chars]]",
             paste_id, line_count, char_count
         );
-        self.pasted_blocks.push(PastedBlock {
-            placeholder: placeholder.clone(),
-            content: text,
-        });
-        self.input.insert_str(&placeholder);
+        self.composer
+            .add_pasted_text(format!("paste {}", paste_id), placeholder.clone(), text);
+        self.composer.text.insert_str(&placeholder);
     }
 
     fn insert_image_paste(&mut self, text: String) {
-        let paste_id = self.pasted_blocks.len() + 1;
+        let paste_id = self
+            .composer
+            .parts
+            .iter()
+            .filter(|part| matches!(part, ComposerPart::Image { .. }))
+            .count()
+            + 1;
         let char_count = text.chars().count();
         let placeholder = format!("[[image:{} {} chars]]", paste_id, char_count);
-        self.pasted_blocks.push(PastedBlock {
-            placeholder: placeholder.clone(),
-            content: text,
-        });
-        self.input.insert_str(&placeholder);
+        self.composer.add_image(placeholder.clone(), text);
+        self.composer.text.insert_str(&placeholder);
     }
 
     pub fn pasted_block_count(&self) -> usize {
-        self.pasted_blocks
+        self.composer
+            .parts
             .iter()
-            .filter(|block| self.input.value().contains(&block.placeholder))
+            .filter(|part| match part {
+                ComposerPart::PastedText { placeholder, .. } => {
+                    self.composer.text.value().contains(placeholder)
+                }
+                ComposerPart::Image { label, .. } => self.composer.text.value().contains(label),
+                _ => false,
+            })
             .count()
     }
 
     pub fn pasted_block_summaries(&self) -> Vec<String> {
-        self.pasted_blocks
+        self.composer
+            .parts
             .iter()
-            .filter(|block| self.input.value().contains(&block.placeholder))
-            .map(|block| {
-                let line_count = block.content.lines().count().max(1);
-                let char_count = block.content.chars().count();
-                format!("{} lines / {} chars", line_count, char_count)
+            .filter(|part| match part {
+                ComposerPart::PastedText { placeholder, .. } => {
+                    self.composer.text.value().contains(placeholder)
+                }
+                ComposerPart::Image { label, .. } => self.composer.text.value().contains(label),
+                _ => false,
+            })
+            .map(|part| match part {
+                ComposerPart::PastedText { content, .. } => {
+                    let line_count = content.lines().count().max(1);
+                    let char_count = content.chars().count();
+                    format!("{} lines / {} chars", line_count, char_count)
+                }
+                ComposerPart::Image { content, .. } => {
+                    format!("{} chars", content.chars().count())
+                }
+                _ => String::new(),
             })
             .collect()
     }
 
     pub fn open_paste_viewer(&mut self, index: Option<usize>) -> bool {
-        let active_blocks = self
-            .pasted_blocks
+        let active_blocks: Vec<_> = self
+            .composer
+            .parts
             .iter()
-            .filter(|block| self.input.value().contains(&block.placeholder))
-            .collect::<Vec<_>>();
+            .filter(|part| match part {
+                ComposerPart::PastedText { placeholder, .. } => {
+                    self.composer.text.value().contains(placeholder)
+                }
+                ComposerPart::Image { label, .. } => self.composer.text.value().contains(label),
+                _ => false,
+            })
+            .collect();
         if active_blocks.is_empty() {
             return false;
         }
@@ -1272,15 +1297,25 @@ impl TuiApp {
         let Some(block) = active_blocks.get(selected) else {
             return false;
         };
-        let line_count = block.content.lines().count().max(1);
-        let char_count = block.content.chars().count();
-        self.tool_viewer_title = format!(
-            "Paste {} ({} lines / {} chars)",
-            selected + 1,
-            line_count,
-            char_count
-        );
-        self.tool_viewer_content = block.content.clone();
+        match block {
+            ComposerPart::PastedText { content, .. } => {
+                let line_count = content.lines().count().max(1);
+                let char_count = content.chars().count();
+                self.tool_viewer_title = format!(
+                    "Paste {} ({} lines / {} chars)",
+                    selected + 1,
+                    line_count,
+                    char_count
+                );
+                self.tool_viewer_content = content.clone();
+            }
+            ComposerPart::Image { content, .. } => {
+                let char_count = content.chars().count();
+                self.tool_viewer_title = format!("Image {} ({} chars)", selected + 1, char_count);
+                self.tool_viewer_content = content.clone();
+            }
+            _ => return false,
+        }
         self.tool_viewer_scroll_offset = 0;
         self.mode = AppMode::ToolViewer;
         true
@@ -1291,25 +1326,17 @@ impl TuiApp {
         if raw_path.is_empty() {
             return Err("Usage: /attach <path>|remove <n>|clear|list".to_string());
         }
-        if self.composer_attachment_count() >= 12 {
+        if self.composer.attachment_count() >= 12 {
             return Err("Attachment limit reached for this prompt.".to_string());
         }
 
         let token = AttachmentToken::from_path(raw_path, AttachmentSource::File);
         let display = token.label.clone();
-        if self
-            .composer_attachment_tokens
-            .iter()
-            .any(|t| t.path == token.path)
-            || self
-                .composer_attachments
-                .iter()
-                .any(|p| p == &display || p == &token.path)
-        {
+        if self.composer.has_file(&token.path) {
             return Ok(format!("Already attached: {display}"));
         }
 
-        self.composer_attachment_tokens.push(token);
+        self.composer.add_file(raw_path, AttachmentSource::File);
         Ok(format!("Attached context: {display}"))
     }
 
@@ -1318,47 +1345,46 @@ impl TuiApp {
             return None;
         }
         let target = self
-            .composer_attachment_paths()
+            .composer
+            .attachment_paths()
             .get(one_based_index - 1)
             .cloned()?;
 
-        if let Some(pos) = self
-            .composer_attachment_tokens
-            .iter()
-            .position(|token| token.label == target || token.path == target)
-        {
-            let token = self.composer_attachment_tokens.remove(pos);
-            self.composer_attachments
-                .retain(|path| path != &token.label && path != &token.path);
+        if let Some(token) = self.composer.remove_file_by_path(&target) {
             return Some(token.label);
         }
 
-        let pos = self
-            .composer_attachments
-            .iter()
-            .position(|path| path == &target)?;
-        Some(self.composer_attachments.remove(pos))
-    }
-
-    pub fn remove_last_composer_attachment(&mut self) -> Option<String> {
-        if let Some(token) = self.composer_attachment_tokens.pop() {
-            self.composer_attachments
-                .retain(|p| p != &token.label && p != &token.path);
-            Some(token.label)
-        } else {
-            self.composer_attachments.pop()
+        let index = self.composer.parts.iter().position(|part| match part {
+            ComposerPart::File(token) => token.label == target || token.path == target,
+            ComposerPart::PastedText {
+                label, placeholder, ..
+            } => label == &target || placeholder == &target,
+            ComposerPart::Image { label, .. } => label == &target,
+        })?;
+        match self.composer.parts.remove(index) {
+            ComposerPart::File(token) => Some(token.label),
+            ComposerPart::PastedText { label, .. } | ComposerPart::Image { label, .. } => {
+                Some(label)
+            }
         }
     }
 
+    pub fn remove_last_composer_attachment(&mut self) -> Option<String> {
+        self.composer.remove_last_part().map(|part| match part {
+            ComposerPart::File(token) => token.label,
+            ComposerPart::PastedText { label, .. } | ComposerPart::Image { label, .. } => label,
+        })
+    }
+
     pub fn clear_composer_attachments(&mut self) -> usize {
-        let count = self.composer_attachment_count();
-        self.composer_attachment_tokens.clear();
-        self.composer_attachments.clear();
+        let count = self.composer.attachment_count();
+        self.composer.parts.clear();
         count
     }
 
     pub fn composer_attachment_summaries(&self) -> Vec<String> {
-        self.composer_attachment_paths()
+        self.composer
+            .attachment_paths()
             .iter()
             .enumerate()
             .map(|(idx, path)| format!("[{}] {}", idx + 1, attachment_summary(path, 44)))
@@ -1366,7 +1392,7 @@ impl TuiApp {
     }
 
     pub fn composer_attachment_count(&self) -> usize {
-        self.composer_attachment_paths().len()
+        self.composer.attachment_count()
     }
 
     pub fn toggle_pinned_session(&mut self, session_id: &str) -> bool {
@@ -1389,8 +1415,12 @@ impl TuiApp {
         Ok(())
     }
 
-    pub fn composer_attachment_tokens(&self) -> &[AttachmentToken] {
-        &self.composer_attachment_tokens
+    pub fn composer_attachment_tokens(&self) -> Vec<AttachmentToken> {
+        self.composer.attachment_tokens()
+    }
+
+    pub fn composer_attachments(&self) -> Vec<String> {
+        self.composer.attachment_paths()
     }
 
     /// Insert an attachment token (for paste/autocomplete intake) if not duplicate.
@@ -1399,31 +1429,25 @@ impl TuiApp {
         path: impl AsRef<std::path::Path>,
         source: AttachmentSource,
     ) -> Option<String> {
-        if self.composer_attachment_count() >= 12 {
+        if self.composer.attachment_count() >= 12 {
             return None;
         }
-        let token = AttachmentToken::from_path(path, source);
-        if self
-            .composer_attachment_tokens
-            .iter()
-            .any(|t| t.path == token.path)
-        {
-            return None;
-        }
-        let label = token.label.clone();
-        self.composer_attachment_tokens.push(token);
-        Some(label)
+        let token = self.composer.add_file(path, source)?;
+        Some(token.label.clone())
     }
 
     pub fn remove_composer_attachment_token(&mut self, id: &str) -> Option<AttachmentToken> {
-        let pos = self
-            .composer_attachment_tokens
-            .iter()
-            .position(|t| t.id == id)?;
-        let token = self.composer_attachment_tokens.remove(pos);
-        self.composer_attachments
-            .retain(|p| p != &token.label && p != &token.path);
-        Some(token)
+        let index = self.composer.parts.iter().position(|part| match part {
+            ComposerPart::File(token) => token.id == id,
+            _ => false,
+        })?;
+        match self.composer.parts.remove(index) {
+            ComposerPart::File(token) => Some(token),
+            other => {
+                self.composer.parts.insert(index, other);
+                None
+            }
+        }
     }
 
     pub fn open_attachment_viewer(&mut self, index: Option<usize>) -> bool {
@@ -1455,46 +1479,15 @@ impl TuiApp {
         true
     }
 
-    fn compose_message_with_attachments(&self, content: String) -> String {
-        let paths = self.composer_attachment_paths();
-        if paths.is_empty() {
-            return content;
-        }
-
-        let mut composed = String::from("Attached context:\n");
-        for path in &paths {
-            composed.push_str("- ");
-            composed.push_str(&attachment_summary(path, 96));
-            composed.push('\n');
-        }
-        composed.push_str("\nUser request:\n");
-        composed.push_str(&content);
-        composed
-    }
-
     fn composer_attachment_paths(&self) -> Vec<String> {
-        let mut seen = BTreeSet::new();
-        let mut paths = Vec::new();
-        for token in &self.composer_attachment_tokens {
-            let was_seen = seen.contains(&token.path) || seen.contains(&token.label);
-            seen.insert(token.path.clone());
-            seen.insert(token.label.clone());
-            if !was_seen {
-                paths.push(token.label.clone());
-            }
-        }
-        for path in &self.composer_attachments {
-            if seen.insert(path.clone()) {
-                paths.push(path.clone());
-            }
-        }
-        paths
+        self.composer.attachment_paths()
     }
 
+    #[allow(dead_code)]
     fn expand_paste_placeholders(&self, content: &str) -> String {
         let mut expanded = content.to_string();
-        for block in &self.pasted_blocks {
-            expanded = expanded.replace(&block.placeholder, &block.content);
+        for (_id, _label, placeholder, paste_content) in self.composer.pasted_text_parts() {
+            expanded = expanded.replace(placeholder, paste_content);
         }
         expanded
     }

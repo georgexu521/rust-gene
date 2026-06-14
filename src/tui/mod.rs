@@ -777,7 +777,8 @@ async fn handle_key_event(key: KeyEvent, app: &mut TuiApp) -> anyhow::Result<boo
         return Ok(false);
     }
 
-    if matches!(key.code, KeyCode::F(1)) || (key.code == KeyCode::Char('?') && app.input.is_empty())
+    if matches!(key.code, KeyCode::F(1))
+        || (key.code == KeyCode::Char('?') && app.composer.text.is_empty())
     {
         app.open_shortcut_help();
         return Ok(false);
@@ -1017,7 +1018,7 @@ async fn handle_key_event(key: KeyEvent, app: &mut TuiApp) -> anyhow::Result<boo
     // Toggle inline expand/collapse for the focused message or tool body when
     // the composer is empty.
     if key.code == KeyCode::Enter
-        && app.input.is_empty()
+        && app.composer.text.is_empty()
         && matches!(app.mode, app::AppMode::Chat | app::AppMode::VimNormal)
         && app.toggle_collapsible_at_scroll_anchor()
     {
@@ -1110,12 +1111,12 @@ async fn handle_key_event(key: KeyEvent, app: &mut TuiApp) -> anyhow::Result<boo
             return Ok(true);
         }
         AppAction::Submit => {
-            if !app.input.is_empty() {
+            if !app.composer.text.is_empty() {
                 app.submit_message().await;
             }
         }
         AppAction::InsertNewline => {
-            app.input.insert_newline();
+            app.composer.text.insert_newline();
         }
         AppAction::ToggleVimMode => {
             app.vim_mode = !app.vim_mode;
@@ -1140,7 +1141,7 @@ async fn handle_key_event(key: KeyEvent, app: &mut TuiApp) -> anyhow::Result<boo
         AppAction::VimInsert => app.mode = app::AppMode::Chat,
         AppAction::VimCommand => {
             app.mode = app::AppMode::Chat;
-            app.input.insert(':');
+            app.composer.text.insert(':');
         }
         AppAction::PlanApprove => {
             app.respond_to_plan(crate::engine::plan_mode::PlanApproval::Approved);
@@ -1175,7 +1176,7 @@ async fn handle_key_event(key: KeyEvent, app: &mut TuiApp) -> anyhow::Result<boo
 async fn handle_ask_user_key_event(key: KeyEvent, app: &mut TuiApp) -> anyhow::Result<bool> {
     match key.code {
         KeyCode::Enter => {
-            let answer = app.input.value().to_string();
+            let answer = app.composer.text.value().to_string();
             app.respond_to_question(answer);
         }
         KeyCode::Esc => {
@@ -1191,14 +1192,14 @@ async fn handle_ask_user_key_event(key: KeyEvent, app: &mut TuiApp) -> anyhow::R
                     return Ok(false);
                 }
             }
-            app.input.insert(c);
+            app.composer.text.insert(c);
         }
-        KeyCode::Backspace => app.input.delete_char_before_cursor(),
-        KeyCode::Delete => app.input.delete_char_at_cursor(),
-        KeyCode::Left => app.input.move_cursor_left(),
-        KeyCode::Right => app.input.move_cursor_right(),
-        KeyCode::Home => app.input.move_cursor_to_start(),
-        KeyCode::End => app.input.move_cursor_to_end(),
+        KeyCode::Backspace => app.composer.text.delete_char_before_cursor(),
+        KeyCode::Delete => app.composer.text.delete_char_at_cursor(),
+        KeyCode::Left => app.composer.text.move_cursor_left(),
+        KeyCode::Right => app.composer.text.move_cursor_right(),
+        KeyCode::Home => app.composer.text.move_cursor_to_start(),
+        KeyCode::End => app.composer.text.move_cursor_to_end(),
         _ => {}
     }
     Ok(false)
@@ -1363,47 +1364,47 @@ fn handle_rich_input_shortcuts(key: KeyEvent, app: &mut TuiApp) -> Option<bool> 
 
     match key.code {
         KeyCode::Char('a') if ctrl => {
-            app.input.select_all();
+            app.composer.text.select_all();
             return Some(false);
         }
         KeyCode::Char('z') if ctrl && shift => {
-            app.input.redo();
+            app.composer.text.redo();
             return Some(false);
         }
         KeyCode::Char('z') if ctrl => {
-            app.input.undo();
+            app.composer.text.undo();
             return Some(false);
         }
         KeyCode::Char('c') if ctrl => {
-            if app.input.has_selection() {
-                let _ = app.input.copy_selection();
+            if app.composer.text.has_selection() {
+                let _ = app.composer.text.copy_selection();
                 return Some(false);
             }
         }
         KeyCode::Char('x') if ctrl => {
-            if app.input.has_selection() {
-                let _ = app.input.cut_selection();
+            if app.composer.text.has_selection() {
+                let _ = app.composer.text.cut_selection();
                 return Some(false);
             }
         }
         KeyCode::Char('v') if ctrl => {
-            let _ = app.input.paste_from_clipboard();
+            let _ = app.composer.text.paste_from_clipboard();
             return Some(false);
         }
         KeyCode::Left if shift => {
-            app.input.select_left();
+            app.composer.text.select_left();
             return Some(false);
         }
         KeyCode::Right if shift => {
-            app.input.select_right();
+            app.composer.text.select_right();
             return Some(false);
         }
         KeyCode::Up if shift => {
-            app.input.select_up();
+            app.composer.text.select_up();
             return Some(false);
         }
         KeyCode::Down if shift => {
-            app.input.select_down();
+            app.composer.text.select_down();
             return Some(false);
         }
         _ => {}
@@ -1420,43 +1421,43 @@ async fn handle_fallback_key_event(key: KeyEvent, app: &mut TuiApp) -> anyhow::R
 
     match key.code {
         KeyCode::Char('@') => {
-            app.open_composer_file_picker(Some("."), true);
+            app.open_composer_file_picker_with_filter(Some("."), true);
         }
         KeyCode::Backspace => {
-            if app.input.is_empty() {
+            if app.composer.text.is_empty() {
                 if let Some(path) = app.remove_last_composer_attachment() {
                     app.add_toast(format!("Removed attachment: {}", path), "-");
                 }
             } else {
-                app.input.delete_char_before_cursor();
+                app.composer.text.delete_char_before_cursor();
             }
         }
-        KeyCode::Delete => app.input.delete_char_at_cursor(),
-        KeyCode::Left => app.input.move_cursor_left(),
-        KeyCode::Right => app.input.move_cursor_right(),
-        KeyCode::Home => app.input.move_cursor_to_start(),
-        KeyCode::End => app.input.move_cursor_to_end(),
+        KeyCode::Delete => app.composer.text.delete_char_at_cursor(),
+        KeyCode::Left => app.composer.text.move_cursor_left(),
+        KeyCode::Right => app.composer.text.move_cursor_right(),
+        KeyCode::Home => app.composer.text.move_cursor_to_start(),
+        KeyCode::End => app.composer.text.move_cursor_to_end(),
         KeyCode::Up => {
             if key.modifiers.contains(KeyModifiers::SHIFT) {
                 app.history_prev();
-            } else if app.input.is_cursor_on_first_line() {
+            } else if app.composer.text.is_cursor_on_first_line() {
                 app.scroll_up();
             } else {
-                app.input.move_cursor_up();
+                app.composer.text.move_cursor_up();
             }
         }
         KeyCode::Down => {
             if key.modifiers.contains(KeyModifiers::SHIFT) {
                 app.history_next();
-            } else if app.input.is_cursor_on_last_line() {
+            } else if app.composer.text.is_cursor_on_last_line() {
                 app.scroll_down();
             } else {
-                app.input.move_cursor_down();
+                app.composer.text.move_cursor_down();
             }
         }
         KeyCode::PageUp => app.scroll_up_half_page(),
         KeyCode::PageDown => app.scroll_down_half_page(),
-        KeyCode::Char(c) => app.input.insert(c),
+        KeyCode::Char(c) => app.composer.text.insert(c),
         _ => {}
     }
     Ok(false)
@@ -1757,8 +1758,12 @@ mod tests {
         app.facade_snapshot.provider_request.elapsed_ms = 3_200;
         app.history.push_back("cargo check current TUI".to_string());
         app.prompt_stash = Some("review the latest TUI run".to_string());
-        app.composer_attachments.push("Cargo.toml".to_string());
-        app.input
+        app.composer.add_file(
+            "Cargo.toml",
+            crate::tui::components::attachment_token::AttachmentSource::File,
+        );
+        app.composer
+            .text
             .insert_str("Check the TUI layout and report any regressions.");
         app.messages.push(crate::state::MessageItem {
             id: "user_snapshot".to_string(),
@@ -2112,13 +2117,13 @@ cargo check finished successfully"
     async fn chat_backspace_keeps_attachments_when_editing_text() {
         let mut app = TuiApp::new();
         app.attach_context_path("Cargo.toml").unwrap();
-        app.input.insert_str("abc");
+        app.composer.text.insert_str("abc");
 
         handle_key_event(key(KeyCode::Backspace), &mut app)
             .await
             .unwrap();
 
-        assert_eq!(app.input.value(), "ab");
+        assert_eq!(app.composer.text.value(), "ab");
         assert_eq!(app.composer_attachment_count(), 1);
     }
 
@@ -2147,7 +2152,7 @@ cargo check finished successfully"
             .unwrap();
 
         assert_eq!(app.mode, app::AppMode::Chat);
-        assert_eq!(app.input.value(), "newer prompt");
+        assert_eq!(app.composer.text.value(), "newer prompt");
         assert_eq!(app.prompt_stash.as_deref(), Some("stashed draft"));
     }
 

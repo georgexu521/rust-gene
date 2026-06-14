@@ -1,5 +1,6 @@
 use super::*;
 use crate::state::{MessageItem, MessageRole};
+use crate::tui::components::attachment_token::AttachmentSource;
 use crate::tui::view_model::timeline::{
     estimate_tool_runs_height, timeline_items, tool_runs_from_parts,
 };
@@ -462,21 +463,17 @@ fn render_input_area_shows_context_strip_and_paste_count() {
     let mut app = TuiApp::new();
     app.history.push_back("previous prompt".to_string());
     app.prompt_stash = Some("stashed prompt".to_string());
-    app.composer_attachments.push("Cargo.toml".to_string());
+    app.composer.add_file("Cargo.toml", AttachmentSource::File);
     let pasted_text = (0..20)
         .map(|i| format!("line {i}"))
         .collect::<Vec<_>>()
         .join("\n");
     let line_count = pasted_text.lines().count().max(1);
     let char_count = pasted_text.chars().count();
-    app.input.insert_str(&format!(
-        "[[paste:{} {} lines {} chars]]",
-        1, line_count, char_count
-    ));
-    app.pasted_blocks.push(crate::tui::app::PastedBlock {
-        placeholder: format!("[[paste:{} {} lines {} chars]]", 1, line_count, char_count),
-        content: pasted_text,
-    });
+    let placeholder_1 = format!("[[paste:{} {} lines {} chars]]", 1, line_count, char_count);
+    app.composer
+        .add_pasted_text("paste 1".to_string(), placeholder_1.clone(), pasted_text);
+    app.composer.text.insert_str(&placeholder_1);
 
     let rendered = render_input_area_text(&app);
 
@@ -508,8 +505,10 @@ fn render_input_area_shows_non_default_mode_in_context_strip() {
 #[test]
 fn render_input_area_truncates_long_attachment_but_keeps_preview_hint() {
     let mut app = TuiApp::new();
-    app.composer_attachments
-        .push("very/long/path/with/many/segments/and-a-wide-name-你好你好/file.rs".to_string());
+    app.composer.add_file(
+        "very/long/path/with/many/segments/and-a-wide-name-你好你好/file.rs",
+        AttachmentSource::File,
+    );
 
     let rendered = render_input_area_text_with_size(&app, 72, 8);
 
@@ -529,21 +528,17 @@ fn render_input_area_compacts_context_strip_but_keeps_action_counts() {
         Some("deepseek-v4-flash-with-a-very-long-routing-suffix".to_string());
     app.history.push_back("previous prompt".to_string());
     app.prompt_stash = Some("stashed prompt".to_string());
-    app.composer_attachments.push("Cargo.toml".to_string());
+    app.composer.add_file("Cargo.toml", AttachmentSource::File);
     let pasted_text = (0..18)
         .map(|i| format!("long pasted context line {i}"))
         .collect::<Vec<_>>()
         .join("\n");
     let line_count = pasted_text.lines().count().max(1);
     let char_count = pasted_text.chars().count();
-    app.input.insert_str(&format!(
-        "[[paste:{} {} lines {} chars]]",
-        1, line_count, char_count
-    ));
-    app.pasted_blocks.push(crate::tui::app::PastedBlock {
-        placeholder: format!("[[paste:{} {} lines {} chars]]", 1, line_count, char_count),
-        content: pasted_text,
-    });
+    let placeholder_1 = format!("[[paste:{} {} lines {} chars]]", 1, line_count, char_count);
+    app.composer
+        .add_pasted_text("paste 1".to_string(), placeholder_1.clone(), pasted_text);
+    app.composer.text.insert_str(&placeholder_1);
 
     let rendered = render_input_area_text_with_size(&app, 84, 8);
 
@@ -561,9 +556,9 @@ fn render_input_area_compacts_context_strip_but_keeps_action_counts() {
 #[test]
 fn render_input_area_uses_dedicated_attachment_row_for_multiple_files() {
     let mut app = TuiApp::new();
-    app.composer_attachments.push("Cargo.toml".to_string());
-    app.composer_attachments.push("src".to_string());
-    app.composer_attachments.push("docs".to_string());
+    app.composer.add_file("Cargo.toml", AttachmentSource::File);
+    app.composer.add_file("src", AttachmentSource::File);
+    app.composer.add_file("docs", AttachmentSource::File);
 
     let rendered = render_input_area_text(&app);
 
@@ -580,21 +575,17 @@ fn render_context_sidebar_shows_runtime_summary() {
     app.sidebar_panel = SidebarPanel::Context;
     app.history.push_back("previous prompt".to_string());
     app.prompt_stash = Some("draft".to_string());
-    app.composer_attachments.push("Cargo.toml".to_string());
+    app.composer.add_file("Cargo.toml", AttachmentSource::File);
     let pasted_text = (0..20)
         .map(|i| format!("line {i}"))
         .collect::<Vec<_>>()
         .join("\n");
     let line_count = pasted_text.lines().count().max(1);
     let char_count = pasted_text.chars().count();
-    app.input.insert_str(&format!(
-        "[[paste:{} {} lines {} chars]]",
-        1, line_count, char_count
-    ));
-    app.pasted_blocks.push(crate::tui::app::PastedBlock {
-        placeholder: format!("[[paste:{} {} lines {} chars]]", 1, line_count, char_count),
-        content: pasted_text,
-    });
+    let placeholder_1 = format!("[[paste:{} {} lines {} chars]]", 1, line_count, char_count);
+    app.composer
+        .add_pasted_text("paste 1".to_string(), placeholder_1.clone(), pasted_text);
+    app.composer.text.insert_str(&placeholder_1);
     let mut failed = ToolRunView::new("tool_1".to_string(), "bash".to_string());
     failed.mark_complete("Result: ERROR\nfailed".to_string());
     app.sync_snapshot
