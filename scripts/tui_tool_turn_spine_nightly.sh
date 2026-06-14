@@ -27,6 +27,8 @@ import pathlib
 import sys
 from datetime import datetime, timezone
 
+import subprocess
+
 path = pathlib.Path(sys.argv[1])
 run_id = sys.argv[2]
 rounds = int(sys.argv[3])
@@ -37,12 +39,16 @@ manifest = {
     "rounds": rounds,
     "provider": os.environ.get("PRIORITY_AGENT_DEFAULT_PROVIDER", "deepseek"),
     "model": os.environ.get("PRIORITY_AGENT_DEFAULT_MODEL"),
+    "base_url_family": os.environ.get("PRIORITY_AGENT_LLM_BASE_URL_FAMILY"),
     "request_timeout_secs": os.environ.get(
         "PRIORITY_AGENT_LLM_REQUEST_TIMEOUT_SECS", "45"
     ),
     "disable_db_final_recovery": os.environ.get(
         "PRIORITY_AGENT_TUI_DISABLE_DB_FINAL_RECOVERY", "1"
     ),
+    "git_sha": subprocess.run(
+        ["git", "rev-parse", "HEAD"], capture_output=True, text=True, check=False
+    ).stdout.strip(),
 }
 path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 PY
@@ -78,6 +84,8 @@ path = pathlib.Path(sys.argv[1])
 manifest = json.loads(path.read_text(encoding="utf-8"))
 manifest["failed_rounds"] = int(sys.argv[2])
 manifest["readiness_exit_code"] = int(sys.argv[3])
+manifest["closed_at"] = datetime.now(timezone.utc).isoformat()
+manifest["status"] = "passed" if manifest["failed_rounds"] == 0 and manifest["readiness_exit_code"] == 0 else "failed"
 path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 PY
 

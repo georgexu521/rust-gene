@@ -74,7 +74,7 @@ def summarize_case(matrix: MatrixSpec, result_path: Path) -> dict[str, Any]:
     rows = load_json(result_path)
     row_failures = [contract_failures(row) for row in rows]
     failures = [
-        f"size {row.get('size', index)}: {failure}"
+        f"size {rows[index].get('size', index)}: {failure}"
         for index, failures_for_row in enumerate(row_failures)
         for failure in failures_for_row
     ]
@@ -171,18 +171,52 @@ def markdown_table_value(values: list[Any]) -> str:
 
 
 def render_markdown(report: dict[str, Any]) -> str:
+    source_lines = []
+    nightly = next(
+        (m for m in report["matrices"] if m["name"].startswith("nightly")), None
+    )
+    if nightly is not None and nightly["cases"]:
+        case = nightly["cases"][0]
+        # Round directory layout: .../<run>/round-N/<case>/result.json
+        manifest_path = Path(case["result_path"]).parent.parent.parent / "manifest.json"
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            manifest = {}
+        if manifest:
+            source_lines.extend(
+                [
+                    "",
+                    "## Nightly Source",
+                    "",
+                    f"- run_id: `{manifest.get('run_id', '-')}`",
+                    f"- provider: `{manifest.get('provider', '-')}`",
+                    f"- model: `{manifest.get('model', '-')}`",
+                    f"- base_url_family: `{manifest.get('base_url_family', '-')}`",
+                    f"- request_timeout_secs: `{manifest.get('request_timeout_secs', '-')}`",
+                    f"- disable_db_final_recovery: `{manifest.get('disable_db_final_recovery', '-')}`",
+                    f"- rounds: `{manifest.get('rounds', '-')}`",
+                    f"- failed_rounds: `{manifest.get('failed_rounds', '-')}`",
+                    f"- git_sha: `{manifest.get('git_sha', '-')}`",
+                ]
+            )
     lines = [
         "# TUI Readiness Report",
         "",
         f"- generated_at: `{report['generated_at']}`",
         f"- status: `{report['status']}`",
         f"- cases: `{report['passed_cases']}/{report['total_cases']}` passed",
-        "",
-        "## Tool Turn Spine Matrix",
-        "",
-        "| Matrix | Case | Status | Outcome | Tools | Seq | Contracts | Notes |",
-        "|---|---|---:|---|---:|---:|---|---|",
     ]
+    lines.extend(source_lines)
+    lines.extend(
+        [
+            "",
+            "## Tool Turn Spine Matrix",
+            "",
+            "| Matrix | Case | Status | Outcome | Tools | Seq | Contracts | Notes |",
+            "|---|---|---:|---|---:|---:|---|---|",
+        ]
+    )
     for matrix in report["matrices"]:
         for error in matrix["errors"]:
             lines.append(
