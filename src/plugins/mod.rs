@@ -2,12 +2,32 @@
 //!
 //! This module provides a minimal plugin manifest loader so the agent can
 //! discover installed plugins before full execution/injection support lands.
+//!
+//! # TUI slot boundary
+//!
+//! Only `SidebarFooter` and `StatusBar` are active static slots rendered
+//! directly from `panel.md` or a declared manifest slot.  The remaining
+//! slots are deferred: they may be declared, but no dynamic code runs and no
+//! prompt/tool state is mutated during normal TUI rendering.
+//!
+//! | Slot             | Status   | Render source | Notes                          |
+//! |------------------|----------|---------------|--------------------------------|
+//! | SidebarFooter    | active   | panel.md      | safe static text               |
+//! | StatusBar        | active   | panel.md      | safe static text               |
+//! | SidebarTitle     | deferred | -             | reserved for future safe slot  |
+//! | MessageBeforeSend| deferred | -             | requires prompt-replacement gate |
+//! | ToolCard         | deferred | -             | requires trusted runtime slot  |
+//!
+//! Declaring a deferred slot does not block the plugin, but it will not
+//! produce any visible TUI contribution until the corresponding capability
+//! is implemented behind explicit feature flags and trust checks.
 
 pub mod trust;
 
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
+/// TUI surface a plugin may contribute to.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum TuiSlot {
@@ -18,6 +38,38 @@ pub enum TuiSlot {
     ToolCard,
 }
 
+impl TuiSlot {
+    /// Slots that may render static content from `panel.md` today.
+    pub const ACTIVE_STATIC: &[TuiSlot] = &[TuiSlot::SidebarFooter, TuiSlot::StatusBar];
+
+    /// Slots that are recognized but deliberately not rendered yet.
+    pub const DEFERRED: &[TuiSlot] = &[
+        TuiSlot::SidebarTitle,
+        TuiSlot::MessageBeforeSend,
+        TuiSlot::ToolCard,
+    ];
+
+    /// Whether this slot may be rendered from a static `panel.md` contribution.
+    pub fn is_active_static(&self) -> bool {
+        matches!(self, TuiSlot::SidebarFooter | TuiSlot::StatusBar)
+    }
+
+    /// Whether this slot is recognized but currently deferred.
+    pub fn is_deferred(&self) -> bool {
+        !self.is_active_static()
+    }
+
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            TuiSlot::SidebarTitle => "sidebar_title",
+            TuiSlot::SidebarFooter => "sidebar_footer",
+            TuiSlot::StatusBar => "status_bar",
+            TuiSlot::MessageBeforeSend => "message_before_send",
+            TuiSlot::ToolCard => "tool_card",
+        }
+    }
+}
+
 /// Runtime content for a static plugin UI slot contribution.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PluginUiSlotContent {
@@ -25,6 +77,14 @@ pub struct PluginUiSlotContent {
     pub slot: TuiSlot,
     pub title: String,
     pub content: String,
+}
+
+/// A warning produced while loading static plugin UI contributions.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PluginUiWarning {
+    pub plugin_id: String,
+    pub severity: String,
+    pub message: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -160,8 +220,12 @@ pub fn discover_plugins(plugin_roots: &[PathBuf]) -> Vec<InstalledPlugin> {
 ///
 /// Only safe display slots are supported: `SidebarFooter` and `StatusBar`.
 /// `MessageBeforeSend`, `ToolCard`, and `SidebarTitle` are explicitly deferred.
-pub fn load_static_ui_contributions(plugins: &[InstalledPlugin]) -> Vec<PluginUiSlotContent> {
+/// Warnings are returned separately so callers can surface them in the UI.
+pub fn load_static_ui_contributions(
+    plugins: &[InstalledPlugin],
+) -> (Vec<PluginUiSlotContent>, Vec<PluginUiWarning>) {
     let mut contributions = Vec::new();
+    let mut warnings = Vec::new();
 
     for plugin in plugins {
         if !plugin.manifest.enabled {
@@ -171,14 +235,13 @@ pub fn load_static_ui_contributions(plugins: &[InstalledPlugin]) -> Vec<PluginUi
         let panel_path = plugin.source_dir.join("panel.md");
         let content = match std::fs::read_to_string(&panel_path) {
             Ok(text) => text,
-            Err(_) => {
-                // No panel.md: only render if exactly one declared slot is supported.
+            Err(err) => {
                 let supported: Vec<_> = plugin
                     .manifest
                     .tui
                     .slots
                     .iter()
-                    .filter(|slot| matches!(slot, TuiSlot::SidebarFooter | TuiSlot::StatusBar))
+                    .filter(|slot| slot.is_active_static())
                     .collect();
                 if supported.len() == 1 {
                     contributions.push(PluginUiSlotContent {
@@ -188,28 +251,79 @@ pub fn load_static_ui_contributions(plugins: &[InstalledPlugin]) -> Vec<PluginUi
                         content: String::new(),
                     });
                 }
+                if supported.is_empty() && !plugin.manifest.tui.slots.is_empty() {
+                    warnings.push(PluginUiWarning {
+                        plugin_id: plugin.id.clone(),
+                        severity: "warning".to_string(),
+                        message: format!(
+                            "declared slots are deferred (no panel.md): {}",
+                            plugin
+                                .manifest
+                                .tui
+                                .slots
+                                .iter()
+                                .map(|s| s.as_str())
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        ),
+                    });
+                } else if supported.len() > 1 {
+                    warnings.push(PluginUiWarning {
+                        plugin_id: plugin.id.clone(),
+                        severity: "warning".to_string(),
+                        message: format!(
+                            "multiple active slots without panel.md; none rendered: {}",
+                            supported
+                                .iter()
+                                .map(|s| s.as_str())
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        ),
+                    });
+                }
+                if err.kind() != std::io::ErrorKind::NotFound {
+                    warnings.push(PluginUiWarning {
+                        plugin_id: plugin.id.clone(),
+                        severity: "warning".to_string(),
+                        message: format!("panel.md unreadable: {err}"),
+                    });
+                }
                 continue;
             }
         };
 
         let (frontmatter, body) = parse_panel_md(&content);
+        let mut frontmatter_warnings = Vec::new();
         let explicit_slots: Vec<_> = frontmatter
             .slot
             .as_ref()
             .map(|name| match name.as_str() {
                 "sidebar_footer" => vec![TuiSlot::SidebarFooter],
                 "status_bar" => vec![TuiSlot::StatusBar],
-                _ => Vec::new(),
+                other => {
+                    frontmatter_warnings.push(format!(
+                        "panel.md frontmatter slot '{other}' is not an active static slot"
+                    ));
+                    Vec::new()
+                }
             })
             .unwrap_or_default();
 
-        let target_slots: Vec<_> = if !explicit_slots.is_empty() {
+        for message in frontmatter_warnings {
+            warnings.push(PluginUiWarning {
+                plugin_id: plugin.id.clone(),
+                severity: "warning".to_string(),
+                message,
+            });
+        }
+
+        // If frontmatter produced no usable active slots, do not fall back to
+        // manifest-declared slots: a panel.md with an unsupported slot is
+        // intentionally invalid.
+        let target_slots: Vec<_> = if frontmatter.slot.is_some() {
             explicit_slots
                 .into_iter()
-                .filter(|slot| {
-                    plugin.manifest.tui.slots.contains(slot)
-                        && matches!(slot, TuiSlot::SidebarFooter | TuiSlot::StatusBar)
-                })
+                .filter(|slot| plugin.manifest.tui.slots.contains(slot) && slot.is_active_static())
                 .collect()
         } else {
             plugin
@@ -217,7 +331,7 @@ pub fn load_static_ui_contributions(plugins: &[InstalledPlugin]) -> Vec<PluginUi
                 .tui
                 .slots
                 .iter()
-                .filter(|slot| matches!(slot, TuiSlot::SidebarFooter | TuiSlot::StatusBar))
+                .filter(|slot| slot.is_active_static())
                 .cloned()
                 .collect()
         };
@@ -235,7 +349,7 @@ pub fn load_static_ui_contributions(plugins: &[InstalledPlugin]) -> Vec<PluginUi
         }
     }
 
-    contributions
+    (contributions, warnings)
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -651,13 +765,58 @@ Hello from plugin panel.
         .unwrap();
 
         let discovered = discover_plugins(std::slice::from_ref(&temp_dir));
-        let contributions = load_static_ui_contributions(&discovered);
+        let (contributions, warnings) = load_static_ui_contributions(&discovered);
 
         assert_eq!(contributions.len(), 1);
         assert_eq!(contributions[0].plugin_id, "panel-plugin");
         assert_eq!(contributions[0].slot, TuiSlot::SidebarFooter);
         assert_eq!(contributions[0].title, "Panel Title");
         assert!(contributions[0].content.contains("Hello from plugin panel"));
+        assert!(warnings.is_empty());
+
+        let _ = std::fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn load_static_ui_contributions_warns_on_unsupported_frontmatter_slot() {
+        let temp_dir = std::env::temp_dir().join(format!(
+            "pa-plugin-warn-frontmatter-test-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        let plugin_dir = temp_dir.join("warn-plugin");
+        std::fs::create_dir_all(&plugin_dir).unwrap();
+        std::fs::write(
+            plugin_dir.join("plugin.toml"),
+            r#"
+name = "warn-plugin"
+version = "0.1.0"
+enabled = true
+entry_command = "sh"
+
+[tui]
+slots = ["sidebar_footer"]
+"#,
+        )
+        .unwrap();
+        std::fs::write(
+            plugin_dir.join("panel.md"),
+            r#"+++
+slot = "tool_card"
++++
+
+Deferred content.
+"#,
+        )
+        .unwrap();
+
+        let discovered = discover_plugins(std::slice::from_ref(&temp_dir));
+        let (contributions, warnings) = load_static_ui_contributions(&discovered);
+
+        assert!(contributions.is_empty());
+        assert_eq!(warnings.len(), 1);
+        assert_eq!(warnings[0].plugin_id, "warn-plugin");
+        assert!(warnings[0].message.contains("tool_card"));
 
         let _ = std::fs::remove_dir_all(temp_dir);
     }
@@ -684,9 +843,12 @@ slots = ["message_before_send", "tool_card"]
         .unwrap();
 
         let discovered = discover_plugins(std::slice::from_ref(&temp_dir));
-        let contributions = load_static_ui_contributions(&discovered);
+        let (contributions, warnings) = load_static_ui_contributions(&discovered);
 
         assert!(contributions.is_empty());
+        assert_eq!(warnings.len(), 1);
+        assert_eq!(warnings[0].plugin_id, "unsafe-plugin");
+        assert!(warnings[0].message.contains("deferred"));
 
         let _ = std::fs::remove_dir_all(temp_dir);
     }
@@ -713,13 +875,46 @@ slots = ["status_bar"]
         .unwrap();
 
         let discovered = discover_plugins(std::slice::from_ref(&temp_dir));
-        let contributions = load_static_ui_contributions(&discovered);
+        let (contributions, warnings) = load_static_ui_contributions(&discovered);
 
         assert_eq!(contributions.len(), 1);
         assert_eq!(contributions[0].plugin_id, "status-plugin");
         assert_eq!(contributions[0].slot, TuiSlot::StatusBar);
         assert_eq!(contributions[0].title, "status-plugin");
         assert!(contributions[0].content.is_empty());
+        assert!(warnings.is_empty());
+
+        let _ = std::fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn load_static_ui_contributions_warns_when_multiple_active_slots_without_panel_md() {
+        let temp_dir =
+            std::env::temp_dir().join(format!("pa-plugin-multi-slot-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        let plugin_dir = temp_dir.join("multi-slot-plugin");
+        std::fs::create_dir_all(&plugin_dir).unwrap();
+        std::fs::write(
+            plugin_dir.join("plugin.toml"),
+            r#"
+name = "multi-slot-plugin"
+version = "0.1.0"
+enabled = true
+entry_command = "sh"
+
+[tui]
+slots = ["status_bar", "sidebar_footer"]
+"#,
+        )
+        .unwrap();
+
+        let discovered = discover_plugins(std::slice::from_ref(&temp_dir));
+        let (contributions, warnings) = load_static_ui_contributions(&discovered);
+
+        assert!(contributions.is_empty());
+        assert_eq!(warnings.len(), 1);
+        assert_eq!(warnings[0].plugin_id, "multi-slot-plugin");
+        assert!(warnings[0].message.contains("multiple active slots"));
 
         let _ = std::fs::remove_dir_all(temp_dir);
     }

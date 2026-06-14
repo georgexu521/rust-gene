@@ -1110,7 +1110,14 @@ impl TuiApp {
         let plugins = crate::plugins::discover_plugins(&roots);
         let trust_mode = crate::plugins::trust::TrustMode::Off;
         self.plugin_facts = crate::plugins::runtime_facts(&plugins, trust_mode);
-        self.plugin_ui_contributions = crate::plugins::load_static_ui_contributions(&plugins);
+        let (contributions, warnings) = crate::plugins::load_static_ui_contributions(&plugins);
+        self.plugin_ui_contributions = contributions;
+        for warning in warnings {
+            self.add_toast(
+                format!("Plugin {}: {}", warning.plugin_id, warning.message),
+                "⚠",
+            );
+        }
     }
 
     pub(crate) fn lazy_goal_runner(&mut self) -> Option<&crate::engine::goal::runner::GoalRunner> {

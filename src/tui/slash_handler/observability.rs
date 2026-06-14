@@ -61,7 +61,7 @@ pub fn handle_plugins(app: &TuiApp) -> String {
             let slot_names: Vec<String> = fact
                 .tui_slots
                 .iter()
-                .map(|slot| format!("{:?}", slot))
+                .map(|slot| slot.as_str().to_string())
                 .collect();
             lines.push(format!("    declared slots: {}", slot_names.join(", ")));
         }
@@ -73,7 +73,7 @@ pub fn handle_plugins(app: &TuiApp) -> String {
         if !active_slots.is_empty() {
             let active_names: Vec<String> = active_slots
                 .iter()
-                .map(|c| format!("{:?}", c.slot))
+                .map(|c| c.slot.as_str().to_string())
                 .collect();
             lines.push(format!(
                 "    active static slots: {}",
@@ -83,13 +83,8 @@ pub fn handle_plugins(app: &TuiApp) -> String {
         let deferred: Vec<String> = fact
             .tui_slots
             .iter()
-            .filter(|slot| {
-                !matches!(
-                    slot,
-                    crate::plugins::TuiSlot::SidebarFooter | crate::plugins::TuiSlot::StatusBar
-                )
-            })
-            .map(|slot| format!("{:?}", slot))
+            .filter(|slot| slot.is_deferred())
+            .map(|slot| slot.as_str().to_string())
             .collect();
         if !deferred.is_empty() {
             lines.push(format!("    deferred slots: {}", deferred.join(", ")));
