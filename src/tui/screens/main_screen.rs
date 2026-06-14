@@ -2,19 +2,16 @@
 //!
 //! 包含聊天区、输入区、状态栏的渲染
 
-use crate::{
-    state::MessageRole,
-    tui::{
-        app::{SidebarPanel, TuiApp},
-        components::{message, tool_renderers::render_tool_lines},
-        tool_view::ToolRunView,
-        view_model::timeline::{
-            estimate_message_height_with_parts_or_reasoning, estimate_timeline_item_height,
-            estimate_tool_parts_height, resolve_scroll_offset, timeline_item_heights,
-            timeline_items, tool_runs_from_parts, TimelineItem,
-        },
-        view_model::tool_rows::{tool_row_lines, tool_rows_for_runs_with_spine, ToolRowSeverity},
+use crate::tui::{
+    app::{SidebarPanel, TuiApp},
+    components::{message, tool_renderers::render_tool_lines},
+    tool_view::ToolRunView,
+    view_model::timeline::{
+        estimate_message_height_with_parts_or_reasoning, estimate_timeline_item_height,
+        estimate_tool_parts_height, resolve_scroll_offset, timeline_item_heights, timeline_items,
+        tool_runs_from_parts, TimelineItem,
     },
+    view_model::tool_rows::{tool_row_lines, tool_rows_for_runs_with_spine, ToolRowSeverity},
 };
 use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Rect},
@@ -87,7 +84,7 @@ pub fn render_chat_area(f: &mut Frame, app: &TuiApp, area: Rect) {
 
     // 计算可见消息（focus_mode 下仅显示 user/assistant）
     let projected_messages = app.visible_timeline_messages();
-    let messages: Vec<_> = if app.focus_mode {
+    let filtered_messages: Vec<_> = if app.focus_mode {
         projected_messages
             .iter()
             .filter(|m| {
@@ -96,12 +93,14 @@ pub fn render_chat_area(f: &mut Frame, app: &TuiApp, area: Rect) {
                     crate::state::MessageRole::User | crate::state::MessageRole::Assistant
                 )
             })
+            .cloned()
             .collect()
     } else {
-        projected_messages.iter().collect()
+        projected_messages.clone()
     };
 
-    let items = timeline_items(&messages, app);
+    let render_session = app.sync_snapshot.render_session(&filtered_messages);
+    let items = timeline_items(&render_session);
     let content_top = inner_area.y + top_offset;
     let content_height = inner_area.height.saturating_sub(top_offset);
     let max_y = content_top + content_height;
@@ -182,15 +181,17 @@ pub fn render_chat_area(f: &mut Frame, app: &TuiApp, area: Rect) {
 
         let TimelineItem::Message {
             message_index,
-            msg,
+            id: msg_id,
+            role,
+            content,
             parts,
             ..
         } = item;
         let collapsed = app.collapsed_indices.contains(message_index);
         // Streaming state for last assistant message
         let stream_meta = if app.is_querying
-            && msg.role == MessageRole::Assistant
-            && *message_index == messages.len() - 1
+            && *role == crate::tui::render_session::TuiRenderRole::Assistant
+            && *message_index == render_session.messages.len() - 1
         {
             let tokens = app.stream_usage_snapshot.map(|u| u.completion_tokens);
             Some(message::StreamMeta {
@@ -203,12 +204,12 @@ pub fn render_chat_area(f: &mut Frame, app: &TuiApp, area: Rect) {
         } else {
             None
         };
-        let tool_height = if collapsed || msg.role != MessageRole::User {
+        let tool_height = if collapsed || *role != crate::tui::render_session::TuiRenderRole::User {
             0
         } else {
             estimate_tool_parts_height(*parts, app)
         };
-        let message_parts = (msg.role == MessageRole::Assistant)
+        let message_parts = (*role == crate::tui::render_session::TuiRenderRole::Assistant)
             .then_some(*parts)
             .flatten();
         let text_part_id = message_parts.and_then(|parts| {
@@ -222,31 +223,32 @@ pub fn render_chat_area(f: &mut Frame, app: &TuiApp, area: Rect) {
             .unwrap_or_else(|| {
                 app.expanded_inline_message_part_ids
                     .contains(&crate::tui::sync_store::part_id_for(
-                        &msg.id,
+                        msg_id,
                         crate::tui::sync_store::TuiPartKind::Text,
                     ))
             });
         let message_height = estimate_message_height_with_parts_or_reasoning(
-            msg,
+            content,
             message_parts,
             inner_area.width as usize,
             collapsed,
-            app.expanded_reasoning_message_id.as_deref() == Some(msg.id.as_str()),
+            app.expanded_reasoning_message_id.as_deref() == Some(msg_id),
             text_part_expanded,
         )
         .min(msg_height as usize)
         .max(1) as u16;
+        let message_item = render_message_item_from_parts(*role, msg_id, content, &app.theme);
         let paragraph = if collapsed {
-            message::render_message_compact(msg, &app.theme)
+            message::render_message_compact(&message_item, &app.theme)
         } else {
             message::render_message_with_options(
-                msg,
+                &message_item,
                 inner_area.width as usize,
                 &app.theme,
                 stream_meta.as_ref(),
                 message::MessageRenderOptions {
                     reasoning_expanded: app.expanded_reasoning_message_id.as_deref()
-                        == Some(msg.id.as_str()),
+                        == Some(*msg_id),
                     text_part_expanded,
                 },
                 message_parts,
@@ -277,6 +279,25 @@ pub fn render_chat_area(f: &mut Frame, app: &TuiApp, area: Rect) {
         }
 
         current_y += msg_height;
+    }
+}
+
+fn render_message_item_from_parts(
+    role: crate::tui::render_session::TuiRenderRole,
+    id: &str,
+    content: &str,
+    _theme: &crate::tui::theme::Theme,
+) -> crate::state::MessageItem {
+    use crate::tui::render_session::TuiRenderRole;
+    crate::state::MessageItem {
+        id: id.to_string(),
+        role: match role {
+            TuiRenderRole::User => crate::state::MessageRole::User,
+            TuiRenderRole::Assistant => crate::state::MessageRole::Assistant,
+        },
+        content: content.to_string(),
+        timestamp: std::time::SystemTime::now(),
+        metadata: std::collections::HashMap::new(),
     }
 }
 

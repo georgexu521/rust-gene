@@ -1,6 +1,8 @@
 use super::*;
-use crate::state::MessageItem;
-use crate::tui::view_model::timeline::{estimate_tool_runs_height, tool_runs_from_parts};
+use crate::state::{MessageItem, MessageRole};
+use crate::tui::view_model::timeline::{
+    estimate_tool_runs_height, timeline_items, tool_runs_from_parts,
+};
 use ratatui::{backend::TestBackend, Terminal};
 use std::{collections::HashMap, time::SystemTime};
 
@@ -157,10 +159,17 @@ fn transcript_window_prefers_active_turn_when_bottom_anchored() {
         msg(MessageRole::User, "current question"),
         msg(MessageRole::Assistant, "current answer"),
     ];
-    let refs: Vec<_> = items.iter().collect();
-    let transcript = timeline_items(&refs, &app);
+    let render_session = app.sync_snapshot.render_session(&items);
+    let transcript = timeline_items(&render_session);
 
-    let window = transcript_window(&transcript, refs.len(), true, 6, 80, &app);
+    let window = transcript_window(
+        &transcript,
+        render_session.messages.len(),
+        true,
+        6,
+        80,
+        &app,
+    );
 
     assert_eq!(window.start, 2);
     assert!(window.more_above);
@@ -176,10 +185,17 @@ fn transcript_window_includes_recent_context_when_it_fits() {
         msg(MessageRole::User, "current question"),
         msg(MessageRole::Assistant, "current answer"),
     ];
-    let refs: Vec<_> = items.iter().collect();
-    let transcript = timeline_items(&refs, &app);
+    let render_session = app.sync_snapshot.render_session(&items);
+    let transcript = timeline_items(&render_session);
 
-    let window = transcript_window(&transcript, refs.len(), true, 7, 80, &app);
+    let window = transcript_window(
+        &transcript,
+        render_session.messages.len(),
+        true,
+        7,
+        80,
+        &app,
+    );
 
     assert_eq!(window.start, 1);
     assert!(window.more_above);
@@ -196,10 +212,17 @@ fn transcript_window_keeps_recent_turn_context_when_answer_overflows() {
         msg(MessageRole::User, "current question"),
         msg(MessageRole::Assistant, &long_answer),
     ];
-    let refs: Vec<_> = items.iter().collect();
-    let transcript = timeline_items(&refs, &app);
+    let render_session = app.sync_snapshot.render_session(&items);
+    let transcript = timeline_items(&render_session);
 
-    let window = transcript_window(&transcript, refs.len(), true, 8, 80, &app);
+    let window = transcript_window(
+        &transcript,
+        render_session.messages.len(),
+        true,
+        8,
+        80,
+        &app,
+    );
 
     assert_eq!(window.start, 0);
     assert!(!window.more_above);
@@ -217,10 +240,17 @@ fn transcript_window_keeps_active_prompt_when_previous_turn_is_too_tall() {
         msg(MessageRole::User, "current question"),
         msg(MessageRole::Assistant, &long_answer),
     ];
-    let refs: Vec<_> = items.iter().collect();
-    let transcript = timeline_items(&refs, &app);
+    let render_session = app.sync_snapshot.render_session(&items);
+    let transcript = timeline_items(&render_session);
 
-    let window = transcript_window(&transcript, refs.len(), true, 8, 80, &app);
+    let window = transcript_window(
+        &transcript,
+        render_session.messages.len(),
+        true,
+        8,
+        80,
+        &app,
+    );
 
     assert_eq!(window.start, 2);
     assert!(window.more_above);
@@ -235,8 +265,8 @@ fn transcript_window_preserves_manual_scroll_offset() {
         msg(MessageRole::Assistant, "two"),
         msg(MessageRole::User, "three"),
     ];
-    let refs: Vec<_> = items.iter().collect();
-    let transcript = timeline_items(&refs, &app);
+    let render_session = app.sync_snapshot.render_session(&items);
+    let transcript = timeline_items(&render_session);
 
     let window = transcript_window(&transcript, 1, false, 6, 80, &app);
 
@@ -260,9 +290,8 @@ fn transcript_items_keep_tool_runs_inside_active_user_message_parts() {
     }));
     app.sync_snapshot
         .set_tool_runs_for_message(items[2].id.clone(), vec![run]);
-    let refs: Vec<_> = items.iter().collect();
-
-    let transcript = timeline_items(&refs, &app);
+    let render_session = app.sync_snapshot.render_session(&items);
+    let transcript = timeline_items(&render_session);
 
     assert_eq!(transcript.len(), 4);
     match &transcript[2] {
@@ -275,7 +304,14 @@ fn transcript_items_keep_tool_runs_inside_active_user_message_parts() {
         }
         item => panic!("expected active user message with tool parts, got {item:?}"),
     }
-    let window = transcript_window(&transcript, refs.len(), true, 8, 80, &app);
+    let window = transcript_window(
+        &transcript,
+        render_session.messages.len(),
+        true,
+        8,
+        80,
+        &app,
+    );
     assert_eq!(window.start, 2);
 }
 
@@ -296,9 +332,8 @@ fn transcript_items_keep_tool_parts_for_previous_turns() {
         items[2].id.clone(),
         vec![ToolRunView::new("tool_2".to_string(), "grep".to_string())],
     );
-    let refs: Vec<_> = items.iter().collect();
-
-    let transcript = timeline_items(&refs, &app);
+    let render_session = app.sync_snapshot.render_session(&items);
+    let transcript = timeline_items(&render_session);
 
     assert_eq!(transcript.len(), 4);
     match &transcript[0] {

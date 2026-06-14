@@ -35,8 +35,9 @@ pub struct TuiSyncSnapshot {
     pub assistant_streaming: bool,
     pub thinking_text: String,
     pub thinking_streaming: bool,
-    /// Render/update cache only; message parts remain the authoritative tool projection.
-    pub tool_run_render_cache: Vec<ToolRunView>,
+    /// Derived tool-run cache used only by the projection reducer.
+    /// Message parts remain the authoritative tool projection source.
+    pub(crate) derived_tool_run_cache: Vec<ToolRunView>,
     pub usage: Option<StreamUsageSnapshot>,
     pub last_error: Option<String>,
 }
@@ -182,13 +183,13 @@ impl TuiSyncSnapshot {
             self.upsert_tool_part_for_message(&message_id, &run.id, &run.name);
             self.replace_tool_part_run(&message_id, run);
         }
-        self.rebuild_tool_run_render_cache();
+        self.rebuild_derived_tool_run_cache();
     }
 
     pub fn upsert_tool_run_for_message(&mut self, message_id: String, run: ToolRunView) {
         self.upsert_tool_part_for_message(&message_id, &run.id, &run.name);
         self.replace_tool_part_run(&message_id, run);
-        self.rebuild_tool_run_render_cache();
+        self.rebuild_derived_tool_run_cache();
     }
 
     pub fn clear_tool_parts(&mut self) {
@@ -203,7 +204,7 @@ impl TuiSyncSnapshot {
         for message_id in message_ids {
             self.remove_stale_part_ids(&message_id);
         }
-        self.tool_run_render_cache.clear();
+        self.derived_tool_run_cache.clear();
     }
 
     pub(crate) fn upsert_tool_part_for_message(
@@ -227,7 +228,7 @@ impl TuiSyncSnapshot {
             kind: TuiPartKind::Tool,
             text: name.to_string(),
             tool_run: self
-                .tool_run_render_cache
+                .derived_tool_run_cache
                 .iter()
                 .find(|run| run.id == tool_id)
                 .cloned(),
@@ -255,7 +256,7 @@ impl TuiSyncSnapshot {
             return;
         };
         let Some(run) = self
-            .tool_run_render_cache
+            .derived_tool_run_cache
             .iter()
             .find(|run| run.id == tool_id)
             .cloned()
@@ -266,8 +267,8 @@ impl TuiSyncSnapshot {
         self.replace_tool_part_run(&message_id, run);
     }
 
-    pub(crate) fn rebuild_tool_run_render_cache(&mut self) {
-        self.tool_run_render_cache = self.all_tool_runs();
+    pub(crate) fn rebuild_derived_tool_run_cache(&mut self) {
+        self.derived_tool_run_cache = self.all_tool_runs();
     }
 
     pub(crate) fn remove_stale_part_ids(&mut self, message_id: &str) {
@@ -422,7 +423,7 @@ impl TuiSyncStore {
     pub fn mark_active_tools_with_result(&mut self, result: String) {
         for run in self
             .snapshot
-            .tool_run_render_cache
+            .derived_tool_run_cache
             .iter_mut()
             .filter(|run| run.is_active())
         {
@@ -430,7 +431,7 @@ impl TuiSyncStore {
         }
         let ids = self
             .snapshot
-            .tool_run_render_cache
+            .derived_tool_run_cache
             .iter()
             .map(|run| run.id.clone())
             .collect::<Vec<_>>();
@@ -517,7 +518,7 @@ mod tests {
                 .kind,
             TuiPartKind::Text
         );
-        assert_eq!(snapshot.tool_run_render_cache.len(), 1);
+        assert_eq!(snapshot.derived_tool_run_cache.len(), 1);
         assert_eq!(
             snapshot
                 .tool_runs_for_message("user_1")
@@ -595,9 +596,9 @@ mod tests {
     }
 
     #[test]
-    fn tool_run_render_cache_is_not_authoritative_projection() {
+    fn derived_tool_run_cache_is_not_authoritative_projection() {
         let mut snapshot = TuiSyncSnapshot::default();
-        snapshot.tool_run_render_cache.push(ToolRunView::new(
+        snapshot.derived_tool_run_cache.push(ToolRunView::new(
             "orphan_tool".to_string(),
             "bash".to_string(),
         ));

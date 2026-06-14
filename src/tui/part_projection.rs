@@ -137,7 +137,7 @@ pub(crate) fn project_event(snapshot: &mut TuiSyncSnapshot, event: &SessionProje
         } => {
             snapshot.assistant_streaming = false;
             upsert_tool_run(
-                &mut snapshot.tool_run_render_cache,
+                &mut snapshot.derived_tool_run_cache,
                 tool_call_id.clone(),
                 tool_name.clone(),
             );
@@ -147,7 +147,7 @@ pub(crate) fn project_event(snapshot: &mut TuiSyncSnapshot, event: &SessionProje
             tool_call_id,
             arguments_delta,
         } => {
-            with_tool_run(&mut snapshot.tool_run_render_cache, tool_call_id, |run| {
+            with_tool_run(&mut snapshot.derived_tool_run_cache, tool_call_id, |run| {
                 run.push_args_delta(arguments_delta)
             });
             snapshot.sync_tool_part(tool_call_id);
@@ -161,7 +161,7 @@ pub(crate) fn project_event(snapshot: &mut TuiSyncSnapshot, event: &SessionProje
             tool_name,
             ..
         } => {
-            with_tool_run(&mut snapshot.tool_run_render_cache, tool_call_id, |run| {
+            with_tool_run(&mut snapshot.derived_tool_run_cache, tool_call_id, |run| {
                 run.mark_running(tool_name.clone())
             });
             upsert_tool_part_for_message(snapshot, message_id.as_deref(), tool_call_id, tool_name);
@@ -171,7 +171,7 @@ pub(crate) fn project_event(snapshot: &mut TuiSyncSnapshot, event: &SessionProje
             tool_call_id,
             progress,
         } => {
-            with_tool_run(&mut snapshot.tool_run_render_cache, tool_call_id, |run| {
+            with_tool_run(&mut snapshot.derived_tool_run_cache, tool_call_id, |run| {
                 run.push_progress(progress.clone())
             });
             snapshot.sync_tool_part(tool_call_id);
@@ -182,7 +182,7 @@ pub(crate) fn project_event(snapshot: &mut TuiSyncSnapshot, event: &SessionProje
             metadata,
             result_data,
         } => {
-            with_tool_run(&mut snapshot.tool_run_render_cache, tool_call_id, |run| {
+            with_tool_run(&mut snapshot.derived_tool_run_cache, tool_call_id, |run| {
                 run.mark_complete_with_metadata(result.clone(), metadata.clone());
                 if let Some(data) = result_data.clone() {
                     run.result_data = Some(data);
@@ -220,11 +220,11 @@ pub(crate) fn project_event(snapshot: &mut TuiSyncSnapshot, event: &SessionProje
             ..
         } => {
             upsert_tool_run(
-                &mut snapshot.tool_run_render_cache,
+                &mut snapshot.derived_tool_run_cache,
                 tool_call_id.clone(),
                 tool_name.clone(),
             );
-            with_tool_run(&mut snapshot.tool_run_render_cache, tool_call_id, |run| {
+            with_tool_run(&mut snapshot.derived_tool_run_cache, tool_call_id, |run| {
                 run.mark_waiting_permission(tool_name.clone(), arguments.clone())
             });
             upsert_tool_part_for_message(snapshot, message_id.as_deref(), tool_call_id, tool_name);
@@ -365,11 +365,11 @@ fn upsert_tool_run_snapshot(
     result_data: Option<serde_json::Value>,
 ) {
     upsert_tool_run(
-        &mut snapshot.tool_run_render_cache,
+        &mut snapshot.derived_tool_run_cache,
         tool_id.to_string(),
         tool_name.to_string(),
     );
-    with_tool_run(&mut snapshot.tool_run_render_cache, tool_id, |run| {
+    with_tool_run(&mut snapshot.derived_tool_run_cache, tool_id, |run| {
         if let Some(input_args) = input_args {
             run.args_buffer = input_args.to_string();
             run.arguments = serde_json::from_str(input_args).ok();

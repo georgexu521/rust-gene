@@ -1,7 +1,8 @@
 use crate::{
-    state::{MessageItem, MessageRole},
+    state::MessageItem,
     tui::{
         app::TuiApp,
+        render_session::{TuiRenderMessage, TuiRenderRole, TuiRenderSession},
         sync_store::TuiMessagePart,
         tool_view::ToolRunView,
         view_model::reasoning::assistant_reasoning_view,
@@ -14,7 +15,9 @@ pub enum TimelineItem<'a> {
     Message {
         message_index: usize,
         id: &'a str,
-        msg: &'a MessageItem,
+        role: TuiRenderRole,
+        content: &'a str,
+        metadata: &'a std::collections::HashMap<String, String>,
         parts: Option<&'a [TuiMessagePart]>,
     },
 }
@@ -27,7 +30,7 @@ impl<'a> TimelineItem<'a> {
     }
 
     pub fn is_user_message(&self) -> bool {
-        matches!(self, Self::Message { msg, .. } if msg.role == MessageRole::User)
+        matches!(self, Self::Message { role, .. } if *role == TuiRenderRole::User)
     }
 }
 
@@ -45,23 +48,36 @@ pub fn resolve_scroll_offset(
         .unwrap_or(fallback_offset)
 }
 
-pub fn timeline_items<'a>(messages: &[&'a MessageItem], app: &'a TuiApp) -> Vec<TimelineItem<'a>> {
-    let mut items = Vec::with_capacity(messages.len());
+pub fn timeline_items(render_session: &TuiRenderSession) -> Vec<TimelineItem<'_>> {
+    let mut items = Vec::with_capacity(render_session.messages.len());
 
-    for (idx, msg) in messages.iter().enumerate() {
-        let parts = (msg.role == MessageRole::Assistant || !app.focus_mode)
-            .then(|| app.sync_snapshot.parts_for_message(&msg.id))
-            .flatten()
-            .map(|v| v.as_slice());
+    for (idx, message) in render_session.messages.iter().enumerate() {
+        let parts = (!message.parts.is_empty()).then_some(message.parts.as_slice());
         items.push(TimelineItem::Message {
             message_index: idx,
-            id: &msg.id,
-            msg,
+            id: &message.id,
+            role: message.role,
+            content: message_content_for_render(message, parts),
+            metadata: &message.metadata,
             parts,
         });
     }
 
     items
+}
+
+fn message_content_for_render<'a>(
+    _message: &'a TuiRenderMessage,
+    parts: Option<&'a [TuiMessagePart]>,
+) -> &'a str {
+    parts
+        .and_then(|parts| {
+            parts
+                .iter()
+                .find(|part| part.kind == crate::tui::sync_store::TuiPartKind::Text)
+                .map(|part| part.text.as_str())
+        })
+        .unwrap_or("")
 }
 
 pub fn timeline_item_heights(items: &[TimelineItem<'_>], width: usize, app: &TuiApp) -> Vec<usize> {
@@ -75,14 +91,15 @@ pub fn estimate_timeline_item_height(item: &TimelineItem<'_>, width: usize, app:
     match item {
         TimelineItem::Message {
             message_index,
-            msg,
+            id,
+            role,
+            content,
             parts,
             ..
         } => {
             let collapsed = app.collapsed_indices.contains(message_index);
-            let reasoning_expanded =
-                app.expanded_reasoning_message_id.as_deref() == Some(msg.id.as_str());
-            let message_parts = (msg.role == MessageRole::Assistant)
+            let reasoning_expanded = app.expanded_reasoning_message_id.as_deref() == Some(*id);
+            let message_parts = (*role == TuiRenderRole::Assistant)
                 .then_some(*parts)
                 .flatten();
             let text_part_id = message_parts.and_then(|ps| {
@@ -95,20 +112,20 @@ pub fn estimate_timeline_item_height(item: &TimelineItem<'_>, width: usize, app:
                 .unwrap_or_else(|| {
                     app.expanded_inline_message_part_ids.contains(
                         &crate::tui::sync_store::part_id_for(
-                            &msg.id,
+                            id,
                             crate::tui::sync_store::TuiPartKind::Text,
                         ),
                     )
                 });
             let base_height = estimate_message_height_with_parts_or_reasoning(
-                msg,
+                content,
                 message_parts,
                 width,
                 collapsed,
                 reasoning_expanded,
                 text_part_expanded,
             );
-            if collapsed || msg.role != MessageRole::User {
+            if collapsed || *role != TuiRenderRole::User {
                 base_height
             } else {
                 base_height + estimate_tool_parts_height(*parts, app)
@@ -118,7 +135,7 @@ pub fn estimate_timeline_item_height(item: &TimelineItem<'_>, width: usize, app:
 }
 
 pub fn estimate_message_height_with_parts_or_reasoning(
-    msg: &MessageItem,
+    content: &str,
     parts: Option<&[TuiMessagePart]>,
     width: usize,
     collapsed: bool,
@@ -143,7 +160,7 @@ pub fn estimate_message_height_with_parts_or_reasoning(
         let has_reasoning = !reasoning.trim().is_empty();
         (text, reasoning, has_reasoning)
     } else {
-        let view = assistant_reasoning_view(&msg.content);
+        let view = assistant_reasoning_view(content);
         (
             view.visible_answer.clone(),
             view.hidden_reasoning.clone(),
@@ -207,7 +224,14 @@ pub fn estimate_message_height_with_parts_or_reasoning(
 }
 
 pub fn estimate_message_height(msg: &MessageItem, width: usize, collapsed: bool) -> usize {
-    estimate_message_height_with_parts_or_reasoning(msg, None, width, collapsed, false, false)
+    estimate_message_height_with_parts_or_reasoning(
+        &msg.content,
+        None,
+        width,
+        collapsed,
+        false,
+        false,
+    )
 }
 
 fn expanded_reasoning_height_for_text(reasoning: &str) -> usize {
@@ -275,7 +299,7 @@ pub fn tool_runs_from_parts(parts: &[TuiMessagePart]) -> Vec<ToolRunView> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::state::MessageRole;
+    use crate::state::{MessageItem, MessageRole};
     use std::{collections::HashMap, time::SystemTime};
 
     fn msg(role: MessageRole, id: &str) -> MessageItem {
@@ -299,9 +323,9 @@ mod tests {
             "user_1".to_string(),
             vec![ToolRunView::new("tool_1".to_string(), "bash".to_string())],
         );
-        let refs = items.iter().collect::<Vec<_>>();
+        let render_session = app.sync_snapshot.render_session(&items);
 
-        let timeline = timeline_items(&refs, &app);
+        let timeline = timeline_items(&render_session);
 
         assert_eq!(timeline.len(), 2);
         match &timeline[0] {
@@ -327,9 +351,11 @@ mod tests {
             "user_1".to_string(),
             vec![ToolRunView::new("tool_1".to_string(), "bash".to_string())],
         );
-        let refs = vec![&item];
+        let render_session = app
+            .sync_snapshot
+            .render_session(std::slice::from_ref(&item));
 
-        let timeline = timeline_items(&refs, &app);
+        let timeline = timeline_items(&render_session);
 
         assert_eq!(timeline.len(), 1);
         assert!(matches!(timeline[0], TimelineItem::Message { .. }));
@@ -344,8 +370,8 @@ mod tests {
             msg(MessageRole::User, "old_user"),
             msg(MessageRole::Assistant, "old_assistant"),
         ];
-        let refs = items.iter().collect::<Vec<_>>();
-        let timeline = timeline_items(&refs, &app);
+        let render_session = app.sync_snapshot.render_session(&items);
+        let timeline = timeline_items(&render_session);
 
         assert_eq!(resolve_scroll_offset(&timeline, 0, Some("old_user")), 2);
         assert_eq!(resolve_scroll_offset(&timeline, 3, Some("missing")), 3);
@@ -381,8 +407,14 @@ mod tests {
         );
 
         let collapsed_reasoning = estimate_message_height(&item, 80, false);
-        let expanded_reasoning =
-            estimate_message_height_with_parts_or_reasoning(&item, None, 80, false, true, false);
+        let expanded_reasoning = estimate_message_height_with_parts_or_reasoning(
+            &item.content,
+            None,
+            80,
+            false,
+            true,
+            false,
+        );
 
         assert!(expanded_reasoning > collapsed_reasoning);
     }

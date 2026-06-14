@@ -608,9 +608,13 @@ impl TuiApp {
     }
 
     pub fn timeline_item_count(&self) -> usize {
+        let render_session = self.render_session();
+        crate::tui::view_model::timeline::timeline_items(&render_session).len()
+    }
+
+    fn render_session(&self) -> crate::tui::render_session::TuiRenderSession {
         let projected_messages = self.visible_timeline_messages();
-        let messages = projected_messages.iter().collect::<Vec<_>>();
-        crate::tui::view_model::timeline::timeline_items(&messages, self).len()
+        self.sync_snapshot.render_session(&projected_messages)
     }
 
     pub fn jump_to_timeline_target(&mut self, target: &str) -> String {
@@ -621,9 +625,8 @@ impl TuiApp {
         }
 
         let target_index = {
-            let projected_messages = self.visible_timeline_messages();
-            let messages = projected_messages.iter().collect::<Vec<_>>();
-            let timeline = crate::tui::view_model::timeline::timeline_items(&messages, self);
+            let render_session = self.render_session();
+            let timeline = crate::tui::view_model::timeline::timeline_items(&render_session);
             match normalized.as_str() {
                 "user" | "prompt" => timeline
                     .iter()
@@ -676,9 +679,8 @@ impl TuiApp {
 
     pub fn scroll_to_message_index(&mut self, target_message_index: usize) -> bool {
         let target_index = {
-            let projected_messages = self.visible_timeline_messages();
-            let messages = projected_messages.iter().collect::<Vec<_>>();
-            let timeline = crate::tui::view_model::timeline::timeline_items(&messages, self);
+            let render_session = self.render_session();
+            let timeline = crate::tui::view_model::timeline::timeline_items(&render_session);
             timeline.iter().position(|item| {
                 matches!(
                     item,
@@ -715,9 +717,8 @@ impl TuiApp {
 
     pub fn toggle_collapse_at_scroll_anchor(&mut self) -> bool {
         let message_index = {
-            let projected_messages = self.visible_timeline_messages();
-            let messages = projected_messages.iter().collect::<Vec<_>>();
-            let timeline = crate::tui::view_model::timeline::timeline_items(&messages, self);
+            let render_session = self.render_session();
+            let timeline = crate::tui::view_model::timeline::timeline_items(&render_session);
             if timeline.is_empty() {
                 return false;
             }
@@ -755,9 +756,8 @@ impl TuiApp {
 
     pub fn toggle_reasoning_at_scroll_anchor(&mut self) -> bool {
         let message_id = {
-            let projected_messages = self.visible_timeline_messages();
-            let messages = projected_messages.iter().collect::<Vec<_>>();
-            let timeline = crate::tui::view_model::timeline::timeline_items(&messages, self);
+            let render_session = self.render_session();
+            let timeline = crate::tui::view_model::timeline::timeline_items(&render_session);
             if timeline.is_empty() {
                 return false;
             }
@@ -774,11 +774,14 @@ impl TuiApp {
                 .rev()
                 .find_map(|item| match item {
                     crate::tui::view_model::timeline::TimelineItem::Message {
-                        msg, parts, ..
-                    } if msg.role == crate::state::MessageRole::Assistant
-                        && assistant_has_hidden_reasoning(msg, *parts) =>
+                        id,
+                        role,
+                        parts,
+                        ..
+                    } if *role == crate::tui::render_session::TuiRenderRole::Assistant
+                        && assistant_has_hidden_reasoning(id, *parts) =>
                     {
-                        Some(msg.id.clone())
+                        Some(id.to_string())
                     }
                     crate::tui::view_model::timeline::TimelineItem::Message { .. } => None,
                 })
@@ -797,9 +800,8 @@ impl TuiApp {
     }
 
     pub fn toggle_collapsible_at_scroll_anchor(&mut self) -> bool {
-        let projected_messages = self.visible_timeline_messages();
-        let messages = projected_messages.iter().collect::<Vec<_>>();
-        let timeline = crate::tui::view_model::timeline::timeline_items(&messages, self);
+        let render_session = self.render_session();
+        let timeline = crate::tui::view_model::timeline::timeline_items(&render_session);
         if timeline.is_empty() {
             return false;
         }
@@ -813,9 +815,15 @@ impl TuiApp {
 
         for item in timeline.iter().take(anchor + 1).rev() {
             match item {
-                crate::tui::view_model::timeline::TimelineItem::Message { msg, parts, .. } => {
-                    if msg.role == crate::state::MessageRole::Assistant
-                        && !msg.content.trim().is_empty()
+                crate::tui::view_model::timeline::TimelineItem::Message {
+                    id,
+                    role,
+                    content,
+                    parts,
+                    ..
+                } => {
+                    if *role == crate::tui::render_session::TuiRenderRole::Assistant
+                        && !content.trim().is_empty()
                     {
                         let part_id = parts
                             .and_then(|ps| {
@@ -825,7 +833,7 @@ impl TuiApp {
                             })
                             .unwrap_or_else(|| {
                                 crate::tui::sync_store::part_id_for(
-                                    &msg.id,
+                                    id,
                                     crate::tui::sync_store::TuiPartKind::Text,
                                 )
                             });
@@ -837,7 +845,7 @@ impl TuiApp {
                         return true;
                     }
 
-                    if msg.role == crate::state::MessageRole::User {
+                    if *role == crate::tui::render_session::TuiRenderRole::User {
                         if let Some(parts) = parts {
                             let runs =
                                 crate::tui::view_model::timeline::tool_runs_from_parts(parts);
@@ -862,9 +870,8 @@ impl TuiApp {
     }
 
     pub fn current_timeline_anchor_index(&self) -> usize {
-        let projected_messages = self.visible_timeline_messages();
-        let messages = projected_messages.iter().collect::<Vec<_>>();
-        let timeline = crate::tui::view_model::timeline::timeline_items(&messages, self);
+        let render_session = self.render_session();
+        let timeline = crate::tui::view_model::timeline::timeline_items(&render_session);
         crate::tui::view_model::timeline::resolve_scroll_offset(
             &timeline,
             self.scroll_offset,
@@ -884,9 +891,8 @@ impl TuiApp {
     }
 
     fn timeline_stable_id_at(&self, index: usize) -> Option<String> {
-        let projected_messages = self.visible_timeline_messages();
-        let messages = projected_messages.iter().collect::<Vec<_>>();
-        let timeline = crate::tui::view_model::timeline::timeline_items(&messages, self);
+        let render_session = self.render_session();
+        let timeline = crate::tui::view_model::timeline::timeline_items(&render_session);
         timeline.get(index).map(|item| item.stable_id().to_string())
     }
 
@@ -931,17 +937,18 @@ impl TuiApp {
 }
 
 fn assistant_has_hidden_reasoning(
-    msg: &crate::state::MessageItem,
+    content: &str,
     parts: Option<&[crate::tui::sync_store::TuiMessagePart]>,
 ) -> bool {
     if let Some(parts) = parts {
-        parts.iter().any(|p| {
+        let has_thinking = parts.iter().any(|p| {
             p.kind == crate::tui::sync_store::TuiPartKind::Thinking && !p.text.trim().is_empty()
-        })
-    } else {
-        crate::tui::view_model::reasoning::assistant_reasoning_view(&msg.content)
-            .has_hidden_reasoning()
+        });
+        if has_thinking {
+            return true;
+        }
     }
+    crate::tui::view_model::reasoning::assistant_reasoning_view(content).has_hidden_reasoning()
 }
 
 fn compact_prompt_line(prompt: &str, max_chars: usize) -> String {
