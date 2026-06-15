@@ -52,6 +52,46 @@ pub fn resolve_scroll_offset(
         .unwrap_or(fallback_offset)
 }
 
+pub fn timeline_row_offset_for_index(heights: &[usize], index: usize) -> usize {
+    heights.iter().take(index.min(heights.len())).sum()
+}
+
+pub fn timeline_index_at_row_offset(heights: &[usize], row_offset: usize) -> (usize, usize) {
+    if heights.is_empty() {
+        return (0, 0);
+    }
+
+    let mut remaining = row_offset;
+    for (index, height) in heights.iter().enumerate() {
+        let height = (*height).max(1);
+        if remaining < height {
+            return (index, remaining);
+        }
+        remaining = remaining.saturating_sub(height);
+    }
+
+    let last = heights.len().saturating_sub(1);
+    (last, heights[last].saturating_sub(1))
+}
+
+pub fn resolve_scroll_row_offset(
+    items: &[TimelineItem<'_>],
+    heights: &[usize],
+    fallback_row_offset: usize,
+    anchor_id: Option<&str>,
+    anchor_row_offset: usize,
+) -> usize {
+    let Some(anchor_id) = anchor_id else {
+        return fallback_row_offset;
+    };
+    let Some(index) = timeline_index_by_stable_id(items, anchor_id) else {
+        return fallback_row_offset;
+    };
+    let base = timeline_row_offset_for_index(heights, index);
+    let height = heights.get(index).copied().unwrap_or(1).max(1);
+    base + anchor_row_offset.min(height.saturating_sub(1))
+}
+
 pub fn timeline_items(render_session: &TuiRenderSession) -> Vec<TimelineItem<'_>> {
     let mut items = Vec::with_capacity(render_session.messages.len());
 
@@ -362,6 +402,39 @@ mod tests {
 
         assert_eq!(resolve_scroll_offset(&timeline, 0, Some("old_user")), 2);
         assert_eq!(resolve_scroll_offset(&timeline, 3, Some("missing")), 3);
+    }
+
+    #[test]
+    fn maps_timeline_rows_to_item_and_intra_offsets() {
+        let heights = vec![2, 5, 3];
+
+        assert_eq!(timeline_row_offset_for_index(&heights, 2), 7);
+        assert_eq!(timeline_index_at_row_offset(&heights, 0), (0, 0));
+        assert_eq!(timeline_index_at_row_offset(&heights, 3), (1, 1));
+        assert_eq!(timeline_index_at_row_offset(&heights, 99), (2, 2));
+    }
+
+    #[test]
+    fn resolves_scroll_row_offset_from_stable_id_after_insertions() {
+        let app = TuiApp::new();
+        let items = [
+            msg(MessageRole::User, "new_user"),
+            msg(MessageRole::Assistant, "new_assistant"),
+            msg(MessageRole::User, "old_user"),
+            msg(MessageRole::Assistant, "old_assistant"),
+        ];
+        let render_session = app.sync_snapshot.render_session(&items);
+        let timeline = timeline_items(&render_session);
+        let heights = vec![1, 2, 3, 4];
+
+        assert_eq!(
+            resolve_scroll_row_offset(&timeline, &heights, 0, Some("old_user"), 2),
+            5
+        );
+        assert_eq!(
+            resolve_scroll_row_offset(&timeline, &heights, 7, Some("missing"), 1),
+            7
+        );
     }
 
     #[test]

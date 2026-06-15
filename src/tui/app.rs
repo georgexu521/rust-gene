@@ -177,6 +177,7 @@ impl StatusBarDensity {
 pub struct SessionUiState {
     pub scroll_offset: usize,
     pub scroll_anchor_id: Option<String>,
+    pub scroll_anchor_row_offset: usize,
     pub pinned_to_bottom: bool,
     pub expanded_tool_run_id: Option<String>,
     pub expanded_reasoning_message_id: Option<String>,
@@ -228,12 +229,17 @@ pub struct TuiApp {
     pub command_registry: CommandRegistry,
     /// 轻量 KV 偏好存储
     pub kv_store: crate::services::kv::KvStore,
-    /// 滚动位置
+    /// Chat transcript row scroll position.
     pub scroll_offset: usize,
     /// Stable timeline item id for manual scroll anchors.
     pub scroll_anchor_id: Option<String>,
+    /// Row offset inside `scroll_anchor_id`, used to survive inserted timeline items.
+    pub scroll_anchor_row_offset: usize,
     /// 是否自动贴底（用户手动上滚后变为 false，滚到底或新消息时恢复）
     pub pinned_to_bottom: bool,
+    /// Last rendered chat viewport dimensions for row-level scrolling.
+    pub chat_viewport_width: u16,
+    pub chat_viewport_height: u16,
     /// 应用上下文
     pub context: AppContext,
     /// 最后错误信息
@@ -656,6 +662,7 @@ impl TuiApp {
             SessionUiState {
                 scroll_offset: self.scroll_offset,
                 scroll_anchor_id: self.scroll_anchor_id.clone(),
+                scroll_anchor_row_offset: self.scroll_anchor_row_offset,
                 pinned_to_bottom: self.pinned_to_bottom,
                 expanded_tool_run_id: self.expanded_tool_run_id.clone(),
                 expanded_reasoning_message_id: self.expanded_reasoning_message_id.clone(),
@@ -670,6 +677,7 @@ impl TuiApp {
         if let Some(state) = self.session_ui_states.get(session_id).cloned() {
             self.scroll_offset = state.scroll_offset;
             self.scroll_anchor_id = state.scroll_anchor_id;
+            self.scroll_anchor_row_offset = state.scroll_anchor_row_offset;
             self.pinned_to_bottom = state.pinned_to_bottom;
             self.expanded_tool_run_id = state.expanded_tool_run_id;
             self.expanded_reasoning_message_id = state.expanded_reasoning_message_id;
@@ -679,6 +687,7 @@ impl TuiApp {
             // Default state for a freshly restored session: pinned to bottom.
             self.scroll_offset = 0;
             self.scroll_anchor_id = None;
+            self.scroll_anchor_row_offset = 0;
             self.pinned_to_bottom = true;
             self.expanded_tool_run_id = None;
             self.expanded_reasoning_message_id = None;
@@ -1018,7 +1027,10 @@ impl TuiApp {
             kv_store,
             scroll_offset: 0,
             scroll_anchor_id: None,
+            scroll_anchor_row_offset: 0,
             pinned_to_bottom: true,
+            chat_viewport_width: 80,
+            chat_viewport_height: 24,
             context,
             error_message: None,
             history: VecDeque::with_capacity(100),

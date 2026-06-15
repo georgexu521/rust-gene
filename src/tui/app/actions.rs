@@ -663,28 +663,26 @@ impl TuiApp {
 
     /// 向上滚动
     pub fn scroll_up(&mut self) {
-        let resolved = self.current_timeline_anchor_index();
-        let next_offset = resolved.saturating_sub(1);
-        self.set_manual_scroll_offset(next_offset);
+        let resolved = self.current_scroll_row_offset();
+        self.set_manual_scroll_row_offset(resolved.saturating_sub(1));
     }
 
     /// 向下滚动
     pub fn scroll_down(&mut self) {
-        let resolved = self.current_timeline_anchor_index();
-        self.scroll_offset = resolved.saturating_add(1);
-        // Re-pin if scrolled past the last timeline item.
-        if self.scroll_offset >= self.timeline_item_count() {
+        let resolved = self.current_scroll_row_offset();
+        let next_offset = resolved.saturating_add(1);
+        if next_offset >= self.max_scroll_row_offset() {
             self.scroll_to_bottom();
         } else {
-            self.pinned_to_bottom = false;
-            self.scroll_anchor_id = self.timeline_stable_id_at(self.scroll_offset);
+            self.set_manual_scroll_row_offset(next_offset);
         }
     }
 
     /// 滚动到底部（显示最新消息）
     pub fn scroll_to_bottom(&mut self) {
-        self.scroll_offset = self.timeline_item_count();
+        self.scroll_offset = self.max_scroll_row_offset();
         self.scroll_anchor_id = None;
+        self.scroll_anchor_row_offset = 0;
         self.pinned_to_bottom = true;
     }
 
@@ -747,7 +745,7 @@ impl TuiApp {
         };
 
         if let Some(index) = target_index {
-            self.set_manual_scroll_offset(index);
+            self.set_manual_scroll_timeline_index(index);
             format!("Jumped to {normalized} timeline item.")
         } else {
             format!("No {normalized} timeline item found.")
@@ -755,7 +753,7 @@ impl TuiApp {
     }
 
     pub fn scroll_to_top(&mut self) {
-        self.set_manual_scroll_offset(0);
+        self.set_manual_scroll_row_offset(0);
     }
 
     pub fn scroll_to_message_index(&mut self, target_message_index: usize) -> bool {
@@ -774,25 +772,24 @@ impl TuiApp {
         let Some(index) = target_index else {
             return false;
         };
-        self.set_manual_scroll_offset(index);
+        self.set_manual_scroll_timeline_index(index);
         true
     }
 
     /// 向上滚动半页（Vim Ctrl+U）
     pub fn scroll_up_half_page(&mut self) {
-        let resolved = self.current_timeline_anchor_index();
-        self.set_manual_scroll_offset(resolved.saturating_sub(5));
+        let resolved = self.current_scroll_row_offset();
+        self.set_manual_scroll_row_offset(resolved.saturating_sub(self.half_page_rows()));
     }
 
     /// 向下滚动半页（Vim Ctrl+D）
     pub fn scroll_down_half_page(&mut self) {
-        let resolved = self.current_timeline_anchor_index();
-        self.scroll_offset = resolved.saturating_add(5);
-        if self.scroll_offset >= self.timeline_item_count() {
+        let resolved = self.current_scroll_row_offset();
+        let next_offset = resolved.saturating_add(self.half_page_rows());
+        if next_offset >= self.max_scroll_row_offset() {
             self.scroll_to_bottom();
         } else {
-            self.pinned_to_bottom = false;
-            self.scroll_anchor_id = self.timeline_stable_id_at(self.scroll_offset);
+            self.set_manual_scroll_row_offset(next_offset);
         }
     }
 
@@ -804,12 +801,9 @@ impl TuiApp {
                 return false;
             }
 
-            let anchor = crate::tui::view_model::timeline::resolve_scroll_offset(
-                &timeline,
-                self.scroll_offset,
-                self.scroll_anchor_id.as_deref(),
-            )
-            .min(timeline.len().saturating_sub(1));
+            let anchor = self
+                .current_timeline_anchor_index()
+                .min(timeline.len().saturating_sub(1));
             timeline
                 .iter()
                 .take(anchor + 1)
@@ -843,12 +837,9 @@ impl TuiApp {
                 return false;
             }
 
-            let anchor = crate::tui::view_model::timeline::resolve_scroll_offset(
-                &timeline,
-                self.scroll_offset,
-                self.scroll_anchor_id.as_deref(),
-            )
-            .min(timeline.len().saturating_sub(1));
+            let anchor = self
+                .current_timeline_anchor_index()
+                .min(timeline.len().saturating_sub(1));
             timeline
                 .iter()
                 .take(anchor + 1)
@@ -887,12 +878,9 @@ impl TuiApp {
             return false;
         }
 
-        let anchor = crate::tui::view_model::timeline::resolve_scroll_offset(
-            &timeline,
-            self.scroll_offset,
-            self.scroll_anchor_id.as_deref(),
-        )
-        .min(timeline.len().saturating_sub(1));
+        let anchor = self
+            .current_timeline_anchor_index()
+            .min(timeline.len().saturating_sub(1));
 
         for item in timeline.iter().take(anchor + 1).rev() {
             match item {
@@ -951,23 +939,76 @@ impl TuiApp {
     }
 
     pub fn current_timeline_anchor_index(&self) -> usize {
-        let render_session = self.render_session();
-        let timeline = crate::tui::view_model::timeline::timeline_items(&render_session);
-        crate::tui::view_model::timeline::resolve_scroll_offset(
-            &timeline,
-            self.scroll_offset,
-            self.scroll_anchor_id.as_deref(),
-        )
+        if let Some(anchor_id) = self.scroll_anchor_id.as_deref() {
+            let render_session = self.render_session();
+            let timeline = crate::tui::view_model::timeline::timeline_items(&render_session);
+            if let Some(index) =
+                crate::tui::view_model::timeline::timeline_index_by_stable_id(&timeline, anchor_id)
+            {
+                return index;
+            }
+        }
+
+        let heights = self.timeline_heights_for_scroll();
+        let row_offset = self.current_scroll_row_offset();
+        crate::tui::view_model::timeline::timeline_index_at_row_offset(&heights, row_offset).0
     }
 
-    fn set_manual_scroll_offset(&mut self, offset: usize) {
-        let count = self.timeline_item_count();
-        if offset >= count {
+    pub fn set_chat_viewport(&mut self, width: u16, height: u16) {
+        self.chat_viewport_width = width.max(1);
+        self.chat_viewport_height = height.max(1);
+        if self.pinned_to_bottom {
+            self.scroll_to_bottom();
+        } else {
+            let max_offset = self.max_scroll_row_offset();
+            if self.scroll_offset > max_offset {
+                self.set_manual_scroll_row_offset(max_offset);
+            }
+        }
+    }
+
+    pub fn current_scroll_row_offset(&self) -> usize {
+        let render_session = self.render_session();
+        let timeline = crate::tui::view_model::timeline::timeline_items(&render_session);
+        let heights = crate::tui::view_model::timeline::timeline_item_heights(
+            &timeline,
+            self.chat_viewport_width as usize,
+            self,
+        );
+        let resolved = crate::tui::view_model::timeline::resolve_scroll_row_offset(
+            &timeline,
+            &heights,
+            self.scroll_offset,
+            self.scroll_anchor_id.as_deref(),
+            self.scroll_anchor_row_offset,
+        );
+        resolved.min(self.max_scroll_row_offset_for_heights(&heights))
+    }
+
+    fn set_manual_scroll_timeline_index(&mut self, index: usize) {
+        let heights = self.timeline_heights_for_scroll();
+        let row_offset = crate::tui::view_model::timeline::timeline_row_offset_for_index(
+            &heights,
+            index.min(heights.len()),
+        );
+        self.scroll_offset = row_offset.min(self.max_scroll_row_offset_for_heights(&heights));
+        self.scroll_anchor_id = self.timeline_stable_id_at(index);
+        self.scroll_anchor_row_offset = 0;
+        self.pinned_to_bottom = false;
+    }
+
+    fn set_manual_scroll_row_offset(&mut self, offset: usize) {
+        let max_offset = self.max_scroll_row_offset();
+        if offset >= max_offset {
             self.scroll_to_bottom();
             return;
         }
         self.scroll_offset = offset;
-        self.scroll_anchor_id = self.timeline_stable_id_at(offset);
+        let heights = self.timeline_heights_for_scroll();
+        let (index, row_offset) =
+            crate::tui::view_model::timeline::timeline_index_at_row_offset(&heights, offset);
+        self.scroll_anchor_id = self.timeline_stable_id_at(index);
+        self.scroll_anchor_row_offset = row_offset;
         self.pinned_to_bottom = false;
     }
 
@@ -975,6 +1016,30 @@ impl TuiApp {
         let render_session = self.render_session();
         let timeline = crate::tui::view_model::timeline::timeline_items(&render_session);
         timeline.get(index).map(|item| item.stable_id().to_string())
+    }
+
+    fn timeline_heights_for_scroll(&self) -> Vec<usize> {
+        let render_session = self.render_session();
+        let timeline = crate::tui::view_model::timeline::timeline_items(&render_session);
+        crate::tui::view_model::timeline::timeline_item_heights(
+            &timeline,
+            self.chat_viewport_width as usize,
+            self,
+        )
+    }
+
+    fn max_scroll_row_offset(&self) -> usize {
+        let heights = self.timeline_heights_for_scroll();
+        self.max_scroll_row_offset_for_heights(&heights)
+    }
+
+    fn max_scroll_row_offset_for_heights(&self, heights: &[usize]) -> usize {
+        let total_rows: usize = heights.iter().sum();
+        total_rows.saturating_sub(self.chat_viewport_height as usize)
+    }
+
+    fn half_page_rows(&self) -> usize {
+        (self.chat_viewport_height as usize / 2).max(1)
     }
 
     /// 获取可见消息数量

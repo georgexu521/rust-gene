@@ -228,6 +228,7 @@ fn transcript_window_keeps_recent_turn_context_when_answer_overflows() {
     assert_eq!(window.start, 3);
     assert!(window.more_above);
     assert_eq!(window.message_height, 7);
+    assert!(window.first_item_scroll_offset > 0);
 }
 
 #[test]
@@ -269,11 +270,37 @@ fn transcript_window_preserves_manual_scroll_offset() {
     let render_session = app.sync_snapshot.render_session(&items);
     let transcript = timeline_items(&render_session);
 
-    let window = transcript_window(&transcript, 1, false, 6, 80, &app);
+    let heights = crate::tui::view_model::timeline::timeline_item_heights(&transcript, 80, &app);
+    let row_offset = crate::tui::view_model::timeline::timeline_row_offset_for_index(&heights, 1);
+    let window = transcript_window(&transcript, row_offset, false, 6, 80, &app);
 
     assert_eq!(window.start, 1);
     assert!(window.more_above);
     assert!(!window.bottom_anchored);
+    assert_eq!(window.first_item_scroll_offset, 0);
+}
+
+#[test]
+fn transcript_window_does_not_line_scroll_manual_anchor() {
+    let app = TuiApp::new();
+    let long_answer = "answer line\n".repeat(20);
+    let items = [
+        msg(MessageRole::User, "old question"),
+        msg(MessageRole::Assistant, "old answer"),
+        msg(MessageRole::User, "current question"),
+        msg(MessageRole::Assistant, &long_answer),
+    ];
+    let render_session = app.sync_snapshot.render_session(&items);
+    let transcript = timeline_items(&render_session);
+
+    let heights = crate::tui::view_model::timeline::timeline_item_heights(&transcript, 80, &app);
+    let row_offset = crate::tui::view_model::timeline::timeline_row_offset_for_index(&heights, 3);
+    let window = transcript_window(&transcript, row_offset, false, 8, 80, &app);
+
+    assert_eq!(window.start, 3);
+    assert!(window.more_above);
+    assert_eq!(window.message_height, 7);
+    assert_eq!(window.first_item_scroll_offset, 0);
 }
 
 #[test]

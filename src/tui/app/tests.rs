@@ -1225,16 +1225,25 @@ fn test_jump_to_failed_and_edit_timeline_items() {
     let failed_result = app.jump_to_timeline_target("failed");
     assert!(failed_result.contains("failed"));
     assert_eq!(app.scroll_offset, 0);
+    assert_eq!(
+        app.scroll_anchor_id.as_deref(),
+        Some(first_user.id.as_str())
+    );
     assert!(!app.pinned_to_bottom);
 
     let edit_result = app.jump_to_timeline_target("edit");
     assert!(edit_result.contains("edit"));
-    assert_eq!(app.scroll_offset, 2);
+    assert_eq!(
+        app.scroll_anchor_id.as_deref(),
+        Some(second_user.id.as_str())
+    );
+    assert!(!app.pinned_to_bottom);
 }
 
 #[test]
-fn test_scroll_down_uses_message_part_timeline_item_count() {
+fn test_scroll_down_moves_by_transcript_row() {
     let mut app = TuiApp::new();
+    app.set_chat_viewport(80, 1);
     let user = MessageItem {
         id: "user_1".to_string(),
         role: MessageRole::User,
@@ -1255,15 +1264,12 @@ fn test_scroll_down_uses_message_part_timeline_item_count() {
         vec![ToolRunView::new("tool_1".to_string(), "bash".to_string())],
     );
 
-    assert_eq!(app.timeline_item_count(), 2);
-
-    app.scroll_offset = 1;
-    app.pinned_to_bottom = false;
+    app.scroll_to_top();
     app.scroll_down();
 
-    assert_eq!(app.scroll_offset, 2);
-    assert!(app.pinned_to_bottom);
-    assert!(app.scroll_anchor_id.is_none());
+    assert_eq!(app.scroll_offset, 1);
+    assert!(!app.pinned_to_bottom);
+    assert!(app.scroll_anchor_id.is_some());
 }
 
 #[test]
@@ -1677,7 +1683,7 @@ fn test_toggle_reasoning_uses_current_assistant_anchor() {
         timestamp: std::time::SystemTime::UNIX_EPOCH,
         metadata: Default::default(),
     });
-    app.scroll_offset = 1;
+    assert!(app.scroll_to_message_index(1));
 
     assert!(app.toggle_reasoning_at_scroll_anchor());
     assert_eq!(
@@ -1814,7 +1820,6 @@ fn test_scroll_to_message_index_maps_through_timeline_tool_groups() {
 
     assert!(app.scroll_to_message_index(2));
 
-    assert_eq!(app.scroll_offset, 2);
     assert_eq!(app.scroll_anchor_id.as_deref(), Some("user_2"));
     assert!(!app.pinned_to_bottom);
 }
@@ -2297,7 +2302,7 @@ async fn test_send_message_keeps_bottom_anchor_after_assistant_placeholder() {
     app.send_message("hello".to_string()).await;
 
     assert_eq!(app.messages.last().unwrap().role, MessageRole::Assistant);
-    assert_eq!(app.scroll_offset, app.messages.len());
+    assert!(app.pinned_to_bottom);
 }
 
 #[tokio::test]

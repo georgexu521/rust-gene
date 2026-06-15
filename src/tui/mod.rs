@@ -160,7 +160,7 @@ async fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut TuiApp) -> an
 }
 
 /// 绘制 UI
-fn draw_ui(f: &mut Frame, app: &TuiApp) {
+fn draw_ui(f: &mut Frame, app: &mut TuiApp) {
     match app.mode {
         app::AppMode::Settings => {
             // 设置模式
@@ -1712,11 +1712,11 @@ mod tests {
         KeyEvent::new(code, KeyModifiers::NONE)
     }
 
-    fn render_ui_text(app: &TuiApp, width: u16, height: u16) -> String {
+    fn render_ui_text(app: &mut TuiApp, width: u16, height: u16) -> String {
         render_ui_lines(app, width, height).join("\n")
     }
 
-    fn render_ui_lines(app: &TuiApp, width: u16, height: u16) -> Vec<String> {
+    fn render_ui_lines(app: &mut TuiApp, width: u16, height: u16) -> Vec<String> {
         let backend = TestBackend::new(width, height);
         let mut terminal = Terminal::new(backend).unwrap();
         terminal
@@ -1729,7 +1729,7 @@ mod tests {
     }
 
     fn rendered_cell_fg_for_text(
-        app: &TuiApp,
+        app: &mut TuiApp,
         width: u16,
         height: u16,
         needle: &str,
@@ -2170,8 +2170,8 @@ cargo check finished successfully"
     #[test]
     fn empty_state_snapshot_is_clean_and_hides_raw_provider_names() {
         for (width, height) in [(80, 24), (120, 35)] {
-            let app = empty_state_fixture();
-            let lines = render_ui_lines(&app, width, height);
+            let mut app = empty_state_fixture();
+            let lines = render_ui_lines(&mut app, width, height);
             let rendered = lines.join("\n");
             write_snapshot_if_requested(&format!("empty-state-{width}x{height}"), &lines);
 
@@ -2189,8 +2189,8 @@ cargo check finished successfully"
 
     #[test]
     fn sidebar_sessions_snapshot_groups_by_workspace_and_shows_status() {
-        let app = sidebar_sessions_fixture();
-        let lines = render_ui_lines(&app, 40, 20);
+        let mut app = sidebar_sessions_fixture();
+        let lines = render_ui_lines(&mut app, 40, 20);
         let rendered = lines.join("\n");
         write_snapshot_if_requested("sidebar-sessions-40x20", &lines);
 
@@ -2204,8 +2204,8 @@ cargo check finished successfully"
 
     #[test]
     fn composer_with_attachments_snapshot_shows_pills_and_prompt() {
-        let app = composer_with_attachments_fixture();
-        let lines = render_ui_lines(&app, 120, 20);
+        let mut app = composer_with_attachments_fixture();
+        let lines = render_ui_lines(&mut app, 120, 20);
         let rendered = lines.join("\n");
         write_snapshot_if_requested("composer-with-attachments-120x20", &lines);
 
@@ -2247,9 +2247,9 @@ cargo check finished successfully"
 
     #[test]
     fn rendered_snapshot_lines_do_not_insert_placeholder_spaces_after_cjk() {
-        let app = provider_failure_turn_fixture();
+        let mut app = provider_failure_turn_fixture();
 
-        let rendered = render_ui_text(&app, 100, 30);
+        let rendered = render_ui_text(&mut app, 100, 30);
 
         assert!(rendered.contains("你好"));
         assert!(!rendered.contains("你 好"));
@@ -2491,7 +2491,7 @@ cargo check finished successfully"
         app.facade_snapshot.provider_request.elapsed_ms = 2_700;
         app.sidebar_visible = true;
 
-        let rendered = render_ui_text(&app, 100, 30);
+        let rendered = render_ui_text(&mut app, 100, 30);
 
         assert_eq!(rendered.matches("waiting on DeepSeek").count(), 1);
         assert!(!rendered.contains("Thinking..."));
@@ -2508,7 +2508,7 @@ cargo check finished successfully"
         app.facade_snapshot.provider_request.model = Some("deepseek-v4-flash".to_string());
         app.sidebar_visible = true;
 
-        let rendered = render_ui_text(&app, 120, 35);
+        let rendered = render_ui_text(&mut app, 120, 35);
 
         assert_eq!(rendered.matches("waiting on DeepSeek").count(), 1);
         assert!(!rendered.contains("Thinking..."));
@@ -2523,7 +2523,7 @@ cargo check finished successfully"
         app.history.push_back("previous prompt".to_string());
         app.prompt_stash = Some("stashed prompt".to_string());
 
-        let rendered = render_ui_text(&app, 160, 45);
+        let rendered = render_ui_text(&mut app, 160, 45);
 
         assert!(rendered.contains("hist:1"));
         assert!(rendered.contains("stash"));
@@ -2533,8 +2533,8 @@ cargo check finished successfully"
     #[test]
     fn rendered_turn_visual_state_stays_clean_across_common_viewports() {
         for (width, height) in [(100, 30), (120, 35), (160, 45)] {
-            let app = opencode_alignment_fixture();
-            let rendered = render_ui_text(&app, width, height);
+            let mut app = opencode_alignment_fixture();
+            let rendered = render_ui_text(&mut app, width, height);
 
             assert_eq!(
                 rendered.matches("Running cargo").count(),
@@ -2570,8 +2570,8 @@ cargo check finished successfully"
     #[test]
     fn opencode_alignment_snapshots_can_be_dumped_for_visual_review() {
         for (width, height) in [(100, 30), (120, 35), (160, 45)] {
-            let app = opencode_alignment_fixture();
-            let lines = render_ui_lines(&app, width, height);
+            let mut app = opencode_alignment_fixture();
+            let lines = render_ui_lines(&mut app, width, height);
             let rendered = lines.join("\n");
             write_snapshot_if_requested(&format!("opencode-alignment-{width}x{height}"), &lines);
 
@@ -2604,8 +2604,8 @@ cargo check finished successfully"
     #[test]
     fn completed_tool_turn_snapshots_can_be_dumped_for_visual_review() {
         for (width, height) in [(100, 30), (120, 35), (160, 45)] {
-            let app = completed_tool_turn_fixture();
-            let lines = render_ui_lines(&app, width, height);
+            let mut app = completed_tool_turn_fixture();
+            let lines = render_ui_lines(&mut app, width, height);
             let rendered = lines.join("\n");
             write_snapshot_if_requested(&format!("completed-tool-turn-{width}x{height}"), &lines);
 
@@ -2649,8 +2649,8 @@ cargo check finished successfully"
     #[test]
     fn provider_failure_turn_snapshots_stay_product_shaped() {
         for (width, height) in [(100, 30), (120, 35), (160, 45)] {
-            let app = provider_failure_turn_fixture();
-            let lines = render_ui_lines(&app, width, height);
+            let mut app = provider_failure_turn_fixture();
+            let lines = render_ui_lines(&mut app, width, height);
             let rendered = lines.join("\n");
             write_snapshot_if_requested(&format!("provider-failure-turn-{width}x{height}"), &lines);
 
@@ -2685,32 +2685,32 @@ cargo check finished successfully"
 
     #[test]
     fn completed_tool_turn_uses_semantic_styles() {
-        let app = completed_tool_turn_fixture();
+        let mut app = completed_tool_turn_fixture();
 
         assert_eq!(
-            rendered_cell_fg_for_text(&app, 120, 35, "Ran cargo"),
+            rendered_cell_fg_for_text(&mut app, 120, 35, "Ran cargo"),
             Some(app.theme.tokens.tone.ok)
         );
         assert_eq!(
-            rendered_cell_fg_for_text(&app, 120, 35, "Reply"),
+            rendered_cell_fg_for_text(&mut app, 120, 35, "Reply"),
             Some(app.theme.tokens.tone.ok)
         );
         assert_eq!(
-            rendered_cell_fg_for_text(&app, 120, 35, "DeepSeek"),
+            rendered_cell_fg_for_text(&mut app, 120, 35, "DeepSeek"),
             Some(app.theme.tokens.fg.faint)
         );
     }
 
     #[test]
     fn provider_failure_turn_uses_error_semantic_style() {
-        let app = provider_failure_turn_fixture();
+        let mut app = provider_failure_turn_fixture();
 
         assert_eq!(
-            rendered_cell_fg_for_text(&app, 120, 35, "Error"),
+            rendered_cell_fg_for_text(&mut app, 120, 35, "Error"),
             Some(app.theme.tokens.card.error.color)
         );
         assert_ne!(
-            rendered_cell_fg_for_text(&app, 120, 35, "Error"),
+            rendered_cell_fg_for_text(&mut app, 120, 35, "Error"),
             Some(app.theme.tokens.tone.ok)
         );
     }

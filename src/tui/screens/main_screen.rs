@@ -9,8 +9,8 @@ use crate::tui::{
     view_model::session_list::{SessionListRow, WorkspaceGroupStatus},
     view_model::timeline::{
         estimate_message_height_with_parts_or_reasoning, estimate_timeline_item_height,
-        estimate_tool_parts_height, resolve_scroll_offset, timeline_item_heights, timeline_items,
-        tool_runs_from_parts, TimelineItem,
+        estimate_tool_parts_height, resolve_scroll_row_offset, timeline_index_at_row_offset,
+        timeline_item_heights, timeline_items, tool_runs_from_parts, TimelineItem,
     },
     view_model::tool_rows::{tool_row_lines, tool_rows_for_runs_with_spine, ToolRowSeverity},
 };
@@ -34,7 +34,9 @@ mod render_connect_wizard;
 pub use render_connect_wizard::*;
 
 /// 渲染聊天区域（Claude Code 风格：无边框，留白分隔）
-pub fn render_chat_area(f: &mut Frame, app: &TuiApp, area: Rect) {
+pub fn render_chat_area(f: &mut Frame, app: &mut TuiApp, area: Rect) {
+    app.set_chat_viewport(area.width, area.height.saturating_sub(1));
+
     // 直接使用 area，不添加外边框
     let inner_area = area;
 
@@ -107,36 +109,39 @@ pub fn render_chat_area(f: &mut Frame, app: &TuiApp, area: Rect) {
     let content_top = inner_area.y + top_offset;
     let content_height = inner_area.height.saturating_sub(top_offset);
     let max_y = content_top + content_height;
-    let bottom_anchored = app.pinned_to_bottom || app.scroll_offset >= items.len();
-    let scroll_offset = if bottom_anchored {
-        items.len()
+    let heights = timeline_item_heights(&items, inner_area.width as usize, app);
+    let total_rows: usize = heights.iter().sum();
+    let viewport_rows = content_height as usize;
+    let max_scroll = total_rows.saturating_sub(viewport_rows);
+    let scroll_row_offset = if app.pinned_to_bottom {
+        max_scroll
     } else {
-        resolve_scroll_offset(&items, app.scroll_offset, app.scroll_anchor_id.as_deref())
+        resolve_scroll_row_offset(
+            &items,
+            &heights,
+            app.scroll_offset,
+            app.scroll_anchor_id.as_deref(),
+            app.scroll_anchor_row_offset,
+        )
+        .min(max_scroll)
     };
+    let bottom_anchored = app.pinned_to_bottom || scroll_row_offset >= max_scroll;
     let window = transcript_window(
         &items,
-        scroll_offset,
+        scroll_row_offset,
         bottom_anchored,
         content_height,
         inner_area.width as usize,
         app,
     );
 
-    // Compute total scroll rows and remaining
-    let total_rows: usize = timeline_item_heights(&items, inner_area.width as usize, app)
-        .iter()
-        .sum();
-    let viewport_rows = content_height as usize;
-    let max_scroll = total_rows.saturating_sub(viewport_rows);
-    let scroll_top = window.start; // approximate
-
     let mut current_y = content_top + u16::from(window.more_above);
 
     // Scroll indicator (Reasonix style)
     let show_indicator = !window.bottom_anchored;
     if show_indicator && max_scroll > 0 {
-        let above = scroll_top;
-        let remaining = max_scroll.saturating_sub(scroll_top);
+        let above = scroll_row_offset;
+        let remaining = max_scroll.saturating_sub(scroll_row_offset);
         let mut indicator_parts = vec![Span::styled(
             format!("{} above", above),
             Style::default()
@@ -168,13 +173,19 @@ pub fn render_chat_area(f: &mut Frame, app: &TuiApp, area: Rect) {
         current_y = content_top + 1;
     }
 
-    for item in items.iter().skip(window.start) {
+    for (item_index, item) in items.iter().enumerate().skip(window.start) {
         if current_y >= max_y {
             break;
         }
 
-        let msg_height = estimate_timeline_item_height(item, inner_area.width as usize, app);
-        let msg_height = (msg_height as u16).min(max_y - current_y);
+        let item_scroll = if item_index == window.start {
+            window.first_item_scroll_offset
+        } else {
+            0
+        };
+        let item_height = estimate_timeline_item_height(item, inner_area.width as usize, app);
+        let visible_item_height = item_height.saturating_sub(item_scroll).max(1);
+        let msg_height = (visible_item_height as u16).min(max_y - current_y);
         let msg_area = Rect {
             x: inner_area.x,
             y: current_y,
@@ -230,16 +241,19 @@ pub fn render_chat_area(f: &mut Frame, app: &TuiApp, area: Rect) {
                         crate::tui::sync_store::TuiPartKind::Text,
                     ))
             });
-        let message_height = estimate_message_height_with_parts_or_reasoning(
+        let message_total_height = estimate_message_height_with_parts_or_reasoning(
             content,
             message_parts,
             inner_area.width as usize,
             collapsed,
             app.expanded_reasoning_message_id.as_deref() == Some(msg_id),
             text_part_expanded,
-        )
-        .min(msg_height as usize)
-        .max(1) as u16;
+        );
+        let message_scroll = item_scroll.min(message_total_height.saturating_sub(1));
+        let message_height = message_total_height
+            .saturating_sub(message_scroll)
+            .min(msg_height as usize)
+            .max(1) as u16;
         let message_item = render_message_item_from_parts(*role, msg_id, content, &app.theme);
         let paragraph = if collapsed {
             message::render_message_compact(&message_item, &app.theme)
@@ -258,7 +272,7 @@ pub fn render_chat_area(f: &mut Frame, app: &TuiApp, area: Rect) {
             )
         };
         f.render_widget(
-            paragraph,
+            paragraph.scroll((message_scroll.min(u16::MAX as usize) as u16, 0)),
             Rect {
                 height: message_height,
                 ..msg_area
@@ -342,11 +356,12 @@ struct TranscriptWindow {
     message_height: usize,
     more_above: bool,
     bottom_anchored: bool,
+    first_item_scroll_offset: usize,
 }
 
 fn transcript_window(
     items: &[TimelineItem<'_>],
-    scroll_offset: usize,
+    scroll_row_offset: usize,
     bottom_anchored: bool,
     viewport_height: u16,
     width: usize,
@@ -358,18 +373,28 @@ fn transcript_window(
             message_height: 0,
             more_above: false,
             bottom_anchored,
+            first_item_scroll_offset: 0,
         };
     }
 
     if !bottom_anchored {
-        let start = scroll_offset.min(items.len().saturating_sub(1));
-        let more_above = start > 0;
+        let heights = timeline_item_heights(items, width, app);
+        let total_rows: usize = heights.iter().sum();
+        let row_offset = scroll_row_offset.min(total_rows.saturating_sub(1));
+        let (start, first_item_scroll_offset) = timeline_index_at_row_offset(&heights, row_offset);
+        let more_above = row_offset > 0;
         let max_height = (viewport_height as usize).saturating_sub(usize::from(more_above));
         return TranscriptWindow {
             start,
-            message_height: visible_items_height(items, start, width, app, max_height),
+            message_height: visible_items_height_from_rows(
+                &heights,
+                start,
+                first_item_scroll_offset,
+                max_height,
+            ),
             more_above,
             bottom_anchored: false,
+            first_item_scroll_offset,
         };
     }
 
@@ -404,12 +429,39 @@ fn transcript_window(
 
     let more_above = start > 0;
     let max_height = viewport.saturating_sub(usize::from(more_above));
+    let first_item_scroll_offset = if bottom_anchored && heights[start] > max_height {
+        heights[start].saturating_sub(max_height)
+    } else {
+        0
+    };
     TranscriptWindow {
         start,
         message_height: used_height.min(max_height),
         more_above,
         bottom_anchored: true,
+        first_item_scroll_offset,
     }
+}
+
+fn visible_items_height_from_rows(
+    heights: &[usize],
+    start: usize,
+    first_item_scroll_offset: usize,
+    max_height: usize,
+) -> usize {
+    heights
+        .iter()
+        .enumerate()
+        .skip(start)
+        .map(|(idx, height)| {
+            if idx == start {
+                height.saturating_sub(first_item_scroll_offset).max(1)
+            } else {
+                *height
+            }
+        })
+        .sum::<usize>()
+        .min(max_height)
 }
 
 fn active_turn_start(items: &[TimelineItem<'_>]) -> Option<usize> {
