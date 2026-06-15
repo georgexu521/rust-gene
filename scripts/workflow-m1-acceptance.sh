@@ -9,7 +9,7 @@ cargo test workflow --quiet
 
 echo "[2/3] Validate required workflow docs"
 required_files=(
-  "workflow-v1-design.md"
+  "docs/archive/workflow-v1-design.md"
   "docs/workflow/baseline-report.md"
   "docs/workflow/gate-spec.md"
   "docs/workflow/weights-spec.md"

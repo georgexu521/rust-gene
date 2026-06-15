@@ -336,7 +336,8 @@ impl Default for Keybindings {
                 .expect("invalid built-in keybinding: ctrl+t"),
             global_status_bar_density: KeyBinding::parse("ctrl+shift+s")
                 .expect("invalid built-in keybinding: ctrl+shift+s"),
-            global_sidebar_toggle: KeyBinding::parse("b").expect("invalid built-in keybinding: b"),
+            global_sidebar_toggle: KeyBinding::parse("ctrl+b")
+                .expect("invalid built-in keybinding: ctrl+b"),
             global_message_search: KeyBinding::parse("ctrl+f")
                 .expect("invalid built-in keybinding: ctrl+f"),
             leader: KeyBinding::parse("backslash").expect("invalid built-in keybinding: backslash"),

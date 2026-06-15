@@ -109,21 +109,23 @@ def latest_session_for_prompt(db_path: Path, prompt: str) -> str | None:
     if not db_path.exists():
         return None
     with sqlite3.connect(db_path) as conn:
+        # The TUI composer wraps free-form user text with a "User request:" prefix.
+        wrapped = f"User request:\n{prompt}"
         row = conn.execute(
             """
             SELECT session_id
             FROM messages
-            WHERE role = 'user' AND content = ?
+            WHERE role = 'user' AND (content = ? OR content = ?)
             ORDER BY id DESC
             LIMIT 1
             """,
-            (prompt,),
+            (prompt, wrapped),
         ).fetchone()
         if row:
             return str(row[0])
         row = conn.execute(
-            "SELECT id FROM sessions WHERE title = ? ORDER BY updated_at DESC LIMIT 1",
-            (prompt,),
+            "SELECT id FROM sessions WHERE title = ? OR title = ? ORDER BY updated_at DESC LIMIT 1",
+            (prompt, wrapped),
         ).fetchone()
     return str(row[0]) if row else None
 
@@ -534,6 +536,21 @@ def run_smoke(args: argparse.Namespace, size: tuple[int, int]) -> dict[str, obje
             if settle_until is not None and time.time() >= settle_until:
                 break
 
+    if child.isalive():
+        # Try the configured quit keybinding first to avoid a spurious
+        # "Run interrupted" cancellation toast if the run state has not
+        # fully settled by the time we tear down the PTY.
+        child.send("\x11")
+        end_deadline = time.time() + 3
+        while time.time() < end_deadline and child.isalive():
+            try:
+                chunk = child.read_nonblocking(size=8192, timeout=0.5)
+                if chunk:
+                    raw_parts.append(chunk)
+            except pexpect.TIMEOUT:
+                pass
+            except pexpect.EOF:
+                break
     if child.isalive():
         child.sendcontrol("c")
         end_deadline = time.time() + 5
