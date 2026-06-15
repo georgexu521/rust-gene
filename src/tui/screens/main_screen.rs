@@ -382,13 +382,10 @@ fn transcript_window(
     let mut used_height = active_height;
 
     if active_height > viewport {
-        // Keep the active turn anchored at the user's prompt. When the assistant
-        // answer becomes taller than the viewport, reverse-filling from the last
-        // item hides the prompt/tool context and makes the screen look like it
-        // jumped to the top of the answer. Claude/Codex-style CLIs preserve the
-        // turn start and let the lower part of a long answer scroll out instead.
-        start =
-            previous_turn_start_that_fits(&heights, active_start, viewport).unwrap_or(active_start);
+        // When the active turn overflows the viewport, anchor to the bottom of
+        // the current turn so the newest output is visible. The user can PgUp
+        // to see earlier context (indicated by the "above" scroll hint).
+        start = bottom_filled_start(&heights, active_start, viewport);
         let more_above = start > 0;
         let max_height = viewport.saturating_sub(usize::from(more_above));
         used_height = visible_items_height(items, start, width, app, max_height);
@@ -419,27 +416,15 @@ fn active_turn_start(items: &[TimelineItem<'_>]) -> Option<usize> {
     items.iter().rposition(TimelineItem::is_user_message)
 }
 
-fn previous_turn_start_that_fits(
-    heights: &[usize],
-    active_start: usize,
-    viewport: usize,
-) -> Option<usize> {
-    if active_start == 0 || viewport < 8 {
-        return None;
+fn bottom_filled_start(heights: &[usize], start: usize, viewport: usize) -> usize {
+    let mut used = 0usize;
+    for idx in (start..heights.len()).rev() {
+        used = used.saturating_add(heights[idx]);
+        if used > viewport {
+            return (idx + 1).min(heights.len().saturating_sub(1));
+        }
     }
-
-    let context_budget = (viewport / 3).clamp(4, 8);
-    let previous_start = active_start.saturating_sub(2);
-    if previous_start == active_start {
-        return None;
-    }
-
-    let previous_height = sum_heights(heights, previous_start, active_start);
-    if previous_height <= context_budget {
-        Some(previous_start)
-    } else {
-        None
-    }
+    start
 }
 
 fn sum_heights(heights: &[usize], start: usize, end: usize) -> usize {

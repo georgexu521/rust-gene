@@ -225,9 +225,9 @@ fn transcript_window_keeps_recent_turn_context_when_answer_overflows() {
         &app,
     );
 
-    assert_eq!(window.start, 0);
-    assert!(!window.more_above);
-    assert_eq!(window.message_height, 8);
+    assert_eq!(window.start, 3);
+    assert!(window.more_above);
+    assert_eq!(window.message_height, 7);
 }
 
 #[test]
@@ -253,7 +253,7 @@ fn transcript_window_keeps_active_prompt_when_previous_turn_is_too_tall() {
         &app,
     );
 
-    assert_eq!(window.start, 2);
+    assert_eq!(window.start, 3);
     assert!(window.more_above);
     assert_eq!(window.message_height, 7);
 }
