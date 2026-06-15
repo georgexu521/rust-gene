@@ -94,12 +94,13 @@ impl AuthStore {
             !trimmed.is_empty() && !trimmed.starts_with('#') && line_assigns_var(trimmed, env_var)
         });
 
+        let target_vars: &[&str] = &[env_var, "PRIORITY_AGENT_DEFAULT_PROVIDER"];
         lines.retain(|line| {
             let trimmed = line.trim();
             if trimmed.is_empty() || trimmed.starts_with('#') {
                 return true;
             }
-            !line_assigns_var(trimmed, env_var)
+            !target_vars.iter().any(|var| line_assigns_var(trimmed, var))
         });
 
         lines.push(format!("{}={}", env_var, dotenv_value(key)));

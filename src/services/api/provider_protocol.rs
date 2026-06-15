@@ -101,20 +101,30 @@ impl ProviderCapabilities {
     }
 
     pub fn detect(base_url: &str, model: &str) -> Self {
+        use crate::services::api::provider_manifest::ProviderManifestLoader;
+
+        // 1. Infer the protocol family directly from base URL / model hints.
+        //    This preserves MiniMax/Kimi/Anthropic identity even when their
+        //    manifest declares them as openai_compatible for adapter selection.
+        let inferred_family = Self::infer_family(base_url, model);
+
+        // 2. Apply manifest capability overrides when we can identify a provider.
+        let inferred_id = Self::infer_provider_id(base_url, model);
+        let manifest = ProviderManifestLoader::load_merged();
+        if let Some(id) = inferred_id {
+            if let Some(entry) = manifest.provider.iter().find(|e| e.id == id) {
+                let mut caps = entry.resolved_capabilities();
+                // Use the runtime-inferred protocol family for normalization,
+                // falling back to the manifest family if no direct hint matched.
+                caps.protocol_family = inferred_family.unwrap_or(entry.provider_family);
+                return caps;
+            }
+        }
+
+        // 3. No manifest entry matched: fall back to the runtime heuristic.
+        let family = inferred_family.unwrap_or(ProviderProtocolFamily::OpenAiCompatible);
         let base = base_url.to_ascii_lowercase();
         let model = model.to_ascii_lowercase();
-        let family = if base.contains("minimax") || model.contains("minimax") {
-            ProviderProtocolFamily::MiniMax
-        } else if base.contains("moonshot") || model.contains("kimi") {
-            ProviderProtocolFamily::Kimi
-        } else if base.contains("anthropic") || model.contains("claude") {
-            ProviderProtocolFamily::AnthropicLike
-        } else if model.contains("reasoning") || model.starts_with("o1") || model.starts_with("o3")
-        {
-            ProviderProtocolFamily::ReasoningCapable
-        } else {
-            ProviderProtocolFamily::OpenAiCompatible
-        };
         let mut capabilities = Self::for_family(family);
         if base.starts_with("test://")
             || model.contains("test-fixture")
@@ -125,6 +135,51 @@ impl ProviderCapabilities {
             capabilities.requires_nonstreaming_tool_calls = true;
         }
         capabilities
+    }
+
+    /// Infer the provider family directly from base URL / model hints.
+    ///
+    /// This is intentionally kept separate from manifest lookup so that known
+    /// providers (MiniMax, Kimi, Anthropic, etc.) retain their protocol-family
+    /// identity even when their manifest declares them as openai_compatible
+    /// for adapter selection.
+    fn infer_family(base_url: &str, model: &str) -> Option<ProviderProtocolFamily> {
+        let base = base_url.to_ascii_lowercase();
+        let model = model.to_ascii_lowercase();
+        if base.contains("minimax") || model.contains("minimax") {
+            Some(ProviderProtocolFamily::MiniMax)
+        } else if base.contains("moonshot") || model.contains("kimi") {
+            Some(ProviderProtocolFamily::Kimi)
+        } else if base.contains("anthropic") || model.contains("claude") {
+            Some(ProviderProtocolFamily::AnthropicLike)
+        } else if model.contains("reasoning") || model.starts_with("o1") || model.starts_with("o3")
+        {
+            Some(ProviderProtocolFamily::ReasoningCapable)
+        } else {
+            None
+        }
+    }
+
+    fn infer_provider_id(base_url: &str, model: &str) -> Option<String> {
+        let base = base_url.to_ascii_lowercase();
+        let model = model.to_ascii_lowercase();
+        if base.contains("minimax") || model.contains("minimax") {
+            Some("minimax".to_string())
+        } else if base.contains("moonshot") || model.contains("kimi") {
+            Some("kimi".to_string())
+        } else if base.contains("deepseek") || model.contains("deepseek") {
+            Some("deepseek".to_string())
+        } else if base.contains("openai")
+            || model.starts_with("gpt-")
+            || model.starts_with("o1")
+            || model.starts_with("o3")
+        {
+            Some("openai".to_string())
+        } else if base.contains("anthropic") || model.contains("claude") {
+            Some("anthropic".to_string())
+        } else {
+            None
+        }
     }
 }
 

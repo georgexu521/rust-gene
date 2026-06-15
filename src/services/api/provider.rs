@@ -116,15 +116,10 @@ impl ProviderType {
 
 impl ProviderConfig {
     pub fn capabilities(&self) -> ProviderCapabilities {
-        let detected = ProviderCapabilities::detect(
+        ProviderCapabilities::detect(
             self.base_url.as_deref().unwrap_or_default(),
             &self.default_model,
-        );
-        if detected.protocol_family == ProviderProtocolFamily::OpenAiCompatible {
-            self.provider_type.capabilities()
-        } else {
-            detected
-        }
+        )
     }
 }
 

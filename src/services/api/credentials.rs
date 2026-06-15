@@ -89,50 +89,11 @@ pub fn save_credential(provider_id: &str, key: &str) -> CredentialSaveOutcome {
     }
 
     let key_env_var = &entry.key_env_vars[0];
-    let path = credential_env_path();
-    if let Some(parent) = path.parent() {
-        if let Err(err) = std::fs::create_dir_all(parent) {
-            return CredentialSaveOutcome::Rejected {
-                reason: format!("cannot create credential dir: {}", err),
-            };
-        }
-    }
-
-    // Read existing lines, replace matching variables
-    let mut lines: Vec<String> = if path.exists() {
-        std::fs::read_to_string(&path)
-            .unwrap_or_default()
-            .lines()
-            .map(|l| l.to_string())
-            .collect()
-    } else {
-        Vec::new()
-    };
-
-    let target_vars: &[&str] = &[key_env_var.as_str(), "PRIORITY_AGENT_DEFAULT_PROVIDER"];
-    lines.retain(|line| {
-        let trimmed = line.trim();
-        if trimmed.is_empty() || trimmed.starts_with('#') {
-            return true;
-        }
-        !target_vars.iter().any(|var| line_assigns_var(trimmed, var))
-    });
-
-    lines.push(format!("{}={}", key_env_var, dotenv_value(key)));
-    lines.push(format!("PRIORITY_AGENT_DEFAULT_PROVIDER={}", provider_id));
-
-    let content = lines.join("\n") + "\n";
-    if let Err(err) = std::fs::write(&path, content.as_bytes()) {
+    let store = super::auth_store::AuthStore::from_path(credential_env_path());
+    if let Err(err) = store.set(provider_id, key_env_var, key) {
         return CredentialSaveOutcome::Rejected {
-            reason: format!("cannot write credential env: {}", err),
+            reason: format!("cannot save credential: {}", err),
         };
-    }
-
-    // Restrict permissions on Unix
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
     }
 
     // Set in current process immediately
@@ -150,26 +111,6 @@ pub fn save_credential(provider_id: &str, key: &str) -> CredentialSaveOutcome {
 /// Set an env var in the current process for the duration of this session.
 pub fn set_env_for_session(var: &str, value: &str) {
     std::env::set_var(var, value);
-}
-
-fn line_assigns_var(trimmed_line: &str, var: &str) -> bool {
-    let assignment = trimmed_line
-        .strip_prefix("export ")
-        .unwrap_or(trimmed_line)
-        .trim_start();
-    assignment.starts_with(&format!("{}=", var))
-}
-
-fn dotenv_value(value: &str) -> String {
-    if value
-        .chars()
-        .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-' | '.' | ':' | '/'))
-    {
-        return value.to_string();
-    }
-
-    let escaped = value.replace('\\', "\\\\").replace('"', "\\\"");
-    format!("\"{}\"", escaped)
 }
 
 /// Status of a provider's credentials.

@@ -325,12 +325,12 @@ mod tests {
     #[test]
     fn missing_key_fails_validation() {
         let (manager, _tmp) = test_manager();
-        // Remove any DEEPSEEK_API_KEY from the environment for this test.
-        std::env::remove_var("DEEPSEEK_API_KEY");
+        // Use a provider id that is unlikely to have a key set in the
+        // developer environment, so the test remains hermetic.
         let rt = tokio::runtime::Runtime::new().unwrap();
-        let result = rt.block_on(manager.validate("deepseek", None));
+        let result = rt.block_on(manager.validate("not-a-provider", None));
         assert!(
-            matches!(result, ValidationResult::Failure { reason } if reason.contains("no API key"))
+            matches!(result, ValidationResult::Failure { reason } if reason.contains("unknown provider"))
         );
     }
 

@@ -123,7 +123,7 @@ pub enum AuthMethod {
 
 - 新建 `resources/providers.toml`，把当前 6 个内置 provider 完整描述迁移进去。
 - `ProviderRegistry::from_env()` 改为先读 manifest，再覆盖 env/auth。
-- `ProviderCatalogType` / `ProviderType`  enum 合并：保留 `ProviderType` 作为运行时 ID 字符串，不再新增 enum variant。
+- `ProviderType` 保留为运行时协议 family 与默认值推断器（从 provider id 解析到 `ProviderProtocolFamily`、默认 base URL / model）。不再新增 enum variant；自定义 provider 统一映射到 `ProviderType::Custom` 并回退到 OpenAI-compatible adapter。
 
 #### 3.1.4 文件改动
 
@@ -131,7 +131,7 @@ pub enum AuthMethod {
 |------|------|
 | `src/services/api/provider_manifest.rs` | 新增 manifest schema + load/merge |
 | `resources/providers.toml` | 内置 provider 清单 |
-| `src/services/api/provider.rs` | `ProviderType` 简化为 `String`；`ProviderRegistry` 读 manifest |
+| `src/services/api/provider.rs` | `ProviderRegistry` 读 manifest；`ProviderType` 保留为 family/默认值推断器 |
 | `src/services/api/provider_catalog.rs` | 删除 `builtin_catalog()`；从 manifest 取模型列表 |
 | `src/services/config.rs` | 增加 `providers_config_path` |
 
