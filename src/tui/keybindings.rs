@@ -588,6 +588,7 @@ impl Keybindings {
             | crate::tui::app::AppMode::PromptHistory
             | crate::tui::app::AppMode::ModelSelect
             | crate::tui::app::AppMode::ProviderSelect
+            | crate::tui::app::AppMode::ConnectWizard
             | crate::tui::app::AppMode::FilePicker
             | crate::tui::app::AppMode::WorkspaceSwitcher => {
                 // Overlay modes are handled directly in handle_key_event.

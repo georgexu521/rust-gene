@@ -149,31 +149,12 @@ pub fn handle_logout(_app: &mut TuiApp, _args: &str) -> String {
     }
 }
 
-/// `/connect <provider>` — guided provider setup with catalog DTO.
+/// `/connect` — open interactive provider setup wizard.
 pub fn handle_connect(app: &mut TuiApp, args: &str) -> String {
     let trimmed = args.trim();
     if trimmed.is_empty() || trimmed == "list" {
-        let mut out = String::from("Available providers:\n\n");
-        for status in crate::services::api::credentials::status_all() {
-            let marker = if status.configured { "✓" } else { "○" };
-            out.push_str(&format!(
-                "  {} {} — {} (use /connect {})\n",
-                marker,
-                status.provider_label,
-                if status.configured {
-                    "configured"
-                } else {
-                    "not configured"
-                },
-                status.provider_id,
-            ));
-        }
-        if out.contains("○") {
-            out.push_str(
-                "\nRun /connect <provider> for setup instructions, or /connect <provider> <key> to save a key.\n",
-            );
-        }
-        return out;
+        app.open_connect_wizard();
+        return String::new();
     }
 
     // Parse /connect <provider> [<key>]
@@ -183,7 +164,7 @@ pub fn handle_connect(app: &mut TuiApp, args: &str) -> String {
 
     match key {
         Some(key) => {
-            // User provided a key — save it.
+            // User provided a key — save it directly.
             match crate::services::api::credentials::save_credential(&id, key) {
                 crate::services::api::credentials::CredentialSaveOutcome::Verified => {
                     let runtime_message = match app.activate_provider_runtime(&id) {
@@ -219,14 +200,8 @@ pub fn handle_connect(app: &mut TuiApp, args: &str) -> String {
             }
         }
         None => {
-            // No key — show setup instructions (existing behavior).
-            match crate::services::api::credentials::connect_message(&id) {
-                Some(msg) => msg,
-                None => format!(
-                    "Unknown provider '{}'. Run /connect list to see available providers.",
-                    id
-                ),
-            }
+            app.open_connect_wizard_with_provider(&id);
+            String::new()
         }
     }
 }

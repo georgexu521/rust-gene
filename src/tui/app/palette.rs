@@ -147,6 +147,28 @@ impl TuiApp {
         self.pop_mode();
     }
 
+    pub fn open_connect_wizard(&mut self) {
+        self.connect_wizard_state =
+            Some(crate::tui::app::connect_wizard::ConnectWizardState::new());
+        self.push_mode(AppMode::ConnectWizard);
+    }
+
+    pub fn open_connect_wizard_with_provider(&mut self, provider_id: &str) {
+        let mut wizard = crate::tui::app::connect_wizard::ConnectWizardState::new();
+        let choices = wizard.provider_choices();
+        if let Some(pos) = choices.iter().position(|entry| entry.id == provider_id) {
+            wizard.selected = pos;
+            wizard.confirm_provider();
+        }
+        self.connect_wizard_state = Some(wizard);
+        self.push_mode(AppMode::ConnectWizard);
+    }
+
+    pub fn close_connect_wizard(&mut self) {
+        self.connect_wizard_state = None;
+        self.pop_mode();
+    }
+
     pub fn open_model_select(&mut self) {
         self.model_select_query.clear();
         self.model_select_selected = self

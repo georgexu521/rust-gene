@@ -28,12 +28,14 @@ use tracing::{debug, info, warn};
 use super::commands::{default_command_registry, CommandRegistry};
 
 mod actions;
+pub mod connect_wizard;
 mod memory;
 mod palette;
 mod permission_diff;
 mod runtime;
 mod slash_commands;
 mod status_tools;
+pub use connect_wizard::*;
 use memory::*;
 pub use runtime::StreamUsageSnapshot;
 use runtime::*;
@@ -83,6 +85,7 @@ pub enum AppMode {
     PromptHistory,
     ModelSelect,
     ProviderSelect,
+    ConnectWizard,
     FilePicker,
     WorkspaceSwitcher,
 }
@@ -393,6 +396,8 @@ pub struct TuiApp {
     pub provider_select_query: String,
     /// 最近一次 provider 切换提示
     pub provider_notice: Option<String>,
+    /// Provider connect wizard state.
+    pub connect_wizard_state: Option<crate::tui::app::connect_wizard::ConnectWizardState>,
     /// Skill invocations waiting for final assistant outcome attribution.
     pending_skill_invocations: Vec<PendingSkillInvocation>,
     /// Discovered plugins and their runtime facts.
@@ -1096,6 +1101,7 @@ impl TuiApp {
             provider_select_selected: 0,
             provider_select_query: String::new(),
             provider_notice: None,
+            connect_wizard_state: None,
             pending_skill_invocations: Vec::new(),
             plugin_facts: Vec::new(),
             plugin_ui_contributions: Vec::new(),

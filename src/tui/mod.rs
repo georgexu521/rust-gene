@@ -237,6 +237,7 @@ fn draw_ui(f: &mut Frame, app: &TuiApp) {
         | app::AppMode::PromptHistory
         | app::AppMode::ModelSelect
         | app::AppMode::ProviderSelect
+        | app::AppMode::ConnectWizard
         | app::AppMode::FilePicker
         | app::AppMode::WorkspaceSwitcher => {
             if app.sidebar_visible {
@@ -305,6 +306,9 @@ fn draw_ui(f: &mut Frame, app: &TuiApp) {
                 }
                 app::AppMode::ProviderSelect => {
                     screens::main_screen::render_provider_select(f, app, f.area());
+                }
+                app::AppMode::ConnectWizard => {
+                    screens::main_screen::render_connect_wizard(f, app, f.area());
                 }
                 app::AppMode::FilePicker => {
                     screens::main_screen::render_file_picker(f, app, f.area());
@@ -524,6 +528,10 @@ async fn handle_key_event(key: KeyEvent, app: &mut TuiApp) -> anyhow::Result<boo
 
     if app.mode == app::AppMode::ProviderSelect {
         return handle_provider_select_key_event(key, app).await;
+    }
+
+    if app.mode == app::AppMode::ConnectWizard {
+        return handle_connect_wizard_key_event(key, app).await;
     }
 
     if app.mode == app::AppMode::ShortcutHelp {
@@ -1278,6 +1286,120 @@ async fn handle_provider_select_key_event(key: KeyEvent, app: &mut TuiApp) -> an
         _ => {}
     }
     Ok(false)
+}
+
+async fn handle_connect_wizard_key_event(key: KeyEvent, app: &mut TuiApp) -> anyhow::Result<bool> {
+    use crate::tui::app::connect_wizard::{ConnectStep, WizardStatus};
+
+    let Some(mut wizard) = app.connect_wizard_state.take() else {
+        app.pop_mode();
+        return Ok(false);
+    };
+
+    match wizard.step {
+        ConnectStep::SelectProvider => match key.code {
+            KeyCode::Esc => {
+                app.close_connect_wizard();
+                return Ok(false);
+            }
+            KeyCode::Enter => {
+                wizard.confirm_provider();
+                app.connect_wizard_state = Some(wizard);
+                return Ok(false);
+            }
+            KeyCode::Up => wizard.select_prev(),
+            KeyCode::Down => wizard.select_next(),
+            KeyCode::Backspace => wizard.backspace_query(),
+            KeyCode::Char(c)
+                if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT =>
+            {
+                wizard.push_query(c);
+            }
+            _ => {}
+        },
+        ConnectStep::InputKey => match key.code {
+            KeyCode::Esc => {
+                app.close_connect_wizard();
+                return Ok(false);
+            }
+            KeyCode::Enter => {
+                let provider_id = wizard.provider_id.clone().unwrap_or_default();
+                let env_var = wizard.selected_key_env_var().unwrap_or_default();
+                let key_value = wizard.input_buffer.clone();
+                wizard.start_validating();
+                app.connect_wizard_state = Some(wizard);
+                let result = save_key_and_activate(app, &provider_id, &env_var, &key_value);
+                if let Some(wizard) = app.connect_wizard_state.as_mut() {
+                    match result {
+                        Ok(msg) => wizard.finish(WizardStatus::Success(msg)),
+                        Err(err) => wizard.finish(WizardStatus::Error(err.to_string())),
+                    }
+                }
+                return Ok(false);
+            }
+            KeyCode::Backspace => wizard.backspace_key(),
+            KeyCode::Char('t') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                wizard.mask_input = !wizard.mask_input;
+            }
+            KeyCode::Char(c)
+                if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT =>
+            {
+                wizard.push_key(c);
+            }
+            _ => {}
+        },
+        ConnectStep::Validating => {}
+        ConnectStep::Done => match key.code {
+            KeyCode::Esc => {
+                app.close_connect_wizard();
+                return Ok(false);
+            }
+            KeyCode::Enter => {
+                if matches!(wizard.status, WizardStatus::Error(_)) {
+                    wizard.step = ConnectStep::InputKey;
+                    wizard.status = WizardStatus::None;
+                    app.connect_wizard_state = Some(wizard);
+                } else {
+                    app.close_connect_wizard();
+                }
+                return Ok(false);
+            }
+            _ => {}
+        },
+    }
+
+    app.connect_wizard_state = Some(wizard);
+    Ok(false)
+}
+
+fn save_key_and_activate(
+    app: &mut TuiApp,
+    provider_id: &str,
+    env_var: &str,
+    key: &str,
+) -> anyhow::Result<String> {
+    let store = crate::services::api::auth_store::AuthStore::new_default();
+    store.set(provider_id, env_var, key)?;
+
+    let _entry = crate::services::api::provider_catalog::find(provider_id)
+        .ok_or_else(|| anyhow::anyhow!("unknown provider '{}'", provider_id))?;
+
+    // Set env for this process so ProviderRegistry::from_env picks it up.
+    std::env::set_var(env_var, key);
+    std::env::set_var("PRIORITY_AGENT_DEFAULT_PROVIDER", provider_id);
+
+    let registry = crate::services::api::provider::ProviderRegistry::from_env();
+    if registry.get(provider_id).is_none() {
+        return Err(anyhow::anyhow!(
+            "key saved, but provider could not be activated for this session"
+        ));
+    }
+
+    // Activate the provider in the streaming engine.
+    let result = app
+        .activate_provider_runtime(provider_id)
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+    Ok(format!("Provider is active with model {}.", result))
 }
 
 async fn handle_workspace_switcher_key_event(
