@@ -179,6 +179,28 @@ impl TuiApp {
         self.push_mode(AppMode::ModelSelect);
     }
 
+    pub async fn refresh_discovered_models(&mut self) {
+        let provider_label = self.current_provider_label();
+        let provider_id =
+            crate::services::api::provider_catalog::provider_id_for_label(&provider_label)
+                .unwrap_or_default();
+        if provider_id.is_empty() {
+            self.discovered_models = Vec::new();
+            return;
+        }
+        let manifest =
+            crate::services::api::provider_manifest::ProviderManifestLoader::load_merged();
+        let Some(entry) = manifest.provider.iter().find(|e| e.id == provider_id) else {
+            self.discovered_models = Vec::new();
+            return;
+        };
+        let api_key = entry.resolve_api_key();
+        self.discovered_models = self
+            .model_discovery
+            .list(&provider_id, entry, api_key.as_deref())
+            .await;
+    }
+
     pub fn close_model_select(&mut self) {
         self.pop_mode();
     }
@@ -187,12 +209,20 @@ impl TuiApp {
         let provider_label = self.current_provider_label();
         let current = self.current_model_label();
 
-        // Use the catalog's supported models, falling back to current-only for unknown providers.
-        let catalog_id =
-            crate::services::api::provider_catalog::provider_id_for_label(&provider_label);
-        let model_names: Vec<String> = catalog_id
-            .map(|id| crate::services::api::provider_catalog::supported_models(&id))
-            .unwrap_or_else(|| vec![current.clone()]);
+        let mut model_names: Vec<String> = self
+            .discovered_models
+            .iter()
+            .map(|m| m.id.clone())
+            .collect();
+
+        // Fallback to catalog static list if discovery is empty.
+        if model_names.is_empty() {
+            let catalog_id =
+                crate::services::api::provider_catalog::provider_id_for_label(&provider_label);
+            model_names = catalog_id
+                .map(|id| crate::services::api::provider_catalog::supported_models(&id))
+                .unwrap_or_else(|| vec![current.clone()]);
+        }
 
         let mut models: Vec<&str> = model_names.iter().map(|s| s.as_str()).collect();
         if !models.iter().any(|m| *m == current) {
@@ -419,6 +449,7 @@ impl TuiApp {
             "Provider switched to {} ({})",
             config.name, config.default_model
         ));
+        self.discovered_models.clear();
         format!(
             "Provider switched to {}\nModel: {}\nBase URL: {}",
             config.name,

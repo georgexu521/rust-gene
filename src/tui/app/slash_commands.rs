@@ -706,6 +706,31 @@ impl TuiApp {
                     "Model: unavailable (no engine connected)".to_string()
                 }
             }
+            "/models" => {
+                self.refresh_discovered_models().await;
+                let lines = self
+                    .model_choices()
+                    .into_iter()
+                    .map(|choice| {
+                        format!(
+                            "{} {} ({})",
+                            if choice.active { "*" } else { "-" },
+                            choice.model,
+                            choice.note
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                if lines.is_empty() {
+                    "No models discovered. Use /model list for static models.".to_string()
+                } else {
+                    format!(
+                        "Discovered models for {}:\n{}",
+                        self.current_provider_label(),
+                        lines
+                    )
+                }
+            }
             "/provider" => {
                 let args = args.trim();
                 if let Some(provider) = args

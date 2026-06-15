@@ -8,6 +8,7 @@ pub(crate) mod content_sanitizer;
 pub mod credentials;
 pub mod kimi;
 pub mod minimax;
+pub mod model_discovery;
 pub mod openai;
 pub mod openai_compat;
 pub mod provider;

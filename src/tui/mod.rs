@@ -1129,7 +1129,10 @@ async fn handle_key_event(key: KeyEvent, app: &mut TuiApp) -> anyhow::Result<boo
         }
         AppAction::OpenCommandPalette => app.open_command_palette(),
         AppAction::OpenPromptHistory => app.open_prompt_picker(),
-        AppAction::OpenModelSelect => app.open_model_select(),
+        AppAction::OpenModelSelect => {
+            app.refresh_discovered_models().await;
+            app.open_model_select();
+        }
         AppAction::OpenProviderSelect => app.open_provider_select(),
         AppAction::OpenShortcutHelp => app.open_shortcut_help(),
         AppAction::ToggleExpandDetails => {
