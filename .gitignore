@@ -35,3 +35,5 @@ docs/benchmarks/live-product-daily*/
 .priority-agent/
 .reasonix/
 .env
+# Transient session scratch file created by some tool runs
+sessions.rs

@@ -217,13 +217,25 @@ impl ProviderManifestLoader {
     ///
     /// Priority:
     /// 1. `PRIORITY_AGENT_PROVIDERS_CONFIG`
-    /// 2. `./.priority-agent/providers.toml`
-    /// 3. `~/.config/priority-agent/providers.toml`
+    /// 2. `api.providers_config_path` from `AppConfig`
+    /// 3. `./.priority-agent/providers.toml`
+    /// 4. `~/.config/priority-agent/providers.toml`
     pub fn resolve_path() -> Option<PathBuf> {
         if let Ok(path) = std::env::var("PRIORITY_AGENT_PROVIDERS_CONFIG") {
             let path = PathBuf::from(path);
             if path.is_file() {
                 return Some(path);
+            }
+        }
+
+        if let Ok(config) = crate::services::config::AppConfig::load() {
+            if let Some(path_str) = config.api.providers_config_path {
+                if !path_str.trim().is_empty() {
+                    let path = PathBuf::from(path_str.trim());
+                    if path.is_file() {
+                        return Some(path);
+                    }
+                }
             }
         }
 
