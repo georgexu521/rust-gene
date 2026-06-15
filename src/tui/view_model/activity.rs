@@ -310,27 +310,18 @@ fn provider_label(
 fn tool_turn_active_label(phase: ToolTurnPhase, name: &str) -> (ActivePhase, String) {
     let tool_name = non_empty_str(name).unwrap_or_else(|| "tool".to_string());
     match phase {
-        ToolTurnPhase::Requested => (
-            ActivePhase::ProviderWaiting,
-            format!("tool requested ({tool_name})"),
-        ),
-        ToolTurnPhase::Accepted => (
-            ActivePhase::ProviderWaiting,
-            format!("tool accepted ({tool_name})"),
-        ),
+        ToolTurnPhase::Requested => (ActivePhase::ProviderWaiting, "tool requested".to_string()),
+        ToolTurnPhase::Accepted => (ActivePhase::ProviderWaiting, "tool accepted".to_string()),
         ToolTurnPhase::Executing => (ActivePhase::ToolRunning, format!("running {tool_name}")),
         ToolTurnPhase::ResultObserved => (
             ActivePhase::ProviderWaiting,
-            format!("tool result observed ({tool_name})"),
+            "tool result received".to_string(),
         ),
         ToolTurnPhase::SentBackToModel => (
             ActivePhase::ProviderWaiting,
-            format!("sent tool result to model ({tool_name})"),
+            "waiting for final answer".to_string(),
         ),
-        ToolTurnPhase::FinalAnswer => (
-            ActivePhase::Thinking,
-            format!("final answer ready ({tool_name})"),
-        ),
+        ToolTurnPhase::FinalAnswer => (ActivePhase::Thinking, "finalizing answer".to_string()),
         ToolTurnPhase::Persisted
         | ToolTurnPhase::Failed
         | ToolTurnPhase::Cancelled
@@ -529,7 +520,7 @@ mod tests {
         let status = active_turn_status(&app).expect("active status");
 
         assert_eq!(status.phase, ActivePhase::ProviderWaiting);
-        assert_eq!(status.label, "sent tool result to model (bash)");
+        assert_eq!(status.label, "waiting for final answer");
         assert_eq!(status.detail.as_deref(), Some("sent back to model"));
     }
 

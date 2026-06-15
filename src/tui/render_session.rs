@@ -92,7 +92,7 @@ impl TuiSyncSnapshot {
                 .find(|projection| projection.id == message.id)
             {
                 seen_projection_ids.insert(message.id.clone());
-                let parts = projection
+                let mut parts: Vec<TuiMessagePart> = projection
                     .part_ids
                     .iter()
                     .filter_map(|part_id| {
@@ -102,6 +102,28 @@ impl TuiSyncSnapshot {
                     })
                     .cloned()
                     .collect();
+                // User messages may have a projection entry but no text part
+                // (e.g. TurnStarted creates an empty projection). Synthesize a
+                // text part from the legacy MessageItem content so the message
+                // does not render as empty.
+                if projection.role == crate::tui::sync_store::TuiMessageRole::User
+                    && !message.content.is_empty()
+                    && !parts
+                        .iter()
+                        .any(|p| p.kind == crate::tui::sync_store::TuiPartKind::Text)
+                {
+                    parts.push(TuiMessagePart {
+                        id: crate::tui::sync_store::part_id_for(
+                            &message.id,
+                            crate::tui::sync_store::TuiPartKind::Text,
+                        ),
+                        message_id: message.id.clone(),
+                        kind: crate::tui::sync_store::TuiPartKind::Text,
+                        text: message.content.clone(),
+                        tool_run: None,
+                        streaming: false,
+                    });
+                }
                 messages.push(TuiRenderMessage {
                     id: message.id.clone(),
                     role: render_role_from_projection(projection.role),

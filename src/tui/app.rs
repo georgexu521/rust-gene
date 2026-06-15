@@ -2683,6 +2683,12 @@ fn persisted_final_answer_for_user(
             && !message.content.trim_start().starts_with("[Error:")
             && !message.content.trim_start().starts_with("[Cancelled:")
     })?;
+    let has_tool_after = messages[assistant_idx + 1..]
+        .iter()
+        .any(|message| message.role == MessageRole::Tool);
+    if has_tool_after {
+        return None;
+    }
     let prior_user_idx = messages[..assistant_idx]
         .iter()
         .rposition(|message| message.role == MessageRole::User)?;

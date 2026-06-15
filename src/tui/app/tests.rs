@@ -1560,6 +1560,74 @@ fn test_persisted_final_answer_matches_current_user_turn() {
 }
 
 #[test]
+fn test_persisted_final_answer_rejects_tool_call_assistant() {
+    let messages = vec![
+        MessageItem {
+            id: "user_1".to_string(),
+            role: MessageRole::User,
+            content: "run pwd".to_string(),
+            timestamp: std::time::SystemTime::UNIX_EPOCH,
+            metadata: Default::default(),
+        },
+        MessageItem {
+            id: "assistant_tool_call".to_string(),
+            role: MessageRole::Assistant,
+            content: "匹配算法自动运行（4维加权打分）...".to_string(),
+            timestamp: std::time::SystemTime::UNIX_EPOCH,
+            metadata: Default::default(),
+        },
+        MessageItem {
+            id: "tool_result".to_string(),
+            role: MessageRole::Tool,
+            content: "/home/user".to_string(),
+            timestamp: std::time::SystemTime::UNIX_EPOCH,
+            metadata: Default::default(),
+        },
+        MessageItem {
+            id: "assistant_final".to_string(),
+            role: MessageRole::Assistant,
+            content: "The current directory is /home/user.".to_string(),
+            timestamp: std::time::SystemTime::UNIX_EPOCH,
+            metadata: Default::default(),
+        },
+    ];
+
+    assert_eq!(
+        persisted_final_answer_for_user(&messages, "run pwd").as_deref(),
+        Some("The current directory is /home/user.")
+    );
+
+    let incomplete = vec![
+        MessageItem {
+            id: "user_1".to_string(),
+            role: MessageRole::User,
+            content: "run pwd".to_string(),
+            timestamp: std::time::SystemTime::UNIX_EPOCH,
+            metadata: Default::default(),
+        },
+        MessageItem {
+            id: "assistant_tool_call".to_string(),
+            role: MessageRole::Assistant,
+            content: "匹配算法自动运行（4维加权打分）...".to_string(),
+            timestamp: std::time::SystemTime::UNIX_EPOCH,
+            metadata: Default::default(),
+        },
+        MessageItem {
+            id: "tool_result".to_string(),
+            role: MessageRole::Tool,
+            content: "/home/user".to_string(),
+            timestamp: std::time::SystemTime::UNIX_EPOCH,
+            metadata: Default::default(),
+        },
+    ];
+
+    assert_eq!(
+        persisted_final_answer_for_user(&incomplete, "run pwd"),
+        None
+    );
+}
+
+#[test]
 fn test_toggle_collapse_uses_parent_message_with_tool_parts() {
     let mut app = TuiApp::new();
     let user = MessageItem {
