@@ -121,7 +121,7 @@ pub fn tool_body_budget(width: usize, max_lines: usize) -> usize {
 ///
 /// Markdown parsers may emit a single `Line` whose spans contain newlines.
 /// Collapsing by line count needs those newlines turned into real `Line`s.
-pub fn flatten_line_breaks(lines: Vec<Line<'static>>) -> Vec<Line<'static>> {
+pub fn flatten_line_breaks<'a>(lines: Vec<Line<'a>>) -> Vec<Line<'static>> {
     let mut out = Vec::new();
     let mut current: Vec<Span<'static>> = Vec::new();
 

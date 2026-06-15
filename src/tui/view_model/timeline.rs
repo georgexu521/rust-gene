@@ -2,6 +2,10 @@ use crate::{
     state::MessageItem,
     tui::{
         app::TuiApp,
+        components::{
+            collapsible::{flatten_line_breaks, wrap_line_to_width},
+            markdown::parse_markdown,
+        },
         render_session::{TuiRenderMessage, TuiRenderRole, TuiRenderSession},
         sync_store::TuiMessagePart,
         tool_view::ToolRunView,
@@ -179,38 +183,21 @@ pub fn estimate_message_height_with_parts_or_reasoning(
     };
 
     let base_height = 1 + reasoning_summary_height + reasoning_body_height;
-    let effective_width = width.saturating_sub(4).max(1);
+    // The rendered paragraph has a 2-space left indent; reserve that budget so
+    // wrap calculations match what ratatui will actually draw.
+    let effective_width = width.saturating_sub(4).saturating_sub(2).max(1);
 
-    let mut lines = 0;
-    let mut in_code_block = false;
-    let mut last_was_text = false;
+    let markdown_lines = parse_markdown(visible_content, &crate::tui::theme::Theme::default());
+    let flat_lines = flatten_line_breaks(markdown_lines.lines);
 
-    for raw_line in visible_content.lines() {
-        let trimmed = raw_line.trim();
-
-        if trimmed.starts_with("```") {
-            in_code_block = !in_code_block;
-            lines += 1;
-            last_was_text = false;
-        } else if in_code_block {
-            lines += 1;
-            last_was_text = false;
-        } else if trimmed.is_empty() {
-            if last_was_text {
-                lines += 1;
-            }
-            last_was_text = false;
-        } else if trimmed.starts_with('#') {
-            lines += 1;
-            last_was_text = true;
-        } else if trimmed == "---" || trimmed == "***" || trimmed == "___" {
-            lines += 2;
-            last_was_text = false;
-        } else {
-            let display_width = unicode_width::UnicodeWidthStr::width(raw_line);
-            lines += display_width.div_ceil(effective_width).max(1);
-            last_was_text = true;
-        }
+    let mut lines = 0usize;
+    for line in flat_lines {
+        let rendered: String = line
+            .spans
+            .iter()
+            .map(|span| span.content.to_string())
+            .collect();
+        lines += wrap_line_to_width(&rendered, effective_width).len().max(1);
     }
 
     if !text_part_expanded {
@@ -417,6 +404,33 @@ mod tests {
         );
 
         assert!(expanded_reasoning > collapsed_reasoning);
+    }
+
+    #[test]
+    fn assistant_height_accounts_for_markdown_tables_and_lists() {
+        let item = msg(
+            MessageRole::Assistant,
+            "## phageGPT（PhageMatch）是什么？\n\n\
+             这是一个噬菌体（细菌病毒）-耐药菌匹配平台。\n\n\
+             **核心理念**\n\
+             不是做分子级别的\"预测\"，而是做基于数据的推荐。\n\n\
+             **匹配算法（4个维度）**\n\
+             | 维度 | 权重 | 说明 |\n\
+             |------|------|------|\n\
+             | 物种匹配 | 40% | 同物种噬菌体优先推荐 |\n\
+             | MLST型匹配 | 30% | 基于历史裂解数据 |\n\n\
+             **技术栈**\n\
+             1. 前端：React + TypeScript + Vite + React Router + TanStack Query\n\
+             2. 后端：Node.js + Express + Prisma ORM\n\
+             3. 数据库：SQLite\n\
+             4. 多模型支持：GPT-4o、DeepSeek 等",
+        );
+
+        let height = estimate_message_height(&item, 80, false);
+        // The old heuristic underestimated this kind of mixed markdown because
+        // it did not account for list numbering/indent and used raw-line wrap
+        // arithmetic. The new parser-based estimate should be at least 15 lines.
+        assert!(height >= 15, "estimated height {} should be >= 15", height);
     }
 
     #[test]
