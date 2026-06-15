@@ -1048,7 +1048,7 @@ impl TuiApp {
             "/login" => slash::handle_login(self, args),
             "/logout" => slash::handle_logout(self, args),
             "/key" => slash::handle_key(self, args),
-            "/connect" => slash::handle_connect(self, args),
+            "/connect" => slash::handle_connect(self, args).await,
             "/credentials" => slash::handle_credentials(self, args),
             "/product-ready" => crate::engine::product_readiness::readiness_report(),
             "/health" => slash::handle_health(self),

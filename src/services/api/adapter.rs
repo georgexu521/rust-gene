@@ -18,7 +18,7 @@ pub type AdapterFactory =
     Arc<dyn Fn(&ProviderConfig) -> Option<ProviderAdapterInstance> + Send + Sync>;
 
 /// Registry mapping protocol families to adapter factories.
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct AdapterRegistry {
     factories: HashMap<ProviderProtocolFamily, AdapterFactory>,
 }

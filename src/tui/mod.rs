@@ -1331,7 +1331,7 @@ async fn handle_connect_wizard_key_event(key: KeyEvent, app: &mut TuiApp) -> any
                 let key_value = wizard.input_buffer.clone();
                 wizard.start_validating();
                 app.connect_wizard_state = Some(wizard);
-                let result = save_key_and_activate(app, &provider_id, &env_var, &key_value);
+                let result = save_key_and_activate(app, &provider_id, &env_var, &key_value).await;
                 if let Some(wizard) = app.connect_wizard_state.as_mut() {
                     match result {
                         Ok(msg) => wizard.finish(WizardStatus::Success(msg)),
@@ -1375,30 +1375,25 @@ async fn handle_connect_wizard_key_event(key: KeyEvent, app: &mut TuiApp) -> any
     Ok(false)
 }
 
-fn save_key_and_activate(
+async fn save_key_and_activate(
     app: &mut TuiApp,
     provider_id: &str,
     env_var: &str,
     key: &str,
 ) -> anyhow::Result<String> {
-    let store = crate::services::api::auth_store::AuthStore::new_default();
-    store.set(provider_id, env_var, key)?;
+    use crate::services::api::provider_manager::ProviderManager;
 
-    let _entry = crate::services::api::provider_catalog::find(provider_id)
-        .ok_or_else(|| anyhow::anyhow!("unknown provider '{}'", provider_id))?;
+    let manager = ProviderManager::new();
+    let validation = manager
+        .save_and_validate(provider_id, env_var, key)
+        .await
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
 
-    // Set env for this process so ProviderRegistry::from_env picks it up.
-    std::env::set_var(env_var, key);
-    std::env::set_var("PRIORITY_AGENT_DEFAULT_PROVIDER", provider_id);
-
-    let registry = crate::services::api::provider::ProviderRegistry::from_env();
-    if registry.get(provider_id).is_none() {
-        return Err(anyhow::anyhow!(
-            "key saved, but provider could not be activated for this session"
-        ));
+    if !validation.is_success() {
+        return Err(anyhow::anyhow!("{}", validation.into_message()));
     }
 
-    // Activate the provider in the streaming engine.
+    std::env::set_var("PRIORITY_AGENT_DEFAULT_PROVIDER", provider_id);
     let result = app
         .activate_provider_runtime(provider_id)
         .map_err(|e| anyhow::anyhow!("{e}"))?;

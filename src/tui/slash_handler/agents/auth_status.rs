@@ -150,7 +150,7 @@ pub fn handle_logout(_app: &mut TuiApp, _args: &str) -> String {
 }
 
 /// `/connect` — open interactive provider setup wizard.
-pub fn handle_connect(app: &mut TuiApp, args: &str) -> String {
+pub async fn handle_connect(app: &mut TuiApp, args: &str) -> String {
     let trimmed = args.trim();
     if trimmed.is_empty() || trimmed == "list" {
         app.open_connect_wizard();
@@ -164,39 +164,36 @@ pub fn handle_connect(app: &mut TuiApp, args: &str) -> String {
 
     match key {
         Some(key) => {
-            // User provided a key — save it directly.
-            match crate::services::api::credentials::save_credential(&id, key) {
-                crate::services::api::credentials::CredentialSaveOutcome::Verified => {
-                    let runtime_message = match app.activate_provider_runtime(&id) {
-                        Ok(model) => {
-                            format!("Provider is active for this session with model {model}.")
-                        }
-                        Err(err) => format!(
-                            "Provider key was saved, but runtime activation failed: {err}.\nRestart Priority Agent or run /provider switch {id} after checking /provider status."
-                        ),
-                    };
-                    format!(
-                        "Saved API key for {} to ~/.priority-agent/.env.\n\
-                         {}\n\
-                         Use /provider status to verify.",
-                        crate::services::api::provider_catalog::find(&id)
-                            .map(|e| e.label)
-                            .unwrap_or_else(|| id.to_string()),
-                        runtime_message
-                    )
+            use crate::services::api::provider_manager::ProviderManager;
+            let manager = ProviderManager::new();
+            let env_var = manager
+                .primary_env_var(&id)
+                .unwrap_or_else(|| format!("{}_API_KEY", id.to_uppercase()));
+            match manager.save_and_validate(&id, &env_var, key).await {
+                Ok(validation) => {
+                    if validation.is_success() {
+                        let runtime_message = match app.activate_provider_runtime(&id) {
+                            Ok(model) => {
+                                format!("Provider is active for this session with model {model}.")
+                            }
+                            Err(err) => format!(
+                                "Provider key was saved, but runtime activation failed: {err}.\nRestart Priority Agent or run /provider switch {id} after checking /provider status."
+                            ),
+                        };
+                        format!(
+                            "Saved API key for {} to ~/.priority-agent/.env.\n\
+                             {}\n\
+                             Use /provider status to verify.",
+                            crate::services::api::provider_catalog::find(&id)
+                                .map(|e| e.label)
+                                .unwrap_or_else(|| id.to_string()),
+                            runtime_message
+                        )
+                    } else {
+                        format!("✗ {}", validation.into_message())
+                    }
                 }
-                crate::services::api::credentials::CredentialSaveOutcome::SavedUnverified => {
-                    format!(
-                        "Saved API key for {} to ~/.priority-agent/.env, but provider activation could not be verified.\n\
-                         Check the key and run /provider status before sending a request.",
-                        crate::services::api::provider_catalog::find(&id)
-                            .map(|e| e.label)
-                            .unwrap_or_else(|| id.to_string())
-                    )
-                }
-                crate::services::api::credentials::CredentialSaveOutcome::Rejected { reason } => {
-                    format!("Failed to save key: {}", reason)
-                }
+                Err(err) => format!("Failed to save key: {}", err),
             }
         }
         None => {
