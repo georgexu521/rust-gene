@@ -3,7 +3,7 @@ use crate::{
     tui::{
         app::TuiApp,
         components::{
-            collapsible::{flatten_line_breaks, wrap_line_to_width},
+            collapsible::{collapse_lines, flatten_line_breaks, wrap_line_to_width},
             markdown::parse_markdown,
         },
         render_session::{TuiRenderMessage, TuiRenderRole, TuiRenderSession},
@@ -230,24 +230,29 @@ pub fn estimate_message_height_with_parts_or_reasoning(
     let markdown_lines = parse_markdown(visible_content, &crate::tui::theme::Theme::default());
     let flat_lines = flatten_line_breaks(markdown_lines.lines);
 
-    let mut lines = 0usize;
-    for line in flat_lines {
-        let rendered: String = line
-            .spans
-            .iter()
-            .map(|span| span.content.to_string())
-            .collect();
-        lines += wrap_line_to_width(&rendered, effective_width).len().max(1);
-    }
-
-    if !text_part_expanded {
+    let collapsed = if text_part_expanded {
+        collapse_lines(flat_lines, usize::MAX, usize::MAX)
+    } else {
         let max_lines = crate::tui::components::collapsible::DEFAULT_TEXT_PART_MAX_LINES;
-        if lines > max_lines {
-            return base_height + max_lines + 1;
-        }
-    }
+        collapse_lines(flat_lines, max_lines, width.saturating_mul(max_lines))
+    };
 
-    base_height + lines.max(1)
+    let visible_lines = rendered_physical_height(&collapsed.visible, effective_width);
+    let footer_height = if collapsed.is_truncated {
+        let footer = if collapsed.hidden_lines > 0 {
+            format!(
+                "  ... {} more lines - press Enter to expand",
+                collapsed.hidden_lines
+            )
+        } else {
+            "  ... more - press Enter to expand".to_string()
+        };
+        wrap_line_to_width(&footer, effective_width).len().max(1)
+    } else {
+        0
+    };
+
+    base_height + visible_lines.max(1) + footer_height
 }
 
 pub fn estimate_message_height(msg: &MessageItem, width: usize, collapsed: bool) -> usize {
@@ -279,6 +284,20 @@ fn expanded_reasoning_height_for_text(reasoning: &str) -> usize {
                     > crate::tui::view_model::reasoning::EXPANDED_REASONING_MAX_LINES,
             )
     }
+}
+
+fn rendered_physical_height(lines: &[ratatui::text::Line<'_>], width: usize) -> usize {
+    lines
+        .iter()
+        .map(|line| {
+            let rendered: String = line
+                .spans
+                .iter()
+                .map(|span| span.content.to_string())
+                .collect();
+            wrap_line_to_width(&rendered, width).len().max(1)
+        })
+        .sum()
 }
 
 pub fn estimate_tool_runs_height(runs: &[ToolRunView], app: &TuiApp) -> usize {
@@ -504,6 +523,24 @@ mod tests {
         // it did not account for list numbering/indent and used raw-line wrap
         // arithmetic. The new parser-based estimate should be at least 15 lines.
         assert!(height >= 15, "estimated height {} should be >= 15", height);
+    }
+
+    #[test]
+    fn collapsed_assistant_height_counts_wrapped_visible_lines_before_footer() {
+        let max_lines = crate::tui::components::collapsible::DEFAULT_TEXT_PART_MAX_LINES;
+        let mut content = (0..max_lines)
+            .map(|idx| format!("visible {idx} {}", "中文内容".repeat(12)))
+            .collect::<Vec<_>>()
+            .join("\n");
+        content.push_str("\n数据来源\n1. 后续来源应该通过折叠 footer 提示展开");
+        let item = msg(MessageRole::Assistant, &content);
+
+        let height = estimate_message_height(&item, 32, false);
+
+        assert!(
+            height > max_lines + 2,
+            "wrapped visible lines plus footer should exceed raw collapse budget, got {height}"
+        );
     }
 
     #[test]
