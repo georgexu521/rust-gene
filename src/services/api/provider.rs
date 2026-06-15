@@ -3,6 +3,7 @@
 //! 支持动态注册和选择多个 LLM Provider
 
 use crate::services::api::{
+    adapter::default_adapter_registry,
     provider_manifest::{ProviderManifest, ProviderManifestLoader},
     provider_protocol::{ProviderCapabilities, ProviderProtocolFamily},
     LlmProvider,
@@ -253,53 +254,7 @@ impl ProviderRegistry {
 
     /// 根据配置创建 Provider
     fn create_provider(config: &ProviderConfig) -> Option<Arc<dyn LlmProvider>> {
-        match config.provider_type {
-            ProviderType::Kimi => {
-                let kimi_config = crate::services::api::kimi::KimiConfig {
-                    api_key: config.api_key.clone(),
-                    base_url: config
-                        .base_url
-                        .clone()
-                        .unwrap_or_else(|| KIMI_DEFAULT_BASE_URL.to_string()),
-                    default_model: config.default_model.clone(),
-                    thinking_enabled: true,
-                    thinking_budget: None,
-                };
-                Some(
-                    Arc::new(crate::services::api::kimi::KimiClient::new(kimi_config))
-                        as Arc<dyn LlmProvider>,
-                )
-            }
-            ProviderType::OpenAI
-            | ProviderType::OpenAICompat
-            | ProviderType::KimiCode
-            | ProviderType::DeepSeek
-            | ProviderType::Glm => Some(Arc::new(
-                crate::services::api::openai::OpenAiClient::new_with_label(
-                    &config.name,
-                    &config.api_key,
-                    config.base_url.as_deref(),
-                    Some(&config.default_model),
-                ),
-            ) as Arc<dyn LlmProvider>),
-            ProviderType::Minimax => {
-                // Minimax 也使用 OpenAI 兼容方式
-                Some(Arc::new(crate::services::api::minimax::MiniMaxClient::new(
-                    &config.api_key,
-                    Some(
-                        config
-                            .base_url
-                            .as_deref()
-                            .unwrap_or(MINIMAX_DEFAULT_BASE_URL),
-                    ),
-                    Some(&config.default_model),
-                )) as Arc<dyn LlmProvider>)
-            }
-            _ => {
-                warn!("Unsupported provider type: {:?}", config.provider_type);
-                None
-            }
-        }
+        default_adapter_registry().build(config)
     }
 
     /// 注册 Provider

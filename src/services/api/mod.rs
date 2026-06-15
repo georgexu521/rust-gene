@@ -2,6 +2,7 @@
 //!
 //! 支持多个 LLM 提供商：Kimi、OpenAI
 
+pub mod adapter;
 pub(crate) mod content_sanitizer;
 pub mod credentials;
 pub mod kimi;
