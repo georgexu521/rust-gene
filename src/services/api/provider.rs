@@ -3,6 +3,7 @@
 //! 支持动态注册和选择多个 LLM Provider
 
 use crate::services::api::{
+    provider_manifest::{ProviderManifest, ProviderManifestLoader},
     provider_protocol::{ProviderCapabilities, ProviderProtocolFamily},
     LlmProvider,
 };
@@ -134,28 +135,6 @@ impl std::str::FromStr for ProviderType {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
-pub struct ProviderEnvSpec {
-    pub id: &'static str,
-    pub label: &'static str,
-    pub provider_type: ProviderType,
-    pub key_env_vars: &'static [&'static str],
-    pub base_url_env_vars: &'static [&'static str],
-    pub model_env_vars: &'static [&'static str],
-    pub default_base_url: &'static str,
-    pub default_model: &'static str,
-}
-
-impl ProviderEnvSpec {
-    pub fn primary_key_env(self) -> &'static str {
-        self.key_env_vars.first().copied().unwrap_or("")
-    }
-
-    pub fn key_env_hint(self) -> String {
-        self.key_env_vars.join(" or ")
-    }
-}
-
 pub const MINIMAX_DEFAULT_BASE_URL: &str = "https://api.minimax.io/v1";
 pub const KIMI_DEFAULT_BASE_URL: &str = "https://api.moonshot.cn/v1";
 pub const KIMI_CODE_DEFAULT_BASE_URL: &str = "https://api.kimi.com/coding/v1";
@@ -163,109 +142,12 @@ pub const DEEPSEEK_DEFAULT_BASE_URL: &str = "https://api.deepseek.com";
 pub const GLM_DEFAULT_BASE_URL: &str = "https://open.bigmodel.cn/api/paas/v4";
 pub const OPENAI_DEFAULT_BASE_URL: &str = "https://api.openai.com/v1";
 
-const MINIMAX_KEY_ENV: &[&str] = &["MINIMAX_API_KEY"];
-const MINIMAX_BASE_URL_ENV: &[&str] = &["MINIMAX_BASE_URL"];
-const MINIMAX_MODEL_ENV: &[&str] = &["MINIMAX_MODEL"];
-const KIMI_CODE_KEY_ENV: &[&str] = &["KIMI_CODE_API_KEY"];
-const KIMI_CODE_BASE_URL_ENV: &[&str] = &["KIMI_CODE_BASE_URL"];
-const KIMI_CODE_MODEL_ENV: &[&str] = &["KIMI_CODE_MODEL"];
-const DEEPSEEK_KEY_ENV: &[&str] = &["DEEPSEEK_API_KEY"];
-const DEEPSEEK_BASE_URL_ENV: &[&str] = &["DEEPSEEK_BASE_URL"];
-const DEEPSEEK_MODEL_ENV: &[&str] = &["DEEPSEEK_MODEL"];
-const GLM_KEY_ENV: &[&str] = &[
-    "GLM_API_KEY",
-    "ZAI_API_KEY",
-    "ZHIPUAI_API_KEY",
-    "BIGMODEL_API_KEY",
-];
-const GLM_BASE_URL_ENV: &[&str] = &[
-    "GLM_BASE_URL",
-    "ZAI_BASE_URL",
-    "ZHIPUAI_BASE_URL",
-    "BIGMODEL_BASE_URL",
-];
-const GLM_MODEL_ENV: &[&str] = &["GLM_MODEL", "ZAI_MODEL", "ZHIPUAI_MODEL", "BIGMODEL_MODEL"];
-const KIMI_KEY_ENV: &[&str] = &["MOONSHOT_API_KEY"];
-const KIMI_BASE_URL_ENV: &[&str] = &["MOONSHOT_BASE_URL"];
-const KIMI_MODEL_ENV: &[&str] = &["MOONSHOT_MODEL"];
-const OPENAI_KEY_ENV: &[&str] = &["OPENAI_API_KEY"];
-const OPENAI_BASE_URL_ENV: &[&str] = &["OPENAI_BASE_URL"];
-const OPENAI_MODEL_ENV: &[&str] = &["OPENAI_MODEL"];
-
-/// Built-in provider order is deterministic, advisory, and user-overridable via
-/// `PRIORITY_AGENT_DEFAULT_PROVIDER`.
-pub const DEFAULT_PROVIDER_ENV_SPECS: &[ProviderEnvSpec] = &[
-    ProviderEnvSpec {
-        id: "minimax",
-        label: "MiniMax",
-        provider_type: ProviderType::Minimax,
-        key_env_vars: MINIMAX_KEY_ENV,
-        base_url_env_vars: MINIMAX_BASE_URL_ENV,
-        model_env_vars: MINIMAX_MODEL_ENV,
-        default_base_url: MINIMAX_DEFAULT_BASE_URL,
-        default_model: "MiniMax-M3",
-    },
-    ProviderEnvSpec {
-        id: "kimi-code",
-        label: "Kimi Code",
-        provider_type: ProviderType::KimiCode,
-        key_env_vars: KIMI_CODE_KEY_ENV,
-        base_url_env_vars: KIMI_CODE_BASE_URL_ENV,
-        model_env_vars: KIMI_CODE_MODEL_ENV,
-        default_base_url: KIMI_CODE_DEFAULT_BASE_URL,
-        default_model: "kimi-for-coding",
-    },
-    ProviderEnvSpec {
-        id: "deepseek",
-        label: "DeepSeek",
-        provider_type: ProviderType::DeepSeek,
-        key_env_vars: DEEPSEEK_KEY_ENV,
-        base_url_env_vars: DEEPSEEK_BASE_URL_ENV,
-        model_env_vars: DEEPSEEK_MODEL_ENV,
-        default_base_url: DEEPSEEK_DEFAULT_BASE_URL,
-        default_model: "deepseek-v4-flash",
-    },
-    ProviderEnvSpec {
-        id: "glm",
-        label: "GLM",
-        provider_type: ProviderType::Glm,
-        key_env_vars: GLM_KEY_ENV,
-        base_url_env_vars: GLM_BASE_URL_ENV,
-        model_env_vars: GLM_MODEL_ENV,
-        default_base_url: GLM_DEFAULT_BASE_URL,
-        default_model: "glm-5.1",
-    },
-    ProviderEnvSpec {
-        id: "kimi",
-        label: "Kimi",
-        provider_type: ProviderType::Kimi,
-        key_env_vars: KIMI_KEY_ENV,
-        base_url_env_vars: KIMI_BASE_URL_ENV,
-        model_env_vars: KIMI_MODEL_ENV,
-        default_base_url: KIMI_DEFAULT_BASE_URL,
-        default_model: "kimi-k2.5",
-    },
-    ProviderEnvSpec {
-        id: "openai",
-        label: "OpenAI",
-        provider_type: ProviderType::OpenAI,
-        key_env_vars: OPENAI_KEY_ENV,
-        base_url_env_vars: OPENAI_BASE_URL_ENV,
-        model_env_vars: OPENAI_MODEL_ENV,
-        default_base_url: OPENAI_DEFAULT_BASE_URL,
-        default_model: "gpt-4o",
-    },
-];
-
-pub fn default_provider_env_spec(id: &str) -> Option<&'static ProviderEnvSpec> {
-    DEFAULT_PROVIDER_ENV_SPECS.iter().find(|spec| spec.id == id)
-}
-
+/// Build a comma-separated hint of primary API key env vars for built-in providers.
 pub fn provider_key_env_hint() -> String {
-    DEFAULT_PROVIDER_ENV_SPECS
+    ProviderManifestLoader::load_merged()
+        .provider
         .iter()
-        .map(|spec| spec.primary_key_env())
-        .filter(|env| !env.is_empty())
+        .filter_map(|entry| entry.env.first().cloned())
         .collect::<Vec<_>>()
         .join(", ")
 }
@@ -314,12 +196,14 @@ impl ProviderRegistry {
             })
             .unwrap_or(false);
 
-        for spec in DEFAULT_PROVIDER_ENV_SPECS {
-            if let Some(config) = provider_config_from_env_spec(spec) {
+        let manifest = ProviderManifestLoader::load_merged();
+        for entry in manifest.provider {
+            if let Some(config) = provider_config_from_manifest(&entry) {
                 if let Some(provider) = Self::create_provider(&config) {
-                    registry.register(spec.id.to_string(), provider, config);
+                    let name = entry.id.clone();
+                    registry.register(name.clone(), provider, config);
                     if registry.selected().is_none() {
-                        registry.select(spec.id.to_string());
+                        registry.select(name);
                     }
                 }
             }
@@ -497,20 +381,15 @@ fn env_non_empty(key: &str) -> Option<String> {
         .filter(|value| !value.is_empty())
 }
 
-fn env_first_non_empty(keys: &[&str]) -> Option<String> {
-    keys.iter().find_map(|key| env_non_empty(key))
-}
-
-fn provider_config_from_env_spec(spec: &ProviderEnvSpec) -> Option<ProviderConfig> {
-    let api_key = env_first_non_empty(spec.key_env_vars)?;
-    let base_url =
-        env_first_non_empty(spec.base_url_env_vars).unwrap_or_else(|| spec.default_base_url.into());
-    let model =
-        env_first_non_empty(spec.model_env_vars).unwrap_or_else(|| spec.default_model.into());
+fn provider_config_from_manifest(entry: &ProviderManifest) -> Option<ProviderConfig> {
+    let api_key = entry.resolve_api_key()?;
+    let base_url = entry.resolve_base_url();
+    let model = entry.resolve_model();
+    let provider_type = ProviderType::parse_lossy(&entry.id);
 
     Some(ProviderConfig {
-        name: spec.id.to_string(),
-        provider_type: spec.provider_type,
+        name: entry.id.clone(),
+        provider_type,
         api_key,
         base_url: Some(base_url),
         default_model: model,
@@ -822,12 +701,12 @@ mod tests {
     }
 
     fn clear_default_provider_env(env: &mut EnvVarGuard) {
-        for spec in DEFAULT_PROVIDER_ENV_SPECS {
-            for key in spec
-                .key_env_vars
+        for entry in ProviderManifestLoader::load_merged().provider {
+            for key in entry
+                .env
                 .iter()
-                .chain(spec.base_url_env_vars.iter())
-                .chain(spec.model_env_vars.iter())
+                .chain(entry.base_url_env.iter())
+                .chain(entry.model_env.iter())
             {
                 env.remove(key);
             }

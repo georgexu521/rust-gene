@@ -10,6 +10,7 @@ pub mod openai;
 pub mod openai_compat;
 pub mod provider;
 pub mod provider_catalog;
+pub mod provider_manifest;
 pub mod provider_protocol;
 pub mod retry;
 pub mod test_provider;

@@ -250,13 +250,14 @@ pub fn check_toolchain() -> CheckResult {
 
 /// 检测配置（API keys 等）
 pub fn check_config() -> CheckResult {
-    let configured = crate::services::api::provider::DEFAULT_PROVIDER_ENV_SPECS
-        .iter()
-        .filter_map(|spec| {
-            spec.key_env_vars
+    let configured = crate::services::api::provider_catalog::builtin_catalog()
+        .into_iter()
+        .filter_map(|entry| {
+            entry
+                .key_env_vars
                 .iter()
                 .any(|env| std::env::var(env).is_ok_and(|value| !value.trim().is_empty()))
-                .then_some(format!("{} configured", spec.label))
+                .then_some(format!("{} configured", entry.label))
         })
         .collect::<Vec<_>>();
 

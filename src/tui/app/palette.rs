@@ -308,18 +308,18 @@ impl TuiApp {
             })
             .collect::<Vec<_>>();
 
-        for spec in crate::services::api::provider::DEFAULT_PROVIDER_ENV_SPECS {
-            if choices.iter().any(|choice| choice.name == spec.id) {
+        for entry in crate::services::api::provider_catalog::builtin_catalog() {
+            if choices.iter().any(|choice| choice.name == entry.id) {
                 continue;
             }
             choices.push(ProviderChoice {
-                name: spec.id.to_string(),
-                provider_type: format!("{:?}", spec.provider_type),
-                model: spec.default_model.to_string(),
+                name: entry.id,
+                provider_type: format!("{:?}", entry.provider_type),
+                model: entry.default_model,
                 base_url: String::new(),
                 configured: false,
                 active: false,
-                note: format!("missing {}", spec.key_env_hint()),
+                note: format!("missing {}", entry.key_env_vars.join(" or ")),
             });
         }
 

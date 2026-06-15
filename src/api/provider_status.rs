@@ -1,7 +1,8 @@
 use super::dto;
 use super::ApiState;
 use crate::diagnostics::provider_health::{ProviderHealthLedgerEntry, ProviderHealthStatus};
-use crate::services::api::provider::{ProviderConfig, ProviderEnvSpec, DEFAULT_PROVIDER_ENV_SPECS};
+use crate::services::api::provider::ProviderConfig;
+use crate::services::api::provider_catalog::{builtin_catalog, ProviderCatalogEntry};
 use crate::services::api::provider_protocol::{ProviderCapabilities, ProviderRuntimeProfile};
 use std::collections::HashSet;
 
@@ -34,11 +35,15 @@ pub(crate) fn provider_product_statuses(
         }));
     }
 
-    for spec in DEFAULT_PROVIDER_ENV_SPECS {
-        if configured_ids.contains(spec.id) {
+    for entry in builtin_catalog() {
+        if configured_ids.contains(entry.id.as_str()) {
             continue;
         }
-        statuses.push(status_from_spec(spec, configured_max_output, latest_health));
+        statuses.push(status_from_catalog_entry(
+            &entry,
+            configured_max_output,
+            latest_health,
+        ));
     }
 
     statuses
@@ -129,29 +134,30 @@ fn status_from_config(
     }
 }
 
-fn status_from_spec(
-    spec: &ProviderEnvSpec,
+fn status_from_catalog_entry(
+    entry: &ProviderCatalogEntry,
     configured_max_output: Option<u64>,
     latest_health: Option<&ProviderHealthLedgerEntry>,
 ) -> dto::provider::ProviderProductStatus {
-    let capabilities = spec.provider_type.capabilities();
-    let profile = ProviderRuntimeProfile::snapshot(&capabilities, spec.default_model, spec.id);
+    let provider_type = crate::services::api::provider::ProviderType::parse_lossy(&entry.id);
+    let capabilities = provider_type.capabilities();
+    let profile = ProviderRuntimeProfile::snapshot(&capabilities, &entry.default_model, &entry.id);
     let context = crate::engine::model_context::ModelContextProfile::detect(
-        spec.default_base_url,
-        spec.default_model,
+        &entry.default_base_url,
+        &entry.default_model,
     );
     let (latest_health_status, latest_timeout_category, last_request_latency_ms) =
-        latest_provider_health_fields(latest_health, spec.default_model, spec.default_base_url);
+        latest_provider_health_fields(latest_health, &entry.default_model, &entry.default_base_url);
     dto::provider::ProviderProductStatus {
-        provider_id: spec.id.to_string(),
-        label: spec.label.to_string(),
-        model_id: spec.default_model.to_string(),
-        model_display_name: spec.default_model.to_string(),
-        connection_source: spec.primary_key_env().to_string(),
+        provider_id: entry.id.clone(),
+        label: entry.label.clone(),
+        model_id: entry.default_model.clone(),
+        model_display_name: entry.default_model.clone(),
+        connection_source: entry.key_env_vars.first().cloned().unwrap_or_default(),
         configured: false,
         active: false,
         disabled: false,
-        base_url_host: base_url_host(spec.default_base_url),
+        base_url_host: base_url_host(&entry.default_base_url),
         protocol_family: profile.protocol_family.label().to_string(),
         supports_streaming_tool_calls: profile.supports_streaming_tool_calls,
         requires_nonstreaming: profile.requires_nonstreaming_tool_calls,
@@ -172,10 +178,10 @@ fn status_from_spec(
 }
 
 fn provider_label(id: &str) -> String {
-    DEFAULT_PROVIDER_ENV_SPECS
-        .iter()
-        .find(|spec| spec.id == id)
-        .map(|spec| spec.label.to_string())
+    builtin_catalog()
+        .into_iter()
+        .find(|entry| entry.id == id)
+        .map(|entry| entry.label)
         .unwrap_or_else(|| id.to_string())
 }
 

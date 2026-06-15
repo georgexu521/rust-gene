@@ -1,0 +1,88 @@
+# priority-agent built-in provider manifest
+# Users can override or extend this by placing a providers.toml in:
+#   ~/.config/priority-agent/providers.toml
+# or by setting PRIORITY_AGENT_PROVIDERS_CONFIG.
+
+[[provider]]
+id = "minimax"
+name = "MiniMax"
+provider_family = "openai_compatible"
+env = ["MINIMAX_API_KEY"]
+base_url_env = ["MINIMAX_BASE_URL"]
+model_env = ["MINIMAX_MODEL"]
+base_url = "https://api.minimax.io/v1"
+default_model = "MiniMax-M3"
+models_source = { type = "static", models = ["MiniMax-M3", "MiniMax-M2.7", "MiniMax-M2.7-highspeed", "MiniMax-M2.5", "MiniMax-M2"] }
+capabilities = { supports_streaming_tool_calls = false, requires_nonstreaming_tool_calls = true, requires_merged_system_messages = true }
+docs_url = "https://platform.minimax.io"
+setup_hint = "Set MINIMAX_API_KEY to your API key from platform.minimax.io"
+
+[[provider]]
+id = "kimi-code"
+name = "Kimi Code"
+provider_family = "kimi"
+env = ["KIMI_CODE_API_KEY"]
+base_url_env = ["KIMI_CODE_BASE_URL"]
+model_env = ["KIMI_CODE_MODEL"]
+base_url = "https://api.kimi.com/coding/v1"
+default_model = "kimi-for-coding"
+models_source = { type = "static", models = ["kimi-for-coding"] }
+capabilities = { supports_streaming_tool_calls = true, supports_reasoning_tokens = true }
+docs_url = "https://platform.moonshot.cn"
+setup_hint = "Set KIMI_CODE_API_KEY to your Kimi Code API key"
+
+[[provider]]
+id = "deepseek"
+name = "DeepSeek"
+provider_family = "openai_compatible"
+env = ["DEEPSEEK_API_KEY"]
+base_url_env = ["DEEPSEEK_BASE_URL"]
+model_env = ["DEEPSEEK_MODEL"]
+base_url = "https://api.deepseek.com"
+default_model = "deepseek-v4-flash"
+models_source = { type = "static", models = ["deepseek-v4-flash", "deepseek-v4-pro", "deepseek-chat"] }
+capabilities = { supports_streaming_tool_calls = false, requires_nonstreaming_tool_calls = true }
+docs_url = "https://platform.deepseek.com"
+setup_hint = "Set DEEPSEEK_API_KEY to your API key from platform.deepseek.com"
+
+[[provider]]
+id = "glm"
+name = "GLM"
+provider_family = "openai_compatible"
+env = ["GLM_API_KEY", "ZAI_API_KEY", "ZHIPUAI_API_KEY", "BIGMODEL_API_KEY"]
+base_url_env = ["GLM_BASE_URL", "ZAI_BASE_URL", "ZHIPUAI_BASE_URL", "BIGMODEL_BASE_URL"]
+model_env = ["GLM_MODEL", "ZAI_MODEL", "ZHIPUAI_MODEL", "BIGMODEL_MODEL"]
+base_url = "https://open.bigmodel.cn/api/paas/v4"
+default_model = "glm-5.1"
+models_source = { type = "static", models = ["glm-5.1", "glm-4.7", "glm-4.6"] }
+capabilities = { supports_streaming_tool_calls = true }
+docs_url = "https://open.bigmodel.cn"
+setup_hint = "Set GLM_API_KEY (or ZHIPUAI_API_KEY) to your API key from open.bigmodel.cn"
+
+[[provider]]
+id = "kimi"
+name = "Kimi"
+provider_family = "kimi"
+env = ["MOONSHOT_API_KEY"]
+base_url_env = ["MOONSHOT_BASE_URL"]
+model_env = ["MOONSHOT_MODEL"]
+base_url = "https://api.moonshot.cn/v1"
+default_model = "kimi-k2.5"
+models_source = { type = "static", models = ["kimi-k2.5", "kimi-k2.5-thinking"] }
+capabilities = { supports_streaming_tool_calls = true, supports_reasoning_tokens = true }
+docs_url = "https://platform.moonshot.cn"
+setup_hint = "Set MOONSHOT_API_KEY to your Kimi API key from platform.moonshot.cn"
+
+[[provider]]
+id = "openai"
+name = "OpenAI"
+provider_family = "openai_compatible"
+env = ["OPENAI_API_KEY"]
+base_url_env = ["OPENAI_BASE_URL"]
+model_env = ["OPENAI_MODEL"]
+base_url = "https://api.openai.com/v1"
+default_model = "gpt-4o"
+models_source = { type = "static", models = ["gpt-4o", "gpt-4o-mini"] }
+capabilities = { supports_streaming_tool_calls = true }
+docs_url = "https://platform.openai.com"
+setup_hint = "Set OPENAI_API_KEY to your API key from platform.openai.com"

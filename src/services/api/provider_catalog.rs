@@ -4,10 +4,11 @@
 //! provider type, required env vars, base URL, default model, supported
 //! model list, docs URL, and setup guidance.
 //!
-//! This replaces the duplicated model lists in `palette.rs` and
-//! `desktop_state.rs`, and extends the existing `DEFAULT_PROVIDER_ENV_SPECS`
-//! from `provider.rs` with additional product metadata.
+//! The canonical data now lives in `resources/providers.toml` and is loaded
+//! via `provider_manifest::ProvidersManifest`. This module keeps the original
+//! public API stable while the underlying definitions are externalized.
 
+use crate::services::api::provider_manifest::{ProviderManifest, ProvidersManifest};
 use serde::{Deserialize, Serialize};
 
 /// Static metadata for a built-in provider.
@@ -37,6 +38,24 @@ pub struct ProviderCatalogEntry {
     pub setup_hint: String,
 }
 
+impl From<&ProviderManifest> for ProviderCatalogEntry {
+    fn from(manifest: &ProviderManifest) -> Self {
+        Self {
+            id: manifest.id.clone(),
+            label: manifest.name.clone(),
+            provider_type: provider_catalog_type_for_id(&manifest.id),
+            key_env_vars: manifest.env.clone(),
+            base_url_env_vars: manifest.base_url_env.clone(),
+            model_env_vars: manifest.model_env.clone(),
+            default_base_url: manifest.base_url.clone(),
+            default_model: manifest.default_model.clone(),
+            supported_models: manifest.supported_models(),
+            docs_url: manifest.docs_url.clone(),
+            setup_hint: manifest.setup_hint.clone(),
+        }
+    }
+}
+
 /// Provider type tag for the catalog.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -54,118 +73,28 @@ pub enum ProviderCatalogType {
     Custom,
 }
 
+fn provider_catalog_type_for_id(id: &str) -> ProviderCatalogType {
+    match id {
+        "minimax" => ProviderCatalogType::Minimax,
+        "kimi" => ProviderCatalogType::Kimi,
+        "kimi-code" => ProviderCatalogType::KimiCode,
+        "deepseek" => ProviderCatalogType::DeepSeek,
+        "glm" => ProviderCatalogType::Glm,
+        "openai" => ProviderCatalogType::OpenAI,
+        _ => ProviderCatalogType::Custom,
+    }
+}
+
 /// The canonical built-in provider catalog.
 ///
 /// Order is deterministic and advisory.  Providers without a configured
 /// API key are shown as "unconfigured" in UI pickers.
 pub fn builtin_catalog() -> Vec<ProviderCatalogEntry> {
-    vec![
-        ProviderCatalogEntry {
-            id: "minimax".into(),
-            label: "MiniMax".into(),
-            provider_type: ProviderCatalogType::Minimax,
-            key_env_vars: vec!["MINIMAX_API_KEY".into()],
-            base_url_env_vars: vec!["MINIMAX_BASE_URL".into()],
-            model_env_vars: vec!["MINIMAX_MODEL".into()],
-            default_base_url: "https://api.minimax.io/v1".into(),
-            default_model: "MiniMax-M3".into(),
-            supported_models: vec![
-                "MiniMax-M3".into(),
-                "MiniMax-M2.7".into(),
-                "MiniMax-M2.7-highspeed".into(),
-                "MiniMax-M2.5".into(),
-                "MiniMax-M2".into(),
-            ],
-            docs_url: Some("https://platform.minimax.io".into()),
-            setup_hint: "Set MINIMAX_API_KEY to your API key from platform.minimax.io".into(),
-        },
-        ProviderCatalogEntry {
-            id: "kimi-code".into(),
-            label: "Kimi Code".into(),
-            provider_type: ProviderCatalogType::KimiCode,
-            key_env_vars: vec!["KIMI_CODE_API_KEY".into()],
-            base_url_env_vars: vec!["KIMI_CODE_BASE_URL".into()],
-            model_env_vars: vec!["KIMI_CODE_MODEL".into()],
-            default_base_url: "https://api.kimi.com/coding/v1".into(),
-            default_model: "kimi-for-coding".into(),
-            supported_models: vec!["kimi-for-coding".into()],
-            docs_url: Some("https://platform.moonshot.cn".into()),
-            setup_hint: "Set KIMI_CODE_API_KEY to your Kimi Code API key".into(),
-        },
-        ProviderCatalogEntry {
-            id: "deepseek".into(),
-            label: "DeepSeek".into(),
-            provider_type: ProviderCatalogType::DeepSeek,
-            key_env_vars: vec!["DEEPSEEK_API_KEY".into()],
-            base_url_env_vars: vec!["DEEPSEEK_BASE_URL".into()],
-            model_env_vars: vec!["DEEPSEEK_MODEL".into()],
-            default_base_url: "https://api.deepseek.com".into(),
-            default_model: "deepseek-v4-flash".into(),
-            supported_models: vec![
-                "deepseek-v4-flash".into(),
-                "deepseek-v4-pro".into(),
-                "deepseek-chat".into(),
-            ],
-            docs_url: Some("https://platform.deepseek.com".into()),
-            setup_hint: "Set DEEPSEEK_API_KEY to your API key from platform.deepseek.com".into(),
-        },
-        ProviderCatalogEntry {
-            id: "glm".into(),
-            label: "GLM".into(),
-            provider_type: ProviderCatalogType::Glm,
-            key_env_vars: vec![
-                "GLM_API_KEY".into(),
-                "ZAI_API_KEY".into(),
-                "ZHIPUAI_API_KEY".into(),
-                "BIGMODEL_API_KEY".into(),
-            ],
-            base_url_env_vars: vec![
-                "GLM_BASE_URL".into(),
-                "ZAI_BASE_URL".into(),
-                "ZHIPUAI_BASE_URL".into(),
-                "BIGMODEL_BASE_URL".into(),
-            ],
-            model_env_vars: vec![
-                "GLM_MODEL".into(),
-                "ZAI_MODEL".into(),
-                "ZHIPUAI_MODEL".into(),
-                "BIGMODEL_MODEL".into(),
-            ],
-            default_base_url: "https://open.bigmodel.cn/api/paas/v4".into(),
-            default_model: "glm-5.1".into(),
-            supported_models: vec!["glm-5.1".into(), "glm-4.7".into(), "glm-4.6".into()],
-            docs_url: Some("https://open.bigmodel.cn".into()),
-            setup_hint:
-                "Set GLM_API_KEY (or ZHIPUAI_API_KEY) to your API key from open.bigmodel.cn".into(),
-        },
-        ProviderCatalogEntry {
-            id: "kimi".into(),
-            label: "Kimi".into(),
-            provider_type: ProviderCatalogType::Kimi,
-            key_env_vars: vec!["MOONSHOT_API_KEY".into()],
-            base_url_env_vars: vec!["MOONSHOT_BASE_URL".into()],
-            model_env_vars: vec!["MOONSHOT_MODEL".into()],
-            default_base_url: "https://api.moonshot.cn/v1".into(),
-            default_model: "kimi-k2.5".into(),
-            supported_models: vec!["kimi-k2.5".into(), "kimi-k2.5-thinking".into()],
-            docs_url: Some("https://platform.moonshot.cn".into()),
-            setup_hint: "Set MOONSHOT_API_KEY to your Kimi API key from platform.moonshot.cn"
-                .into(),
-        },
-        ProviderCatalogEntry {
-            id: "openai".into(),
-            label: "OpenAI".into(),
-            provider_type: ProviderCatalogType::OpenAI,
-            key_env_vars: vec!["OPENAI_API_KEY".into()],
-            base_url_env_vars: vec!["OPENAI_BASE_URL".into()],
-            model_env_vars: vec!["OPENAI_MODEL".into()],
-            default_base_url: "https://api.openai.com/v1".into(),
-            default_model: "gpt-4o".into(),
-            supported_models: vec!["gpt-4o".into(), "gpt-4o-mini".into()],
-            docs_url: Some("https://platform.openai.com".into()),
-            setup_hint: "Set OPENAI_API_KEY to your API key from platform.openai.com".into(),
-        },
-    ]
+    ProvidersManifest::builtin()
+        .provider
+        .into_iter()
+        .map(|entry| ProviderCatalogEntry::from(&entry))
+        .collect()
 }
 
 /// Find a catalog entry by id.

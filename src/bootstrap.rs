@@ -379,12 +379,12 @@ mod tests {
         let config_home_path = config_home.path().to_string_lossy();
         env.set("XDG_CONFIG_HOME", config_home_path.as_ref());
         env.set("HOME", config_home_path.as_ref());
-        for spec in crate::services::api::provider::DEFAULT_PROVIDER_ENV_SPECS {
-            for key in spec
+        for entry in crate::services::api::provider_catalog::builtin_catalog() {
+            for key in entry
                 .key_env_vars
                 .iter()
-                .chain(spec.base_url_env_vars.iter())
-                .chain(spec.model_env_vars.iter())
+                .chain(entry.base_url_env_vars.iter())
+                .chain(entry.model_env_vars.iter())
             {
                 env.remove(key);
             }

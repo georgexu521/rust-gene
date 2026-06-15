@@ -259,10 +259,11 @@ pub fn handle_credentials(_app: &mut TuiApp, args: &str) -> String {
 /// /key - API key management
 pub fn handle_key(_app: &mut TuiApp, args: &str) -> String {
     if args.is_empty() {
-        let has_key = crate::services::api::provider::DEFAULT_PROVIDER_ENV_SPECS
+        let has_key = crate::services::api::provider_catalog::builtin_catalog()
             .iter()
-            .any(|spec| {
-                spec.key_env_vars
+            .any(|entry| {
+                entry
+                    .key_env_vars
                     .iter()
                     .any(|key| std::env::var(key).is_ok_and(|value| !value.trim().is_empty()))
             });
@@ -282,8 +283,8 @@ pub fn handle_key(_app: &mut TuiApp, args: &str) -> String {
             crate::services::api::provider::provider_key_env_hint()
         ),
         "clear" => {
-            for spec in crate::services::api::provider::DEFAULT_PROVIDER_ENV_SPECS {
-                for key in spec.key_env_vars {
+            for entry in crate::services::api::provider_catalog::builtin_catalog() {
+                for key in entry.key_env_vars {
                     std::env::remove_var(key);
                 }
             }
