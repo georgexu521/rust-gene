@@ -30,6 +30,8 @@ mod status_bar;
 pub use status_bar::*;
 mod popups;
 pub use popups::*;
+mod render_connect_wizard;
+pub use render_connect_wizard::*;
 
 /// 渲染聊天区域（Claude Code 风格：无边框，留白分隔）
 pub fn render_chat_area(f: &mut Frame, app: &TuiApp, area: Rect) {

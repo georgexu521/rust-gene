@@ -50,6 +50,7 @@ impl AppConfig {
             // 1. 默认配置 (provider-agnostic, 实际值由 env vars 决定)
             .set_default("api.model", "")?
             .set_default("api.base_url", "")?
+            .set_default("api.providers_config_path", "")?
             .set_default("ui.theme", "dark")?
             .set_default("storage.persistence_enabled", true)?
             .set_default("features.llm_memory_extraction", true)?
@@ -154,6 +155,13 @@ pub const CONFIG_KEY_SPECS: &[ConfigKeySpec] = &[
         mutable: true,
         secret: false,
         description: "Optional max tokens",
+    },
+    ConfigKeySpec {
+        key: "api.providers_config_path",
+        value_type: "string|none",
+        mutable: true,
+        secret: false,
+        description: "Path to custom providers.toml manifest",
     },
     ConfigKeySpec {
         key: "ui.theme",
@@ -786,6 +794,9 @@ pub struct ApiConfig {
     /// Selected provider name (persisted across sessions).
     #[serde(default)]
     pub provider_name: Option<String>,
+    /// Optional path to a custom providers.toml manifest.
+    #[serde(default)]
+    pub providers_config_path: Option<String>,
 }
 
 impl Default for ApiConfig {
@@ -797,6 +808,7 @@ impl Default for ApiConfig {
             temperature: 0.6,
             max_tokens: None,
             provider_name: None,
+            providers_config_path: None,
         }
     }
 }
