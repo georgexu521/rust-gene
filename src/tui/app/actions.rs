@@ -663,24 +663,16 @@ impl TuiApp {
 
     /// 向上滚动
     pub fn scroll_up(&mut self) {
-        let resolved = self.current_scroll_row_offset();
-        self.set_manual_scroll_row_offset(resolved.saturating_sub(1));
+        self.scroll_by_rows(-1);
     }
 
     /// 向下滚动
     pub fn scroll_down(&mut self) {
-        let resolved = self.current_scroll_row_offset();
-        let next_offset = resolved.saturating_add(1);
-        if next_offset >= self.max_scroll_row_offset() {
-            self.scroll_to_bottom();
-        } else {
-            self.set_manual_scroll_row_offset(next_offset);
-        }
+        self.scroll_by_rows(1);
     }
 
     /// 滚动到底部（显示最新消息）
     pub fn scroll_to_bottom(&mut self) {
-        self.scroll_offset = self.max_scroll_row_offset();
         self.scroll_anchor_id = None;
         self.scroll_anchor_row_offset = 0;
         self.pinned_to_bottom = true;
@@ -778,19 +770,12 @@ impl TuiApp {
 
     /// 向上滚动半页（Vim Ctrl+U）
     pub fn scroll_up_half_page(&mut self) {
-        let resolved = self.current_scroll_row_offset();
-        self.set_manual_scroll_row_offset(resolved.saturating_sub(self.half_page_rows()));
+        self.scroll_by_rows(-(self.half_page_rows() as isize));
     }
 
     /// 向下滚动半页（Vim Ctrl+D）
     pub fn scroll_down_half_page(&mut self) {
-        let resolved = self.current_scroll_row_offset();
-        let next_offset = resolved.saturating_add(self.half_page_rows());
-        if next_offset >= self.max_scroll_row_offset() {
-            self.scroll_to_bottom();
-        } else {
-            self.set_manual_scroll_row_offset(next_offset);
-        }
+        self.scroll_by_rows(self.half_page_rows() as isize);
     }
 
     pub fn toggle_collapse_at_scroll_anchor(&mut self) -> bool {
@@ -955,14 +940,18 @@ impl TuiApp {
     }
 
     pub fn set_chat_viewport(&mut self, width: u16, height: u16) {
+        let previous_width = self.chat_viewport_width;
+        let previous_height = self.chat_viewport_height;
         self.chat_viewport_width = width.max(1);
         self.chat_viewport_height = height.max(1);
-        if self.pinned_to_bottom {
-            self.scroll_to_bottom();
-        } else {
-            let max_offset = self.max_scroll_row_offset();
+        if !self.pinned_to_bottom
+            && (self.chat_viewport_width != previous_width
+                || self.chat_viewport_height != previous_height)
+        {
+            let heights = self.timeline_heights_for_scroll();
+            let max_offset = self.max_scroll_row_offset_for_heights(&heights);
             if self.scroll_offset > max_offset {
-                self.set_manual_scroll_row_offset(max_offset);
+                self.set_manual_scroll_row_offset_with_heights(max_offset, &heights);
             }
         }
     }
@@ -975,6 +964,9 @@ impl TuiApp {
             self.chat_viewport_width as usize,
             self,
         );
+        if self.pinned_to_bottom {
+            return self.max_scroll_row_offset_for_heights(&heights);
+        }
         let resolved = crate::tui::view_model::timeline::resolve_scroll_row_offset(
             &timeline,
             &heights,
@@ -998,13 +990,17 @@ impl TuiApp {
     }
 
     fn set_manual_scroll_row_offset(&mut self, offset: usize) {
-        let max_offset = self.max_scroll_row_offset();
+        let heights = self.timeline_heights_for_scroll();
+        self.set_manual_scroll_row_offset_with_heights(offset, &heights);
+    }
+
+    fn set_manual_scroll_row_offset_with_heights(&mut self, offset: usize, heights: &[usize]) {
+        let max_offset = self.max_scroll_row_offset_for_heights(heights);
         if offset >= max_offset {
             self.scroll_to_bottom();
             return;
         }
         self.scroll_offset = offset;
-        let heights = self.timeline_heights_for_scroll();
         let (index, row_offset) =
             crate::tui::view_model::timeline::timeline_index_at_row_offset(&heights, offset);
         self.scroll_anchor_id = self.timeline_stable_id_at(index);
@@ -1028,11 +1024,6 @@ impl TuiApp {
         )
     }
 
-    fn max_scroll_row_offset(&self) -> usize {
-        let heights = self.timeline_heights_for_scroll();
-        self.max_scroll_row_offset_for_heights(&heights)
-    }
-
     fn max_scroll_row_offset_for_heights(&self, heights: &[usize]) -> usize {
         let total_rows: usize = heights.iter().sum();
         total_rows.saturating_sub(self.chat_viewport_height as usize)
@@ -1040,6 +1031,45 @@ impl TuiApp {
 
     fn half_page_rows(&self) -> usize {
         (self.chat_viewport_height as usize / 2).max(1)
+    }
+
+    fn scroll_by_rows(&mut self, rows: isize) {
+        let render_session = self.render_session();
+        let timeline = crate::tui::view_model::timeline::timeline_items(&render_session);
+        let heights = crate::tui::view_model::timeline::timeline_item_heights(
+            &timeline,
+            self.chat_viewport_width as usize,
+            self,
+        );
+        let current = if self.pinned_to_bottom {
+            self.max_scroll_row_offset_for_heights(&heights)
+        } else {
+            crate::tui::view_model::timeline::resolve_scroll_row_offset(
+                &timeline,
+                &heights,
+                self.scroll_offset,
+                self.scroll_anchor_id.as_deref(),
+                self.scroll_anchor_row_offset,
+            )
+            .min(self.max_scroll_row_offset_for_heights(&heights))
+        };
+        let next = if rows < 0 {
+            current.saturating_sub(rows.unsigned_abs())
+        } else {
+            current.saturating_add(rows as usize)
+        };
+        let max_offset = self.max_scroll_row_offset_for_heights(&heights);
+        if next >= max_offset {
+            self.scroll_to_bottom();
+            return;
+        }
+
+        self.scroll_offset = next;
+        let (index, row_offset) =
+            crate::tui::view_model::timeline::timeline_index_at_row_offset(&heights, next);
+        self.scroll_anchor_id = timeline.get(index).map(|item| item.stable_id().to_string());
+        self.scroll_anchor_row_offset = row_offset;
+        self.pinned_to_bottom = false;
     }
 
     /// 获取可见消息数量

@@ -128,11 +128,10 @@ pub fn render_chat_area(f: &mut Frame, app: &mut TuiApp, area: Rect) {
     let bottom_anchored = app.pinned_to_bottom || scroll_row_offset >= max_scroll;
     let window = transcript_window(
         &items,
+        &heights,
         scroll_row_offset,
         bottom_anchored,
         content_height,
-        inner_area.width as usize,
-        app,
     );
 
     let mut current_y = content_top + u16::from(window.more_above);
@@ -249,11 +248,10 @@ pub fn render_chat_area(f: &mut Frame, app: &mut TuiApp, area: Rect) {
             app.expanded_reasoning_message_id.as_deref() == Some(msg_id),
             text_part_expanded,
         );
-        let message_scroll = item_scroll.min(message_total_height.saturating_sub(1));
+        let message_scroll = item_scroll.min(message_total_height);
         let message_height = message_total_height
             .saturating_sub(message_scroll)
-            .min(msg_height as usize)
-            .max(1) as u16;
+            .min(msg_height as usize) as u16;
         let message_item = render_message_item_from_parts(*role, msg_id, content, &app.theme);
         let paragraph = if collapsed {
             message::render_message_compact(&message_item, &app.theme)
@@ -271,23 +269,27 @@ pub fn render_chat_area(f: &mut Frame, app: &mut TuiApp, area: Rect) {
                 message_parts,
             )
         };
-        f.render_widget(
-            paragraph.scroll((message_scroll.min(u16::MAX as usize) as u16, 0)),
-            Rect {
-                height: message_height,
-                ..msg_area
-            },
-        );
-        if tool_height > 0 && message_height < msg_height {
+        if message_height > 0 {
+            f.render_widget(
+                paragraph.scroll((message_scroll.min(u16::MAX as usize) as u16, 0)),
+                Rect {
+                    height: message_height,
+                    ..msg_area
+                },
+            );
+        }
+        let remaining_height = msg_height.saturating_sub(message_height);
+        if tool_height > 0 && remaining_height > 0 {
             if let Some(parts) = parts {
                 let runs = tool_runs_from_parts(parts);
                 if !runs.is_empty() {
+                    let tool_scroll = item_scroll.saturating_sub(message_total_height);
                     let paragraph = render_tool_runs_message(&runs, app, msg_area.width as usize);
                     f.render_widget(
-                        paragraph,
+                        paragraph.scroll((tool_scroll.min(u16::MAX as usize) as u16, 0)),
                         Rect {
                             y: msg_area.y + message_height,
-                            height: msg_height - message_height,
+                            height: remaining_height,
                             ..msg_area
                         },
                     );
@@ -361,11 +363,10 @@ struct TranscriptWindow {
 
 fn transcript_window(
     items: &[TimelineItem<'_>],
+    heights: &[usize],
     scroll_row_offset: usize,
     bottom_anchored: bool,
     viewport_height: u16,
-    width: usize,
-    app: &TuiApp,
 ) -> TranscriptWindow {
     if items.is_empty() || viewport_height == 0 {
         return TranscriptWindow {
@@ -378,7 +379,6 @@ fn transcript_window(
     }
 
     if !bottom_anchored {
-        let heights = timeline_item_heights(items, width, app);
         let total_rows: usize = heights.iter().sum();
         let row_offset = scroll_row_offset.min(total_rows.saturating_sub(1));
         let (start, first_item_scroll_offset) = timeline_index_at_row_offset(&heights, row_offset);
@@ -398,7 +398,6 @@ fn transcript_window(
         };
     }
 
-    let heights = timeline_item_heights(items, width, app);
     let viewport = viewport_height as usize;
     let active_start = active_turn_start(items).unwrap_or(items.len().saturating_sub(1));
     let active_height = sum_heights(&heights, active_start, items.len());
@@ -413,7 +412,7 @@ fn transcript_window(
         start = bottom_filled_start(&heights, active_start, viewport);
         let more_above = start > 0;
         let max_height = viewport.saturating_sub(usize::from(more_above));
-        used_height = visible_items_height(items, start, width, app, max_height);
+        used_height = visible_items_height_from_rows(&heights, start, 0, max_height);
     } else {
         while start > 0 {
             let candidate_start = start - 1;
@@ -485,20 +484,6 @@ fn sum_heights(heights: &[usize], start: usize, end: usize) -> usize {
         .unwrap_or_default()
         .iter()
         .sum()
-}
-
-fn visible_items_height(
-    items: &[TimelineItem<'_>],
-    start: usize,
-    width: usize,
-    app: &TuiApp,
-    max_height: usize,
-) -> usize {
-    timeline_item_heights(items, width, app)
-        .into_iter()
-        .skip(start)
-        .sum::<usize>()
-        .min(max_height)
 }
 
 fn render_tool_runs_message<'a>(

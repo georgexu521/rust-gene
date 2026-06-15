@@ -96,6 +96,23 @@ fn render_tool_viewer_text(app: &TuiApp) -> String {
         .collect::<String>()
 }
 
+fn render_chat_area_text(app: &mut TuiApp, width: u16, height: u16) -> String {
+    let backend = TestBackend::new(width, height);
+    let mut terminal = Terminal::new(backend).unwrap();
+    terminal
+        .draw(|frame| {
+            render_chat_area(frame, app, frame.area());
+        })
+        .unwrap();
+    terminal
+        .backend()
+        .buffer()
+        .content()
+        .iter()
+        .map(|cell| cell.symbol())
+        .collect::<String>()
+}
+
 fn render_context_sidebar_text(app: &TuiApp) -> String {
     render_sidebar_text(app, 80, 30)
 }
@@ -162,14 +179,14 @@ fn transcript_window_prefers_active_turn_when_bottom_anchored() {
     ];
     let render_session = app.sync_snapshot.render_session(&items);
     let transcript = timeline_items(&render_session);
+    let heights = crate::tui::view_model::timeline::timeline_item_heights(&transcript, 80, &app);
 
     let window = transcript_window(
         &transcript,
+        &heights,
         render_session.messages.len(),
         true,
         6,
-        80,
-        &app,
     );
 
     assert_eq!(window.start, 2);
@@ -188,14 +205,14 @@ fn transcript_window_includes_recent_context_when_it_fits() {
     ];
     let render_session = app.sync_snapshot.render_session(&items);
     let transcript = timeline_items(&render_session);
+    let heights = crate::tui::view_model::timeline::timeline_item_heights(&transcript, 80, &app);
 
     let window = transcript_window(
         &transcript,
+        &heights,
         render_session.messages.len(),
         true,
         7,
-        80,
-        &app,
     );
 
     assert_eq!(window.start, 1);
@@ -215,14 +232,14 @@ fn transcript_window_keeps_recent_turn_context_when_answer_overflows() {
     ];
     let render_session = app.sync_snapshot.render_session(&items);
     let transcript = timeline_items(&render_session);
+    let heights = crate::tui::view_model::timeline::timeline_item_heights(&transcript, 80, &app);
 
     let window = transcript_window(
         &transcript,
+        &heights,
         render_session.messages.len(),
         true,
         8,
-        80,
-        &app,
     );
 
     assert_eq!(window.start, 3);
@@ -244,14 +261,14 @@ fn transcript_window_keeps_active_prompt_when_previous_turn_is_too_tall() {
     ];
     let render_session = app.sync_snapshot.render_session(&items);
     let transcript = timeline_items(&render_session);
+    let heights = crate::tui::view_model::timeline::timeline_item_heights(&transcript, 80, &app);
 
     let window = transcript_window(
         &transcript,
+        &heights,
         render_session.messages.len(),
         true,
         8,
-        80,
-        &app,
     );
 
     assert_eq!(window.start, 3);
@@ -272,7 +289,7 @@ fn transcript_window_preserves_manual_scroll_offset() {
 
     let heights = crate::tui::view_model::timeline::timeline_item_heights(&transcript, 80, &app);
     let row_offset = crate::tui::view_model::timeline::timeline_row_offset_for_index(&heights, 1);
-    let window = transcript_window(&transcript, row_offset, false, 6, 80, &app);
+    let window = transcript_window(&transcript, &heights, row_offset, false, 6);
 
     assert_eq!(window.start, 1);
     assert!(window.more_above);
@@ -295,12 +312,47 @@ fn transcript_window_does_not_line_scroll_manual_anchor() {
 
     let heights = crate::tui::view_model::timeline::timeline_item_heights(&transcript, 80, &app);
     let row_offset = crate::tui::view_model::timeline::timeline_row_offset_for_index(&heights, 3);
-    let window = transcript_window(&transcript, row_offset, false, 8, 80, &app);
+    let window = transcript_window(&transcript, &heights, row_offset, false, 8);
 
     assert_eq!(window.start, 3);
     assert!(window.more_above);
     assert_eq!(window.message_height, 7);
     assert_eq!(window.first_item_scroll_offset, 0);
+}
+
+#[test]
+fn render_chat_area_scrolls_user_tool_rows_after_message_body() {
+    let mut app = TuiApp::new();
+    let user = MessageItem {
+        id: "user_with_tools".to_string(),
+        role: MessageRole::User,
+        content: "run several commands".to_string(),
+        timestamp: SystemTime::UNIX_EPOCH,
+        metadata: HashMap::new(),
+    };
+    app.messages.push(user.clone());
+
+    let runs = (0..5)
+        .map(|idx| {
+            let mut run = ToolRunView::new(format!("tool_{idx}"), "bash".to_string());
+            run.arguments = Some(serde_json::json!({
+                "command": format!("echo visible-tool-{idx}")
+            }));
+            run.mark_complete(format!("Result: OK\nvisible-tool-{idx}"));
+            run
+        })
+        .collect::<Vec<_>>();
+    app.sync_snapshot
+        .set_tool_runs_for_message(user.id.clone(), runs);
+    app.scroll_anchor_id = Some(user.id);
+    app.scroll_anchor_row_offset = 5;
+    app.scroll_offset = 5;
+    app.pinned_to_bottom = false;
+
+    let rendered = render_chat_area_text(&mut app, 100, 6);
+
+    assert!(rendered.contains("visible-tool-1") || rendered.contains("visible-tool-2"));
+    assert!(!rendered.contains("run several commands"));
 }
 
 #[test]
@@ -334,11 +386,10 @@ fn transcript_items_keep_tool_runs_inside_active_user_message_parts() {
     }
     let window = transcript_window(
         &transcript,
+        &crate::tui::view_model::timeline::timeline_item_heights(&transcript, 80, &app),
         render_session.messages.len(),
         true,
         8,
-        80,
-        &app,
     );
     assert_eq!(window.start, 2);
 }
