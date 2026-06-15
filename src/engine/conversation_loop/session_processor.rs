@@ -148,6 +148,45 @@ impl ConversationLoop {
         ))
     }
 
+    /// Emit the tool lifecycle events that the TUI projection layer expects,
+    /// even when the provider response arrived via a non-streaming path.
+    pub(super) async fn emit_non_streaming_tool_events(
+        &self,
+        tx: &mpsc::Sender<StreamEvent>,
+        assistant_text: &str,
+        tool_calls: &[ToolCall],
+    ) {
+        if !assistant_text.is_empty() {
+            emit_text_progressively(tx, assistant_text.to_string()).await;
+        }
+        for tc in tool_calls {
+            let _ = tx
+                .send(StreamEvent::ToolCallStart {
+                    id: tc.id.clone(),
+                    name: tc.name.clone(),
+                })
+                .await;
+            if !tc.arguments.to_string().is_empty() {
+                let _ = tx
+                    .send(StreamEvent::ToolCallArgs {
+                        id: tc.id.clone(),
+                        args_delta: tc.arguments.to_string(),
+                    })
+                    .await;
+            }
+            let _ = tx
+                .send(StreamEvent::ToolCallComplete { id: tc.id.clone() })
+                .await;
+            let _ = tx
+                .send(StreamEvent::ToolExecutionStart {
+                    id: tc.id.clone(),
+                    name: tc.name.clone(),
+                    metadata: None,
+                })
+                .await;
+        }
+    }
+
     async fn provider_chat_with_timeout(
         &self,
         request: ChatRequest,

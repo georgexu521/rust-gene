@@ -345,6 +345,18 @@ impl ApiRequestController {
                             }),
                         )
                         .await;
+                    if let Some(tx) = context.tx {
+                        if use_nonstreaming_request {
+                            context
+                                .conversation
+                                .emit_non_streaming_tool_events(
+                                    tx,
+                                    &step.assistant_text,
+                                    &step.tool_calls,
+                                )
+                                .await;
+                        }
+                    }
                     Self::record_streaming_tool_shadow(
                         context.trace,
                         context.conversation.tool_registry.as_ref(),
