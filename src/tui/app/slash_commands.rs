@@ -707,28 +707,32 @@ impl TuiApp {
                 }
             }
             "/models" => {
-                self.refresh_discovered_models().await;
-                let lines = self
-                    .model_choices()
-                    .into_iter()
-                    .map(|choice| {
-                        format!(
-                            "{} {} ({})",
-                            if choice.active { "*" } else { "-" },
-                            choice.model,
-                            choice.note
-                        )
-                    })
-                    .collect::<Vec<_>>()
-                    .join("\n");
-                if lines.is_empty() {
-                    "No models discovered. Use /model list for static models.".to_string()
+                if self.discovering_models {
+                    format!("Fetching models for {}...", self.current_provider_label())
                 } else {
-                    format!(
-                        "Discovered models for {}:\n{}",
-                        self.current_provider_label(),
-                        lines
-                    )
+                    self.refresh_discovered_models().await;
+                    let lines = self
+                        .model_choices()
+                        .into_iter()
+                        .map(|choice| {
+                            format!(
+                                "{} {} ({})",
+                                if choice.active { "*" } else { "-" },
+                                choice.model,
+                                choice.note
+                            )
+                        })
+                        .collect::<Vec<_>>()
+                        .join("\n");
+                    if lines.is_empty() {
+                        "No models discovered. Use /model list for static models.".to_string()
+                    } else {
+                        format!(
+                            "Discovered models for {}:\n{}",
+                            self.current_provider_label(),
+                            lines
+                        )
+                    }
                 }
             }
             "/provider" => {
@@ -739,7 +743,9 @@ impl TuiApp {
                     .map(str::trim)
                     .filter(|p| !p.is_empty())
                 {
-                    self.switch_provider_by_name(provider)
+                    let result = self.switch_provider_by_name(provider);
+                    self.refresh_discovered_models().await;
+                    result
                 } else if args == "status --json" || args == "status json" {
                     let provider = self.current_provider_label();
                     let model = self.current_model_label();

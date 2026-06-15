@@ -1277,7 +1277,7 @@ async fn handle_provider_select_key_event(key: KeyEvent, app: &mut TuiApp) -> an
     match key.code {
         KeyCode::Esc => app.close_provider_select(),
         KeyCode::Enter => {
-            let result = app.accept_provider_selection();
+            let result = app.accept_provider_selection().await;
             app.add_system_message(result);
         }
         KeyCode::Up => app.provider_select_prev(),

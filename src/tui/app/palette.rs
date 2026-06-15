@@ -186,19 +186,23 @@ impl TuiApp {
                 .unwrap_or_default();
         if provider_id.is_empty() {
             self.discovered_models = Vec::new();
+            self.discovering_models = false;
             return;
         }
         let manifest =
             crate::services::api::provider_manifest::ProviderManifestLoader::load_merged();
         let Some(entry) = manifest.provider.iter().find(|e| e.id == provider_id) else {
             self.discovered_models = Vec::new();
+            self.discovering_models = false;
             return;
         };
         let api_key = entry.resolve_api_key();
+        self.discovering_models = true;
         self.discovered_models = self
             .model_discovery
             .list(&provider_id, entry, api_key.as_deref())
             .await;
+        self.discovering_models = false;
     }
 
     pub fn close_model_select(&mut self) {
@@ -409,7 +413,7 @@ impl TuiApp {
         self.provider_select_selected = 0;
     }
 
-    pub fn accept_provider_selection(&mut self) -> String {
+    pub async fn accept_provider_selection(&mut self) -> String {
         let Some(choice) = self
             .provider_choices()
             .get(self.provider_select_selected)
@@ -419,6 +423,7 @@ impl TuiApp {
             return "No provider selected.".to_string();
         };
         let result = self.switch_provider_by_name(&choice.name);
+        self.refresh_discovered_models().await;
         self.close_provider_select();
         result
     }

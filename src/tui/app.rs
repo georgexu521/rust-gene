@@ -400,6 +400,8 @@ pub struct TuiApp {
     pub connect_wizard_state: Option<crate::tui::app::connect_wizard::ConnectWizardState>,
     /// Discovered models for the active provider.
     pub discovered_models: Vec<crate::services::api::model_discovery::DiscoveredModel>,
+    /// Whether model discovery is currently fetching live models.
+    pub discovering_models: bool,
     /// Model discovery service.
     pub model_discovery: crate::services::api::model_discovery::ModelDiscovery,
     /// Skill invocations waiting for final assistant outcome attribution.
@@ -1107,6 +1109,7 @@ impl TuiApp {
             provider_notice: None,
             connect_wizard_state: None,
             discovered_models: Vec::new(),
+            discovering_models: false,
             model_discovery: crate::services::api::model_discovery::ModelDiscovery::new(),
             pending_skill_invocations: Vec::new(),
             plugin_facts: Vec::new(),

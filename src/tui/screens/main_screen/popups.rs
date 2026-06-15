@@ -665,7 +665,12 @@ pub fn render_model_select(f: &mut Frame, app: &TuiApp, area: Rect) {
     ];
 
     let choices = app.model_choices();
-    if choices.is_empty() {
+    if app.discovering_models {
+        lines.push(Line::from(Span::styled(
+            "Fetching models from provider...",
+            Style::default().fg(app.theme.tokens.tone.info),
+        )));
+    } else if choices.is_empty() {
         let empty_message = if app.model_select_query.is_empty() {
             "No models available for the active provider.".to_string()
         } else {
