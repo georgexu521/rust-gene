@@ -79,6 +79,7 @@ python3 - "$RUN_DIR/manifest.json" "$failed_rounds" "$report_status" <<'PY'
 import json
 import pathlib
 import sys
+from datetime import datetime, timezone
 
 path = pathlib.Path(sys.argv[1])
 manifest = json.loads(path.read_text(encoding="utf-8"))
