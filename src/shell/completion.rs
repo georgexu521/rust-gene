@@ -18,7 +18,7 @@ pub struct MentionCandidate {
 /// Returns `Some((start_index, candidates))` when the cursor is in an active
 /// `@` mention; otherwise returns `None`.
 pub fn find_candidates(text: &str, cursor_col: usize) -> Option<(usize, Vec<MentionCandidate>)> {
-    let before_cursor = &text[..cursor_col.min(text.len())];
+    let before_cursor = text.chars().take(cursor_col).collect::<String>();
     let at_pos = before_cursor.rfind('@')?;
     // Only complete when the @ is at the start of the word.
     if at_pos > 0 {
