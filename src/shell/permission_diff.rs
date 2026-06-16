@@ -142,8 +142,8 @@ pub fn compute_permission_diff(req: &ToolApprovalRequest) -> Option<(String, Str
     }
 }
 
-/// 生成 unified diff（通过 diff -u 命令）
-fn generate_unified_diff(old_content: &str, new_content: &str, path: &str) -> Option<String> {
+/// Generate unified diff (using diff -u command)
+pub fn generate_unified_diff(old_content: &str, new_content: &str, path: &str) -> Option<String> {
     let old_file = std::env::temp_dir().join(format!("diff_old_{}", uuid::Uuid::new_v4()));
     let new_file = std::env::temp_dir().join(format!("diff_new_{}", uuid::Uuid::new_v4()));
 

@@ -9,12 +9,15 @@
 pub mod attachment;
 pub mod completion;
 pub mod footer;
+pub mod host;
 pub mod interrupt;
 pub mod permission_diff;
 pub mod prompt;
 pub mod question;
 pub mod render;
 pub mod theme;
+
+pub mod slash;
 
 use crate::components::attachment_token::AttachmentSource;
 use crate::engine::runtime_controller::RuntimeController;
@@ -24,9 +27,13 @@ use crate::session_store::{MessageRecord, SessionRecord, SessionStore};
 use crate::shell::attachment::AttachmentManager;
 use crate::shell::completion::{find_candidates, MentionCandidate};
 use crate::shell::footer::{AttachmentLine, FooterMode, FooterRenderer};
+use crate::shell::host::{CliHost, ShellHost};
 use crate::shell::interrupt::InterruptState;
 use crate::shell::prompt::PromptEditor;
 use crate::shell::render::render_assistant_line;
+use crate::shell::slash::{
+    handle_diff, handle_export_data, handle_redo, handle_save_session, handle_undo,
+};
 use crate::shell::theme::*;
 use crate::tui::tool_view::{upsert_tool_run, with_tool_run, ToolRunView};
 use crossterm::event::{Event, KeyCode, KeyEventKind, KeyModifiers};
@@ -62,6 +69,9 @@ pub async fn run_shell(engine: Arc<StreamingQueryEngine>) -> anyhow::Result<()> 
 
 async fn run_shell_inner(engine: Arc<StreamingQueryEngine>) -> anyhow::Result<()> {
     print_welcome(&engine).await;
+
+    let session_manager = build_session_manager(&engine).await?;
+    let mut host = CliHost::new(engine.clone(), session_manager);
 
     let footer_height = 3usize;
     let mut editor = PromptEditor::new();
@@ -106,8 +116,14 @@ async fn run_shell_inner(engine: Arc<StreamingQueryEngine>) -> anyhow::Result<()
                         editor.clear();
                         footer.print_above(&format_user_message(&message))?;
 
-                        if handle_local_command(&engine, &message, &mut footer, &mut attachments)
-                            .await?
+                        if handle_local_command(
+                            &mut host,
+                            &engine,
+                            &message,
+                            &mut footer,
+                            &mut attachments,
+                        )
+                        .await?
                         {
                             if matches!(message.trim(), "/exit" | "/quit" | "exit" | "quit") {
                                 break;
@@ -437,7 +453,31 @@ async fn print_welcome(engine: &StreamingQueryEngine) {
     println!();
 }
 
+async fn build_session_manager(
+    engine: &StreamingQueryEngine,
+) -> anyhow::Result<crate::tui::session_manager::TuiSessionManager> {
+    if let Some((store, session_id)) = engine.session_binding() {
+        let title = engine
+            .current_session_id()
+            .unwrap_or_else(|| "New Session".to_string());
+        let model = engine.model_name();
+        let workspace = std::env::current_dir()
+            .ok()
+            .map(|p| p.to_string_lossy().to_string());
+        crate::tui::session_manager::TuiSessionManager::from_store(
+            store,
+            session_id,
+            title,
+            &model,
+            workspace.as_deref(),
+        )
+    } else {
+        Ok(crate::tui::session_manager::TuiSessionManager::in_memory()?)
+    }
+}
+
 async fn handle_local_command(
+    host: &mut CliHost,
     engine: &StreamingQueryEngine,
     message: &str,
     footer: &mut FooterRenderer,
@@ -453,6 +493,11 @@ async fn handle_local_command(
         }
         "/help" | "/commands" | "/?" | "help" => {
             print_command_help();
+            Ok(true)
+        }
+        "/help maturity" | "/commands maturity" => {
+            let registry = crate::tui::commands::default_command_registry();
+            println!("{}", registry.help_text_all());
             Ok(true)
         }
         "/attach" | "/attachments" => {
@@ -487,7 +532,31 @@ async fn handle_local_command(
             Ok(true)
         }
         command if command == "/resume" || command.starts_with("/resume ") => {
-            resume_session_command(engine, command).await?;
+            handle_resume_command(host, command).await;
+            Ok(true)
+        }
+        "/new" => {
+            let title = "New Session";
+            let model = engine.model_name();
+            let workspace = std::env::current_dir()
+                .ok()
+                .map(|p| p.to_string_lossy().to_string());
+            match host
+                .session_manager
+                .start_session(title, &model, workspace.as_deref())
+            {
+                Ok(session_id) => {
+                    engine.set_session_id(session_id.clone());
+                    println!("{GREEN}✓{RESET} Started new session {session_id}");
+                }
+                Err(e) => println!("{RED}✗{RESET} Failed to start session: {e}"),
+            }
+            Ok(true)
+        }
+        "/back" => {
+            println!(
+                "{DIM}Back navigation is a TUI feature; use /resume to switch sessions.{RESET}"
+            );
             Ok(true)
         }
         "/status" => {
@@ -504,12 +573,131 @@ async fn handle_local_command(
             io::stdout().flush()?;
             Ok(true)
         }
+        "/tools" => {
+            let registry = engine.tool_registry();
+            let tools: Vec<String> = registry
+                .tool_names()
+                .into_iter()
+                .map(|name| format!("  {name}"))
+                .collect();
+            println!("{BOLD}Available tools{RESET}\n{}", tools.join("\n"));
+            Ok(true)
+        }
+        "/permissions" => {
+            let rules = engine.session_permission_rules();
+            println!("{BOLD}Permission rules{RESET}");
+            println!("{DIM}  always allow:{RESET} {}", rules.always_allow.len());
+            println!("{DIM}  always deny:{RESET}  {}", rules.always_deny.len());
+            println!("{DIM}  always ask:{RESET}   {}", rules.always_ask.len());
+            Ok(true)
+        }
+        "/memory" => {
+            println!(
+                "{BOLD}Memory{RESET}\n{DIM}  use     {RESET}{}\n{DIM}  generate{RESET}{}\n{DIM}  recall  {RESET}{}",
+                host.memory_use(),
+                host.memory_generate(),
+                host.memory_recall_mode()
+            );
+            Ok(true)
+        }
+        command if command.starts_with("/memory ") => {
+            let sub = command.strip_prefix("/memory ").unwrap_or("").trim();
+            match sub {
+                "on" => {
+                    host.set_memory_use(true);
+                    host.set_memory_generate(true);
+                    println!("{DIM}Memory enabled.{RESET}");
+                }
+                "off" => {
+                    host.set_memory_use(false);
+                    host.set_memory_generate(false);
+                    println!("{DIM}Memory disabled.{RESET}");
+                }
+                "use on" => host.set_memory_use(true),
+                "use off" => host.set_memory_use(false),
+                "generate on" => host.set_memory_generate(true),
+                "generate off" => host.set_memory_generate(false),
+                _ => println!(
+                    "{DIM}Usage: /memory [on|off|use on|use off|generate on|generate off]{RESET}"
+                ),
+            }
+            Ok(true)
+        }
+        "/undo" => {
+            let response = handle_undo(host, "");
+            println!("{}", response);
+            Ok(true)
+        }
+        "/redo" => {
+            let response = handle_redo(host, "");
+            println!("{}", response);
+            Ok(true)
+        }
+        "/validate" => {
+            let response = crate::shell::slash::handle_doctor(host, "").await;
+            println!("{}", response);
+            Ok(true)
+        }
+        "/diff" => {
+            let response = handle_diff(host, "").await;
+            println!("{}", response);
+            Ok(true)
+        }
+        command if command.starts_with("/diff ") => {
+            let args = command.strip_prefix("/diff ").unwrap_or("").trim();
+            let response = handle_diff(host, args).await;
+            println!("{}", response);
+            Ok(true)
+        }
+        "/export" => {
+            let response = handle_export_data(host, "").await;
+            println!("{}", response);
+            Ok(true)
+        }
+        command if command.starts_with("/export ") => {
+            let args = command.strip_prefix("/export ").unwrap_or("").trim();
+            let response = handle_export_data(host, args).await;
+            println!("{}", response);
+            Ok(true)
+        }
+        "/save" => {
+            let response = handle_save_session(host);
+            println!("{}", response);
+            Ok(true)
+        }
+        "/doctor" => {
+            let response = crate::shell::slash::handle_doctor(host, "").await;
+            println!("{}", response);
+            Ok(true)
+        }
+        "/audit" => {
+            let response = crate::shell::slash::handle_audit(host, "").await;
+            println!("{}", response);
+            Ok(true)
+        }
+        command if command.starts_with("/audit ") => {
+            let args = command.strip_prefix("/audit ").unwrap_or("").trim();
+            let response = crate::shell::slash::handle_audit(host, args).await;
+            println!("{}", response);
+            Ok(true)
+        }
+        command if command == "/resume" || command.starts_with("/resume ") => {
+            handle_resume_command(host, command).await;
+            Ok(true)
+        }
         "/tui" => {
             println!("{DIM}Run `pa --tui` to open the full-screen terminal interface.{RESET}");
             Ok(true)
         }
         _ => Ok(false),
     }
+}
+
+async fn handle_resume_command(host: &mut CliHost, command: &str) {
+    let args = command.strip_prefix("/resume").unwrap_or("").trim();
+    let dyn_host: &mut dyn ShellHost = host;
+    let response = crate::shell::slash::handle_resume(dyn_host, args).await;
+    println!("{}", response);
 }
 
 fn handle_attach_command(args: &str, attachments: &mut AttachmentManager) -> anyhow::Result<()> {
@@ -618,6 +806,7 @@ fn print_sessions(engine: &StreamingQueryEngine, limit: i64) -> anyhow::Result<(
     Ok(())
 }
 
+#[allow(dead_code)]
 async fn resume_session_command(
     engine: &StreamingQueryEngine,
     command: &str,
@@ -700,6 +889,7 @@ fn print_session_list(
     Ok(())
 }
 
+#[allow(dead_code)]
 fn resumable_sessions(store: &SessionStore, sessions: Vec<SessionRecord>) -> Vec<SessionRecord> {
     sessions
         .into_iter()
@@ -707,6 +897,7 @@ fn resumable_sessions(store: &SessionStore, sessions: Vec<SessionRecord>) -> Vec
         .collect()
 }
 
+#[allow(dead_code)]
 fn resolve_session_selection(
     store: &SessionStore,
     sessions: &[SessionRecord],
@@ -741,6 +932,7 @@ fn resolve_session_selection(
     Ok(None)
 }
 
+#[allow(dead_code)]
 fn records_to_api_messages(records: &[MessageRecord]) -> Vec<Message> {
     records
         .iter()
@@ -770,6 +962,7 @@ fn records_to_api_messages(records: &[MessageRecord]) -> Vec<Message> {
         .collect()
 }
 
+#[allow(dead_code)]
 fn print_recent_session_preview(records: &[MessageRecord]) {
     let recent = records
         .iter()
