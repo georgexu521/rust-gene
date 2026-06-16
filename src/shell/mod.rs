@@ -7,6 +7,7 @@
 //! than a dashboard-style TUI.
 
 pub mod attachment;
+pub mod completion;
 pub mod footer;
 pub mod interrupt;
 pub mod permission_diff;
@@ -20,6 +21,7 @@ use crate::engine::streaming::{StreamEvent, StreamingQueryEngine};
 use crate::services::api::Message;
 use crate::session_store::{MessageRecord, SessionRecord, SessionStore};
 use crate::shell::attachment::AttachmentManager;
+use crate::shell::completion::{find_candidates, MentionCandidate};
 use crate::shell::footer::{AttachmentLine, FooterMode, FooterRenderer};
 use crate::shell::interrupt::InterruptState;
 use crate::shell::prompt::PromptEditor;
@@ -63,6 +65,7 @@ async fn run_shell_inner(engine: Arc<StreamingQueryEngine>) -> anyhow::Result<()
     let footer_height = 3usize;
     let mut editor = PromptEditor::new();
     let mut attachments = AttachmentManager::new();
+    let mut completion_state: Option<(usize, Vec<MentionCandidate>, usize)> = None;
     let mut footer = FooterRenderer::new(footer_height);
     let interrupt = InterruptState::new();
     let controller = RuntimeController::new(engine.clone());
@@ -139,46 +142,114 @@ async fn run_shell_inner(engine: Arc<StreamingQueryEngine>) -> anyhow::Result<()
                 }
                 (_, KeyCode::Char(ch)) => {
                     editor.insert(&ch.to_string());
-                    render_prompt_footer(&mut footer, &editor, &attachments)?;
+                    completion_state = None;
+                    if let Some((_, candidates)) =
+                        find_candidates(&editor.text(), current_cursor_col(&editor))
+                    {
+                        if !candidates.is_empty() {
+                            completion_state =
+                                Some((current_cursor_col(&editor), candidates.clone(), 0));
+                        }
+                    }
+                    render_prompt_footer_with_completion(
+                        &mut footer,
+                        &editor,
+                        &attachments,
+                        completion_state.as_ref(),
+                    )?;
                 }
                 (_, KeyCode::Backspace) => {
                     editor.backspace();
-                    render_prompt_footer(&mut footer, &editor, &attachments)?;
+                    completion_state = update_completion_after_edit(&editor, completion_state);
+                    render_prompt_footer_with_completion(
+                        &mut footer,
+                        &editor,
+                        &attachments,
+                        completion_state.as_ref(),
+                    )?;
                 }
                 (_, KeyCode::Delete) => {
                     editor.delete();
-                    render_prompt_footer(&mut footer, &editor, &attachments)?;
+                    completion_state = update_completion_after_edit(&editor, completion_state);
+                    render_prompt_footer_with_completion(
+                        &mut footer,
+                        &editor,
+                        &attachments,
+                        completion_state.as_ref(),
+                    )?;
                 }
                 (KeyModifiers::CONTROL, KeyCode::Left) | (KeyModifiers::ALT, KeyCode::Left) => {
                     editor.move_word_left();
+                    completion_state = None;
+                    render_prompt_footer(&mut footer, &editor, &attachments)?;
                     footer.position_cursor(&editor, prompt_prefix_width())?;
                 }
                 (KeyModifiers::CONTROL, KeyCode::Right) | (KeyModifiers::ALT, KeyCode::Right) => {
                     editor.move_word_right();
+                    completion_state = None;
+                    render_prompt_footer(&mut footer, &editor, &attachments)?;
                     footer.position_cursor(&editor, prompt_prefix_width())?;
                 }
                 (_, KeyCode::Left) => {
                     editor.move_left();
+                    completion_state = None;
+                    render_prompt_footer(&mut footer, &editor, &attachments)?;
                     footer.position_cursor(&editor, prompt_prefix_width())?;
                 }
                 (_, KeyCode::Right) => {
                     editor.move_right();
+                    completion_state = None;
+                    render_prompt_footer(&mut footer, &editor, &attachments)?;
                     footer.position_cursor(&editor, prompt_prefix_width())?;
                 }
                 (_, KeyCode::Up) => {
-                    editor.move_up();
-                    footer.position_cursor(&editor, prompt_prefix_width())?;
+                    if let Some((_, _, selected)) = completion_state.as_mut() {
+                        *selected = selected.saturating_sub(1);
+                        render_prompt_footer_with_completion(
+                            &mut footer,
+                            &editor,
+                            &attachments,
+                            completion_state.as_ref(),
+                        )?;
+                    } else {
+                        editor.move_up();
+                        render_prompt_footer(&mut footer, &editor, &attachments)?;
+                        footer.position_cursor(&editor, prompt_prefix_width())?;
+                    }
                 }
                 (_, KeyCode::Down) => {
-                    editor.move_down();
-                    footer.position_cursor(&editor, prompt_prefix_width())?;
+                    if let Some((_, candidates, selected)) = completion_state.as_mut() {
+                        *selected = (*selected + 1).min(candidates.len().saturating_sub(1));
+                        render_prompt_footer_with_completion(
+                            &mut footer,
+                            &editor,
+                            &attachments,
+                            completion_state.as_ref(),
+                        )?;
+                    } else {
+                        editor.move_down();
+                        render_prompt_footer(&mut footer, &editor, &attachments)?;
+                        footer.position_cursor(&editor, prompt_prefix_width())?;
+                    }
+                }
+                (KeyModifiers::NONE, KeyCode::Tab) => {
+                    if let Some((start, candidates, selected)) = completion_state.take() {
+                        if let Some(candidate) = candidates.get(selected) {
+                            replace_word_at_cursor(&mut editor, start, &candidate.replacement);
+                        }
+                        render_prompt_footer(&mut footer, &editor, &attachments)?;
+                    }
                 }
                 (_, KeyCode::Home) => {
                     editor.move_home();
+                    completion_state = None;
+                    render_prompt_footer(&mut footer, &editor, &attachments)?;
                     footer.position_cursor(&editor, prompt_prefix_width())?;
                 }
                 (_, KeyCode::End) => {
                     editor.move_end();
+                    completion_state = None;
+                    render_prompt_footer(&mut footer, &editor, &attachments)?;
                     footer.position_cursor(&editor, prompt_prefix_width())?;
                 }
                 _ => {}
@@ -189,18 +260,117 @@ async fn run_shell_inner(engine: Arc<StreamingQueryEngine>) -> anyhow::Result<()
     Ok(())
 }
 
-fn render_prompt_footer(
+fn current_cursor_col(editor: &PromptEditor) -> usize {
+    let (row, col) = editor.cursor();
+    let mut chars_before = 0usize;
+    for (idx, line) in editor.lines().iter().enumerate() {
+        if idx < row {
+            chars_before += line.chars().count() + 1; // +1 for newline
+        } else {
+            chars_before += line[..col].chars().count();
+            break;
+        }
+    }
+    chars_before
+}
+
+fn replace_word_at_cursor(editor: &mut PromptEditor, start_col: usize, replacement: &str) {
+    let text = editor.text();
+    let end_col = current_cursor_col(editor);
+    let mut new_text = String::with_capacity(text.len() + replacement.len());
+    new_text.push_str(&text[..start_col.min(text.len())]);
+    new_text.push_str(replacement);
+    new_text.push_str(&text[end_col.min(text.len())..]);
+    editor.clear();
+    editor.insert(&new_text);
+    let new_col = start_col + replacement.chars().count();
+    position_editor_cursor(editor, new_col);
+}
+
+fn position_editor_cursor(editor: &mut PromptEditor, target_char_col: usize) {
+    let text = editor.text();
+    let mut chars_seen = 0usize;
+    for (row, line) in text.lines().enumerate() {
+        let line_chars = line.chars().count();
+        if chars_seen + line_chars >= target_char_col {
+            let col_in_line = target_char_col.saturating_sub(chars_seen);
+            let byte_col = line
+                .char_indices()
+                .nth(col_in_line)
+                .map(|(i, _)| i)
+                .unwrap_or(line.len());
+            // PromptEditor cursor is (row, byte col); move until match
+            while editor.cursor().0 > row {
+                editor.move_up();
+            }
+            while editor.cursor().0 < row {
+                editor.move_down();
+            }
+            while editor.cursor().1 > byte_col {
+                editor.move_left();
+            }
+            while editor.cursor().1 < byte_col {
+                editor.move_right();
+            }
+            return;
+        }
+        chars_seen += line_chars + 1;
+    }
+    editor.move_end();
+}
+
+fn update_completion_after_edit(
+    editor: &PromptEditor,
+    state: Option<(usize, Vec<MentionCandidate>, usize)>,
+) -> Option<(usize, Vec<MentionCandidate>, usize)> {
+    let col = current_cursor_col(editor);
+    if let Some((start, _, _)) = state {
+        if col >= start {
+            if let Some((new_start, candidates)) = find_candidates(&editor.text(), col) {
+                if !candidates.is_empty() {
+                    return Some((new_start, candidates, 0));
+                }
+            }
+        }
+    }
+    None
+}
+
+fn render_prompt_footer_with_completion(
     footer: &mut FooterRenderer,
     editor: &PromptEditor,
     attachments: &AttachmentManager,
+    completion: Option<&(usize, Vec<MentionCandidate>, usize)>,
 ) -> io::Result<()> {
-    let line = attachments.render_pills(terminal_width().saturating_sub(2));
+    let mut line = attachments.render_pills(terminal_width().saturating_sub(2));
+    if let Some((_, candidates, selected)) = completion {
+        let mut comp_line = String::from("Completion: ");
+        for (idx, candidate) in candidates.iter().take(6).enumerate() {
+            if idx > 0 {
+                comp_line.push_str("  ");
+            }
+            let marker = if idx == *selected { ">" } else { " " };
+            comp_line.push_str(&format!("{}{}", marker, candidate.display));
+        }
+        if !line.is_empty() {
+            line.push('\n');
+        }
+        line.push_str(&comp_line);
+    }
     footer.render_with_attachments(
         &FooterMode::Prompt,
         editor,
         terminal_width(),
         &AttachmentLine { text: line },
     )
+}
+
+fn render_prompt_footer(
+    footer: &mut FooterRenderer,
+    editor: &PromptEditor,
+    attachments: &AttachmentManager,
+) -> io::Result<()> {
+    render_prompt_footer_with_completion(footer, editor, attachments, None)
 }
 
 fn prompt_prefix_width() -> usize {
@@ -761,6 +931,7 @@ impl PermissionChoice {
 
 async fn prompt_for_permission(
     controller: &RuntimeController,
+    request: &crate::engine::conversation_loop::ToolApprovalRequest,
     tool_name: &str,
     arguments: &serde_json::Value,
     prompt_text: &str,
@@ -781,6 +952,23 @@ async fn prompt_for_permission(
             overlay_text.push_str(&format!("{DIM}  {trimmed}{RESET}\n"));
         }
     }
+
+    if let Some((title, diff)) = crate::shell::permission_diff::compute_permission_diff(request) {
+        overlay_text.push('\n');
+        overlay_text.push_str(&format!("{DIM}{title}{RESET}\n"));
+        for line in diff.lines().take(24) {
+            let prefix = match line.chars().next() {
+                Some('+') => GREEN,
+                Some('-') => RED,
+                _ => DIM,
+            };
+            overlay_text.push_str(&format!("{prefix}{line}{RESET}\n"));
+        }
+        if diff.lines().count() > 24 {
+            overlay_text.push_str(&format!("{DIM}  ...{RESET}\n"));
+        }
+    }
+
     let pattern = if tool_name.is_empty() {
         None
     } else {
@@ -954,9 +1142,20 @@ async fn run_turn(
                     Some(StreamEvent::ToolResultsReadyForModel { .. }) => {
                         footer.render(&FooterMode::Thinking, &PromptEditor::new(), terminal_width())?;
                     }
-                    Some(StreamEvent::PermissionRequest { tool_name, arguments, prompt, .. }) => {
+                    Some(StreamEvent::PermissionRequest { id, tool_name, arguments, prompt, metadata: _, review }) => {
                         assistant_printer.finish_line_if_needed(footer)?;
-                        let approved = prompt_for_permission(controller, &tool_name, &arguments, &prompt, footer, event_rx).await?;
+                        let request = crate::engine::conversation_loop::ToolApprovalRequest {
+                            tool_call: crate::services::api::ToolCall {
+                                id,
+                                name: tool_name.clone(),
+                                arguments: arguments.clone(),
+                            },
+                            prompt: prompt.clone(),
+                            review: None,
+                            audit: review.as_ref().map(|b| (**b).clone()),
+                            diff_preview: None,
+                        };
+                        let approved = prompt_for_permission(controller, &request, &tool_name, &arguments, &prompt, footer, event_rx).await?;
                         footer.render(&FooterMode::Thinking, &PromptEditor::new(), terminal_width())?;
                         if !approved {
                             interrupt.request_interrupt();
