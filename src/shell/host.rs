@@ -7,6 +7,7 @@
 
 use crate::engine::streaming::StreamingQueryEngine;
 use crate::session_store::SessionStore;
+use crate::shell::theme::{DIM, RESET};
 use crate::tui::session_manager::TuiSessionManager;
 use std::sync::Arc;
 
@@ -145,7 +146,7 @@ impl ShellHost for CliHost {
     }
 
     fn show_message(&mut self, message: String) {
-        let _ = message;
+        println!("{DIM}{message}{RESET}");
     }
 
     fn memory_use(&self) -> bool {

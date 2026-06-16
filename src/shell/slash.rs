@@ -18,9 +18,28 @@ pub fn handle_undo(host: &mut dyn ShellHost, args: &str) -> String {
         Err(e) => return e,
     };
 
-    match host.session_manager().rewind_last_edit(session_id) {
-        Ok(_) => format!("Undid last edit ({n})."),
-        Err(e) => format!("Nothing to undo or undo failed: {}", e),
+    let mut successes = 0usize;
+    let mut last_error = None::<String>;
+    for _ in 0..n {
+        match host.session_manager().rewind_last_edit(session_id) {
+            Ok(_) => successes += 1,
+            Err(e) => {
+                last_error = Some(e.to_string());
+                break;
+            }
+        }
+    }
+
+    if successes == 0 {
+        format!(
+            "Nothing to undo or undo failed{}",
+            last_error.map(|e| format!(": {e}")).unwrap_or_default()
+        )
+    } else {
+        format!(
+            "Undid {successes} edit{}.",
+            if successes > 1 { "s" } else { "" }
+        )
     }
 }
 
@@ -35,9 +54,28 @@ pub fn handle_redo(host: &mut dyn ShellHost, args: &str) -> String {
         Err(e) => return e,
     };
 
-    match host.session_manager().redo_last_edit(session_id) {
-        Ok(_) => format!("Redone last edit ({n})."),
-        Err(e) => format!("Nothing to redo or redo failed: {}", e),
+    let mut successes = 0usize;
+    let mut last_error = None::<String>;
+    for _ in 0..n {
+        match host.session_manager().redo_last_edit(session_id) {
+            Ok(_) => successes += 1,
+            Err(e) => {
+                last_error = Some(e.to_string());
+                break;
+            }
+        }
+    }
+
+    if successes == 0 {
+        format!(
+            "Nothing to redo or redo failed{}",
+            last_error.map(|e| format!(": {e}")).unwrap_or_default()
+        )
+    } else {
+        format!(
+            "Redone {successes} edit{}.",
+            if successes > 1 { "s" } else { "" }
+        )
     }
 }
 
@@ -123,11 +161,22 @@ pub async fn handle_export_data(host: &dyn ShellHost, args: &str) -> String {
     }
 }
 
-pub fn handle_save_session(host: &dyn ShellHost) -> String {
-    if let Some(id) = host.session_manager().current_session_id() {
-        format!("Session {} auto-saved.", &id[..8.min(id.len())])
-    } else {
-        "No active session.".to_string()
+pub async fn handle_save_session(host: &dyn ShellHost) -> String {
+    let Some(session_id) = host.session_manager().current_session_id() else {
+        return "No active session.".to_string();
+    };
+    // Session messages and edit history are persisted continuously. /save
+    // forces a checkpoint snapshot of the current workspace files so the
+    // session can be rewound to this exact state later.
+    let mgr = crate::engine::checkpoint::get_checkpoint_manager(session_id).await;
+    let mut guard = mgr.lock().await;
+    let result = guard
+        .create_checkpoint("manual_save", None, None, &[])
+        .await;
+    drop(guard);
+    match result {
+        Ok(_) => format!("Session {} saved.", &session_id[..8.min(session_id.len())]),
+        Err(e) => format!("Failed to save session: {e}"),
     }
 }
 
@@ -303,6 +352,43 @@ pub async fn handle_resume(host: &mut dyn ShellHost, args: &str) -> String {
     }
 }
 
+pub async fn handle_validate(host: &dyn ShellHost) -> String {
+    let Some(session_id) = host.session_manager().current_session_id() else {
+        return "No active session.".to_string();
+    };
+    let sid = session_id.to_string();
+    let mgr = crate::engine::checkpoint::get_checkpoint_manager(&sid).await;
+    let cp = mgr.lock().await;
+    let changes = cp.list_file_changes();
+    let rounds = cp.list_file_change_rounds();
+    let mut lines = vec![
+        "Validation Summary".to_string(),
+        "==================".to_string(),
+        String::new(),
+        format!("File changes: {}", changes.len()),
+        format!("Tool rounds: {}", rounds.len()),
+        String::new(),
+    ];
+    if changes.is_empty() {
+        lines.push("No file changes to validate.".to_string());
+    } else {
+        lines.push("Changed files:".to_string());
+        for c in changes.iter().rev().take(10) {
+            lines.push(format!("  {} ({})", c.path, c.tool_name));
+        }
+        lines.push(String::new());
+        lines.push("Run your test suite to validate changes.".to_string());
+        lines.push(
+            "Use /diff for details or /changes in --tui for a round-by-round breakdown."
+                .to_string(),
+        );
+    }
+    lines.join(
+        "
+",
+    )
+}
+
 pub async fn handle_token_cost(engine: &StreamingQueryEngine) -> String {
     let tracker = engine.cost_tracker().lock().await;
     tracker.generate_report()
@@ -375,6 +461,9 @@ mod tests {
         }
 
         let host = DummyHost;
-        assert_eq!(handle_save_session(&host), "No active session.");
+        assert_eq!(
+            futures::executor::block_on(handle_save_session(&host)),
+            "No active session."
+        );
     }
 }

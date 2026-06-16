@@ -659,7 +659,7 @@ async fn handle_local_command(
             Ok(true)
         }
         "/validate" => {
-            let response = crate::shell::slash::handle_doctor(host, "").await;
+            let response = crate::shell::slash::handle_validate(host).await;
             println!("{}", response);
             Ok(true)
         }
@@ -686,7 +686,7 @@ async fn handle_local_command(
             Ok(true)
         }
         "/save" => {
-            let response = handle_save_session(host);
+            let response = handle_save_session(host).await;
             println!("{}", response);
             Ok(true)
         }
