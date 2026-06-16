@@ -184,18 +184,554 @@ pub async fn handle_doctor(host: &dyn ShellHost, args: &str) -> String {
     if args.trim() == "product" {
         return crate::engine::product_readiness::readiness_report();
     }
+    let working_dir = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    let mut report = crate::diagnostics::run_full_diagnostics(&working_dir).await;
 
-    let mut lines = vec!["Environment diagnostics:".to_string()];
-    lines.push(format!(
-        "  session: {}",
-        host.session_manager()
-            .current_session_id()
-            .unwrap_or("none")
+    let mut registry = crate::tools::ToolRegistry::default_registry();
+    let injected =
+        crate::tools::plugin_tool::register_enabled_plugin_tools(&mut registry, &working_dir);
+    let total_tools = registry.tool_names().len();
+    report.checks.push(crate::diagnostics::CheckResult::info(
+        "tools",
+        format!(
+            "{} tools registered ({} plugin runtime injected)",
+            total_tools, injected
+        ),
     ));
-    lines.push(format!("  workspace: {}", host.workspace_root().display()));
+
+    let context = host.build_tool_context();
+    let route = crate::engine::intent_router::IntentRouter::new().route("general coding task");
+    let mut available_count = 0usize;
+    let mut hidden_by_route = 0usize;
+    let mut hidden_by_permission = 0usize;
+    let mut unavailable_count = 0usize;
+    for tool_name in registry.tool_names() {
+        let exposure = crate::engine::tool_exposure::diagnose_tool_exposure(
+            &registry, &context, &route, tool_name,
+        );
+        if exposure.model_exposed {
+            available_count += 1;
+        } else if !exposure.route_exposed {
+            hidden_by_route += 1;
+        } else if !exposure.permission_exposed {
+            hidden_by_permission += 1;
+        } else {
+            unavailable_count += 1;
+        }
+    }
+    report.checks.push(crate::diagnostics::CheckResult::info(
+        "tool_availability",
+        format!(
+            "available={} hidden_by_route={} hidden_by_permission={} unavailable={}",
+            available_count, hidden_by_route, hidden_by_permission, unavailable_count
+        ),
+    ));
+
+    let bash_exposure = terminal_bash_exposure_report(host, &registry, &context).await;
+    let bash_message =
+        crate::tui::slash_handler::agents::doctor_formatting::format_terminal_bash_exposure(
+            &bash_exposure,
+        );
+    if bash_exposure.model_exposed {
+        report.checks.push(crate::diagnostics::CheckResult::ok(
+            "bash_model_exposure",
+            bash_message,
+        ));
+    } else if !bash_exposure.registered || !bash_exposure.available {
+        report.checks.push(crate::diagnostics::CheckResult::error(
+            "bash_model_exposure",
+            bash_message,
+            "Register the bash tool or fix its runtime availability before terminal tasks.",
+        ));
+    } else {
+        report.checks.push(crate::diagnostics::CheckResult::warn(
+            "bash_model_exposure",
+            bash_message,
+            "Check /mode, /permissions mode and rules, or disable route scoped tools only for debugging.",
+        ));
+    }
+
+    let learning_events = recent_route_learning_events(host);
+    report.checks.push(crate::diagnostics::CheckResult::info(
+        "agent_mode_route",
+        format_current_mode_route_exposure(host, &registry, &context),
+    ));
+    report.checks.push(crate::diagnostics::CheckResult::info(
+        "agent_mode_matrix",
+        format_agent_mode_exposure_matrix(&registry, &context, &learning_events),
+    ));
+    report.checks.push(crate::diagnostics::CheckResult::info(
+        "route_tool_schema_cache",
+        format_route_tool_schema_cache_matrix(host, &registry, &context, &learning_events),
+    ));
+
     if let Some(engine) = host.engine() {
-        lines.push(format!("  model: {}", engine.model_name()));
-        lines.push(format!("  provider: {}", engine.provider_base_url()));
+        report.checks.push(crate::diagnostics::CheckResult::ok(
+            "engine",
+            format!("model={}", engine.model_name()),
+        ));
+        report.checks.push(crate::diagnostics::CheckResult::ok(
+            "task_manager",
+            if engine.task_manager().is_some() {
+                "connected"
+            } else {
+                "missing"
+            },
+        ));
+        report.checks.push(crate::diagnostics::CheckResult::ok(
+            "agent_manager",
+            if engine.agent_manager().is_some() {
+                "connected"
+            } else {
+                "missing"
+            },
+        ));
+
+        if let Some(am) = engine.agent_manager() {
+            let agents = am.list_agents().await;
+            if !agents.is_empty() {
+                use std::collections::HashMap;
+                let mut role_counts: HashMap<String, usize> = HashMap::new();
+                let mut status_counts: HashMap<String, usize> = HashMap::new();
+                for handle in &agents {
+                    *role_counts
+                        .entry(handle.config.role.display_name().to_string())
+                        .or_insert(0) += 1;
+                    let status_label = format!("{:?}", *handle.status.borrow());
+                    *status_counts.entry(status_label).or_insert(0) += 1;
+                }
+                let role_line = role_counts
+                    .iter()
+                    .map(|(k, v)| format!("{}: {}", k, v))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                let status_line = status_counts
+                    .iter()
+                    .map(|(k, v)| format!("{}: {}", k, v))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                report.checks.push(crate::diagnostics::CheckResult::info(
+                    "agent_roles",
+                    format!(
+                        "{} agents | roles [{}] | status [{}]",
+                        agents.len(),
+                        role_line,
+                        status_line
+                    ),
+                ));
+            } else {
+                report.checks.push(crate::diagnostics::CheckResult::info(
+                    "agent_roles",
+                    "0 agents active".to_string(),
+                ));
+            }
+        }
+
+        let tracker = engine.cost_tracker().lock().await;
+        report.checks.push(crate::diagnostics::CheckResult::info(
+            "cost_tracker",
+            tracker.tool_diagnostics_line(),
+        ));
+        report.checks.push(crate::diagnostics::CheckResult::info(
+            "prompt_cache",
+            crate::tui::slash_handler::agents::doctor_formatting::format_prompt_cache_doctor_line(
+                &tracker,
+            ),
+        ));
+        report.checks.push(crate::diagnostics::CheckResult::info(
+            "tool_latency",
+            tracker.slowest_tools_line(5),
+        ));
+        report.checks.push(crate::diagnostics::CheckResult::info(
+            "tool_failures",
+            tracker.top_failure_reasons_line(5),
+        ));
+
+        let total_calls: u64 = tracker.tool_metrics.values().map(|s| s.calls).sum();
+        let total_success: u64 = tracker.tool_metrics.values().map(|s| s.success).sum();
+        let success_rate = if total_calls > 0 {
+            (total_success as f64 / total_calls as f64) * 100.0
+        } else {
+            0.0
+        };
+        report.checks.push(crate::diagnostics::CheckResult::info(
+            "tool_success_rate",
+            format!(
+                "calls={} success={} success_rate={:.1}%",
+                total_calls, total_success, success_rate
+            ),
+        ));
+        report.checks.push(crate::diagnostics::CheckResult::info(
+            "coding_quality",
+            tracker.coding_quality_detail(),
+        ));
+        report.checks.push(crate::diagnostics::CheckResult::info(
+            "model_usage",
+            tracker.model_usage_summary(),
+        ));
+        report.checks.push(crate::diagnostics::CheckResult::info(
+            "token_usage",
+            tracker.token_summary(),
+        ));
+
+        let p95_lines: Vec<String> = tracker
+            .tool_latency_percentiles(5)
+            .into_iter()
+            .map(|(name, p50, p95, _p99, n)| {
+                format!("{}: p50={:.0}ms p95={:.0}ms (n={})", name, p50, p95, n)
+            })
+            .collect();
+        if !p95_lines.is_empty() {
+            report.checks.push(crate::diagnostics::CheckResult::info(
+                "tool_latency_p95",
+                p95_lines.join(", "),
+            ));
+        }
+        report.checks.push(crate::diagnostics::CheckResult::info(
+            "tool_quality",
+            tracker.tool_quality_ranking(5),
+        ));
+
+        if let Some(mem_mgr) = engine.memory_manager() {
+            let mem = mem_mgr.lock().await;
+            let (hits, misses) = mem.cache_stats();
+            let mem_hit_rate = if hits + misses > 0 {
+                ((hits as f64) / ((hits + misses) as f64)) * 100.0
+            } else {
+                0.0
+            };
+            report.checks.push(crate::diagnostics::CheckResult::info(
+                "memory_cache",
+                format!(
+                    "memory_extraction: hits={} misses={} hit_rate={:.1}%",
+                    hits, misses, mem_hit_rate
+                ),
+            ));
+        }
+
+        if let Some(compressor) = engine.compressor() {
+            let comp = compressor.lock().await;
+            let stats = comp.stats();
+            let savings = if stats.total_tokens_before > 0 {
+                ((stats.total_tokens_before - stats.total_tokens_after) as f64
+                    / stats.total_tokens_before as f64)
+                    * 100.0
+            } else {
+                0.0
+            };
+            report.checks.push(crate::diagnostics::CheckResult::info(
+                "context_compression",
+                format!(
+                    "compressions={} before={} after={} savings={:.1}% session={}s",
+                    stats.compression_count,
+                    stats.total_tokens_before,
+                    stats.total_tokens_after,
+                    savings,
+                    stats.session_duration_secs
+                ),
+            ));
+        }
+    } else {
+        report.checks.push(crate::diagnostics::CheckResult::error(
+            "engine",
+            "Streaming engine not available",
+            "Restart the application or check bootstrap logs",
+        ));
+    }
+
+    report.checks.push(crate::diagnostics::CheckResult::info(
+        "provider_status",
+        crate::tui::slash_handler::agents::doctor_formatting::format_provider_status_summary(),
+    ));
+    report.checks.push(crate::diagnostics::CheckResult::info(
+        "effective_config",
+        crate::tui::slash_handler::agents::doctor_formatting::format_effective_config_summary(),
+    ));
+
+    let runtime = host.runtime_status_snapshot();
+    let readiness =
+        crate::tui::slash_handler::agents::doctor_formatting::evaluate_product_readiness(
+            &report, &runtime,
+        );
+    report
+        .metadata
+        .insert("product_ready".to_string(), readiness.ready.to_string());
+    report
+        .metadata
+        .insert("product_readiness".to_string(), readiness.label.to_string());
+    report.metadata.insert(
+        "product_blockers".to_string(),
+        readiness.blockers.len().to_string(),
+    );
+    report.metadata.insert(
+        "product_warnings".to_string(),
+        readiness.warnings.len().to_string(),
+    );
+    report.checks.push(readiness.to_check_result());
+
+    report.overall = if report
+        .checks
+        .iter()
+        .any(|c| c.status == crate::diagnostics::CheckStatus::Error)
+    {
+        crate::diagnostics::CheckStatus::Error
+    } else if report
+        .checks
+        .iter()
+        .any(|c| c.status == crate::diagnostics::CheckStatus::Warning)
+    {
+        crate::diagnostics::CheckStatus::Warning
+    } else {
+        crate::diagnostics::CheckStatus::Ok
+    };
+
+    let parts: Vec<&str> = args.split_whitespace().collect();
+    if parts.first() == Some(&"json") {
+        report.to_json()
+    } else if parts.first() == Some(&"gap") {
+        generate_gap_snapshot(host, &report, &registry).await
+    } else {
+        format!("{}\n\n{}", readiness.format_text(), report.format_text())
+    }
+}
+
+async fn terminal_bash_exposure_report(
+    host: &dyn ShellHost,
+    registry: &crate::tools::ToolRegistry,
+    context: &crate::tools::ToolContext,
+) -> crate::engine::tool_exposure::ToolExposureReport {
+    let learning_events = recent_route_learning_events(host);
+    let route = route_for_agent_mode_with_learning(
+        crate::tui::slash_handler::agents::TERMINAL_EXPOSURE_PROMPT,
+        host.agent_mode(),
+        &learning_events,
+    );
+    crate::engine::tool_exposure::diagnose_tool_exposure(registry, context, &route, "bash")
+}
+
+fn recent_route_learning_events(
+    host: &dyn ShellHost,
+) -> Vec<crate::session_store::LearningEventRecord> {
+    host.session_manager()
+        .recent_learning_events(20)
+        .unwrap_or_default()
+}
+
+fn route_for_agent_mode_with_learning(
+    prompt: &str,
+    mode: crate::engine::agent_mode::AgentMode,
+    learning_events: &[crate::session_store::LearningEventRecord],
+) -> crate::engine::intent_router::IntentRoute {
+    let mut route = crate::engine::intent_router::IntentRouter::new()
+        .route_with_learning(prompt, learning_events);
+    mode.apply_to_route(&mut route);
+    route
+}
+
+fn format_current_mode_route_exposure(
+    host: &dyn ShellHost,
+    registry: &crate::tools::ToolRegistry,
+    context: &crate::tools::ToolContext,
+) -> String {
+    let learning_events = recent_route_learning_events(host);
+    let route = route_for_agent_mode_with_learning(
+        crate::tui::slash_handler::agents::TERMINAL_EXPOSURE_PROMPT,
+        host.agent_mode(),
+        &learning_events,
+    );
+    let bash =
+        crate::engine::tool_exposure::diagnose_tool_exposure(registry, context, &route, "bash");
+    let file_edit = crate::engine::tool_exposure::diagnose_tool_exposure(
+        registry,
+        context,
+        &route,
+        "file_edit",
+    );
+    let file_write = crate::engine::tool_exposure::diagnose_tool_exposure(
+        registry,
+        context,
+        &route,
+        "file_write",
+    );
+    format!(
+        "mode={} route={} route_scoped={} bash={} file_edit={} file_write={}",
+        host.current_agent_mode_label(),
+        route.compact_label(),
+        crate::engine::conversation_loop::ConversationLoop::route_scoped_tools_enabled(),
+        crate::tui::slash_handler::agents::doctor_formatting::exposure_label(&bash),
+        crate::tui::slash_handler::agents::doctor_formatting::exposure_label(&file_edit),
+        crate::tui::slash_handler::agents::doctor_formatting::exposure_label(&file_write)
+    )
+}
+
+fn format_agent_mode_exposure_matrix(
+    registry: &crate::tools::ToolRegistry,
+    context: &crate::tools::ToolContext,
+    learning_events: &[crate::session_store::LearningEventRecord],
+) -> String {
+    use crate::engine::agent_mode::AgentMode;
+    [
+        AgentMode::Auto,
+        AgentMode::Build,
+        AgentMode::Plan,
+        AgentMode::Explore,
+        AgentMode::Review,
+    ]
+    .into_iter()
+    .map(|mode| {
+        let route = route_for_agent_mode_with_learning(
+            crate::tui::slash_handler::agents::TERMINAL_EXPOSURE_PROMPT,
+            mode,
+            learning_events,
+        );
+        let bash =
+            crate::engine::tool_exposure::diagnose_tool_exposure(registry, context, &route, "bash");
+        let file_edit = crate::engine::tool_exposure::diagnose_tool_exposure(
+            registry,
+            context,
+            &route,
+            "file_edit",
+        );
+        format!(
+            "{}: route={} bash={} file_edit={}",
+            mode.label(),
+            route.compact_label(),
+            crate::tui::slash_handler::agents::doctor_formatting::exposure_label(&bash),
+            crate::tui::slash_handler::agents::doctor_formatting::exposure_label(&file_edit)
+        )
+    })
+    .collect::<Vec<_>>()
+    .join("; ")
+}
+
+fn format_route_tool_schema_cache_matrix(
+    host: &dyn ShellHost,
+    registry: &crate::tools::ToolRegistry,
+    context: &crate::tools::ToolContext,
+    learning_events: &[crate::session_store::LearningEventRecord],
+) -> String {
+    use crate::engine::agent_mode::AgentMode;
+    let available_tools = available_provider_tools(registry, context);
+    [
+        AgentMode::Auto,
+        AgentMode::Build,
+        AgentMode::Plan,
+        AgentMode::Explore,
+        AgentMode::Review,
+    ]
+    .into_iter()
+    .map(|mode| {
+        let route = route_for_agent_mode_with_learning(
+            crate::tui::slash_handler::agents::TERMINAL_EXPOSURE_PROMPT,
+            mode,
+            learning_events,
+        );
+        let scoped_tools =
+            if crate::engine::conversation_loop::ConversationLoop::route_scoped_tools_enabled() {
+                let allowlist =
+                    crate::engine::conversation_loop::ConversationLoop::route_tool_allowlist(
+                        &route,
+                    );
+                available_tools
+                    .iter()
+                    .filter(|tool| allowlist.contains(tool.name.as_str()))
+                    .cloned()
+                    .collect::<Vec<_>>()
+            } else {
+                available_tools.clone()
+            };
+        let manifest = crate::engine::cache_stability::provider_tool_schema_manifest(&scoped_tools);
+        format!(
+            "{}:{} tools={} tool_fp={} route={}",
+            if mode == host.agent_mode() { "*" } else { "" },
+            mode.label(),
+            manifest.tool_count,
+            crate::tui::slash_handler::agents::doctor_formatting::short_hash(&manifest.fingerprint),
+            route.compact_label()
+        )
+    })
+    .collect::<Vec<_>>()
+    .join("; ")
+}
+
+fn available_provider_tools(
+    registry: &crate::tools::ToolRegistry,
+    context: &crate::tools::ToolContext,
+) -> Vec<crate::services::api::Tool> {
+    registry
+        .iter_tools()
+        .filter(|tool| {
+            tool.is_available(context) && context.permission_context.should_expose_tool(tool.name())
+        })
+        .map(|tool| crate::services::api::Tool {
+            name: tool.name().to_string(),
+            description: tool.description().to_string(),
+            parameters: tool.parameters(),
+            strict_schema: tool.strict_schema(),
+        })
+        .collect()
+}
+
+async fn generate_gap_snapshot(
+    host: &dyn ShellHost,
+    report: &crate::diagnostics::DiagnosticReport,
+    registry: &crate::tools::ToolRegistry,
+) -> String {
+    let mut lines = vec![
+        "=== Claude Code Gap Snapshot ===".to_string(),
+        format!(
+            "Generated: {}",
+            chrono::Local::now().format("%Y-%m-%d %H:%M:%S")
+        ),
+        "".to_string(),
+    ];
+
+    let tool_count = registry.tool_names().len();
+    let cmd_count = crate::tui::commands::ALL_COMMANDS.len();
+    let engine_ok = host.engine().is_some();
+    let model_name = host.engine().map(|e| e.model_name()).unwrap_or_default();
+
+    let tool_gap = if tool_count >= 64 {
+        "0".to_string()
+    } else {
+        format!("-{}", 64i32 - tool_count as i32)
+    };
+    let cmd_gap = if cmd_count >= 101 {
+        "0".to_string()
+    } else {
+        format!("-{}", 101i32 - cmd_count as i32)
+    };
+
+    lines.push("## Dimensions".to_string());
+    lines.push("| Dimension | Ours | Claude | Gap |".to_string());
+    lines.push("|-----------|------|--------|-----|".to_string());
+    lines.push(format!(
+        "| Tools     | {}   | 64     | {}  |",
+        tool_count, tool_gap
+    ));
+    lines.push(format!(
+        "| Commands  | {}   | 101    | {}  |",
+        cmd_count, cmd_gap
+    ));
+    lines.push(format!(
+        "| Engine    | {}   | true   | {}  |",
+        engine_ok,
+        if engine_ok { "0" } else { "-1" }
+    ));
+    lines.push(format!(
+        "| Model     | {:<4} | any    | 0   |",
+        model_name.split('/').next().unwrap_or("none")
+    ));
+    lines.push("".to_string());
+    lines.push("## Diagnostics".to_string());
+    for check in &report.checks {
+        let icon = match check.status {
+            crate::diagnostics::CheckStatus::Ok => "+",
+            crate::diagnostics::CheckStatus::Warning => "~",
+            crate::diagnostics::CheckStatus::Error => "-",
+            crate::diagnostics::CheckStatus::Info => "·",
+        };
+        lines.push(format!("{} {}: {}", icon, check.name, check.message));
     }
     lines.join("\n")
 }

@@ -35,6 +35,48 @@ pub trait ShellHost {
     /// Build a tool context for the current host.
     fn build_tool_context(&self) -> crate::tools::ToolContext;
 
+    /// Current agent mode.
+    fn agent_mode(&self) -> crate::engine::agent_mode::AgentMode {
+        crate::engine::agent_mode::AgentMode::default()
+    }
+
+    /// Label for the current agent mode.
+    fn current_agent_mode_label(&self) -> &'static str {
+        self.agent_mode().label()
+    }
+
+    /// Runtime status snapshot. The default is empty and should be overridden
+    /// by hosts that track live tool/runtime state.
+    fn runtime_status_snapshot(&self) -> crate::state::RuntimeStatusSnapshot {
+        crate::state::RuntimeStatusSnapshot {
+            messages: 0,
+            is_querying: false,
+            last_error: None,
+            total_tools: 0,
+            active_tool_count: 0,
+            active_tool_ids: Vec::new(),
+            current_tool_label: None,
+            failed_tool_count: 0,
+            backgrounded_tool_count: 0,
+            terminal_task_count: 0,
+            running_terminal_task_count: 0,
+            pty_terminal_task_count: 0,
+            task_count: 0,
+            running_task_count: 0,
+            permission_mode: String::new(),
+            pending_permission: None,
+            mcp_server_count: 0,
+            mcp_available_count: 0,
+            mcp_repair_hints: Vec::new(),
+            bridge_url_configured: false,
+            bridge_url_source: None,
+            bridge_cursor_count: 0,
+            remote_env_type: String::new(),
+            remote_trigger_tool_available: false,
+            remote_dev_tool_available: false,
+        }
+    }
+
     /// Restore a session by id. The CLI implementation mutates the engine
     /// history directly; the TUI implementation also restores UI widgets.
     fn restore_session<'a>(

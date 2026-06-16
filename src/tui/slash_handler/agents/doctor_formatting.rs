@@ -1,6 +1,4 @@
-pub(super) fn format_prompt_cache_doctor_line(
-    tracker: &crate::cost_tracker::CostTracker,
-) -> String {
+pub fn format_prompt_cache_doctor_line(tracker: &crate::cost_tracker::CostTracker) -> String {
     let hit_rate = if tracker.total_tokens.prompt == 0 {
         0.0
     } else {
@@ -30,11 +28,11 @@ pub(super) fn format_prompt_cache_doctor_line(
     )
 }
 
-pub(super) fn short_hash(hash: &str) -> String {
+pub fn short_hash(hash: &str) -> String {
     hash.chars().take(12).collect()
 }
 
-pub(super) fn format_provider_status_summary() -> String {
+pub fn format_provider_status_summary() -> String {
     let mut parts = Vec::new();
 
     // Provider timeout
@@ -62,7 +60,7 @@ pub(super) fn format_provider_status_summary() -> String {
     parts.join(" | ")
 }
 
-pub(super) fn format_effective_config_summary() -> String {
+pub fn format_effective_config_summary() -> String {
     let mut parts = Vec::new();
 
     // Memory settings
@@ -93,9 +91,7 @@ pub(super) fn format_effective_config_summary() -> String {
     parts.join(" | ")
 }
 
-pub(super) fn exposure_label(
-    report: &crate::engine::tool_exposure::ToolExposureReport,
-) -> &'static str {
+pub fn exposure_label(report: &crate::engine::tool_exposure::ToolExposureReport) -> &'static str {
     if report.model_exposed {
         "exposed"
     } else {
@@ -103,7 +99,7 @@ pub(super) fn exposure_label(
     }
 }
 
-pub(super) fn format_terminal_bash_exposure(
+pub fn format_terminal_bash_exposure(
     report: &crate::engine::tool_exposure::ToolExposureReport,
 ) -> String {
     let scope = if report.route_scoped_tools {
@@ -135,16 +131,16 @@ pub(super) fn format_terminal_bash_exposure(
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct ProductReadiness {
-    pub(super) ready: bool,
-    pub(super) label: &'static str,
-    pub(super) status: crate::diagnostics::CheckStatus,
-    pub(super) blockers: Vec<String>,
-    pub(super) warnings: Vec<String>,
+pub struct ProductReadiness {
+    pub ready: bool,
+    pub label: &'static str,
+    pub status: crate::diagnostics::CheckStatus,
+    pub blockers: Vec<String>,
+    pub warnings: Vec<String>,
 }
 
 impl ProductReadiness {
-    pub(super) fn to_check_result(&self) -> crate::diagnostics::CheckResult {
+    pub fn to_check_result(&self) -> crate::diagnostics::CheckResult {
         match self.status {
             crate::diagnostics::CheckStatus::Ok => crate::diagnostics::CheckResult::ok(
                 "product_ready",
@@ -166,7 +162,7 @@ impl ProductReadiness {
         }
     }
 
-    pub(super) fn format_text(&self) -> String {
+    pub fn format_text(&self) -> String {
         let mut lines = vec![
             "Product Readiness".to_string(),
             format!("Status: {}", self.label),
@@ -185,7 +181,7 @@ impl ProductReadiness {
     }
 }
 
-pub(super) fn evaluate_product_readiness(
+pub fn evaluate_product_readiness(
     report: &crate::diagnostics::DiagnosticReport,
     runtime: &crate::state::RuntimeStatusSnapshot,
 ) -> ProductReadiness {

@@ -7,7 +7,7 @@ use crate::tui::app::{AppMode, TuiApp};
 
 mod agent_listing;
 mod auth_status;
-mod doctor_formatting;
+pub mod doctor_formatting;
 mod history_mode;
 mod launchers;
 mod lsp;
@@ -157,7 +157,8 @@ pub async fn handle_status(app: &TuiApp) -> String {
     lines.join("\n")
 }
 
-const TERMINAL_EXPOSURE_PROMPT: &str = "帮我看看我电脑默认的python有没有安装pygame，帮我安装一下吧";
+pub const TERMINAL_EXPOSURE_PROMPT: &str =
+    "帮我看看我电脑默认的python有没有安装pygame，帮我安装一下吧";
 
 async fn terminal_bash_exposure_report(
     app: &TuiApp,
