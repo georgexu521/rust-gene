@@ -23,6 +23,7 @@ pub mod theme;
 pub mod turn;
 
 pub mod slash;
+pub mod test_support;
 
 use crate::components::attachment_token::AttachmentSource;
 use crate::engine::runtime_controller::RuntimeController;
@@ -927,5 +928,109 @@ struct ShellCommand {
 impl ShellCommand {
     const fn new(name: &'static str, description: &'static str) -> Self {
         Self { name, description }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::shell::test_support::{test_cli_host, test_engine};
+    #[tokio::test]
+    async fn handle_help_command_prints_commands() {
+        let engine = test_engine();
+        let mut host = test_cli_host(engine.clone());
+        let mut footer = FooterRenderer::new(DEFAULT_FOOTER_HEIGHT);
+        let mut attachments = AttachmentManager::new();
+
+        let consumed =
+            handle_local_command(&mut host, &engine, "/help", &mut footer, &mut attachments)
+                .await
+                .unwrap();
+
+        assert!(consumed, "/help should be consumed");
+        assert!(attachments.is_empty());
+    }
+
+    #[tokio::test]
+    async fn handle_unknown_slash_command_is_consumed() {
+        let engine = test_engine();
+        let mut host = test_cli_host(engine.clone());
+        let mut footer = FooterRenderer::new(DEFAULT_FOOTER_HEIGHT);
+        let mut attachments = AttachmentManager::new();
+
+        let consumed = handle_local_command(
+            &mut host,
+            &engine,
+            "/notacommand",
+            &mut footer,
+            &mut attachments,
+        )
+        .await
+        .unwrap();
+
+        assert!(consumed, "unknown slash commands are still consumed");
+    }
+
+    #[tokio::test]
+    async fn handle_plain_message_is_not_consumed() {
+        let engine = test_engine();
+        let mut host = test_cli_host(engine.clone());
+        let mut footer = FooterRenderer::new(DEFAULT_FOOTER_HEIGHT);
+        let mut attachments = AttachmentManager::new();
+
+        let consumed =
+            handle_local_command(&mut host, &engine, "hello", &mut footer, &mut attachments)
+                .await
+                .unwrap();
+
+        assert!(!consumed, "plain messages should not be consumed");
+    }
+
+    #[tokio::test]
+    async fn handle_exit_command_is_consumed() {
+        let engine = test_engine();
+        let mut host = test_cli_host(engine.clone());
+        let mut footer = FooterRenderer::new(DEFAULT_FOOTER_HEIGHT);
+        let mut attachments = AttachmentManager::new();
+
+        let consumed =
+            handle_local_command(&mut host, &engine, "/exit", &mut footer, &mut attachments)
+                .await
+                .unwrap();
+
+        assert!(consumed, "/exit should be consumed");
+    }
+
+    #[tokio::test]
+    async fn handle_new_command_creates_session() {
+        let engine = test_engine();
+        let mut host = test_cli_host(engine.clone());
+        let mut footer = FooterRenderer::new(DEFAULT_FOOTER_HEIGHT);
+        let mut attachments = AttachmentManager::new();
+
+        let consumed =
+            handle_local_command(&mut host, &engine, "/new", &mut footer, &mut attachments)
+                .await
+                .unwrap();
+
+        assert!(consumed);
+        let sid = host.session_manager.current_session_id();
+        assert!(sid.is_some(), "/new should create a session");
+        assert_eq!(sid, engine.current_session_id().as_deref());
+    }
+
+    #[tokio::test]
+    async fn handle_clear_command_is_consumed() {
+        let engine = test_engine();
+        let mut host = test_cli_host(engine.clone());
+        let mut footer = FooterRenderer::new(DEFAULT_FOOTER_HEIGHT);
+        let mut attachments = AttachmentManager::new();
+
+        let consumed =
+            handle_local_command(&mut host, &engine, "/clear", &mut footer, &mut attachments)
+                .await
+                .unwrap();
+
+        assert!(consumed, "/clear should be consumed");
     }
 }
