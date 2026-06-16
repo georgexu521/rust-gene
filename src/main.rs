@@ -50,21 +50,21 @@ fn print_help() {
     println!();
     println!("Modes:");
     println!("  --api    Start HTTP API server (feature: experimental-api-server)");
-    println!("  --cli    Start Priority Agent (default)");
-    println!("  --tui    Start the full-screen terminal interface");
+    println!("  --cli    Start the default terminal interface");
+    println!("  --tui    Start the legacy full-screen terminal interface (alternative)");
     println!("  --eval-run --prompt-file <PATH> [--output <PATH>] [--events <PATH>]");
     println!("           Run one non-interactive evaluation task");
     println!("  --provider-health [--output <PATH>] [--timeout <SECS>]");
     println!("           Probe provider chat, tool-call, and tool-result continuation");
     println!("  --context attach --file <PATH> [--range <L1:L2>]");
     println!("           Write IDE context handoff file for desktop/tui pickup");
-    println!("  (none)   Default: start Priority Agent");
+    println!("  (none)   Default: start the terminal interface");
     println!();
     println!("Examples:");
-    println!("  {bin}                  # Default mode");
+    println!("  {bin}                  # Default terminal interface");
     println!("  {bin} --api --port 8787 # HTTP API server");
     println!("  {bin} --cli            # Same as default");
-    println!("  {bin} --tui            # Full-screen interface");
+    println!("  {bin} --tui            # Legacy full-screen interface");
 }
 
 fn arg_value(args: &[String], flag: &str) -> Option<String> {

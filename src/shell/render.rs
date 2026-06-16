@@ -4,7 +4,7 @@
 //! and flushed. No alternate screen buffer is used, so native text selection
 //! and scrollback continue to work as in a normal terminal session.
 
-use crate::shell::theme::{BOLD, DIM, RESET};
+use crate::shell::theme::{BOLD, CYAN, DIM, GREEN, MAGENTA, RED, RESET};
 use std::io::{self, Write};
 
 /// Append a user message to the scrollback.
@@ -33,6 +33,23 @@ pub fn show_status(text: &str, color: &str) -> io::Result<()> {
     io::stdout().flush()
 }
 
+/// Wrap a code block in a plain frame that keeps code lines copyable.
+pub fn begin_code_block(language: &str) -> String {
+    if language.is_empty() {
+        format!("{CYAN}┌─ code{RESET}")
+    } else {
+        format!("{CYAN}┌─ {}{RESET}", language)
+    }
+}
+
+pub fn end_code_block() -> String {
+    format!("{CYAN}└─{RESET}")
+}
+
+pub fn code_line(line: &str) -> String {
+    line.to_string()
+}
+
 /// Render one assistant output line with lightweight Markdown softening.
 pub fn render_assistant_line(line: &str, in_code_block: &mut bool) -> String {
     let trimmed = line.trim_end();
@@ -41,16 +58,13 @@ pub fn render_assistant_line(line: &str, in_code_block: &mut bool) -> String {
         *in_code_block = !*in_code_block;
         let label = trimmed.trim_start().trim_start_matches("```").trim();
         if was_in_code_block {
-            return format!("{DIM}╰─{RESET}");
+            return end_code_block();
         }
-        if label.is_empty() {
-            return format!("{DIM}╭─ code{RESET}");
-        }
-        return format!("{DIM}╭─ {label}{RESET}");
+        return begin_code_block(label);
     }
 
     if *in_code_block {
-        return format!("{DIM}│{RESET} {trimmed}");
+        return code_line(trimmed);
     }
 
     if let Some(table_line) = render_markdown_table_line(trimmed) {
@@ -73,6 +87,16 @@ pub fn render_assistant_line(line: &str, in_code_block: &mut bool) -> String {
         return numbered_item;
     }
     cleaned
+}
+
+/// Colorize a unified diff line for terminal output.
+pub fn colorize_diff_line(line: &str) -> String {
+    match line.chars().next() {
+        Some('+') => format!("{GREEN}{}{RESET}", line),
+        Some('-') => format!("{RED}{}{RESET}", line),
+        Some('@') => format!("{MAGENTA}{}{RESET}", line),
+        _ => line.to_string(),
+    }
 }
 
 fn render_list_item(line: &str) -> Option<String> {
@@ -197,15 +221,15 @@ mod tests {
         );
         assert_eq!(
             render_assistant_line("```rust", &mut in_code),
-            format!("{DIM}╭─ rust{RESET}")
+            format!("{CYAN}┌─ rust{RESET}")
         );
         assert_eq!(
             render_assistant_line("let x = 1;", &mut in_code),
-            format!("{DIM}│{RESET} let x = 1;")
+            "let x = 1;"
         );
         assert_eq!(
             render_assistant_line("```", &mut in_code),
-            format!("{DIM}╰─{RESET}")
+            format!("{CYAN}└─{RESET}")
         );
     }
 }

@@ -12,6 +12,7 @@ pub mod footer;
 pub mod interrupt;
 pub mod permission_diff;
 pub mod prompt;
+pub mod question;
 pub mod render;
 pub mod theme;
 
@@ -957,12 +958,8 @@ async fn prompt_for_permission(
         overlay_text.push('\n');
         overlay_text.push_str(&format!("{DIM}{title}{RESET}\n"));
         for line in diff.lines().take(24) {
-            let prefix = match line.chars().next() {
-                Some('+') => GREEN,
-                Some('-') => RED,
-                _ => DIM,
-            };
-            overlay_text.push_str(&format!("{prefix}{line}{RESET}\n"));
+            overlay_text.push_str(&crate::shell::render::colorize_diff_line(line));
+            overlay_text.push('\n');
         }
         if diff.lines().count() > 24 {
             overlay_text.push_str(&format!("{DIM}  ...{RESET}\n"));
@@ -1163,6 +1160,12 @@ async fn run_turn(
                             break;
                         }
                     }
+                    Some(StreamEvent::RuntimeDiagnostic { .. }) => {}
+                    Some(StreamEvent::Closeout { status, evidence_summary }) => {
+                        assistant_printer.finish_line_if_needed(footer)?;
+                        let summary = evidence_summary.as_deref().unwrap_or("");
+                        footer.print_above(&format!("{DIM}[Closeout: {status}] {summary}{RESET}"))?;
+                    }
                     Some(StreamEvent::OutputTruncated) => {
                         assistant_printer.finish_line_if_needed(footer)?;
                         footer.print_above(&format!("{YELLOW}Output truncated. Continue if needed.{RESET}"))?;
@@ -1196,6 +1199,20 @@ async fn run_turn(
                             &PromptEditor::new(),
                             terminal_width(),
                         )?;
+                    }
+                }
+
+                // Check for pending user questions while a turn is running.
+                if let Some(channel) = controller.engine().tool_registry().ask_channel() {
+                    if let Some(answer) = crate::shell::question::run_question_ui(
+                        footer, event_rx, &channel, terminal_width()
+                    ).await? {
+                        footer.render(
+                            &FooterMode::Thinking,
+                            &PromptEditor::new(),
+                            terminal_width(),
+                        )?;
+                        let _ = answer;
                     }
                 }
             }
@@ -1365,15 +1382,15 @@ mod tests {
         );
         assert_eq!(
             render_assistant_line("```rust", &mut in_code),
-            format!("{DIM}╭─ rust{RESET}")
+            format!("{CYAN}┌─ rust{RESET}")
         );
         assert_eq!(
             render_assistant_line("let x = 1;", &mut in_code),
-            format!("{DIM}│{RESET} let x = 1;")
+            "let x = 1;"
         );
         assert_eq!(
             render_assistant_line("```", &mut in_code),
-            format!("{DIM}╰─{RESET}")
+            format!("{CYAN}└─{RESET}")
         );
     }
 
