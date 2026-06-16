@@ -1,10 +1,10 @@
-//! Scrollback-first interactive shell.
+//! Interactive shell for the Priority Agent CLI.
 //!
-//! This renderer intentionally avoids alternate-screen full redraws. The main
-//! conversation is appended to the user's real terminal scrollback, while a
-//! fixed footer at the bottom shows the prompt and transient status. This
-//! matches the interaction model used by mature coding-agent CLIs more closely
-//! than a dashboard-style TUI.
+//! The default renderer uses the terminal's alternate screen buffer and redraws
+//! the whole interface on every change. This avoids cursor-dance artifacts when
+//! raw-mode input, streaming output, and CJK characters mix. The `--no-footer`
+//! flag falls back to a plain stdout mode suitable for pipe/redirection
+//! environments.
 
 pub mod attachment;
 pub mod completion;
@@ -18,6 +18,8 @@ pub mod permission_diff;
 pub mod prompt;
 pub mod question;
 pub mod render;
+pub mod screen;
+pub mod surface;
 pub mod text;
 pub mod theme;
 pub mod turn;
@@ -33,21 +35,23 @@ use crate::shell::attachment::AttachmentManager;
 use crate::shell::completion::find_candidates;
 use crate::shell::completion_state::CompletionState;
 use crate::shell::constants::{
-    DEFAULT_FOOTER_HEIGHT, PROMPT_PREFIX_WIDTH, SESSION_LIST_MODEL_WIDTH, SESSION_LIST_TITLE_WIDTH,
-    WELCOME_MODEL_WIDTH, WELCOME_PROVIDER_WIDTH, WELCOME_WIDTH_MAX, WELCOME_WIDTH_MIN,
+    SESSION_LIST_MODEL_WIDTH, SESSION_LIST_TITLE_WIDTH, WELCOME_MODEL_WIDTH,
+    WELCOME_PROVIDER_WIDTH, WELCOME_WIDTH_MAX, WELCOME_WIDTH_MIN,
 };
-use crate::shell::footer::{AttachmentLine, FooterMode, FooterRenderer};
+use crate::shell::footer::FooterMode;
 use crate::shell::host::{CliHost, ShellHost};
 use crate::shell::interrupt::InterruptState;
 use crate::shell::prompt::PromptEditor;
+use crate::shell::screen::ScreenSurface;
 use crate::shell::slash::{
     handle_diff, handle_export_data, handle_redo, handle_save_session, handle_undo,
 };
+use crate::shell::surface::{PlainSurface, Surface};
 use crate::shell::text::{colored_rule, compact_home_path, compact_line, terminal_width};
 use crate::shell::theme::*;
 use crate::shell::turn::run_turn;
 use crossterm::event::{Event, KeyCode, KeyEventKind, KeyModifiers};
-use std::io::{self, IsTerminal, Write};
+use std::io::{self, IsTerminal};
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -110,41 +114,56 @@ async fn run_shell_inner(
     engine: Arc<StreamingQueryEngine>,
     options: ShellOptions,
 ) -> anyhow::Result<()> {
-    print_welcome(&engine).await;
-
     let session_manager = build_session_manager(&engine).await?;
     let mut host = CliHost::new(engine.clone(), session_manager);
-
-    let footer_height = if options.no_footer {
-        0
-    } else {
-        DEFAULT_FOOTER_HEIGHT
-    };
-    let mut editor = PromptEditor::new();
-    let mut attachments = AttachmentManager::new();
-    let mut footer = FooterRenderer::new(footer_height);
-    let mut completion_state: Option<CompletionState> = None;
-    let interrupt = InterruptState::new();
-    let controller = RuntimeController::new(engine.clone());
-
-    // Reserve footer space at the bottom of the terminal.
-    for _ in 0..footer_height {
-        println!();
-    }
 
     let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel::<Event>();
     tokio::spawn(event_reader(event_tx));
 
-    if options.no_footer {
-        print_plain_prompt(&editor, &attachments)?;
+    let mut editor = PromptEditor::new();
+    let mut attachments = AttachmentManager::new();
+    let mut completion_state: Option<CompletionState> = None;
+    let interrupt = InterruptState::new();
+    let controller = RuntimeController::new(engine.clone());
+
+    let welcome = render_welcome(&engine).await;
+    let mut surface = if options.no_footer {
+        println!("{}", welcome);
+        ShellSurface::Plain(PlainSurface::new())
     } else {
-        render_prompt_footer(&mut footer, &editor, &attachments)?;
-    }
+        let (width, height) = crossterm::terminal::size()
+            .map(|(w, h)| (w as usize, h as usize))
+            .unwrap_or((80, 24));
+        let mut screen = ScreenSurface::new(width, height)?;
+        let _ = screen.push_line(&welcome);
+        ShellSurface::Screen(screen)
+    };
+
+    let surface_ref = surface.as_surface();
+    surface_ref.render_footer(
+        &FooterMode::Prompt,
+        &editor,
+        &attachments,
+        completion_state.as_ref(),
+    )?;
 
     loop {
         let Some(event) = event_rx.recv().await else {
             break;
         };
+
+        if let Event::Resize(cols, rows) = event {
+            if let ShellSurface::Screen(ref mut screen) = surface {
+                screen.resize(cols as usize, rows as usize);
+                let _ = screen.render_footer(
+                    &FooterMode::Prompt,
+                    &editor,
+                    &attachments,
+                    completion_state.as_ref(),
+                );
+            }
+            continue;
+        }
 
         if let Event::Key(key) = event {
             if key.kind == KeyEventKind::Release {
@@ -155,7 +174,12 @@ async fn run_shell_inner(
                 (KeyModifiers::CONTROL, KeyCode::Char('c')) => {
                     if interrupt.request_interrupt() {
                         controller.cancel().await;
-                        footer.render(&FooterMode::Interrupt, &editor, terminal_width())?;
+                        surface.as_surface().render_footer(
+                            &FooterMode::Interrupt,
+                            &editor,
+                            &attachments,
+                            completion_state.as_ref(),
+                        )?;
                     } else {
                         break;
                     }
@@ -164,18 +188,15 @@ async fn run_shell_inner(
                     if !editor.is_empty() || !attachments.is_empty() {
                         let message = editor.text();
                         editor.clear();
-                        if options.no_footer {
-                            print_plain_prompt(&editor, &attachments)?;
-                            println!("{}", format_user_message(&message));
-                        } else {
-                            footer.print_above(&format_user_message(&message))?;
-                        }
+                        surface
+                            .as_surface()
+                            .push_line(&format_user_message(&message))?;
 
                         if handle_local_command(
                             &mut host,
                             &engine,
                             &message,
-                            &mut footer,
+                            surface.as_surface(),
                             &mut attachments,
                         )
                         .await?
@@ -183,29 +204,31 @@ async fn run_shell_inner(
                             if matches!(message.trim(), "/exit" | "/quit" | "exit" | "quit") {
                                 break;
                             }
-                            if options.no_footer {
-                                print_plain_prompt(&editor, &attachments)?;
-                            } else {
-                                render_prompt_footer(&mut footer, &editor, &attachments)?;
-                            }
+                            surface.as_surface().render_footer(
+                                &FooterMode::Prompt,
+                                &editor,
+                                &attachments,
+                                completion_state.as_ref(),
+                            )?;
                             continue;
                         }
 
                         let submission = attachments.build_submission(&message);
                         attachments.clear();
                         interrupt.start_turn();
-                        if options.no_footer {
-                            println!("{DIM}· Thinking…{RESET}");
-                        } else {
-                            footer.render(&FooterMode::Thinking, &editor, terminal_width())?;
-                        }
+                        surface.as_surface().render_footer(
+                            &FooterMode::Thinking,
+                            &editor,
+                            &attachments,
+                            completion_state.as_ref(),
+                        )?;
 
                         let mut stream = controller.submit_stream_turn(submission.clone()).await;
                         let continuation = run_turn(
                             engine.clone(),
                             &controller,
                             &mut stream,
-                            &mut footer,
+                            surface.as_surface(),
                             &interrupt,
                             &mut event_rx,
                             if options.no_footer {
@@ -223,7 +246,7 @@ async fn run_shell_inner(
                                 engine.clone(),
                                 &controller,
                                 &mut stream,
-                                &mut footer,
+                                surface.as_surface(),
                                 &interrupt,
                                 &mut event_rx,
                                 if options.no_footer {
@@ -235,11 +258,12 @@ async fn run_shell_inner(
                             .await?;
                         }
                         interrupt.end_turn();
-                        if options.no_footer {
-                            print_plain_prompt(&editor, &attachments)?;
-                        } else {
-                            render_prompt_footer(&mut footer, &editor, &attachments)?;
-                        }
+                        surface.as_surface().render_footer(
+                            &FooterMode::Prompt,
+                            &editor,
+                            &attachments,
+                            completion_state.as_ref(),
+                        )?;
                     }
                 }
                 (KeyModifiers::CONTROL, KeyCode::Char('d'))
@@ -247,6 +271,9 @@ async fn run_shell_inner(
                     if editor.is_empty() && attachments.is_empty() {
                         break;
                     }
+                }
+                (KeyModifiers::CONTROL, KeyCode::Char('l')) => {
+                    surface.as_surface().push_line("")?;
                 }
                 (_, KeyCode::Char(ch)) => {
                     editor.insert(&ch.to_string());
@@ -261,8 +288,8 @@ async fn run_shell_inner(
                             ));
                         }
                     }
-                    render_prompt_footer_with_completion(
-                        &mut footer,
+                    surface.as_surface().render_footer(
+                        &FooterMode::Prompt,
                         &editor,
                         &attachments,
                         completion_state.as_ref(),
@@ -275,8 +302,8 @@ async fn run_shell_inner(
                         completion_state,
                         current_cursor_col(&editor),
                     );
-                    render_prompt_footer_with_completion(
-                        &mut footer,
+                    surface.as_surface().render_footer(
+                        &FooterMode::Prompt,
                         &editor,
                         &attachments,
                         completion_state.as_ref(),
@@ -285,8 +312,8 @@ async fn run_shell_inner(
                 (_, KeyCode::Delete) => {
                     editor.delete();
                     completion_state = update_completion_after_edit(&editor, completion_state);
-                    render_prompt_footer_with_completion(
-                        &mut footer,
+                    surface.as_surface().render_footer(
+                        &FooterMode::Prompt,
                         &editor,
                         &attachments,
                         completion_state.as_ref(),
@@ -295,56 +322,68 @@ async fn run_shell_inner(
                 (KeyModifiers::CONTROL, KeyCode::Left) | (KeyModifiers::ALT, KeyCode::Left) => {
                     editor.move_word_left();
                     completion_state = None;
-                    render_prompt_footer(&mut footer, &editor, &attachments)?;
-                    footer.position_cursor(&editor, PROMPT_PREFIX_WIDTH)?;
+                    surface.as_surface().render_footer(
+                        &FooterMode::Prompt,
+                        &editor,
+                        &attachments,
+                        completion_state.as_ref(),
+                    )?;
                 }
                 (KeyModifiers::CONTROL, KeyCode::Right) | (KeyModifiers::ALT, KeyCode::Right) => {
                     editor.move_word_right();
                     completion_state = None;
-                    render_prompt_footer(&mut footer, &editor, &attachments)?;
-                    footer.position_cursor(&editor, PROMPT_PREFIX_WIDTH)?;
+                    surface.as_surface().render_footer(
+                        &FooterMode::Prompt,
+                        &editor,
+                        &attachments,
+                        completion_state.as_ref(),
+                    )?;
                 }
                 (_, KeyCode::Left) => {
                     editor.move_left();
                     completion_state = None;
-                    render_prompt_footer(&mut footer, &editor, &attachments)?;
-                    footer.position_cursor(&editor, PROMPT_PREFIX_WIDTH)?;
+                    surface.as_surface().render_footer(
+                        &FooterMode::Prompt,
+                        &editor,
+                        &attachments,
+                        completion_state.as_ref(),
+                    )?;
                 }
                 (_, KeyCode::Right) => {
                     editor.move_right();
                     completion_state = None;
-                    render_prompt_footer(&mut footer, &editor, &attachments)?;
-                    footer.position_cursor(&editor, PROMPT_PREFIX_WIDTH)?;
+                    surface.as_surface().render_footer(
+                        &FooterMode::Prompt,
+                        &editor,
+                        &attachments,
+                        completion_state.as_ref(),
+                    )?;
                 }
                 (_, KeyCode::Up) => {
                     if let Some(ref mut state) = completion_state {
                         state.select_previous();
-                        render_prompt_footer_with_completion(
-                            &mut footer,
-                            &editor,
-                            &attachments,
-                            completion_state.as_ref(),
-                        )?;
                     } else {
                         editor.move_up();
-                        render_prompt_footer(&mut footer, &editor, &attachments)?;
-                        footer.position_cursor(&editor, PROMPT_PREFIX_WIDTH)?;
                     }
+                    surface.as_surface().render_footer(
+                        &FooterMode::Prompt,
+                        &editor,
+                        &attachments,
+                        completion_state.as_ref(),
+                    )?;
                 }
                 (_, KeyCode::Down) => {
                     if let Some(ref mut state) = completion_state {
                         state.select_next();
-                        render_prompt_footer_with_completion(
-                            &mut footer,
-                            &editor,
-                            &attachments,
-                            completion_state.as_ref(),
-                        )?;
                     } else {
                         editor.move_down();
-                        render_prompt_footer(&mut footer, &editor, &attachments)?;
-                        footer.position_cursor(&editor, PROMPT_PREFIX_WIDTH)?;
                     }
+                    surface.as_surface().render_footer(
+                        &FooterMode::Prompt,
+                        &editor,
+                        &attachments,
+                        completion_state.as_ref(),
+                    )?;
                 }
                 (KeyModifiers::NONE, KeyCode::Tab) => {
                     if let Some(state) = completion_state.take() {
@@ -355,43 +394,78 @@ async fn run_shell_inner(
                                 &candidate.replacement,
                             );
                         }
-                        render_prompt_footer(&mut footer, &editor, &attachments)?;
                     }
+                    surface.as_surface().render_footer(
+                        &FooterMode::Prompt,
+                        &editor,
+                        &attachments,
+                        completion_state.as_ref(),
+                    )?;
                 }
                 (_, KeyCode::Home) => {
                     editor.move_home();
                     completion_state = None;
-                    render_prompt_footer(&mut footer, &editor, &attachments)?;
-                    footer.position_cursor(&editor, PROMPT_PREFIX_WIDTH)?;
+                    surface.as_surface().render_footer(
+                        &FooterMode::Prompt,
+                        &editor,
+                        &attachments,
+                        completion_state.as_ref(),
+                    )?;
                 }
                 (_, KeyCode::End) => {
                     editor.move_end();
                     completion_state = None;
-                    render_prompt_footer(&mut footer, &editor, &attachments)?;
-                    footer.position_cursor(&editor, PROMPT_PREFIX_WIDTH)?;
+                    surface.as_surface().render_footer(
+                        &FooterMode::Prompt,
+                        &editor,
+                        &attachments,
+                        completion_state.as_ref(),
+                    )?;
                 }
                 _ => {}
             }
         }
     }
 
+    if let ShellSurface::Screen(ref mut screen) = surface {
+        screen.dump_to_scrollback();
+    }
+
     Ok(())
 }
 
-fn print_plain_prompt(editor: &PromptEditor, attachments: &AttachmentManager) -> io::Result<()> {
-    let prefix = format!("{CYAN}●{RESET} ");
-    print!("{}", prefix);
-    for (idx, line) in editor.lines().iter().enumerate() {
-        if idx > 0 {
-            print!("  ");
+enum ShellSurface {
+    Plain(PlainSurface),
+    Screen(ScreenSurface),
+}
+
+impl ShellSurface {
+    fn as_surface(&mut self) -> &mut dyn Surface {
+        match self {
+            ShellSurface::Plain(s) => s,
+            ShellSurface::Screen(s) => s,
         }
-        print!("{}", line);
     }
-    if !attachments.is_empty() {
-        print!("  {DIM}[{}]{RESET}", attachments.labels().join(", "));
+}
+
+async fn event_reader(event_tx: tokio::sync::mpsc::UnboundedSender<Event>) {
+    while let Ok(Ok(event)) = tokio::task::spawn_blocking(crossterm::event::read).await {
+        if event_tx.send(event).is_err() {
+            break;
+        }
     }
-    println!();
-    io::stdout().flush()
+}
+
+fn format_user_message(message: &str) -> String {
+    message
+        .lines()
+        .enumerate()
+        .map(|(idx, line)| {
+            let prefix = if idx == 0 { "" } else { "  " };
+            format!("{}{}│{} {}", prefix, DIM, RESET, line)
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 fn current_cursor_col(editor: &PromptEditor) -> usize {
@@ -449,64 +523,7 @@ fn update_completion_after_edit(
     CompletionState::update_after_edit(editor, state, current_cursor_col(editor))
 }
 
-fn render_prompt_footer_with_completion(
-    footer: &mut FooterRenderer,
-    editor: &PromptEditor,
-    attachments: &AttachmentManager,
-    completion: Option<&CompletionState>,
-) -> io::Result<()> {
-    let mut line = attachments.render_pills(terminal_width().saturating_sub(2));
-    if let Some(state) = completion {
-        let mut comp_line = String::from("Completion: ");
-        for (idx, candidate) in state.candidates.iter().take(6).enumerate() {
-            if idx > 0 {
-                comp_line.push_str("  ");
-            }
-            let marker = if idx == state.selected { ">" } else { " " };
-            comp_line.push_str(&format!("{}{}", marker, candidate.display));
-        }
-        if !line.is_empty() {
-            line.push('\n');
-        }
-        line.push_str(&comp_line);
-    }
-    footer.render_with_attachments(
-        &FooterMode::Prompt,
-        editor,
-        terminal_width(),
-        &AttachmentLine { text: line },
-    )
-}
-
-fn render_prompt_footer(
-    footer: &mut FooterRenderer,
-    editor: &PromptEditor,
-    attachments: &AttachmentManager,
-) -> io::Result<()> {
-    render_prompt_footer_with_completion(footer, editor, attachments, None)
-}
-
-fn format_user_message(message: &str) -> String {
-    message
-        .lines()
-        .enumerate()
-        .map(|(idx, line)| {
-            let prefix = if idx == 0 { "" } else { "  " };
-            format!("{}{}│{} {}", prefix, DIM, RESET, line)
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
-}
-
-async fn event_reader(event_tx: tokio::sync::mpsc::UnboundedSender<Event>) {
-    while let Ok(Ok(event)) = tokio::task::spawn_blocking(crossterm::event::read).await {
-        if event_tx.send(event).is_err() {
-            break;
-        }
-    }
-}
-
-async fn print_welcome(engine: &StreamingQueryEngine) {
+async fn render_welcome(engine: &StreamingQueryEngine) -> String {
     let usage = engine.context_usage_report().await;
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     let dir = compact_home_path(&cwd);
@@ -514,51 +531,62 @@ async fn print_welcome(engine: &StreamingQueryEngine) {
     let provider = compact_line(&engine.provider_base_url(), WELCOME_PROVIDER_WIDTH);
     let mode = permission_mode_label(engine.permission_mode());
     let width = terminal_width();
+    let mut out = String::new();
 
-    // Use a compact header on narrow terminals to avoid line-wrapping artifacts.
     if width < WELCOME_WIDTH_MIN {
-        println!("{BLUE}Priority Agent{RESET} {DIM}coding agent{RESET}");
-        println!("{DIM}Dir{RESET} {}", compact_line(&dir, 40));
-        println!("{DIM}Model{RESET} {} {DIM}·{RESET} {}", model, provider);
-        println!(
-            "{DIM}Mode{RESET} {} {DIM}·{RESET} context {} / {}",
+        out.push_str(&format!(
+            "{BLUE}Priority Agent{RESET} {DIM}coding agent{RESET}\n"
+        ));
+        out.push_str(&format!("{DIM}Dir{RESET} {}\n", compact_line(&dir, 40)));
+        out.push_str(&format!(
+            "{DIM}Model{RESET} {} {DIM}·{RESET} {}\n",
+            model, provider
+        ));
+        out.push_str(&format!(
+            "{DIM}Mode{RESET} {} {DIM}·{RESET} context {} / {}\n",
             mode, usage.total_estimated_tokens, usage.max_context_tokens
-        );
-        println!("{DIM}/help{RESET} commands {DIM}·{RESET} /status {DIM}·{RESET} /exit");
-        println!();
-        return;
+        ));
+        out.push_str(&format!(
+            "{DIM}/help{RESET} commands {DIM}·{RESET} /status {DIM}·{RESET} /exit\n"
+        ));
+        out.push('\n');
+        return out;
     }
 
     let width = width.clamp(WELCOME_WIDTH_MIN, WELCOME_WIDTH_MAX);
     let inner = width.saturating_sub(4);
 
-    println!(
-        "{BLUE}╭─{RESET} {BOLD}Priority Agent{RESET} {DIM}coding agent{RESET}{}",
+    out.push_str(&format!(
+        "{BLUE}╭─{RESET} {BOLD}Priority Agent{RESET} {DIM}coding agent{RESET}{}\n",
         colored_rule(width.saturating_sub(31), BLUE)
-    );
-    println!(
-        "{BLUE}│{RESET}  {BOLD}Welcome back.{RESET} {DIM}Ask for code changes, debugging, reviews, or project inspection.{RESET}"
-    );
-    println!("{BLUE}│{RESET}");
-    println!(
-        "{BLUE}│{RESET}  {DIM}{:<10}{RESET}{}",
+    ));
+    out.push_str(&format!(
+        "{BLUE}│{RESET}  {BOLD}Welcome back.{RESET} {DIM}Ask for code changes, debugging, reviews, or project inspection.{RESET}\n"
+    ));
+    out.push_str(&format!("{BLUE}│{RESET}\n"));
+    out.push_str(&format!(
+        "{BLUE}│{RESET}  {DIM}{:<10}{RESET}{}\n",
         "Directory",
         compact_line(&dir, inner.saturating_sub(12))
-    );
-    println!(
-        "{BLUE}│{RESET}  {DIM}{:<10}{RESET}{} {DIM}· provider {RESET}{}",
+    ));
+    out.push_str(&format!(
+        "{BLUE}│{RESET}  {DIM}{:<10}{RESET}{} {DIM}· provider {RESET}{}\n",
         "Model", model, provider
-    );
-    println!(
-        "{BLUE}│{RESET}  {DIM}{:<10}{RESET}{} {DIM}· context {RESET}{} / {}",
+    ));
+    out.push_str(&format!(
+        "{BLUE}│{RESET}  {DIM}{:<10}{RESET}{} {DIM}· context {RESET}{} / {}\n",
         "Mode", mode, usage.total_estimated_tokens, usage.max_context_tokens
-    );
-    println!(
-        "{BLUE}│{RESET}  {DIM}{:<10}{RESET}/help commands · /status details · /exit quit",
+    ));
+    out.push_str(&format!(
+        "{BLUE}│{RESET}  {DIM}{:<10}{RESET}/help commands · /status details · /exit quit\n",
         "Shortcuts"
-    );
-    println!("{BLUE}╰{}╯{RESET}", "─".repeat(width.saturating_sub(2)));
-    println!();
+    ));
+    out.push_str(&format!(
+        "{BLUE}╰{}╯{RESET}\n",
+        "─".repeat(width.saturating_sub(2))
+    ));
+    out.push('\n');
+    out
 }
 
 async fn build_session_manager(
@@ -588,7 +616,7 @@ async fn handle_local_command(
     host: &mut CliHost,
     engine: &StreamingQueryEngine,
     message: &str,
-    footer: &mut FooterRenderer,
+    surface: &mut dyn Surface,
     attachments: &mut AttachmentManager,
 ) -> anyhow::Result<bool> {
     match message.trim() {
@@ -596,35 +624,35 @@ async fn handle_local_command(
             engine
                 .flush_memory_for_current_history(crate::memory::MemoryFlushReason::Exit)
                 .await;
-            footer.print_above(&format!("{DIM}Bye.{RESET}"))?;
+            surface.push_line(&format!("{DIM}Bye.{RESET}"))?;
             Ok(true)
         }
         "/help" | "/commands" | "/?" | "help" => {
-            print_command_help();
+            print_command_help(surface)?;
             Ok(true)
         }
         "/help maturity" | "/commands maturity" => {
             let registry = crate::tui::commands::default_command_registry();
-            println!("{}", registry.help_text_all());
+            surface.push_line(&registry.help_text_all())?;
             Ok(true)
         }
         "/attach" | "/attachments" => {
-            print_attachments(attachments);
+            print_attachments(surface, attachments)?;
             Ok(true)
         }
         command if command.starts_with("/attach ") => {
             let args = command.strip_prefix("/attach ").unwrap_or("").trim();
-            handle_attach_command(args, attachments)?;
+            handle_attach_command(surface, args, attachments)?;
             Ok(true)
         }
         command if command.starts_with("/detach ") => {
             let args = command.strip_prefix("/detach ").unwrap_or("").trim();
-            handle_detach_command(args, attachments)?;
+            handle_detach_command(surface, args, attachments)?;
             Ok(true)
         }
         "/detach" | "/unattach" => {
             attachments.clear();
-            println!("{DIM}Cleared all attachments.{RESET}");
+            surface.push_line(&format!("{DIM}Cleared all attachments.{RESET}"))?;
             Ok(true)
         }
         "/model" => {
@@ -636,7 +664,7 @@ async fn handle_local_command(
             Ok(true)
         }
         "/sessions" => {
-            print_sessions(engine, 20)?;
+            print_sessions(surface, engine, 20)?;
             Ok(true)
         }
         "/new" => {
@@ -651,43 +679,43 @@ async fn handle_local_command(
             {
                 Ok(session_id) => {
                     engine.set_session_id(session_id.clone());
-                    println!("{GREEN}✓{RESET} Started new session {session_id}");
+                    surface
+                        .push_line(&format!("{GREEN}✓{RESET} Started new session {session_id}"))?;
                 }
                 Err(e) => println!("{RED}✗{RESET} Failed to start session: {e}"),
             }
             Ok(true)
         }
         "/back" => {
-            println!(
+            surface.push_line(&format!(
                 "{DIM}Back navigation is a TUI feature; use /resume to switch sessions.{RESET}"
-            );
+            ))?;
             Ok(true)
         }
         "/status" => {
             let response = crate::shell::slash::handle_status(host).await;
-            println!("{}", response);
+            surface.push_line(&response)?;
             Ok(true)
         }
         "/provider" => {
             let response = crate::shell::slash::handle_provider(host, "").await;
-            println!("{}", response);
+            surface.push_line(&response)?;
             Ok(true)
         }
         command if command.starts_with("/provider ") => {
             let args = command.strip_prefix("/provider ").unwrap_or("").trim();
             let response = crate::shell::slash::handle_provider(host, args).await;
-            println!("{}", response);
+            surface.push_line(&response)?;
             Ok(true)
         }
         "/cost" | "/token" => {
             let response = crate::shell::slash::handle_token_cost(engine).await;
-            println!("{}", response);
+            surface.push_line(&response)?;
             Ok(true)
         }
         "/clear" => {
             engine.clear_history().await;
-            print!("\x1b[2J\x1b[H");
-            io::stdout().flush()?;
+            surface.clear()?;
             Ok(true)
         }
         "/tools" => {
@@ -702,7 +730,7 @@ async fn handle_local_command(
         }
         "/permissions" => {
             let rules = engine.session_permission_rules();
-            println!("{BOLD}Permission rules{RESET}");
+            surface.push_line(&format!("{BOLD}Permission rules{RESET}"))?;
             println!("{DIM}  always allow:{RESET} {}", rules.always_allow.len());
             println!("{DIM}  always deny:{RESET}  {}", rules.always_deny.len());
             println!("{DIM}  always ask:{RESET}   {}", rules.always_ask.len());
@@ -723,12 +751,12 @@ async fn handle_local_command(
                 "on" => {
                     host.set_memory_use(true);
                     host.set_memory_generate(true);
-                    println!("{DIM}Memory enabled.{RESET}");
+                    surface.push_line(&format!("{DIM}Memory enabled.{RESET}"))?;
                 }
                 "off" => {
                     host.set_memory_use(false);
                     host.set_memory_generate(false);
-                    println!("{DIM}Memory disabled.{RESET}");
+                    surface.push_line(&format!("{DIM}Memory disabled.{RESET}"))?;
                 }
                 "use on" => host.set_memory_use(true),
                 "use off" => host.set_memory_use(false),
@@ -742,78 +770,86 @@ async fn handle_local_command(
         }
         "/undo" => {
             let response = handle_undo(host, "");
-            println!("{}", response);
+            surface.push_line(&response)?;
             Ok(true)
         }
         "/redo" => {
             let response = handle_redo(host, "");
-            println!("{}", response);
+            surface.push_line(&response)?;
             Ok(true)
         }
         "/validate" => {
             let response = crate::shell::slash::handle_validate(host).await;
-            println!("{}", response);
+            surface.push_line(&response)?;
             Ok(true)
         }
         "/diff" => {
             let response = handle_diff(host, "").await;
-            println!("{}", response);
+            surface.push_line(&response)?;
             Ok(true)
         }
         command if command.starts_with("/diff ") => {
             let args = command.strip_prefix("/diff ").unwrap_or("").trim();
             let response = handle_diff(host, args).await;
-            println!("{}", response);
+            surface.push_line(&response)?;
             Ok(true)
         }
         "/export" => {
             let response = handle_export_data(host, "").await;
-            println!("{}", response);
+            surface.push_line(&response)?;
             Ok(true)
         }
         command if command.starts_with("/export ") => {
             let args = command.strip_prefix("/export ").unwrap_or("").trim();
             let response = handle_export_data(host, args).await;
-            println!("{}", response);
+            surface.push_line(&response)?;
             Ok(true)
         }
         "/save" => {
             let response = handle_save_session(host).await;
-            println!("{}", response);
+            surface.push_line(&response)?;
             Ok(true)
         }
         "/doctor" => {
             let response = crate::shell::slash::handle_doctor(host, "").await;
-            println!("{}", response);
+            surface.push_line(&response)?;
             Ok(true)
         }
         "/audit" => {
             let response = crate::shell::slash::handle_audit(host, "").await;
-            println!("{}", response);
+            surface.push_line(&response)?;
             Ok(true)
         }
         command if command.starts_with("/audit ") => {
             let args = command.strip_prefix("/audit ").unwrap_or("").trim();
             let response = crate::shell::slash::handle_audit(host, args).await;
-            println!("{}", response);
+            surface.push_line(&response)?;
             Ok(true)
         }
         "/tui" => {
-            println!("{DIM}Run `pa --tui` to open the full-screen terminal interface.{RESET}");
+            surface.push_line(&format!(
+                "{DIM}Run `pa --tui` to open the full-screen terminal interface.{RESET}"
+            ))?;
             Ok(true)
         }
         command if command.starts_with('/') => {
-            println!("{DIM}Unknown command: {command}. Use /help for available commands.{RESET}");
+            surface.push_line(&format!(
+                "{DIM}Unknown command: {command}. Use /help for available commands.{RESET}"
+            ))?;
             Ok(true)
         }
         _ => Ok(false),
     }
 }
 
-fn handle_attach_command(args: &str, attachments: &mut AttachmentManager) -> anyhow::Result<()> {
+fn handle_attach_command(
+    surface: &mut dyn Surface,
+    args: &str,
+    attachments: &mut AttachmentManager,
+) -> io::Result<()> {
     let paths: Vec<&str> = args.split_whitespace().collect();
     if paths.is_empty() {
-        println!("{DIM}Usage: /attach <path> [<path> ...]{RESET}");
+        surface.push_line(&format!("{DIM}Usage: /attach <path> [<path> ...]{RESET}"))?;
         return Ok(());
     }
 
@@ -823,42 +859,55 @@ fn handle_attach_command(args: &str, attachments: &mut AttachmentManager) -> any
             continue;
         }
         if !std::path::Path::new(trimmed).exists() {
-            println!("{YELLOW}✗{RESET} {DIM}not found:{RESET} {trimmed}");
+            surface.push_line(&format!(
+                "{YELLOW}✗{RESET} {DIM}not found:{RESET} {trimmed}"
+            ))?;
             continue;
         }
         match attachments.add_file(trimmed, AttachmentSource::File) {
-            Some(token) => println!("{GREEN}✓{RESET} {DIM}attached{RESET} {}", token.label),
-            None => println!("{YELLOW}·{RESET} {DIM}already attached:{RESET} {trimmed}"),
+            Some(token) => surface.push_line(&format!(
+                "{GREEN}✓{RESET} {DIM}attached{RESET} {}",
+                token.label
+            ))?,
+            None => surface.push_line(&format!(
+                "{YELLOW}·{RESET} {DIM}already attached:{RESET} {trimmed}"
+            ))?,
         }
     }
     Ok(())
 }
 
-fn handle_detach_command(args: &str, attachments: &mut AttachmentManager) -> anyhow::Result<()> {
+fn handle_detach_command(
+    surface: &mut dyn Surface,
+    args: &str,
+    attachments: &mut AttachmentManager,
+) -> io::Result<()> {
     let target = args.trim();
     if target.is_empty() {
-        println!("{DIM}Usage: /detach <index|path|label> or /detach all{RESET}");
+        surface.push_line(&format!(
+            "{DIM}Usage: /detach <index|path|label> or /detach all{RESET}"
+        ))?;
         return Ok(());
     }
     if target.eq_ignore_ascii_case("all") {
         attachments.clear();
-        println!("{DIM}Cleared all attachments.{RESET}");
+        surface.push_line(&format!("{DIM}Cleared all attachments.{RESET}"))?;
         return Ok(());
     }
 
     if let Ok(index) = target.parse::<usize>() {
         if index > 0 {
             if attachments.remove_by_index(index - 1).is_some() {
-                println!("{DIM}Detached attachment #{index}.{RESET}");
+                surface.push_line(&format!("{DIM}Detached attachment #{index}.{RESET}"))?;
             } else {
-                println!("{YELLOW}No attachment at index {index}.{RESET}");
+                surface.push_line(&format!("{YELLOW}No attachment at index {index}.{RESET}"))?;
             }
             return Ok(());
         }
     }
 
     if let Some(token) = attachments.remove_file_by_path(target) {
-        println!("{DIM}Detached {}.{RESET}", token.label);
+        surface.push_line(&format!("{DIM}Detached {}.{RESET}", token.label))?;
         return Ok(());
     }
 
@@ -870,58 +919,72 @@ fn handle_detach_command(args: &str, attachments: &mut AttachmentManager) -> any
         .position(|label| label.to_lowercase() == lowered)
     {
         if attachments.remove_by_index(idx).is_some() {
-            println!("{DIM}Detached {}.{RESET}", labels[idx]);
+            surface.push_line(&format!("{DIM}Detached {}.{RESET}", labels[idx]))?;
             return Ok(());
         }
     }
 
-    println!("{YELLOW}No attachment matching '{target}'.{RESET}");
+    surface.push_line(&format!(
+        "{YELLOW}No attachment matching '{target}'.{RESET}"
+    ))?;
     Ok(())
 }
 
-fn print_attachments(attachments: &AttachmentManager) {
+fn print_attachments(surface: &mut dyn Surface, attachments: &AttachmentManager) -> io::Result<()> {
     if attachments.is_empty() {
-        println!("{DIM}No attachments.{RESET}");
-        return;
+        surface.push_line(&format!("{DIM}No attachments.{RESET}"))?;
+        return Ok(());
     }
-    println!("{BOLD}Attachments{RESET}");
+    surface.push_line(&format!("{BOLD}Attachments{RESET}"))?;
     for (idx, label) in attachments.labels().iter().enumerate() {
-        println!("{DIM}  {:>2}. {}{RESET}", idx + 1, label);
+        surface.push_line(&format!("{DIM}  {:>2}. {}{RESET}", idx + 1, label))?;
     }
+    Ok(())
 }
 
-fn print_command_help() {
-    println!("{BOLD}Commands{RESET}");
+fn print_command_help(surface: &mut dyn Surface) -> io::Result<()> {
+    surface.push_line(&format!("{BOLD}Commands{RESET}"))?;
     for command in LOCAL_COMMANDS {
-        println!("{DIM}  {:<10}{RESET}{}", command.name, command.description);
+        surface.push_line(&format!(
+            "{DIM}  {:<10}{RESET}{}",
+            command.name, command.description
+        ))?;
     }
-    println!("{DIM}  /?        {RESET}alias for /help");
-    println!();
-    println!(
+    surface.push_line(&format!("{DIM}  /?        {RESET}alias for /help"))?;
+    surface.push_line("")?;
+    surface.push_line(&format!(
         "{DIM}Tips: /resume opens prior conversations · ↑/↓ history · Tab complete slash commands{RESET}"
-    );
+    ))?;
+    Ok(())
 }
 
-fn print_sessions(engine: &StreamingQueryEngine, limit: i64) -> anyhow::Result<()> {
+fn print_sessions(
+    surface: &mut dyn Surface,
+    engine: &StreamingQueryEngine,
+    limit: i64,
+) -> anyhow::Result<()> {
     let Some((store, current_id)) = engine.session_binding() else {
-        println!("{DIM}No session store is configured for this run.{RESET}");
+        surface.push_line(&format!(
+            "{DIM}No session store is configured for this run.{RESET}"
+        ))?;
         return Ok(());
     };
     let sessions = store.list_sessions(limit)?;
     if sessions.is_empty() {
-        println!("{DIM}No previous sessions found.{RESET}");
+        surface.push_line(&format!("{DIM}No previous sessions found.{RESET}"))?;
         return Ok(());
     }
-    print_session_list(&store, &sessions, Some(&current_id))?;
+    print_session_list(surface, &store, &sessions, Some(&current_id))?;
     Ok(())
 }
 
 fn print_session_list(
+    surface: &mut dyn Surface,
     store: &SessionStore,
     sessions: &[SessionRecord],
     current_id: Option<&str>,
 ) -> anyhow::Result<()> {
-    println!("{BOLD}Conversations{RESET}");
+    surface.push_line(&format!("{BOLD}Conversations{RESET}"))?;
     for (idx, session) in sessions.iter().enumerate() {
         let count = store.message_count(&session.id).unwrap_or_default();
         let marker = if current_id == Some(session.id.as_str()) {
@@ -929,7 +992,7 @@ fn print_session_list(
         } else {
             " "
         };
-        println!(
+        surface.push_line(&format!(
             "{DIM}{:>2}.{}{RESET} {:<42} {DIM}{:>3} msgs · {} · {}{RESET}",
             idx + 1,
             marker,
@@ -937,8 +1000,8 @@ fn print_session_list(
             count,
             compact_line(&session.model, SESSION_LIST_MODEL_WIDTH),
             session.updated_at
-        );
-        println!("{DIM}    {}{RESET}", session.id);
+        ))?;
+        surface.push_line(&format!("{DIM}    {}{RESET}", session.id))?;
     }
     Ok(())
 }
@@ -976,16 +1039,17 @@ impl ShellCommand {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::shell::surface::TestSurface;
     use crate::shell::test_support::{test_cli_host, test_engine};
     #[tokio::test]
     async fn handle_help_command_prints_commands() {
         let engine = test_engine();
         let mut host = test_cli_host(engine.clone());
-        let mut footer = FooterRenderer::new(DEFAULT_FOOTER_HEIGHT);
+        let mut surface = TestSurface::new();
         let mut attachments = AttachmentManager::new();
 
         let consumed =
-            handle_local_command(&mut host, &engine, "/help", &mut footer, &mut attachments)
+            handle_local_command(&mut host, &engine, "/help", &mut surface, &mut attachments)
                 .await
                 .unwrap();
 
@@ -997,14 +1061,14 @@ mod tests {
     async fn handle_unknown_slash_command_is_consumed() {
         let engine = test_engine();
         let mut host = test_cli_host(engine.clone());
-        let mut footer = FooterRenderer::new(DEFAULT_FOOTER_HEIGHT);
+        let mut surface = TestSurface::new();
         let mut attachments = AttachmentManager::new();
 
         let consumed = handle_local_command(
             &mut host,
             &engine,
             "/notacommand",
-            &mut footer,
+            &mut surface,
             &mut attachments,
         )
         .await
@@ -1017,11 +1081,11 @@ mod tests {
     async fn handle_plain_message_is_not_consumed() {
         let engine = test_engine();
         let mut host = test_cli_host(engine.clone());
-        let mut footer = FooterRenderer::new(DEFAULT_FOOTER_HEIGHT);
+        let mut surface = TestSurface::new();
         let mut attachments = AttachmentManager::new();
 
         let consumed =
-            handle_local_command(&mut host, &engine, "hello", &mut footer, &mut attachments)
+            handle_local_command(&mut host, &engine, "hello", &mut surface, &mut attachments)
                 .await
                 .unwrap();
 
@@ -1032,11 +1096,11 @@ mod tests {
     async fn handle_exit_command_is_consumed() {
         let engine = test_engine();
         let mut host = test_cli_host(engine.clone());
-        let mut footer = FooterRenderer::new(DEFAULT_FOOTER_HEIGHT);
+        let mut surface = TestSurface::new();
         let mut attachments = AttachmentManager::new();
 
         let consumed =
-            handle_local_command(&mut host, &engine, "/exit", &mut footer, &mut attachments)
+            handle_local_command(&mut host, &engine, "/exit", &mut surface, &mut attachments)
                 .await
                 .unwrap();
 
@@ -1047,11 +1111,11 @@ mod tests {
     async fn handle_new_command_creates_session() {
         let engine = test_engine();
         let mut host = test_cli_host(engine.clone());
-        let mut footer = FooterRenderer::new(DEFAULT_FOOTER_HEIGHT);
+        let mut surface = TestSurface::new();
         let mut attachments = AttachmentManager::new();
 
         let consumed =
-            handle_local_command(&mut host, &engine, "/new", &mut footer, &mut attachments)
+            handle_local_command(&mut host, &engine, "/new", &mut surface, &mut attachments)
                 .await
                 .unwrap();
 
@@ -1065,11 +1129,11 @@ mod tests {
     async fn handle_clear_command_is_consumed() {
         let engine = test_engine();
         let mut host = test_cli_host(engine.clone());
-        let mut footer = FooterRenderer::new(DEFAULT_FOOTER_HEIGHT);
+        let mut surface = TestSurface::new();
         let mut attachments = AttachmentManager::new();
 
         let consumed =
-            handle_local_command(&mut host, &engine, "/clear", &mut footer, &mut attachments)
+            handle_local_command(&mut host, &engine, "/clear", &mut surface, &mut attachments)
                 .await
                 .unwrap();
 
@@ -1080,11 +1144,11 @@ mod tests {
     async fn handle_model_command_is_consumed() {
         let engine = test_engine();
         let mut host = test_cli_host(engine.clone());
-        let mut footer = FooterRenderer::new(DEFAULT_FOOTER_HEIGHT);
+        let mut surface = TestSurface::new();
         let mut attachments = AttachmentManager::new();
 
         let consumed =
-            handle_local_command(&mut host, &engine, "/model", &mut footer, &mut attachments)
+            handle_local_command(&mut host, &engine, "/model", &mut surface, &mut attachments)
                 .await
                 .unwrap();
 
@@ -1095,13 +1159,18 @@ mod tests {
     async fn handle_status_command_is_consumed() {
         let engine = test_engine();
         let mut host = test_cli_host(engine.clone());
-        let mut footer = FooterRenderer::new(DEFAULT_FOOTER_HEIGHT);
+        let mut surface = TestSurface::new();
         let mut attachments = AttachmentManager::new();
 
-        let consumed =
-            handle_local_command(&mut host, &engine, "/status", &mut footer, &mut attachments)
-                .await
-                .unwrap();
+        let consumed = handle_local_command(
+            &mut host,
+            &engine,
+            "/status",
+            &mut surface,
+            &mut attachments,
+        )
+        .await
+        .unwrap();
 
         assert!(consumed, "/status should be consumed");
     }
@@ -1110,13 +1179,13 @@ mod tests {
     async fn handle_attach_and_detach_commands() {
         let engine = test_engine();
         let mut host = test_cli_host(engine.clone());
-        let mut footer = FooterRenderer::new(DEFAULT_FOOTER_HEIGHT);
+        let mut surface = TestSurface::new();
         let mut attachments = AttachmentManager::new();
 
         let file_path = std::env::current_dir().unwrap().join("Cargo.toml");
         let cmd = format!("/attach {}", file_path.display());
         let consumed =
-            handle_local_command(&mut host, &engine, &cmd, &mut footer, &mut attachments)
+            handle_local_command(&mut host, &engine, &cmd, &mut surface, &mut attachments)
                 .await
                 .unwrap();
         assert!(consumed, "/attach should be consumed");
@@ -1126,7 +1195,7 @@ mod tests {
             &mut host,
             &engine,
             "/detach all",
-            &mut footer,
+            &mut surface,
             &mut attachments,
         )
         .await

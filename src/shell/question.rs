@@ -4,8 +4,9 @@
 //! question in the footer and reads either a numeric option choice or free-form
 //! text from the keyboard.
 
-use crate::shell::footer::{FooterMode, FooterRenderer};
+use crate::shell::footer::FooterMode;
 use crate::shell::prompt::PromptEditor;
+use crate::shell::surface::Surface;
 use crate::shell::theme::{DIM, GREEN, RESET};
 use crossterm::event::{Event, KeyCode, KeyEventKind, KeyModifiers};
 
@@ -145,7 +146,7 @@ pub enum QuestionResult {
 
 /// Poll for a pending question and render a question footer until answered.
 pub async fn run_question_ui(
-    footer: &mut FooterRenderer,
+    surface: &mut dyn Surface,
     event_rx: &mut tokio::sync::mpsc::UnboundedReceiver<Event>,
     channel: &std::sync::Arc<crate::tools::ask_tool::AskChannel>,
     width: usize,
@@ -156,10 +157,11 @@ pub async fn run_question_ui(
 
     let mut state = QuestionState::new(question, options);
     loop {
-        footer.render(
+        surface.render_footer(
             &FooterMode::Question(state.render_text(width)),
             &PromptEditor::new(),
-            width,
+            &crate::shell::attachment::AttachmentManager::new(),
+            None,
         )?;
 
         let Some(event) = event_rx.recv().await else {

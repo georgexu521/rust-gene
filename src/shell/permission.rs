@@ -5,8 +5,9 @@
 
 use crate::engine::runtime_controller::RuntimeController;
 use crate::shell::constants::PERMISSION_SCOPE_MAX_LEN;
-use crate::shell::footer::{FooterMode, FooterRenderer};
+use crate::shell::footer::FooterMode;
 use crate::shell::prompt::PromptEditor;
+use crate::shell::surface::Surface;
 use crate::shell::theme::{DIM, RESET, YELLOW};
 use crossterm::event::{Event, KeyCode, KeyEventKind};
 
@@ -31,9 +32,9 @@ pub async fn prompt_for_permission(
     tool_name: &str,
     arguments: &serde_json::Value,
     prompt_text: &str,
-    footer: &mut FooterRenderer,
+    surface: &mut dyn Surface,
     event_rx: &mut tokio::sync::mpsc::UnboundedReceiver<Event>,
-    terminal_width: usize,
+    _terminal_width: usize,
 ) -> anyhow::Result<bool> {
     let mut overlay_text = String::new();
     overlay_text.push_str(&format!("{YELLOW}?{RESET} Permission required\n"));
@@ -73,10 +74,11 @@ pub async fn prompt_for_permission(
         overlay_text.push_str(&format!("{DIM}  scope     {RESET}{pattern}\n"));
     }
 
-    footer.render(
+    surface.render_footer(
         &FooterMode::Permission(overlay_text),
         &PromptEditor::new(),
-        terminal_width,
+        &crate::shell::attachment::AttachmentManager::new(),
+        None,
     )?;
 
     let choice = loop {

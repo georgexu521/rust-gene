@@ -93,6 +93,29 @@ impl FooterRenderer {
     ) -> io::Result<()> {
         self.enter()?;
 
+        let lines = self.render_lines(mode, prompt, width, attachments);
+        for line in &lines {
+            println!("{line}");
+        }
+
+        // Pad to fixed footer height so subsequent renders start at same row.
+        for _ in lines.len()..self.height {
+            println!();
+        }
+
+        self.last_rendered_height = self.height;
+        self.cursor_in_footer = true;
+        io::stdout().flush()
+    }
+
+    /// Generate the footer lines without writing to the terminal.
+    pub fn render_lines(
+        &self,
+        mode: &FooterMode,
+        prompt: &PromptEditor,
+        width: usize,
+        attachments: &AttachmentLine,
+    ) -> Vec<String> {
         let mut lines: Vec<String> = match mode {
             FooterMode::Prompt => render_prompt_footer(prompt, width),
             FooterMode::Thinking => vec![format!("{YELLOW}· Thinking…{RESET}")],
@@ -108,18 +131,7 @@ impl FooterRenderer {
             lines.insert(0, attachments.text.clone());
         }
 
-        for line in &lines {
-            println!("{line}");
-        }
-
-        // Pad to fixed footer height so subsequent renders start at same row.
-        for _ in lines.len()..self.height {
-            println!();
-        }
-
-        self.last_rendered_height = self.height;
-        self.cursor_in_footer = true;
-        io::stdout().flush()
+        lines
     }
 
     /// Print content above the footer and move cursor back to footer start.

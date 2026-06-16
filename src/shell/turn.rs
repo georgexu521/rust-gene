@@ -2,30 +2,28 @@
 //!
 //! Consumes `StreamEvent`s from `RuntimeController::submit_stream_turn` and
 //! renders assistant text, tool status lines, permission prompts, and closeout
-//! markers into the scrollback/footer.
+//! markers into the active surface.
 
 use crate::engine::runtime_controller::RuntimeController;
 use crate::engine::streaming::{StreamEvent, StreamingQueryEngine};
 use crate::shell::constants::{TOOL_PROGRESS_LATEST_WIDTH, TOOL_PROGRESS_NAME_WIDTH};
-use crate::shell::footer::{FooterMode, FooterRenderer};
-use crate::shell::interrupt::InterruptState;
-use crate::shell::permission::prompt_for_permission;
+use crate::shell::footer::FooterMode;
 use crate::shell::prompt::PromptEditor;
 use crate::shell::render::render_assistant_line;
-use crate::shell::text::{compact_line, terminal_width};
+use crate::shell::surface::Surface;
 use crate::shell::theme::{CYAN, DIM, GREEN, RED, RESET, YELLOW};
 use crate::tui::tool_view::{upsert_tool_run, with_tool_run, ToolRunView};
 use crossterm::event::{Event, KeyCode, KeyEventKind, KeyModifiers};
 use futures::StreamExt;
-use std::io::{self, Write};
+use std::io;
 use std::sync::Arc;
 
 pub(crate) async fn run_turn(
     engine: Arc<StreamingQueryEngine>,
     controller: &RuntimeController,
     stream: &mut std::pin::Pin<Box<dyn futures::Stream<Item = StreamEvent> + Send>>,
-    footer: &mut FooterRenderer,
-    interrupt: &InterruptState,
+    surface: &mut dyn Surface,
+    interrupt: &crate::shell::interrupt::InterruptState,
     event_rx: &mut tokio::sync::mpsc::UnboundedReceiver<Event>,
     continuation_editor: Option<&mut PromptEditor>,
 ) -> anyhow::Result<Option<String>> {
@@ -38,14 +36,24 @@ pub(crate) async fn run_turn(
                 match event {
                     Some(StreamEvent::Start) => {}
                     Some(StreamEvent::ThinkingStart) => {
-                        footer.render(&FooterMode::Thinking, &PromptEditor::new(), terminal_width())?;
+                        surface.render_footer(
+                            &FooterMode::Thinking,
+                            &PromptEditor::new(),
+                            &crate::shell::attachment::AttachmentManager::new(),
+                        None,
+                        )?;
                     }
                     Some(StreamEvent::ThinkingChunk(_)) => {}
                     Some(StreamEvent::ThinkingComplete) => {
-                        footer.render(&FooterMode::Prompt, &PromptEditor::new(), terminal_width())?;
+                        surface.render_footer(
+                            &FooterMode::Prompt,
+                            &PromptEditor::new(),
+                            &crate::shell::attachment::AttachmentManager::new(),
+                        None,
+                        )?;
                     }
                     Some(StreamEvent::TextChunk(text)) => {
-                        assistant_printer.push(&text, footer)?;
+                        assistant_printer.push(&text, surface)?;
                     }
                     Some(StreamEvent::ToolCallStart { id, name }) => {
                         upsert_tool_run(&mut tool_runs, id, name);
@@ -55,27 +63,39 @@ pub(crate) async fn run_turn(
                     }
                     Some(StreamEvent::ToolCallComplete { .. }) => {}
                     Some(StreamEvent::ToolExecutionStart { id, name, .. }) => {
-                        assistant_printer.finish_line_if_needed(footer)?;
+                        assistant_printer.finish_line_if_needed(surface)?;
                         upsert_tool_run(&mut tool_runs, id.clone(), name.clone());
                         with_tool_run(&mut tool_runs, &id, |run| run.mark_running(name));
                         if let Some(run) = tool_runs.iter().find(|run| run.id == id) {
                             let desc = run.render_lines(false).join("\n");
-                            footer.render(&FooterMode::ToolRunning(desc), &PromptEditor::new(), terminal_width())?;
-                            footer.print_above(&format_tool_line("·", YELLOW, &run.render_lines(false).join("\n"), false))?;
+                            surface.render_footer(
+                                &FooterMode::ToolRunning(desc.clone()),
+                                &PromptEditor::new(),
+                                &crate::shell::attachment::AttachmentManager::new(),
+                            None,
+                            )?;
+                            surface.push_line(&format_tool_line("·", YELLOW, &desc, false)
+                            )?;
                         }
                     }
                     Some(StreamEvent::ToolExecutionProgress { id, progress }) => {
                         with_tool_run(&mut tool_runs, &id, |run| run.push_progress(progress));
                         if let Some(run) = tool_runs.iter().find(|run| run.id == id) {
                             if let Some(line) = tool_progress_line(run) {
-                                assistant_printer.finish_line_if_needed(footer)?;
-                                footer.print_above(&format_tool_line("…", YELLOW, &line, false))?;
-                                footer.render(&FooterMode::ToolRunning(line), &PromptEditor::new(), terminal_width())?;
+                                assistant_printer.finish_line_if_needed(surface)?;
+                                surface.push_line(&format_tool_line("…", YELLOW, &line, false)
+                                )?;
+                                surface.render_footer(
+                                    &FooterMode::ToolRunning(line),
+                                    &PromptEditor::new(),
+                                    &crate::shell::attachment::AttachmentManager::new(),
+                                None,
+                                )?;
                             }
                         }
                     }
                     Some(StreamEvent::ToolExecutionComplete { id, result, metadata, .. }) => {
-                        assistant_printer.finish_line_if_needed(footer)?;
+                        assistant_printer.finish_line_if_needed(surface)?;
                         with_tool_run(&mut tool_runs, &id, |run| {
                             run.mark_complete_with_metadata(result, metadata)
                         });
@@ -94,14 +114,20 @@ pub(crate) async fn run_turn(
                             } else {
                                 GREEN
                             };
-                            footer.print_above(&format_tool_line(marker, color, &run.render_lines(false).join("\n"), true))?;
+                            surface.push_line(&format_tool_line(marker, color, &run.render_lines(false).join("\n"), true)
+                            )?;
                         }
                     }
                     Some(StreamEvent::ToolResultsReadyForModel { .. }) => {
-                        footer.render(&FooterMode::Thinking, &PromptEditor::new(), terminal_width())?;
+                        surface.render_footer(
+                            &FooterMode::Thinking,
+                            &PromptEditor::new(),
+                            &crate::shell::attachment::AttachmentManager::new(),
+                        None,
+                        )?;
                     }
                     Some(StreamEvent::PermissionRequest { id, tool_name, arguments, prompt, metadata: _, review }) => {
-                        assistant_printer.finish_line_if_needed(footer)?;
+                        assistant_printer.finish_line_if_needed(surface)?;
                         let request = crate::engine::conversation_loop::ToolApprovalRequest {
                             tool_call: crate::services::api::ToolCall {
                                 id,
@@ -113,11 +139,17 @@ pub(crate) async fn run_turn(
                             audit: review.as_ref().map(|b| (**b).clone()),
                             diff_preview: None,
                         };
-                        let approved = prompt_for_permission(
+                        let width = surface.terminal_width();
+                        let approved = crate::shell::permission::prompt_for_permission(
                             controller, &request, &tool_name, &arguments, &prompt,
-                            footer, event_rx, terminal_width(),
+                            surface, event_rx, width,
                         ).await?;
-                        footer.render(&FooterMode::Thinking, &PromptEditor::new(), terminal_width())?;
+                        surface.render_footer(
+                            &FooterMode::Thinking,
+                            &PromptEditor::new(),
+                            &crate::shell::attachment::AttachmentManager::new(),
+                        None,
+                        )?;
                         if !approved {
                             interrupt.request_interrupt();
                             controller.cancel().await;
@@ -126,20 +158,21 @@ pub(crate) async fn run_turn(
                     }
                     Some(StreamEvent::RuntimeDiagnostic { .. }) => {}
                     Some(StreamEvent::Closeout { status, evidence_summary }) => {
-                        assistant_printer.finish_line_if_needed(footer)?;
+                        assistant_printer.finish_line_if_needed(surface)?;
                         let summary = evidence_summary.as_deref().unwrap_or("");
-                        footer.print_above(&format!("{DIM}[Closeout: {status}] {summary}{RESET}"))?;
+                        surface.push_line(&format!("{DIM}[Closeout: {status}] {summary}{RESET}"))?;
                     }
                     Some(StreamEvent::OutputTruncated) => {
-                        assistant_printer.finish_line_if_needed(footer)?;
-                        footer.print_above(&format!("{YELLOW}Output truncated.{RESET}"))?;
+                        assistant_printer.finish_line_if_needed(surface)?;
+                        surface.push_line(&format!("{YELLOW}Output truncated.{RESET}"))?;
                         if let Some(ref prompt) = continuation_editor {
-                            footer.render(
+                            surface.render_footer(
                                 &FooterMode::Prompt,
                                 prompt,
-                                terminal_width(),
+                                &crate::shell::attachment::AttachmentManager::new(),
+                            None,
                             )?;
-                            if let Some(text) = read_single_line(footer, event_rx).await? {
+                            if let Some(text) = read_single_line(surface, event_rx).await? {
                                 if !text.trim().is_empty() {
                                     let summary = build_context_summary(&engine).await;
                                     return Ok(Some(format!("{}\n\n{}", text.trim(), summary)));
@@ -149,8 +182,8 @@ pub(crate) async fn run_turn(
                     }
                     Some(StreamEvent::Complete) => break,
                     Some(StreamEvent::Error(error)) => {
-                        assistant_printer.finish_line_if_needed(footer)?;
-                        footer.print_above(&format!("{RED}Error:{RESET} {error}"))?;
+                        assistant_printer.finish_line_if_needed(surface)?;
+                        surface.push_line(&format!("{RED}Error:{RESET} {error}"))?;
                         break;
                     }
                     Some(_) => {}
@@ -171,23 +204,26 @@ pub(crate) async fn run_turn(
                         && interrupt.request_interrupt()
                     {
                         controller.cancel().await;
-                        footer.render(
+                        surface.render_footer(
                             &FooterMode::Interrupt,
                             &PromptEditor::new(),
-                            terminal_width(),
+                            &crate::shell::attachment::AttachmentManager::new(),
+                        None,
                         )?;
                     }
                 }
 
                 // Check for pending user questions while a turn is running.
                 if let Some(channel) = controller.engine().tool_registry().ask_channel() {
+                    let width = surface.terminal_width();
                     if let Some(answer) = crate::shell::question::run_question_ui(
-                        footer, event_rx, &channel, terminal_width()
+                        surface, event_rx, &channel, width
                     ).await? {
-                        footer.render(
+                        surface.render_footer(
                             &FooterMode::Thinking,
                             &PromptEditor::new(),
-                            terminal_width(),
+                            &crate::shell::attachment::AttachmentManager::new(),
+                        None,
                         )?;
                         let _ = answer;
                     }
@@ -196,7 +232,7 @@ pub(crate) async fn run_turn(
         }
     }
 
-    assistant_printer.finish(footer)?;
+    assistant_printer.finish(surface)?;
     Ok(None)
 }
 
@@ -213,12 +249,17 @@ async fn build_context_summary(engine: &StreamingQueryEngine) -> String {
 }
 
 async fn read_single_line(
-    footer: &mut FooterRenderer,
+    surface: &mut dyn Surface,
     event_rx: &mut tokio::sync::mpsc::UnboundedReceiver<Event>,
 ) -> anyhow::Result<Option<String>> {
     let mut editor = PromptEditor::new();
     loop {
-        footer.render(&FooterMode::Prompt, &editor, terminal_width())?;
+        surface.render_footer(
+            &FooterMode::Prompt,
+            &editor,
+            &crate::shell::attachment::AttachmentManager::new(),
+            None,
+        )?;
         let Some(event) = event_rx.recv().await else {
             return Ok(None);
         };
@@ -279,8 +320,8 @@ fn tool_progress_line(run: &ToolRunView) -> Option<String> {
     }
     Some(format!(
         "{} · {}",
-        compact_line(&run.name, TOOL_PROGRESS_NAME_WIDTH),
-        compact_line(latest, TOOL_PROGRESS_LATEST_WIDTH)
+        crate::shell::text::compact_line(&run.name, TOOL_PROGRESS_NAME_WIDTH),
+        crate::shell::text::compact_line(latest, TOOL_PROGRESS_LATEST_WIDTH)
     ))
 }
 
@@ -293,55 +334,51 @@ struct AssistantPrinter {
 }
 
 impl AssistantPrinter {
-    fn push(&mut self, text: &str, footer: &mut FooterRenderer) -> io::Result<()> {
-        self.ensure_started(footer)?;
+    fn push(&mut self, text: &str, surface: &mut dyn Surface) -> io::Result<()> {
         self.line.push_str(text);
 
         while let Some(newline_idx) = self.line.find('\n') {
             let rest = self.line.split_off(newline_idx + 1);
             let complete = std::mem::replace(&mut self.line, rest);
             let line = complete.trim_end_matches(['\r', '\n']);
-            self.print_line(line, footer)?;
+            self.print_line(line, surface)?;
         }
 
-        io::stdout().flush()
+        surface.flush()
     }
 
-    fn finish_line_if_needed(&mut self, footer: &mut FooterRenderer) -> io::Result<()> {
+    fn finish_line_if_needed(&mut self, surface: &mut dyn Surface) -> io::Result<()> {
         if self.started && !self.line.is_empty() {
             let line = std::mem::take(&mut self.line);
-            self.print_line(&line, footer)?;
+            self.print_line(&line, surface)?;
         }
         Ok(())
     }
 
-    fn finish(&mut self, footer: &mut FooterRenderer) -> io::Result<()> {
-        self.finish_line_if_needed(footer)?;
+    fn finish(&mut self, surface: &mut dyn Surface) -> io::Result<()> {
+        self.finish_line_if_needed(surface)?;
         if self.started {
-            footer.print_above("")?;
+            surface.push_line("")?;
         }
         Ok(())
     }
 
-    fn ensure_started(&mut self, footer: &mut FooterRenderer) -> io::Result<()> {
-        if !self.started {
-            footer.print_above(&format!("{CYAN}●{RESET} "))?;
-            self.started = true;
-        }
-        Ok(())
-    }
-
-    fn print_line(&mut self, line: &str, footer: &mut FooterRenderer) -> io::Result<()> {
+    fn print_line(&mut self, line: &str, surface: &mut dyn Surface) -> io::Result<()> {
         let rendered = render_assistant_line(line, &mut self.in_code_block);
         if rendered.trim().is_empty() {
             if !self.started || self.blank_lines >= 1 {
                 return Ok(());
             }
             self.blank_lines += 1;
-            footer.print_above("")?;
+            surface.push_line("")?;
         } else {
             self.blank_lines = 0;
-            footer.print_above(&rendered)?;
+            if !self.started {
+                self.started = true;
+                surface.push_line(&format!("{CYAN}●{RESET} {rendered}"))?;
+            } else {
+                surface.push_line(&rendered)?;
+            }
         }
         Ok(())
     }
