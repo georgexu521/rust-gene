@@ -831,7 +831,7 @@ fn test_token_attachments_remove_clear_and_summarize_once() {
 
     app.composer.add_file(
         "Cargo.toml",
-        crate::tui::components::attachment_token::AttachmentSource::File,
+        crate::components::attachment_token::AttachmentSource::File,
     );
     assert_eq!(app.composer_attachment_count(), 1);
     assert_eq!(app.composer_attachment_summaries().len(), 1);

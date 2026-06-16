@@ -2,6 +2,8 @@
 //!
 //! 对应 Claude Code 中的 AppState 概念
 
+use crate::components::attachment_token::{AttachmentSource, AttachmentToken};
+use crate::components::composer::{ComposerPart, ComposerState};
 use crate::engine::agent_mode::AgentMode;
 use crate::engine::conversation_loop::ToolApprovalResponse;
 use crate::engine::runtime_controller::RuntimeController;
@@ -13,8 +15,6 @@ use crate::state::{
     MessageRole, RuntimeAppState, RuntimeBridgeState, RuntimeMcpState, RuntimePermissionState,
     RuntimeStatusSnapshot, RuntimeToolStatus, TaskItem,
 };
-use crate::tui::components::attachment_token::{AttachmentSource, AttachmentToken};
-use crate::tui::components::composer::{ComposerPart, ComposerState};
 use crate::tui::sync_store::{TuiSyncSnapshot, TuiSyncStore};
 use crate::tui::tool_view::{ToolRunStatus, ToolRunView};
 use crate::workspace::Workspace;
@@ -31,7 +31,6 @@ mod actions;
 pub mod connect_wizard;
 mod memory;
 mod palette;
-mod permission_diff;
 mod runtime;
 mod slash_commands;
 mod status_tools;
@@ -578,6 +577,12 @@ mod completion_metadata_tests {
 }
 
 impl TuiApp {
+    /// 计算待审批工具的 Diff 预览（前端无关实现位于 `crate::shell::permission_diff`）。
+    pub fn compute_permission_diff(&self) -> Option<(String, String)> {
+        let req = self.pending_permission_request.as_ref()?;
+        crate::shell::permission_diff::compute_permission_diff(req)
+    }
+
     /// Push a new mode onto the mode stack and expose it via `self.mode`.
     pub fn push_mode(&mut self, mode: AppMode) {
         if self.mode != mode {

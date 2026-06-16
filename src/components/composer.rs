@@ -5,10 +5,8 @@
 //! attachment markers and provides one place to build the submitted prompt
 //! payload.
 
-use crate::tui::components::{
-    attachment_token::{AttachmentSource, AttachmentToken},
-    input::InputState,
-};
+use crate::components::attachment_token::{AttachmentSource, AttachmentToken};
+use crate::tui::components::input::InputState;
 
 #[derive(Debug, Clone)]
 pub struct ComposerState {

@@ -1879,7 +1879,7 @@ mod tests {
         app.prompt_stash = Some("review the latest TUI run".to_string());
         app.composer.add_file(
             "Cargo.toml",
-            crate::tui::components::attachment_token::AttachmentSource::File,
+            crate::components::attachment_token::AttachmentSource::File,
         );
         app.composer
             .text
@@ -2155,11 +2155,11 @@ cargo check finished successfully"
         app.facade_snapshot.provider_request.model = Some("deepseek-v4-flash".into());
         app.composer.add_file(
             "Cargo.toml",
-            crate::tui::components::attachment_token::AttachmentSource::File,
+            crate::components::attachment_token::AttachmentSource::File,
         );
         app.composer.add_file(
             "src/main.rs",
-            crate::tui::components::attachment_token::AttachmentSource::File,
+            crate::components::attachment_token::AttachmentSource::File,
         );
         app.composer
             .text

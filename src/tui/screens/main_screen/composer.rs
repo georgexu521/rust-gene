@@ -1,6 +1,6 @@
+use crate::components::attachment_token::AttachmentToken;
 use crate::tui::{
     app::{AppMode, TuiApp},
-    components::attachment_token::AttachmentToken,
     view_model::activity::{active_turn_status, format_elapsed, ActivePhase},
 };
 use ratatui::{

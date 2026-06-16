@@ -10,6 +10,7 @@ pub mod api;
 pub mod bootstrap;
 pub mod bridge;
 pub mod changelog;
+pub mod components;
 pub mod context_manager;
 pub mod cost_tracker;
 pub mod desktop_runtime;

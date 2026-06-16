@@ -2,9 +2,7 @@
 //!
 //! 可复用的 UI 组件
 
-pub mod attachment_token;
 pub mod collapsible;
-pub mod composer;
 pub mod diff_renderer;
 pub mod diff_viewer;
 pub mod file_browser;

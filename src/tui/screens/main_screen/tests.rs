@@ -1,6 +1,6 @@
 use super::*;
+use crate::components::attachment_token::AttachmentSource;
 use crate::state::{MessageItem, MessageRole};
-use crate::tui::components::attachment_token::AttachmentSource;
 use crate::tui::view_model::timeline::{
     estimate_tool_runs_height, timeline_items, tool_runs_from_parts,
 };

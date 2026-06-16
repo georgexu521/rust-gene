@@ -5,6 +5,8 @@
 //! the short "thinking" line is transient. This matches the interaction model
 //! used by mature coding-agent CLIs more closely than a dashboard-style TUI.
 
+pub mod permission_diff;
+
 use crate::engine::streaming::{StreamEvent, StreamingQueryEngine};
 use crate::services::api::Message;
 use crate::session_store::{MessageRecord, SessionRecord, SessionStore};
