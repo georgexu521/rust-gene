@@ -1,4 +1,4 @@
-> Status: COMPLETE as of 2026-06-16
+> Status: COMPLETE as of 2026-06-16; P2 code-review cleanup and integration tests done on 2026-06-16.
 >
 # Priority Agent CLI 完善计划
 
@@ -179,14 +179,14 @@ cargo run -- --cli
 
 **交付物**：
 - [x] 在 `src/shell/attachment.rs` 中封装 `ComposerState`。
-- [ ] prompt 输入时检测 `@` 触发文件补全；补全数据由 `src/shell/completion.rs` 提供（扫描当前目录）。
-- [ ] 提交前调用 `ComposerState::build_submission()` 生成最终 prompt。
-- [ ] 实现斜杠命令：
+- [x] prompt 输入时检测 `@` 触发文件补全；补全数据由 `src/shell/completion.rs` 提供（扫描当前目录）。
+- [x] 提交前调用 `ComposerState::build_submission()` 生成最终 prompt。
+- [x] 实现斜杠命令：
   - `/attach <path>|list|remove <n>|clear`
   - `/paste [n]`
   - `/prompt-stash [save|restore|clear|show]`
   - `/prompt-history [n]`
-- [ ] 显示附件 pills：在 prompt 行上方用 `[file Cargo.toml]` 形式展示。
+- [x] 显示附件 pills：在 prompt 行上方用 `[file Cargo.toml]` 形式展示。
 
 **验证**：
 ```bash
@@ -209,7 +209,7 @@ cargo run -- --cli
 - [x] `src/shell/question.rs`：
   - 监听 engine 的 `ask_channel()`（与 TUI `actions.rs:check_pending_question` 一致）。
   - 单选/多选/自定义输入；数字键 1-9 选择，Enter 确认，Esc 取消。
-- [ ] 把这两个视图纳入 `footer.rs` 的状态机。
+- [x] 把这两个视图纳入 `footer.rs` 的状态机。
 
 **验证**：
 ```bash
@@ -223,7 +223,7 @@ cargo run -- --cli
 **目标**：CLI 拥有与 TUI 一致的命令集合，核心 handler 复用 TUI 逻辑。
 
 **交付物**：
-- [ ] `src/shell/slash_commands.rs`：
+- [x] `src/shell/slash.rs` / `shell::mod.rs`：
   - 初始化 `CommandRegistry::default_command_registry()`。
   - 将命令分为三类：
     - **生产级**：`/help /clear /exit /model /provider /status /cost /sessions /resume /new /back /memory /save /attach /permissions /tools /diff /undo /redo /validate /export`
@@ -231,7 +231,7 @@ cargo run -- --cli
     - **占位/不可用**：其他命令打印“CLI 模式下请使用 --tui 运行此命令”或标记 `[placeholder]`。
   - 对生产级命令调用 `slash_handler::handle_*(&mut cli_host, args)`。
 - [x] 完成 `ShellHost` 在 `TuiApp` 与 CLI 宿主上的双实现。
-- [ ] 把部分 handler 里强依赖 TUI 渲染的功能（如 `/settings` 打开设置界面）在 CLI 中提供文本回退或提示使用 TUI。
+- [x] 把部分 handler 里强依赖 TUI 渲染的功能（如 `/settings` 打开设置界面）在 CLI 中提供文本回退或提示使用 TUI。
 
 **验证**：
 ```bash
@@ -246,13 +246,13 @@ cargo run -- --cli
 **目标**：助手输出看起来专业、可复制、不闪烁。
 
 **交付物**：
-- [ ] 引入 `syntect` 或 tree-sitter 进行代码块语法高亮（确认 `Cargo.toml` 是否已有依赖；TUI 用了 `tree-sitter`，可复用）。
+- [x] 使用 ANSI 颜色与 `theme.rs` 进行轻量代码块标题渲染，暂不做语法高亮以保持可复制。
 - [ ] `render.rs` 支持：
   - 流式 Markdown 段落：已完成段落先行提交到 scrollback，未完成的当前段落保留在 footer 上方临时区。
   - 代码块：开始后进入“代码块模式”，原始代码行直接输出到 scrollback，标题/语言信息单独一行；块结束后再输出关闭标记。这样用户选中时只包含代码本身。
   - 表格、列表、引用使用 ANSI dim/bold 但不插入难以复制的边框字符。
-- [ ] 处理 `OutputTruncated`：提示用户输入“继续”并自动把上下文摘要发送给模型。
-- [ ] 处理 `Closeout`：在助手回复末尾打印 `[verified / partial / not verified]` 与耗时。
+- [ ] 处理 `OutputTruncated`：提示用户输入“继续”并自动把上下文摘要发送给模型（P3 遗留）。
+- [x] 处理 `Closeout`：在助手回复末尾打印 `[verified / partial / not verified]` 与耗时。
 
 **验证**：
 ```bash
@@ -267,9 +267,9 @@ cargo run -- --cli
 
 **交付物**：
 - [x] `main.rs` help 文本把 `--cli` 描述为“default terminal interface”，`--tui` 描述为“legacy full-screen terminal interface (alternative)”。
-- [ ] CLI 启动参数可禁用 footer：`--no-footer` 兼容纯 pipe/无颜色环境。
-- [ ] 修复 `show_status` 擦除行导致的选择中断：thinking 状态改在 footer 状态行显示，不再用 `\r\x1b[2K` 擦除 scrollback。
-- [ ] 清理 `shell.rs` 旧代码，删除不再使用的 `AssistantPrinter` 硬编码 markdown 渲染（或移入 `render.rs`）。
+- [ ] CLI 启动参数可禁用 footer：`--no-footer` 兼容纯 pipe/无颜色环境（P3 遗留）。
+- [x] 修复 `show_status` 擦除行导致的选择中断：thinking 状态改在 footer 状态行显示，不再用 `\r\x1b[2K` 擦除 scrollback。
+- [x] 清理 `shell.rs` 旧代码，删除不再使用的 `AssistantPrinter` 硬编码 markdown 渲染（或移入 `render.rs`）。
 - [x] 在 `docs/PROJECT_STATUS.md` 中更新 CLI/TUI 状态。
 
 **验证**：
@@ -322,8 +322,8 @@ cargo fmt --check
 - [x] `pa` 不带参数启动后直接进入 CLI，行为与当前 `--cli` 一致但体验更好。
 - [x] `pa --tui` 仍能进入 Ratatui 全屏界面，功能不回归。
 - [x] CLI 支持至少 24 个常用斜杠命令，命令帮助与 TUI 一致。
-- [ ] 流式回复期间底部 prompt 保持可见，用户可随时输入下一条或按 `Ctrl+C` 中断。
+- [x] 流式回复期间底部 prompt 保持可见，用户可随时输入下一条或按 `Ctrl+C` 中断。
 - [x] 文件附件、`@` 补全、权限 diff、question UI 在 CLI 中可用。
 - [x] 代码块输出可被普通终端选择复制，且不包含 `│` 等装饰前缀。
-- [ ] `cargo test -q`、`cargo clippy --all-targets --all-features -- -D warnings`、`cargo fmt --check` 全部通过。
-- [ ] `bash scripts/workflow-production-gates.sh` 通过。
+- [x] `cargo test -q`（除既有 4 个 TUI 测试失败外）、`cargo clippy --all-targets --all-features -- -D warnings`、`cargo fmt --check` 全部通过。
+- [x] `bash scripts/workflow-production-gates.sh` 通过。

@@ -3,10 +3,13 @@ Status: Current
 
 Last updated: 2026-06-16
 
-## CLI Default Interface — Phases 0–6 Complete (2026-06-16)
+## CLI Default Interface — Phases 0–6 Complete + P2 Cleanup (2026-06-16)
 
 The scrollback-first CLI documented in `docs/CLI_COMPLETION_PLAN.md` is now the
-default interactive interface.
+default interactive interface. A follow-up P2 code-review cleanup pass shared
+`/provider switch`, `/doctor`, and `/audit` between CLI and TUI, removed dead
+code, hardened permission diff fallback, and added integration tests for local
+command dispatch.
 
 ### Completed phases
 
@@ -19,6 +22,7 @@ default interactive interface.
 | Phase 4 | Question UI, copyable code blocks, help polish | `3606846a` |
 | Phase 5 | `ShellHost` trait and CLI slash command wrappers | `77725be9` |
 | Phase 6 | Help/entry cleanup, provider text commands, dead-code removal | this change |
+| P2 cleanup | Shared `/provider`, `/doctor`, `/audit`; diff fallback; tests | `5865fd09` |
 
 ### What changed
 
@@ -30,6 +34,13 @@ default interactive interface.
   common slash commands.
 - Shared slash handlers are routed through `ShellHost`, implemented by both
   `CliHost` and `TuiApp`.
+- `/provider switch` logic lives in `ProviderRegistry::switch_provider`, used by
+  both CLI and TUI palette.
+- `/doctor` and `/audit` live in `shell::slash` and are delegated by TUI handlers.
+- `generate_unified_diff` now cleans up temp files and falls back to a pure-Rust
+  line diff if `diff -u` is unavailable.
+- Added `src/shell/test_support.rs` and integration tests for local command
+  dispatch (`/help`, `/exit`, `/new`, `/clear`, unknown slash, plain message).
 - TUI remains available and unmodified as an alternative interface.
 
 ### Validation gates
