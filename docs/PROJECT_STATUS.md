@@ -23,6 +23,7 @@ command dispatch.
 | Phase 5 | `ShellHost` trait and CLI slash command wrappers | `77725be9` |
 | Phase 6 | Help/entry cleanup, provider text commands, dead-code removal | this change |
 | P2 cleanup | Shared `/provider`, `/doctor`, `/audit`; diff fallback; tests | `5865fd09` |
+| P3 | OutputTruncated continuation, `--no-footer`, shared `/status`/`/model`, stability | `265f5b9c` |
 
 ### What changed
 
@@ -40,7 +41,11 @@ command dispatch.
 - `generate_unified_diff` now cleans up temp files and falls back to a pure-Rust
   line diff if `diff -u` is unavailable.
 - Added `src/shell/test_support.rs` and integration tests for local command
-  dispatch (`/help`, `/exit`, `/new`, `/clear`, unknown slash, plain message).
+  dispatch (`/help`, `/exit`, `/new`, `/clear`, `/model`, `/status`, attachments,
+  unknown slash, plain message).
+- P3 adds `OutputTruncated` continuation prompt with context summary,
+  `--no-footer` CLI flag, shared `/status` and `/model` handlers, and main-loop
+  error recovery for local commands and streaming turns.
 - TUI remains available and unmodified as an alternative interface.
 
 ### Validation gates

@@ -251,7 +251,7 @@ cargo run -- --cli
   - 流式 Markdown 段落：已完成段落先行提交到 scrollback，未完成的当前段落保留在 footer 上方临时区。
   - 代码块：开始后进入“代码块模式”，原始代码行直接输出到 scrollback，标题/语言信息单独一行；块结束后再输出关闭标记。这样用户选中时只包含代码本身。
   - 表格、列表、引用使用 ANSI dim/bold 但不插入难以复制的边框字符。
-- [ ] 处理 `OutputTruncated`：提示用户输入“继续”并自动把上下文摘要发送给模型（P3 遗留）。
+- [x] 处理 `OutputTruncated`：提示用户输入“继续”并自动把上下文摘要发送给模型（P3 完成）。
 - [x] 处理 `Closeout`：在助手回复末尾打印 `[verified / partial / not verified]` 与耗时。
 
 **验证**：
@@ -267,7 +267,7 @@ cargo run -- --cli
 
 **交付物**：
 - [x] `main.rs` help 文本把 `--cli` 描述为“default terminal interface”，`--tui` 描述为“legacy full-screen terminal interface (alternative)”。
-- [ ] CLI 启动参数可禁用 footer：`--no-footer` 兼容纯 pipe/无颜色环境（P3 遗留）。
+- [x] CLI 启动参数可禁用 footer：`--no-footer` 兼容纯 pipe/无颜色环境（P3 完成）。
 - [x] 修复 `show_status` 擦除行导致的选择中断：thinking 状态改在 footer 状态行显示，不再用 `\r\x1b[2K` 擦除 scrollback。
 - [x] 清理 `shell.rs` 旧代码，删除不再使用的 `AssistantPrinter` 硬编码 markdown 渲染（或移入 `render.rs`）。
 - [x] 在 `docs/PROJECT_STATUS.md` 中更新 CLI/TUI 状态。
@@ -316,6 +316,14 @@ cargo fmt --check
 | 代码块语法高亮依赖 tree-sitter 语言识别，可能增加编译时间 | 低 | 仅对常见语言启用；无识别时回退到纯文本。 |
 
 ---
+
+## 9. P3 追加项（2026-06-16 完成）
+
+- [x] `OutputTruncated` 继续提示与上下文摘要自动重投。
+- [x] `--no-footer` CLI 启动参数。
+- [x] `/status` 与 `/model` 在 CLI/TUI 间共享实现。
+- [x] 扩展 CLI 集成测试覆盖 `/model`、`/status`、附件管理。
+- [x] 主循环对本地命令与 turn 运行错误进行恢复，避免单点故障直接退出。
 
 ## 8. 成功标准
 
