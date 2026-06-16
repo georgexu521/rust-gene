@@ -9,6 +9,12 @@ use crate::shell::prompt::PromptEditor;
 use crate::shell::theme::{CYAN, DIM, GREEN, MAGENTA, RESET, YELLOW};
 use std::io::{self, Write};
 
+/// Optional attachment pill line shown above the prompt.
+#[derive(Debug, Clone, Default)]
+pub struct AttachmentLine {
+    pub text: String,
+}
+
 /// State describing what the footer should currently display.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FooterMode {
@@ -74,9 +80,20 @@ impl FooterRenderer {
         prompt: &PromptEditor,
         width: usize,
     ) -> io::Result<()> {
+        self.render_with_attachments(mode, prompt, width, &AttachmentLine::default())
+    }
+
+    /// Render the footer with an optional attachment pill line above the prompt.
+    pub fn render_with_attachments(
+        &mut self,
+        mode: &FooterMode,
+        prompt: &PromptEditor,
+        width: usize,
+        attachments: &AttachmentLine,
+    ) -> io::Result<()> {
         self.enter()?;
 
-        let lines: Vec<String> = match mode {
+        let mut lines: Vec<String> = match mode {
             FooterMode::Prompt => render_prompt_footer(prompt, width),
             FooterMode::Thinking => vec![format!("{YELLOW}· Thinking…{RESET}")],
             FooterMode::ToolRunning(desc) => {
@@ -86,6 +103,10 @@ impl FooterRenderer {
             FooterMode::Question(text) => render_question_footer(text, width),
             FooterMode::Interrupt => vec![format!("{MAGENTA}· Press Ctrl+C again to quit{RESET}")],
         };
+
+        if !attachments.text.is_empty() && matches!(mode, FooterMode::Prompt) {
+            lines.insert(0, attachments.text.clone());
+        }
 
         for line in &lines {
             println!("{line}");

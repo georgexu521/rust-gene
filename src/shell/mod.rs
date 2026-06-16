@@ -6,6 +6,7 @@
 //! matches the interaction model used by mature coding-agent CLIs more closely
 //! than a dashboard-style TUI.
 
+pub mod attachment;
 pub mod footer;
 pub mod interrupt;
 pub mod permission_diff;
@@ -13,11 +14,13 @@ pub mod prompt;
 pub mod render;
 pub mod theme;
 
+use crate::components::attachment_token::AttachmentSource;
 use crate::engine::runtime_controller::RuntimeController;
 use crate::engine::streaming::{StreamEvent, StreamingQueryEngine};
 use crate::services::api::Message;
 use crate::session_store::{MessageRecord, SessionRecord, SessionStore};
-use crate::shell::footer::{FooterMode, FooterRenderer};
+use crate::shell::attachment::AttachmentManager;
+use crate::shell::footer::{AttachmentLine, FooterMode, FooterRenderer};
 use crate::shell::interrupt::InterruptState;
 use crate::shell::prompt::PromptEditor;
 use crate::shell::render::render_assistant_line;
@@ -32,6 +35,7 @@ use std::sync::Arc;
 const LOCAL_COMMANDS: &[ShellCommand] = &[
     ShellCommand::new("/help", "show commands"),
     ShellCommand::new("/commands", "show commands"),
+    ShellCommand::new("/attach", "attach a file to the next message"),
     ShellCommand::new("/resume", "resume a previous conversation"),
     ShellCommand::new("/sessions", "list previous conversations"),
     ShellCommand::new("/status", "show model and context status"),
@@ -58,6 +62,7 @@ async fn run_shell_inner(engine: Arc<StreamingQueryEngine>) -> anyhow::Result<()
 
     let footer_height = 3usize;
     let mut editor = PromptEditor::new();
+    let mut attachments = AttachmentManager::new();
     let mut footer = FooterRenderer::new(footer_height);
     let interrupt = InterruptState::new();
     let controller = RuntimeController::new(engine.clone());
@@ -70,7 +75,7 @@ async fn run_shell_inner(engine: Arc<StreamingQueryEngine>) -> anyhow::Result<()
     let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel::<Event>();
     tokio::spawn(event_reader(event_tx));
 
-    footer.render(&FooterMode::Prompt, &editor, terminal_width())?;
+    render_prompt_footer(&mut footer, &editor, &attachments)?;
 
     loop {
         let Some(event) = event_rx.recv().await else {
@@ -92,23 +97,27 @@ async fn run_shell_inner(engine: Arc<StreamingQueryEngine>) -> anyhow::Result<()
                     }
                 }
                 (KeyModifiers::NONE, KeyCode::Enter) => {
-                    if !editor.is_empty() {
+                    if !editor.is_empty() || !attachments.is_empty() {
                         let message = editor.text();
                         editor.clear();
                         footer.print_above(&format_user_message(&message))?;
 
-                        if handle_local_command(&engine, &message, &mut footer).await? {
+                        if handle_local_command(&engine, &message, &mut footer, &mut attachments)
+                            .await?
+                        {
                             if matches!(message.trim(), "/exit" | "/quit" | "exit" | "quit") {
                                 break;
                             }
-                            footer.render(&FooterMode::Prompt, &editor, terminal_width())?;
+                            render_prompt_footer(&mut footer, &editor, &attachments)?;
                             continue;
                         }
 
+                        let submission = attachments.build_submission(&message);
+                        attachments.clear();
                         interrupt.start_turn();
                         footer.render(&FooterMode::Thinking, &editor, terminal_width())?;
 
-                        let mut stream = controller.submit_stream_turn(message).await;
+                        let mut stream = controller.submit_stream_turn(submission).await;
                         run_turn(
                             engine.clone(),
                             &controller,
@@ -119,26 +128,26 @@ async fn run_shell_inner(engine: Arc<StreamingQueryEngine>) -> anyhow::Result<()
                         )
                         .await?;
                         interrupt.end_turn();
-                        footer.render(&FooterMode::Prompt, &editor, terminal_width())?;
+                        render_prompt_footer(&mut footer, &editor, &attachments)?;
                     }
                 }
                 (KeyModifiers::CONTROL, KeyCode::Char('d'))
                 | (KeyModifiers::NONE, KeyCode::Esc) => {
-                    if editor.is_empty() {
+                    if editor.is_empty() && attachments.is_empty() {
                         break;
                     }
                 }
                 (_, KeyCode::Char(ch)) => {
                     editor.insert(&ch.to_string());
-                    footer.render(&FooterMode::Prompt, &editor, terminal_width())?;
+                    render_prompt_footer(&mut footer, &editor, &attachments)?;
                 }
                 (_, KeyCode::Backspace) => {
                     editor.backspace();
-                    footer.render(&FooterMode::Prompt, &editor, terminal_width())?;
+                    render_prompt_footer(&mut footer, &editor, &attachments)?;
                 }
                 (_, KeyCode::Delete) => {
                     editor.delete();
-                    footer.render(&FooterMode::Prompt, &editor, terminal_width())?;
+                    render_prompt_footer(&mut footer, &editor, &attachments)?;
                 }
                 (KeyModifiers::CONTROL, KeyCode::Left) | (KeyModifiers::ALT, KeyCode::Left) => {
                     editor.move_word_left();
@@ -178,6 +187,20 @@ async fn run_shell_inner(engine: Arc<StreamingQueryEngine>) -> anyhow::Result<()
     }
 
     Ok(())
+}
+
+fn render_prompt_footer(
+    footer: &mut FooterRenderer,
+    editor: &PromptEditor,
+    attachments: &AttachmentManager,
+) -> io::Result<()> {
+    let line = attachments.render_pills(terminal_width().saturating_sub(2));
+    footer.render_with_attachments(
+        &FooterMode::Prompt,
+        editor,
+        terminal_width(),
+        &AttachmentLine { text: line },
+    )
 }
 
 fn prompt_prefix_width() -> usize {
@@ -247,6 +270,7 @@ async fn handle_local_command(
     engine: &StreamingQueryEngine,
     message: &str,
     footer: &mut FooterRenderer,
+    attachments: &mut AttachmentManager,
 ) -> anyhow::Result<bool> {
     match message.trim() {
         "/exit" | "/quit" | "exit" | "quit" => {
@@ -258,6 +282,25 @@ async fn handle_local_command(
         }
         "/help" | "/commands" | "/?" | "help" => {
             print_command_help();
+            Ok(true)
+        }
+        "/attach" | "/attachments" => {
+            print_attachments(attachments);
+            Ok(true)
+        }
+        command if command.starts_with("/attach ") => {
+            let args = command.strip_prefix("/attach ").unwrap_or("").trim();
+            handle_attach_command(args, attachments)?;
+            Ok(true)
+        }
+        command if command.starts_with("/detach ") => {
+            let args = command.strip_prefix("/detach ").unwrap_or("").trim();
+            handle_detach_command(args, attachments)?;
+            Ok(true)
+        }
+        "/detach" | "/unattach" => {
+            attachments.clear();
+            println!("{DIM}Cleared all attachments.{RESET}");
             Ok(true)
         }
         "/model" => {
@@ -295,6 +338,86 @@ async fn handle_local_command(
             Ok(true)
         }
         _ => Ok(false),
+    }
+}
+
+fn handle_attach_command(args: &str, attachments: &mut AttachmentManager) -> anyhow::Result<()> {
+    let paths: Vec<&str> = args.split_whitespace().collect();
+    if paths.is_empty() {
+        println!("{DIM}Usage: /attach <path> [<path> ...]{RESET}");
+        return Ok(());
+    }
+
+    for path in paths {
+        let trimmed = path.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if !std::path::Path::new(trimmed).exists() {
+            println!("{YELLOW}✗{RESET} {DIM}not found:{RESET} {trimmed}");
+            continue;
+        }
+        match attachments.add_file(trimmed, AttachmentSource::File) {
+            Some(token) => println!("{GREEN}✓{RESET} {DIM}attached{RESET} {}", token.label),
+            None => println!("{YELLOW}·{RESET} {DIM}already attached:{RESET} {trimmed}"),
+        }
+    }
+    Ok(())
+}
+
+fn handle_detach_command(args: &str, attachments: &mut AttachmentManager) -> anyhow::Result<()> {
+    let target = args.trim();
+    if target.is_empty() {
+        println!("{DIM}Usage: /detach <index|path|label> or /detach all{RESET}");
+        return Ok(());
+    }
+    if target.eq_ignore_ascii_case("all") {
+        attachments.clear();
+        println!("{DIM}Cleared all attachments.{RESET}");
+        return Ok(());
+    }
+
+    if let Ok(index) = target.parse::<usize>() {
+        if index > 0 {
+            if attachments.remove_by_index(index - 1).is_some() {
+                println!("{DIM}Detached attachment #{index}.{RESET}");
+            } else {
+                println!("{YELLOW}No attachment at index {index}.{RESET}");
+            }
+            return Ok(());
+        }
+    }
+
+    if let Some(token) = attachments.remove_file_by_path(target) {
+        println!("{DIM}Detached {}.{RESET}", token.label);
+        return Ok(());
+    }
+
+    // Try matching by label.
+    let labels: Vec<String> = attachments.labels();
+    let lowered = target.to_lowercase();
+    if let Some(idx) = labels
+        .iter()
+        .position(|label| label.to_lowercase() == lowered)
+    {
+        if attachments.remove_by_index(idx).is_some() {
+            println!("{DIM}Detached {}.{RESET}", labels[idx]);
+            return Ok(());
+        }
+    }
+
+    println!("{YELLOW}No attachment matching '{target}'.{RESET}");
+    Ok(())
+}
+
+fn print_attachments(attachments: &AttachmentManager) {
+    if attachments.is_empty() {
+        println!("{DIM}No attachments.{RESET}");
+        return;
+    }
+    println!("{BOLD}Attachments{RESET}");
+    for (idx, label) in attachments.labels().iter().enumerate() {
+        println!("{DIM}  {:>2}. {}{RESET}", idx + 1, label);
     }
 }
 
