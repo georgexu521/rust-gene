@@ -564,6 +564,7 @@ mod tests {
             tool_calls: None,
             usage: None,
             tool_call_repair: None,
+            finish_reason: None,
         });
         let route = IntentRouter::new().route("hello");
         let resource_policy = ResourcePolicy::from_route(&route);
@@ -775,6 +776,7 @@ mod tests {
             tool_calls: None,
             usage: None,
             tool_call_repair: None,
+            finish_reason: None,
         });
         let route = IntentRouter::new().route("finish the change");
         let mut task_bundle = TaskContextBundle::new("finish the change", ".", route.clone(), None);

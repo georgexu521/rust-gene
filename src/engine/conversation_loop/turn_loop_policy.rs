@@ -69,7 +69,7 @@ impl MainLoopProfile {
 // ForceSummary
 // ---------------------------------------------------------------------------
 
-const FORCE_SUMMARY_MAX_TOKENS: u32 = 2048;
+const FORCE_SUMMARY_MAX_TOKENS: u32 = 8192;
 const FORCE_SUMMARY_INSTRUCTION: &str = "The turn is being force-summarized because the runtime reached a stuck-state or context guard. Summarize in plain prose what you learned from the tool results above. Do NOT emit any tool calls, function-call markup, DSML invocations, or SEARCH/REPLACE edit blocks; they will be discarded. Just plain text.";
 
 /// Why the turn was forcefully terminated.
@@ -180,6 +180,13 @@ pub(super) async fn force_summary_after_iter_limit(
                             cached_tokens: usage.cached_tokens,
                         })
                         .await;
+                }
+            }
+            if super::session_processor::finish_reason_indicates_length(
+                response.finish_reason.as_deref(),
+            ) {
+                if let Some(tx) = context.tx {
+                    let _ = tx.send(StreamEvent::OutputTruncated).await;
                 }
             }
 
@@ -301,5 +308,10 @@ mod tests {
             "Done\n〈DSML｜function_calls〉call〈/DSML｜function_calls〉\n<tool_call>{}</tool_call>",
         );
         assert_eq!(cleaned, "Done");
+    }
+
+    #[test]
+    fn force_summary_uses_full_answer_output_cap() {
+        assert_eq!(FORCE_SUMMARY_MAX_TOKENS, 8192);
     }
 }

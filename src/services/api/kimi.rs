@@ -242,6 +242,10 @@ impl LlmProvider for KimiClient {
             .next()
             .context("No choices in response")?;
 
+        let finish_reason = choice
+            .finish_reason
+            .as_ref()
+            .map(|reason| format!("{reason:?}"));
         let message = choice.message;
 
         // 提取工具调用
@@ -288,6 +292,7 @@ impl LlmProvider for KimiClient {
             tool_calls: repaired.tool_calls,
             usage,
             tool_call_repair: repaired.report,
+            finish_reason,
         })
     }
 

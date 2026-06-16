@@ -574,6 +574,7 @@ impl LlmProvider for MockLlmProvider {
                     cached_tokens: None,
                 }),
                 tool_call_repair: None,
+                finish_reason: None,
             }),
             None => Err(anyhow::anyhow!("Mock LLM error")),
         }
@@ -615,6 +616,7 @@ impl LlmProvider for CapturingLlmProvider {
                 cached_tokens: Some(80),
             }),
             tool_call_repair: None,
+            finish_reason: None,
         })
     }
 

@@ -679,6 +679,22 @@ mod tests {
     }
 
     #[test]
+    fn sync_store_makes_output_truncation_visible() {
+        let mut store = TuiSyncStore::new();
+        store.start_turn("user_1".to_string(), "assistant_1".to_string());
+
+        store.apply_stream_event(&StreamEvent::TextChunk("这是一个".to_string()));
+        store.apply_stream_event(&StreamEvent::OutputTruncated);
+
+        let snapshot = store.snapshot();
+        assert!(!snapshot.assistant_streaming);
+        assert!(snapshot.assistant_message_content.contains("这是一个"));
+        assert!(snapshot
+            .assistant_message_content
+            .contains("Output truncated"));
+    }
+
+    #[test]
     fn sync_store_updates_existing_assistant_tool_part_from_spine_snapshot() {
         let mut store = TuiSyncStore::new();
         store.start_turn("user_1".to_string(), "assistant_1".to_string());

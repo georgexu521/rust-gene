@@ -143,6 +143,7 @@ struct MiniMaxChatResponseBody {
 #[derive(serde::Deserialize)]
 struct MiniMaxChoice {
     message: MiniMaxMessage,
+    finish_reason: Option<String>,
 }
 
 #[derive(serde::Deserialize)]
@@ -193,6 +194,7 @@ fn parse_minimax_chat_response_body(body: &str) -> Result<ChatResponse> {
         .into_iter()
         .next()
         .context("No choices in response")?;
+    let finish_reason = choice.finish_reason;
     let message = choice.message;
     let mut repair_report =
         tool_call_repair::ToolCallRepairReport::new(ProviderProtocolFamily::MiniMax);
@@ -233,6 +235,7 @@ fn parse_minimax_chat_response_body(body: &str) -> Result<ChatResponse> {
         tool_calls: repaired.tool_calls,
         usage,
         tool_call_repair: repaired.report,
+        finish_reason,
     })
 }
 

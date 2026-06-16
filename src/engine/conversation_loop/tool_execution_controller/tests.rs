@@ -78,6 +78,7 @@ impl LlmProvider for NoopProvider {
             tool_calls: None,
             usage: None,
             tool_call_repair: None,
+            finish_reason: None,
         })
     }
 

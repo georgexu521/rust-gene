@@ -304,6 +304,7 @@ pub struct ChatResponse {
     pub tool_calls: Option<Vec<ToolCall>>,
     pub usage: Option<Usage>,
     pub tool_call_repair: Option<tool_call_repair::ToolCallRepairReport>,
+    pub finish_reason: Option<String>,
 }
 
 /// Remove provider-leaked hidden reasoning blocks from assistant-visible output.

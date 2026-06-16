@@ -30,6 +30,7 @@ impl LlmProvider for MockProvider {
                 cached_tokens: None,
             }),
             tool_call_repair: None,
+            finish_reason: None,
         })
     }
 

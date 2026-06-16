@@ -1,5 +1,5 @@
 use super::request_timeouts::{profile_driven_slow_warning, profile_driven_timeout};
-use super::session_processor::SessionStepResult;
+use super::session_processor::{finish_reason_indicates_length, SessionStepResult};
 use super::tool_execution::{tool_call_is_concurrency_safe, tool_call_is_read_only};
 use super::turn_recording::record_recovery_plan;
 use super::ConversationLoop;
@@ -346,6 +346,11 @@ impl ApiRequestController {
                         )
                         .await;
                     if let Some(tx) = context.tx {
+                        if use_nonstreaming_request
+                            && finish_reason_indicates_length(step.finish_reason.as_deref())
+                        {
+                            let _ = tx.send(StreamEvent::OutputTruncated).await;
+                        }
                         if use_nonstreaming_request {
                             context
                                 .conversation

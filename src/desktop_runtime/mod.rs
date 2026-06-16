@@ -431,6 +431,7 @@ mod tests {
                 tool_calls: None,
                 usage: None,
                 tool_call_repair: None,
+                finish_reason: None,
             })
         }
 
@@ -469,6 +470,7 @@ mod tests {
                     cached_tokens: Some(8),
                 }),
                 tool_call_repair: None,
+                finish_reason: None,
             })
         }
 

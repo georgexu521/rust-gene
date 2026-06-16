@@ -395,6 +395,7 @@ mod tests {
             tool_calls: None,
             usage: None,
             tool_call_repair: None,
+            finish_reason: None,
         })]);
         let route = IntentRouter::new().route("hello");
         let mut loop_state = TurnLoopStateController::initial_state();
@@ -435,6 +436,7 @@ mod tests {
             tool_calls: Some(vec![tool_call.clone()]),
             usage: None,
             tool_call_repair: None,
+            finish_reason: None,
         })]);
         let route = IntentRouter::new().route("run cargo check");
         let mut loop_state = TurnLoopStateController::initial_state();

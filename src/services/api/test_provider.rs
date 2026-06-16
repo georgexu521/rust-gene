@@ -47,6 +47,7 @@ impl TestProvider {
             tool_calls: Some(tool_calls),
             usage: None,
             tool_call_repair: None,
+            finish_reason: None,
         }
     }
 
@@ -56,6 +57,7 @@ impl TestProvider {
             tool_calls: None,
             usage: None,
             tool_call_repair: None,
+            finish_reason: None,
         }
     }
 
@@ -132,6 +134,7 @@ impl TestProvider {
                     }]),
                     usage: None,
                     tool_call_repair: Some(report),
+                    finish_reason: None,
                 }
             }
         }

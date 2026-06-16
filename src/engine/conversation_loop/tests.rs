@@ -2731,6 +2731,7 @@ async fn runtime_diet_report_is_recorded_for_real_loop_turn() {
                 cached_tokens: None,
             }),
             tool_call_repair: None,
+            finish_reason: None,
         }])),
     });
     let tool_registry = Arc::new(ToolRegistry::new());
@@ -2836,6 +2837,7 @@ async fn quiet_direct_turn_stays_in_main_loop_without_tools_or_dynamic_context()
             tool_calls: None,
             usage: None,
             tool_call_repair: None,
+            finish_reason: None,
         })),
     });
     let (tx, mut rx) = mpsc::channel(8);
@@ -2889,6 +2891,7 @@ async fn runtime_diet_report_records_context_budget_when_compressor_enabled() {
             tool_calls: None,
             usage: None,
             tool_call_repair: None,
+            finish_reason: None,
         }])),
     });
     let trace_store = Arc::new(TraceStore::default());
@@ -2955,12 +2958,14 @@ async fn runtime_diet_report_records_tool_result_budget_for_tool_turn() {
                 }]),
                 usage: None,
                 tool_call_repair: None,
+                finish_reason: None,
             },
             ChatResponse {
                 content: "done".to_string(),
                 tool_calls: None,
                 usage: None,
                 tool_call_repair: None,
+                finish_reason: None,
             },
         ])),
     });

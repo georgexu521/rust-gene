@@ -118,6 +118,7 @@ impl LlmProvider for RecordingToolProvider {
                 }]),
                 usage: None,
                 tool_call_repair: None,
+                finish_reason: None,
             })
         } else {
             Ok(crate::services::api::ChatResponse {
@@ -125,6 +126,7 @@ impl LlmProvider for RecordingToolProvider {
                 tool_calls: None,
                 usage: None,
                 tool_call_repair: None,
+                finish_reason: None,
             })
         }
     }
@@ -163,6 +165,7 @@ impl LlmProvider for RecordingTextProvider {
             tool_calls: None,
             usage: None,
             tool_call_repair: None,
+            finish_reason: None,
         })
     }
 
@@ -306,24 +309,28 @@ async fn streaming_history_does_not_persist_completed_tool_calls_as_final_assist
                 }]),
                 usage: None,
                 tool_call_repair: None,
+                finish_reason: None,
             },
             crate::services::api::ChatResponse {
                 content: "Done.".to_string(),
                 tool_calls: None,
                 usage: None,
                 tool_call_repair: None,
+                finish_reason: None,
             },
             crate::services::api::ChatResponse {
                 content: "Done.".to_string(),
                 tool_calls: None,
                 usage: None,
                 tool_call_repair: None,
+                finish_reason: None,
             },
             crate::services::api::ChatResponse {
                 content: "Done.".to_string(),
                 tool_calls: None,
                 usage: None,
                 tool_call_repair: None,
+                finish_reason: None,
             },
         ])),
     });
@@ -467,6 +474,7 @@ async fn manual_compact_records_attempt_and_updates_history() {
             tool_calls: None,
             usage: None,
             tool_call_repair: None,
+            finish_reason: None,
         }])),
     });
     let registry = Arc::new(ToolRegistry::new());
@@ -578,6 +586,7 @@ async fn context_long_session_manual_compact_persists_boundary_for_restore() {
             tool_calls: None,
             usage: None,
             tool_call_repair: None,
+            finish_reason: None,
         }])),
     });
     let registry = Arc::new(ToolRegistry::new());

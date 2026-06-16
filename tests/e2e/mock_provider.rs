@@ -65,6 +65,7 @@ pub fn text_response(content: impl Into<String>) -> ChatResponse {
         tool_calls: None,
         usage: None,
         tool_call_repair: None,
+        finish_reason: None,
     }
 }
 
@@ -80,5 +81,6 @@ pub fn tool_response(name: impl Into<String>, args: serde_json::Value) -> ChatRe
         }]),
         usage: None,
         tool_call_repair: None,
+        finish_reason: None,
     }
 }

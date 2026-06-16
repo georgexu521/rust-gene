@@ -244,10 +244,13 @@ pub(crate) fn project_event(snapshot: &mut TuiSyncSnapshot, event: &SessionProje
                 cached_tokens: *cached_tokens,
             });
         }
+        SessionProjectionEvent::OutputTruncated => {
+            snapshot.assistant_streaming = false;
+            append_output_truncated_notice(snapshot);
+        }
         SessionProjectionEvent::RuntimeDiagnostic { .. }
         | SessionProjectionEvent::Closeout { .. }
-        | SessionProjectionEvent::ToolResultsReadyForModel { .. }
-        | SessionProjectionEvent::OutputTruncated => {}
+        | SessionProjectionEvent::ToolResultsReadyForModel { .. } => {}
         SessionProjectionEvent::Completed => {
             snapshot.phase = TuiSessionPhase::Completed;
             snapshot.assistant_streaming = false;
@@ -365,6 +368,24 @@ fn append_stream_delta(current: &mut String, delta: &str) {
         return;
     }
     current.push_str(delta);
+}
+
+fn append_output_truncated_notice(snapshot: &mut TuiSyncSnapshot) {
+    const NOTICE: &str = "[Output truncated: the provider stopped at its token limit.]";
+    let Some(message_id) = assistant_message_id(snapshot, None) else {
+        return;
+    };
+    let Some(part) = assistant_part_for_message(snapshot, &message_id, TuiPartKind::Text) else {
+        return;
+    };
+    part.streaming = false;
+    if !part.text.contains(NOTICE) {
+        if !part.text.trim_end().is_empty() {
+            part.text.push_str("\n\n");
+        }
+        part.text.push_str(NOTICE);
+    }
+    snapshot.rebuild_assistant_projection_for(&message_id);
 }
 
 fn upsert_tool_part_for_message(

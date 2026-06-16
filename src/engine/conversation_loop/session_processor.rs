@@ -111,6 +111,13 @@ fn request_phase_for_output_cap(cap: Option<u32>) -> &'static str {
     }
 }
 
+pub(super) fn finish_reason_indicates_length(finish_reason: Option<&str>) -> bool {
+    finish_reason.is_some_and(|reason| {
+        let reason = reason.to_ascii_lowercase();
+        reason.contains("length") || reason.contains("max_tokens")
+    })
+}
+
 impl ConversationLoop {
     #[cfg(test)]
     pub(super) async fn call_api(&self, request: ChatRequest) -> Result<SessionStepResult> {
@@ -142,7 +149,7 @@ impl ConversationLoop {
             std::collections::HashMap::new(),
             usage,
             tool_call_repair,
-            None,
+            response.finish_reason.clone(),
             SessionStepSource::NonStreaming,
             Some(cache_shape),
         ))
@@ -259,6 +266,9 @@ impl ConversationLoop {
         if !content.is_empty() {
             emit_text_progressively(tx, content.clone()).await;
         }
+        if finish_reason_indicates_length(response.finish_reason.as_deref()) {
+            let _ = tx.send(StreamEvent::OutputTruncated).await;
+        }
         let tool_calls = response.tool_calls.unwrap_or_default();
         Ok(SessionStepResult::new(
             content,
@@ -266,7 +276,7 @@ impl ConversationLoop {
             std::collections::HashMap::new(),
             response.usage.clone(),
             response.tool_call_repair.clone(),
-            None,
+            response.finish_reason.clone(),
             SessionStepSource::StreamingFallback {
                 reason: reason.to_string(),
             },
@@ -559,9 +569,12 @@ impl ConversationLoop {
                             }
 
                             let truncated = chunk.choices.iter().any(|c| {
-                                c.finish_reason
-                                    .as_ref()
-                                    .is_some_and(|fr| format!("{:?}", fr).contains("Length"))
+                                finish_reason_indicates_length(
+                                    c.finish_reason
+                                        .as_ref()
+                                        .map(|reason| format!("{reason:?}"))
+                                        .as_deref(),
+                                )
                             });
                             if truncated {
                                 let _ = tx.send(StreamEvent::OutputTruncated).await;
@@ -785,5 +798,14 @@ mod tests {
         assert_eq!(shape.effective_output_cap, Some(8192));
         assert_eq!(shape.request_phase.as_deref(), Some("coding"));
         assert_eq!(shape.tool_round_count, Some(1));
+    }
+
+    #[test]
+    fn finish_reason_length_detection_accepts_provider_variants() {
+        assert!(finish_reason_indicates_length(Some("Length")));
+        assert!(finish_reason_indicates_length(Some("length")));
+        assert!(finish_reason_indicates_length(Some("max_tokens")));
+        assert!(!finish_reason_indicates_length(Some("Stop")));
+        assert!(!finish_reason_indicates_length(None));
     }
 }
