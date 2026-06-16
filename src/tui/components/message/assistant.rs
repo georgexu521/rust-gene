@@ -4,10 +4,12 @@ use crate::{
         components::collapsible::flatten_line_breaks,
         sync_store::{TuiMessagePart, TuiPartKind},
         view_model::reasoning::assistant_reasoning_view,
+        view_model::tool_rows::{tool_row_lines, tool_rows_for_runs},
     },
 };
 use ratatui::{
-    text::Text,
+    style::{Style, Stylize},
+    text::{Line, Span, Text},
     widgets::{Paragraph, Wrap},
 };
 
@@ -28,19 +30,20 @@ pub(super) fn render_assistant_message<'a>(
     let (reasoning_view, visible_answer, is_error) = if let Some(parts) = parts {
         let text = parts
             .iter()
-            .find(|p| p.kind == TuiPartKind::Text)
+            .filter(|p| p.kind == TuiPartKind::Text)
             .map(|p| p.text.as_str())
-            .unwrap_or("");
+            .collect::<Vec<_>>()
+            .join("\n\n");
         let reasoning = parts
             .iter()
             .find(|p| p.kind == TuiPartKind::Thinking)
             .map(|p| p.text.as_str())
             .unwrap_or("");
-        let is_error = !is_streaming && assistant_message_is_error(text);
+        let is_error = !is_streaming && assistant_message_is_error(&text);
         let visible_answer = if is_error {
-            assistant_error_body(text)
+            assistant_error_body(&text)
         } else {
-            text.to_string()
+            text
         };
         (
             AssistantReasoningViewForParts {
@@ -130,12 +133,55 @@ pub(super) fn render_assistant_message<'a>(
         append_reasoning_body_for_parts(&mut lines, &reasoning_view, theme);
     }
 
-    let mut answer_lines = Vec::new();
-    append_markdown_lines(&mut answer_lines, &visible_answer, theme, "  ");
-    let answer_lines = flatten_line_breaks(answer_lines);
-    lines.extend(answer_lines);
+    if let Some(parts) = parts {
+        append_part_lines(&mut lines, parts, theme);
+    } else {
+        let mut answer_lines = Vec::new();
+        append_markdown_lines(&mut answer_lines, &visible_answer, theme, "  ");
+        let answer_lines = flatten_line_breaks(answer_lines);
+        lines.extend(answer_lines);
+    }
 
     Paragraph::new(Text::from(lines)).wrap(Wrap { trim: true })
+}
+
+fn append_part_lines(
+    lines: &mut Vec<Line<'static>>,
+    parts: &[TuiMessagePart],
+    theme: &crate::tui::theme::Theme,
+) {
+    for part in parts {
+        match part.kind {
+            TuiPartKind::Text => {
+                if part.text.trim().is_empty() {
+                    continue;
+                }
+                let mut answer_lines = Vec::new();
+                append_markdown_lines(&mut answer_lines, &part.text, theme, "  ");
+                lines.extend(flatten_line_breaks(answer_lines));
+            }
+            TuiPartKind::Tool => {
+                let Some(run) = part.tool_run.as_ref() else {
+                    continue;
+                };
+                let view = tool_rows_for_runs(std::slice::from_ref(run), 120);
+                let Some(row) = view.rows.first() else {
+                    continue;
+                };
+                for (idx, line) in tool_row_lines(row, false, run).into_iter().enumerate() {
+                    let prefix = if idx == 0 { row.icon } else { " " };
+                    lines.push(Line::from(vec![
+                        Span::styled(
+                            format!("  {prefix} "),
+                            Style::default().fg(theme.tokens.tone.ok),
+                        ),
+                        Span::styled(line, Style::default().fg(theme.tokens.fg.faint).italic()),
+                    ]));
+                }
+            }
+            TuiPartKind::Thinking => {}
+        }
+    }
 }
 
 struct AssistantReasoningViewForParts {

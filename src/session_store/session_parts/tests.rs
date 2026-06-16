@@ -270,6 +270,45 @@ fn incremental_projection_matches_full_projection_for_text_tool_text() {
     assert_eq!(incremental_payloads, full_payloads);
 }
 
+#[test]
+fn projection_keeps_previous_step_text_when_next_step_starts_with_tool() {
+    let conn = test_conn();
+    let events = vec![
+        row(1, "step_started", "{}"),
+        row(2, "assistant_text_delta", r#"{"text":"final answer"}"#),
+        row(3, "step_ended", "{}"),
+        row(4, "step_started", "{}"),
+        row(
+            5,
+            "tool_called",
+            r#"{"tool_call_id":"c1","tool_name":"bash"}"#,
+        ),
+    ];
+
+    let full_parts = project_session_parts(&events);
+    assert!(matches!(
+        &full_parts[0],
+        SessionPart::AssistantText { content, .. } if content == "final answer"
+    ));
+    assert!(matches!(&full_parts[1], SessionPart::Tool { .. }));
+
+    for event in &events {
+        insert_event(&conn, event);
+        incremental_refresh_session_parts(&conn, "sess-1").unwrap();
+    }
+    let incremental_payloads = query_persisted_session_parts(&conn, "sess-1")
+        .unwrap()
+        .into_iter()
+        .map(|part| part.payload)
+        .collect::<Vec<_>>();
+    let full_payloads = full_parts
+        .iter()
+        .map(|part| serde_json::to_value(part).unwrap())
+        .collect::<Vec<_>>();
+
+    assert_eq!(incremental_payloads, full_payloads);
+}
+
 fn row(seq: i64, event_type: &str, payload: &str) -> SessionEventRow {
     SessionEventRow {
         id: seq,

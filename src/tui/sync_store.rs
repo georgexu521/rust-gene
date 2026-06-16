@@ -213,7 +213,12 @@ impl TuiSyncSnapshot {
         tool_id: &str,
         name: &str,
     ) {
-        self.upsert_message_projection(message_id, TuiMessageRole::User);
+        let role = if Some(message_id) == self.active_assistant_message_id.as_deref() {
+            TuiMessageRole::Assistant
+        } else {
+            TuiMessageRole::User
+        };
+        self.upsert_message_projection(message_id, role);
         let part_id = format!("{message_id}:tool:{tool_id}");
         let parts = self
             .parts_by_message_id
@@ -252,15 +257,25 @@ impl TuiSyncSnapshot {
     }
 
     pub(crate) fn sync_tool_part(&mut self, tool_id: &str) {
-        let Some(message_id) = self.active_user_message_id.clone() else {
-            return;
-        };
         let Some(run) = self
             .derived_tool_run_cache
             .iter()
             .find(|run| run.id == tool_id)
             .cloned()
         else {
+            return;
+        };
+        let message_id = self
+            .parts_by_message_id
+            .iter()
+            .find_map(|(message_id, parts)| {
+                parts
+                    .iter()
+                    .any(|part| part.kind == TuiPartKind::Tool && part.id.ends_with(tool_id))
+                    .then(|| message_id.clone())
+            })
+            .or_else(|| self.active_user_message_id.clone());
+        let Some(message_id) = message_id else {
             return;
         };
         self.upsert_tool_part_for_message(&message_id, tool_id, &run.name);
@@ -316,9 +331,11 @@ impl TuiSyncSnapshot {
         let parts = self.parts_by_message_id.get(message_id)?;
         let text = parts
             .iter()
-            .find(|part| part.kind == TuiPartKind::Text)
+            .filter(|part| part.kind == TuiPartKind::Text)
             .map(|part| part.text.clone())
-            .unwrap_or_default();
+            .filter(|text| !text.trim().is_empty())
+            .collect::<Vec<_>>()
+            .join("\n\n");
         let thinking = parts
             .iter()
             .find(|part| part.kind == TuiPartKind::Thinking)
@@ -336,9 +353,11 @@ impl TuiSyncSnapshot {
             .unwrap_or_default();
         let text = parts
             .iter()
-            .find(|part| part.kind == TuiPartKind::Text)
+            .filter(|part| part.kind == TuiPartKind::Text)
             .map(|part| part.text.clone())
-            .unwrap_or_default();
+            .filter(|text| !text.trim().is_empty())
+            .collect::<Vec<_>>()
+            .join("\n\n");
         let thinking = parts
             .iter()
             .find(|part| part.kind == TuiPartKind::Thinking)
@@ -480,7 +499,7 @@ mod tests {
         let mut store = TuiSyncStore::new();
         store.start_turn("user_1".to_string(), "assistant_1".to_string());
 
-        store.apply_stream_event(&StreamEvent::TextChunk("hello".to_string()));
+        store.apply_stream_event(&StreamEvent::TextChunk("draft".to_string()));
         store.apply_stream_event(&StreamEvent::ToolCallStart {
             id: "call_1".to_string(),
             name: "bash".to_string(),
@@ -500,28 +519,28 @@ mod tests {
             metadata: None,
             result_data: None,
         });
+        store.apply_stream_event(&StreamEvent::TextChunk("final".to_string()));
         store.apply_stream_event(&StreamEvent::Complete);
 
         let snapshot = store.snapshot();
         assert_eq!(snapshot.phase, TuiSessionPhase::Completed);
-        assert_eq!(snapshot.assistant_text, "hello");
-        assert_eq!(snapshot.assistant_message_content, "hello");
+        assert_eq!(snapshot.assistant_text, "draft\n\nfinal");
+        assert_eq!(snapshot.assistant_message_content, "draft\n\nfinal");
         assert!(!snapshot.assistant_streaming);
         assert_eq!(snapshot.messages.len(), 2);
         assert_eq!(snapshot.messages[0].id, "user_1");
         assert_eq!(snapshot.messages[1].id, "assistant_1");
-        assert_eq!(
-            snapshot
-                .parts_by_message_id
-                .get("assistant_1")
-                .expect("assistant parts")[0]
-                .kind,
-            TuiPartKind::Text
-        );
+        let assistant_parts = snapshot
+            .parts_by_message_id
+            .get("assistant_1")
+            .expect("assistant parts");
+        assert_eq!(assistant_parts[0].kind, TuiPartKind::Text);
+        assert_eq!(assistant_parts[1].kind, TuiPartKind::Tool);
+        assert_eq!(assistant_parts[2].kind, TuiPartKind::Text);
         assert_eq!(snapshot.derived_tool_run_cache.len(), 1);
         assert_eq!(
             snapshot
-                .tool_runs_for_message("user_1")
+                .tool_runs_for_message("assistant_1")
                 .expect("anchored tool runs")
                 .len(),
             1
@@ -537,7 +556,7 @@ mod tests {
         });
         store.apply_projection_event(&SessionProjectionEvent::AssistantTextDelta {
             message_id: Some("assistant_1".to_string()),
-            text: "working".to_string(),
+            text: "working draft".to_string(),
         });
         store.apply_projection_event(&SessionProjectionEvent::ToolCallStarted {
             message_id: Some("user_1".to_string()),
@@ -554,15 +573,19 @@ mod tests {
             metadata: None,
             result_data: None,
         });
+        store.apply_projection_event(&SessionProjectionEvent::AssistantTextDelta {
+            message_id: Some("assistant_1".to_string()),
+            text: "final answer".to_string(),
+        });
         store.apply_projection_event(&SessionProjectionEvent::Completed);
 
         let snapshot = store.snapshot();
         assert_eq!(snapshot.phase, TuiSessionPhase::Completed);
-        assert_eq!(snapshot.assistant_text, "working");
+        assert_eq!(snapshot.assistant_text, "working draft\n\nfinal answer");
         assert_eq!(
             snapshot
-                .tool_runs_for_message("user_1")
-                .expect("tool part anchored to user message")[0]
+                .tool_runs_for_message("assistant_1")
+                .expect("tool part anchored to assistant message")[0]
                 .result_body
                 .as_deref(),
             Some("/tmp/project")
@@ -613,6 +636,78 @@ mod tests {
         assert_eq!(
             snapshot.assistant_text,
             "phageGPT 项目概览\n核心场景\n技术栈哈哈"
+        );
+    }
+
+    #[test]
+    fn sync_store_splits_assistant_text_around_tool_call() {
+        let mut store = TuiSyncStore::new();
+        store.start_turn("user_1".to_string(), "assistant_1".to_string());
+
+        store.apply_stream_event(&StreamEvent::TextChunk("我先看看项目。".to_string()));
+        store.apply_stream_event(&StreamEvent::ToolCallStart {
+            id: "call_1".to_string(),
+            name: "file_read".to_string(),
+        });
+        store.apply_stream_event(&StreamEvent::TextChunk(
+            "PhageGPT 是噬菌体匹配平台。".to_string(),
+        ));
+
+        let snapshot = store.snapshot();
+        assert_eq!(
+            snapshot.assistant_text,
+            "我先看看项目。\n\nPhageGPT 是噬菌体匹配平台。"
+        );
+        assert_eq!(
+            snapshot.assistant_message_content,
+            "我先看看项目。\n\nPhageGPT 是噬菌体匹配平台。"
+        );
+        let assistant_parts = snapshot
+            .parts_by_message_id
+            .get("assistant_1")
+            .expect("assistant parts");
+        assert_eq!(assistant_parts[0].kind, TuiPartKind::Text);
+        assert_eq!(assistant_parts[1].kind, TuiPartKind::Tool);
+        assert_eq!(assistant_parts[2].kind, TuiPartKind::Text);
+        assert_eq!(
+            snapshot
+                .tool_runs_for_message("assistant_1")
+                .expect("tool part anchored to assistant message")
+                .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn sync_store_updates_existing_assistant_tool_part_from_spine_snapshot() {
+        let mut store = TuiSyncStore::new();
+        store.start_turn("user_1".to_string(), "assistant_1".to_string());
+
+        store.apply_stream_event(&StreamEvent::TextChunk("draft".to_string()));
+        store.apply_stream_event(&StreamEvent::ToolCallStart {
+            id: "call_1".to_string(),
+            name: "bash".to_string(),
+        });
+        store.apply_projection_event(&SessionProjectionEvent::ToolPartUpdated {
+            message_id: Some("user_1".to_string()),
+            tool_call_id: "call_1".to_string(),
+            tool_name: "bash".to_string(),
+            status: Some("completed".to_string()),
+            input_args: Some("{\"command\":\"pwd\"}".to_string()),
+            result: Some("/tmp/project".to_string()),
+            metadata: None,
+            result_data: None,
+        });
+
+        let snapshot = store.snapshot();
+        assert!(snapshot.tool_runs_for_message("user_1").is_none());
+        assert_eq!(
+            snapshot
+                .tool_runs_for_message("assistant_1")
+                .expect("assistant tool part")[0]
+                .result_body
+                .as_deref(),
+            Some("/tmp/project")
         );
     }
 

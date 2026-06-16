@@ -135,12 +135,16 @@ pub fn project_session_parts(events: &[super::SessionEventRow]) -> Vec<SessionPa
                     continue;
                 }
                 match parts.last_mut() {
-                    Some(SessionPart::AssistantText { content, .. }) => content.push_str(text),
-                    _ => parts.push(SessionPart::AssistantText {
-                        part_id: format!("text_{}", event.seq),
-                        content: text.to_string(),
-                        message_id: None,
-                    }),
+                    Some(SessionPart::AssistantText { content, .. }) => {
+                        content.push_str(text);
+                    }
+                    _ => {
+                        parts.push(SessionPart::AssistantText {
+                            part_id: format!("text_{}", event.seq),
+                            content: text.to_string(),
+                            message_id: None,
+                        });
+                    }
                 }
             }
             "assistant_text_completed" => {

@@ -131,9 +131,9 @@ pub(crate) fn project_event(snapshot: &mut TuiSyncSnapshot, event: &SessionProje
             snapshot.thinking_streaming = *streaming;
         }
         SessionProjectionEvent::ToolCallStarted {
-            message_id,
             tool_call_id,
             tool_name,
+            ..
         } => {
             snapshot.assistant_streaming = false;
             upsert_tool_run(
@@ -141,6 +141,7 @@ pub(crate) fn project_event(snapshot: &mut TuiSyncSnapshot, event: &SessionProje
                 tool_call_id.clone(),
                 tool_name.clone(),
             );
+            let message_id = assistant_message_id(snapshot, None);
             upsert_tool_part_for_message(snapshot, message_id.as_deref(), tool_call_id, tool_name);
         }
         SessionProjectionEvent::ToolArgumentsDelta {
@@ -156,7 +157,6 @@ pub(crate) fn project_event(snapshot: &mut TuiSyncSnapshot, event: &SessionProje
             snapshot.sync_tool_part(tool_call_id);
         }
         SessionProjectionEvent::ToolExecutionStarted {
-            message_id,
             tool_call_id,
             tool_name,
             ..
@@ -164,6 +164,7 @@ pub(crate) fn project_event(snapshot: &mut TuiSyncSnapshot, event: &SessionProje
             with_tool_run(&mut snapshot.derived_tool_run_cache, tool_call_id, |run| {
                 run.mark_running(tool_name.clone())
             });
+            let message_id = assistant_message_id(snapshot, None);
             upsert_tool_part_for_message(snapshot, message_id.as_deref(), tool_call_id, tool_name);
             snapshot.sync_tool_part(tool_call_id);
         }
@@ -308,14 +309,28 @@ fn assistant_part_for_message<'a>(
     kind: TuiPartKind,
 ) -> Option<&'a mut TuiMessagePart> {
     snapshot.upsert_message_projection(message_id, TuiMessageRole::Assistant);
-    let part_id = part_id_for(message_id, kind);
     let parts = snapshot
         .parts_by_message_id
         .entry(message_id.to_string())
         .or_default();
-    if let Some(index) = parts.iter().position(|part| part.kind == kind) {
+    if let Some(index) = parts
+        .len()
+        .checked_sub(1)
+        .filter(|idx| parts[*idx].kind == kind)
+    {
         return parts.get_mut(index);
     }
+    let part_id = if kind == TuiPartKind::Text {
+        format!(
+            "{message_id}:text:{}",
+            parts
+                .iter()
+                .filter(|part| part.kind == TuiPartKind::Text)
+                .count()
+        )
+    } else {
+        part_id_for(message_id, kind)
+    };
     parts.push(TuiMessagePart {
         id: part_id.clone(),
         message_id: message_id.to_string(),
@@ -358,8 +373,8 @@ fn upsert_tool_part_for_message(
     tool_id: &str,
     name: &str,
 ) {
-    let Some(message_id) = message_id
-        .map(str::to_string)
+    let Some(message_id) = existing_tool_message_id(snapshot, tool_id)
+        .or_else(|| message_id.map(str::to_string))
         .or_else(|| snapshot.active_user_message_id.clone())
     else {
         return;
@@ -427,6 +442,18 @@ fn upsert_tool_run_snapshot(
         run.result_data = result_data;
     });
     upsert_tool_part_for_message(snapshot, message_id, tool_id, tool_name);
+}
+
+fn existing_tool_message_id(snapshot: &TuiSyncSnapshot, tool_id: &str) -> Option<String> {
+    snapshot
+        .parts_by_message_id
+        .iter()
+        .find_map(|(message_id, parts)| {
+            parts
+                .iter()
+                .any(|part| part.kind == TuiPartKind::Tool && part.id.ends_with(tool_id))
+                .then(|| message_id.clone())
+        })
 }
 
 fn mark_active_parts_not_streaming(snapshot: &mut TuiSyncSnapshot) {

@@ -193,9 +193,10 @@ pub fn estimate_message_height_with_parts_or_reasoning(
     let (visible_content, reasoning_text_owned, has_reasoning) = if let Some(parts) = parts {
         let text = parts
             .iter()
-            .find(|p| p.kind == crate::tui::sync_store::TuiPartKind::Text)
+            .filter(|p| p.kind == crate::tui::sync_store::TuiPartKind::Text)
             .map(|p| p.text.clone())
-            .unwrap_or_default();
+            .collect::<Vec<_>>()
+            .join("\n\n");
         let reasoning = parts
             .iter()
             .find(|p| p.kind == crate::tui::sync_store::TuiPartKind::Thinking)
@@ -227,11 +228,15 @@ pub fn estimate_message_height_with_parts_or_reasoning(
     // wrap calculations match what ratatui will actually draw.
     let effective_width = width.saturating_sub(4).saturating_sub(2).max(1);
 
-    let markdown_lines = parse_markdown(visible_content, &crate::tui::theme::Theme::default());
-    let flat_lines = flatten_line_breaks(markdown_lines.lines);
-
-    let visible_lines = rendered_physical_height(&flat_lines, effective_width);
-    base_height + visible_lines.max(1)
+    if let Some(parts) = parts {
+        let visible_lines = estimate_ordered_parts_height(parts, effective_width);
+        base_height + visible_lines.max(1)
+    } else {
+        let markdown_lines = parse_markdown(visible_content, &crate::tui::theme::Theme::default());
+        let flat_lines = flatten_line_breaks(markdown_lines.lines);
+        let visible_lines = rendered_physical_height(&flat_lines, effective_width);
+        base_height + visible_lines.max(1)
+    }
 }
 
 pub fn estimate_message_height(msg: &MessageItem, width: usize, collapsed: bool) -> usize {
@@ -275,6 +280,36 @@ fn rendered_physical_height(lines: &[ratatui::text::Line<'_>], width: usize) -> 
                 .map(|span| span.content.to_string())
                 .collect();
             wrap_line_to_width(&rendered, width).len().max(1)
+        })
+        .sum()
+}
+
+fn estimate_ordered_parts_height(parts: &[TuiMessagePart], width: usize) -> usize {
+    parts
+        .iter()
+        .map(|part| match part.kind {
+            crate::tui::sync_store::TuiPartKind::Text => {
+                if part.text.trim().is_empty() {
+                    0
+                } else {
+                    let markdown_lines =
+                        parse_markdown(&part.text, &crate::tui::theme::Theme::default());
+                    let flat_lines = flatten_line_breaks(markdown_lines.lines);
+                    rendered_physical_height(&flat_lines, width)
+                }
+            }
+            crate::tui::sync_store::TuiPartKind::Tool => part
+                .tool_run
+                .as_ref()
+                .map(|run| {
+                    let view = tool_rows_for_runs_with_spine(std::slice::from_ref(run), &[], width);
+                    view.rows
+                        .first()
+                        .map(|row| tool_row_height(row, false, run))
+                        .unwrap_or(0)
+                })
+                .unwrap_or(0),
+            crate::tui::sync_store::TuiPartKind::Thinking => 0,
         })
         .sum()
 }

@@ -90,6 +90,7 @@ impl StreamEventMirror {
                 tool_call_id,
                 tool_name,
             } => {
+                self.accumulated_text.clear();
                 self.tool_names
                     .insert(tool_call_id.clone(), tool_name.clone());
                 self.writer.write_event(
@@ -120,6 +121,7 @@ impl StreamEventMirror {
                 tool_name,
                 ..
             } => {
+                self.accumulated_text.clear();
                 self.tool_names
                     .insert(tool_call_id.clone(), tool_name.clone());
                 self.writer.write_event(
