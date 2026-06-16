@@ -45,6 +45,21 @@ pub trait ShellHost {
         self.agent_mode().label()
     }
 
+    /// Number of messages in the current conversation surface.
+    fn message_count(&self) -> usize {
+        0
+    }
+
+    /// Whether a query is currently in flight.
+    fn is_querying(&self) -> bool {
+        false
+    }
+
+    /// Skill runtime, if available.
+    fn skill_runtime(&self) -> Option<&crate::skills::SkillRuntime> {
+        None
+    }
+
     /// Runtime status snapshot. The default is empty and should be overridden
     /// by hosts that track live tool/runtime state.
     fn runtime_status_snapshot(&self) -> crate::state::RuntimeStatusSnapshot {

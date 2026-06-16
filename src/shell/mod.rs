@@ -43,9 +43,7 @@ use crate::shell::prompt::PromptEditor;
 use crate::shell::slash::{
     handle_diff, handle_export_data, handle_redo, handle_save_session, handle_undo,
 };
-use crate::shell::text::{
-    colored_rule, compact_home_path, compact_line, percent_bar, terminal_width,
-};
+use crate::shell::text::{colored_rule, compact_home_path, compact_line, terminal_width};
 use crate::shell::theme::*;
 use crate::shell::turn::run_turn;
 use crossterm::event::{Event, KeyCode, KeyEventKind, KeyModifiers};
@@ -81,28 +79,51 @@ const LOCAL_COMMANDS: &[ShellCommand] = &[
     ShellCommand::new("/exit", "quit"),
 ];
 
+/// Options that control how the CLI shell behaves.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ShellOptions {
+    /// When true, the shell runs in plain stdin/stdout mode without a fixed
+    /// bottom footer. Useful for pipe/redirection environments or minimal
+    /// terminals.
+    pub no_footer: bool,
+}
+
 pub async fn run_shell(engine: Arc<StreamingQueryEngine>) -> anyhow::Result<()> {
+    run_shell_with_options(engine, ShellOptions::default()).await
+}
+
+pub async fn run_shell_with_options(
+    engine: Arc<StreamingQueryEngine>,
+    options: ShellOptions,
+) -> anyhow::Result<()> {
     if !io::stdin().is_terminal() {
         anyhow::bail!("CLI mode requires an interactive terminal");
     }
 
     crossterm::terminal::enable_raw_mode()?;
-    let result = run_shell_inner(engine).await;
+    let result = run_shell_inner(engine, options).await;
     let _ = crossterm::terminal::disable_raw_mode();
     result
 }
 
-async fn run_shell_inner(engine: Arc<StreamingQueryEngine>) -> anyhow::Result<()> {
+async fn run_shell_inner(
+    engine: Arc<StreamingQueryEngine>,
+    options: ShellOptions,
+) -> anyhow::Result<()> {
     print_welcome(&engine).await;
 
     let session_manager = build_session_manager(&engine).await?;
     let mut host = CliHost::new(engine.clone(), session_manager);
 
-    let footer_height = DEFAULT_FOOTER_HEIGHT;
+    let footer_height = if options.no_footer {
+        0
+    } else {
+        DEFAULT_FOOTER_HEIGHT
+    };
     let mut editor = PromptEditor::new();
     let mut attachments = AttachmentManager::new();
-    let mut completion_state: Option<CompletionState> = None;
     let mut footer = FooterRenderer::new(footer_height);
+    let mut completion_state: Option<CompletionState> = None;
     let interrupt = InterruptState::new();
     let controller = RuntimeController::new(engine.clone());
 
@@ -114,7 +135,11 @@ async fn run_shell_inner(engine: Arc<StreamingQueryEngine>) -> anyhow::Result<()
     let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel::<Event>();
     tokio::spawn(event_reader(event_tx));
 
-    render_prompt_footer(&mut footer, &editor, &attachments)?;
+    if options.no_footer {
+        print_plain_prompt(&editor, &attachments)?;
+    } else {
+        render_prompt_footer(&mut footer, &editor, &attachments)?;
+    }
 
     loop {
         let Some(event) = event_rx.recv().await else {
@@ -139,7 +164,12 @@ async fn run_shell_inner(engine: Arc<StreamingQueryEngine>) -> anyhow::Result<()
                     if !editor.is_empty() || !attachments.is_empty() {
                         let message = editor.text();
                         editor.clear();
-                        footer.print_above(&format_user_message(&message))?;
+                        if options.no_footer {
+                            print_plain_prompt(&editor, &attachments)?;
+                            println!("{}", format_user_message(&message));
+                        } else {
+                            footer.print_above(&format_user_message(&message))?;
+                        }
 
                         if handle_local_command(
                             &mut host,
@@ -153,27 +183,63 @@ async fn run_shell_inner(engine: Arc<StreamingQueryEngine>) -> anyhow::Result<()
                             if matches!(message.trim(), "/exit" | "/quit" | "exit" | "quit") {
                                 break;
                             }
-                            render_prompt_footer(&mut footer, &editor, &attachments)?;
+                            if options.no_footer {
+                                print_plain_prompt(&editor, &attachments)?;
+                            } else {
+                                render_prompt_footer(&mut footer, &editor, &attachments)?;
+                            }
                             continue;
                         }
 
                         let submission = attachments.build_submission(&message);
                         attachments.clear();
                         interrupt.start_turn();
-                        footer.render(&FooterMode::Thinking, &editor, terminal_width())?;
+                        if options.no_footer {
+                            println!("{DIM}· Thinking…{RESET}");
+                        } else {
+                            footer.render(&FooterMode::Thinking, &editor, terminal_width())?;
+                        }
 
-                        let mut stream = controller.submit_stream_turn(submission).await;
-                        run_turn(
+                        let mut stream = controller.submit_stream_turn(submission.clone()).await;
+                        let continuation = run_turn(
                             engine.clone(),
                             &controller,
                             &mut stream,
                             &mut footer,
                             &interrupt,
                             &mut event_rx,
+                            if options.no_footer {
+                                None
+                            } else {
+                                Some(&mut editor)
+                            },
                         )
                         .await?;
+                        if let Some(continue_message) = continuation {
+                            let mut stream = controller
+                                .submit_stream_turn(format!("{submission}\n\n{continue_message}"))
+                                .await;
+                            run_turn(
+                                engine.clone(),
+                                &controller,
+                                &mut stream,
+                                &mut footer,
+                                &interrupt,
+                                &mut event_rx,
+                                if options.no_footer {
+                                    None
+                                } else {
+                                    Some(&mut editor)
+                                },
+                            )
+                            .await?;
+                        }
                         interrupt.end_turn();
-                        render_prompt_footer(&mut footer, &editor, &attachments)?;
+                        if options.no_footer {
+                            print_plain_prompt(&editor, &attachments)?;
+                        } else {
+                            render_prompt_footer(&mut footer, &editor, &attachments)?;
+                        }
                     }
                 }
                 (KeyModifiers::CONTROL, KeyCode::Char('d'))
@@ -310,6 +376,22 @@ async fn run_shell_inner(engine: Arc<StreamingQueryEngine>) -> anyhow::Result<()
     }
 
     Ok(())
+}
+
+fn print_plain_prompt(editor: &PromptEditor, attachments: &AttachmentManager) -> io::Result<()> {
+    let prefix = format!("{CYAN}●{RESET} ");
+    print!("{}", prefix);
+    for (idx, line) in editor.lines().iter().enumerate() {
+        if idx > 0 {
+            print!("  ");
+        }
+        print!("{}", line);
+    }
+    if !attachments.is_empty() {
+        print!("  {DIM}[{}]{RESET}", attachments.labels().join(", "));
+    }
+    println!();
+    io::stdout().flush()
 }
 
 fn current_cursor_col(editor: &PromptEditor) -> usize {
@@ -566,7 +648,8 @@ async fn handle_local_command(
             Ok(true)
         }
         "/status" => {
-            print_status(engine).await;
+            let response = crate::shell::slash::handle_status(host).await;
+            println!("{}", response);
             Ok(true)
         }
         "/provider" => {
@@ -852,63 +935,6 @@ fn display_session_title(session: &SessionRecord) -> String {
     }
 }
 
-async fn print_status(engine: &StreamingQueryEngine) {
-    let usage = engine.context_usage_report().await;
-    let session_rules = engine.session_permission_rules();
-    let usage_pct = if usage.max_context_tokens > 0 {
-        usage.total_estimated_tokens.saturating_mul(100) / usage.max_context_tokens
-    } else {
-        0
-    };
-    let context_bar = percent_bar(
-        usage_pct.min(100),
-        crate::shell::constants::STATUS_CONTEXT_BAR_WIDTH,
-    );
-    let memory_label = if usage.relevant_memories.is_empty() {
-        "none".to_string()
-    } else {
-        format!("{} relevant", usage.relevant_memories.len())
-    };
-    let rule_count = session_rules.always_allow.len()
-        + session_rules.always_deny.len()
-        + session_rules.always_ask.len();
-    let recent_memory = usage.relevant_memories.first().map(|m| {
-        compact_line(
-            &m.snippet,
-            crate::shell::constants::RECENT_MEMORY_SNIPPET_WIDTH,
-        )
-    });
-
-    println!("{BOLD}Priority Agent{RESET}");
-    println!(
-        "{DIM}  model      {RESET}{:<24} {DIM}provider{RESET} {}",
-        compact_line(&engine.model_name(), 24),
-        compact_line(&engine.provider_base_url(), 48)
-    );
-    println!(
-        "{DIM}  context    {RESET}{} {:>3}%  {}/{} tokens",
-        context_bar, usage_pct, usage.total_estimated_tokens, usage.max_context_tokens
-    );
-    println!(
-        "{DIM}  request    {RESET}history {} msgs / {} tokens · tools {} / {} tokens",
-        usage.history_messages, usage.history_tokens, usage.tool_count, usage.tool_schema_tokens
-    );
-    println!(
-        "{DIM}  policy     {RESET}{} · {} session rules · {} tools registered",
-        permission_mode_label(engine.permission_mode()),
-        rule_count,
-        usage.tool_count
-    );
-    println!("{DIM}  memory     {RESET}{memory_label}");
-    if let Some(memory) = recent_memory {
-        println!("{DIM}  recall     {RESET}{memory}");
-    }
-    println!(
-        "{DIM}  prefix     {RESET}{}",
-        usage.stable_prefix_fingerprint
-    );
-}
-
 fn permission_mode_label(mode: crate::permissions::PermissionMode) -> &'static str {
     match mode {
         crate::permissions::PermissionMode::Default => "default",
@@ -1032,5 +1058,64 @@ mod tests {
                 .unwrap();
 
         assert!(consumed, "/clear should be consumed");
+    }
+
+    #[tokio::test]
+    async fn handle_model_command_is_consumed() {
+        let engine = test_engine();
+        let mut host = test_cli_host(engine.clone());
+        let mut footer = FooterRenderer::new(DEFAULT_FOOTER_HEIGHT);
+        let mut attachments = AttachmentManager::new();
+
+        let consumed =
+            handle_local_command(&mut host, &engine, "/model", &mut footer, &mut attachments)
+                .await
+                .unwrap();
+
+        assert!(consumed, "/model should be consumed");
+    }
+
+    #[tokio::test]
+    async fn handle_status_command_is_consumed() {
+        let engine = test_engine();
+        let mut host = test_cli_host(engine.clone());
+        let mut footer = FooterRenderer::new(DEFAULT_FOOTER_HEIGHT);
+        let mut attachments = AttachmentManager::new();
+
+        let consumed =
+            handle_local_command(&mut host, &engine, "/status", &mut footer, &mut attachments)
+                .await
+                .unwrap();
+
+        assert!(consumed, "/status should be consumed");
+    }
+
+    #[tokio::test]
+    async fn handle_attach_and_detach_commands() {
+        let engine = test_engine();
+        let mut host = test_cli_host(engine.clone());
+        let mut footer = FooterRenderer::new(DEFAULT_FOOTER_HEIGHT);
+        let mut attachments = AttachmentManager::new();
+
+        let file_path = std::env::current_dir().unwrap().join("Cargo.toml");
+        let cmd = format!("/attach {}", file_path.display());
+        let consumed =
+            handle_local_command(&mut host, &engine, &cmd, &mut footer, &mut attachments)
+                .await
+                .unwrap();
+        assert!(consumed, "/attach should be consumed");
+        assert_eq!(attachments.count(), 1);
+
+        let consumed = handle_local_command(
+            &mut host,
+            &engine,
+            "/detach all",
+            &mut footer,
+            &mut attachments,
+        )
+        .await
+        .unwrap();
+        assert!(consumed, "/detach all should be consumed");
+        assert!(attachments.is_empty());
     }
 }

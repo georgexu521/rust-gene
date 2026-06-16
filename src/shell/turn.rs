@@ -21,13 +21,14 @@ use std::io::{self, Write};
 use std::sync::Arc;
 
 pub(crate) async fn run_turn(
-    _engine: Arc<StreamingQueryEngine>,
+    engine: Arc<StreamingQueryEngine>,
     controller: &RuntimeController,
     stream: &mut std::pin::Pin<Box<dyn futures::Stream<Item = StreamEvent> + Send>>,
     footer: &mut FooterRenderer,
     interrupt: &InterruptState,
     event_rx: &mut tokio::sync::mpsc::UnboundedReceiver<Event>,
-) -> anyhow::Result<()> {
+    continuation_editor: Option<&mut PromptEditor>,
+) -> anyhow::Result<Option<String>> {
     let mut tool_runs: Vec<ToolRunView> = Vec::new();
     let mut assistant_printer = AssistantPrinter::default();
 
@@ -131,7 +132,20 @@ pub(crate) async fn run_turn(
                     }
                     Some(StreamEvent::OutputTruncated) => {
                         assistant_printer.finish_line_if_needed(footer)?;
-                        footer.print_above(&format!("{YELLOW}Output truncated. Continue if needed.{RESET}"))?;
+                        footer.print_above(&format!("{YELLOW}Output truncated.{RESET}"))?;
+                        if let Some(ref prompt) = continuation_editor {
+                            footer.render(
+                                &FooterMode::Prompt,
+                                prompt,
+                                terminal_width(),
+                            )?;
+                            if let Some(text) = read_single_line(footer, event_rx).await? {
+                                if !text.trim().is_empty() {
+                                    let summary = build_context_summary(&engine).await;
+                                    return Ok(Some(format!("{}\n\n{}", text.trim(), summary)));
+                                }
+                            }
+                        }
                     }
                     Some(StreamEvent::Complete) => break,
                     Some(StreamEvent::Error(error)) => {
@@ -183,7 +197,60 @@ pub(crate) async fn run_turn(
     }
 
     assistant_printer.finish(footer)?;
-    Ok(())
+    Ok(None)
+}
+
+async fn build_context_summary(engine: &StreamingQueryEngine) -> String {
+    let usage = engine.context_usage_report().await;
+    format!(
+        "[context summary] messages={} tokens={}/{} tools={} fingerprint={}",
+        usage.history_messages,
+        usage.total_estimated_tokens,
+        usage.max_context_tokens,
+        usage.tool_count,
+        usage.stable_prefix_fingerprint
+    )
+}
+
+async fn read_single_line(
+    footer: &mut FooterRenderer,
+    event_rx: &mut tokio::sync::mpsc::UnboundedReceiver<Event>,
+) -> anyhow::Result<Option<String>> {
+    let mut editor = PromptEditor::new();
+    loop {
+        footer.render(&FooterMode::Prompt, &editor, terminal_width())?;
+        let Some(event) = event_rx.recv().await else {
+            return Ok(None);
+        };
+        if let Event::Key(key) = event {
+            if key.kind == KeyEventKind::Release {
+                continue;
+            }
+            match (key.modifiers, key.code) {
+                (KeyModifiers::NONE, KeyCode::Enter) => {
+                    return Ok(Some(editor.text()));
+                }
+                (KeyModifiers::NONE, KeyCode::Esc) => {
+                    return Ok(None);
+                }
+                (KeyModifiers::CONTROL, KeyCode::Char('c')) => {
+                    return Ok(None);
+                }
+                (_, KeyCode::Char(ch)) => {
+                    editor.insert(&ch.to_string());
+                }
+                (_, KeyCode::Backspace) => {
+                    editor.backspace();
+                }
+                (_, KeyCode::Delete) => {
+                    editor.delete();
+                }
+                (_, KeyCode::Left) => editor.move_left(),
+                (_, KeyCode::Right) => editor.move_right(),
+                _ => {}
+            }
+        }
+    }
 }
 
 fn format_tool_line(marker: &str, color: &str, text: &str, first_line_normal: bool) -> String {

@@ -46,11 +46,14 @@ fn print_help() {
     println!("Priority Agent");
     println!();
     println!("Usage:");
-    println!("  {bin} [--api [--port <PORT>]] [--cli] [--tui] [--help]");
+    println!("  {bin} [--api [--port <PORT>]] [--cli] [--tui] [--no-footer] [--help]");
     println!();
     println!("Modes:");
     println!("  --api    Start HTTP API server (feature: experimental-api-server)");
-    println!("  --cli    Start the default terminal interface");
+    println!(
+        "  --cli    Start the default terminal interface
+  --no-footer  Disable the fixed bottom footer in CLI mode (use plain stdin/stdout)"
+    );
     println!("  --tui    Start the legacy full-screen terminal interface (alternative)");
     println!("  --eval-run --prompt-file <PATH> [--output <PATH>] [--events <PATH>]");
     println!("           Run one non-interactive evaluation task");
@@ -65,6 +68,10 @@ fn print_help() {
     println!("  {bin} --api --port 8787 # HTTP API server");
     println!("  {bin} --cli            # Same as default");
     println!("  {bin} --tui            # Legacy full-screen interface");
+}
+
+fn has_flag(args: &[String], flag: &str) -> bool {
+    args.iter().any(|arg| arg == flag)
 }
 
 fn arg_value(args: &[String], flag: &str) -> Option<String> {
@@ -657,13 +664,19 @@ async fn main() {
                 print_help();
                 std::process::exit(1);
             }
+            let no_footer = has_flag(&args, "--no-footer");
             info!("Starting Priority Agent CLI...");
             let components = init_app_or_exit(&working_dir, startup_mode).await;
             let Some(components) = components else {
                 eprintln!("No provider configured. Run /connect <provider> <key>");
                 std::process::exit(1);
             };
-            if let Err(e) = shell::run_shell(components.streaming_engine).await {
+            if let Err(e) = shell::run_shell_with_options(
+                components.streaming_engine,
+                shell::ShellOptions { no_footer },
+            )
+            .await
+            {
                 error!("Priority Agent CLI failed: {}", e);
                 std::process::exit(1);
             }

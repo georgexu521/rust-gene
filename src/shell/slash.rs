@@ -1003,3 +1003,251 @@ mod tests {
         );
     }
 }
+
+pub async fn handle_status(host: &dyn ShellHost) -> String {
+    let mut lines = vec![];
+    let msg_count = host.message_count();
+    let runtime = host.runtime_status_snapshot();
+
+    lines.push(format!("Messages: {}", msg_count));
+    lines.push(format!("Agent mode: {}", host.current_agent_mode_label()));
+    lines.push(format!(
+        "Runtime tools: {} active / {} total ({} failed)",
+        runtime.active_tool_count, runtime.total_tools, runtime.failed_tool_count
+    ));
+    if let Some(label) = runtime.current_tool_label.as_ref() {
+        lines.push(format!("Active tool: {}", label));
+    }
+    if let Some(pending) = runtime.pending_permission.as_ref() {
+        lines.push(format!("Permission pending: {}", pending));
+    }
+
+    if let Some(engine) = host.engine() {
+        let history_len = engine.get_history().await.len();
+        lines.push(format!("History: {} turns", history_len));
+        lines.push(format!(
+            "Model: {} (via {})",
+            engine.model_name(),
+            engine.provider_base_url()
+        ));
+
+        let tracker = engine.cost_tracker();
+        let tracker_guard = tracker.lock().await;
+        lines.push(format!(
+            "Cost: ${:.4} ({} tokens)",
+            tracker_guard.estimated_cost_usd, tracker_guard.total_tokens.total
+        ));
+        let total_calls: u64 = tracker_guard.tool_metrics.values().map(|s| s.calls).sum();
+        let total_failed: u64 = tracker_guard.tool_metrics.values().map(|s| s.failed).sum();
+        lines.push(format!(
+            "Tools: {} calls ({} failed)",
+            total_calls, total_failed
+        ));
+        drop(tracker_guard);
+
+        if let Some(mcp) = engine.mcp_manager() {
+            let diagnostics = mcp.health_diagnostics();
+            let available = diagnostics
+                .iter()
+                .filter(|diag| {
+                    diag.approved && diag.health == crate::engine::mcp::McpHealthStatus::Healthy
+                })
+                .count();
+            let needs_repair = diagnostics
+                .iter()
+                .filter(|diag| diag.repair_hint != "none")
+                .map(|diag| format!("{}=>{}", diag.name, diag.repair_hint))
+                .collect::<Vec<_>>();
+            if diagnostics.is_empty() {
+                lines.push("MCP: no servers configured".to_string());
+            } else {
+                lines.push(format!(
+                    "MCP: {} servers, {} available",
+                    diagnostics.len(),
+                    available
+                ));
+                if !needs_repair.is_empty() {
+                    lines.push(format!("MCP repair: {}", needs_repair.join(", ")));
+                }
+            }
+        }
+
+        let profiles = crate::agent::profiles::load_profiles(host.workspace_root());
+        lines.push(format!("Agent profiles: {}", profiles.len()));
+        if let Some(skill_runtime) = host.skill_runtime() {
+            lines.push(format!("Skills: {}", skill_runtime.len()));
+        }
+
+        let mode = engine.permission_mode();
+        lines.push(format!("Permission mode: {:?}", mode));
+    } else {
+        lines.push("Model: unavailable".to_string());
+    }
+
+    if runtime.mcp_server_count > 0 {
+        lines.push(format!(
+            "Runtime MCP: {} servers, {} available",
+            runtime.mcp_server_count, runtime.mcp_available_count
+        ));
+        if !runtime.mcp_repair_hints.is_empty() {
+            lines.push(format!(
+                "Runtime MCP repair: {}",
+                runtime.mcp_repair_hints.join(", ")
+            ));
+        }
+    }
+    if runtime.running_task_count > 0 {
+        lines.push(format!(
+            "Runtime tasks: {} running / {} total",
+            runtime.running_task_count, runtime.task_count
+        ));
+    }
+    if runtime.terminal_task_count > 0 || runtime.backgrounded_tool_count > 0 {
+        lines.push(format!(
+            "Runtime terminal tasks: {} known ({} running, {} pty, {} backgrounded tools)",
+            runtime
+                .terminal_task_count
+                .max(runtime.backgrounded_tool_count),
+            runtime
+                .running_terminal_task_count
+                .max(runtime.backgrounded_tool_count),
+            runtime.pty_terminal_task_count,
+            runtime.backgrounded_tool_count
+        ));
+    }
+
+    let registry = crate::tools::ToolRegistry::default_registry();
+    let context = host.build_tool_context();
+    let bash_exposure = crate::engine::tool_exposure::diagnose_tool_exposure(
+        &registry,
+        &context,
+        &crate::engine::intent_router::IntentRouter::new().route("general coding task"),
+        "bash",
+    );
+    lines.push(format!(
+        "Bash exposure: {}",
+        crate::tui::slash_handler::agents::doctor_formatting::format_terminal_bash_exposure(
+            &bash_exposure
+        )
+    ));
+
+    lines.push(format!("Querying: {}", host.is_querying()));
+    lines.join(
+        "
+",
+    )
+}
+
+pub async fn handle_model(host: &dyn ShellHost, args: &str) -> String {
+    let Some(engine) = host.engine() else {
+        return "Model: unavailable (no engine connected)".to_string();
+    };
+    let args = args.trim();
+    if let Some(model) = args
+        .strip_prefix("set ")
+        .or_else(|| args.strip_prefix("switch "))
+        .map(str::trim)
+        .filter(|m| !m.is_empty())
+    {
+        engine.set_model(model.to_string());
+        if let Ok(mut config) = crate::services::config::AppConfig::load() {
+            config.api.model = model.to_string();
+            if config.save().is_ok() {
+                crate::services::config::init_runtime_config(config);
+            }
+        }
+        format!("Model switched to {}. Next request will use it.", model)
+    } else if args == "list" {
+        let choices = model_choices(&engine).await;
+        let lines = choices
+            .into_iter()
+            .map(|choice| {
+                format!(
+                    "{} {} ({})",
+                    if choice.active { "*" } else { "-" },
+                    choice.model,
+                    choice.note
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(
+                "
+",
+            );
+        format!(
+            "Models for {}:
+{}",
+            engine.provider_base_url(),
+            lines
+        )
+    } else {
+        format!(
+            "Model: {}
+Provider: {}
+Base URL: {}
+
+Use /model list or /model switch <name>.",
+            engine.model_name(),
+            engine.provider_base_url(),
+            engine.provider_base_url()
+        )
+    }
+}
+
+#[derive(Debug, Clone)]
+struct ModelChoice {
+    model: String,
+    note: String,
+    active: bool,
+}
+
+async fn model_choices(
+    engine: &crate::engine::streaming::StreamingQueryEngine,
+) -> Vec<ModelChoice> {
+    let current = engine.model_name();
+    let provider_label = provider_label_for_base_url(&engine.provider_base_url());
+    let provider_id =
+        crate::services::api::provider_catalog::provider_id_for_label(&provider_label)
+            .unwrap_or_default();
+
+    let mut model_names: Vec<String> = Vec::new();
+    if !provider_id.is_empty() {
+        let manifest =
+            crate::services::api::provider_manifest::ProviderManifestLoader::load_merged();
+        if let Some(entry) = manifest.provider.iter().find(|e| e.id == provider_id) {
+            if let Some(api_key) = entry.resolve_api_key() {
+                let discovery = crate::services::api::model_discovery::ModelDiscovery::new();
+                model_names = discovery
+                    .list(&provider_id, entry, Some(&api_key))
+                    .await
+                    .into_iter()
+                    .map(|m| m.id)
+                    .collect();
+            }
+        }
+    }
+
+    if model_names.is_empty() {
+        model_names = crate::services::api::provider_catalog::supported_models(&provider_id);
+        if model_names.is_empty() {
+            model_names.push(current.clone());
+        }
+    }
+
+    let mut models: Vec<&str> = model_names.iter().map(|s| s.as_str()).collect();
+    if !models.iter().any(|m| *m == current) {
+        models.insert(0, current.as_str());
+    }
+    models
+        .into_iter()
+        .map(|model| ModelChoice {
+            model: model.to_string(),
+            note: if model == current {
+                "current".to_string()
+            } else {
+                "same provider, takes effect next request".to_string()
+            },
+            active: model == current,
+        })
+        .collect()
+}
