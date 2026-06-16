@@ -1002,7 +1002,7 @@ impl TuiApp {
         }
         self.scroll_offset = offset;
         let (index, row_offset) =
-            crate::tui::view_model::timeline::timeline_index_at_row_offset(&heights, offset);
+            crate::tui::view_model::timeline::timeline_index_at_row_offset(heights, offset);
         self.scroll_anchor_id = self.timeline_stable_id_at(index);
         self.scroll_anchor_row_offset = row_offset;
         self.pinned_to_bottom = false;

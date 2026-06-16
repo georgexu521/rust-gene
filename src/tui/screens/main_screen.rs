@@ -381,13 +381,13 @@ fn transcript_window(
     if !bottom_anchored {
         let total_rows: usize = heights.iter().sum();
         let row_offset = scroll_row_offset.min(total_rows.saturating_sub(1));
-        let (start, first_item_scroll_offset) = timeline_index_at_row_offset(&heights, row_offset);
+        let (start, first_item_scroll_offset) = timeline_index_at_row_offset(heights, row_offset);
         let more_above = row_offset > 0;
         let max_height = (viewport_height as usize).saturating_sub(usize::from(more_above));
         return TranscriptWindow {
             start,
             message_height: visible_items_height_from_rows(
-                &heights,
+                heights,
                 start,
                 first_item_scroll_offset,
                 max_height,
@@ -400,7 +400,7 @@ fn transcript_window(
 
     let viewport = viewport_height as usize;
     let active_start = active_turn_start(items).unwrap_or(items.len().saturating_sub(1));
-    let active_height = sum_heights(&heights, active_start, items.len());
+    let active_height = sum_heights(heights, active_start, items.len());
 
     let mut start = active_start;
     let mut used_height = active_height;
@@ -409,10 +409,10 @@ fn transcript_window(
         // When the active turn overflows the viewport, anchor to the bottom of
         // the current turn so the newest output is visible. The user can PgUp
         // to see earlier context (indicated by the "above" scroll hint).
-        start = bottom_filled_start(&heights, active_start, viewport);
+        start = bottom_filled_start(heights, active_start, viewport);
         let more_above = start > 0;
         let max_height = viewport.saturating_sub(usize::from(more_above));
-        used_height = visible_items_height_from_rows(&heights, start, 0, max_height);
+        used_height = visible_items_height_from_rows(heights, start, 0, max_height);
     } else {
         while start > 0 {
             let candidate_start = start - 1;

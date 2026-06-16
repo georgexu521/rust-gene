@@ -125,6 +125,7 @@ impl TuiSyncSnapshot {
         // authoritative update (e.g. from persisted replay) overwrites the
         // current text part instead of creating a duplicate.
         let part_id = if kind == TuiPartKind::Text {
+            #[allow(clippy::double_ended_iterator_last)]
             if let Some(last_text) = parts.iter().filter(|p| p.kind == TuiPartKind::Text).last() {
                 last_text.id.clone()
             } else {
