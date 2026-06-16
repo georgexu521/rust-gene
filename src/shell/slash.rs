@@ -4,6 +4,7 @@
 //! underlying TUI handler logic. They exist because some handlers only touch
 //! session state and do not require Ratatui widgets.
 
+use crate::engine::streaming::StreamingQueryEngine;
 use crate::shell::host::ShellHost;
 
 pub fn handle_undo(host: &mut dyn ShellHost, args: &str) -> String {
@@ -175,6 +176,85 @@ pub async fn handle_audit(host: &dyn ShellHost, args: &str) -> String {
     }
 }
 
+pub async fn handle_provider(host: &dyn ShellHost, args: &str) -> String {
+    let registry = crate::services::api::provider::ProviderRegistry::from_env();
+    let trimmed = args.trim();
+
+    if trimmed.is_empty()
+        || trimmed == "status"
+        || trimmed == "status --json"
+        || trimmed == "status json"
+    {
+        if let Some(engine) = host.engine() {
+            format!(
+                "Provider: {}\nModel: {}\nBase URL: {}\n\nUse /provider list or /provider switch <name>.",
+                provider_label_for_base_url(&engine.provider_base_url()),
+                engine.model_name(),
+                engine.provider_base_url(),
+            )
+        } else {
+            "No engine available.".to_string()
+        }
+    } else if trimmed == "list" {
+        let statuses = crate::services::api::provider_catalog::provider_status_list();
+        if statuses.is_empty() {
+            return "No providers configured.".to_string();
+        }
+        let mut lines = vec!["Providers:".to_string()];
+        for s in statuses {
+            let marker = if s.configured { "*" } else { "-" };
+            lines.push(format!(
+                "{} {:<12} {:<12} {}",
+                marker,
+                s.id,
+                s.default_model,
+                if s.configured {
+                    "configured"
+                } else {
+                    "not configured"
+                }
+            ));
+        }
+        lines.join("\n")
+    } else if let Some(name) = trimmed
+        .strip_prefix("switch ")
+        .or_else(|| trimmed.strip_prefix("set "))
+        .map(str::trim)
+        .filter(|p| !p.is_empty())
+    {
+        let name_lower = name.to_ascii_lowercase();
+        let provider = registry.get(&name_lower);
+        let config = registry.get_config(&name_lower).cloned();
+        match (provider, config) {
+            (Some(provider), Some(config)) => {
+                if let Some(engine) = host.engine() {
+                    engine.set_provider(provider, config.default_model.clone());
+                }
+                if let Ok(mut app_config) = crate::services::config::AppConfig::load() {
+                    app_config.api.provider_name = Some(name_lower.clone());
+                    app_config.api.model = config.default_model.clone();
+                    app_config.api.base_url = config.base_url.clone().unwrap_or_default();
+                    if app_config.save().is_ok() {
+                        crate::services::config::init_runtime_config(app_config);
+                    }
+                }
+                format!(
+                    "Provider switched to {}\nModel: {}\nBase URL: {}",
+                    config.name,
+                    config.default_model,
+                    config.base_url.as_deref().unwrap_or("default")
+                )
+            }
+            _ => format!(
+                "Provider '{}' is not configured. Use /provider list to see available providers.",
+                name
+            ),
+        }
+    } else {
+        "Usage: /provider [list|switch <name>|status]".to_string()
+    }
+}
+
 pub async fn handle_resume(host: &mut dyn ShellHost, args: &str) -> String {
     if args.is_empty() {
         match host.session_manager().list_resumable_sessions(10) {
@@ -220,6 +300,30 @@ pub async fn handle_resume(host: &mut dyn ShellHost, args: &str) -> String {
             }
             Err(e) => format!("Failed to resolve session: {}", e),
         }
+    }
+}
+
+pub async fn handle_token_cost(engine: &StreamingQueryEngine) -> String {
+    let tracker = engine.cost_tracker().lock().await;
+    tracker.generate_report()
+}
+
+fn provider_label_for_base_url(base_url: &str) -> String {
+    let u = base_url.to_ascii_lowercase();
+    if u.contains("minimax") {
+        "MiniMax".to_string()
+    } else if u.contains("api.kimi.com") {
+        "Kimi Code".to_string()
+    } else if u.contains("moonshot") {
+        "Kimi".to_string()
+    } else if u.contains("deepseek") {
+        "DeepSeek".to_string()
+    } else if u.contains("bigmodel") || u.contains("z.ai") {
+        "GLM".to_string()
+    } else if u.contains("openai.com") {
+        "OpenAI".to_string()
+    } else {
+        "Custom".to_string()
     }
 }
 

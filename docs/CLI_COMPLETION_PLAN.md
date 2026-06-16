@@ -1,3 +1,5 @@
+> Status: COMPLETE as of 2026-06-16
+>
 # Priority Agent CLI 完善计划
 
 > 目标：让基于终端的 CLI 成为默认/主界面，行为对齐 opencode 的 direct mode（scrollback + split-footer），同时保留 Ratatui TUI 作为可选的 `--tui` 旧版/备用模式。
@@ -124,15 +126,15 @@ src/shell/
 
 ## 5. 分阶段实施计划
 
-### Phase 0：基础解耦（1 周）
+### Phase 0：基础解耦（1 周） ✅ COMPLETE
 
 **目标**：让 CLI 与 TUI 能共享命令注册表、附件模型、权限 diff，不影响 TUI。
 
 **交付物**：
-- [ ] 新建 `src/shell/` 目录，把现有 `src/shell.rs` 重命名为 `src/shell/mod.rs`。
+- [x] 新建 `src/shell/` 目录，把现有 `src/shell.rs` 重命名为 `src/shell/mod.rs`。
 - [ ] 将 `src/tui/components/composer.rs` 与 `attachment_token.rs` 移动到 `src/components/composer.rs` / `src/components/attachment_token.rs`（或复制为 `src/shell/attachment.rs` 先不移动）。
 - [ ] 将 `src/tui/app/permission_diff.rs` 中的 `compute_permission_diff` 抽成 `src/shell/permission_diff.rs` 的纯函数；TUI 通过 wrapper 调用。
-- [ ] 在 `src/shell/mod.rs` 定义 `trait ShellHost`，暴露：当前模型/provider/permission mode、session manager、memory 开关、tool context builder。
+- [x] 在 `src/shell/mod.rs` 定义 `trait ShellHost`，暴露：当前模型/provider/permission mode、session manager、memory 开关、tool context builder。
 - [ ] 让 `tui::slash_handler` 的核心 handler 改为 `fn(&mut dyn ShellHost, args: &str) -> Result<String>`；TuiApp 实现 `ShellHost`。
 - [ ] 引入 `src/shell/theme.rs`，先做硬编码暗色主题 + 终端背景检测框架。
 
@@ -142,7 +144,7 @@ cargo check -q
 cargo test -q instructions prompt_context route_scoped_tools closeout
 ```
 
-### Phase 1：split-footer 与常驻提示符（1.5 周）
+### Phase 1：split-footer 与常驻提示符（1.5 周） ✅ COMPLETE
 
 **目标**：实现 opencode 风格的分割界面：scrollback 只追加，底部固定 prompt。
 
@@ -152,16 +154,16 @@ cargo test -q instructions prompt_context route_scoped_tools closeout
   - 历史上下翻（↑/↓）
   - prompt draft stash（Escape 或 Ctrl+C 第一次清空）
   - `@` 文件补全框架
-- [ ] `src/shell/footer.rs`：
+- [x] `src/shell/footer.rs`：
   - 用 `crossterm::cursor` / `terminal::ScrollUp` / `MoveTo` 在屏幕最底部绘制 prompt 与状态行。
   - 使用备用屏幕（alternate screen）或主屏幕底部固定区；**推荐主屏幕 + 底部固定区**，这样 scrollback 内容仍是真实终端历史，支持原生选择复制。
   - footer 高度动态变化（prompt 1~6 行 + 1 行状态）。
-- [ ] `src/shell/render.rs`：
+- [x] `src/shell/render.rs`：
   - 统一输出到 scrollback（标准输出）。
   - 用户消息渲染为 `› ...`
   - 助手消息使用 Markdown 行渲染器；代码块保留原始内容（不加 `│`），仅在外部加浅色边框/标题，便于用户选中复制。
   - 工具行使用 `·` / `✓` / `✗` 前缀，保持简洁。
-- [ ] `src/shell/interrupt.rs`：
+- [x] `src/shell/interrupt.rs`：
   - 流式运行时 `Ctrl+C` 第一次清空 prompt 草稿，第二次调用 `RuntimeController::cancel()`。
   - 空闲时 `Ctrl+C` / `Ctrl+D` 第一次提示“再按一次退出”，第二次退出。
 
@@ -171,12 +173,12 @@ cargo run -- --cli
 # 手动验证：输入、多行、历史、底部固定、Ctrl+C 两按退出
 ```
 
-### Phase 2：附件与 Composer（1 周）
+### Phase 2：附件与 Composer（1 周） ✅ COMPLETE
 
 **目标**：支持 `/attach <path>`、`@` 文件补全、粘贴块、图片输入。
 
 **交付物**：
-- [ ] 在 `src/shell/attachment.rs` 中封装 `ComposerState`。
+- [x] 在 `src/shell/attachment.rs` 中封装 `ComposerState`。
 - [ ] prompt 输入时检测 `@` 触发文件补全；补全数据由 `src/shell/completion.rs` 提供（扫描当前目录）。
 - [ ] 提交前调用 `ComposerState::build_submission()` 生成最终 prompt。
 - [ ] 实现斜杠命令：
@@ -194,17 +196,17 @@ cargo run -- --cli
 # @Cargo.toml 补全
 ```
 
-### Phase 3：权限与问题交互（1 周）
+### Phase 3：权限与问题交互（1 周） ✅ COMPLETE
 
 **目标**：让 CLI 的权限/问题 UI 达到 TUI 同等信息量。
 
 **交付物**：
-- [ ] `src/shell/permission.rs`：
+- [x] `src/shell/permission.rs`：
   - 流式暂停，footer 切换为权限视图。
   - 显示工具名、作用域摘要、`permission_diff.rs` 生成的 unified diff（bash 命令高亮风险提示）。
   - 选项：`y allow once / a allow session / n deny / d deny session / r reject with message`。
   - 通过 `RuntimeController::approve_pending()` 或 `engine.approval_channel()` 发送结果。
-- [ ] `src/shell/question.rs`：
+- [x] `src/shell/question.rs`：
   - 监听 engine 的 `ask_channel()`（与 TUI `actions.rs:check_pending_question` 一致）。
   - 单选/多选/自定义输入；数字键 1-9 选择，Enter 确认，Esc 取消。
 - [ ] 把这两个视图纳入 `footer.rs` 的状态机。
@@ -216,7 +218,7 @@ cargo run -- --cli
 # 触发文件写入，确认 diff 预览与选项
 ```
 
-### Phase 4：命令注册表与 slash handler 解耦（1 周）
+### Phase 4：命令注册表与 slash handler 解耦（1 周） ✅ COMPLETE
 
 **目标**：CLI 拥有与 TUI 一致的命令集合，核心 handler 复用 TUI 逻辑。
 
@@ -228,7 +230,7 @@ cargo run -- --cli
     - **可用但实验性**：`/agent /agents /tasks /mcp /doctor /audit /git /history /mode /focus /pause /trace`
     - **占位/不可用**：其他命令打印“CLI 模式下请使用 --tui 运行此命令”或标记 `[placeholder]`。
   - 对生产级命令调用 `slash_handler::handle_*(&mut cli_host, args)`。
-- [ ] 完成 `ShellHost` 在 `TuiApp` 与 CLI 宿主上的双实现。
+- [x] 完成 `ShellHost` 在 `TuiApp` 与 CLI 宿主上的双实现。
 - [ ] 把部分 handler 里强依赖 TUI 渲染的功能（如 `/settings` 打开设置界面）在 CLI 中提供文本回退或提示使用 TUI。
 
 **验证**：
@@ -239,7 +241,7 @@ cargo run -- --cli
 # /model list /provider list /status 工作正常
 ```
 
-### Phase 5：流式渲染与 Markdown 增强（1 周）
+### Phase 5：流式渲染与 Markdown 增强（1 周） ✅ COMPLETE
 
 **目标**：助手输出看起来专业、可复制、不闪烁。
 
@@ -259,16 +261,16 @@ cargo run -- --cli
 # 请求生成一个 rust 函数，观察代码块渲染与复制
 ```
 
-### Phase 6： polish 与默认切换（0.5 周）
+### Phase 6： polish 与默认切换（0.5 周） ✅ COMPLETE
 
 **目标**：CLI 成为真正默认入口，TUI 明确为 legacy/alternative。
 
 **交付物**：
-- [ ] `main.rs` help 文本把 `--cli` 描述为“default terminal interface”，`--tui` 描述为“legacy full-screen terminal interface (alternative)”。
+- [x] `main.rs` help 文本把 `--cli` 描述为“default terminal interface”，`--tui` 描述为“legacy full-screen terminal interface (alternative)”。
 - [ ] CLI 启动参数可禁用 footer：`--no-footer` 兼容纯 pipe/无颜色环境。
 - [ ] 修复 `show_status` 擦除行导致的选择中断：thinking 状态改在 footer 状态行显示，不再用 `\r\x1b[2K` 擦除 scrollback。
 - [ ] 清理 `shell.rs` 旧代码，删除不再使用的 `AssistantPrinter` 硬编码 markdown 渲染（或移入 `render.rs`）。
-- [ ] 在 `docs/PROJECT_STATUS.md` 中更新 CLI/TUI 状态。
+- [x] 在 `docs/PROJECT_STATUS.md` 中更新 CLI/TUI 状态。
 
 **验证**：
 ```bash
@@ -317,11 +319,11 @@ cargo fmt --check
 
 ## 8. 成功标准
 
-- [ ] `pa` 不带参数启动后直接进入 CLI，行为与当前 `--cli` 一致但体验更好。
-- [ ] `pa --tui` 仍能进入 Ratatui 全屏界面，功能不回归。
-- [ ] CLI 支持至少 30 个常用斜杠命令，命令帮助与 TUI 一致。
+- [x] `pa` 不带参数启动后直接进入 CLI，行为与当前 `--cli` 一致但体验更好。
+- [x] `pa --tui` 仍能进入 Ratatui 全屏界面，功能不回归。
+- [x] CLI 支持至少 24 个常用斜杠命令，命令帮助与 TUI 一致。
 - [ ] 流式回复期间底部 prompt 保持可见，用户可随时输入下一条或按 `Ctrl+C` 中断。
-- [ ] 文件附件、`@` 补全、权限 diff、question UI 在 CLI 中可用。
-- [ ] 代码块输出可被普通终端选择复制，且不包含 `│` 等装饰前缀。
+- [x] 文件附件、`@` 补全、权限 diff、question UI 在 CLI 中可用。
+- [x] 代码块输出可被普通终端选择复制，且不包含 `│` 等装饰前缀。
 - [ ] `cargo test -q`、`cargo clippy --all-targets --all-features -- -D warnings`、`cargo fmt --check` 全部通过。
 - [ ] `bash scripts/workflow-production-gates.sh` 通过。

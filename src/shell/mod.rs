@@ -22,8 +22,7 @@ pub mod slash;
 use crate::components::attachment_token::AttachmentSource;
 use crate::engine::runtime_controller::RuntimeController;
 use crate::engine::streaming::{StreamEvent, StreamingQueryEngine};
-use crate::services::api::Message;
-use crate::session_store::{MessageRecord, SessionRecord, SessionStore};
+use crate::session_store::{SessionRecord, SessionStore};
 use crate::shell::attachment::AttachmentManager;
 use crate::shell::completion::{find_candidates, MentionCandidate};
 use crate::shell::footer::{AttachmentLine, FooterMode, FooterRenderer};
@@ -46,13 +45,27 @@ const LOCAL_COMMANDS: &[ShellCommand] = &[
     ShellCommand::new("/help", "show commands"),
     ShellCommand::new("/commands", "show commands"),
     ShellCommand::new("/attach", "attach a file to the next message"),
+    ShellCommand::new("/detach", "remove an attachment"),
     ShellCommand::new("/resume", "resume a previous conversation"),
     ShellCommand::new("/sessions", "list previous conversations"),
+    ShellCommand::new("/new", "start a new conversation"),
     ShellCommand::new("/status", "show model and context status"),
     ShellCommand::new("/model", "show active model"),
+    ShellCommand::new("/provider", "list or switch provider"),
+    ShellCommand::new("/tools", "list available tools"),
+    ShellCommand::new("/permissions", "show permission rules"),
+    ShellCommand::new("/memory", "show or toggle memory settings"),
     ShellCommand::new("/cost", "show token and cost usage"),
     ShellCommand::new("/token", "show token and cost usage"),
+    ShellCommand::new("/undo", "undo last file edit"),
+    ShellCommand::new("/redo", "redo last file edit"),
+    ShellCommand::new("/diff", "show diff for recent edits or file"),
+    ShellCommand::new("/export", "export current session"),
+    ShellCommand::new("/save", "save current session"),
+    ShellCommand::new("/doctor", "show environment diagnostics"),
+    ShellCommand::new("/audit", "show token usage or tool audit"),
     ShellCommand::new("/clear", "clear terminal"),
+    ShellCommand::new("/tui", "open the full-screen TUI"),
     ShellCommand::new("/exit", "quit"),
 ];
 
@@ -563,8 +576,20 @@ async fn handle_local_command(
             print_status(engine).await;
             Ok(true)
         }
+        "/provider" => {
+            let response = crate::shell::slash::handle_provider(host, "").await;
+            println!("{}", response);
+            Ok(true)
+        }
+        command if command.starts_with("/provider ") => {
+            let args = command.strip_prefix("/provider ").unwrap_or("").trim();
+            let response = crate::shell::slash::handle_provider(host, args).await;
+            println!("{}", response);
+            Ok(true)
+        }
         "/cost" | "/token" => {
-            print_cost(engine).await;
+            let response = crate::shell::slash::handle_token_cost(engine).await;
+            println!("{}", response);
             Ok(true)
         }
         "/clear" => {
@@ -689,6 +714,10 @@ async fn handle_local_command(
             println!("{DIM}Run `pa --tui` to open the full-screen terminal interface.{RESET}");
             Ok(true)
         }
+        command if command.starts_with('/') => {
+            println!("{DIM}Unknown command: {command}. Use /help for available commands.{RESET}");
+            Ok(true)
+        }
         _ => Ok(false),
     }
 }
@@ -806,62 +835,6 @@ fn print_sessions(engine: &StreamingQueryEngine, limit: i64) -> anyhow::Result<(
     Ok(())
 }
 
-#[allow(dead_code)]
-async fn resume_session_command(
-    engine: &StreamingQueryEngine,
-    command: &str,
-) -> anyhow::Result<()> {
-    let Some((store, current_id)) = engine.session_binding() else {
-        println!("{DIM}No session store is configured for this run.{RESET}");
-        return Ok(());
-    };
-
-    let sessions = resumable_sessions(&store, store.list_sessions(40)?);
-    if sessions.is_empty() {
-        println!("{DIM}No previous sessions found.{RESET}");
-        return Ok(());
-    }
-
-    let query = command.strip_prefix("/resume").unwrap_or("").trim();
-    let selected = if query.is_empty() {
-        print_session_list(&store, &sessions, Some(&current_id))?;
-        print!("{DIM}Resume session [number/id/search, empty to cancel] {RESET}");
-        io::stdout().flush()?;
-        let mut answer = String::new();
-        io::stdin().read_line(&mut answer)?;
-        let answer = answer.trim();
-        if answer.is_empty() {
-            println!("{DIM}Resume cancelled.{RESET}");
-            return Ok(());
-        }
-        resolve_session_selection(&store, &sessions, answer)?
-    } else {
-        resolve_session_selection(&store, &sessions, query)?
-    };
-
-    let Some(session) = selected else {
-        println!("{YELLOW}No matching session found.{RESET}");
-        return Ok(());
-    };
-
-    let records = store.get_messages(&session.id)?;
-    let messages = records_to_api_messages(&records);
-    engine
-        .flush_memory_for_current_history(crate::memory::MemoryFlushReason::ResumeSwitch)
-        .await;
-    engine.set_history(messages).await;
-    engine.set_session_id(session.id.clone());
-
-    println!(
-        "{GREEN}✓{RESET} Resumed {} {DIM}· {} messages · updated {}{RESET}",
-        display_session_title(&session),
-        records.len(),
-        session.updated_at
-    );
-    print_recent_session_preview(&records);
-    Ok(())
-}
-
 fn print_session_list(
     store: &SessionStore,
     sessions: &[SessionRecord],
@@ -887,105 +860,6 @@ fn print_session_list(
         println!("{DIM}    {}{RESET}", session.id);
     }
     Ok(())
-}
-
-#[allow(dead_code)]
-fn resumable_sessions(store: &SessionStore, sessions: Vec<SessionRecord>) -> Vec<SessionRecord> {
-    sessions
-        .into_iter()
-        .filter(|session| store.message_count(&session.id).unwrap_or_default() > 0)
-        .collect()
-}
-
-#[allow(dead_code)]
-fn resolve_session_selection(
-    store: &SessionStore,
-    sessions: &[SessionRecord],
-    query: &str,
-) -> anyhow::Result<Option<SessionRecord>> {
-    if matches!(query, "latest" | "last" | "continue") {
-        return Ok(sessions.first().cloned());
-    }
-
-    if let Ok(index) = query.parse::<usize>() {
-        if (1..=sessions.len()).contains(&index) {
-            return Ok(Some(sessions[index - 1].clone()));
-        }
-    }
-
-    let query_lower = query.to_lowercase();
-    if let Some(session) = sessions.iter().find(|session| {
-        session.id.starts_with(query)
-            || session.title.to_lowercase().contains(&query_lower)
-            || session.model.to_lowercase().contains(&query_lower)
-    }) {
-        return Ok(Some(session.clone()));
-    }
-
-    let matches = store.search_messages(query, 8).unwrap_or_default();
-    for message in matches {
-        if let Some(session) = store.get_session(&message.session_id)? {
-            return Ok(Some(session));
-        }
-    }
-
-    Ok(None)
-}
-
-#[allow(dead_code)]
-fn records_to_api_messages(records: &[MessageRecord]) -> Vec<Message> {
-    records
-        .iter()
-        .map(|record| match record.role.as_str() {
-            "user" => Message::user(record.content.clone()),
-            "assistant" => {
-                let tool_calls = record.tool_calls.as_ref().and_then(|value| {
-                    if value.is_array() {
-                        serde_json::from_value::<Vec<crate::services::api::ToolCall>>(value.clone())
-                            .ok()
-                    } else {
-                        None
-                    }
-                });
-                if let Some(tool_calls) = tool_calls {
-                    Message::assistant_with_tools(record.content.clone(), tool_calls)
-                } else {
-                    Message::assistant(record.content.clone())
-                }
-            }
-            "tool" => Message::tool(
-                record.tool_call_id.clone().unwrap_or_default(),
-                record.content.clone(),
-            ),
-            _ => Message::system(record.content.clone()),
-        })
-        .collect()
-}
-
-#[allow(dead_code)]
-fn print_recent_session_preview(records: &[MessageRecord]) {
-    let recent = records
-        .iter()
-        .rev()
-        .filter(|record| matches!(record.role.as_str(), "user" | "assistant"))
-        .take(4)
-        .collect::<Vec<_>>();
-    if recent.is_empty() {
-        return;
-    }
-    println!("{DIM}Recent context:{RESET}");
-    for record in recent.into_iter().rev() {
-        let label = if record.role == "user" {
-            "you"
-        } else {
-            "agent"
-        };
-        println!(
-            "{DIM}  {:<5}{RESET} {}",
-            label,
-            compact_line(&record.content, 86)
-        );
-    }
 }
 
 fn display_session_title(session: &SessionRecord) -> String {
@@ -1046,12 +920,6 @@ async fn print_status(engine: &StreamingQueryEngine) {
         "{DIM}  prefix     {RESET}{}",
         usage.stable_prefix_fingerprint
     );
-}
-
-async fn print_cost(engine: &StreamingQueryEngine) {
-    let tracker = engine.cost_tracker().lock().await;
-    println!("{BOLD}Token Usage{RESET}");
-    println!("{}", tracker.generate_report());
 }
 
 fn permission_mode_label(mode: crate::permissions::PermissionMode) -> &'static str {
@@ -1609,64 +1477,5 @@ mod tests {
         assert!(PermissionChoice::AllowSession.approved());
         assert!(!PermissionChoice::DenyOnce.approved());
         assert!(!PermissionChoice::DenySession.approved());
-    }
-
-    #[test]
-    fn session_selection_accepts_index_id_and_title() {
-        let store = SessionStore::in_memory().expect("store");
-        store
-            .create_session("session-alpha", "Fix login bug", "model-a", None)
-            .unwrap();
-        store
-            .create_session("session-beta", "Build dashboard", "model-b", None)
-            .unwrap();
-        let sessions = store.list_sessions(10).unwrap();
-
-        let by_index = resolve_session_selection(&store, &sessions, "1")
-            .unwrap()
-            .unwrap();
-        assert!(by_index.id == "session-alpha" || by_index.id == "session-beta");
-
-        let by_id = resolve_session_selection(&store, &sessions, "session-alpha")
-            .unwrap()
-            .unwrap();
-        assert_eq!(by_id.id, "session-alpha");
-
-        let by_title = resolve_session_selection(&store, &sessions, "dashboard")
-            .unwrap()
-            .unwrap();
-        assert_eq!(by_title.id, "session-beta");
-    }
-
-    #[test]
-    fn message_records_restore_api_history() {
-        let records = vec![
-            MessageRecord {
-                id: 1,
-                session_id: "s".to_string(),
-                role: "user".to_string(),
-                content: "hello".to_string(),
-                tool_calls: None,
-                tool_call_id: None,
-                reasoning: None,
-                metadata: None,
-                created_at: "now".to_string(),
-            },
-            MessageRecord {
-                id: 2,
-                session_id: "s".to_string(),
-                role: "assistant".to_string(),
-                content: "hi".to_string(),
-                tool_calls: None,
-                tool_call_id: None,
-                reasoning: None,
-                metadata: None,
-                created_at: "now".to_string(),
-            },
-        ];
-
-        let messages = records_to_api_messages(&records);
-        assert!(matches!(messages[0], Message::User { .. }));
-        assert!(matches!(messages[1], Message::Assistant { .. }));
     }
 }

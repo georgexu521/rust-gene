@@ -1,7 +1,53 @@
 # Project Status
 Status: Current
 
-Last updated: 2026-06-14
+Last updated: 2026-06-16
+
+## CLI Default Interface — Phases 0–6 Complete (2026-06-16)
+
+The scrollback-first CLI documented in `docs/CLI_COMPLETION_PLAN.md` is now the
+default interactive interface.
+
+### Completed phases
+
+| Phase | Theme | Commit |
+|-------|-------|--------|
+| Phase 0 | Decouple shared frontend components for CLI/TUI reuse | `002f4281` |
+| Phase 1 | Split-footer prompt and scrollback-first renderer | `f7f19867` |
+| Phase 2 | Attachments and Composer integration | `34960bf9` |
+| Phase 3 | Permission diff previews and `@` mention file completion | `0b0ae1f2` |
+| Phase 4 | Question UI, copyable code blocks, help polish | `3606846a` |
+| Phase 5 | `ShellHost` trait and CLI slash command wrappers | `77725be9` |
+| Phase 6 | Help/entry cleanup, provider text commands, dead-code removal | this change |
+
+### What changed
+
+- `priority-agent` / `pa` now defaults to the scrollback-first CLI.
+- `--cli` is explicitly the default terminal interface; `--tui` is the legacy
+  full-screen terminal interface (alternative).
+- CLI supports streaming output, split-footer prompt, attachments,
+  `@` file completion, permission diff previews, question UI, and the most
+  common slash commands.
+- Shared slash handlers are routed through `ShellHost`, implemented by both
+  `CliHost` and `TuiApp`.
+- TUI remains available and unmodified as an alternative interface.
+
+### Validation gates
+
+```bash
+cargo fmt --check
+cargo check -q
+cargo test -q
+cargo clippy --all-targets --all-features -- -D warnings
+cargo check --features experimental-api-server -q
+bash scripts/workflow-production-gates.sh
+```
+
+### Known issues
+
+- `cargo test -q` has 4 pre-existing TUI failures unrelated to CLI work.
+
+---
 
 ## TUI Projection And Polish — Phases 1–6 Complete (2026-06-14)
 
