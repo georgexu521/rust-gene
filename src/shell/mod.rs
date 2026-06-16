@@ -513,7 +513,23 @@ async fn print_welcome(engine: &StreamingQueryEngine) {
     let model = compact_line(&engine.model_name(), WELCOME_MODEL_WIDTH);
     let provider = compact_line(&engine.provider_base_url(), WELCOME_PROVIDER_WIDTH);
     let mode = permission_mode_label(engine.permission_mode());
-    let width = terminal_width().clamp(WELCOME_WIDTH_MIN, WELCOME_WIDTH_MAX);
+    let width = terminal_width();
+
+    // Use a compact header on narrow terminals to avoid line-wrapping artifacts.
+    if width < WELCOME_WIDTH_MIN {
+        println!("{BLUE}Priority Agent{RESET} {DIM}coding agent{RESET}");
+        println!("{DIM}Dir{RESET} {}", compact_line(&dir, 40));
+        println!("{DIM}Model{RESET} {} {DIM}·{RESET} {}", model, provider);
+        println!(
+            "{DIM}Mode{RESET} {} {DIM}·{RESET} context {} / {}",
+            mode, usage.total_estimated_tokens, usage.max_context_tokens
+        );
+        println!("{DIM}/help{RESET} commands {DIM}·{RESET} /status {DIM}·{RESET} /exit");
+        println!();
+        return;
+    }
+
+    let width = width.clamp(WELCOME_WIDTH_MIN, WELCOME_WIDTH_MAX);
     let inner = width.saturating_sub(4);
 
     println!(

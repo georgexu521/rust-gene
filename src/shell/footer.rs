@@ -174,7 +174,9 @@ fn render_prompt_footer(prompt: &PromptEditor, width: usize) -> Vec<String> {
         } else {
             "  ".to_string()
         };
-        let wrapped = wrap_line(line, width.saturating_sub(prefix_len));
+        // Reserve at least 10 columns for usable input on very narrow terminals.
+        let usable_width = width.saturating_sub(prefix_len).max(10);
+        let wrapped = wrap_line(line, usable_width);
         for (widx, wrapped_line) in wrapped.into_iter().enumerate() {
             let pad = if idx == 0 && widx == 0 { "" } else { "  " };
             lines.push(format!("{pad}{marker}{wrapped_line}"));
