@@ -1,3 +1,5 @@
+use regex::Regex;
+
 #[derive(Debug, Clone, Copy)]
 pub struct HiddenBlockSpec {
     pub open_prefix: &'static str,
@@ -56,8 +58,9 @@ pub(crate) fn find_hidden_block_open(buffer: &str) -> Option<(usize, usize, Hidd
 }
 
 pub(crate) fn strip_hidden_blocks(content: impl AsRef<str>) -> String {
-    let mut output = String::with_capacity(content.as_ref().len());
-    let mut rest = content.as_ref();
+    let content = strip_dsml_blocks(content.as_ref());
+    let mut output = String::with_capacity(content.len());
+    let mut rest = content.as_str();
 
     loop {
         let Some((open_start, open_end, block)) = find_hidden_block_open(rest) else {
@@ -77,6 +80,35 @@ pub(crate) fn strip_hidden_blocks(content: impl AsRef<str>) -> String {
     output
 }
 
+/// Strip DSML tool-call markup leaked into visible assistant content.
+///
+/// DeepSeek-family models sometimes emit tool calls as text using delimiters
+/// such as `<|DSML|function_calls>` or the spaced variant
+/// `<| | DSML | | function_calls>`. These blocks are not user-facing prose.
+fn strip_dsml_blocks(content: &str) -> String {
+    let open_re = Regex::new(
+        r"〈DSML｜(?:function_calls|tool_calls)[^〉]*〉|<\|(?:\s*\|)?\s*[Dd][Ss][Mm][Ll]\s*\|(?:\s*\|)?\s*(?:function_calls|tool_calls)[^>]*>",
+    )
+    .expect("valid DSML open regex");
+    let close_re = Regex::new(
+        r"〈/DSML｜(?:function_calls|tool_calls)[^〉]*〉|</\|(?:\s*\|)?\s*[Dd][Ss][Mm][Ll]\s*\|(?:\s*\|)?\s*(?:function_calls|tool_calls)[^>]*>|<\|(?:\s*\|)?\s*/\s*[Dd][Ss][Mm][Ll]\s*\|(?:\s*\|)?\s*(?:function_calls|tool_calls)[^>]*>",
+    )
+    .expect("valid DSML close regex");
+    let mut result = content.to_string();
+    loop {
+        let Some(open_match) = open_re.find(&result) else {
+            break;
+        };
+        let after_open = &result[open_match.end()..];
+        let Some(close_match) = close_re.find(after_open) else {
+            break;
+        };
+        let close_end = open_match.end() + close_match.end();
+        result.replace_range(open_match.start()..close_end, "");
+    }
+    result
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -91,5 +123,29 @@ mod tests {
     fn prefers_longer_prefix_for_overlapping_think_tags() {
         let input = "A <thinking>hidden</thinking> B <think>also hidden</think> C";
         assert_eq!(strip_hidden_blocks(input), "A  B  C");
+    }
+
+    #[test]
+    fn strips_spaced_half_width_dsml_blocks() {
+        let input = r#"我来检查。
+<| | DSML | | tool_calls>
+<| | DSML | | invoke name="bash">
+<| | DSML | | parameter name="command" string="true">ls</| | DSML | | parameter>
+</| | DSML | | invoke>
+</| | DSML | | tool_calls>
+Done."#;
+        assert!(strip_hidden_blocks(input).trim().ends_with("Done."));
+    }
+
+    #[test]
+    fn strips_compact_half_width_dsml_blocks() {
+        let input = r#"Before <|DSML|tool_calls><|DSML|invoke name="bash"><|DSML|parameter name="command">ls</|DSML|parameter></|DSML|invoke></|DSML|tool_calls> After"#;
+        assert_eq!(strip_hidden_blocks(input), "Before  After");
+    }
+
+    #[test]
+    fn strips_full_width_dsml_blocks() {
+        let input = "Before\n〈DSML｜tool_calls〉\n〈DSML｜invoke name=\"bash\"〉\n〈DSML｜parameter name=\"command\" string=\"true\"〉pwd〈/DSML｜parameter〉\n〈/DSML｜invoke〉\n〈/DSML｜tool_calls〉\nAfter";
+        assert_eq!(strip_hidden_blocks(input), "Before\n\nAfter");
     }
 }

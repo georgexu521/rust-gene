@@ -327,7 +327,7 @@ fn scavenge_tool_calls(raw_content: &str, report: &mut ToolCallRepairReport) -> 
     let mut calls = Vec::new();
     calls.extend(scavenge_invoke_tags(raw_content, report));
     calls.extend(scavenge_json_tool_call_tags(raw_content, report));
-    calls.extend(scavenge_dsml_function_calls(raw_content, report));
+    calls.extend(scavenge_dsml_function_calls(raw_content));
     calls
 }
 
@@ -419,37 +419,88 @@ fn parse_json_tool_call(
 /// 〈/DSML｜invoke〉
 /// 〈/DSML｜function_calls〉
 /// ```
-fn scavenge_dsml_function_calls(
-    raw_content: &str,
-    report: &mut ToolCallRepairReport,
-) -> Vec<ToolCall> {
-    if !raw_content.contains("〈DSML｜function_calls〉") {
+pub(crate) fn scavenge_dsml_function_calls(raw_content: &str) -> Vec<ToolCall> {
+    let normalized = normalize_dsml_markup(raw_content);
+    if !normalized.contains("〈DSML｜function_calls〉")
+        && !normalized.contains("〈DSML｜tool_calls〉")
+    {
         return Vec::new();
     }
 
-    let re = Regex::new(r"(?s)〈DSML｜function_calls〉(.*?)〈/DSML｜function_calls〉")
-        .expect("valid DSML regex");
+    let re = Regex::new(
+        r"(?s)〈DSML｜(?:function_calls|tool_calls)〉(.*?)〈/DSML｜(?:function_calls|tool_calls)〉",
+    )
+    .expect("valid DSML regex");
     let mut calls = Vec::new();
 
-    for captures in re.captures_iter(raw_content) {
+    for captures in re.captures_iter(&normalized) {
         let body = captures.get(1).map(|m| m.as_str()).unwrap_or("");
-        calls.extend(parse_dsml_invoke_block(body, calls.len(), report));
+        calls.extend(parse_dsml_invoke_block(body, calls.len()));
     }
 
     calls
 }
 
-fn parse_dsml_invoke_block(
-    body: &str,
-    base_idx: usize,
-    report: &mut ToolCallRepairReport,
-) -> Vec<ToolCall> {
+/// Normalize the several DSML delimiter shapes DeepSeek-family models leak into
+/// regular content so the existing full-width parser can consume them.
+///
+/// Supported shapes:
+///   〈DSML｜...〉            (full-width, already canonical)
+///   <|DSML|...>             (half-width, compact)
+///   <| | DSML | | ...>      (half-width, spaced, as seen from deepseek-v4-flash)
+fn normalize_dsml_markup(content: &str) -> String {
+    // Open tags may carry attributes (e.g. name="bash") after the tag name.
+    let open_re = Regex::new(r"<\|(?:\s*\|)?\s*[Dd][Ss][Mm][Ll]\s*\|(?:\s*\|)?\s*(\w+)([^>]*)>")
+        .expect("valid open re");
+    // Close tags may look like </|DSML|tag>, </| | DSML | | tag>, <|/DSML|tag>, etc.
+    let close_re = Regex::new(r"<(?:/\|(?:\s*\|)?\s*[Dd][Ss][Mm][Ll]\s*\|(?:\s*\|)?\s*(\w+)\s*|\|(?:\s*\|)?\s*/\s*[Dd][Ss][Mm][Ll]\s*\|(?:\s*\|)?\s*(\w+)\s*)([^>]*)>")
+        .expect("valid close re");
+    let normalized = open_re.replace_all(content, "〈DSML｜$1$2〉");
+    close_re
+        .replace_all(&normalized, |caps: &regex::Captures| {
+            let name = caps
+                .get(1)
+                .or_else(|| caps.get(2))
+                .map(|m| m.as_str())
+                .unwrap_or("");
+            let attrs = caps.get(3).map(|m| m.as_str()).unwrap_or("");
+            format!("〈/DSML｜{name}{attrs}〉")
+        })
+        .into_owned()
+}
+
+#[cfg(test)]
+mod normalize_tests {
+    use super::normalize_dsml_markup;
+
+    #[test]
+    fn normalizes_compact_half_width_dsml() {
+        let input = r#"<|DSML|tool_calls><|DSML|invoke name="bash"><|DSML|parameter name="command">ls<|/DSML|parameter><|/DSML|invoke><|/DSML|tool_calls>"#;
+        let normalized = normalize_dsml_markup(input);
+        assert!(normalized.contains("〈DSML｜tool_calls〉"));
+        assert!(normalized.contains("〈/DSML｜tool_calls〉"));
+    }
+
+    #[test]
+    fn normalizes_spaced_half_width_dsml() {
+        let input = r#"<| | DSML | | tool_calls><| | DSML | | invoke name="bash"><| | DSML | | parameter name="command">ls</| | DSML | | parameter></| | DSML | | invoke></| | DSML | | tool_calls>"#;
+        let normalized = normalize_dsml_markup(input);
+        assert!(normalized.contains("〈DSML｜tool_calls〉"));
+        assert!(normalized.contains("〈/DSML｜tool_calls〉"));
+    }
+}
+
+fn parse_dsml_invoke_block(body: &str, base_idx: usize) -> Vec<ToolCall> {
+    // DeepSeek may emit self-closing parameter tags using the same shape as the
+    // opening tag (e.g. `<|DSML|parameter>` instead of `</|DSML|parameter>`),
+    // so the close delimiter accepts both `〈/DSML｜...〉` and `〈DSML｜...〉`.
     let invoke_re =
-        Regex::new(r#"(?s)〈DSML｜invoke\s+name\s*=\s*"([^"]+)"〉(.*?)〈/DSML｜invoke〉"#)
+        Regex::new(r#"(?s)〈DSML｜invoke\s+name\s*=\s*"([^"]+)"〉(.*?)〈/?DSML｜invoke[^〉]*〉"#)
             .expect("valid DSML invoke regex");
-    let param_re =
-        Regex::new(r#"〈DSML｜parameter\s+name\s*=\s*"([^"]+)"[^〉]*〉(.*?)〈/DSML｜parameter〉"#)
-            .expect("valid DSML param regex");
+    let param_re = Regex::new(
+        r#"〈DSML｜parameter\s+name\s*=\s*"([^"]+)"[^〉]*〉(.*?)〈/?DSML｜parameter[^〉]*〉"#,
+    )
+    .expect("valid DSML param regex");
 
     let mut calls = Vec::new();
 
@@ -480,7 +531,6 @@ fn parse_dsml_invoke_block(
             name,
             arguments: Value::Object(args),
         });
-        report.scavenged_tool_calls += 1;
     }
 
     calls
@@ -614,6 +664,71 @@ mod tests {
         assert_eq!(calls[0].name, "file_read");
         assert_eq!(calls[0].arguments, json!({"path": "Cargo.toml"}));
         assert_eq!(repaired.content.trim(), "before  after");
+        assert_eq!(repaired.report.unwrap().scavenged_tool_calls, 1);
+    }
+
+    #[test]
+    fn scavenges_half_width_spaced_dsml_tool_call() {
+        let raw = r#"我来检查。
+<| | DSML | | tool_calls>
+<| | DSML | | invoke name="bash">
+<| | DSML | | parameter name="command" string="true">ls -la ~/Desktop/phageGPT/<| | DSML | | parameter>
+<| | DSML | | parameter name="description" string="true">List project root<| | DSML | | parameter>
+</| | DSML | | invoke>
+</| | DSML | | tool_calls>
+Done."#;
+
+        let repaired = repair_response(
+            raw,
+            None,
+            ProviderProtocolFamily::OpenAiCompatible,
+            report(),
+        );
+
+        let calls = repaired.tool_calls.expect("tool calls scavenged");
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].name, "bash");
+        assert_eq!(calls[0].arguments["command"], "ls -la ~/Desktop/phageGPT/");
+        assert_eq!(calls[0].arguments["description"], "List project root");
+        assert_eq!(repaired.content.trim(), "我来检查。\n\nDone.");
+        assert_eq!(repaired.report.unwrap().scavenged_tool_calls, 1);
+    }
+
+    #[test]
+    fn scavenges_compact_half_width_dsml_tool_call() {
+        let raw = r#"Before <|DSML|tool_calls><|DSML|invoke name="bash"><|DSML|parameter name="command">ls<|/DSML|parameter><|/DSML|invoke><|/DSML|tool_calls> After"#;
+
+        let repaired = repair_response(
+            raw,
+            None,
+            ProviderProtocolFamily::OpenAiCompatible,
+            report(),
+        );
+
+        let calls = repaired.tool_calls.expect("tool calls scavenged");
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].name, "bash");
+        assert_eq!(calls[0].arguments["command"], "ls");
+        assert_eq!(repaired.content, "Before  After");
+        assert_eq!(repaired.report.unwrap().scavenged_tool_calls, 1);
+    }
+
+    #[test]
+    fn scavenges_full_width_dsml_without_visible_markup() {
+        let raw = "Before\n〈DSML｜tool_calls〉\n〈DSML｜invoke name=\"bash\"〉\n〈DSML｜parameter name=\"command\" string=\"true\"〉pwd〈/DSML｜parameter〉\n〈/DSML｜invoke〉\n〈/DSML｜tool_calls〉\nAfter";
+
+        let repaired = repair_response(
+            raw,
+            None,
+            ProviderProtocolFamily::OpenAiCompatible,
+            report(),
+        );
+
+        let calls = repaired.tool_calls.expect("tool calls scavenged");
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].name, "bash");
+        assert_eq!(calls[0].arguments["command"], "pwd");
+        assert_eq!(repaired.content.trim(), "Before\n\nAfter");
         assert_eq!(repaired.report.unwrap().scavenged_tool_calls, 1);
     }
 
