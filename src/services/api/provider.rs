@@ -324,6 +324,44 @@ impl ProviderRegistry {
     }
 }
 
+impl ProviderRegistry {
+    /// Switch the active provider at runtime and persist the choice to disk.
+    pub async fn switch_provider(
+        &self,
+        engine: Option<&crate::engine::streaming::StreamingQueryEngine>,
+        name: &str,
+    ) -> String {
+        let name_lower = name.to_ascii_lowercase();
+        let provider = self.get(&name_lower);
+        let config = self.get_config(&name_lower).cloned();
+        match (provider, config) {
+            (Some(provider), Some(config)) => {
+                if let Some(engine) = engine {
+                    engine.set_provider(provider, config.default_model.clone());
+                }
+                if let Ok(mut app_config) = crate::services::config::AppConfig::load() {
+                    app_config.api.provider_name = Some(name_lower.clone());
+                    app_config.api.model = config.default_model.clone();
+                    app_config.api.base_url = config.base_url.clone().unwrap_or_default();
+                    if app_config.save().is_ok() {
+                        crate::services::config::init_runtime_config(app_config);
+                    }
+                }
+                format!(
+                    "Provider switched to {}\nModel: {}\nBase URL: {}",
+                    config.name,
+                    config.default_model,
+                    config.base_url.as_deref().unwrap_or("default")
+                )
+            }
+            _ => format!(
+                "Provider '{}' is not configured. Use /provider list to see available providers.",
+                name
+            ),
+        }
+    }
+}
+
 fn env_non_empty(key: &str) -> Option<String> {
     std::env::var(key)
         .ok()

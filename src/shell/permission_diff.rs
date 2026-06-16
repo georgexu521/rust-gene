@@ -1,9 +1,9 @@
 use crate::engine::conversation_loop::ToolApprovalRequest;
 use crate::tools::bash_tool::command_classifier::{classify_command, ShellCommandCategory};
 
-/// 计算待审批工具的 Diff 预览。
+/// Compute a human-readable diff/preview for a pending tool approval request.
 ///
-/// 该函数前端无关，可被 TUI 和 CLI 同时复用。
+/// This function is UI-agnostic and can be reused by both TUI and CLI.
 pub fn compute_permission_diff(req: &ToolApprovalRequest) -> Option<(String, String)> {
     let name = req.tool_call.name.as_str();
     let args = &req.tool_call.arguments;
@@ -25,7 +25,7 @@ pub fn compute_permission_diff(req: &ToolApprovalRequest) -> Option<(String, Str
         }
         "file_edit" => {
             let path = args["path"].as_str().unwrap_or("unknown");
-            // 尝试读取原始文件并生成真实的 unified diff
+            // Try to read the original file and produce a real unified diff.
             if let Ok(original) = std::fs::read_to_string(path) {
                 if let Ok(new_content) =
                     crate::tools::file_tool::FileEditTool::preview_edit(args, &original)
@@ -35,7 +35,7 @@ pub fn compute_permission_diff(req: &ToolApprovalRequest) -> Option<(String, Str
                     }
                 }
             }
-            // 回退：显示旧版本的参数展示
+            // Fallback: show the old-style parameter preview.
             let old_string = args["old_string"].as_str().unwrap_or("");
             let new_string = args["new_string"].as_str().unwrap_or("");
             let insert_after = args["insert_after"].as_str();
@@ -120,7 +120,7 @@ pub fn compute_permission_diff(req: &ToolApprovalRequest) -> Option<(String, Str
                 lines.push(format!("Timeout: {}s", timeout));
             }
 
-            // 检测 bash 命令是否包含文件修改操作，给出替代工具建议
+            // Detect file-mutating bash commands and suggest dedicated file tools.
             let classification = classify_command(command);
             if classification.category == ShellCommandCategory::FileMutation
                 || classification.category == ShellCommandCategory::GitMutation
@@ -142,7 +142,7 @@ pub fn compute_permission_diff(req: &ToolApprovalRequest) -> Option<(String, Str
     }
 }
 
-/// Generate unified diff (using diff -u command)
+/// Generate a unified diff, falling back to a pure-Rust line diff if `diff -u` is unavailable.
 pub fn generate_unified_diff(old_content: &str, new_content: &str, path: &str) -> Option<String> {
     let old_file = std::env::temp_dir().join(format!("diff_old_{}", uuid::Uuid::new_v4()));
     let new_file = std::env::temp_dir().join(format!("diff_new_{}", uuid::Uuid::new_v4()));
@@ -150,18 +150,57 @@ pub fn generate_unified_diff(old_content: &str, new_content: &str, path: &str) -
     std::fs::write(&old_file, old_content).ok()?;
     std::fs::write(&new_file, new_content).ok()?;
 
-    let output = std::process::Command::new("diff")
-        .args(["-u", old_file.to_str()?, new_file.to_str()?])
-        .output()
-        .ok()?;
+    let result = (|| {
+        let output = std::process::Command::new("diff")
+            .args(["-u", old_file.to_str()?, new_file.to_str()?])
+            .output()
+            .ok()?;
+
+        let diff = String::from_utf8_lossy(&output.stdout);
+        Some(if diff.is_empty() {
+            format!("No differences in {}", path)
+        } else {
+            diff.to_string()
+        })
+    })();
 
     let _ = std::fs::remove_file(&old_file).ok();
     let _ = std::fs::remove_file(&new_file).ok();
 
-    let diff = String::from_utf8_lossy(&output.stdout);
-    if diff.is_empty() {
-        Some(format!("No differences in {}", path))
-    } else {
-        Some(diff.to_string())
+    result.or_else(|| Some(pure_line_diff(old_content, new_content, path)))
+}
+
+fn pure_line_diff(old_content: &str, new_content: &str, path: &str) -> String {
+    let old_lines: Vec<&str> = old_content.lines().collect();
+    let new_lines: Vec<&str> = new_content.lines().collect();
+    let mut lines = vec![format!("--- a/{}", path), format!("+++ b/{}", path)];
+
+    let mut old_idx = 0usize;
+    let mut new_idx = 0usize;
+    while old_idx < old_lines.len() || new_idx < new_lines.len() {
+        if old_idx < old_lines.len()
+            && new_idx < new_lines.len()
+            && old_lines[old_idx] == new_lines[new_idx]
+        {
+            lines.push(format!(" {}", old_lines[old_idx]));
+            old_idx += 1;
+            new_idx += 1;
+        } else if old_idx < old_lines.len()
+            && (new_idx >= new_lines.len()
+                || !new_lines
+                    .get(new_idx..)
+                    .unwrap_or(&[])
+                    .contains(&old_lines[old_idx]))
+        {
+            lines.push(format!("-{}", old_lines[old_idx]));
+            old_idx += 1;
+        } else {
+            lines.push(format!("+{}", new_lines[new_idx]));
+            new_idx += 1;
+        }
     }
+    lines.join(
+        "
+",
+    )
 }

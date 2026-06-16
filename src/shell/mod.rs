@@ -540,10 +540,6 @@ async fn handle_local_command(
             print_sessions(engine, 20)?;
             Ok(true)
         }
-        command if command == "/resume" || command.starts_with("/resume ") => {
-            handle_resume_command(host, command).await;
-            Ok(true)
-        }
         "/new" => {
             let title = "New Session";
             let model = engine.model_name();
@@ -702,10 +698,6 @@ async fn handle_local_command(
             println!("{}", response);
             Ok(true)
         }
-        command if command == "/resume" || command.starts_with("/resume ") => {
-            handle_resume_command(host, command).await;
-            Ok(true)
-        }
         "/tui" => {
             println!("{DIM}Run `pa --tui` to open the full-screen terminal interface.{RESET}");
             Ok(true)
@@ -716,13 +708,6 @@ async fn handle_local_command(
         }
         _ => Ok(false),
     }
-}
-
-async fn handle_resume_command(host: &mut CliHost, command: &str) {
-    let args = command.strip_prefix("/resume").unwrap_or("").trim();
-    let dyn_host: &mut dyn ShellHost = host;
-    let response = crate::shell::slash::handle_resume(dyn_host, args).await;
-    println!("{}", response);
 }
 
 fn handle_attach_command(args: &str, attachments: &mut AttachmentManager) -> anyhow::Result<()> {
@@ -931,17 +916,6 @@ fn permission_mode_label(mode: crate::permissions::PermissionMode) -> &'static s
         crate::permissions::PermissionMode::ReadOnly => "read-only",
         crate::permissions::PermissionMode::Once => "once",
     }
-}
-
-#[allow(dead_code)]
-fn shell_history_path() -> Option<PathBuf> {
-    let mut dir = dirs::data_local_dir().or_else(dirs::home_dir)?;
-    dir.push("priority-agent");
-    if std::fs::create_dir_all(&dir).is_err() {
-        return None;
-    }
-    dir.push("shell_history");
-    Some(dir)
 }
 
 #[derive(Clone, Copy)]

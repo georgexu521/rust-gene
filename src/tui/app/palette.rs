@@ -430,36 +430,15 @@ impl TuiApp {
 
     pub fn switch_provider_by_name(&mut self, name: &str) -> String {
         let registry = crate::services::api::provider::ProviderRegistry::from_env();
-        let Some(provider) = registry.get(name) else {
-            return format!(
-                "Provider '{}' is not configured. Use /provider list to inspect required environment variables.",
-                name
-            );
-        };
-        let Some(config) = registry.get_config(name).cloned() else {
-            return format!("Provider '{}' has no config.", name);
-        };
-        if let Some(engine) = &self.streaming_engine {
-            engine.set_provider(provider, config.default_model.clone());
-        }
-        if let Ok(mut app_config) = crate::services::config::AppConfig::load() {
-            app_config.api.provider_name = Some(name.to_string());
-            app_config.api.model = config.default_model.clone();
-            app_config.api.base_url = config.base_url.clone().unwrap_or_default();
-            if app_config.save().is_ok() {
-                crate::services::config::init_runtime_config(app_config);
-            }
-        }
+        let result = registry.switch_provider(self.streaming_engine.as_deref(), name);
+        // switch_provider is async; palette runs in a synchronous context, so
+        // block on the trivial persistence future.
+        let result = futures::executor::block_on(result);
         self.provider_notice = Some(format!(
-            "Provider switched to {} ({})",
-            config.name, config.default_model
+            "Provider switched to {}",
+            result.split('\n').next().unwrap_or(&result)
         ));
         self.discovered_models.clear();
-        format!(
-            "Provider switched to {}\nModel: {}\nBase URL: {}",
-            config.name,
-            config.default_model,
-            config.base_url.unwrap_or_default()
-        )
+        result
     }
 }

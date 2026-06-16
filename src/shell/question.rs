@@ -248,11 +248,11 @@ mod tests {
             if ch == '\u{1b}' {
                 // Skip ESC [ ... m
                 if chars.next() == Some('[') {
-                for c in chars.by_ref() {
-                    if c.is_ascii_alphabetic() {
-                        break;
+                    for c in chars.by_ref() {
+                        if c.is_ascii_alphabetic() {
+                            break;
+                        }
                     }
-                }
                 }
             } else {
                 out.push(ch);

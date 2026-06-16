@@ -162,8 +162,24 @@ fn render_markdown_table_line(line: &str) -> Option<String> {
 }
 
 fn clean_markdown_inline(line: &str) -> String {
-    let mut out = line.replace("**", "");
-    out = out.replace('`', "");
+    // Strip paired bold markers and backticks while preserving unmatched chars.
+    let mut out = String::with_capacity(line.len());
+    let mut chars = line.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if ch == '*' {
+            if chars.peek() == Some(&'*') {
+                chars.next();
+                continue;
+            }
+            out.push(ch);
+        } else if ch == '`' {
+            // Drop a single backtick; if text has an unmatched backtick the
+            // result is slightly cleaned rather than mangled.
+            continue;
+        } else {
+            out.push(ch);
+        }
+    }
     out
 }
 
