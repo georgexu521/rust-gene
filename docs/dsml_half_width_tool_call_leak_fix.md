@@ -120,3 +120,45 @@ cargo check -q
 2. 运行 `cargo clippy --all-targets --all-features -- -D warnings`。
 3. 运行 `bash scripts/workflow-production-gates.sh`。
 4. 提交修改并刷新 workflow 报告。
+
+## 新增：TUI assistant 文本重复输出修复（2026-06-16）
+
+### 现象
+
+在 TUI 中，同一条 assistant 回复的文本内容会出现两次（如用户截图中 `## 📌 phageGPT 项目概览` 到 `核心目标 / 工作原理` 段落在页面上方和下方各出现一次）。
+
+### 根因
+
+TUI 的 message-part 投影允许一条 assistant message 存在多个 `Text` part：
+- **Streaming 增量**（`AssistantTextDelta`）通过 `assistant_part_for_message` 创建/追加 text part，id 形如 `msg:text:0`。
+- **权威性更新**（`AssistantTextUpdated`，来自 persisted replay 或最终状态同步）通过 `set_message_text_part` 设置 text part，id 固定为 `msg:text`（`part_id_for` 生成）。
+
+两者 id 不一致，导致同一条 assistant message 同时存在：
+- `msg:text:0`：streaming 累积的文本
+- `msg:text`：authoritative 更新写入的完整文本
+
+渲染时 `append_part_lines` 会把所有 text parts 依次渲染，于是用户看到重复内容。
+
+### 修复
+
+在 `src/tui/sync_store.rs` 的 `set_message_text_part` 中，对 `TuiPartKind::Text` 使用与 streaming 相同的 id 方案：
+- 如果该 message 已存在 text part，复用最后一个 text part 的 id。
+- 否则创建 `msg:text:0`。
+
+这样 `AssistantTextUpdated` 会覆盖当前 text part，而不是创建新的重复 part。
+
+### 验证
+
+- `cargo test -q tui::sync_store::tests`：通过。
+- `cargo test -q tui::view_model::timeline::tests`：通过。
+- `cargo test -q tui::components::message::tests`：通过。
+- `cargo fmt --check`：通过。
+- `cargo check -q`：通过。
+
+### 备注
+
+本次只修改了 `src/tui/sync_store.rs`。另有两个与 tool-part message 归属相关的既有测试失败，与本次重复输出修复无关：
+- `tui::render_session::tests::live_projection_and_persisted_hydration_produce_same_render_session`
+- `tui::app::tests::cancel_active_run_interrupts_query_and_marks_tool_cancelled`
+
+这些失败源于近期“把 tool call 作为 assistant message ordered parts”的改动，导致 persisted replay 与 live streaming 对 tool part 的 `message_id` 归属不一致，需要单独处理。

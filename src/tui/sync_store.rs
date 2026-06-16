@@ -116,11 +116,24 @@ impl TuiSyncSnapshot {
             return;
         }
         self.upsert_message_projection(message_id, role);
-        let part_id = part_id_for(message_id, kind);
         let parts = self
             .parts_by_message_id
             .entry(message_id.to_string())
             .or_default();
+
+        // Use the same id scheme as assistant_part_for_message so that an
+        // authoritative update (e.g. from persisted replay) overwrites the
+        // current text part instead of creating a duplicate.
+        let part_id = if kind == TuiPartKind::Text {
+            if let Some(last_text) = parts.iter().filter(|p| p.kind == TuiPartKind::Text).last() {
+                last_text.id.clone()
+            } else {
+                format!("{message_id}:text:0")
+            }
+        } else {
+            part_id_for(message_id, kind)
+        };
+
         if let Some(part) = parts.iter_mut().find(|part| part.id == part_id) {
             part.text = text;
             part.streaming = streaming;
