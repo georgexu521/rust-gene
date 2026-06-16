@@ -45,11 +45,20 @@ impl QuestionState {
             ));
         }
 
-        // Soft-wrap long lines to width.
+        // Soft-wrap long lines to width using visual column counts.
         let mut out = String::new();
         for line in lines {
-            if line.len() > width && width > 10 {
-                out.push_str(&line[..width]);
+            let line_width = unicode_width::UnicodeWidthStr::width(line.as_str());
+            if line_width > width && width > 10 {
+                let mut current_width = 0usize;
+                for ch in line.chars() {
+                    let ch_width = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0);
+                    if current_width + ch_width > width {
+                        break;
+                    }
+                    out.push(ch);
+                    current_width += ch_width;
+                }
                 out.push('\n');
                 out.push_str(&format!("{DIM}  ...{RESET}"));
             } else {
@@ -212,5 +221,43 @@ mod tests {
         let mut state = QuestionState::new("Choose one".to_string(), vec!["A".to_string()]);
         assert!(state.handle_key(&key(KeyCode::Char('0'))).is_none());
         assert!(state.freeform_mode);
+    }
+
+    #[test]
+    fn long_lines_are_truncated_at_visual_width() {
+        let state = QuestionState::new(
+            "Choose one".to_string(),
+            vec!["あ".repeat(20)], // each 'あ' is width 2
+        );
+        let text = state.render_text(12);
+        // The option line alone is 40 visual columns plus the prefix, so it
+        // must be truncated. Verify no stripped line exceeds the width.
+        for line in text.lines() {
+            let stripped = strip_ansi_escapes(line);
+            assert!(
+                unicode_width::UnicodeWidthStr::width(stripped.as_str()) <= 12,
+                "line '{stripped}' exceeds width 12"
+            );
+        }
+    }
+
+    fn strip_ansi_escapes(s: &str) -> String {
+        let mut out = String::with_capacity(s.len());
+        let mut chars = s.chars().peekable();
+        while let Some(ch) = chars.next() {
+            if ch == '\u{1b}' {
+                // Skip ESC [ ... m
+                if chars.next() == Some('[') {
+                for c in chars.by_ref() {
+                    if c.is_ascii_alphabetic() {
+                        break;
+                    }
+                }
+                }
+            } else {
+                out.push(ch);
+            }
+        }
+        out
     }
 }

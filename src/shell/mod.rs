@@ -8,35 +8,46 @@
 
 pub mod attachment;
 pub mod completion;
+pub mod completion_state;
+pub mod constants;
 pub mod footer;
 pub mod host;
 pub mod interrupt;
+pub mod permission;
 pub mod permission_diff;
 pub mod prompt;
 pub mod question;
 pub mod render;
+pub mod text;
 pub mod theme;
+pub mod turn;
 
 pub mod slash;
 
 use crate::components::attachment_token::AttachmentSource;
 use crate::engine::runtime_controller::RuntimeController;
-use crate::engine::streaming::{StreamEvent, StreamingQueryEngine};
+use crate::engine::streaming::StreamingQueryEngine;
 use crate::session_store::{SessionRecord, SessionStore};
 use crate::shell::attachment::AttachmentManager;
-use crate::shell::completion::{find_candidates, MentionCandidate};
+use crate::shell::completion::find_candidates;
+use crate::shell::completion_state::CompletionState;
+use crate::shell::constants::{
+    DEFAULT_FOOTER_HEIGHT, PROMPT_PREFIX_WIDTH, SESSION_LIST_MODEL_WIDTH, SESSION_LIST_TITLE_WIDTH,
+    WELCOME_MODEL_WIDTH, WELCOME_PROVIDER_WIDTH, WELCOME_WIDTH_MAX, WELCOME_WIDTH_MIN,
+};
 use crate::shell::footer::{AttachmentLine, FooterMode, FooterRenderer};
 use crate::shell::host::{CliHost, ShellHost};
 use crate::shell::interrupt::InterruptState;
 use crate::shell::prompt::PromptEditor;
-use crate::shell::render::render_assistant_line;
 use crate::shell::slash::{
     handle_diff, handle_export_data, handle_redo, handle_save_session, handle_undo,
 };
+use crate::shell::text::{
+    colored_rule, compact_home_path, compact_line, percent_bar, terminal_width,
+};
 use crate::shell::theme::*;
-use crate::tui::tool_view::{upsert_tool_run, with_tool_run, ToolRunView};
+use crate::shell::turn::run_turn;
 use crossterm::event::{Event, KeyCode, KeyEventKind, KeyModifiers};
-use futures::StreamExt;
 use std::io::{self, IsTerminal, Write};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -86,10 +97,10 @@ async fn run_shell_inner(engine: Arc<StreamingQueryEngine>) -> anyhow::Result<()
     let session_manager = build_session_manager(&engine).await?;
     let mut host = CliHost::new(engine.clone(), session_manager);
 
-    let footer_height = 3usize;
+    let footer_height = DEFAULT_FOOTER_HEIGHT;
     let mut editor = PromptEditor::new();
     let mut attachments = AttachmentManager::new();
-    let mut completion_state: Option<(usize, Vec<MentionCandidate>, usize)> = None;
+    let mut completion_state: Option<CompletionState> = None;
     let mut footer = FooterRenderer::new(footer_height);
     let interrupt = InterruptState::new();
     let controller = RuntimeController::new(engine.clone());
@@ -177,8 +188,10 @@ async fn run_shell_inner(engine: Arc<StreamingQueryEngine>) -> anyhow::Result<()
                         find_candidates(&editor.text(), current_cursor_col(&editor))
                     {
                         if !candidates.is_empty() {
-                            completion_state =
-                                Some((current_cursor_col(&editor), candidates.clone(), 0));
+                            completion_state = Some(CompletionState::new(
+                                current_cursor_col(&editor),
+                                candidates,
+                            ));
                         }
                     }
                     render_prompt_footer_with_completion(
@@ -190,7 +203,11 @@ async fn run_shell_inner(engine: Arc<StreamingQueryEngine>) -> anyhow::Result<()
                 }
                 (_, KeyCode::Backspace) => {
                     editor.backspace();
-                    completion_state = update_completion_after_edit(&editor, completion_state);
+                    completion_state = CompletionState::update_after_edit(
+                        &editor,
+                        completion_state,
+                        current_cursor_col(&editor),
+                    );
                     render_prompt_footer_with_completion(
                         &mut footer,
                         &editor,
@@ -212,29 +229,29 @@ async fn run_shell_inner(engine: Arc<StreamingQueryEngine>) -> anyhow::Result<()
                     editor.move_word_left();
                     completion_state = None;
                     render_prompt_footer(&mut footer, &editor, &attachments)?;
-                    footer.position_cursor(&editor, prompt_prefix_width())?;
+                    footer.position_cursor(&editor, PROMPT_PREFIX_WIDTH)?;
                 }
                 (KeyModifiers::CONTROL, KeyCode::Right) | (KeyModifiers::ALT, KeyCode::Right) => {
                     editor.move_word_right();
                     completion_state = None;
                     render_prompt_footer(&mut footer, &editor, &attachments)?;
-                    footer.position_cursor(&editor, prompt_prefix_width())?;
+                    footer.position_cursor(&editor, PROMPT_PREFIX_WIDTH)?;
                 }
                 (_, KeyCode::Left) => {
                     editor.move_left();
                     completion_state = None;
                     render_prompt_footer(&mut footer, &editor, &attachments)?;
-                    footer.position_cursor(&editor, prompt_prefix_width())?;
+                    footer.position_cursor(&editor, PROMPT_PREFIX_WIDTH)?;
                 }
                 (_, KeyCode::Right) => {
                     editor.move_right();
                     completion_state = None;
                     render_prompt_footer(&mut footer, &editor, &attachments)?;
-                    footer.position_cursor(&editor, prompt_prefix_width())?;
+                    footer.position_cursor(&editor, PROMPT_PREFIX_WIDTH)?;
                 }
                 (_, KeyCode::Up) => {
-                    if let Some((_, _, selected)) = completion_state.as_mut() {
-                        *selected = selected.saturating_sub(1);
+                    if let Some(ref mut state) = completion_state {
+                        state.select_previous();
                         render_prompt_footer_with_completion(
                             &mut footer,
                             &editor,
@@ -244,12 +261,12 @@ async fn run_shell_inner(engine: Arc<StreamingQueryEngine>) -> anyhow::Result<()
                     } else {
                         editor.move_up();
                         render_prompt_footer(&mut footer, &editor, &attachments)?;
-                        footer.position_cursor(&editor, prompt_prefix_width())?;
+                        footer.position_cursor(&editor, PROMPT_PREFIX_WIDTH)?;
                     }
                 }
                 (_, KeyCode::Down) => {
-                    if let Some((_, candidates, selected)) = completion_state.as_mut() {
-                        *selected = (*selected + 1).min(candidates.len().saturating_sub(1));
+                    if let Some(ref mut state) = completion_state {
+                        state.select_next();
                         render_prompt_footer_with_completion(
                             &mut footer,
                             &editor,
@@ -259,13 +276,17 @@ async fn run_shell_inner(engine: Arc<StreamingQueryEngine>) -> anyhow::Result<()
                     } else {
                         editor.move_down();
                         render_prompt_footer(&mut footer, &editor, &attachments)?;
-                        footer.position_cursor(&editor, prompt_prefix_width())?;
+                        footer.position_cursor(&editor, PROMPT_PREFIX_WIDTH)?;
                     }
                 }
                 (KeyModifiers::NONE, KeyCode::Tab) => {
-                    if let Some((start, candidates, selected)) = completion_state.take() {
-                        if let Some(candidate) = candidates.get(selected) {
-                            replace_word_at_cursor(&mut editor, start, &candidate.replacement);
+                    if let Some(state) = completion_state.take() {
+                        if let Some(candidate) = state.selected_candidate() {
+                            replace_word_at_cursor(
+                                &mut editor,
+                                state.start_col,
+                                &candidate.replacement,
+                            );
                         }
                         render_prompt_footer(&mut footer, &editor, &attachments)?;
                     }
@@ -274,13 +295,13 @@ async fn run_shell_inner(engine: Arc<StreamingQueryEngine>) -> anyhow::Result<()
                     editor.move_home();
                     completion_state = None;
                     render_prompt_footer(&mut footer, &editor, &attachments)?;
-                    footer.position_cursor(&editor, prompt_prefix_width())?;
+                    footer.position_cursor(&editor, PROMPT_PREFIX_WIDTH)?;
                 }
                 (_, KeyCode::End) => {
                     editor.move_end();
                     completion_state = None;
                     render_prompt_footer(&mut footer, &editor, &attachments)?;
-                    footer.position_cursor(&editor, prompt_prefix_width())?;
+                    footer.position_cursor(&editor, PROMPT_PREFIX_WIDTH)?;
                 }
                 _ => {}
             }
@@ -322,6 +343,7 @@ fn position_editor_cursor(editor: &mut PromptEditor, target_char_col: usize) {
     let mut chars_seen = 0usize;
     for (row, line) in text.lines().enumerate() {
         let line_chars = line.chars().count();
+        // +1 accounts for the newline that joins lines in `editor.text()`.
         if chars_seen + line_chars >= target_char_col {
             let col_in_line = target_char_col.saturating_sub(chars_seen);
             let byte_col = line
@@ -329,19 +351,7 @@ fn position_editor_cursor(editor: &mut PromptEditor, target_char_col: usize) {
                 .nth(col_in_line)
                 .map(|(i, _)| i)
                 .unwrap_or(line.len());
-            // PromptEditor cursor is (row, byte col); move until match
-            while editor.cursor().0 > row {
-                editor.move_up();
-            }
-            while editor.cursor().0 < row {
-                editor.move_down();
-            }
-            while editor.cursor().1 > byte_col {
-                editor.move_left();
-            }
-            while editor.cursor().1 < byte_col {
-                editor.move_right();
-            }
+            editor.set_cursor(row, byte_col);
             return;
         }
         chars_seen += line_chars + 1;
@@ -351,35 +361,25 @@ fn position_editor_cursor(editor: &mut PromptEditor, target_char_col: usize) {
 
 fn update_completion_after_edit(
     editor: &PromptEditor,
-    state: Option<(usize, Vec<MentionCandidate>, usize)>,
-) -> Option<(usize, Vec<MentionCandidate>, usize)> {
-    let col = current_cursor_col(editor);
-    if let Some((start, _, _)) = state {
-        if col >= start {
-            if let Some((new_start, candidates)) = find_candidates(&editor.text(), col) {
-                if !candidates.is_empty() {
-                    return Some((new_start, candidates, 0));
-                }
-            }
-        }
-    }
-    None
+    state: Option<CompletionState>,
+) -> Option<CompletionState> {
+    CompletionState::update_after_edit(editor, state, current_cursor_col(editor))
 }
 
 fn render_prompt_footer_with_completion(
     footer: &mut FooterRenderer,
     editor: &PromptEditor,
     attachments: &AttachmentManager,
-    completion: Option<&(usize, Vec<MentionCandidate>, usize)>,
+    completion: Option<&CompletionState>,
 ) -> io::Result<()> {
     let mut line = attachments.render_pills(terminal_width().saturating_sub(2));
-    if let Some((_, candidates, selected)) = completion {
+    if let Some(state) = completion {
         let mut comp_line = String::from("Completion: ");
-        for (idx, candidate) in candidates.iter().take(6).enumerate() {
+        for (idx, candidate) in state.candidates.iter().take(6).enumerate() {
             if idx > 0 {
                 comp_line.push_str("  ");
             }
-            let marker = if idx == *selected { ">" } else { " " };
+            let marker = if idx == state.selected { ">" } else { " " };
             comp_line.push_str(&format!("{}{}", marker, candidate.display));
         }
         if !line.is_empty() {
@@ -401,10 +401,6 @@ fn render_prompt_footer(
     attachments: &AttachmentManager,
 ) -> io::Result<()> {
     render_prompt_footer_with_completion(footer, editor, attachments, None)
-}
-
-fn prompt_prefix_width() -> usize {
-    2
 }
 
 fn format_user_message(message: &str) -> String {
@@ -431,10 +427,10 @@ async fn print_welcome(engine: &StreamingQueryEngine) {
     let usage = engine.context_usage_report().await;
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     let dir = compact_home_path(&cwd);
-    let model = compact_line(&engine.model_name(), 30);
-    let provider = compact_line(&engine.provider_base_url(), 42);
+    let model = compact_line(&engine.model_name(), WELCOME_MODEL_WIDTH);
+    let provider = compact_line(&engine.provider_base_url(), WELCOME_PROVIDER_WIDTH);
     let mode = permission_mode_label(engine.permission_mode());
-    let width = terminal_width().clamp(60, 110);
+    let width = terminal_width().clamp(WELCOME_WIDTH_MIN, WELCOME_WIDTH_MAX);
     let inner = width.saturating_sub(4);
 
     println!(
@@ -852,9 +848,9 @@ fn print_session_list(
             "{DIM}{:>2}.{}{RESET} {:<42} {DIM}{:>3} msgs · {} · {}{RESET}",
             idx + 1,
             marker,
-            compact_line(&display_session_title(session), 42),
+            compact_line(&display_session_title(session), SESSION_LIST_TITLE_WIDTH),
             count,
-            compact_line(&session.model, 18),
+            compact_line(&session.model, SESSION_LIST_MODEL_WIDTH),
             session.updated_at
         );
         println!("{DIM}    {}{RESET}", session.id);
@@ -878,7 +874,10 @@ async fn print_status(engine: &StreamingQueryEngine) {
     } else {
         0
     };
-    let context_bar = percent_bar(usage_pct.min(100), 16);
+    let context_bar = percent_bar(
+        usage_pct.min(100),
+        crate::shell::constants::STATUS_CONTEXT_BAR_WIDTH,
+    );
     let memory_label = if usage.relevant_memories.is_empty() {
         "none".to_string()
     } else {
@@ -887,10 +886,12 @@ async fn print_status(engine: &StreamingQueryEngine) {
     let rule_count = session_rules.always_allow.len()
         + session_rules.always_deny.len()
         + session_rules.always_ask.len();
-    let recent_memory = usage
-        .relevant_memories
-        .first()
-        .map(|m| compact_line(&m.snippet, 72));
+    let recent_memory = usage.relevant_memories.first().map(|m| {
+        compact_line(
+            &m.snippet,
+            crate::shell::constants::RECENT_MEMORY_SNIPPET_WIDTH,
+        )
+    });
 
     println!("{BOLD}Priority Agent{RESET}");
     println!(
@@ -932,184 +933,6 @@ fn permission_mode_label(mode: crate::permissions::PermissionMode) -> &'static s
     }
 }
 
-fn percent_bar(percent: u64, width: usize) -> String {
-    let filled = ((percent as usize) * width).div_ceil(100).min(width);
-    let empty = width.saturating_sub(filled);
-    format!("[{}{}]", "█".repeat(filled), "░".repeat(empty))
-}
-
-fn terminal_width() -> usize {
-    crossterm::terminal::size()
-        .map(|(width, _)| width as usize)
-        .unwrap_or(80)
-}
-
-fn colored_rule(len: usize, color: &str) -> String {
-    if len == 0 {
-        String::new()
-    } else {
-        format!("{color}{}{RESET}", "─".repeat(len))
-    }
-}
-
-fn compact_home_path(path: &std::path::Path) -> String {
-    let home = dirs::home_dir();
-    if let Some(home) = home.as_ref() {
-        if let Ok(stripped) = path.strip_prefix(home) {
-            let suffix = stripped.to_string_lossy();
-            if suffix.is_empty() {
-                return "~".to_string();
-            }
-            return format!("~/{}", suffix);
-        }
-    }
-    path.display().to_string()
-}
-
-fn compact_line(text: &str, max_chars: usize) -> String {
-    let text = text.split_whitespace().collect::<Vec<_>>().join(" ");
-    if text.chars().count() <= max_chars {
-        return text;
-    }
-
-    let mut out: String = text.chars().take(max_chars.saturating_sub(1)).collect();
-    out.push('…');
-    out
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum PermissionChoice {
-    AllowOnce,
-    DenyOnce,
-    AllowSession,
-    DenySession,
-}
-
-impl PermissionChoice {
-    fn approved(self) -> bool {
-        matches!(self, Self::AllowOnce | Self::AllowSession)
-    }
-}
-
-async fn prompt_for_permission(
-    controller: &RuntimeController,
-    request: &crate::engine::conversation_loop::ToolApprovalRequest,
-    tool_name: &str,
-    arguments: &serde_json::Value,
-    prompt_text: &str,
-    footer: &mut FooterRenderer,
-    event_rx: &mut tokio::sync::mpsc::UnboundedReceiver<Event>,
-) -> anyhow::Result<bool> {
-    let mut overlay_text = String::new();
-    overlay_text.push_str(&format!("{YELLOW}?{RESET} Permission required\n"));
-    if !tool_name.is_empty() {
-        overlay_text.push_str(&format!(
-            "{DIM}  tool      {RESET}{}\n",
-            permission_scope_summary(tool_name, arguments)
-        ));
-    }
-    for line in prompt_text.lines() {
-        let trimmed = line.trim();
-        if !trimmed.is_empty() {
-            overlay_text.push_str(&format!("{DIM}  {trimmed}{RESET}\n"));
-        }
-    }
-
-    if let Some((title, diff)) = crate::shell::permission_diff::compute_permission_diff(request) {
-        overlay_text.push('\n');
-        overlay_text.push_str(&format!("{DIM}{title}{RESET}\n"));
-        for line in diff.lines().take(24) {
-            overlay_text.push_str(&crate::shell::render::colorize_diff_line(line));
-            overlay_text.push('\n');
-        }
-        if diff.lines().count() > 24 {
-            overlay_text.push_str(&format!("{DIM}  ...{RESET}\n"));
-        }
-    }
-
-    let pattern = if tool_name.is_empty() {
-        None
-    } else {
-        Some(crate::tui::app::permission_rule_pattern(
-            tool_name, arguments,
-        ))
-    };
-    if let Some(pattern) = pattern.as_ref() {
-        overlay_text.push_str(&format!("{DIM}  scope     {RESET}{pattern}\n"));
-    }
-
-    footer.render(
-        &FooterMode::Permission(overlay_text),
-        &PromptEditor::new(),
-        terminal_width(),
-    )?;
-
-    let choice = loop {
-        match event_rx.recv().await {
-            Some(Event::Key(key)) => {
-                if key.kind == KeyEventKind::Release {
-                    continue;
-                }
-                match key.code {
-                    KeyCode::Char('y') | KeyCode::Char('Y') => break PermissionChoice::AllowOnce,
-                    KeyCode::Char('a') | KeyCode::Char('A') => {
-                        break PermissionChoice::AllowSession
-                    }
-                    KeyCode::Char('d') | KeyCode::Char('D') => break PermissionChoice::DenySession,
-                    KeyCode::Char('n') | KeyCode::Char('N') => break PermissionChoice::DenyOnce,
-                    KeyCode::Enter => break PermissionChoice::DenyOnce,
-                    _ => {}
-                }
-            }
-            _ => break PermissionChoice::DenyOnce,
-        }
-    };
-
-    if let Some(pattern) = pattern.as_ref() {
-        match choice {
-            PermissionChoice::AllowSession => {
-                controller
-                    .engine()
-                    .add_session_permission_rule("allow", pattern);
-            }
-            PermissionChoice::DenySession => {
-                controller
-                    .engine()
-                    .add_session_permission_rule("deny", pattern);
-            }
-            PermissionChoice::AllowOnce | PermissionChoice::DenyOnce => {}
-        }
-    }
-
-    controller.approve_pending(choice.approved()).await;
-    Ok(choice.approved())
-}
-
-fn permission_scope_summary(tool_name: &str, arguments: &serde_json::Value) -> String {
-    if tool_name == "bash" {
-        let cmd = arguments["command"]
-            .as_str()
-            .or_else(|| arguments["cmd"].as_str())
-            .unwrap_or("");
-        if !cmd.is_empty() {
-            return format!("bash · {}", compact_line(cmd, 80));
-        }
-    }
-    if tool_name == "mcp_tool" {
-        let server = arguments["server_name"].as_str().unwrap_or("");
-        let tool = arguments["tool_name"].as_str().unwrap_or("");
-        if !server.is_empty() || !tool.is_empty() {
-            return format!("mcp · {server}/{tool}");
-        }
-    }
-    if matches!(tool_name, "file_write" | "file_edit" | "file_read") {
-        if let Some(path) = arguments["path"].as_str() {
-            return format!("{tool_name} · {}", compact_line(path, 80));
-        }
-    }
-    tool_name.to_string()
-}
-
 #[allow(dead_code)]
 fn shell_history_path() -> Option<PathBuf> {
     let mut dir = dirs::data_local_dir().or_else(dirs::home_dir)?;
@@ -1121,263 +944,6 @@ fn shell_history_path() -> Option<PathBuf> {
     Some(dir)
 }
 
-async fn run_turn(
-    _engine: Arc<StreamingQueryEngine>,
-    controller: &RuntimeController,
-    stream: &mut std::pin::Pin<Box<dyn futures::Stream<Item = StreamEvent> + Send>>,
-    footer: &mut FooterRenderer,
-    interrupt: &InterruptState,
-    event_rx: &mut tokio::sync::mpsc::UnboundedReceiver<Event>,
-) -> anyhow::Result<()> {
-    let mut tool_runs: Vec<ToolRunView> = Vec::new();
-    let mut assistant_printer = AssistantPrinter::default();
-
-    loop {
-        tokio::select! {
-            event = stream.next() => {
-                match event {
-                    Some(StreamEvent::Start) => {}
-                    Some(StreamEvent::ThinkingStart) => {
-                        footer.render(&FooterMode::Thinking, &PromptEditor::new(), terminal_width())?;
-                    }
-                    Some(StreamEvent::ThinkingChunk(_)) => {}
-                    Some(StreamEvent::ThinkingComplete) => {
-                        footer.render(&FooterMode::Prompt, &PromptEditor::new(), terminal_width())?;
-                    }
-                    Some(StreamEvent::TextChunk(text)) => {
-                        assistant_printer.push(&text, footer)?;
-                    }
-                    Some(StreamEvent::ToolCallStart { id, name }) => {
-                        upsert_tool_run(&mut tool_runs, id, name);
-                    }
-                    Some(StreamEvent::ToolCallArgs { id, args_delta }) => {
-                        with_tool_run(&mut tool_runs, &id, |run| run.push_args_delta(&args_delta));
-                    }
-                    Some(StreamEvent::ToolCallComplete { .. }) => {}
-                    Some(StreamEvent::ToolExecutionStart { id, name, .. }) => {
-                        assistant_printer.finish_line_if_needed(footer)?;
-                        upsert_tool_run(&mut tool_runs, id.clone(), name.clone());
-                        with_tool_run(&mut tool_runs, &id, |run| run.mark_running(name));
-                        if let Some(run) = tool_runs.iter().find(|run| run.id == id) {
-                            let desc = run.render_lines(false).join("\n");
-                            footer.render(&FooterMode::ToolRunning(desc), &PromptEditor::new(), terminal_width())?;
-                            footer.print_above(&format_tool_line("·", YELLOW, &run.render_lines(false).join("\n"), false))?;
-                        }
-                    }
-                    Some(StreamEvent::ToolExecutionProgress { id, progress }) => {
-                        with_tool_run(&mut tool_runs, &id, |run| run.push_progress(progress));
-                        if let Some(run) = tool_runs.iter().find(|run| run.id == id) {
-                            if let Some(line) = tool_progress_line(run) {
-                                assistant_printer.finish_line_if_needed(footer)?;
-                                footer.print_above(&format_tool_line("…", YELLOW, &line, false))?;
-                                footer.render(&FooterMode::ToolRunning(line), &PromptEditor::new(), terminal_width())?;
-                            }
-                        }
-                    }
-                    Some(StreamEvent::ToolExecutionComplete { id, result, metadata, .. }) => {
-                        assistant_printer.finish_line_if_needed(footer)?;
-                        with_tool_run(&mut tool_runs, &id, |run| {
-                            run.mark_complete_with_metadata(result, metadata)
-                        });
-                        if let Some(run) = tool_runs.iter().find(|run| run.id == id) {
-                            let marker = match run.status {
-                                crate::tui::tool_view::ToolRunStatus::Failed
-                                | crate::tui::tool_view::ToolRunStatus::TimedOut => "✗",
-                                crate::tui::tool_view::ToolRunStatus::Cancelled => "×",
-                                crate::tui::tool_view::ToolRunStatus::Backgrounded => "↪",
-                                _ => "✓",
-                            };
-                            let color = if marker == "✗" {
-                                RED
-                            } else if marker == "×" {
-                                YELLOW
-                            } else {
-                                GREEN
-                            };
-                            footer.print_above(&format_tool_line(marker, color, &run.render_lines(false).join("\n"), true))?;
-                        }
-                    }
-                    Some(StreamEvent::ToolResultsReadyForModel { .. }) => {
-                        footer.render(&FooterMode::Thinking, &PromptEditor::new(), terminal_width())?;
-                    }
-                    Some(StreamEvent::PermissionRequest { id, tool_name, arguments, prompt, metadata: _, review }) => {
-                        assistant_printer.finish_line_if_needed(footer)?;
-                        let request = crate::engine::conversation_loop::ToolApprovalRequest {
-                            tool_call: crate::services::api::ToolCall {
-                                id,
-                                name: tool_name.clone(),
-                                arguments: arguments.clone(),
-                            },
-                            prompt: prompt.clone(),
-                            review: None,
-                            audit: review.as_ref().map(|b| (**b).clone()),
-                            diff_preview: None,
-                        };
-                        let approved = prompt_for_permission(controller, &request, &tool_name, &arguments, &prompt, footer, event_rx).await?;
-                        footer.render(&FooterMode::Thinking, &PromptEditor::new(), terminal_width())?;
-                        if !approved {
-                            interrupt.request_interrupt();
-                            controller.cancel().await;
-                            break;
-                        }
-                    }
-                    Some(StreamEvent::RuntimeDiagnostic { .. }) => {}
-                    Some(StreamEvent::Closeout { status, evidence_summary }) => {
-                        assistant_printer.finish_line_if_needed(footer)?;
-                        let summary = evidence_summary.as_deref().unwrap_or("");
-                        footer.print_above(&format!("{DIM}[Closeout: {status}] {summary}{RESET}"))?;
-                    }
-                    Some(StreamEvent::OutputTruncated) => {
-                        assistant_printer.finish_line_if_needed(footer)?;
-                        footer.print_above(&format!("{YELLOW}Output truncated. Continue if needed.{RESET}"))?;
-                    }
-                    Some(StreamEvent::Complete) => break,
-                    Some(StreamEvent::Error(error)) => {
-                        assistant_printer.finish_line_if_needed(footer)?;
-                        footer.print_above(&format!("{RED}Error:{RESET} {error}"))?;
-                        break;
-                    }
-                    Some(_) => {}
-                    None => break,
-                }
-
-                if interrupt.is_interrupted() {
-                    controller.cancel().await;
-                    break;
-                }
-            }
-            Some(event) = event_rx.recv() => {
-                if let Event::Key(key) = event {
-                    if key.kind == KeyEventKind::Release {
-                        continue;
-                    }
-                    if matches!((key.modifiers, key.code), (KeyModifiers::CONTROL, KeyCode::Char('c')))
-                        && interrupt.request_interrupt()
-                    {
-                        controller.cancel().await;
-                        footer.render(
-                            &FooterMode::Interrupt,
-                            &PromptEditor::new(),
-                            terminal_width(),
-                        )?;
-                    }
-                }
-
-                // Check for pending user questions while a turn is running.
-                if let Some(channel) = controller.engine().tool_registry().ask_channel() {
-                    if let Some(answer) = crate::shell::question::run_question_ui(
-                        footer, event_rx, &channel, terminal_width()
-                    ).await? {
-                        footer.render(
-                            &FooterMode::Thinking,
-                            &PromptEditor::new(),
-                            terminal_width(),
-                        )?;
-                        let _ = answer;
-                    }
-                }
-            }
-        }
-    }
-
-    assistant_printer.finish(footer)?;
-    Ok(())
-}
-
-fn format_tool_line(marker: &str, color: &str, text: &str, first_line_normal: bool) -> String {
-    let mut out = String::new();
-    for (idx, line) in text.lines().enumerate() {
-        if idx > 0 {
-            out.push('\n');
-        }
-        if idx == 0 {
-            if first_line_normal {
-                out.push_str(&format!("{color}{marker}{RESET} {line}"));
-            } else {
-                out.push_str(&format!("{color}{marker}{RESET} {DIM}{line}{RESET}"));
-            }
-        } else {
-            out.push_str(&format!("{DIM}{line}{RESET}"));
-        }
-    }
-    out
-}
-
-fn tool_progress_line(run: &ToolRunView) -> Option<String> {
-    let latest = run.progress.last()?.trim();
-    if latest.is_empty() {
-        return None;
-    }
-    Some(format!(
-        "{} · {}",
-        compact_line(&run.name, 24),
-        compact_line(latest, 96)
-    ))
-}
-
-#[derive(Default)]
-struct AssistantPrinter {
-    started: bool,
-    line: String,
-    in_code_block: bool,
-    blank_lines: usize,
-}
-
-impl AssistantPrinter {
-    fn push(&mut self, text: &str, footer: &mut FooterRenderer) -> io::Result<()> {
-        self.ensure_started(footer)?;
-        self.line.push_str(text);
-
-        while let Some(newline_idx) = self.line.find('\n') {
-            let rest = self.line.split_off(newline_idx + 1);
-            let complete = std::mem::replace(&mut self.line, rest);
-            let line = complete.trim_end_matches(['\r', '\n']);
-            self.print_line(line, footer)?;
-        }
-
-        io::stdout().flush()
-    }
-
-    fn finish_line_if_needed(&mut self, footer: &mut FooterRenderer) -> io::Result<()> {
-        if self.started && !self.line.is_empty() {
-            let line = std::mem::take(&mut self.line);
-            self.print_line(&line, footer)?;
-        }
-        Ok(())
-    }
-
-    fn finish(&mut self, footer: &mut FooterRenderer) -> io::Result<()> {
-        self.finish_line_if_needed(footer)?;
-        if self.started {
-            footer.print_above("")?;
-        }
-        Ok(())
-    }
-
-    fn ensure_started(&mut self, footer: &mut FooterRenderer) -> io::Result<()> {
-        if !self.started {
-            footer.print_above(&format!("{CYAN}●{RESET} "))?;
-            self.started = true;
-        }
-        Ok(())
-    }
-
-    fn print_line(&mut self, line: &str, footer: &mut FooterRenderer) -> io::Result<()> {
-        let rendered = render_assistant_line(line, &mut self.in_code_block);
-        if rendered.trim().is_empty() {
-            if !self.started || self.blank_lines >= 1 {
-                return Ok(());
-            }
-            self.blank_lines += 1;
-            footer.print_above("")?;
-        } else {
-            self.blank_lines = 0;
-            footer.print_above(&rendered)?;
-        }
-        Ok(())
-    }
-}
-
 #[derive(Clone, Copy)]
 struct ShellCommand {
     name: &'static str,
@@ -1387,95 +953,5 @@ struct ShellCommand {
 impl ShellCommand {
     const fn new(name: &'static str, description: &'static str) -> Self {
         Self { name, description }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn markdown_table_separator_is_hidden() {
-        let mut in_code = false;
-        assert_eq!(
-            render_assistant_line("|---|:---:|", &mut in_code),
-            String::new()
-        );
-    }
-
-    #[test]
-    fn markdown_table_is_softened() {
-        let mut in_code = false;
-        assert_eq!(
-            render_assistant_line("| `gex` | 空文件夹 |", &mut in_code),
-            "  gex  空文件夹"
-        );
-    }
-
-    #[test]
-    fn inline_markdown_is_cleaned() {
-        let mut in_code = false;
-        assert_eq!(
-            render_assistant_line("**文件：** `a.md`", &mut in_code),
-            "文件： a.md"
-        );
-    }
-
-    #[test]
-    fn markdown_lists_are_softened() {
-        let mut in_code = false;
-        assert_eq!(
-            render_assistant_line("- first item", &mut in_code),
-            format!("{DIM}•{RESET} first item")
-        );
-        assert_eq!(
-            render_assistant_line("  1. next item", &mut in_code),
-            format!("  {DIM}1.{RESET} next item")
-        );
-    }
-
-    #[test]
-    fn markdown_quotes_and_code_blocks_are_softened() {
-        let mut in_code = false;
-        assert_eq!(
-            render_assistant_line("> note", &mut in_code),
-            format!("{DIM}│ note{RESET}")
-        );
-        assert_eq!(
-            render_assistant_line("```rust", &mut in_code),
-            format!("{CYAN}┌─ rust{RESET}")
-        );
-        assert_eq!(
-            render_assistant_line("let x = 1;", &mut in_code),
-            "let x = 1;"
-        );
-        assert_eq!(
-            render_assistant_line("```", &mut in_code),
-            format!("{CYAN}└─{RESET}")
-        );
-    }
-
-    #[test]
-    fn percent_bar_renders_fixed_width() {
-        assert_eq!(percent_bar(0, 4), "[░░░░]");
-        assert_eq!(percent_bar(50, 4), "[██░░]");
-        assert_eq!(percent_bar(100, 4), "[████]");
-    }
-
-    #[test]
-    fn tool_progress_line_shows_latest_progress_compactly() {
-        let mut run = ToolRunView::new("tool_1".to_string(), "bash".to_string());
-        run.push_progress("required validation still running after 30s".to_string());
-        let line = tool_progress_line(&run).expect("progress line");
-        assert!(line.contains("bash"));
-        assert!(line.contains("30s"));
-    }
-
-    #[test]
-    fn permission_choice_approval_semantics() {
-        assert!(PermissionChoice::AllowOnce.approved());
-        assert!(PermissionChoice::AllowSession.approved());
-        assert!(!PermissionChoice::DenyOnce.approved());
-        assert!(!PermissionChoice::DenySession.approved());
     }
 }

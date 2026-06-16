@@ -199,6 +199,13 @@ impl PromptEditor {
     pub fn lines(&self) -> &[String] {
         &self.lines
     }
+
+    /// Set the cursor to a valid (row, byte_col) position, clamping to the
+    /// available lines and line lengths.
+    pub fn set_cursor(&mut self, row: usize, col: usize) {
+        self.row = row.min(self.lines.len().saturating_sub(1));
+        self.col = col.min(self.lines[self.row].len());
+    }
 }
 
 #[cfg(test)]
