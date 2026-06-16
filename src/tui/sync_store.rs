@@ -596,6 +596,27 @@ mod tests {
     }
 
     #[test]
+    fn sync_store_replaces_cumulative_text_deltas_without_dropping_real_repeats() {
+        let mut store = TuiSyncStore::new();
+        store.start_turn("user_1".to_string(), "assistant_1".to_string());
+
+        store.apply_stream_event(&StreamEvent::TextChunk(
+            "phageGPT 项目概览\n核心场景".to_string(),
+        ));
+        store.apply_stream_event(&StreamEvent::TextChunk(
+            "phageGPT 项目概览\n核心场景\n技术栈".to_string(),
+        ));
+        store.apply_stream_event(&StreamEvent::TextChunk("哈".to_string()));
+        store.apply_stream_event(&StreamEvent::TextChunk("哈".to_string()));
+
+        let snapshot = store.snapshot();
+        assert_eq!(
+            snapshot.assistant_text,
+            "phageGPT 项目概览\n核心场景\n技术栈哈哈"
+        );
+    }
+
+    #[test]
     fn derived_tool_run_cache_is_not_authoritative_projection() {
         let mut snapshot = TuiSyncSnapshot::default();
         snapshot.derived_tool_run_cache.push(ToolRunView::new(

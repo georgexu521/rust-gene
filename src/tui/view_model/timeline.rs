@@ -3,7 +3,7 @@ use crate::{
     tui::{
         app::TuiApp,
         components::{
-            collapsible::{collapse_lines, flatten_line_breaks, wrap_line_to_width},
+            collapsible::{flatten_line_breaks, wrap_line_to_width},
             markdown::parse_markdown,
         },
         render_session::{TuiRenderMessage, TuiRenderRole, TuiRenderSession},
@@ -184,7 +184,7 @@ pub fn estimate_message_height_with_parts_or_reasoning(
     width: usize,
     collapsed: bool,
     reasoning_expanded: bool,
-    text_part_expanded: bool,
+    _text_part_expanded: bool,
 ) -> usize {
     if collapsed {
         return 2;
@@ -230,29 +230,8 @@ pub fn estimate_message_height_with_parts_or_reasoning(
     let markdown_lines = parse_markdown(visible_content, &crate::tui::theme::Theme::default());
     let flat_lines = flatten_line_breaks(markdown_lines.lines);
 
-    let collapsed = if text_part_expanded {
-        collapse_lines(flat_lines, usize::MAX, usize::MAX)
-    } else {
-        let max_lines = crate::tui::components::collapsible::DEFAULT_TEXT_PART_MAX_LINES;
-        collapse_lines(flat_lines, max_lines, width.saturating_mul(max_lines))
-    };
-
-    let visible_lines = rendered_physical_height(&collapsed.visible, effective_width);
-    let footer_height = if collapsed.is_truncated {
-        let footer = if collapsed.hidden_lines > 0 {
-            format!(
-                "  ... {} more lines - press Enter to expand",
-                collapsed.hidden_lines
-            )
-        } else {
-            "  ... more - press Enter to expand".to_string()
-        };
-        wrap_line_to_width(&footer, effective_width).len().max(1)
-    } else {
-        0
-    };
-
-    base_height + visible_lines.max(1) + footer_height
+    let visible_lines = rendered_physical_height(&flat_lines, effective_width);
+    base_height + visible_lines.max(1)
 }
 
 pub fn estimate_message_height(msg: &MessageItem, width: usize, collapsed: bool) -> usize {
@@ -526,20 +505,20 @@ mod tests {
     }
 
     #[test]
-    fn collapsed_assistant_height_counts_wrapped_visible_lines_before_footer() {
-        let max_lines = crate::tui::components::collapsible::DEFAULT_TEXT_PART_MAX_LINES;
-        let mut content = (0..max_lines)
+    fn assistant_height_counts_full_reply_lines_without_collapse_footer() {
+        let visible_budget = crate::tui::components::collapsible::DEFAULT_TEXT_PART_MAX_LINES;
+        let mut content = (0..visible_budget)
             .map(|idx| format!("visible {idx} {}", "中文内容".repeat(12)))
             .collect::<Vec<_>>()
             .join("\n");
-        content.push_str("\n数据来源\n1. 后续来源应该通过折叠 footer 提示展开");
+        content.push_str("\n数据来源\n1. 后续来源应该默认可见");
         let item = msg(MessageRole::Assistant, &content);
 
         let height = estimate_message_height(&item, 32, false);
 
         assert!(
-            height > max_lines + 2,
-            "wrapped visible lines plus footer should exceed raw collapse budget, got {height}"
+            height > visible_budget + 2,
+            "full assistant replies should estimate beyond the old collapse budget, got {height}"
         );
     }
 

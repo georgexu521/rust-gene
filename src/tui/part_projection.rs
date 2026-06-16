@@ -52,7 +52,7 @@ pub(crate) fn project_event(snapshot: &mut TuiSyncSnapshot, event: &SessionProje
                 if let Some(part) =
                     assistant_part_for_message(snapshot, &message_id, TuiPartKind::Text)
                 {
-                    part.text.push_str(text);
+                    append_stream_delta(&mut part.text, text);
                     part.streaming = true;
                 }
                 snapshot.rebuild_assistant_projection_for(&message_id);
@@ -95,7 +95,7 @@ pub(crate) fn project_event(snapshot: &mut TuiSyncSnapshot, event: &SessionProje
             if let Some(part) =
                 assistant_part_for_message(snapshot, &message_id, TuiPartKind::Thinking)
             {
-                part.text.push_str(text);
+                append_stream_delta(&mut part.text, text);
                 part.streaming = true;
             }
             snapshot.rebuild_assistant_projection_for(&message_id);
@@ -334,6 +334,22 @@ fn assistant_part_for_message<'a>(
         }
     }
     parts.last_mut()
+}
+
+fn append_stream_delta(current: &mut String, delta: &str) {
+    if delta.is_empty() {
+        return;
+    }
+    if current.is_empty() {
+        current.push_str(delta);
+        return;
+    }
+    if delta.starts_with(current.as_str()) {
+        current.clear();
+        current.push_str(delta);
+        return;
+    }
+    current.push_str(delta);
 }
 
 fn upsert_tool_part_for_message(

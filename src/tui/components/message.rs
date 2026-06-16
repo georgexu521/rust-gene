@@ -385,7 +385,7 @@ mod tests {
     }
 
     #[test]
-    fn assistant_long_text_collapses_and_expands() {
+    fn assistant_long_text_renders_without_default_collapse() {
         use ratatui::{backend::TestBackend, Terminal};
 
         let content = (0..60)
@@ -412,14 +412,15 @@ mod tests {
                 .collect::<String>()
         };
 
-        let collapsed = render_text(MessageRenderOptions::default());
-        assert!(collapsed.contains("more lines"));
+        let rendered = render_text(MessageRenderOptions::default());
+        assert!(!rendered.contains("more lines"));
+        assert!(rendered.contains("line 59"));
 
-        let expanded = render_text(MessageRenderOptions {
+        let rendered_with_text_part_expanded = render_text(MessageRenderOptions {
             reasoning_expanded: false,
             text_part_expanded: true,
         });
-        assert!(!expanded.contains("more lines"));
-        assert!(expanded.contains("line 59"));
+        assert!(!rendered_with_text_part_expanded.contains("more lines"));
+        assert!(rendered_with_text_part_expanded.contains("line 59"));
     }
 }

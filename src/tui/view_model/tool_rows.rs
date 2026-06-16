@@ -91,9 +91,6 @@ pub fn tool_row_for_run_with_spine(
     let severity = turn
         .map(|turn| severity_for_phase(turn.phase))
         .unwrap_or(severity);
-    let visible = turn
-        .map(|turn| should_show_turn(run, turn))
-        .unwrap_or_else(|| should_show_run(run));
     let expandable =
         run.result_body.is_some() || !run.progress.is_empty() || run.arguments.is_some();
     let preview_limit = terminal_width.saturating_sub(16).clamp(48, 140);
@@ -114,7 +111,7 @@ pub fn tool_row_for_run_with_spine(
             .unwrap_or_else(|| status_label(run.status)),
         severity,
         expandable,
-        visible,
+        visible: true,
     }
 }
 
@@ -141,38 +138,6 @@ pub fn collapse_output_preview(text: &str, max_lines: usize, max_chars: usize) -
         preview.push_str(&format!("... {} more lines", remaining));
     }
     Some(preview)
-}
-
-fn should_show_run(run: &ToolRunView) -> bool {
-    if run.is_active() {
-        return true;
-    }
-    if matches!(
-        run.status,
-        ToolRunStatus::Failed
-            | ToolRunStatus::TimedOut
-            | ToolRunStatus::Cancelled
-            | ToolRunStatus::Backgrounded
-    ) {
-        return true;
-    }
-    if is_file_mutation(&run.name) || is_shell(&run.name) || is_validation(&run.name) {
-        return true;
-    }
-    !matches!(run.status, ToolRunStatus::Completed) || !is_routine_read_only(&run.name)
-}
-
-fn should_show_turn(run: &ToolRunView, turn: &ToolTurnSnapshot) -> bool {
-    if !turn.phase.is_terminal() {
-        return true;
-    }
-    if matches!(
-        turn.phase,
-        ToolTurnPhase::Failed | ToolTurnPhase::Cancelled | ToolTurnPhase::TimedOut
-    ) {
-        return true;
-    }
-    should_show_run(run)
 }
 
 fn preview_for_turn(turn: &ToolTurnSnapshot, max_chars: usize) -> Option<String> {
@@ -329,47 +294,20 @@ fn is_shell(name: &str) -> bool {
     )
 }
 
-fn is_validation(name: &str) -> bool {
-    matches!(name, "run_tests" | "git_status" | "git_diff")
-}
-
-fn is_routine_read_only(name: &str) -> bool {
-    matches!(
-        name,
-        "file_read"
-            | "grep"
-            | "glob"
-            | "web_search"
-            | "json_query"
-            | "memory_load"
-            | "context"
-            | "context_visualization"
-            | "datetime"
-            | "cost"
-            | "telemetry"
-            | "project_list"
-            | "skill_view"
-            | "lsp"
-            | "symbol_query"
-            | "brief"
-            | "notebook"
-            | "bash_tasks"
-    )
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn hides_successful_routine_reads_but_keeps_count() {
+    fn shows_successful_routine_reads_as_compact_rows() {
         let mut read = ToolRunView::new("tool_1".to_string(), "file_read".to_string());
         read.mark_complete("Result: OK\nhello".to_string());
 
         let view = tool_rows_for_runs(&[read], 100);
 
-        assert_eq!(view.hidden_routine_count, 1);
-        assert!(!view.rows[0].visible);
+        assert_eq!(view.hidden_routine_count, 0);
+        assert!(view.rows[0].visible);
+        assert_eq!(view.rows[0].severity, ToolRowSeverity::Success);
     }
 
     #[test]
