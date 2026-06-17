@@ -187,7 +187,7 @@ fn default_log_level(startup_mode: StartupMode) -> &'static str {
 }
 
 fn suppress_terminal_logs(startup_mode: StartupMode) -> bool {
-    matches!(startup_mode, StartupMode::Tui)
+    matches!(startup_mode, StartupMode::Tui | StartupMode::Cli)
 }
 
 async fn answer_pending_approval(
@@ -847,7 +847,7 @@ mod tests {
         assert!(suppress_terminal_logs(StartupMode::Tui));
 
         assert_eq!(default_log_level(StartupMode::Cli), "warn");
-        assert!(!suppress_terminal_logs(StartupMode::Cli));
+        assert!(suppress_terminal_logs(StartupMode::Cli));
         assert_eq!(default_log_level(StartupMode::Api), "info");
         assert!(!suppress_terminal_logs(StartupMode::Api));
     }

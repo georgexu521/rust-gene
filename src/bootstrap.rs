@@ -88,10 +88,12 @@ fn init_provider_with_default_preference(
     };
 
     let selected = registry.selected().unwrap_or("unknown");
-    let default_model = registry
-        .get_config(selected)
+    let provider_config = registry.get_config(selected);
+    let default_model = provider_config
         .map(|config| config.default_model.clone())
         .unwrap_or_else(|| provider.default_model().to_string());
+    let supported_models =
+        crate::services::api::provider_catalog::supported_models(selected);
     let model = if app_config
         .api
         .provider_name
@@ -100,7 +102,21 @@ fn init_provider_with_default_preference(
         .unwrap_or(false)
         && !app_config.api.model.trim().is_empty()
     {
-        app_config.api.model.clone()
+        let saved_model = app_config.api.model.trim();
+        let is_supported = supported_models
+            .iter()
+            .any(|m| m.eq_ignore_ascii_case(saved_model));
+        if is_supported || supported_models.is_empty() {
+            saved_model.to_string()
+        } else {
+            tracing::warn!(
+                "Saved model '{}' is not in the supported list for provider '{}'; using default '{}'",
+                saved_model,
+                selected,
+                default_model
+            );
+            default_model.clone()
+        }
     } else {
         default_model
     };
