@@ -1282,7 +1282,7 @@ fn compact_text(value: &str, max_chars: usize) -> String {
 /// Phase C (opencode alignment): progressive output token cap policy.
 ///
 /// No dynamic context → None (provider default)
-/// Normal turn → 8192
+/// Normal turn → None (no cap, let the model decide)
 /// 1st repair → 4096
 /// 2nd repair → 2048
 /// 3rd+ repair → 1024
@@ -1301,7 +1301,7 @@ fn output_cap_for_turn(is_repair: bool, has_dynamic_context: bool) -> Option<u32
         }
     } else {
         CONSECUTIVE_REPAIRS.store(0, Ordering::Relaxed);
-        Some(8192)
+        None
     }
 }
 
