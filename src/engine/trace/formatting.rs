@@ -1,9 +1,17 @@
+//! 跟踪格式化
+//!
+//! 将跟踪数据格式化为人类可读的文本，用于：
+//! - 调试输出
+//! - 诊断报告
+//! - 用户界面显示
+
 use super::{
     action_review_trace_summary, control_loop_diagnostic, latest_runtime_diet_summary,
     latest_tool_record_count, latest_tool_record_evidence_summary, scoring_trace_summary, short_id,
     TurnTrace,
 };
 
+/// 格式化跟踪摘要
 pub fn format_trace_summary(trace: &TurnTrace, max_events: usize) -> String {
     let duration = trace
         .duration_ms()

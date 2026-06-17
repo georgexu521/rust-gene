@@ -1,6 +1,14 @@
+//! 跟踪事件标签
+//!
+//! 为每种跟踪事件定义简短的标签，用于：
+//! - 日志过滤
+//! - 统计分类
+//! - 用户界面显示
+
 use super::TraceEvent;
 
 impl TraceEvent {
+    /// 获取事件标签
     pub fn label(&self) -> &'static str {
         match self {
             TraceEvent::UserPromptSubmitted { .. } => "prompt",

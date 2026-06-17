@@ -1,3 +1,11 @@
+//! 检查点管理器
+//!
+//! 管理文件检查点，支持：
+//! - 创建文件快照
+//! - 追踪文件变更
+//! - 回滚到历史版本
+//! - 持久化到磁盘
+
 use super::types::*;
 use chrono::Local;
 use std::collections::{HashMap, HashSet};

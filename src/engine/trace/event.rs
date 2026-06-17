@@ -1,5 +1,22 @@
+//! 跟踪事件定义
+//!
+//! 定义了 agent 运行过程中记录的所有事件类型。这些事件用于：
+//! - 调试和问题诊断
+//! - 性能分析和优化
+//! - 运行轨迹回放
+//! - 质量评估和改进
+
 use serde::{Deserialize, Serialize};
 
+/// 跟踪事件枚举
+///
+/// 每个事件代表 agent 运行过程中的一个关键节点，包括：
+/// - 用户输入处理
+/// - 意图路由决策
+/// - 工具调用执行
+/// - API 请求/响应
+/// - 错误和恢复
+/// - 性能指标
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum TraceEvent {

@@ -1,3 +1,11 @@
+//! 记忆评估
+//!
+//! 评估记忆系统的性能和质量，包括：
+//! - 记忆召回准确性
+//! - 记忆写入质量
+//! - 冲突检测效果
+//! - 整体系统健康度
+
 use crate::engine::intent_router::RetrievalPolicy;
 use crate::engine::retrieval_context::{MemoryRetrievalBudget, RetrievalContext};
 use crate::engine::task_contract::{
@@ -13,6 +21,7 @@ use std::path::PathBuf;
 
 mod review_workflow;
 
+/// 评估失败责任人
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum MemoryEvalFailureOwner {

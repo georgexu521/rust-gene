@@ -1,3 +1,10 @@
+//! 活跃记忆
+//!
+//! 实现主动记忆召回，在对话开始时自动检索相关记忆。特点：
+//! - 低延迟（超时控制）
+//! - 高相关性（基于意图路由）
+//! - 可配置（通过环境变量）
+
 use crate::engine::intent_router::RetrievalPolicy;
 use crate::engine::retrieval_context::{
     RetrievalContext, RetrievalItem, RetrievalSource, TrustLevel,
@@ -5,10 +12,14 @@ use crate::engine::retrieval_context::{
 use crate::memory::MemoryManager;
 use std::time::{Duration, Instant};
 
+/// 默认超时时间（毫秒）
 const DEFAULT_ACTIVE_MEMORY_TIMEOUT_MS: u64 = 250;
+/// 最大结果数
 const DEFAULT_ACTIVE_MEMORY_MAX_RESULTS: usize = 4;
+/// 最大字符数
 const DEFAULT_ACTIVE_MEMORY_MAX_CHARS: usize = 1800;
 
+/// 活跃记忆配置
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ActiveMemoryConfig {
     pub enabled: bool,

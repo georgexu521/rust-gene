@@ -1,6 +1,15 @@
+//! 跟踪诊断
+//!
+//! 提供跟踪数据的诊断和分析功能，包括：
+//! - 控制循环阶段分析
+//! - 动作审查摘要
+//! - 工具调用统计
+//! - 性能指标
+
 use super::{preview, TraceEvent, TurnTrace};
 use serde::{Deserialize, Serialize};
 
+/// 控制循环诊断
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ControlLoopDiagnostic {
     pub phases: Vec<ControlLoopPhaseDiagnostic>,

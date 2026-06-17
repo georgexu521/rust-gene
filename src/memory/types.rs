@@ -1,7 +1,18 @@
+//! 记忆系统类型定义
+//!
+//! 定义了记忆系统使用的所有核心类型，包括：
+//! - 记忆范围和边界
+//! - 记忆记录和元数据
+//! - 记忆查询和过滤
+//! - 记忆评估和质量
+
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
+/// Agent 上下文类型
+///
+/// 标识当前是在哪种 agent 上下文中操作记忆
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AgentContext {

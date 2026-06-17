@@ -1,5 +1,13 @@
+//! Agent 工具描述构建
+//!
+//! 负责构建 agent 工具的描述文本，包括：
+//! - 基础使用说明
+//! - 可用的子 agent 类型列表
+//! - 各子 agent 可访问的工具
+
 use crate::agent::profiles;
 
+/// 基础描述文本
 const BASE_DESCRIPTION: &str = "\
 Launch a new agent to handle complex, multistep tasks autonomously. \
 When using the agent tool, you must specify a profile parameter to select which agent type to use. \

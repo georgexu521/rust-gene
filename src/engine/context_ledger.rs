@@ -1,3 +1,17 @@
+//! 上下文账本
+//!
+//! 记录 agent 在对话过程中产生的所有上下文信息，包括：
+//! - 文件读取记录（路径、哈希、预览）
+//! - 命令执行记录（命令、输出、状态）
+//! - 文件编辑记录（修改前后的哈希）
+//! - 验证结果记录
+//! - 用户确认记录
+//!
+//! 这些记录用于：
+//! - 上下文压缩时保留关键信息
+//! - 断点恢复时重建状态
+//! - 质量评估时分析行为
+
 use crate::services::api::ToolCall;
 use crate::session_store::{LearningEventRecord, SessionStore};
 use crate::tools::ToolResult;
@@ -8,14 +22,22 @@ use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tracing::warn;
 
+/// 文件读取记录类型
 pub const CONTEXT_LEDGER_FILE_READ_KIND: &str = "context_ledger.file_read";
+/// Bash 命令输出记录类型
 pub const CONTEXT_LEDGER_BASH_READ_KIND: &str = "context_ledger.bash_read";
+/// 文件编辑记录类型
 pub const CONTEXT_LEDGER_FILE_EDIT_KIND: &str = "context_ledger.file_edit";
+/// Diff 记录类型
 pub const CONTEXT_LEDGER_DIFF_KIND: &str = "context_ledger.diff";
+/// 验证结果记录类型
 pub const CONTEXT_LEDGER_VALIDATION_KIND: &str = "context_ledger.validation";
+/// 用户确认记录类型
 pub const CONTEXT_LEDGER_USER_CONFIRMATION_KIND: &str = "context_ledger.user_confirmation";
+/// 工具观察记录类型
 pub const CONTEXT_LEDGER_TOOL_OBSERVATION_KIND: &str = "context_ledger.tool_observation";
 
+/// 文件读取账本条目
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct FileReadLedgerEntry {
     pub path: String,

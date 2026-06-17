@@ -1,5 +1,18 @@
+//! 修复规格
+//!
+//! 定义了 agent 在修复失败时需要遵循的规格，包括：
+//! - 失败的命令和证据
+//! - 必须执行的下一步补丁
+//! - 禁止的修复方式
+//! - 验证命令
+//!
+//! 修复规格用于指导 agent 在验证失败后如何正确修复问题。
+
 use crate::engine::workflow_contract::AcceptanceReview;
 
+/// 修复规格
+///
+/// 包含修复失败所需的所有信息和约束
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RepairSpec {
     pub failed_commands: Vec<String>,

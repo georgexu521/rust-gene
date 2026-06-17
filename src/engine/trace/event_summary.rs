@@ -1,9 +1,17 @@
+//! 跟踪事件摘要
+//!
+//! 为每种跟踪事件生成人类可读的摘要文本，用于：
+//! - 调试日志
+//! - 用户界面显示
+//! - 诊断报告
+
 use super::event_summary_workflow::workflow_summary;
 use super::{
     compact_id_list, compact_label_list, preview, runtime_diet_level, short_id, TraceEvent,
 };
 
 impl TraceEvent {
+    /// 生成事件摘要
     pub fn summary(&self) -> String {
         match self {
             TraceEvent::UserPromptSubmitted { .. }

@@ -1,3 +1,20 @@
+//! 记忆存储提供者
+//!
+//! 定义了记忆的存储后端接口和实现，包括：
+//! - 本地文件存储（JSONL 格式）
+//! - 搜索索引（SQLite）
+//! - 记忆生命周期管理
+//! - 记忆导入导出
+//!
+//! ## 存储结构
+//! ```text
+//! .priority-agent/
+//!   memory/
+//!     records.jsonl      # 记忆记录
+//!     operations.jsonl   # 操作日志
+//!     search.sqlite      # 搜索索引
+//! ```
+
 use crate::memory::reports::format_pinned_memory_text_index;
 use crate::memory::search_index::{
     MemorySearchDocument, MemorySearchHit, MemorySearchIndex, MemorySearchIndexReport,
@@ -10,12 +27,19 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex as StdMutex};
 
+/// 记忆内容字符限制
 const LOCAL_PROVIDER_MEMORY_CHAR_LIMIT: usize = 8_000;
+/// 用户内容字符限制
 const LOCAL_PROVIDER_USER_CHAR_LIMIT: usize = 4_000;
+/// 文件索引字符限制
 const LOCAL_PROVIDER_MEMORY_FILE_INDEX_CHAR_LIMIT: usize = 4_000;
+/// 记忆存储目录名
 const LOCAL_PROVIDER_MEMORY_DIR: &str = "memory";
+/// 记录文件名
 const LOCAL_PROVIDER_RECORDS_FILE: &str = "records.jsonl";
+/// 操作日志文件名
 const LOCAL_PROVIDER_OPERATION_JOURNAL_FILE: &str = "operations.jsonl";
+/// 搜索索引文件名
 const LOCAL_PROVIDER_SEARCH_INDEX_FILE: &str = "search.sqlite";
 mod no_network_provider;
 mod registry;
@@ -27,6 +51,7 @@ pub use registry::*;
 pub use traits::*;
 pub use types::*;
 
+/// 生命周期钩子
 pub const MEMORY_PROVIDER_LIFECYCLE_HOOKS: &[&str] = &[
     "initialize",
     "system_prompt_block",

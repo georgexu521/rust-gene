@@ -1,7 +1,17 @@
+//! 跟踪收集器
+//!
+//! 收集和管理单次对话的跟踪事件。支持：
+//! - 线程安全的事件记录
+//! - 快照和克隆
+//! - 完成状态标记
+
 use super::{TraceEvent, TurnStatus, TurnTrace, DEFAULT_MAX_TRACES};
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex, RwLock};
 
+/// 跟踪收集器
+///
+/// 线程安全地收集对话过程中的所有事件
 #[derive(Clone)]
 pub struct TraceCollector {
     inner: Arc<Mutex<TurnTrace>>,

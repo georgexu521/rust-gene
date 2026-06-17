@@ -1,8 +1,17 @@
+//! 文本文件编解码
+//!
+//! 处理文本文件的编码检测、转换和行尾风格。支持：
+//! - UTF-8 和 UTF-16LE 编码
+//! - LF 和 CRLF 行尾风格
+//! - 文件哈希计算
+//! - 安全读写
+
 use serde_json::json;
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+/// 文本文件编码
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum TextFileEncoding {
     Utf8,

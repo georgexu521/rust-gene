@@ -1,3 +1,11 @@
+//! 记忆提案存储
+//!
+//! 管理记忆写入提案的存储和审批流程，包括：
+//! - 提案创建和存储
+//! - 状态管理（待审批、已批准、已拒绝）
+//! - 冲突检测和解决
+//! - 批量过滤和查询
+
 use super::{
     compact_text, current_memory_proposal_project_identity, infer_proposal_active_scope,
     memory_proposal_candidate_evidence_refs, memory_proposal_conflict_groups,
@@ -11,6 +19,7 @@ use std::collections::HashMap;
 use std::io::Write;
 use std::path::PathBuf;
 
+/// 记忆提案审查存储
 #[derive(Debug, Clone)]
 pub struct MemoryProposalReviewStore {
     path: PathBuf,

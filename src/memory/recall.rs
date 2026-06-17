@@ -1,5 +1,17 @@
+//! 记忆召回决策
+//!
+//! 定义了记忆召回的决策逻辑和评分因子，包括：
+//! - 注入决策（是否将记忆注入上下文）
+//! - 匹配质量评估
+//! - 范围匹配
+//! - 时效性评估
+//! - 信任度评估
+
 use serde::{Deserialize, Serialize};
 
+/// 召回决策
+///
+/// 决定一条记忆是否应该被注入到当前上下文中
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RecallDecision {

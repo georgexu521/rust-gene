@@ -1,6 +1,16 @@
+//! 记忆安全检查
+//!
+//! 检测记忆内容中的敏感信息，包括：
+//! - API 密钥
+//! - 密码
+//! - 私钥
+//! - 令牌
+//! - 其他敏感数据
+
 use crate::memory::types::SensitivityLevel;
 use serde::{Deserialize, Serialize};
 
+/// 记忆安全问题
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MemorySafetyIssue {
     pub code: String,

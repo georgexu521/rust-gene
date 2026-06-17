@@ -1,7 +1,16 @@
+//! 记忆校准
+//!
+//! 用于校准记忆系统的质量评估阈值，包括：
+//! - 预期结果定义
+//! - 实际结果比较
+//! - 校准样本管理
+//! - 校准报告生成
+
 use crate::memory::quality::assess_memory_candidate;
 use crate::memory::types::MemoryStatus;
 use serde::{Deserialize, Serialize};
 
+/// 记忆校准预期
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum MemoryCalibrationExpectation {

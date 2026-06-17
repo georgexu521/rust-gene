@@ -1,3 +1,11 @@
+//! 文件补丁工具
+//!
+//! 提供结构化的文件编辑能力，支持：
+//! - 多文件批量编辑
+//! - 行级精确修改
+//! - 编辑历史追踪
+//! - 自动检查点创建
+
 use super::history::{
     checkpoint_metadata_json, create_files_checkpoint, record_file_change, FileChangeRequest,
 };
@@ -22,10 +30,13 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 use tokio::sync::OwnedMutexGuard;
 
+/// 最大补丁操作数
 const MAX_FILE_PATCH_OPERATIONS: usize = 20;
 
+/// 文件补丁工具
 pub struct FilePatchTool;
 
+/// 补丁规格
 #[derive(Clone, Debug)]
 struct PatchSpec {
     path_arg: String,

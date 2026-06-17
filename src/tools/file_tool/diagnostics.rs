@@ -1,3 +1,11 @@
+//! 文件编辑诊断
+//!
+//! 在文件编辑后收集 LSP 诊断信息，用于：
+//! - 检测语法错误
+//! - 检测类型错误
+//! - 提供即时反馈
+//! - 支持增量检查
+
 use crate::engine::lsp::{language_id_from_path, path_to_uri, LspDiagnostic, LspManager};
 use crate::tools::ToolContext;
 use serde_json::{json, Value};
@@ -5,12 +13,18 @@ use std::path::Path;
 use std::sync::atomic::{AtomicI32, Ordering};
 use std::time::{Duration, Instant};
 
+/// 最大诊断项数
 const MAX_FILE_EDIT_DIAGNOSTIC_ITEMS: usize = 20;
+/// 诊断最大等待时间（毫秒）
 const FILE_EDIT_DIAGNOSTICS_MAX_WAIT_MS: u64 = 400;
+/// 诊断通知超时（毫秒）
 const FILE_EDIT_DIAGNOSTICS_NOTIFY_TIMEOUT_MS: u64 = 200;
+/// 诊断轮询间隔（毫秒）
 const FILE_EDIT_DIAGNOSTICS_POLL_MS: u64 = 50;
+/// LSP 版本号
 static FILE_EDIT_LSP_VERSION: AtomicI32 = AtomicI32::new(2);
 
+/// 收集文件编辑后的诊断信息
 pub(super) async fn collect_file_edit_diagnostics(
     context: &ToolContext,
     path: &Path,

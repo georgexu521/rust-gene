@@ -1,6 +1,21 @@
+//! 记忆评分系统
+//!
+//! 定义了记忆写入和检索的评分因子，包括：
+//! - 相关性评分
+//! - 复用概率
+//! - 稳定性评估
+//! - 信任度
+//! - 新颖性
+//! - 风险评估
+//! - Token 成本
+//! - 敏感度风险
+
 use crate::memory::types::{MemoryKind, MemoryStatus, SensitivityLevel};
 use serde::{Deserialize, Serialize};
 
+/// 记忆写入因子
+///
+/// 用于评估一条记忆是否值得写入存储
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct MemoryWriteFactors {
     pub relevance: f32,

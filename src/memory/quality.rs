@@ -1,3 +1,14 @@
+//! 记忆质量评估
+//!
+//! 评估记忆的质量，决定是否值得写入存储。评估维度包括：
+//! - 事实稳定性
+//! - 未来实用性
+//! - 具体性
+//! - 相关性
+//! - 波动性
+//! - 敏感度风险
+//! - 重复度
+
 use crate::memory::safety::{scan_memory_content, MemorySafetyIssue};
 use crate::memory::scoring::{
     memory_write_factors_from_signals, score_memory_write, MemoryWriteFactors,
@@ -5,6 +16,7 @@ use crate::memory::scoring::{
 use crate::memory::types::{MemoryKind, MemoryStatus, SensitivityLevel};
 use serde::{Deserialize, Serialize};
 
+/// 记忆质量评估结果
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MemoryQualityAssessment {
     pub stable_fact: f32,

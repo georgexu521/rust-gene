@@ -1,6 +1,15 @@
+//! 记忆搜索索引
+//!
+//! 使用 SQLite 实现记忆的全文搜索，支持：
+//! - 文档索引和存储
+//! - 全文搜索
+//! - 相关性评分
+//! - 增量更新
+
 use rusqlite::{params, Connection};
 use std::path::{Path, PathBuf};
 
+/// 搜索索引报告
 #[derive(Debug, Clone)]
 pub struct MemorySearchIndexReport {
     pub path: PathBuf,
