@@ -348,7 +348,7 @@ impl AssistantPrinter {
     }
 
     fn finish_line_if_needed(&mut self, surface: &mut dyn Surface) -> io::Result<()> {
-        if self.started && !self.line.is_empty() {
+        if !self.line.is_empty() {
             let line = std::mem::take(&mut self.line);
             self.print_line(&line, surface)?;
         }

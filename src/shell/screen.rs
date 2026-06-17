@@ -13,8 +13,6 @@ use crate::shell::surface::{build_attachment_line, build_completion_line, Surfac
 use crate::shell::theme::RESET;
 use std::io::{self, Write};
 
-const FOOTER_ROWS: usize = 6;
-
 pub struct ScreenSurface {
     width: usize,
     height: usize,
@@ -37,7 +35,7 @@ impl ScreenSurface {
             height,
             lines: Vec::new(),
             scroll_offset: 0,
-            footer: FooterRenderer::new(FOOTER_ROWS),
+            footer: FooterRenderer::new(3),
             pending_footer_mode: FooterMode::Prompt,
             pending_editor: PromptEditor::new(),
             pending_attachment_line: AttachmentLine::default(),
@@ -50,7 +48,7 @@ impl ScreenSurface {
 
     fn enter_alternate_screen(&mut self) -> io::Result<()> {
         if !self.in_alternate_screen {
-            print!("\x1b[?1049h\x1b[?25l\x1b[2J\x1b[H");
+            print!("\x1b[?1049h\x1b[2J\x1b[H");
             io::stdout().flush()?;
             self.in_alternate_screen = true;
         }
@@ -59,7 +57,7 @@ impl ScreenSurface {
 
     fn leave_alternate_screen(&mut self) -> io::Result<()> {
         if self.in_alternate_screen {
-            print!("\x1b[?25h\x1b[?1049l");
+            print!("\x1b[?1049l");
             io::stdout().flush()?;
             self.in_alternate_screen = false;
         }
@@ -69,42 +67,11 @@ impl ScreenSurface {
     pub fn resize(&mut self, width: usize, height: usize) {
         self.width = width;
         self.height = height;
-        self.clamp_scroll();
-    }
-
-    fn visible_rows(&self) -> usize {
-        self.height.saturating_sub(FOOTER_ROWS).max(1)
-    }
-
-    fn clamp_scroll(&mut self) {
-        let visible = self.visible_rows();
-        let max_offset = self.lines.len().saturating_sub(visible);
-        self.scroll_offset = self.scroll_offset.min(max_offset);
     }
 
     fn redraw(&mut self) -> io::Result<()> {
         if !self.in_alternate_screen {
             return Ok(());
-        }
-
-        let visible = self.visible_rows();
-        let rows: Vec<String> = self
-            .lines
-            .iter()
-            .flat_map(|line| wrap_visual(line, self.width))
-            .collect();
-        let max_offset = rows.len().saturating_sub(visible);
-        self.scroll_offset = self.scroll_offset.min(max_offset);
-
-        let mut out = String::with_capacity(self.width * self.height * 2);
-        out.push_str("\x1b[H");
-
-        for row in 0..visible {
-            let idx = self.scroll_offset + row;
-            if let Some(line) = rows.get(idx) {
-                out.push_str(&truncate_visual(line, self.width));
-            }
-            out.push('\n');
         }
 
         let mut attachment_line = self.pending_attachment_line.clone();
@@ -124,16 +91,51 @@ impl ScreenSurface {
             &attachment_line,
         );
 
+        let footer_height = footer_lines.len().max(1);
+        let visible = self.height.saturating_sub(footer_height).max(1);
+        let rows: Vec<String> = self
+            .lines
+            .iter()
+            .flat_map(|line| wrap_visual(line, self.width))
+            .collect();
+        let max_offset = rows.len().saturating_sub(visible);
+        self.scroll_offset = self.scroll_offset.min(max_offset);
+
+        let mut out = String::with_capacity(self.width * self.height * 2);
+        out.push_str("\x1b[H");
+
+        for row in 0..visible {
+            let idx = self.scroll_offset + row;
+            if let Some(line) = rows.get(idx) {
+                out.push_str(&truncate_visual(line, self.width));
+            }
+            out.push_str("\r\n");
+        }
+
         for (i, line) in footer_lines.iter().enumerate() {
             if i > 0 {
-                out.push('\n');
+                out.push_str("\r\n");
             }
             out.push_str(&truncate_visual(line, self.width));
         }
 
-        // Pad footer to fixed height so the bottom of the screen stays stable.
-        for _ in footer_lines.len()..FOOTER_ROWS {
-            out.push('\n');
+        // In Prompt mode, position the terminal cursor at the editor caret so
+        // typed characters have a visible insertion point.
+        if matches!(self.pending_footer_mode, FooterMode::Prompt) {
+            let attachment_offset = usize::from(!attachment_line.text.is_empty());
+            let (editor_row, col_bytes) = self.pending_editor.cursor();
+            let target_row = visible + attachment_offset + editor_row + 1;
+            let line = self
+                .pending_editor
+                .lines()
+                .get(editor_row)
+                .map(String::as_str)
+                .unwrap_or("");
+            let safe_col = col_bytes.min(line.len());
+            let visual = unicode_width::UnicodeWidthStr::width(&line[..safe_col]);
+            let prefix_width = 2; // "● " or "  "
+            let target_col = prefix_width + visual + 1;
+            out.push_str(&format!("\x1b[{};{}H", target_row, target_col));
         }
 
         print!("{}", out);
@@ -238,8 +240,9 @@ fn wrap_visual(line: &str, width: usize) -> Vec<String> {
     rows
 }
 
-/// Truncate a line to a target visual width, preserving ANSI sequences and
-/// padding with spaces so stale characters are overwritten.
+/// Truncate a line to a target visual width, preserving ANSI sequences.
+/// Uses `\x1b[K` (erase to end of line) instead of space padding so the
+/// cursor never reaches the right margin and triggers auto-wrap in raw mode.
 fn truncate_visual(line: &str, width: usize) -> String {
     let mut out = String::with_capacity(width * 2);
     let mut current_width = 0usize;
@@ -259,20 +262,16 @@ fn truncate_visual(line: &str, width: usize) -> String {
             continue;
         }
         let w = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0);
-        if current_width + w > width {
+        if current_width + w >= width {
             break;
         }
         out.push(ch);
         current_width += w;
     }
 
-    // Reset any active ANSI styles and pad to width so stale characters are
-    // cleared when a line becomes shorter.
+    // Reset any active ANSI styles and clear the rest of the line.
     out.push_str(RESET);
-    while current_width < width {
-        out.push(' ');
-        current_width += 1;
-    }
+    out.push_str("\x1b[K");
     out
 }
 

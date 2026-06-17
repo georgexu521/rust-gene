@@ -2,6 +2,8 @@
 
 use rusqlite::{Connection, Result as SqlResult};
 
+use crate::migrations::framework::add_column_if_missing;
+
 pub struct V18AddGoalStepScore;
 
 impl crate::migrations::Migration for V18AddGoalStepScore {
@@ -14,10 +16,6 @@ impl crate::migrations::Migration for V18AddGoalStepScore {
     }
 
     fn up(&self, conn: &Connection) -> SqlResult<()> {
-        conn.execute_batch(ADD_SCORE_COLUMN)
+        add_column_if_missing(conn, "goal_steps", "score", "REAL")
     }
 }
-
-const ADD_SCORE_COLUMN: &str = r#"
-ALTER TABLE goal_steps ADD COLUMN score REAL;
-"#;

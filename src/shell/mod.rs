@@ -79,6 +79,14 @@ const LOCAL_COMMANDS: &[ShellCommand] = &[
     ShellCommand::new("/doctor", "show environment diagnostics"),
     ShellCommand::new("/audit", "show token usage or tool audit"),
     ShellCommand::new("/clear", "clear terminal"),
+    ShellCommand::new("/changes", "show recent file changes"),
+    ShellCommand::new("/checkpoints", "list session checkpoints"),
+    ShellCommand::new("/compact", "compact context manually"),
+    ShellCommand::new("/context", "show context usage"),
+    ShellCommand::new("/skills", "list installed skills"),
+    ShellCommand::new("/agents", "list active agents"),
+    ShellCommand::new("/tasks", "list tasks"),
+    ShellCommand::new("/mcp", "show MCP server status"),
     ShellCommand::new("/tui", "open the full-screen TUI"),
     ShellCommand::new("/exit", "quit"),
 ];
@@ -115,7 +123,9 @@ async fn run_shell_inner(
     options: ShellOptions,
 ) -> anyhow::Result<()> {
     let session_manager = build_session_manager(&engine).await?;
-    let mut host = CliHost::new(engine.clone(), session_manager);
+    let controller = RuntimeController::new(engine.clone());
+    let mut host =
+        CliHost::new(engine.clone(), session_manager).with_controller(controller.clone());
 
     let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel::<Event>();
     tokio::spawn(event_reader(event_tx));
@@ -124,11 +134,13 @@ async fn run_shell_inner(
     let mut attachments = AttachmentManager::new();
     let mut completion_state: Option<CompletionState> = None;
     let interrupt = InterruptState::new();
-    let controller = RuntimeController::new(engine.clone());
 
     let welcome = render_welcome(&engine).await;
     let mut surface = if options.no_footer {
-        println!("{}", welcome);
+        for line in welcome.lines() {
+            print!("{line}\r\n");
+        }
+        let _ = io::Write::flush(&mut io::stdout());
         ShellSurface::Plain(PlainSurface::new())
     } else {
         let (width, height) = crossterm::terminal::size()
@@ -656,11 +668,25 @@ async fn handle_local_command(
             Ok(true)
         }
         "/model" => {
-            println!(
-                "{BOLD}Model{RESET}\n{DIM}  provider{RESET} {}\n{DIM}  model   {RESET} {}",
-                engine.provider_base_url(),
-                engine.model_name()
-            );
+            let response = crate::shell::slash::handle_model(host, "").await;
+            surface.push_line(&response)?;
+            Ok(true)
+        }
+        command if command.starts_with("/model ") => {
+            let args = command.strip_prefix("/model ").unwrap_or("").trim();
+            let response = crate::shell::slash::handle_model(host, args).await;
+            surface.push_line(&response)?;
+            Ok(true)
+        }
+        "/resume" => {
+            let response = crate::shell::slash::handle_resume(host, "").await;
+            surface.push_line(&response)?;
+            Ok(true)
+        }
+        command if command.starts_with("/resume ") => {
+            let args = command.strip_prefix("/resume ").unwrap_or("").trim();
+            let response = crate::shell::slash::handle_resume(host, args).await;
+            surface.push_line(&response)?;
             Ok(true)
         }
         "/sessions" => {
@@ -682,7 +708,9 @@ async fn handle_local_command(
                     surface
                         .push_line(&format!("{GREEN}✓{RESET} Started new session {session_id}"))?;
                 }
-                Err(e) => println!("{RED}✗{RESET} Failed to start session: {e}"),
+                Err(e) => {
+                    surface.push_line(&format!("{RED}✗{RESET} Failed to start session: {e}"))?
+                }
             }
             Ok(true)
         }
@@ -725,24 +753,29 @@ async fn handle_local_command(
                 .into_iter()
                 .map(|name| format!("  {name}"))
                 .collect();
-            println!("{BOLD}Available tools{RESET}\n{}", tools.join("\n"));
+            surface.push_line(&format!(
+                "{BOLD}Available tools{RESET}\n{}",
+                tools.join("\n")
+            ))?;
             Ok(true)
         }
         "/permissions" => {
             let rules = engine.session_permission_rules();
-            surface.push_line(&format!("{BOLD}Permission rules{RESET}"))?;
-            println!("{DIM}  always allow:{RESET} {}", rules.always_allow.len());
-            println!("{DIM}  always deny:{RESET}  {}", rules.always_deny.len());
-            println!("{DIM}  always ask:{RESET}   {}", rules.always_ask.len());
+            surface.push_line(&format!(
+                "{BOLD}Permission rules{RESET}\n{DIM}  always allow:{RESET} {}\n{DIM}  always deny:{RESET}  {}\n{DIM}  always ask:{RESET}   {}",
+                rules.always_allow.len(),
+                rules.always_deny.len(),
+                rules.always_ask.len(),
+            ))?;
             Ok(true)
         }
         "/memory" => {
-            println!(
+            surface.push_line(&format!(
                 "{BOLD}Memory{RESET}\n{DIM}  use     {RESET}{}\n{DIM}  generate{RESET}{}\n{DIM}  recall  {RESET}{}",
                 host.memory_use(),
                 host.memory_generate(),
                 host.memory_recall_mode()
-            );
+            ))?;
             Ok(true)
         }
         command if command.starts_with("/memory ") => {
@@ -762,9 +795,9 @@ async fn handle_local_command(
                 "use off" => host.set_memory_use(false),
                 "generate on" => host.set_memory_generate(true),
                 "generate off" => host.set_memory_generate(false),
-                _ => println!(
+                _ => surface.push_line(&format!(
                     "{DIM}Usage: /memory [on|off|use on|use off|generate on|generate off]{RESET}"
-                ),
+                ))?,
             }
             Ok(true)
         }
@@ -830,6 +863,46 @@ async fn handle_local_command(
             surface.push_line(&format!(
                 "{DIM}Run `pa --tui` to open the full-screen terminal interface.{RESET}"
             ))?;
+            Ok(true)
+        }
+        "/changes" => {
+            let response = crate::shell::slash::handle_changes(host).await;
+            surface.push_line(&response)?;
+            Ok(true)
+        }
+        "/checkpoints" => {
+            let response = crate::shell::slash::handle_checkpoints(host).await;
+            surface.push_line(&response)?;
+            Ok(true)
+        }
+        "/compact" => {
+            let response = crate::shell::slash::handle_compact(host).await;
+            surface.push_line(&response)?;
+            Ok(true)
+        }
+        "/context" => {
+            let response = crate::shell::slash::handle_context(host).await;
+            surface.push_line(&response)?;
+            Ok(true)
+        }
+        "/skills" => {
+            let response = crate::shell::slash::handle_skills(host);
+            surface.push_line(&response)?;
+            Ok(true)
+        }
+        "/agents" => {
+            let response = crate::shell::slash::handle_agents(host).await;
+            surface.push_line(&response)?;
+            Ok(true)
+        }
+        "/tasks" => {
+            let response = crate::shell::slash::handle_tasks(host).await;
+            surface.push_line(&response)?;
+            Ok(true)
+        }
+        "/mcp" => {
+            let response = crate::shell::slash::handle_mcp(host);
+            surface.push_line(&response)?;
             Ok(true)
         }
         command if command.starts_with('/') => {

@@ -2,6 +2,8 @@
 
 use rusqlite::{Connection, Result as SqlResult};
 
+use crate::migrations::framework::add_column_if_missing;
+
 pub struct V16AddSessionPartMessageId;
 
 impl crate::migrations::Migration for V16AddSessionPartMessageId {
@@ -14,12 +16,12 @@ impl crate::migrations::Migration for V16AddSessionPartMessageId {
     }
 
     fn up(&self, conn: &Connection) -> SqlResult<()> {
-        conn.execute_batch(ADD_MESSAGE_ID)
-    }
-}
-
-const ADD_MESSAGE_ID: &str = r#"
-ALTER TABLE session_parts ADD COLUMN message_id TEXT;
+        add_column_if_missing(conn, "session_parts", "message_id", "TEXT")?;
+        conn.execute_batch(
+            r#"
 CREATE INDEX IF NOT EXISTS idx_session_parts_message
     ON session_parts(session_id, message_id);
-"#;
+"#,
+        )
+    }
+}

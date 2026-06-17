@@ -55,7 +55,7 @@ impl Default for PlainSurface {
 impl Surface for PlainSurface {
     fn push_line(&mut self, text: &str) -> io::Result<()> {
         for line in text.split('\n') {
-            println!("{}", line);
+            print!("{}\r\n", line);
         }
         io::stdout().flush()
     }
@@ -72,14 +72,14 @@ impl Surface for PlainSurface {
                 print_plain_prompt(editor, attachments, completion)?;
             }
             FooterMode::Thinking => {
-                println!("{DIM}· Thinking…{RESET}");
+                print!("{DIM}· Thinking…{RESET}\r\n");
             }
             FooterMode::Interrupt => {
-                println!("{DIM}· Press Ctrl+C again to quit{RESET}");
+                print!("{DIM}· Press Ctrl+C again to quit{RESET}\r\n");
             }
             _ => {}
         }
-        Ok(())
+        io::stdout().flush()
     }
 
     fn terminal_width(&self) -> usize {
@@ -122,7 +122,7 @@ fn print_plain_prompt(
             print!("{}{}", marker, candidate.display);
         }
     }
-    println!();
+    print!("\r\n");
     io::stdout().flush()
 }
 

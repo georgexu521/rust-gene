@@ -817,6 +817,7 @@ impl Default for ApiConfig {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct UiConfig {
     pub theme: String,
+    #[serde(default = "default_show_token_usage")]
     pub show_token_usage: bool,
     #[serde(default)]
     pub pinned_sessions: Vec<String>,
@@ -826,10 +827,14 @@ impl Default for UiConfig {
     fn default() -> Self {
         Self {
             theme: "light".to_string(),
-            show_token_usage: true,
+            show_token_usage: default_show_token_usage(),
             pinned_sessions: Vec::new(),
         }
     }
+}
+
+fn default_show_token_usage() -> bool {
+    true
 }
 
 /// 存储配置

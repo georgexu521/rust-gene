@@ -930,6 +930,211 @@ pub async fn handle_token_cost(engine: &StreamingQueryEngine) -> String {
     tracker.generate_report()
 }
 
+pub async fn handle_changes(host: &dyn ShellHost) -> String {
+    let Some(session_id) = host.session_manager().current_session_id() else {
+        return "No active session.".to_string();
+    };
+    let mgr = crate::engine::checkpoint::get_checkpoint_manager(session_id).await;
+    let cp = mgr.lock().await;
+    let file_changes = cp.list_file_changes();
+    let rounds = cp.list_file_change_rounds();
+
+    if file_changes.is_empty() && rounds.is_empty() {
+        return "No file changes tracked yet.".to_string();
+    }
+
+    let mut lines = vec![format!(
+        "Recent changes ({} files in {} tool rounds):",
+        file_changes.len(),
+        rounds.len()
+    )];
+
+    if !rounds.is_empty() {
+        lines.push(String::new());
+        lines.push("By tool round:".to_string());
+        for summary in rounds.iter().rev().take(10) {
+            let round = summary.tool_round_id.as_deref().unwrap_or("<single>");
+            let diff_info = if summary.additions > 0 || summary.deletions > 0 {
+                format!(" (+{}/-{})", summary.additions, summary.deletions)
+            } else {
+                String::new()
+            };
+            lines.push(format!(
+                "  {} | {} file(s){} | {}B | {}",
+                round,
+                summary.change_count,
+                diff_info,
+                summary.total_bytes_written,
+                summary
+                    .paths
+                    .iter()
+                    .take(3)
+                    .cloned()
+                    .collect::<Vec<_>>()
+                    .join(", "),
+            ));
+        }
+    }
+
+    if !file_changes.is_empty() {
+        lines.push(String::new());
+        lines.push("Most recent file changes:".to_string());
+        for change in file_changes.iter().rev().take(10) {
+            lines.push(format!("  {} ({})", change.path, change.tool_name));
+        }
+    }
+    lines.join("\n")
+}
+
+pub async fn handle_checkpoints(host: &dyn ShellHost) -> String {
+    let Some(session_id) = host.session_manager().current_session_id() else {
+        return "No active session.".to_string();
+    };
+    let mgr = crate::engine::checkpoint::get_checkpoint_manager(session_id).await;
+    let cp = mgr.lock().await;
+    let checkpoints = cp.list_checkpoints();
+    let stats = cp.stats();
+
+    if checkpoints.is_empty() {
+        return "No checkpoints for this session yet.".to_string();
+    }
+
+    let mut lines = vec![format!(
+        "Checkpoints (total: {}, files tracked: {}, file changes: {})",
+        stats.total_checkpoints, stats.total_files_tracked, stats.total_file_changes
+    )];
+
+    for c in checkpoints.iter().rev().take(20) {
+        let label = &c.tool_name;
+        let file_count = c.file_backups.len();
+        lines.push(format!("  {} | {} | {} file(s)", c.id, label, file_count));
+    }
+    lines.join("\n")
+}
+
+pub async fn handle_compact(host: &dyn ShellHost) -> String {
+    let Some(engine) = host.engine() else {
+        return "No engine available.".to_string();
+    };
+    match engine.compact_context_manually().await {
+        Some(record) => format!(
+            "Context compacted: {} -> {} tokens (strategy: {})",
+            record.before_tokens,
+            record.after_tokens.unwrap_or(0),
+            record.strategy.label()
+        ),
+        None => "No compaction performed (no compressor or already compact).".to_string(),
+    }
+}
+
+pub async fn handle_context(host: &dyn ShellHost) -> String {
+    let Some(engine) = host.engine() else {
+        return "No engine available.".to_string();
+    };
+    let usage = engine.context_usage_report().await;
+    let pct = if usage.max_context_tokens > 0 {
+        usage.total_estimated_tokens * 100 / usage.max_context_tokens
+    } else {
+        0
+    };
+    format!(
+        "Context: {} / {} tokens ({}%)\n  history: {} messages ({} tokens)\n  tool schema: {} tokens\n  memory snapshot: {} tokens\n  fingerprint: {}",
+        usage.total_estimated_tokens,
+        usage.max_context_tokens,
+        pct,
+        usage.history_messages,
+        usage.history_tokens,
+        usage.tool_schema_tokens,
+        usage.memory_snapshot_tokens,
+        usage.stable_prefix_fingerprint
+    )
+}
+
+pub fn handle_skills(host: &dyn ShellHost) -> String {
+    let Some(runtime) = host.skill_runtime() else {
+        return "Skills not loaded.".to_string();
+    };
+    if runtime.is_empty() {
+        return "No skills installed.".to_string();
+    }
+    format!("Skills ({}):", runtime.len())
+}
+
+pub async fn handle_agents(host: &dyn ShellHost) -> String {
+    let Some(engine) = host.engine() else {
+        return "No engine available.".to_string();
+    };
+    let Some(am) = engine.agent_manager() else {
+        return "No agent manager configured.".to_string();
+    };
+    let agents = am.list_agents().await;
+    if agents.is_empty() {
+        return "No agents active.".to_string();
+    }
+    let mut lines = vec![format!("Active agents ({}):", agents.len())];
+    for handle in &agents {
+        let status = format!("{:?}", *handle.status.borrow());
+        lines.push(format!(
+            "  {} [{}] {}",
+            handle.config.role.display_name(),
+            status,
+            handle.config.name
+        ));
+    }
+    lines.join("\n")
+}
+
+pub async fn handle_tasks(host: &dyn ShellHost) -> String {
+    let Some(engine) = host.engine() else {
+        return "No engine available.".to_string();
+    };
+    let Some(tm) = engine.task_manager() else {
+        return "No task manager configured.".to_string();
+    };
+    let tasks = tm.list_tasks(None).await;
+    if tasks.is_empty() {
+        return "No tasks.".to_string();
+    }
+    let mut lines = vec![format!("Tasks ({}):", tasks.len())];
+    for task in tasks.iter().take(20) {
+        lines.push(format!("  {} [{:?}] {}", task.id, task.status, task.name));
+    }
+    lines.join("\n")
+}
+
+pub fn handle_mcp(host: &dyn ShellHost) -> String {
+    let Some(engine) = host.engine() else {
+        return "No engine available.".to_string();
+    };
+    let Some(mcp) = engine.mcp_manager() else {
+        return "No MCP manager configured.".to_string();
+    };
+    let diagnostics = mcp.health_diagnostics();
+    if diagnostics.is_empty() {
+        return "No MCP servers configured.".to_string();
+    }
+    let available = diagnostics
+        .iter()
+        .filter(|d| d.approved && d.health == crate::engine::mcp::McpHealthStatus::Healthy)
+        .count();
+    let mut lines = vec![format!(
+        "MCP servers ({} total, {} available):",
+        diagnostics.len(),
+        available
+    )];
+    for d in &diagnostics {
+        let status = if d.approved && d.health == crate::engine::mcp::McpHealthStatus::Healthy {
+            "available"
+        } else if d.repair_hint != "none" {
+            "needs repair"
+        } else {
+            "unavailable"
+        };
+        lines.push(format!("  {} [{}]", d.name, status));
+    }
+    lines.join("\n")
+}
+
 fn provider_label_for_base_url(base_url: &str) -> String {
     let u = base_url.to_ascii_lowercase();
     if u.contains("minimax") {
@@ -1132,10 +1337,7 @@ pub async fn handle_status(host: &dyn ShellHost) -> String {
     ));
 
     lines.push(format!("Querying: {}", host.is_querying()));
-    lines.join(
-        "
-",
-    )
+    lines.join("\n")
 }
 
 pub async fn handle_model(host: &dyn ShellHost, args: &str) -> String {
@@ -1170,23 +1372,11 @@ pub async fn handle_model(host: &dyn ShellHost, args: &str) -> String {
                 )
             })
             .collect::<Vec<_>>()
-            .join(
-                "
-",
-            );
-        format!(
-            "Models for {}:
-{}",
-            engine.provider_base_url(),
-            lines
-        )
+            .join("\n");
+        format!("Models for {}:\n{}", engine.provider_base_url(), lines)
     } else {
         format!(
-            "Model: {}
-Provider: {}
-Base URL: {}
-
-Use /model list or /model switch <name>.",
+            "Model: {}\nProvider: {}\nBase URL: {}\n\nUse /model list or /model switch <name>.",
             engine.model_name(),
             engine.provider_base_url(),
             engine.provider_base_url()

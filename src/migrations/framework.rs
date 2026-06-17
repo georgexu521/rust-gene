@@ -16,6 +16,30 @@ pub trait Migration: Send + Sync {
     fn up(&self, conn: &Connection) -> SqlResult<()>;
 }
 
+/// Idempotent `ALTER TABLE ... ADD COLUMN` helper.
+///
+/// SQLite has no native `ADD COLUMN IF NOT EXISTS`, so callers can use this to
+/// avoid `duplicate column name` errors when a migration is re-applied against
+/// a database that already received the column from a partial previous run.
+pub fn add_column_if_missing(
+    conn: &Connection,
+    table: &str,
+    column: &str,
+    column_type: &str,
+) -> SqlResult<()> {
+    let mut stmt = conn.prepare(&format!("PRAGMA table_info({table})"))?;
+    let exists = stmt
+        .query_map([], |row| row.get::<_, String>(1))?
+        .filter_map(Result::ok)
+        .any(|name| name == column);
+    if !exists {
+        conn.execute_batch(&format!(
+            "ALTER TABLE {table} ADD COLUMN {column} {column_type};"
+        ))?;
+    }
+    Ok(())
+}
+
 /// 迁移运行器
 pub struct MigrationRunner {
     migrations: Vec<Arc<dyn Migration>>,

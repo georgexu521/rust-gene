@@ -2,6 +2,8 @@
 
 use rusqlite::{Connection, Result as SqlResult};
 
+use crate::migrations::framework::add_column_if_missing;
+
 pub struct V19AddMessageMetadata;
 
 impl crate::migrations::Migration for V19AddMessageMetadata {
@@ -14,10 +16,6 @@ impl crate::migrations::Migration for V19AddMessageMetadata {
     }
 
     fn up(&self, conn: &Connection) -> SqlResult<()> {
-        conn.execute_batch(ADD_MESSAGE_METADATA)
+        add_column_if_missing(conn, "messages", "metadata", "TEXT")
     }
 }
-
-const ADD_MESSAGE_METADATA: &str = r#"
-ALTER TABLE messages ADD COLUMN metadata TEXT;
-"#;

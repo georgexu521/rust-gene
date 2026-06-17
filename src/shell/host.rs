@@ -5,9 +5,11 @@
 //! CLI implementation is intentionally simpler: it has no Ratatui widgets, no
 //! LSP manager, and no worktree manager.
 
+use crate::engine::runtime_controller::RuntimeController;
 use crate::engine::streaming::StreamingQueryEngine;
 use crate::session_store::SessionStore;
 use crate::shell::theme::{DIM, RESET};
+use crate::skills::SkillRuntime;
 use crate::tui::session_manager::TuiSessionManager;
 use std::sync::Arc;
 
@@ -119,6 +121,8 @@ pub struct CliHost {
     pub memory_use: bool,
     pub memory_generate: bool,
     pub memory_recall_mode: String,
+    pub skill_runtime: SkillRuntime,
+    pub controller: Option<RuntimeController>,
 }
 
 impl CliHost {
@@ -126,13 +130,22 @@ impl CliHost {
         let memory_use = engine.memory_use_enabled();
         let memory_generate = engine.memory_generate_enabled();
         let memory_recall_mode = engine.memory_recall_mode();
+        let working_dir = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+        let skill_runtime = SkillRuntime::load(&working_dir);
         Self {
             engine,
             session_manager,
             memory_use,
             memory_generate,
             memory_recall_mode,
+            skill_runtime,
+            controller: None,
         }
+    }
+
+    pub fn with_controller(mut self, controller: RuntimeController) -> Self {
+        self.controller = Some(controller);
+        self
     }
 }
 
@@ -203,7 +216,8 @@ impl ShellHost for CliHost {
     }
 
     fn show_message(&mut self, message: String) {
-        println!("{DIM}{message}{RESET}");
+        print!("{DIM}{message}{RESET}\r\n");
+        let _ = std::io::Write::flush(&mut std::io::stdout());
     }
 
     fn memory_use(&self) -> bool {
@@ -231,6 +245,48 @@ impl ShellHost for CliHost {
     fn set_memory_recall_mode(&mut self, value: String) {
         self.memory_recall_mode = value.clone();
         self.engine.set_memory_recall_mode(value);
+    }
+
+    fn skill_runtime(&self) -> Option<&SkillRuntime> {
+        Some(&self.skill_runtime)
+    }
+
+    fn agent_mode(&self) -> crate::engine::agent_mode::AgentMode {
+        crate::engine::agent_mode::AgentMode::Auto
+    }
+
+    fn message_count(&self) -> usize {
+        self.session_manager
+            .current_session_id()
+            .and_then(|sid| self.session_manager.message_count(sid).ok())
+            .map(|n| n as usize)
+            .unwrap_or(0)
+    }
+
+    fn is_querying(&self) -> bool {
+        false
+    }
+
+    fn runtime_status_snapshot(&self) -> crate::state::RuntimeStatusSnapshot {
+        let mut snapshot = crate::state::RuntimeStatusSnapshot {
+            permission_mode: format!("{:?}", self.engine.permission_mode()),
+            ..Default::default()
+        };
+        snapshot.total_tools = self.engine.tool_registry().tool_names().len();
+        if let Some(mcp) = self.engine.mcp_manager() {
+            let diagnostics = mcp.health_diagnostics();
+            snapshot.mcp_server_count = diagnostics.len();
+            snapshot.mcp_available_count = diagnostics
+                .iter()
+                .filter(|d| d.approved && d.health == crate::engine::mcp::McpHealthStatus::Healthy)
+                .count();
+            snapshot.mcp_repair_hints = diagnostics
+                .iter()
+                .filter(|d| d.repair_hint != "none")
+                .map(|d| format!("{}=>{}", d.name, d.repair_hint))
+                .collect();
+        }
+        snapshot
     }
 }
 

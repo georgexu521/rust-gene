@@ -2,6 +2,8 @@
 
 use rusqlite::{Connection, Result as SqlResult};
 
+use crate::migrations::framework::add_column_if_missing;
+
 pub struct V20AddSessionWorkspace;
 
 impl crate::migrations::Migration for V20AddSessionWorkspace {
@@ -14,10 +16,6 @@ impl crate::migrations::Migration for V20AddSessionWorkspace {
     }
 
     fn up(&self, conn: &Connection) -> SqlResult<()> {
-        conn.execute_batch(ADD_SESSION_WORKSPACE)
+        add_column_if_missing(conn, "sessions", "workspace_root", "TEXT")
     }
 }
-
-const ADD_SESSION_WORKSPACE: &str = r#"
-ALTER TABLE sessions ADD COLUMN workspace_root TEXT;
-"#;

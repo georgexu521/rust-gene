@@ -95,12 +95,12 @@ impl FooterRenderer {
 
         let lines = self.render_lines(mode, prompt, width, attachments);
         for line in &lines {
-            println!("{line}");
+            print!("{line}\r\n");
         }
 
         // Pad to fixed footer height so subsequent renders start at same row.
         for _ in lines.len()..self.height {
-            println!();
+            print!("\r\n");
         }
 
         self.last_rendered_height = self.height;
@@ -139,7 +139,7 @@ impl FooterRenderer {
         self.clear_current()?;
         print!("\x1b[0G{text}");
         if !text.ends_with('\n') {
-            println!();
+            print!("\r\n");
         }
         self.cursor_in_footer = false;
         io::stdout().flush()

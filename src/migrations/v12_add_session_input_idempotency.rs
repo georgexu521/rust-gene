@@ -2,6 +2,8 @@
 
 use rusqlite::{Connection, Result as SqlResult};
 
+use crate::migrations::framework::add_column_if_missing;
+
 pub struct V12AddSessionInputIdempotency;
 
 impl crate::migrations::Migration for V12AddSessionInputIdempotency {
@@ -14,19 +16,24 @@ impl crate::migrations::Migration for V12AddSessionInputIdempotency {
     }
 
     fn up(&self, conn: &Connection) -> SqlResult<()> {
-        conn.execute_batch(ALTER_SESSION_INPUTS)
-    }
-}
+        add_column_if_missing(conn, "session_inputs", "prompt_id", "TEXT")?;
+        add_column_if_missing(conn, "session_inputs", "prompt_hash", "TEXT")?;
+        add_column_if_missing(conn, "session_inputs", "attachments_json", "TEXT")?;
+        add_column_if_missing(conn, "session_inputs", "promoted_seq", "INTEGER")?;
+        add_column_if_missing(
+            conn,
+            "session_inputs",
+            "state",
+            "TEXT NOT NULL DEFAULT 'pending'",
+        )?;
+        add_column_if_missing(conn, "session_inputs", "error", "TEXT")?;
 
-const ALTER_SESSION_INPUTS: &str = r#"
-ALTER TABLE session_inputs ADD COLUMN prompt_id TEXT;
-ALTER TABLE session_inputs ADD COLUMN prompt_hash TEXT;
-ALTER TABLE session_inputs ADD COLUMN attachments_json TEXT;
-ALTER TABLE session_inputs ADD COLUMN promoted_seq INTEGER;
-ALTER TABLE session_inputs ADD COLUMN state TEXT NOT NULL DEFAULT 'pending';
-ALTER TABLE session_inputs ADD COLUMN error TEXT;
-
+        conn.execute_batch(
+            r#"
 CREATE UNIQUE INDEX IF NOT EXISTS idx_session_inputs_prompt_id
     ON session_inputs(session_id, prompt_id)
     WHERE prompt_id IS NOT NULL;
-"#;
+"#,
+        )
+    }
+}
