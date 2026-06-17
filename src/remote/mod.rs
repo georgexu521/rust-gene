@@ -177,26 +177,12 @@ impl RemoteEnvDetector {
         }
     }
 
-    /// 检测是否在 GitHub Codespaces 中
-    #[allow(dead_code)]
-    fn detect_codespaces() -> Option<RemoteEnvType> {
-        let env_vars: HashMap<String, String> = std::env::vars().collect();
-        Self::detect_codespaces_env(&env_vars)
-    }
-
     fn detect_codespaces_env(env_vars: &HashMap<String, String>) -> Option<RemoteEnvType> {
         if env_vars.get("CODESPACES")? == "true" {
             Some(RemoteEnvType::Codespaces)
         } else {
             None
         }
-    }
-
-    /// 检测是否在 GitPod 中
-    #[allow(dead_code)]
-    fn detect_gitpod() -> Option<RemoteEnvType> {
-        let env_vars: HashMap<String, String> = std::env::vars().collect();
-        Self::detect_gitpod_env(&env_vars)
     }
 
     fn detect_gitpod_env(env_vars: &HashMap<String, String>) -> Option<RemoteEnvType> {
@@ -207,26 +193,12 @@ impl RemoteEnvDetector {
         }
     }
 
-    /// 检测是否在 VS Code Remote 中
-    #[allow(dead_code)]
-    fn detect_vscode_remote() -> Option<RemoteEnvType> {
-        let env_vars: HashMap<String, String> = std::env::vars().collect();
-        Self::detect_vscode_remote_env(&env_vars)
-    }
-
     fn detect_vscode_remote_env(env_vars: &HashMap<String, String>) -> Option<RemoteEnvType> {
         if env_vars.contains_key("VSCODE_REMOTE") || env_vars.contains_key("REMOTE_CONTAINERS") {
             Some(RemoteEnvType::VsCodeRemote)
         } else {
             None
         }
-    }
-
-    /// 检测是否在 Docker 容器中
-    #[allow(dead_code)]
-    fn detect_docker() -> Option<RemoteEnvType> {
-        let env_vars: HashMap<String, String> = std::env::vars().collect();
-        Self::detect_docker_env(&env_vars)
     }
 
     fn detect_docker_env(env_vars: &HashMap<String, String>) -> Option<RemoteEnvType> {
@@ -248,13 +220,6 @@ impl RemoteEnvDetector {
         None
     }
 
-    /// 检测是否在 WSL 中
-    #[allow(dead_code)]
-    fn detect_wsl() -> Option<RemoteEnvType> {
-        let env_vars: HashMap<String, String> = std::env::vars().collect();
-        Self::detect_wsl_env(&env_vars)
-    }
-
     fn detect_wsl_env(env_vars: &HashMap<String, String>) -> Option<RemoteEnvType> {
         if env_vars.contains_key("WSL_DISTRO_NAME") || env_vars.contains_key("WSL_INTEROP") {
             return Some(RemoteEnvType::Wsl);
@@ -265,13 +230,6 @@ impl RemoteEnvDetector {
             }
         }
         None
-    }
-
-    /// 检测是否通过 SSH 连接
-    #[allow(dead_code)]
-    fn detect_ssh() -> Option<RemoteEnvType> {
-        let env_vars: HashMap<String, String> = std::env::vars().collect();
-        Self::detect_ssh_env(&env_vars)
     }
 
     fn detect_ssh_env(env_vars: &HashMap<String, String>) -> Option<RemoteEnvType> {

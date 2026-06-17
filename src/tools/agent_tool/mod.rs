@@ -180,13 +180,6 @@ impl AgentTool {
             description: description::build_tool_description(working_dir),
         }
     }
-
-    #[allow(dead_code)]
-    pub fn with_profiles(_profiles: &[crate::agent::profiles::AgentProfile]) -> Self {
-        Self {
-            description: description::build_tool_description(std::path::Path::new(".")),
-        }
-    }
 }
 
 /// 加载文件上下文

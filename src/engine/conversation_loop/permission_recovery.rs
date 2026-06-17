@@ -57,18 +57,6 @@ pub(super) fn permission_denial_state_json(
     })
 }
 
-/// Clean up permission denial counters for a session.
-/// Call this when a session ends to prevent memory leaks.
-#[allow(dead_code)]
-pub fn cleanup_session_denial_counters(session_id: &str) {
-    if let Some(counters) = PERMISSION_DENIAL_COUNTERS.get() {
-        if let Ok(mut counters) = counters.lock() {
-            let prefix = format!("{}:", session_id);
-            counters.retain(|key, _| !key.starts_with(&prefix));
-        }
-    }
-}
-
 pub(super) fn record_permission_denial(record: &PermissionRequestRecord) -> serde_json::Value {
     let tool_name = record
         .metadata

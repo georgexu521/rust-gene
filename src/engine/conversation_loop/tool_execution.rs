@@ -17,24 +17,10 @@ pub(crate) const READ_ONLY_TOOLS: &[&str] = &[
     "read_mcp_resource",
 ];
 
-/// Maximum tool-call iterations per turn. Mirrors Reasonix's
-/// DEFAULT_MAX_ITER_PER_TURN = 50. Env override: PRIORITY_AGENT_MAX_ITER.
-#[allow(dead_code)]
-pub(crate) const DEFAULT_MAX_ITERATIONS: usize = 50;
-
 /// Whether tool dispatch should be forced serial (mirrors Reasonix's
 /// REASONIX_TOOL_DISPATCH=serial). Default is parallel for read-only tools.
 pub(crate) fn force_serial_tool_dispatch() -> bool {
     crate::services::config::runtime_config().force_serial_tool_dispatch()
-}
-
-/// 工具结果磁盘缓存目录
-#[allow(dead_code)]
-pub(crate) fn tool_result_cache_dir() -> std::path::PathBuf {
-    dirs::data_local_dir()
-        .unwrap_or_else(|| std::path::PathBuf::from("."))
-        .join("priority-agent")
-        .join("tool-results")
 }
 
 pub(crate) fn read_only_tool_concurrency() -> usize {
@@ -62,11 +48,6 @@ pub(crate) fn safe_suffix_by_bytes(s: &str, max_bytes: usize) -> &str {
     }
     &s[start..]
 }
-
-/// Default max result tokens before shrinking (mirrors Reasonix's
-/// DEFAULT_MAX_RESULT_TOKENS = 4096). CJK text costs ~2× tokens vs ASCII.
-#[allow(dead_code)] // API-ready: callers will integrate in follow-up
-pub(crate) const DEFAULT_MAX_RESULT_TOKENS: usize = 4096;
 
 /// Token-aware result truncation applied as a supplementary pass on top
 /// of the regular ToolOutputStore preview.  This keeps the stored artifact
@@ -96,100 +77,6 @@ pub(crate) fn shrink_tool_result_by_tokens(content: &str, max_tokens: usize) -> 
     let tail = safe_suffix_by_bytes(content, tail_chars);
     let skipped = content.len().saturating_sub(head.len() + tail.len());
     format!("{head}\n\n... [truncated ~{skipped} chars, ~{max_tokens} token budget] ...\n\n{tail}")
-}
-
-#[allow(dead_code)]
-const HIGH_SIGNAL_TOOL_RESULT_TERMS: &[&str] = &[
-    "assess_memory_candidate",
-    "memorywriteoutcome",
-    "write_decision.status",
-    "memorystatus::accepted",
-    "record_memory_decision",
-    "add_learning_async",
-    "add_topic_learning_async",
-    "add_auto_learning_async",
-    "format!(\"saved:",
-    "saved: {}",
-    "memory_save",
-    "/save",
-    "acceptance",
-    "failed",
-    "panic",
-    "error:",
-];
-
-#[allow(dead_code)]
-fn high_signal_tool_result_snippets(content: &str, max_bytes: usize) -> String {
-    let lines: Vec<&str> = content.lines().collect();
-    if lines.is_empty() || max_bytes == 0 {
-        return String::new();
-    }
-
-    let mut ranges: Vec<(usize, usize)> = Vec::new();
-    for (idx, line) in lines.iter().enumerate() {
-        if high_signal_term_match(line).is_some() {
-            let start = idx.saturating_sub(2);
-            let end = (idx + 3).min(lines.len());
-            if let Some((_, last_end)) = ranges.last_mut() {
-                if start <= *last_end {
-                    *last_end = (*last_end).max(end);
-                    continue;
-                }
-            }
-            ranges.push((start, end));
-        }
-    }
-
-    let mut out = String::new();
-    for (start, end) in ranges {
-        if !out.is_empty() {
-            out.push_str("\n...\n");
-        }
-        for line in &lines[start..end] {
-            out.push_str(&format_high_signal_context_line(line));
-            out.push('\n');
-            if out.len() >= max_bytes {
-                return safe_prefix_by_bytes(&out, max_bytes).to_string();
-            }
-        }
-    }
-    out
-}
-
-#[allow(dead_code)]
-fn high_signal_term_match(line: &str) -> Option<(&'static str, usize)> {
-    let lower = line.to_lowercase();
-    HIGH_SIGNAL_TOOL_RESULT_TERMS
-        .iter()
-        .find_map(|term| lower.find(term).map(|idx| (*term, idx)))
-}
-
-#[allow(dead_code)]
-fn format_high_signal_context_line(line: &str) -> String {
-    const CONTEXT_LINE_LIMIT: usize = 320;
-    const SIGNAL_LINE_LIMIT: usize = 900;
-
-    if line.len() <= CONTEXT_LINE_LIMIT {
-        return line.to_string();
-    }
-
-    if let Some((term, idx)) = high_signal_term_match(line) {
-        let start = idx.saturating_sub(SIGNAL_LINE_LIMIT / 3);
-        let end = (idx + term.len() + SIGNAL_LINE_LIMIT * 2 / 3).min(line.len());
-        let mut byte_start = start;
-        while byte_start > 0 && !line.is_char_boundary(byte_start) {
-            byte_start -= 1;
-        }
-        let mut byte_end = end;
-        while byte_end < line.len() && !line.is_char_boundary(byte_end) {
-            byte_end += 1;
-        }
-        let prefix = if byte_start > 0 { "..." } else { "" };
-        let suffix = if byte_end < line.len() { "..." } else { "" };
-        return format!("{prefix}{}{suffix}", &line[byte_start..byte_end]);
-    }
-
-    format!("{}...", safe_prefix_by_bytes(line, CONTEXT_LINE_LIMIT))
 }
 
 /// 截断工具结果，如果超过阈值则写入 ToolOutputStore

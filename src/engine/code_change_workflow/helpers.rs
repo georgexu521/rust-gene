@@ -137,8 +137,3 @@ pub(super) fn select_validation_evidence(record: &StageValidationRecord) -> Opti
 
     usable.first().map(|item| (*item).clone())
 }
-
-#[allow(dead_code)]
-pub(super) fn path_label(path: &Path) -> String {
-    path.display().to_string()
-}

@@ -1561,7 +1561,7 @@ impl TuiApp {
         self.composer.attachment_paths()
     }
 
-    #[allow(dead_code)]
+    #[cfg(test)]
     fn expand_paste_placeholders(&self, content: &str) -> String {
         let mut expanded = content.to_string();
         for (_id, _label, placeholder, paste_content) in self.composer.pasted_text_parts() {

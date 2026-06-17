@@ -15,7 +15,6 @@ struct SkillSearchPath {
 }
 
 /// Skill 注册表 - 文件驱动
-#[allow(dead_code)]
 pub struct SkillRegistry {
     /// 已加载的 skills（name -> Skill）
     skills: HashMap<String, Skill>,

@@ -51,7 +51,7 @@ impl ContextScrubber {
         }
     }
 
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub fn reset(&mut self) {
         self.in_span = false;
         self.buf.clear();

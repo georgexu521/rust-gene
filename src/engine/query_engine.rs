@@ -151,12 +151,6 @@ impl QueryEngine {
         self
     }
 
-    /// 创建统一对话循环
-    #[allow(dead_code)]
-    fn create_loop(&self) -> super::conversation_loop::ConversationLoop {
-        self.create_loop_with_allowed_tools(None)
-    }
-
     /// 执行单次查询（无工具）
     pub async fn query_simple(&self, user_message: impl Into<String>) -> Result<String> {
         let user_message = user_message.into();

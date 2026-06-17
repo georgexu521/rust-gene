@@ -3,7 +3,7 @@
 //! 集成 Telegram Bot API，支持接收和发送消息
 
 use super::{AdapterStatus, MessageHandler, PlatformAdapter, PlatformConfig};
-use crate::api::{InboundMessage, MessageType, OutboundMessage, Platform};
+use crate::api::{InboundMessage, OutboundMessage, Platform};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -144,64 +144,6 @@ impl TelegramAdapter {
                 "Failed to get updates: {:?}",
                 response.description
             ))
-        }
-    }
-
-    /// 处理更新
-    #[allow(dead_code)]
-    async fn process_updates(&self, updates: Vec<TelegramUpdate>, handler: &dyn MessageHandler) {
-        for update in updates {
-            // 更新 offset
-            if let Some(update_id) = update.update_id {
-                let mut offset = self.offset.write().await;
-                *offset = update_id + 1;
-            }
-
-            // 处理消息
-            if let Some(message) = update.message {
-                if let Some(text) = message.text {
-                    let chat_id = message.chat.id.to_string();
-                    let user_id = message
-                        .from
-                        .as_ref()
-                        .map(|u| u.id.to_string())
-                        .unwrap_or_default();
-
-                    let inbound = InboundMessage {
-                        platform: Platform::Telegram,
-                        chat_id: chat_id.clone(),
-                        user_id,
-                        content: text,
-                        message_type: MessageType::Text,
-                        metadata: {
-                            let mut map = HashMap::new();
-                            map.insert("message_id".to_string(), message.message_id.to_string());
-                            map
-                        },
-                    };
-
-                    // 调用处理器
-                    match handler.process(&inbound).await {
-                        Ok(outbound) => {
-                            if let Err(e) = self.send_message(&outbound).await {
-                                error!("Failed to send response: {}", e);
-                            }
-                        }
-                        Err(e) => {
-                            error!("Message handler error: {}", e);
-                            // 发送错误提示
-                            let error_msg = OutboundMessage {
-                                platform: Platform::Telegram,
-                                chat_id,
-                                content: "Sorry, I encountered an error processing your message."
-                                    .to_string(),
-                                streaming: false,
-                            };
-                            let _ = self.send_message(&error_msg).await;
-                        }
-                    }
-                }
-            }
         }
     }
 }
