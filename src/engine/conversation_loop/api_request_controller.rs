@@ -179,6 +179,11 @@ impl ApiRequestController {
             }
             let request_started_at = Instant::now();
             let provider_retry_count = Arc::new(AtomicU32::new(0));
+            if use_nonstreaming_request {
+                if let Some(tx) = context.tx {
+                    let _ = tx.send(StreamEvent::ThinkingStart).await;
+                }
+            }
             let retry_observer: ProviderRetryObserver = {
                 let trace = context.trace.clone();
                 let tx = context.tx.cloned();
@@ -259,7 +264,14 @@ impl ApiRequestController {
             let mut slow_warning_sent = false;
             api_result = loop {
                 tokio::select! {
-                    result = &mut provider_request => break result,
+                    result = &mut provider_request => {
+                        if use_nonstreaming_request {
+                            if let Some(tx) = context.tx {
+                                let _ = tx.send(StreamEvent::ThinkingComplete).await;
+                            }
+                        }
+                        break result;
+                    }
                     _ = &mut slow_warning_sleep, if !slow_warning_sent
                         && !slow_warning_threshold.is_zero()
                         && slow_warning_threshold < profile_timeout => {
@@ -360,6 +372,7 @@ impl ApiRequestController {
                                     &step.tool_calls,
                                 )
                                 .await;
+                            let _ = tx.send(StreamEvent::ThinkingComplete).await;
                         }
                     }
                     Self::record_streaming_tool_shadow(

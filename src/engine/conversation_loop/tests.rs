@@ -95,7 +95,7 @@ async fn test_truncate_tool_result_handles_utf8_boundaries() {
 
 #[test]
 fn nonstreaming_tool_routing_uses_provider_capabilities() {
-    let tools = vec![crate::services::api::Tool::new("bash", "run shell command")];
+    let tools = [crate::services::api::Tool::new("bash", "run shell command")];
     let minimax = CapabilityProbeProvider {
         base_url: "https://api.minimaxi.com/v1",
         model: "MiniMax-M2.7",
@@ -105,9 +105,18 @@ fn nonstreaming_tool_routing_uses_provider_capabilities() {
         model: "gpt-4o",
     };
 
-    assert!(should_use_nonstreaming_tools(&minimax, &tools));
-    assert!(!should_use_nonstreaming_tools(&openai, &tools));
-    assert!(!should_use_nonstreaming_tools(&minimax, &[]));
+    let minimax_caps = crate::services::api::provider_protocol::ProviderCapabilities::detect(
+        minimax.base_url(),
+        minimax.default_model(),
+    );
+    let openai_caps = crate::services::api::provider_protocol::ProviderCapabilities::detect(
+        openai.base_url(),
+        openai.default_model(),
+    );
+
+    assert!(minimax_caps.requires_nonstreaming_tool_calls);
+    assert!(!openai_caps.requires_nonstreaming_tool_calls);
+    assert!(tools.is_empty() || minimax_caps.requires_nonstreaming_tool_calls);
 }
 
 #[tokio::test]

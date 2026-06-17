@@ -20,6 +20,10 @@ pub struct ScreenSurface {
     lines: Vec<String>,
     /// First visible conversation line index.
     scroll_offset: usize,
+    /// Set when the user manually scrolled; overrides auto-scroll-to-bottom.
+    user_scroll_offset: Option<usize>,
+    /// Cached wrapped visual rows. Invalidated when lines, width, or height change.
+    wrapped_rows: Option<Vec<String>>,
     footer: FooterRenderer,
     pending_footer_mode: FooterMode,
     pending_editor: PromptEditor,
@@ -35,6 +39,8 @@ impl ScreenSurface {
             height,
             lines: Vec::new(),
             scroll_offset: 0,
+            user_scroll_offset: None,
+            wrapped_rows: None,
             footer: FooterRenderer::new(3),
             pending_footer_mode: FooterMode::Prompt,
             pending_editor: PromptEditor::new(),
@@ -48,7 +54,12 @@ impl ScreenSurface {
 
     fn enter_alternate_screen(&mut self) -> io::Result<()> {
         if !self.in_alternate_screen {
-            print!("\x1b[?1049h\x1b[2J\x1b[H");
+            crossterm::execute!(
+                io::stdout(),
+                crossterm::terminal::EnterAlternateScreen,
+                crossterm::event::EnableMouseCapture
+            )?;
+            print!("\x1b[2J\x1b[H");
             io::stdout().flush()?;
             self.in_alternate_screen = true;
         }
@@ -57,8 +68,11 @@ impl ScreenSurface {
 
     fn leave_alternate_screen(&mut self) -> io::Result<()> {
         if self.in_alternate_screen {
-            print!("\x1b[?1049l");
-            io::stdout().flush()?;
+            crossterm::execute!(
+                io::stdout(),
+                crossterm::event::DisableMouseCapture,
+                crossterm::terminal::LeaveAlternateScreen
+            )?;
             self.in_alternate_screen = false;
         }
         Ok(())
@@ -67,6 +81,7 @@ impl ScreenSurface {
     pub fn resize(&mut self, width: usize, height: usize) {
         self.width = width;
         self.height = height;
+        self.wrapped_rows = None;
     }
 
     fn redraw(&mut self) -> io::Result<()> {
@@ -94,12 +109,19 @@ impl ScreenSurface {
         let footer_height = footer_lines.len().max(1);
         let visible = self.height.saturating_sub(footer_height).max(1);
         let rows: Vec<String> = self
-            .lines
-            .iter()
-            .flat_map(|line| wrap_visual(line, self.width))
-            .collect();
+            .wrapped_rows
+            .get_or_insert_with(|| {
+                self.lines
+                    .iter()
+                    .flat_map(|line| wrap_visual(line, self.width))
+                    .collect()
+            })
+            .clone();
         let max_offset = rows.len().saturating_sub(visible);
-        self.scroll_offset = self.scroll_offset.min(max_offset);
+        self.scroll_offset = self
+            .user_scroll_offset
+            .unwrap_or(max_offset)
+            .min(max_offset);
 
         let mut out = String::with_capacity(self.width * self.height * 2);
         out.push_str("\x1b[H");
@@ -161,6 +183,7 @@ impl Surface for ScreenSurface {
         for line in text.split('\n') {
             self.lines.push(line.to_string());
         }
+        self.wrapped_rows = None;
         self.redraw()
     }
 
@@ -189,6 +212,24 @@ impl Surface for ScreenSurface {
     fn clear(&mut self) -> io::Result<()> {
         self.lines.clear();
         self.scroll_offset = 0;
+        self.user_scroll_offset = None;
+        self.wrapped_rows = None;
+        self.redraw()
+    }
+
+    fn scroll_by(&mut self, delta: isize) -> io::Result<()> {
+        let current = self.user_scroll_offset.unwrap_or(self.scroll_offset);
+        let new = if delta < 0 {
+            current.saturating_sub(delta.unsigned_abs())
+        } else {
+            current.saturating_add(delta as usize)
+        };
+        self.user_scroll_offset = Some(new);
+        self.redraw()
+    }
+
+    fn scroll_to_bottom(&mut self) -> io::Result<()> {
+        self.user_scroll_offset = None;
         self.redraw()
     }
 }

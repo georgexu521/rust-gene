@@ -151,8 +151,6 @@ impl TurnModelStepController {
                 verification_proof: &closeout_evaluation.verification_proof,
                 required_validation_commands: context.required_validation_commands,
                 exposed_tool_names: context.exposed_tool_names,
-                provider: context.conversation.provider.as_ref(),
-                tools: context.tools,
                 tx: context.tx,
                 messages: context.messages,
             })

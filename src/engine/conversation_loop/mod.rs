@@ -178,20 +178,6 @@ pub fn replace_last_assistant_message(messages: &mut [Message], correction: &str
     }
 }
 
-fn should_use_nonstreaming_tools(
-    provider: &dyn LlmProvider,
-    tools: &[crate::services::api::Tool],
-) -> bool {
-    if tools.is_empty() {
-        return false;
-    }
-    crate::services::api::provider_protocol::ProviderCapabilities::detect(
-        provider.base_url(),
-        provider.default_model(),
-    )
-    .requires_nonstreaming_tool_calls
-}
-
 /// 统一对话循环
 pub struct ConversationLoop {
     provider: Arc<dyn LlmProvider>,

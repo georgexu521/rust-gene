@@ -213,6 +213,18 @@ pub(crate) async fn run_turn(
                     }
                 }
 
+                if let Event::Mouse(crossterm::event::MouseEvent { kind, .. }) = event {
+                    let delta = match kind {
+                        crossterm::event::MouseEventKind::ScrollUp => -3,
+                        crossterm::event::MouseEventKind::ScrollDown => 3,
+                        _ => 0,
+                    };
+                    if delta != 0 {
+                        surface.scroll_by(delta)?;
+                    }
+                    continue;
+                }
+
                 // Check for pending user questions while a turn is running.
                 if let Some(channel) = controller.engine().tool_registry().ask_channel() {
                     let width = surface.terminal_width();

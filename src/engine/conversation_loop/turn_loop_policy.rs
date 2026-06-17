@@ -153,6 +153,7 @@ pub(super) async fn force_summary_after_iter_limit(
 
     let mut messages = context.messages.clone();
     messages.push(Message::user(FORCE_SUMMARY_INSTRUCTION));
+    tracing::debug!(message_count = messages.len(), "forcing no-tools summary");
 
     let mut request = ChatRequest::new(context.model).with_messages(messages);
     request.max_tokens = Some(FORCE_SUMMARY_MAX_TOKENS);
@@ -191,6 +192,10 @@ pub(super) async fn force_summary_after_iter_limit(
             }
 
             let cleaned = strip_hallucinated_tool_markup(&response.content);
+            tracing::debug!(
+                cleaned_len = cleaned.len(),
+                "force summary response received"
+            );
             let summary = if cleaned.trim().is_empty() {
                 "The model did not produce a usable summary after the runtime stopped the repeated tool loop.".to_string()
             } else {

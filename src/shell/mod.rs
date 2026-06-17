@@ -42,7 +42,6 @@ use crate::shell::footer::FooterMode;
 use crate::shell::host::{CliHost, ShellHost};
 use crate::shell::interrupt::InterruptState;
 use crate::shell::prompt::PromptEditor;
-use crate::shell::screen::ScreenSurface;
 use crate::shell::slash::{
     handle_diff, handle_export_data, handle_redo, handle_save_session, handle_undo,
 };
@@ -50,7 +49,7 @@ use crate::shell::surface::{PlainSurface, Surface};
 use crate::shell::text::{colored_rule, compact_home_path, compact_line, terminal_width};
 use crate::shell::theme::*;
 use crate::shell::turn::run_turn;
-use crossterm::event::{Event, KeyCode, KeyEventKind, KeyModifiers};
+use crossterm::event::{Event, KeyCode, KeyEventKind, KeyModifiers, MouseEvent, MouseEventKind};
 use std::io::{self, IsTerminal};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -136,20 +135,11 @@ async fn run_shell_inner(
     let interrupt = InterruptState::new();
 
     let welcome = render_welcome(&engine).await;
-    let mut surface = if options.no_footer {
-        for line in welcome.lines() {
-            print!("{line}\r\n");
-        }
-        let _ = io::Write::flush(&mut io::stdout());
-        ShellSurface::Plain(PlainSurface::new())
-    } else {
-        let (width, height) = crossterm::terminal::size()
-            .map(|(w, h)| (w as usize, h as usize))
-            .unwrap_or((80, 24));
-        let mut screen = ScreenSurface::new(width, height)?;
-        let _ = screen.push_line(&welcome);
-        ShellSurface::Screen(screen)
-    };
+    for line in welcome.lines() {
+        print!("{line}\r\n");
+    }
+    let _ = io::Write::flush(&mut io::stdout());
+    let mut surface = ShellSurface::Plain(PlainSurface::new());
 
     let surface_ref = surface.as_surface();
     surface_ref.render_footer(
@@ -164,15 +154,24 @@ async fn run_shell_inner(
             break;
         };
 
-        if let Event::Resize(cols, rows) = event {
-            if let ShellSurface::Screen(ref mut screen) = surface {
-                screen.resize(cols as usize, rows as usize);
-                let _ = screen.render_footer(
-                    &FooterMode::Prompt,
-                    &editor,
-                    &attachments,
-                    completion_state.as_ref(),
-                );
+        if let Event::Resize(_cols, _rows) = event {
+            let _ = surface.as_surface().render_footer(
+                &FooterMode::Prompt,
+                &editor,
+                &attachments,
+                completion_state.as_ref(),
+            );
+            continue;
+        }
+
+        if let Event::Mouse(MouseEvent { kind, .. }) = event {
+            let delta = match kind {
+                MouseEventKind::ScrollUp => -3,
+                MouseEventKind::ScrollDown => 3,
+                _ => 0,
+            };
+            if delta != 0 {
+                let _ = surface.as_surface().scroll_by(delta);
             }
             continue;
         }
@@ -198,6 +197,7 @@ async fn run_shell_inner(
                 }
                 (KeyModifiers::NONE, KeyCode::Enter) => {
                     if !editor.is_empty() || !attachments.is_empty() {
+                        surface.as_surface().scroll_to_bottom()?;
                         let message = editor.text();
                         editor.clear();
                         surface
@@ -439,23 +439,17 @@ async fn run_shell_inner(
         }
     }
 
-    if let ShellSurface::Screen(ref mut screen) = surface {
-        screen.dump_to_scrollback();
-    }
-
     Ok(())
 }
 
 enum ShellSurface {
     Plain(PlainSurface),
-    Screen(ScreenSurface),
 }
 
 impl ShellSurface {
     fn as_surface(&mut self) -> &mut dyn Surface {
         match self {
             ShellSurface::Plain(s) => s,
-            ShellSurface::Screen(s) => s,
         }
     }
 }

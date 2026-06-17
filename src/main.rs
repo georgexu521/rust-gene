@@ -588,7 +588,19 @@ async fn main() {
     // 初始化日志（交互模式默认降噪，仍可通过 RUST_LOG 覆盖）
     let default_level = default_log_level(startup_mode);
     let log_writer = if suppress_terminal_logs(startup_mode) {
-        BoxMakeWriter::new(std::io::sink)
+        // CLI/TUI: redirect logs to a file so they never garble the terminal
+        // but are still available for debugging.
+        let log_dir = dirs::data_local_dir()
+            .map(|d| d.join("priority-agent"))
+            .unwrap_or_else(|| std::path::PathBuf::from("."));
+        let _ = std::fs::create_dir_all(&log_dir);
+        let log_file = std::fs::OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(true)
+            .open(log_dir.join("cli.log"))
+            .unwrap_or_else(|_| std::fs::File::create("/dev/null").expect("create /dev/null"));
+        BoxMakeWriter::new(std::sync::Mutex::new(log_file))
     } else {
         BoxMakeWriter::new(std::io::stderr)
     };

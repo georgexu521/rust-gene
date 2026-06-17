@@ -1,14 +1,14 @@
 use super::final_answer_claim_gate::{
     FinalAnswerClaimGate, FinalAnswerClaimGateDecision, FinalAnswerClaimGateInput,
 };
+use super::pseudo_tool_text;
 use super::tool_execution::safe_prefix_by_bytes;
-use super::{pseudo_tool_text, should_use_nonstreaming_tools};
 use crate::engine::evidence_ledger::EvidenceLedger;
 use crate::engine::intent_router::{IntentKind, IntentRoute, WorkflowKind};
-use crate::engine::streaming::{emit_text_progressively, StreamEvent};
+use crate::engine::streaming::StreamEvent;
 use crate::engine::trace::{TraceCollector, TraceEvent};
 use crate::engine::verification_proof::VerificationProof;
-use crate::services::api::{LlmProvider, Message, Tool};
+use crate::services::api::Message;
 use std::collections::HashSet;
 use tokio::sync::mpsc;
 
@@ -65,8 +65,6 @@ pub(super) struct NoToolAssistantResponseContext<'a> {
     pub(super) continuation_retry_used: &'a mut bool,
     pub(super) post_tool_empty_retry_used: &'a mut bool,
     pub(super) claim_gate_repair_used: &'a mut bool,
-    pub(super) provider: &'a dyn LlmProvider,
-    pub(super) tools: &'a [Tool],
     pub(super) tx: Option<&'a mpsc::Sender<StreamEvent>>,
     pub(super) trace: &'a TraceCollector,
     pub(super) messages: &'a mut Vec<Message>,
@@ -89,9 +87,15 @@ impl AssistantResponseRetryController {
         // Post-tool empty response nudge: when the model returns empty after
         // having executed tool calls, inject a "keep going" correction.
         // Borrowed from Hermes' `_post_tool_empty_retried` pattern.
-        let needs_post_tool_empty_nudge = !request.post_tool_empty_retry_used
-            && request.tool_calls_made
-            && request.content.trim().is_empty();
+        let needs_post_tool_empty_nudge =
+            request.tool_calls_made && request.content.trim().is_empty();
+        tracing::debug!(
+            post_tool_empty_retry_used = request.post_tool_empty_retry_used,
+            tool_calls_made = request.tool_calls_made,
+            content_len = request.content.len(),
+            needs_post_tool_empty_nudge,
+            "evaluating post-tool empty response"
+        );
 
         let needs_bash_tool_retry = pseudo_tool_text::contains_unexecuted_tool_command(
             request.content,
@@ -174,11 +178,21 @@ impl AssistantResponseRetryController {
             mark_continuation_retry_used,
             mark_post_tool_empty_retry_used,
         ) = if needs_post_tool_empty_nudge {
-            (
-                "assistant returned empty after executing tool calls; nudging to continue processing".to_string(),
-                "You just executed tool calls but returned an empty response. Please process the tool results above and continue with the task.",
-                false, false, true,
-            )
+            if request.post_tool_empty_retry_used {
+                (
+                    "assistant still returned empty after executing tool calls; forcing final summary".to_string(),
+                    "The tool results are above. You previously returned empty after tool calls. \
+You MUST now produce a concise final answer in plain text based on the tool results. \
+Do NOT emit tool calls, function-call markup, or planning prose; just answer the user.",
+                    false, false, false,
+                )
+            } else {
+                (
+                    "assistant returned empty after executing tool calls; nudging to continue processing".to_string(),
+                    "You just executed tool calls but returned an empty response. Please process the tool results above and continue with the task.",
+                    false, false, true,
+                )
+            }
         } else if needs_filesystem_grounding_retry {
             (
                 format!(
@@ -302,13 +316,13 @@ Only report a tool as unavailable when it is not exposed in the current tool lis
             return NoToolAssistantResponseFlow::Retry;
         }
 
-        if let Some(tx) = context.tx {
-            if should_use_nonstreaming_tools(context.provider, context.tools)
-                && !context.content.is_empty()
-            {
-                emit_text_progressively(tx, context.content.to_string()).await;
-            }
-        }
+        let _ = context.tx;
+
+        tracing::debug!(
+            content_len = context.content.len(),
+            tool_calls_made = context.tool_calls_made,
+            "no-tool response finishing"
+        );
 
         NoToolAssistantResponseFlow::Finish
     }
@@ -361,8 +375,6 @@ mod tests {
     use super::*;
     use crate::engine::intent_router::IntentRouter;
     use crate::engine::trace::{TurnStatus, TurnTrace};
-    use crate::services::api::{ChatRequest, ChatResponse};
-    use async_openai::types::ChatCompletionResponseStream;
 
     fn exposed(names: &[&str]) -> HashSet<String> {
         names.iter().map(|name| (*name).to_string()).collect()
@@ -620,33 +632,6 @@ mod tests {
         )));
     }
 
-    struct MockProvider {
-        base_url: &'static str,
-        model: &'static str,
-    }
-
-    #[async_trait::async_trait]
-    impl LlmProvider for MockProvider {
-        async fn chat(&self, _request: ChatRequest) -> anyhow::Result<ChatResponse> {
-            Err(anyhow::anyhow!("chat not used in this test"))
-        }
-
-        async fn chat_stream(
-            &self,
-            _request: ChatRequest,
-        ) -> anyhow::Result<ChatCompletionResponseStream> {
-            Err(anyhow::anyhow!("stream not used in this test"))
-        }
-
-        fn base_url(&self) -> &str {
-            self.base_url
-        }
-
-        fn default_model(&self) -> &str {
-            self.model
-        }
-    }
-
     #[test]
     fn local_filesystem_inspection_route_is_distinct_from_terminal_route() {
         let local_route = IntentRouter::new().route("请帮我看看桌面有没有 gex 文件夹");
@@ -666,11 +651,6 @@ mod tests {
             "not evaluated",
         );
         let trace = trace();
-        let provider = MockProvider {
-            base_url: "mock://local",
-            model: "mock-model",
-        };
-        let tools = vec![Tool::new("bash", "run shell command")];
         let exposed_tools = exposed(&["bash"]);
         let mut pseudo_tool_retry_used = false;
         let mut filesystem_grounding_retry_used = false;
@@ -691,8 +671,6 @@ mod tests {
                 continuation_retry_used: &mut continuation_retry_used,
                 post_tool_empty_retry_used: &mut post_tool_empty_retry_used,
                 claim_gate_repair_used: &mut false,
-                provider: &provider,
-                tools: &tools,
                 tx: None,
                 trace: &trace,
                 messages: &mut messages,
@@ -716,61 +694,36 @@ mod tests {
         )));
     }
 
-    #[tokio::test]
-    async fn no_tool_response_finishes_and_emits_nonstreaming_text_chunk() {
-        let route = IntentRouter::new().route("say hello");
-        let evidence_ledger = EvidenceLedger::new();
-        let verification_proof = VerificationProof::new(
-            crate::engine::verification_proof::VerificationProofStatus::NotRun,
-            "not evaluated",
-        );
-        let trace = trace();
-        let provider = MockProvider {
-            base_url: "https://api.minimaxi.com/v1",
-            model: "MiniMax-M3",
-        };
-        let tools = vec![Tool::new("bash", "run shell command")];
-        let exposed_tools = exposed(&["bash"]);
-        let (tx, mut rx) = mpsc::channel(1);
-        let mut pseudo_tool_retry_used = false;
-        let mut filesystem_grounding_retry_used = false;
-        let mut continuation_retry_used = false;
-        let mut post_tool_empty_retry_used = false;
-        let mut messages = Vec::new();
+    #[test]
+    fn post_tool_empty_uses_stronger_correction_on_second_retry() {
+        let decision = AssistantResponseRetryController::evaluate(AssistantResponseRetryRequest {
+            content: "",
+            exposed_tool_names: &exposed(&["file_read"]),
+            tool_calls_made: true,
+            is_local_filesystem_inspection_route: false,
+            unsupported_filesystem_claims: Vec::new(),
+            pseudo_tool_retry_used: false,
+            filesystem_grounding_retry_used: false,
+            continuation_retry_used: false,
+            post_tool_empty_retry_used: true,
+            claim_gate_repair_used: false,
+            route: &IntentRouter::new().route("test"),
+            evidence_ledger: &EvidenceLedger::new(),
+            verification_proof: &VerificationProof::new(
+                crate::engine::verification_proof::VerificationProofStatus::NotRun,
+                "not evaluated",
+            ),
+            required_validation_commands: &[],
+            iterations_used: 2,
+            max_iterations: 10,
+        })
+        .expect("second post-tool empty should still retry with stronger correction");
 
-        let flow = AssistantResponseRetryController::handle_no_tool_response(
-            NoToolAssistantResponseContext {
-                content: "hello",
-                route: &route,
-                evidence_ledger: &evidence_ledger,
-                verification_proof: &verification_proof,
-                exposed_tool_names: &exposed_tools,
-                tool_calls_made: false,
-                pseudo_tool_retry_used: &mut pseudo_tool_retry_used,
-                filesystem_grounding_retry_used: &mut filesystem_grounding_retry_used,
-                continuation_retry_used: &mut continuation_retry_used,
-                post_tool_empty_retry_used: &mut post_tool_empty_retry_used,
-                claim_gate_repair_used: &mut false,
-                provider: &provider,
-                tools: &tools,
-                tx: Some(&tx),
-                trace: &trace,
-                messages: &mut messages,
-                required_validation_commands: &[],
-                iterations_used: 1,
-                max_iterations: 10,
-            },
-        )
-        .await;
-
-        assert!(matches!(flow, NoToolAssistantResponseFlow::Finish));
-        assert!(!pseudo_tool_retry_used);
-        assert!(!filesystem_grounding_retry_used);
-        assert!(!continuation_retry_used);
-        assert!(messages.is_empty());
+        assert!(decision.fallback_error.contains("forcing final summary"));
+        assert!(!decision.mark_post_tool_empty_retry_used);
         assert!(matches!(
-            rx.recv().await,
-            Some(StreamEvent::TextChunk(content)) if content == "hello"
+            decision.correction_message,
+            Message::System { ref content } if content.contains("MUST now produce a concise final answer")
         ));
     }
 }

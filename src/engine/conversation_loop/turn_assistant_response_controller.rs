@@ -10,7 +10,7 @@ use crate::engine::intent_router::IntentRoute;
 use crate::engine::streaming::StreamEvent;
 use crate::engine::trace::TraceCollector;
 use crate::engine::verification_proof::VerificationProof;
-use crate::services::api::{LlmProvider, Message, Tool, ToolCall};
+use crate::services::api::{Message, ToolCall};
 use crate::tools::ToolResult;
 use std::collections::{HashMap, HashSet};
 use tokio::sync::mpsc;
@@ -25,8 +25,6 @@ pub(super) struct TurnAssistantResponseContext<'a> {
     pub(super) verification_proof: &'a VerificationProof,
     pub(super) required_validation_commands: &'a [String],
     pub(super) exposed_tool_names: &'a HashSet<String>,
-    pub(super) provider: &'a dyn LlmProvider,
-    pub(super) tools: &'a [Tool],
     pub(super) tx: Option<&'a mpsc::Sender<StreamEvent>>,
     pub(super) messages: &'a mut Vec<Message>,
 }
@@ -76,8 +74,6 @@ impl TurnAssistantResponseController {
                     continuation_retry_used: &mut context.loop_state.continuation_retry_used,
                     post_tool_empty_retry_used: &mut context.loop_state.post_tool_empty_retry_used,
                     claim_gate_repair_used: &mut context.loop_state.claim_gate_repair_used,
-                    provider: context.provider,
-                    tools: context.tools,
                     tx: context.tx,
                     trace: context.trace,
                     messages: context.messages,
@@ -108,7 +104,7 @@ mod tests {
     use super::*;
     use crate::engine::intent_router::IntentRouter;
     use crate::engine::trace::{TraceEvent, TurnStatus, TurnTrace};
-    use crate::services::api::{ChatRequest, ChatResponse};
+    use crate::services::api::{ChatRequest, ChatResponse, LlmProvider};
     use async_openai::types::ChatCompletionResponseStream;
 
     struct MockProvider;
@@ -174,6 +170,7 @@ mod tests {
             "not evaluated",
         );
         let exposed_tool_names = HashSet::from(["bash".to_string()]);
+        let _ = provider;
 
         let flow = TurnAssistantResponseController::handle(TurnAssistantResponseContext {
             outcome: outcome("running check", vec![tool_call.clone()]),
@@ -185,8 +182,6 @@ mod tests {
             verification_proof: &verification_proof,
             required_validation_commands: &[],
             exposed_tool_names: &exposed_tool_names,
-            provider: &provider,
-            tools: &[],
             tx: None,
             messages: &mut messages,
         })
@@ -236,6 +231,7 @@ mod tests {
             "not evaluated",
         );
         let exposed_tool_names = HashSet::new();
+        let _ = provider;
 
         let flow = TurnAssistantResponseController::handle(TurnAssistantResponseContext {
             outcome: outcome("hello there", Vec::new()),
@@ -247,8 +243,6 @@ mod tests {
             verification_proof: &verification_proof,
             required_validation_commands: &[],
             exposed_tool_names: &exposed_tool_names,
-            provider: &provider,
-            tools: &[],
             tx: None,
             messages: &mut messages,
         })

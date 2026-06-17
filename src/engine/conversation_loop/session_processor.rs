@@ -184,13 +184,6 @@ impl ConversationLoop {
             let _ = tx
                 .send(StreamEvent::ToolCallComplete { id: tc.id.clone() })
                 .await;
-            let _ = tx
-                .send(StreamEvent::ToolExecutionStart {
-                    id: tc.id.clone(),
-                    name: tc.name.clone(),
-                    metadata: None,
-                })
-                .await;
         }
     }
 

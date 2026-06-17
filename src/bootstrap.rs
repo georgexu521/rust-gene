@@ -92,8 +92,7 @@ fn init_provider_with_default_preference(
     let default_model = provider_config
         .map(|config| config.default_model.clone())
         .unwrap_or_else(|| provider.default_model().to_string());
-    let supported_models =
-        crate::services::api::provider_catalog::supported_models(selected);
+    let supported_models = crate::services::api::provider_catalog::supported_models(selected);
     let model = if app_config
         .api
         .provider_name

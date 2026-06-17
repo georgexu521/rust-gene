@@ -99,6 +99,13 @@ impl TurnIterationLoopController {
                     &context.loop_state.final_content,
                 ));
 
+        tracing::debug!(
+            tool_calls_made = context.loop_state.tool_calls_made,
+            final_content_len = context.loop_state.final_content.len(),
+            needs_forced_closeout_summary,
+            "turn iteration loop exited"
+        );
+
         if needs_forced_closeout_summary {
             let summary = super::turn_loop_policy::force_summary_after_iter_limit(
                 super::turn_loop_policy::ForceSummaryAfterLimitContext {
@@ -112,12 +119,18 @@ impl TurnIterationLoopController {
                 },
             )
             .await;
+            tracing::debug!(
+                summary_len = summary.len(),
+                "forced closeout summary completed"
+            );
             if !summary.trim().is_empty() {
                 context.loop_state.final_content.clear();
                 context.loop_state.final_content.push_str(&summary);
                 if let Some(tx) = context.tx {
                     let _ = tx.send(StreamEvent::TextChunk(summary)).await;
                 }
+            } else {
+                tracing::debug!("forced closeout summary returned empty");
             }
         }
 
