@@ -254,6 +254,8 @@ fn test_all_core_tools_registered() {
         "skill_view",
         "ask_user",
         "plan",
+        "agent",
+        "send_message",
     ];
 
     for &name in &expected_core {
@@ -265,7 +267,6 @@ fn test_all_core_tools_registered() {
     }
 
     for &name in &[
-        "agent",
         "web_fetch",
         "web_search",
         "json_query",
@@ -273,7 +274,6 @@ fn test_all_core_tools_registered() {
         "notebook",
         "repl",
         "powershell",
-        "send_message",
         "tool_search",
         "mcp",
         "mcp_tool",

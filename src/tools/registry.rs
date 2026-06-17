@@ -191,6 +191,10 @@ impl ToolRegistry {
         registry.register(EnterPlanModeTool::new(plan_manager.clone()));
         registry.register(ExitPlanModeTool::new(plan_manager.clone()));
 
+        // Agent & communication tools (sub-agent support, always available)
+        registry.register(AgentTool::new());
+        registry.register(SendMessageTool);
+
         if matches!(profile, ToolRegistryProfile::Full) {
             // Extended file/system tools
             registry.register(InstallDependenciesTool);
@@ -217,9 +221,7 @@ impl ToolRegistry {
             registry.register(REPLTool);
             registry.register(PowerShellTool);
 
-            // Agent & communication tools
-            registry.register(AgentTool::new());
-            registry.register(SendMessageTool);
+            // Communication tools
             registry.register(ShareTool);
             registry.register(SleepTool);
 

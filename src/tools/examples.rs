@@ -107,7 +107,8 @@ mod tests {
         assert!(registry.has("glob"));
         assert!(registry.has("grep"));
         assert!(registry.has("todo_write"));
-        assert!(!registry.has("agent"));
+        assert!(registry.has("agent"));
+        assert!(registry.has("send_message"));
 
         let full = ToolRegistry::full_registry();
         assert!(full.has("agent"));
