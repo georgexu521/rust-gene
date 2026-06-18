@@ -494,6 +494,12 @@ fn assistant_completion_metadata(
         if let Some(cached_tokens) = usage.cached_tokens {
             metadata.insert("cached_tokens".to_string(), cached_tokens.to_string());
         }
+        if let Some(cache_write_tokens) = usage.cache_write_tokens {
+            metadata.insert(
+                "cache_write_tokens".to_string(),
+                cache_write_tokens.to_string(),
+            );
+        }
     }
     metadata
 }
@@ -515,6 +521,7 @@ mod completion_metadata_tests {
                 completion_tokens: 25,
                 reasoning_tokens: Some(5),
                 cached_tokens: Some(90),
+                cache_write_tokens: Some(10),
             }),
             Some(2_730),
             crate::engine::runtime_facade::ProviderPhase::Completed,
@@ -1772,6 +1779,7 @@ impl TuiApp {
                             completion_tokens,
                             reasoning_tokens,
                             cached_tokens,
+                            cache_write_tokens,
                         } => {
                             let mut usage = usage_clone.lock().await;
                             *usage = Some(StreamUsageSnapshot {
@@ -1779,6 +1787,7 @@ impl TuiApp {
                                 completion_tokens: *completion_tokens,
                                 reasoning_tokens: *reasoning_tokens,
                                 cached_tokens: *cached_tokens,
+                                cache_write_tokens: *cache_write_tokens,
                             });
                             runtime_facade_state_clone
                                 .set_stream_usage(Some(
@@ -1787,6 +1796,7 @@ impl TuiApp {
                                         completion_tokens: *completion_tokens,
                                         reasoning_tokens: *reasoning_tokens,
                                         cached_tokens: *cached_tokens,
+                                        cache_write_tokens: *cache_write_tokens,
                                     },
                                 ))
                                 .await;

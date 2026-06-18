@@ -330,6 +330,9 @@ fn completed_assistant_meta(message: &MessageItem) -> Option<String> {
     if let Some(cached_tokens) = message.metadata.get("cached_tokens") {
         parts.push(format!("cache {cached_tokens}"));
     }
+    if let Some(cache_write_tokens) = message.metadata.get("cache_write_tokens") {
+        parts.push(format!("cache write {cache_write_tokens}"));
+    }
     if let Some(provider_phase) = message.metadata.get("provider_phase") {
         if provider_phase != "provider done" {
             parts.push(provider_phase.clone());

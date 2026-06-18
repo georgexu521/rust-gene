@@ -2738,6 +2738,7 @@ async fn runtime_diet_report_is_recorded_for_real_loop_turn() {
                 total_tokens: 15,
                 reasoning_tokens: None,
                 cached_tokens: None,
+                cache_write_tokens: None,
             }),
             tool_call_repair: None,
             finish_reason: None,

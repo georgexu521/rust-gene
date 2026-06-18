@@ -4,6 +4,7 @@ impl ContextCompressor {
     pub fn new(max_context_tokens: u64) -> Self {
         Self {
             budget: TokenBudget::new(max_context_tokens),
+            token_estimate_profile: TokenEstimateProfile::GeneralText,
             time_config: TimeBasedConfig::default(),
             session_start: std::time::Instant::now(),
             accumulated_summary: None,
@@ -38,13 +39,22 @@ impl ContextCompressor {
     ) -> Self {
         Self {
             budget: TokenBudget::from_model_context_profile(profile),
+            token_estimate_profile: TokenEstimateProfile::for_model_context(profile),
             ..Self::new(profile.context_window_tokens)
         }
     }
 
+    pub fn estimate_messages_tokens(&self, messages: &[Message]) -> u64 {
+        estimate_messages_tokens_for_profile(messages, self.token_estimate_profile)
+    }
+
+    pub fn token_counter_label(&self) -> &'static str {
+        self.token_estimate_profile.source_label()
+    }
+
     /// 获取当前压缩警告级别
     pub fn warning_level(&self, messages: &[Message]) -> CompressionWarning {
-        let tokens = estimate_messages_tokens(messages);
+        let tokens = self.estimate_messages_tokens(messages);
         let total = tokens + self.budget.system_prompt_tokens + self.budget.tool_schemas_tokens;
         let ratio = total as f64 / self.budget.max_context_tokens as f64;
         CompressionWarning::from_usage_ratio(ratio)
@@ -86,14 +96,14 @@ impl ContextCompressor {
 
     /// Snip old tool outputs without summarizing the conversation.
     pub fn snip_tool_results(&mut self, messages: &[Message]) -> Vec<Message> {
-        let (result, tokens_before, tokens_after) = Self::snip_tool_results_candidate(messages);
+        let (result, tokens_before, tokens_after) = self.snip_tool_results_candidate(messages);
         self.record_tool_snip_compaction(messages.len(), result.len(), tokens_before, tokens_after);
         result
     }
 
     /// Snip old tool outputs only when it reduces estimated tokens.
     pub fn snip_tool_results_if_reduces(&mut self, messages: &[Message]) -> Option<Vec<Message>> {
-        let (result, tokens_before, tokens_after) = Self::snip_tool_results_candidate(messages);
+        let (result, tokens_before, tokens_after) = self.snip_tool_results_candidate(messages);
         if tokens_after >= tokens_before {
             return None;
         }
@@ -101,10 +111,10 @@ impl ContextCompressor {
         Some(result)
     }
 
-    fn snip_tool_results_candidate(messages: &[Message]) -> (Vec<Message>, u64, u64) {
-        let tokens_before = estimate_messages_tokens(messages);
+    fn snip_tool_results_candidate(&self, messages: &[Message]) -> (Vec<Message>, u64, u64) {
+        let tokens_before = self.estimate_messages_tokens(messages);
         let result = Self::prune_old_tool_results(messages);
-        let tokens_after = estimate_messages_tokens(&result);
+        let tokens_after = self.estimate_messages_tokens(&result);
         (result, tokens_before, tokens_after)
     }
 
@@ -142,14 +152,14 @@ impl ContextCompressor {
         strategy: ContextCompactionStrategy,
         level: Option<CompressionLevel>,
     ) -> Vec<Message> {
-        let tokens_before = estimate_messages_tokens(messages);
+        let tokens_before = self.estimate_messages_tokens(messages);
         self.total_tokens_before += tokens_before;
 
         // 只做 Phase 0（裁剪旧工具输出）和 Phase 5（工具对校验）
         let pruned = Self::prune_old_tool_results(messages);
         let result = Self::sanitize_tool_pairs(pruned);
 
-        let tokens_after = estimate_messages_tokens(&result);
+        let tokens_after = self.estimate_messages_tokens(&result);
         self.total_tokens_after += tokens_after;
         self.record_compaction(CompactionRuntimeRecord {
             strategy,
@@ -252,7 +262,10 @@ impl ContextCompressor {
         if self.is_in_cooldown() {
             return false;
         }
-        let total = estimate_messages_tokens(messages) + system_prompt_tokens + tool_schemas_tokens;
+        let total = self
+            .estimate_messages_tokens(messages)
+            .saturating_add(system_prompt_tokens)
+            .saturating_add(tool_schemas_tokens);
         let threshold = self.budget.max_context_tokens * 80 / 100;
         total > threshold
     }
@@ -262,7 +275,7 @@ impl ContextCompressor {
         if self.is_in_cooldown() {
             return false;
         }
-        let tokens = estimate_messages_tokens(messages);
+        let tokens = self.estimate_messages_tokens(messages);
         self.budget.needs_compression(tokens)
     }
 
@@ -285,7 +298,7 @@ impl ContextCompressor {
         level: CompressionLevel,
         strategy: ContextCompactionStrategy,
     ) -> Vec<Message> {
-        let tokens_before = estimate_messages_tokens(messages);
+        let tokens_before = self.estimate_messages_tokens(messages);
 
         match level {
             CompressionLevel::None => {
@@ -310,7 +323,7 @@ impl ContextCompressor {
             }
             CompressionLevel::Light => {
                 let r = self.micro_compress_with_strategy(messages, strategy, Some(level));
-                let tokens_after = estimate_messages_tokens(&r);
+                let tokens_after = self.estimate_messages_tokens(&r);
                 info!(
                     "Light compression ({}): {} -> {} tokens",
                     level.label(),
@@ -322,7 +335,7 @@ impl ContextCompressor {
             CompressionLevel::Medium => {
                 let r =
                     self.compress_with_summary_for_strategy(messages, None, strategy, Some(level));
-                let tokens_after = estimate_messages_tokens(&r);
+                let tokens_after = self.estimate_messages_tokens(&r);
                 info!(
                     "Medium compression ({}): {} -> {} tokens",
                     level.label(),
@@ -353,7 +366,7 @@ impl ContextCompressor {
         messages: &[Message],
         strategy: ContextCompactionStrategy,
     ) -> Vec<Message> {
-        let tokens_before = estimate_messages_tokens(messages);
+        let tokens_before = self.estimate_messages_tokens(messages);
         let total =
             tokens_before + self.budget.system_prompt_tokens + self.budget.tool_schemas_tokens;
         let usage_ratio = total as f64 / self.budget.max_context_tokens as f64;
@@ -426,7 +439,7 @@ impl ContextCompressor {
                         strategy,
                         Some(level),
                     );
-                    let tokens_after = estimate_messages_tokens(&compressed);
+                    let tokens_after = self.estimate_messages_tokens(&compressed);
                     info!(
                         "Heavy (LLM) compression succeeded: {} -> {} tokens (saved {}%)",
                         tokens_before,
@@ -449,7 +462,7 @@ impl ContextCompressor {
                         strategy,
                         Some(level),
                     );
-                    let tokens_after = estimate_messages_tokens(&compressed);
+                    let tokens_after = self.estimate_messages_tokens(&compressed);
                     warn!(
                         "LLM compression failed, fell back to medium: {} -> {} tokens",
                         tokens_before, tokens_after
@@ -497,7 +510,7 @@ impl ContextCompressor {
         level: Option<CompressionLevel>,
     ) -> Vec<Message> {
         let original_message_count = messages.len();
-        let original_tokens_before = estimate_messages_tokens(messages);
+        let original_tokens_before = self.estimate_messages_tokens(messages);
         let summary_source_tag = if summary_text.is_some() {
             "summary_source:llm"
         } else {
@@ -676,7 +689,7 @@ impl ContextCompressor {
         let result = Self::sanitize_tool_pairs(result);
 
         // 更新 compact metadata 的 tokens_after 并保存到历史
-        let tokens_after = estimate_messages_tokens(&result);
+        let tokens_after = self.estimate_messages_tokens(&result);
         let mut recorded_meta = None;
         if let Some(mut meta) = compact_meta {
             meta.tokens_after = tokens_after;
@@ -866,7 +879,10 @@ impl ContextCompressor {
 
         // 从后往前计算，使用 soft_ceiling 防止超大消息中间切割
         for (i, msg) in messages.iter().enumerate().rev() {
-            let tokens = estimate_message_tokens(msg);
+            let tokens = estimate_messages_tokens_for_profile(
+                std::slice::from_ref(msg),
+                self.token_estimate_profile,
+            );
             if used_tokens + tokens > soft_ceiling {
                 tail_start = i + 1;
                 break;
@@ -1365,6 +1381,7 @@ impl ContextCompressor {
             session_duration_secs: self.session_start.elapsed().as_secs(),
             message_count: 0, // caller should fill this
             time_based_enabled: self.time_config.enabled,
+            token_counter: self.token_counter_label(),
         }
     }
 }

@@ -59,6 +59,7 @@ config = "0.14"
 # 事件系统（观察者模式）
 tokio-util = { version = "0.7", features = ["full"] }
 tokio-stream = "0.1"
+tiktoken-rs = "0.12"
 
 # 用于工具系统
 schemars = "0.8"
@@ -145,6 +146,7 @@ dirs = { workspace = true }
 config = { workspace = true }
 tokio-util = { workspace = true }
 tokio-stream = { workspace = true }
+tiktoken-rs = { workspace = true }
 schemars = { workspace = true }
 async-trait = { workspace = true }
 glob = { workspace = true }

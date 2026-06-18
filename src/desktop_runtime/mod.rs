@@ -314,6 +314,7 @@ pub enum DesktopRunEvent {
         completion_tokens: u32,
         reasoning_tokens: Option<u32>,
         cached_tokens: Option<u32>,
+        cache_write_tokens: Option<u32>,
     },
     RuntimeDiagnostic {
         diagnostic: serde_json::Value,
@@ -366,11 +367,13 @@ impl DesktopRunEvent {
                 completion_tokens,
                 reasoning_tokens,
                 cached_tokens,
+                cache_write_tokens,
             } => Self::Usage {
                 prompt_tokens,
                 completion_tokens,
                 reasoning_tokens,
                 cached_tokens,
+                cache_write_tokens,
             },
             StreamEvent::RuntimeDiagnostic { diagnostic } => Self::RuntimeDiagnostic { diagnostic },
             StreamEvent::Closeout {
@@ -468,6 +471,7 @@ mod tests {
                     total_tokens: 16,
                     reasoning_tokens: None,
                     cached_tokens: Some(8),
+                    cache_write_tokens: Some(2),
                 }),
                 tool_call_repair: None,
                 finish_reason: None,

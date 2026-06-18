@@ -48,6 +48,24 @@ fn estimate_tokens_for_model_context_uses_provider_family_profile() {
 }
 
 #[test]
+fn estimate_tokens_for_openai_model_context_uses_tiktoken() {
+    let profile = crate::engine::model_context::ModelContextProfile::detect(
+        "https://api.openai.com/v1",
+        "gpt-4o",
+    );
+
+    assert_eq!(
+        TokenEstimateProfile::for_model_context(&profile).source_label(),
+        "tiktoken:o200k_base"
+    );
+    assert_eq!(estimate_tokens_for_model_context("hello", &profile), 1);
+    assert_eq!(
+        ContextCompressor::from_model_context_profile(&profile).token_counter_label(),
+        "tiktoken:o200k_base"
+    );
+}
+
+#[test]
 fn estimate_messages_tokens_counts_assistant_tool_calls() {
     let content_only = vec![Message::assistant("")];
     let with_tool_call = vec![Message::assistant_with_tools(
@@ -724,6 +742,7 @@ impl LlmProvider for MockLlmProvider {
                     total_tokens: 150,
                     reasoning_tokens: None,
                     cached_tokens: None,
+                    cache_write_tokens: None,
                 }),
                 tool_call_repair: None,
                 finish_reason: None,
@@ -766,6 +785,7 @@ impl LlmProvider for CapturingLlmProvider {
                 total_tokens: 150,
                 reasoning_tokens: None,
                 cached_tokens: Some(80),
+                cache_write_tokens: Some(10),
             }),
             tool_call_repair: None,
             finish_reason: None,

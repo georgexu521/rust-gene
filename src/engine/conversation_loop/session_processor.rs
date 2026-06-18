@@ -70,6 +70,7 @@ async fn emit_usage_event(response: &ChatResponse, tx: &mpsc::Sender<StreamEvent
                 completion_tokens: usage.completion_tokens,
                 reasoning_tokens: usage.reasoning_tokens,
                 cached_tokens: usage.cached_tokens,
+                cache_write_tokens: usage.cache_write_tokens,
             })
             .await;
     }
@@ -346,6 +347,7 @@ impl ConversationLoop {
                                         .prompt_tokens_details
                                         .as_ref()
                                         .and_then(|d| d.cached_tokens),
+                                    cache_write_tokens: None,
                                 });
                                 let _ = tx
                                     .send(StreamEvent::Usage {
@@ -359,6 +361,7 @@ impl ConversationLoop {
                                             .prompt_tokens_details
                                             .as_ref()
                                             .and_then(|d| d.cached_tokens),
+                                        cache_write_tokens: None,
                                     })
                                     .await;
                             }
@@ -734,12 +737,13 @@ impl ConversationLoop {
         metadata: Option<crate::cost_tracker::ApiUsageMetadata>,
     ) {
         let mut tracker = self.cost_tracker.lock().await;
-        tracker.record_api_call_with_session_cache_shape_and_metadata(
+        tracker.record_api_call_with_session_cache_shape_metadata_and_cache_write(
             Some(&self.session_id),
             &self.model,
             usage.prompt_tokens as u64,
             usage.completion_tokens as u64,
             usage.cached_tokens.map(|t| t as u64),
+            usage.cache_write_tokens.map(|t| t as u64),
             cache_shape,
             metadata,
         );

@@ -39,7 +39,14 @@ impl PreflightCompressionController {
                 context.runtime_diet,
                 &preflight.observation,
             );
-            if !preflight.should_compact {
+            let time_based_compaction = !preflight.should_compact
+                && compressor.needs_time_based_compression(context.messages);
+            let trigger = if time_based_compaction {
+                "time_based"
+            } else {
+                "preflight"
+            };
+            if !preflight.should_compact && !time_based_compaction {
                 compressor.record_compaction_decision(CompactionAttemptInput::new(
                     "preflight",
                     ContextCompactionStrategy::AutoCompact,
@@ -54,15 +61,16 @@ impl PreflightCompressionController {
                 let before_tokens = preflight.observation.message_tokens;
                 let compaction_record_len = compressor.compaction_records().len();
                 if let Some(snipped) = compressor.snip_tool_results_if_reduces(context.messages) {
+                    let circuit_trigger = format!("{trigger}_circuit_open");
                     let after_tokens = estimate_messages_tokens(&snipped);
                     *context.messages = snipped;
                     compressor.annotate_compaction_record_trigger(
                         compaction_record_len,
-                        "preflight_circuit_open",
+                        circuit_trigger.clone(),
                     );
                     compressor.record_compaction_decision(
                         CompactionAttemptInput::new(
-                            "preflight_circuit_open",
+                            circuit_trigger.clone(),
                             ContextCompactionStrategy::Snip,
                             CompactionDecision::Compacted,
                             before_tokens,
@@ -75,7 +83,7 @@ impl PreflightCompressionController {
                         before_tokens: before_tokens as usize,
                         after_tokens: after_tokens as usize,
                         strategy: "snip".to_string(),
-                        trigger: Some("preflight_circuit_open".to_string()),
+                        trigger: Some(circuit_trigger.clone()),
                         token_pressure: None,
                         boundary_id: None,
                         sequence: None,
@@ -85,12 +93,12 @@ impl PreflightCompressionController {
                         retained_items: vec!["recent_tool_results:last_3".to_string()],
                         provenance: vec![
                             "tool_result_snip".to_string(),
-                            "trigger:preflight_circuit_open".to_string(),
+                            format!("trigger:{circuit_trigger}"),
                         ],
                     });
                 } else {
                     compressor.record_compaction_decision(CompactionAttemptInput::new(
-                        "preflight",
+                        trigger,
                         ContextCompactionStrategy::AutoCompact,
                         CompactionDecision::CircuitOpen,
                         before_tokens,
@@ -107,12 +115,16 @@ impl PreflightCompressionController {
                 preflight.observation.tool_schema_tokens
             );
             compressor.record_compaction_decision(CompactionAttemptInput::new(
-                "preflight",
+                trigger,
                 ContextCompactionStrategy::AutoCompact,
                 CompactionDecision::Considered,
                 preflight.observation.message_tokens,
                 context.messages.len(),
-                "preflight threshold reached",
+                if time_based_compaction {
+                    "time-based compression threshold reached"
+                } else {
+                    "preflight threshold reached"
+                },
             ));
             drop(compressor);
             let before_tokens = preflight.observation.message_tokens;
@@ -125,7 +137,7 @@ impl PreflightCompressionController {
                     ContextCompactionStrategy::AutoCompact,
                 )
                 .await;
-            compressor.annotate_compaction_record_trigger(compaction_record_len, "preflight");
+            compressor.annotate_compaction_record_trigger(compaction_record_len, trigger);
             let compaction_record = compressor
                 .compaction_records()
                 .get(compaction_record_len)
@@ -137,8 +149,8 @@ impl PreflightCompressionController {
                 let _ = store.add_compact_boundary_from_runtime_record(
                     context.session_id,
                     record,
-                    Some("preflight"),
-                    "preflight context compacted",
+                    Some(trigger),
+                    &format!("{trigger} context compacted"),
                 );
                 // Write compaction event to session_events for durable replay.
                 let writer = crate::session_store::SessionEventWriter::new(
@@ -147,7 +159,7 @@ impl PreflightCompressionController {
                 );
                 if let Err(err) = writer.compaction(
                     record.strategy.label(),
-                    "preflight",
+                    trigger,
                     record.tokens_before,
                     record.tokens_after,
                 ) {
@@ -163,7 +175,7 @@ impl PreflightCompressionController {
                 .as_ref()
                 .map(|record| record.provenance.clone())
                 .unwrap_or_default();
-            provenance.push("trigger:preflight".to_string());
+            provenance.push(format!("trigger:{trigger}"));
             context.trace.record(TraceEvent::ContextCompacted {
                 before_tokens: before_tokens as usize,
                 after_tokens: after_tokens as usize,
@@ -171,7 +183,7 @@ impl PreflightCompressionController {
                     .as_ref()
                     .map(|record| record.strategy.label().to_string())
                     .unwrap_or_else(|| "auto_compact".to_string()),
-                trigger: Some("preflight".to_string()),
+                trigger: Some(trigger.to_string()),
                 token_pressure: compaction_record.as_ref().and_then(|record| {
                     record
                         .token_pressure
@@ -202,7 +214,7 @@ impl PreflightCompressionController {
                 let mut compressor = compressor_mutex.lock().await;
                 let attempt = compressor.record_compaction_decision(
                     CompactionAttemptInput::new(
-                        "preflight",
+                        trigger,
                         ContextCompactionStrategy::AutoCompact,
                         CompactionDecision::NoGain,
                         before_tokens,
@@ -230,7 +242,7 @@ impl PreflightCompressionController {
                 let mut compressor = compressor_mutex.lock().await;
                 compressor.record_compaction_decision(
                     CompactionAttemptInput::new(
-                        "preflight",
+                        trigger,
                         ContextCompactionStrategy::AutoCompact,
                         CompactionDecision::Compacted,
                         before_tokens,
@@ -358,6 +370,39 @@ mod tests {
         assert_eq!(last_attempt.strategy, ContextCompactionStrategy::Snip);
         assert_eq!(last_attempt.decision, CompactionDecision::Compacted);
         assert!(!last_attempt.circuit_open);
+    }
+
+    #[tokio::test]
+    async fn time_based_compression_runs_through_preflight_pipeline() {
+        let compressor = Arc::new(Mutex::new(ContextCompressor::new(128_000)));
+        let trace = TraceCollector::new(TurnTrace::new("session", 1, "test"));
+        let mut runtime_diet = RuntimeDietSnapshot::new(true);
+        let mut messages = (0..105)
+            .map(|idx| {
+                if idx % 2 == 0 {
+                    Message::user(format!("turn {idx}"))
+                } else {
+                    Message::assistant(format!("reply {idx}"))
+                }
+            })
+            .collect::<Vec<_>>();
+
+        PreflightCompressionController::run(PreflightCompressionContext {
+            compressor: Some(&compressor),
+            session_store: None,
+            session_id: "session",
+            messages: &mut messages,
+            tools: &[],
+            runtime_diet: &mut runtime_diet,
+            trace: &trace,
+        })
+        .await;
+
+        let compressor = compressor.lock().await;
+        assert!(compressor
+            .compaction_attempt_records()
+            .iter()
+            .any(|record| record.trigger == "time_based"));
     }
 
     #[tokio::test]

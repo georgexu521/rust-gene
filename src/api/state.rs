@@ -555,6 +555,16 @@ fn delivery_from_api(delivery: Option<&str>) -> InputDelivery {
     }
 }
 
+fn runtime_bool_env(name: &str, default: bool) -> bool {
+    match std::env::var(name) {
+        Ok(raw) => matches!(
+            raw.trim().to_ascii_lowercase().as_str(),
+            "1" | "true" | "yes" | "on"
+        ),
+        Err(_) => default,
+    }
+}
+
 /// API 服务器状态
 pub struct ApiState {
     /// LLM Provider
@@ -645,11 +655,12 @@ impl ApiState {
         let response = self.provider.chat(llm_req).await?;
         if let Some(usage) = &response.usage {
             let mut tracker = self.audit_tracker.write().await;
-            tracker.record_api_call(
+            tracker.record_api_call_with_cache_write(
                 model,
                 usage.prompt_tokens as u64,
                 usage.completion_tokens as u64,
                 usage.cached_tokens.map(|t| t as u64),
+                usage.cache_write_tokens.map(|t| t as u64),
             );
         }
 
@@ -884,6 +895,17 @@ impl ApiState {
     /// 获取配置
     pub async fn get_config(&self) -> anyhow::Result<ConfigResponse> {
         let config = self.config.read().await;
+        let model = if config.api.model.trim().is_empty() {
+            self.model.as_str()
+        } else {
+            config.api.model.as_str()
+        };
+        let profile =
+            crate::engine::model_context::ModelContextProfile::detect(&config.api.base_url, model);
+        let token_counter =
+            crate::engine::context_compressor::TokenEstimateProfile::for_model_context(&profile)
+                .source_label()
+                .to_string();
 
         Ok(ConfigResponse {
             api: ApiConfigInfo {
@@ -900,6 +922,33 @@ impl ApiState {
                 mcp_enabled: config.features.mcp_enabled,
                 skills_enabled: config.features.skills_enabled,
                 web_search: config.features.web_search,
+            },
+            runtime: RuntimeConfigInfo {
+                full_agent_prompt_available: self.agent_runtime.is_some(),
+                agent_runtime_entrypoint: self
+                    .agent_runtime
+                    .as_ref()
+                    .map(|_| "RuntimeController".to_string()),
+                session_prompt_endpoint: "/api/sessions/{id}/prompt".to_string(),
+            },
+            context: ContextConfigInfo {
+                provider_family: format!("{:?}", profile.provider_family),
+                model_pattern: profile.model_pattern.to_string(),
+                context_window_tokens: profile.context_window_tokens,
+                reserved_output_tokens: profile.reserved_output_tokens,
+                auto_compact_threshold_tokens: profile.auto_compact_threshold_tokens,
+                token_counter,
+                cache_accounting: format!("{:?}", profile.cache_accounting),
+                background_prune_enabled: runtime_bool_env("PRIORITY_AGENT_BACKGROUND_PRUNE", true),
+                time_based_compression_enabled: runtime_bool_env(
+                    "PRIORITY_AGENT_TIME_BASED_COMPRESSION",
+                    true,
+                ),
+                context_collapse_enabled: runtime_bool_env(
+                    "PRIORITY_AGENT_CONTEXT_COLLAPSE",
+                    false,
+                ),
+                llm_compaction_enabled: runtime_bool_env("PRIORITY_AGENT_LLM_COMPACTION", false),
             },
         })
     }

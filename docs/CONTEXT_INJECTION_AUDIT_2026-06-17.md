@@ -100,23 +100,23 @@
 
 ## 当前完成状态
 
-**核心文档、代码注释和本轮剩余架构整理已经对齐；后续只剩更高精度 tokenizer / 外部参考验证这类增强项。**
+**核心文档、代码注释和本轮剩余架构整理已经对齐；OpenAI-family tokenizer 已接入真实 tiktoken，后续只剩非 OpenAI provider tokenizer / 外部参考验证这类增强项。**
 
-- 已完成：`ContextCollapseService` 已标为实验性未接入；压缩职责边界已写入 `context_compressor.rs` 模块文档；repair output cap 已移入 turn/session state；`ContextAssemblyPlan` 已明确为观测模型；request preparation 动态块已集中到 `DynamicContextBlockBuilder`；dynamic context tag/prefix 已抽为共享 registry；token estimator 已增加 JSON/tool-schema 和 model-context profile 入口。
+- 已完成：`ContextCollapseService` 已标为实验性门控路径；压缩职责边界已写入 `context_compressor.rs` 模块文档；repair output cap 已移入 turn/session state；`ContextAssemblyPlan` 已明确为观测模型；request preparation 动态块已集中到 `DynamicContextBlockBuilder`；dynamic context tag/prefix 已抽为共享 registry；token estimator 已增加 JSON/tool-schema、model-context profile 入口，并为 OpenAI-family 接入 `tiktoken-rs`。
 - 已确认不成立：`PromptContextAssembler::build_for_single_user_message` 和 `ContextAssemblyPlan::render_zoned_context` 当前代码中不存在，不应继续列为待删除项。
-- 仍未完成：未接入真实 tokenizer；未重新验证 opencode 当前源码。
+- 仍未完成：MiniMax/Kimi/Claude 等 provider 未接入官方真实 tokenizer；未重新验证 opencode 当前源码。
 
 ## 发现的问题和状态
 
-### 1. `ContextCollapseService` 已明确为实验性未接入
+### 1. `ContextCollapseService` 已明确为实验性门控路径
 
 **位置：** `src/engine/context_collapse.rs`
 
 **状态：已完成当前决策。**
 
-`ContextCollapseService` 是基于磁盘的折叠服务，由 `PRIORITY_AGENT_CONTEXT_COLLAPSE` 配置门控，但当前主对话循环没有实例化或调用它。`context_collapse.rs` 中的 compaction metadata、strategy、attempt record 等类型仍被 `ContextCompressor` 使用，不能删除整个文件。
+`ContextCollapseService` 是基于磁盘的折叠服务，由 `PRIORITY_AGENT_CONTEXT_COLLAPSE` 配置门控。当前 request bootstrap 已有 bridge，只有显式设置 `PRIORITY_AGENT_CONTEXT_COLLAPSE=1` 时才会为 session 复用 collapse service 并折叠旧消息。`context_collapse.rs` 中的 compaction metadata、strategy、attempt record 等类型仍被 `ContextCompressor` 使用，不能删除整个文件。
 
-当前代码已经把 `ContextCollapseService` 标为“实验性，未接入主运行时”，并在 `ContextCompressor` 模块文档中说明它是磁盘折叠的实验性替代路径。后续不需要为了本审计再做立即改动；如果以后要清理，只能在确认不会影响 compaction metadata/types 后再拆。
+当前代码已经把 `ContextCollapseService` 标为“实验性，默认关闭”，并在 `ContextCompressor` 模块文档中说明它是磁盘折叠的实验性替代路径。后续如果要默认开启，需要先有更长 soak evidence；如果以后要清理，只能在确认不会影响 compaction metadata/types 后再拆。
 
 验收建议：
 
@@ -214,13 +214,13 @@
 
 **位置：** `context_compressor::estimate_tokens`
 
-**状态：已完成当前启发式；真实 tokenizer 仍是增强项。**
+**状态：OpenAI-family 已接入真实 tokenizer；其他 provider 仍是增强项。**
 
 当前估算已经从纯 `text.len().div_ceil(4)` 改为按字符类别估算：ASCII word、whitespace、ASCII punctuation、CJK、其他 Unicode 分开计数。工具调用 JSON 和 provider tool schema 会走 `TokenEstimateProfile::JsonToolSchema`，`ModelContextProfile` 可映射到 `TokenEstimateProfile`。
 
-剩余问题是它仍然不是真实 tokenizer：不同模型 tokenizer 的精确差异仍只能粗略估计。
+剩余问题是非 OpenAI provider 仍没有真实 tokenizer：MiniMax/Kimi/Claude 等模型 tokenizer 的精确差异仍只能粗略估计。
 
-建议：长期如果需要更高精度，再接入 provider/model 对应 tokenizer 或模型上下文 profile 中的 tokenizer hint。
+建议：长期如果需要更高精度，再接入 provider 官方 tokenizer 或模型上下文 profile 中的 tokenizer hint。
 
 ### 8. `ContextAssemblyPlan` 是观测模型，不是完整渲染路径
 
@@ -249,18 +249,19 @@
 ## 仍不完善的覆盖
 
 - 压缩职责边界已有代码侧说明，但还可以同步到面向维护者的 docs。
-- token estimator 已有 profile-aware 启发式，但还未接入真实 tokenizer。
+- token estimator 已有 profile-aware 入口；OpenAI-family 使用真实 `tiktoken-rs`，非 OpenAI provider 仍使用 fallback。
 
 ## 后续行动
 
-- [x] 明确 `ContextCollapseService` 命运：已标为实验性未接入，保留 compaction metadata 类型供 `ContextCompressor` 使用。
+- [x] 明确 `ContextCollapseService` 命运：已标为实验性门控路径，保留 compaction metadata 类型供 `ContextCompressor` 使用。
 - [x] 增加压缩职责边界说明：preflight、streaming pre-query、API reactive、selective tool-output、message healing 已写入 `context_compressor.rs` 模块文档。
 - [x] 将 repair output cap 计数移入 session/turn state。
 - [x] 将 `MemorySnapshotController::has_dynamic_memory_recall` 限制为 `#[cfg(test)]` 诊断 helper。
 - [x] 引入统一动态上下文 block builder，集中处理收集、排序、dedupe 和 user-tail 渲染。
 - [x] 统一 dynamic context tag/prefix registry，并让 request preparation 与 cache stability 共享。
 - [x] 改进 token estimator，使其纳入 JSON/tool schema 密集文本和 model context profile。
-- [ ] 如需更高精度，接入真实 tokenizer 或 provider/model tokenizer hint。
+- [x] 为 OpenAI-family 接入 `tiktoken-rs` 真实 tokenizer。
+- [ ] 如需更高精度，继续接入非 OpenAI provider/model tokenizer hint。
 - [ ] 保持 opencode 参考为“可借鉴模式”，不要用它弱化本项目已有的 evidence、memory、permission、closeout 边界。
 
 ## 本次文档更新状态
@@ -276,7 +277,7 @@
 **未完成：**
 
 - 未重新验证 opencode 当前源码；
-- 未接入真实 tokenizer；
+- 非 OpenAI provider 未接入真实 tokenizer；
 - 未运行全量测试；本次已运行上下文注入相关窄测试和 `cargo check -q`。
 
 **本次验证：**

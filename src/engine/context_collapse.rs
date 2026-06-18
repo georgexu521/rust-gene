@@ -5,9 +5,11 @@
 
 use crate::services::api::Message;
 use anyhow::Result;
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
-use tokio::sync::RwLock;
+use std::sync::OnceLock;
+use tokio::sync::{Mutex, RwLock};
 use tracing::{debug, info, warn};
 
 // ── Compact Boundary 元数据 ───────────────────────────────
@@ -318,10 +320,15 @@ pub struct ContextCollapseConfig {
 
 impl Default for ContextCollapseConfig {
     fn default() -> Self {
-        let storage_dir = dirs::data_local_dir()
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join("priority-agent")
-            .join("context-collapse");
+        let storage_dir = std::env::var("PRIORITY_AGENT_CONTEXT_COLLAPSE_DIR")
+            .ok()
+            .map(PathBuf::from)
+            .unwrap_or_else(|| {
+                dirs::data_local_dir()
+                    .unwrap_or_else(|| PathBuf::from("."))
+                    .join("priority-agent")
+                    .join("context-collapse")
+            });
 
         let window_size = std::env::var("PRIORITY_AGENT_CONTEXT_COLLAPSE_WINDOW")
             .ok()
@@ -334,16 +341,20 @@ impl Default for ContextCollapseConfig {
                 .map(|v| v == "1")
                 .unwrap_or(false),
             window_size,
-            threshold: window_size + 20, // 超过 window + 20 条时触发折叠
+            threshold: std::env::var("PRIORITY_AGENT_CONTEXT_COLLAPSE_THRESHOLD")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(window_size + 20), // 超过 window + 20 条时触发折叠
             storage_dir,
         }
     }
 }
 
-/// 上下文折叠服务（实验性，未接入主运行时）
+/// 上下文折叠服务（实验性，默认不参与主运行时）
 ///
-/// 当前未接入主对话循环。运行时使用 `ContextCompressor`（内存压缩）替代。
-/// 保留此服务用于未来可能的磁盘持久化折叠需求。
+/// 主运行时默认使用 `ContextCompressor` 做语义压缩。该服务通过
+/// `apply_session_context_collapse_if_needed()` 接入 request bootstrap，但只有
+/// `PRIORITY_AGENT_CONTEXT_COLLAPSE=1` 时才会真正折叠并持久化旧消息。
 /// 由 `PRIORITY_AGENT_CONTEXT_COLLAPSE=1` 门控。
 #[allow(dead_code)]
 pub struct ContextCollapseService {
@@ -354,7 +365,7 @@ pub struct ContextCollapseService {
     session_id: Option<String>,
 }
 
-/// 实验性：未接入主运行时。见 `ContextCollapseService` 文档。
+/// 实验性：默认关闭；可通过 bootstrap bridge 显式启用。见 `ContextCollapseService` 文档。
 #[allow(dead_code)]
 impl ContextCollapseService {
     /// 创建新的折叠服务
@@ -625,6 +636,40 @@ impl Default for ContextCollapseService {
     fn default() -> Self {
         Self::new()
     }
+}
+
+static CONTEXT_COLLAPSE_SERVICES: OnceLock<Mutex<HashMap<String, Arc<ContextCollapseService>>>> =
+    OnceLock::new();
+
+/// Apply the optional disk-backed context collapse service for a live session.
+///
+/// This is intentionally gated by `ContextCollapseConfig::enabled`
+/// (`PRIORITY_AGENT_CONTEXT_COLLAPSE=1`). The main runtime still uses
+/// `ContextCompressor` for default semantic compaction; this path is a
+/// process-local bridge so the experimental disk collapse service participates
+/// in the request pipeline when explicitly enabled.
+pub async fn apply_session_context_collapse_if_needed(
+    session_id: &str,
+    messages: &mut Vec<Message>,
+) -> Result<usize> {
+    let config = ContextCollapseConfig::default();
+    if !config.enabled {
+        return Ok(0);
+    }
+
+    let registry = CONTEXT_COLLAPSE_SERVICES.get_or_init(|| Mutex::new(HashMap::new()));
+    let service = {
+        let mut services = registry.lock().await;
+        services
+            .entry(session_id.to_string())
+            .or_insert_with(|| {
+                let mut service = ContextCollapseService::with_config(config.clone());
+                service.set_session_id(session_id);
+                Arc::new(service)
+            })
+            .clone()
+    };
+    service.apply_collapses_if_needed(messages).await
 }
 
 /// 折叠统计信息

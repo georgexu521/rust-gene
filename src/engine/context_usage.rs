@@ -15,6 +15,7 @@ pub struct ContextUsageSnapshot {
     pub provider_completion_tokens: Option<u64>,
     pub provider_reasoning_tokens: Option<u64>,
     pub provider_cached_tokens: Option<u64>,
+    pub provider_cache_write_tokens: Option<u64>,
     pub provider_cache_miss_tokens: Option<u64>,
     pub reserved_output_tokens: u64,
     pub max_context_tokens: u64,
@@ -42,6 +43,8 @@ impl ContextUsageSnapshot {
             latest_usage.and_then(|usage| usage.reasoning_tokens.map(u64::from));
         let provider_cached_tokens =
             latest_usage.and_then(|usage| usage.cached_tokens.map(u64::from));
+        let provider_cache_write_tokens =
+            latest_usage.and_then(|usage| usage.cache_write_tokens.map(u64::from));
         let provider_cache_miss_tokens = latest_usage.map(|usage| {
             crate::engine::cache_stability::prompt_cache_usage(
                 u64::from(usage.prompt_tokens),
@@ -59,6 +62,7 @@ impl ContextUsageSnapshot {
             u64::from(usage.prompt_tokens)
                 .saturating_add(u64::from(usage.completion_tokens))
                 .saturating_add(usage.cached_tokens.map(u64::from).unwrap_or(0))
+                .saturating_add(usage.cache_write_tokens.map(u64::from).unwrap_or(0))
         });
         let pressure_tokens = provider_pressure
             .unwrap_or(total_request_tokens)
@@ -77,6 +81,7 @@ impl ContextUsageSnapshot {
             provider_completion_tokens,
             provider_reasoning_tokens,
             provider_cached_tokens,
+            provider_cache_write_tokens,
             provider_cache_miss_tokens,
             reserved_output_tokens: profile.reserved_output_tokens,
             max_context_tokens: profile.context_window_tokens,
@@ -144,11 +149,13 @@ mod tests {
             total_tokens: 10_500,
             reasoning_tokens: Some(100),
             cached_tokens: Some(8_000),
+            cache_write_tokens: Some(500),
         };
         let snapshot = ContextUsageSnapshot::estimate(&profile, &[], &[], "", "", Some(&usage));
 
         assert_eq!(snapshot.provider_prompt_tokens, Some(10_000));
         assert_eq!(snapshot.provider_cached_tokens, Some(8_000));
+        assert_eq!(snapshot.provider_cache_write_tokens, Some(500));
         assert_eq!(snapshot.provider_cache_miss_tokens, Some(2_000));
         assert_eq!(snapshot.provider_reasoning_tokens, Some(100));
         assert!(snapshot.pressure_tokens >= 18_500);

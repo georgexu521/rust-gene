@@ -27,11 +27,11 @@
 整体结论：缓存诊断和压缩主链路已经比较完整，可观测性强，且比简单“超限后裁剪”方案更适合长期本地编程会话。但原文有几处过时或过强的判断，需要修正：
 
 - `CompactionDecision::Retrying` / `Recovered` 已经在 API 反应式压缩重试路径使用，不能再列为未使用死枚举。
-- `ContextCollapseService` 本体未接入生产对话循环，但同文件中的压缩元数据、决策、运行时记录类型被生产路径使用，不能简单建议删除整个文件。
+- `ContextCollapseService` 已有 gated bootstrap bridge；同文件中的压缩元数据、决策、运行时记录类型也被生产路径使用，不能简单建议删除整个文件。
 - `last_result_idx` 死变量已清理，复杂 tool-call group 边界已有回归测试。
 - `Message::content()` 不是重复实现；它是 `context_compressor.rs` 中的私有 helper。可以优化为公共借用 helper，但不是 Rust 维护冲突。
-- token 估算已从纯 `len()/4` 升级为按字符类别和 profile 估算；当前仍不是真实 tokenizer。
-- 后台修剪、时间触发压缩、`ContextCollapseService` 属于未接入或弱接入路径，需要在文档里和生产主链路分开。
+- token 估算已从纯 `len()/4` 升级为 profile-aware 计数：OpenAI GPT-4o/GPT-4.1/reasoning family 走 `tiktoken-rs` 的真实 `o200k_base`/`cl100k_base`，MiniMax/Kimi/Claude 仍走 provider profile fallback 启发式；provider 返回后的真实 usage 会记录 prompt、completion、cached/read、cache write、reasoning 等字段。
+- 后台修剪已经接入 request bootstrap 并默认开启；时间触发压缩已经接入 preflight；`ContextCollapseService` 已有 gated bootstrap bridge，但默认关闭，仍应视为实验路径。
 
 ## 当前架构事实
 
@@ -58,9 +58,9 @@
 | 手动压缩 | `streaming.rs` | 已接入 | slash/手动 compact 路径使用 `SessionMemoryCompact` 策略 |
 | API 反应式压缩 | `api_request_controller.rs` | 已接入 | provider 返回上下文过长后记录 `Retrying`，压缩成功后记录 `Recovered` 或 `Failed` |
 | 选择性消息压缩 | `message_compression.rs` + request preparation | 已接入 | 请求局部压缩旧工具输出，默认开启，不一定改写历史 |
-| 后台工具输出修剪 | `message_compression.rs` | 辅助函数，未见生产调用 | 受 `PRIORITY_AGENT_BACKGROUND_PRUNE` 门控，但当前更像保留能力 |
-| 时间触发压缩判断 | `context_compressor.rs` / `compressor.rs` | 判断函数和测试存在，未见主循环调用 | 不应写成稳定生产触发路径 |
-| `ContextCollapseService` | `context_collapse.rs` | 实验服务未接入 | 默认关闭，本体无生产调用；共享类型仍被生产路径使用 |
+| 后台工具输出修剪 | `message_compression.rs` + request bootstrap | 已接入，默认开启 | 每轮发送请求前修剪旧工具输出，保护验证/权限/checkpoint/failure evidence |
+| 时间触发压缩判断 | `context_compressor.rs` / `compressor.rs` + preflight | 已接入 | token 压力未到阈值但消息数/会话时长超过阈值时，以 `time_based` trigger 进入 preflight 压缩 |
+| `ContextCollapseService` | `context_collapse.rs` + request bootstrap | 已接入但默认关闭 | 受 `PRIORITY_AGENT_CONTEXT_COLLAPSE=1` 门控；会真实移走旧消息并写 collapse 文件，仍是实验路径 |
 
 ### 3. 压缩管道
 
@@ -94,15 +94,18 @@
 | 配置 | 默认 | 作用 |
 |------|------|------|
 | `PRIORITY_AGENT_SELECTIVE_COMPRESSION` | 开 | 请求准备阶段选择性压缩旧工具输出 |
-| `PRIORITY_AGENT_BACKGROUND_PRUNE` | 关 | 后台工具输出修剪 helper 的开关 |
+| `PRIORITY_AGENT_BACKGROUND_PRUNE` | 开 | request bootstrap 后台工具输出修剪；设为 `0/false/no/off` 可关闭 |
 | `PRIORITY_AGENT_LLM_COMPACTION` | 关 | 是否允许 LLM 参与摘要压缩 |
 | `PRIORITY_AGENT_CONTEXT_COLLAPSE` | 关 | 实验 `ContextCollapseService` 开关 |
-| `PRIORITY_AGENT_TIME_BASED_COMPRESSION` | 关 | 时间/消息数触发判断的开关 |
+| `PRIORITY_AGENT_CONTEXT_COLLAPSE_WINDOW` | 20 | collapse 启用后保留的最近消息窗口 |
+| `PRIORITY_AGENT_CONTEXT_COLLAPSE_THRESHOLD` | `window + 20` | collapse 启用后的触发消息数 |
+| `PRIORITY_AGENT_CONTEXT_COLLAPSE_DIR` | app data dir | collapse 文件持久化目录 |
+| `PRIORITY_AGENT_TIME_BASED_COMPRESSION` | 开 | 时间/消息数触发判断的开关；设为 `false` 可关闭 |
 | `PRIORITY_AGENT_SESSION_DURATION_THRESHOLD` | 1 小时 | 时间触发阈值 |
 | `PRIORITY_AGENT_MESSAGE_COUNT_THRESHOLD` | 100 | 消息数量触发阈值 |
-| `PRIORITY_AGENT_IDLE_THRESHOLD` | 30 分钟 | idle 触发阈值 |
+| `PRIORITY_AGENT_IDLE_THRESHOLD` | 5 分钟 | idle 触发阈值；当前 `needs_time_based_compression()` 只使用时长和消息数 |
 
-这些开关不是同一层级：有的是请求局部压缩，有的是历史压缩，有的是未接入实验路径。建议后续整理为一张用户/开发者可读的配置表，明确默认值、生产状态和影响面。
+这些开关不是同一层级：有的是请求局部压缩，有的是历史压缩，有的是 provider 成本/质量权衡，有的是显式 opt-in 实验路径。建议后续整理为一张用户/开发者可读的配置表，明确默认值、生产状态和影响面。
 
 ## 发现的问题与状态
 
@@ -129,12 +132,12 @@
 
 本次已补充 `Retrying` / `Recovered` attempt record 测试，覆盖 reactive compaction 的记录策略、boundary id 和 recovered 后计数器归零行为。它不是端到端 provider mock 测试，但已经锁住当前决策记录层。
 
-### 4. `ContextCollapseService` 已明确为实验服务
+### 4. `ContextCollapseService` 已有 gated 主线桥接
 
-**状态：已完成当前归属决策。**
-`ContextCollapseService` 受 `PRIORITY_AGENT_CONTEXT_COLLAPSE` 门控，默认关闭，当前未看到主对话循环调用它。它更像早期 compact boundary / collapse 实验服务。
+**状态：已接入，但默认关闭。**
+`ContextCollapseService` 受 `PRIORITY_AGENT_CONTEXT_COLLAPSE` 门控，默认关闭。当前 request bootstrap 会调用 `apply_session_context_collapse_if_needed()`，只有显式启用时才会为 session 复用一个 collapse service，按 window/threshold 折叠旧消息并写入 collapse 文件。
 
-当前代码已经在 `context_collapse.rs` 和 `context_compressor.rs` 模块文档中标注：`ContextCollapseService` 是实验性、未接入主运行时；但 `context_collapse.rs` 中的 `CompactMetadata`、`ContextCompactionStrategy`、`CompactionDecision`、`CompactionAttemptRecord`、`ContextTokenPressure`、`CompactionRuntimeRecord` 已被当前压缩主链路使用。后续如果清理，只能清理 service/config/persistence 片段，不能删除共享类型。
+这个接入是故意 gated：它不同于 `ContextCompressor` 的语义摘要压缩，会直接把较早消息移出 live request，并通过磁盘文件保留 collapse entries。默认生产路径仍应优先使用 preflight/streaming/API reactive compaction。`context_collapse.rs` 中的 `CompactMetadata`、`ContextCompactionStrategy`、`CompactionDecision`、`CompactionAttemptRecord`、`ContextTokenPressure`、`CompactionRuntimeRecord` 继续是生产压缩链路共享类型，不能作为“实验服务”整体删除。
 
 ### 5. skills preserved marker 已改为明确策略
 
@@ -162,12 +165,27 @@
 
 当前文件顶部已经标注“旧路径，已废弃”，`ContextManager` 也带有 `#[deprecated]`，并说明主对话循环使用 `PreflightCompressionController + ContextBudgetController + ContextCompressor`。当前只保留测试/参考用途，避免未来修复压缩行为时改错路径。
 
-### 8. token 估算已升级为 profile-aware 启发式
+### 8. token 估算已接入 tiktoken profile，真实 usage 字段已补齐 cache write
 
-**状态：已完成当前启发式；真实 tokenizer 仍是增强项。**
-`estimate_tokens(text)` 已不再使用纯 `text.len().div_ceil(4)`，当前会按 ASCII word、whitespace、ASCII punctuation、CJK、其他 Unicode 分开估算。工具调用 JSON 和 provider tool schema 会走 `TokenEstimateProfile::JsonToolSchema`，并提供 `estimate_tokens_for_model_context()` 入口。
+**状态：OpenAI-family 预请求计数已是真实 tokenizer；非 OpenAI provider 仍是 profile fallback。**
+`estimate_tokens(text)` 已不再使用纯 `text.len().div_ceil(4)`。当前 `ContextCompressor::from_model_context_profile()` 会根据 provider/model profile 选择计数器：OpenAI GPT-4o/GPT-4.1/reasoning family 使用 `tiktoken-rs` singleton 的 `o200k_base` 或 `cl100k_base`；MiniMax/Kimi 走 CJK-heavy fallback；Anthropic-like 走 general-text fallback。工具调用 JSON 和 provider tool schema 会走 `TokenEstimateProfile::JsonToolSchema`，并提供 `estimate_tokens_for_model_context()` 入口。
 
-剩余边界是它仍然不是真实 tokenizer。若后续需要更高精度，可接入 provider/model tokenizer 或在 `ModelContextProfile` 中增加 tokenizer hint。
+请求发送前仍然需要本地 token 计数/估算，因为 runtime 必须先预判本轮是否可能撑爆上下文窗口，provider 的真实 token usage 只能在请求完成或 streaming usage 返回后得到。主流 agent 通常也是“发送前本地 tokenizer/估算 + 返回后以 provider usage 记账”的组合，而不是只靠返回后的真实 token。
+
+本次已把 `cache_write_tokens` 接到 provider usage、stream event、session projection、TUI metadata、cost tracker、usage JSONL 和 SQLite projection。当前 OpenAI/Kimi 适配层没有可用 cache write 字段时记录为 `None`；MiniMax 会从 `prompt_tokens_details.cache_write_tokens` 及兼容 alias 中提取。
+
+成本统计也已区分 uncached prompt、cached/read prompt、cache-write/create tokens 和 completion tokens。默认 cache write 按 prompt lane 计价，并支持三层覆盖：
+
+- provider：`PRIORITY_AGENT_COST_<PROVIDER>_CACHE_WRITE_PER_1K`
+- model：`PRIORITY_AGENT_COST_MODEL_<MODEL>_CACHE_WRITE_PER_1K`
+- global：`PRIORITY_AGENT_COST_CACHE_WRITE_PER_1K`
+
+同类覆盖也支持 prompt、completion 和 cached prompt multiplier。
+
+剩余边界：
+
+- MiniMax/Kimi/Claude 等 provider 尚未接入官方真实 tokenizer，只能使用 profile fallback。
+- 不同 provider 的字段名不统一，后续应继续按 provider certification matrix 补字段映射。
 
 ### 9. 压缩配置矩阵已补充，仍可拆成独立维护文档
 
@@ -176,8 +194,8 @@
 
 - 请求局部压缩：不改写历史，只减少本次请求体。
 - 会话历史压缩：会写 compact boundary，并可能替换 session messages。
-- 实验服务：默认关闭，未接入主循环。
-- 判断 helper：测试存在，但生产触发路径不完整。
+- 显式 opt-in 实验服务：默认关闭，但已有主线 bridge。
+- 时间/消息数触发：已接入 preflight，但仍使用同一个 compact boundary/压缩证据链。
 
 本文已经补充压缩配置矩阵，`context_compressor.rs` 模块文档也写明核心开关和影响面。后续如果要面向用户或维护者，可以再拆成独立配置文档。
 
@@ -199,10 +217,12 @@
 **状态：已完成当前保护。**
 选择性工具输出压缩和历史工具输出 snip 现在都保护 validation、permission、checkpoint、failure_owner、preserved skills 等 runtime evidence。普通旧工具输出仍可被压缩为 `evidence_safe_for_closeout=false` 摘要，但这些 closeout/recovery 关键证据会保留原文。
 
-### 12. 后台修剪和时间触发压缩不应写成已接入主路径
+### 12. 后台修剪和时间触发压缩已接入主路径
 
-**状态：文档已修正，代码未变。**
-`background_prune_tool_outputs()` 和 `needs_time_based_compression()` 都有实现/测试痕迹，但当前未看到主对话循环稳定调用它们。后续要么接入主路径并补测试，要么明确标注为保留 helper。
+**状态：已完成。**
+`background_prune_tool_outputs()` 现在在 request bootstrap 中运行，默认开启，显式设置 `PRIORITY_AGENT_BACKGROUND_PRUNE=0/false/no/off` 可关闭。它只改写本轮请求里的旧工具输出，不写 compact boundary；如果发生修剪，会在 trace 中记录 fallback 事件，便于诊断。
+
+`needs_time_based_compression()` 现在接入 preflight。若 token 压力还没达到 80% compact threshold，但会话时长或消息数超过阈值，会以 `time_based` trigger 走同一套 `ContextCompressor`、compact boundary、session event 和 trace 记录。这样不会额外创造第二套压缩系统。
 
 ## 与 opencode 对比的保留意见
 
@@ -225,13 +245,13 @@
 ## 本次文档更新已完成
 
 - [x] 修正 `Retrying` / `Recovered` 未使用的过时结论。
-- [x] 修正 `ContextCollapseService` 的清理建议，区分未接入服务和已使用共享类型。
+- [x] 修正 `ContextCollapseService` 的清理建议，区分默认关闭的 gated 服务和已使用共享类型。
 - [x] 修正 `last_result_idx` 问题描述，避免误判整个工具边界对齐无效。
 - [x] 修正 `Message::content()` “重复实现”的误判。
 - [x] 修正 token 估算对 CJK 的表述，改为模型无关启发式风险。
 - [x] 补充 preflight、streaming、manual compact、API reactive、selective compression 的触发路径区分。
 - [x] 补充 compact boundary、message replacement、runtime record 的持久化事实。
-- [x] 补充 context collapse、time-based compression、background prune 的未接入/弱接入状态。
+- [x] 补充 context collapse、time-based compression、background prune 的当前接入状态。
 - [x] 补充压缩配置矩阵和后续整理建议。
 - [x] 复核并更新当前完成状态：`last_result_idx`、`ContextCollapseService` 标注、skills marker 策略、`ContextManager` deprecation、token estimator profile 已完成。
 - [x] 接入 `SessionMemoryCompact.user_preferences` 的显式 memory/profile 行提取。
@@ -242,11 +262,18 @@
 
 ## 本次复核验证
 
-- `cargo test -q cache_stability`
-- `cargo test -q context_compressor`
+- `cargo fmt --check`
+- `cargo check -q`
+- `cargo test -q usage_ledger`
+- `cargo test -q context_usage`
+- `cargo test -q cost_tracker`
 - `cargo test -q message_compression`
 - `cargo test -q preflight_compression_controller`
-- `cargo check -q`
+- `cargo test -q turn_request_bootstrap_controller`
+- `cargo test -q context_collapse`
+- `cargo test -q cache_stability`
+- `cargo test -q session_store`
+- `cargo test -q context_compressor`
 - `git diff --check`
 
 ## 后续行动
@@ -255,15 +282,21 @@
 - [x] 删除 `last_result_idx` 死变量。
 - [x] 补充复杂 tool-call group 边界测试。
 - [x] 为 API reactive compression 增加 `Retrying` / `Recovered` 记录测试。
-- [x] 标注未接入的 `ContextCollapseService` 本体，保留生产路径使用的共享类型。
+- [x] 为 `ContextCollapseService` 增加 gated bootstrap bridge，并保留生产路径使用的共享类型。
 - [x] 将 `has_active_skills` 改为明确的 always-preserve 策略。
 - [x] 判断 `ContextManager` 是否仍有入口；当前已标记 deprecated。
 - [x] 改进 token 估算，引入 JSON/tool schema 和 model context profile 启发式。
+- [x] 补齐真实 usage 链路中的 `cache_write_tokens` 字段。
+- [x] 将 background prune 接入 request bootstrap，默认开启且可显式关闭。
+- [x] 将 time-based compression 接入 preflight，使用 `time_based` trigger。
 - [x] 整理压缩相关环境变量文档，区分请求局部压缩、历史压缩和实验路径。
 - [x] 为短会话巨大工具输出和 no-gain 后增长场景补测试并保留 deterministic snip fallback。
 - [x] 评估并实现 protected tool outputs，避免验证、权限、checkpoint、skills、failure evidence 被压缩丢失。
-- [ ] 如需更高精度，接入真实 tokenizer 或 provider/model tokenizer hint。
-- [ ] 如果要面向用户暴露配置，拆出独立压缩配置文档。
+- [x] 为 OpenAI-family provider/model profile 接入 `tiktoken-rs` 真实 tokenizer。
+- [x] 为 cache write 增加 provider/model/global 单独计价 lane。
+- [x] 在 `/config effective` 和 `/api/config` 暴露 token counter、压缩开关和 API runtime 状态。
+- [ ] 如果要面向用户暴露完整配置说明，拆出独立压缩/运行时配置文档。
+- [ ] 如 provider 发布官方 tokenizer，继续补 MiniMax/Kimi/Claude 的真实 tokenizer。
 
 ## 建议验证
 

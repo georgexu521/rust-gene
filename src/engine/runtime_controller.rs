@@ -396,6 +396,7 @@ pub enum TurnEvent {
         completion_tokens: u32,
         reasoning_tokens: Option<u32>,
         cached_tokens: Option<u32>,
+        cache_write_tokens: Option<u32>,
     },
     RuntimeDiagnostic {
         diagnostic: serde_json::Value,
@@ -456,11 +457,13 @@ impl From<StreamEvent> for TurnEvent {
                 completion_tokens,
                 reasoning_tokens,
                 cached_tokens,
+                cache_write_tokens,
             } => TurnEvent::Usage {
                 prompt_tokens,
                 completion_tokens,
                 reasoning_tokens,
                 cached_tokens,
+                cache_write_tokens,
             },
             StreamEvent::RuntimeDiagnostic { diagnostic } => {
                 TurnEvent::RuntimeDiagnostic { diagnostic }
@@ -638,6 +641,7 @@ mod tests {
                 completion_tokens: 50,
                 reasoning_tokens: Some(20),
                 cached_tokens: Some(80),
+                cache_write_tokens: Some(10),
             },
             StreamEvent::RuntimeDiagnostic {
                 diagnostic: serde_json::json!({"ok": true}),

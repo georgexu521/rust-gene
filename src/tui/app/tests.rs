@@ -25,6 +25,7 @@ impl LlmProvider for MockProvider {
                 total_tokens: 2,
                 reasoning_tokens: None,
                 cached_tokens: None,
+                cache_write_tokens: None,
             }),
             tool_call_repair: None,
             finish_reason: None,
@@ -630,6 +631,7 @@ fn test_stream_usage_label_includes_reasoning_and_cached_tokens() {
         completion_tokens: 25,
         reasoning_tokens: Some(12),
         cached_tokens: Some(80),
+        cache_write_tokens: Some(10),
     });
 
     assert_eq!(

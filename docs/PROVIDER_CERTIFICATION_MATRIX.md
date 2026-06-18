@@ -4,7 +4,7 @@ Status: Reference
 Product-auditable summary of provider-family behavior.  Each family is
 reasoned about through its known contracts rather than "tried and seen".
 
-Last updated: 2026-06-07
+Last updated: 2026-06-18
 
 ---
 
@@ -18,7 +18,10 @@ Last updated: 2026-06-07
 | Streaming tool calls | ✅ | ❌ (requires non-streaming) | ✅ | MiniMax: synchronous only |
 | Non-streaming fallback | N/A | ✅ always when tools present | N/A | See `ProviderCapabilities::for_family` |
 | Usage extraction | `usage.prompt_tokens`, `usage.completion_tokens`, `usage.completion_tokens_details.reasoning_tokens` | same (no reasoning tokens) | same | |
-| Cached-token extraction | `usage.prompt_tokens_details.cached_tokens` | none | `usage.prompt_tokens_details.cached_tokens` | |
+| Cached-token extraction | `usage.prompt_tokens_details.cached_tokens` | cached/read not currently mapped | `usage.prompt_tokens_details.cached_tokens` | |
+| Cache-write extraction | not currently exposed by adapter | `usage.prompt_tokens_details.cache_write_tokens` plus compatible aliases | not currently exposed by adapter | Recorded as `cache_write_tokens` when provider reports it |
+| Token counter | OpenAI GPT-4o/GPT-4.1/reasoning profiles use `tiktoken-rs` | CJK-heavy fallback | CJK-heavy fallback | Provider usage remains source of truth after response |
+| Cache-write pricing | provider/model/global env override lanes | provider/model/global env override lanes | provider/model/global env override lanes | `PRIORITY_AGENT_COST_<PROVIDER>_CACHE_WRITE_PER_1K`, model-specific and global fallbacks |
 | Reasoning / interleaved | `reasoning_content` in delta | none | `reasoning_content` in delta | DeepSeek emits interleaved; see `ProviderTransformReport` |
 | Empty reasoning parts | preserved (or inserted) | N/A | N/A | See golden tests |
 | DSML leaked calls | occasionally emits `\n\n`-wrapped function calls | unknown | unknown | Stripped by `tool_call_repair.rs` |

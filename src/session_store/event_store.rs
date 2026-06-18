@@ -229,11 +229,13 @@ impl SessionEventWriter {
         prompt_tokens: u64,
         completion_tokens: u64,
         cached_tokens: u64,
+        cache_write_tokens: u64,
     ) -> Result<(), rusqlite::Error> {
         let payload = serde_json::json!({
             "prompt_tokens": prompt_tokens,
             "completion_tokens": completion_tokens,
             "cached_tokens": cached_tokens,
+            "cache_write_tokens": cache_write_tokens,
         })
         .to_string();
         self.write_event("usage", &payload)
@@ -415,7 +417,7 @@ mod tests {
         writer.step_started().unwrap();
         writer.tool_called("call-1", "bash").unwrap();
         writer.tool_succeeded("call-1", "test output").unwrap();
-        writer.usage(1000, 500, 800).unwrap();
+        writer.usage(1000, 500, 800, 0).unwrap();
         writer.closeout("passed", Some("verified")).unwrap();
 
         let conn_guard = conn.lock().unwrap();

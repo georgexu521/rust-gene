@@ -19,6 +19,8 @@ pub struct UsageLedgerEntry {
     pub completion_tokens: u64,
     pub total_tokens: u64,
     pub cache_hit_tokens: u64,
+    #[serde(default)]
+    pub cache_write_tokens: u64,
     pub cache_miss_tokens: u64,
     pub cost_usd: f64,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -70,6 +72,8 @@ pub struct UsageLedgerModelSummary {
     pub completion_tokens: u64,
     pub total_tokens: u64,
     pub cache_hit_tokens: u64,
+    #[serde(default)]
+    pub cache_write_tokens: u64,
     pub cache_miss_tokens: u64,
     pub cost_usd: f64,
     pub tool_schema_tokens: u64,
@@ -85,6 +89,8 @@ pub struct UsageLedgerSummary {
     pub completion_tokens: u64,
     pub total_tokens: u64,
     pub cache_hit_tokens: u64,
+    #[serde(default)]
+    pub cache_write_tokens: u64,
     pub cache_miss_tokens: u64,
     pub cost_usd: f64,
     pub hit_rate: f64,
@@ -101,6 +107,7 @@ impl UsageLedgerSummary {
         self.completion_tokens += entry.completion_tokens;
         self.total_tokens += entry.total_tokens;
         self.cache_hit_tokens += entry.cache_hit_tokens;
+        self.cache_write_tokens += entry.cache_write_tokens;
         self.cache_miss_tokens += entry.cache_miss_tokens;
         self.cost_usd += entry.cost_usd;
         self.tool_schema_tokens += entry.tool_schema_tokens;
@@ -118,6 +125,7 @@ impl UsageLedgerSummary {
         model.completion_tokens += entry.completion_tokens;
         model.total_tokens += entry.total_tokens;
         model.cache_hit_tokens += entry.cache_hit_tokens;
+        model.cache_write_tokens += entry.cache_write_tokens;
         model.cache_miss_tokens += entry.cache_miss_tokens;
         model.cost_usd += entry.cost_usd;
         model.tool_schema_tokens += entry.tool_schema_tokens;
@@ -227,6 +235,7 @@ fn ensure_usage_sqlite(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
             completion_tokens INTEGER NOT NULL DEFAULT 0,
             total_tokens INTEGER NOT NULL DEFAULT 0,
             cache_hit_tokens INTEGER NOT NULL DEFAULT 0,
+            cache_write_tokens INTEGER NOT NULL DEFAULT 0,
             cache_miss_tokens INTEGER NOT NULL DEFAULT 0,
             cost_usd REAL NOT NULL DEFAULT 0.0,
             stable_prefix_hash TEXT,
@@ -270,6 +279,7 @@ fn ensure_usage_sqlite(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
         ("effective_output_cap", "INTEGER"),
         ("tool_schema_tokens", "INTEGER NOT NULL DEFAULT 0"),
         ("tool_round_count", "INTEGER"),
+        ("cache_write_tokens", "INTEGER NOT NULL DEFAULT 0"),
         ("request_id", "TEXT"),
         ("provider", "TEXT"),
         ("latency_ms", "INTEGER"),
@@ -346,14 +356,14 @@ fn insert_usage_sqlite_entry(
     conn.execute(
         &format!(
             "INSERT INTO {table} (ts, session, model, prompt_tokens, completion_tokens,
-             total_tokens, cache_hit_tokens, cache_miss_tokens, cost_usd,
+             total_tokens, cache_hit_tokens, cache_write_tokens, cache_miss_tokens, cost_usd,
              stable_prefix_hash, system_hash, tool_schema_hash, dynamic_tail_hash,
              miss_reason, miss_reason_detail, request_phase, effective_output_cap,
              tool_schema_tokens, tool_round_count, compaction_decision,
              request_id, provider, latency_ms, time_to_first_token_ms,
              finish_reason, error_kind, timeout_kind, retry_count)
              SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20,
-                    ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28
+                    ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29
              WHERE NOT EXISTS (
                 SELECT 1 FROM {table}
                 WHERE ts = ?1
@@ -363,27 +373,28 @@ fn insert_usage_sqlite_entry(
                   AND completion_tokens = ?5
                   AND total_tokens = ?6
                   AND cache_hit_tokens = ?7
-                  AND cache_miss_tokens = ?8
-                  AND cost_usd = ?9
-                  AND COALESCE(stable_prefix_hash, '') = COALESCE(?10, '')
-                  AND COALESCE(system_hash, '') = COALESCE(?11, '')
-                  AND COALESCE(tool_schema_hash, '') = COALESCE(?12, '')
-                  AND COALESCE(dynamic_tail_hash, '') = COALESCE(?13, '')
-                  AND COALESCE(miss_reason, '') = COALESCE(?14, '')
-                  AND COALESCE(miss_reason_detail, '') = COALESCE(?15, '')
-                  AND COALESCE(request_phase, '') = COALESCE(?16, '')
-                  AND COALESCE(effective_output_cap, -1) = COALESCE(?17, -1)
-                  AND tool_schema_tokens = ?18
-                  AND COALESCE(tool_round_count, -1) = COALESCE(?19, -1)
-                  AND COALESCE(compaction_decision, '') = COALESCE(?20, '')
-                  AND COALESCE(request_id, '') = COALESCE(?21, '')
-                  AND COALESCE(provider, '') = COALESCE(?22, '')
-                  AND COALESCE(latency_ms, -1) = COALESCE(?23, -1)
-                  AND COALESCE(time_to_first_token_ms, -1) = COALESCE(?24, -1)
-                  AND COALESCE(finish_reason, '') = COALESCE(?25, '')
-                  AND COALESCE(error_kind, '') = COALESCE(?26, '')
-                  AND COALESCE(timeout_kind, '') = COALESCE(?27, '')
-                  AND COALESCE(retry_count, -1) = COALESCE(?28, -1)
+                  AND cache_write_tokens = ?8
+                  AND cache_miss_tokens = ?9
+                  AND cost_usd = ?10
+                  AND COALESCE(stable_prefix_hash, '') = COALESCE(?11, '')
+                  AND COALESCE(system_hash, '') = COALESCE(?12, '')
+                  AND COALESCE(tool_schema_hash, '') = COALESCE(?13, '')
+                  AND COALESCE(dynamic_tail_hash, '') = COALESCE(?14, '')
+                  AND COALESCE(miss_reason, '') = COALESCE(?15, '')
+                  AND COALESCE(miss_reason_detail, '') = COALESCE(?16, '')
+                  AND COALESCE(request_phase, '') = COALESCE(?17, '')
+                  AND COALESCE(effective_output_cap, -1) = COALESCE(?18, -1)
+                  AND tool_schema_tokens = ?19
+                  AND COALESCE(tool_round_count, -1) = COALESCE(?20, -1)
+                  AND COALESCE(compaction_decision, '') = COALESCE(?21, '')
+                  AND COALESCE(request_id, '') = COALESCE(?22, '')
+                  AND COALESCE(provider, '') = COALESCE(?23, '')
+                  AND COALESCE(latency_ms, -1) = COALESCE(?24, -1)
+                  AND COALESCE(time_to_first_token_ms, -1) = COALESCE(?25, -1)
+                  AND COALESCE(finish_reason, '') = COALESCE(?26, '')
+                  AND COALESCE(error_kind, '') = COALESCE(?27, '')
+                  AND COALESCE(timeout_kind, '') = COALESCE(?28, '')
+                  AND COALESCE(retry_count, -1) = COALESCE(?29, -1)
              )",
             table = USAGE_SQLITE_TABLE
         ),
@@ -395,6 +406,7 @@ fn insert_usage_sqlite_entry(
             entry.completion_tokens as i64,
             entry.total_tokens as i64,
             entry.cache_hit_tokens as i64,
+            entry.cache_write_tokens as i64,
             entry.cache_miss_tokens as i64,
             entry.cost_usd,
             &entry.stable_prefix_hash,
@@ -483,7 +495,7 @@ fn query_usage_sqlite(
     let mut sql = format!(
         "SELECT COUNT(*), COALESCE(SUM(prompt_tokens),0), COALESCE(SUM(completion_tokens),0),
          COALESCE(SUM(total_tokens),0), COALESCE(SUM(cache_hit_tokens),0),
-         COALESCE(SUM(cache_miss_tokens),0), COALESCE(SUM(cost_usd),0.0),
+         COALESCE(SUM(cache_write_tokens),0), COALESCE(SUM(cache_miss_tokens),0), COALESCE(SUM(cost_usd),0.0),
          COALESCE(SUM(tool_schema_tokens),0),
          COALESCE(SUM(CASE WHEN effective_output_cap IS NOT NULL THEN 1 ELSE 0 END),0)
          FROM {table}",
@@ -521,9 +533,10 @@ fn query_usage_sqlite(
             row.get::<_, i64>(3)?,
             row.get::<_, i64>(4)?,
             row.get::<_, i64>(5)?,
-            row.get::<_, f64>(6)?,
-            row.get::<_, i64>(7)?,
+            row.get::<_, i64>(6)?,
+            row.get::<_, f64>(7)?,
             row.get::<_, i64>(8)?,
+            row.get::<_, i64>(9)?,
         ))
     }) {
         summary.entries = row.0 as u64;
@@ -531,10 +544,11 @@ fn query_usage_sqlite(
         summary.completion_tokens = row.2 as u64;
         summary.total_tokens = row.3 as u64;
         summary.cache_hit_tokens = row.4 as u64;
-        summary.cache_miss_tokens = row.5 as u64;
-        summary.cost_usd = row.6;
-        summary.tool_schema_tokens = row.7 as u64;
-        summary.capped_requests = row.8 as u64;
+        summary.cache_write_tokens = row.5 as u64;
+        summary.cache_miss_tokens = row.6 as u64;
+        summary.cost_usd = row.7;
+        summary.tool_schema_tokens = row.8 as u64;
+        summary.capped_requests = row.9 as u64;
         summary.hit_rate = prompt_cache_hit_rate(summary.prompt_tokens, summary.cache_hit_tokens);
     }
     populate_usage_sqlite_model_summaries(&conn, &mut summary, session_filter, model_filter)?;
@@ -573,7 +587,7 @@ fn populate_usage_sqlite_model_summaries(
     let mut sql = format!(
         "SELECT model, COUNT(*), COALESCE(SUM(prompt_tokens),0), COALESCE(SUM(completion_tokens),0),
          COALESCE(SUM(total_tokens),0), COALESCE(SUM(cache_hit_tokens),0),
-         COALESCE(SUM(cache_miss_tokens),0), COALESCE(SUM(cost_usd),0.0),
+         COALESCE(SUM(cache_write_tokens),0), COALESCE(SUM(cache_miss_tokens),0), COALESCE(SUM(cost_usd),0.0),
          COALESCE(SUM(tool_schema_tokens),0),
          COALESCE(SUM(CASE WHEN effective_output_cap IS NOT NULL THEN 1 ELSE 0 END),0)
          FROM {table}",
@@ -604,10 +618,11 @@ fn populate_usage_sqlite_model_summaries(
                 completion_tokens: row.get::<_, i64>(3).unwrap_or_default() as u64,
                 total_tokens: row.get::<_, i64>(4).unwrap_or_default() as u64,
                 cache_hit_tokens: row.get::<_, i64>(5).unwrap_or_default() as u64,
-                cache_miss_tokens: row.get::<_, i64>(6).unwrap_or_default() as u64,
-                cost_usd: row.get::<_, f64>(7).unwrap_or_default(),
-                tool_schema_tokens: row.get::<_, i64>(8).unwrap_or_default() as u64,
-                capped_requests: row.get::<_, i64>(9).unwrap_or_default() as u64,
+                cache_write_tokens: row.get::<_, i64>(6).unwrap_or_default() as u64,
+                cache_miss_tokens: row.get::<_, i64>(7).unwrap_or_default() as u64,
+                cost_usd: row.get::<_, f64>(8).unwrap_or_default(),
+                tool_schema_tokens: row.get::<_, i64>(9).unwrap_or_default() as u64,
+                capped_requests: row.get::<_, i64>(10).unwrap_or_default() as u64,
             },
         );
     }
@@ -669,6 +684,7 @@ mod tests {
             completion_tokens: 50,
             total_tokens: 1050,
             cache_hit_tokens: 800,
+            cache_write_tokens: 25,
             cache_miss_tokens: 200,
             cost_usd: 0.001,
             stable_prefix_hash: Some("prefix".to_string()),
@@ -705,6 +721,7 @@ mod tests {
         assert_eq!(summary.entries, 1);
         assert_eq!(summary.prompt_tokens, 1000);
         assert_eq!(summary.cache_hit_tokens, 800);
+        assert_eq!(summary.cache_write_tokens, 25);
         assert_eq!(summary.cache_miss_tokens, 200);
         assert_eq!(summary.tool_schema_tokens, 320);
         assert_eq!(summary.capped_requests, 1);
@@ -729,6 +746,7 @@ mod tests {
             completion_tokens: 100,
             total_tokens: 600,
             cache_hit_tokens: 400,
+            cache_write_tokens: 30,
             cache_miss_tokens: 100,
             cost_usd: 0.002,
             stable_prefix_hash: Some("abc".to_string()),

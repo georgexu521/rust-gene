@@ -204,13 +204,13 @@ fn is_protected_tool_output(content: &str) -> bool {
 }
 
 pub fn background_prune_enabled() -> bool {
-    matches!(
+    !matches!(
         std::env::var("PRIORITY_AGENT_BACKGROUND_PRUNE")
-            .unwrap_or_default()
+            .unwrap_or_else(|_| "1".to_string())
             .trim()
             .to_ascii_lowercase()
             .as_str(),
-        "1" | "true" | "yes" | "on"
+        "0" | "false" | "no" | "off"
     )
 }
 

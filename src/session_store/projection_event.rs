@@ -153,6 +153,7 @@ pub enum SessionProjectionEvent {
         completion_tokens: u32,
         reasoning_tokens: Option<u32>,
         cached_tokens: Option<u32>,
+        cache_write_tokens: Option<u32>,
     },
     RuntimeDiagnostic {
         diagnostic: serde_json::Value,
@@ -310,11 +311,13 @@ impl SessionProjectionEvent {
                 completion_tokens,
                 reasoning_tokens,
                 cached_tokens,
+                cache_write_tokens,
             } => Self::Usage {
                 prompt_tokens: *prompt_tokens,
                 completion_tokens: *completion_tokens,
                 reasoning_tokens: *reasoning_tokens,
                 cached_tokens: *cached_tokens,
+                cache_write_tokens: *cache_write_tokens,
             },
             StreamEvent::RuntimeDiagnostic { diagnostic } => Self::RuntimeDiagnostic {
                 diagnostic: diagnostic.clone(),

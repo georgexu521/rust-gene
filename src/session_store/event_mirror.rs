@@ -234,11 +234,13 @@ impl StreamEventMirror {
                 prompt_tokens,
                 completion_tokens,
                 cached_tokens,
+                cache_write_tokens,
                 ..
             } => self.writer.usage(
                 *prompt_tokens as u64,
                 *completion_tokens as u64,
                 cached_tokens.unwrap_or(0) as u64,
+                cache_write_tokens.unwrap_or(0) as u64,
             ),
             SessionProjectionEvent::RuntimeDiagnostic { diagnostic } => {
                 let payload = serde_json::json!({ "diagnostic": diagnostic }).to_string();

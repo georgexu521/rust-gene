@@ -165,11 +165,12 @@ pub(super) async fn force_summary_after_iter_limit(
             if let Some(usage) = &response.usage {
                 {
                     let mut tracker = context.cost_tracker.lock().await;
-                    tracker.record_api_call(
+                    tracker.record_api_call_with_cache_write(
                         context.model,
                         usage.prompt_tokens as u64,
                         usage.completion_tokens as u64,
                         usage.cached_tokens.map(|tokens| tokens as u64),
+                        usage.cache_write_tokens.map(|tokens| tokens as u64),
                     );
                 }
                 if let Some(tx) = context.tx {
@@ -179,6 +180,7 @@ pub(super) async fn force_summary_after_iter_limit(
                             completion_tokens: usage.completion_tokens,
                             reasoning_tokens: usage.reasoning_tokens,
                             cached_tokens: usage.cached_tokens,
+                            cache_write_tokens: usage.cache_write_tokens,
                         })
                         .await;
                 }

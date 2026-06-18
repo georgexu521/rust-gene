@@ -318,6 +318,55 @@ read from the durable `session_reverts` projection (not only from raw events).
 
 ---
 
+## Runtime Config
+
+`GET /api/config` returns user-facing config plus runtime discoverability fields:
+
+```json
+{
+  "api": {
+    "model": "string",
+    "base_url": "string",
+    "temperature": "f32",
+    "max_tokens": "u32 | null"
+  },
+  "ui": {
+    "theme": "string",
+    "show_token_usage": "bool"
+  },
+  "features": {
+    "mcp_enabled": "bool",
+    "skills_enabled": "bool",
+    "web_search": "bool"
+  },
+  "runtime": {
+    "full_agent_prompt_available": "bool",
+    "agent_runtime_entrypoint": "RuntimeController | null",
+    "session_prompt_endpoint": "/api/sessions/{id}/prompt"
+  },
+  "context": {
+    "provider_family": "string",
+    "model_pattern": "string",
+    "context_window_tokens": "u64",
+    "reserved_output_tokens": "u64",
+    "auto_compact_threshold_tokens": "u64",
+    "token_counter": "tiktoken:o200k_base | tiktoken:cl100k_base | heuristic:*",
+    "cache_accounting": "string",
+    "background_prune_enabled": "bool",
+    "time_based_compression_enabled": "bool",
+    "context_collapse_enabled": "bool",
+    "llm_compaction_enabled": "bool"
+  }
+}
+```
+
+`full_agent_prompt_available` is the API product-readiness check for
+`POST /api/sessions/:id/prompt`: production API startup injects
+`RuntimeController`; tests or custom states may intentionally omit it and return
+typed `501`.
+
+---
+
 ## Cursor Semantics
 
 All cursor-based routes include `cursor.limit` (the requested page size),
@@ -383,7 +432,8 @@ Desktop provider status DTO:
   "usage_totals": {
     "prompt_tokens": "u64",
     "completion_tokens": "u64",
-    "cached_tokens": "u64"
+    "cached_tokens": "u64",
+    "cache_write_tokens": "u64"
   },
   "provider_profile": "<ProviderRuntimeProfile>",
   "tool_output_policy": {

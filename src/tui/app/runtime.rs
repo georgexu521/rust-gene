@@ -20,6 +20,7 @@ pub struct StreamUsageSnapshot {
     pub completion_tokens: u32,
     pub reasoning_tokens: Option<u32>,
     pub cached_tokens: Option<u32>,
+    pub cache_write_tokens: Option<u32>,
 }
 
 impl StreamUsageSnapshot {

@@ -17,18 +17,23 @@
 //! | **Full-message compaction** | `ContextCompressor` (preflight) | token 压力 > 80% | ✅ | ✅ `compact_boundary` |
 //! | **Streaming pre-query** | `streaming.rs` | 每次 query 前 | ✅ | 通过 `ContextCompressor` |
 //! | **API reactive compaction** | `api_request_controller` | provider 返回 context limit | ✅ | ✅ `CompactionRuntimeRecord` |
+//! | **Background tool prune** | `message_compression` | 每轮 request bootstrap | ❌ (仅本轮) | trace fallback |
 //! | **Selective tool-output** | `message_compression` | 每轮 request preparation | ❌ (仅本轮) | ❌ |
 //! | **Message healing** | `message_healing` | 发送到 provider 前 | ❌ (仅本轮) | ❌ |
+//! | **ContextCollapseService** | `context_collapse` | opt-in request bootstrap | ✅ | collapse files |
 //!
-//! - 前三条路径会改变持久化消息历史，后两条只影响本次 request。
+//! - preflight/streaming/API reactive/manual compact 会改变会话历史或写 compact boundary。
+//! - background prune/selective compression/message healing 只影响本次 request。
 //! - `message_healing` 不属于语义压缩，但对可发送性至关重要。
-//! - `ContextCollapseService` 是磁盘折叠的实验性替代路径，当前未接入主运行时。
+//! - `ContextCollapseService` 已接入 bootstrap，但仍是 `PRIORITY_AGENT_CONTEXT_COLLAPSE=1`
+//!   门控的磁盘折叠实验路径，默认不参与生产会话。
 //!
 //! ## 环境变量配置
 //!
 //! 详见 `docs/CACHE_COMPRESSION_AUDIT_2026-06-17.md`。
 //! 核心开关：`PRIORITY_AGENT_SELECTIVE_COMPRESSION`（默认开）、
-//! `PRIORITY_AGENT_BACKGROUND_PRUNE`（默认关，未接入主循环）、
+//! `PRIORITY_AGENT_BACKGROUND_PRUNE`（默认开，可显式关）、
+//! `PRIORITY_AGENT_TIME_BASED_COMPRESSION`（默认开，可显式设为 false）、
 //! `PRIORITY_AGENT_LLM_COMPACTION`（默认关）、
 //! `PRIORITY_AGENT_CONTEXT_COLLAPSE`（默认关，实验服务）。
 //!
@@ -898,6 +903,8 @@ pub enum TokenEstimateProfile {
     GeneralText,
     JsonToolSchema,
     CjkHeavy,
+    TiktokenO200kBase,
+    TiktokenCl100kBase,
 }
 
 impl TokenEstimateProfile {
@@ -906,9 +913,27 @@ impl TokenEstimateProfile {
 
         match profile.provider_family {
             ProviderProtocolFamily::MiniMax | ProviderProtocolFamily::Kimi => Self::CjkHeavy,
-            ProviderProtocolFamily::AnthropicLike
-            | ProviderProtocolFamily::ReasoningCapable
-            | ProviderProtocolFamily::OpenAiCompatible => Self::GeneralText,
+            ProviderProtocolFamily::ReasoningCapable => Self::TiktokenO200kBase,
+            ProviderProtocolFamily::OpenAiCompatible => {
+                if profile.model_pattern.contains("gpt4")
+                    || profile.model_pattern.contains("reasoning")
+                {
+                    Self::TiktokenO200kBase
+                } else {
+                    Self::TiktokenCl100kBase
+                }
+            }
+            ProviderProtocolFamily::AnthropicLike => Self::GeneralText,
+        }
+    }
+
+    pub fn source_label(self) -> &'static str {
+        match self {
+            Self::GeneralText => "heuristic:general_text",
+            Self::JsonToolSchema => "heuristic:json_tool_schema",
+            Self::CjkHeavy => "heuristic:cjk_heavy",
+            Self::TiktokenO200kBase => "tiktoken:o200k_base",
+            Self::TiktokenCl100kBase => "tiktoken:cl100k_base",
         }
     }
 }
@@ -928,6 +953,10 @@ pub fn estimate_tokens_for_model_context(
 pub fn estimate_tokens_for_profile(text: &str, profile: TokenEstimateProfile) -> u64 {
     if text.is_empty() {
         return 0;
+    }
+
+    if let Some(tokens) = exact_tiktoken_tokens(text, profile) {
+        return tokens;
     }
 
     let mut ascii_word = 0u64;
@@ -954,15 +983,17 @@ pub fn estimate_tokens_for_profile(text: &str, profile: TokenEstimateProfile) ->
     let whitespace_tokens = ascii_whitespace.div_ceil(16);
     let ascii_punct_tokens = match profile {
         TokenEstimateProfile::JsonToolSchema => ascii_punct,
-        TokenEstimateProfile::GeneralText | TokenEstimateProfile::CjkHeavy => {
-            ascii_punct.div_ceil(3)
-        }
+        TokenEstimateProfile::GeneralText
+        | TokenEstimateProfile::CjkHeavy
+        | TokenEstimateProfile::TiktokenO200kBase
+        | TokenEstimateProfile::TiktokenCl100kBase => ascii_punct.div_ceil(3),
     };
     let cjk_tokens = match profile {
         TokenEstimateProfile::CjkHeavy => cjk_chars.saturating_mul(2),
-        TokenEstimateProfile::GeneralText | TokenEstimateProfile::JsonToolSchema => {
-            cjk_chars.saturating_mul(3).div_ceil(2)
-        }
+        TokenEstimateProfile::GeneralText
+        | TokenEstimateProfile::JsonToolSchema
+        | TokenEstimateProfile::TiktokenO200kBase
+        | TokenEstimateProfile::TiktokenCl100kBase => cjk_chars.saturating_mul(3).div_ceil(2),
     };
     let other_unicode_tokens = other_unicode_bytes.div_ceil(2);
 
@@ -971,6 +1002,17 @@ pub fn estimate_tokens_for_profile(text: &str, profile: TokenEstimateProfile) ->
         .saturating_add(ascii_punct_tokens)
         .saturating_add(cjk_tokens)
         .saturating_add(other_unicode_tokens)
+}
+
+fn exact_tiktoken_tokens(text: &str, profile: TokenEstimateProfile) -> Option<u64> {
+    let bpe = match profile {
+        TokenEstimateProfile::TiktokenO200kBase => tiktoken_rs::o200k_base_singleton(),
+        TokenEstimateProfile::TiktokenCl100kBase => tiktoken_rs::cl100k_base_singleton(),
+        TokenEstimateProfile::GeneralText
+        | TokenEstimateProfile::JsonToolSchema
+        | TokenEstimateProfile::CjkHeavy => return None,
+    };
+    Some(bpe.count_ordinary(text) as u64)
 }
 
 fn is_cjk_char(ch: char) -> bool {
@@ -989,11 +1031,21 @@ fn is_cjk_char(ch: char) -> bool {
 
 /// 估算消息列表的总 token 数
 pub fn estimate_messages_tokens(messages: &[Message]) -> u64 {
-    messages.iter().map(estimate_message_tokens).sum()
+    estimate_messages_tokens_for_profile(messages, TokenEstimateProfile::GeneralText)
 }
 
-fn estimate_message_tokens(message: &Message) -> u64 {
-    let content_tokens = estimate_tokens(&message.content());
+pub fn estimate_messages_tokens_for_profile(
+    messages: &[Message],
+    profile: TokenEstimateProfile,
+) -> u64 {
+    messages
+        .iter()
+        .map(|message| estimate_message_tokens_for_profile(message, profile))
+        .sum()
+}
+
+fn estimate_message_tokens_for_profile(message: &Message, profile: TokenEstimateProfile) -> u64 {
+    let content_tokens = estimate_tokens_for_profile(&message.content(), profile);
     let tool_call_tokens = match message {
         Message::Assistant {
             tool_calls: Some(tool_calls),
@@ -1334,6 +1386,7 @@ impl Default for StructuredSummary {
 /// 上下文压缩器
 pub struct ContextCompressor {
     budget: TokenBudget,
+    token_estimate_profile: TokenEstimateProfile,
     /// 时间基础配置（新增）
     time_config: TimeBasedConfig,
     /// 会话开始时间
@@ -1407,6 +1460,8 @@ pub struct CompressionStats {
     pub message_count: usize,
     /// 时间基础压缩是否启用
     pub time_based_enabled: bool,
+    /// Token counter used for preflight and compaction estimates.
+    pub token_counter: &'static str,
 }
 
 // ── 测试 ───────────────────────────────────────────────────────────────────

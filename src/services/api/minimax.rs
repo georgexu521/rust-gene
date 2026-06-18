@@ -180,6 +180,12 @@ struct MiniMaxUsage {
 #[derive(serde::Deserialize)]
 struct MiniMaxPromptTokenDetails {
     cached_tokens: Option<u32>,
+    #[serde(
+        default,
+        alias = "cache_creation_tokens",
+        alias = "cache_write_input_tokens"
+    )]
+    cache_write_tokens: Option<u32>,
 }
 
 #[derive(serde::Deserialize)]
@@ -220,7 +226,12 @@ fn parse_minimax_chat_response_body(body: &str) -> Result<ChatResponse> {
             .and_then(|details| details.reasoning_tokens),
         cached_tokens: usage
             .prompt_tokens_details
+            .as_ref()
             .and_then(|details| details.cached_tokens),
+        cache_write_tokens: usage
+            .prompt_tokens_details
+            .as_ref()
+            .and_then(|details| details.cache_write_tokens),
     });
 
     let repaired = tool_call_repair::repair_response(

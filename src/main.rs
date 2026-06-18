@@ -361,6 +361,7 @@ async fn run_eval_task(
                 completion_tokens,
                 reasoning_tokens,
                 cached_tokens,
+                cache_write_tokens,
             } => write_eval_event(
                 &mut event_writer,
                 json!({
@@ -369,6 +370,7 @@ async fn run_eval_task(
                     "completion_tokens": completion_tokens,
                     "reasoning_tokens": reasoning_tokens,
                     "cached_tokens": cached_tokens,
+                    "cache_write_tokens": cache_write_tokens,
                 }),
             )?,
             StreamEvent::RuntimeDiagnostic { diagnostic } => write_eval_event(

@@ -278,6 +278,7 @@ impl LlmProvider for KimiClient {
                 .prompt_tokens_details
                 .as_ref()
                 .and_then(|d| d.cached_tokens),
+            cache_write_tokens: None,
         });
 
         let repaired = tool_call_repair::repair_response(

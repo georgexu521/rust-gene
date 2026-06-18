@@ -295,6 +295,9 @@ impl TuiApp {
         }
         if let Some(cached) = usage.cached_tokens {
             label.push_str(&format!(" / {} cached", cached));
+            if let Some(write) = usage.cache_write_tokens {
+                label.push_str(&format!(" / {} cache write", write));
+            }
             if let Some(miss) = usage.cache_miss_tokens() {
                 label.push_str(&format!(" / {} miss", miss));
             }

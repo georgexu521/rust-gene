@@ -128,6 +128,7 @@ pub enum StreamEvent {
         completion_tokens: u32,
         reasoning_tokens: Option<u32>,
         cached_tokens: Option<u32>,
+        cache_write_tokens: Option<u32>,
     },
     /// Runtime diagnostic snapshot for clients that render run state.
     RuntimeDiagnostic { diagnostic: serde_json::Value },

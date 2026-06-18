@@ -27,6 +27,7 @@ impl LlmProvider for MockProvider {
                 total_tokens: 2,
                 reasoning_tokens: None,
                 cached_tokens: None,
+                cache_write_tokens: None,
             }),
             tool_call_repair: None,
             finish_reason: None,

@@ -175,12 +175,15 @@ impl QueryEngine {
         // 记录成本
         if let Some(ref usage) = response.usage {
             let mut tracker = self.cost_tracker.lock().await;
-            tracker.record_api_call_with_cache_shape(
+            tracker.record_api_call_with_session_cache_shape_metadata_and_cache_write(
+                None,
                 &self.model,
                 usage.prompt_tokens as u64,
                 usage.completion_tokens as u64,
                 usage.cached_tokens.map(|t| t as u64),
+                usage.cache_write_tokens.map(|t| t as u64),
                 Some(cache_shape),
+                None,
             );
         }
 

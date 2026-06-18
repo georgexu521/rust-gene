@@ -28,6 +28,7 @@ impl LlmProvider for MockProvider {
                 total_tokens: 2,
                 reasoning_tokens: None,
                 cached_tokens: None,
+                cache_write_tokens: None,
             }),
             tool_call_repair: None,
             finish_reason: None,
@@ -187,6 +188,42 @@ async fn provider_status_has_required_fields() {
     assert!(first["provider_id"].is_string(), "provider_id");
     assert!(first["model_id"].is_string(), "model_id");
     assert!(first["protocol_family"].is_string(), "protocol_family");
+}
+
+#[tokio::test]
+async fn config_reports_full_agent_prompt_unavailable_without_runtime() {
+    let mut env = EnvVarGuard::acquire().await;
+    env.set("PRIORITY_AGENT_BRIDGE_TOKEN", TEST_BRIDGE_TOKEN);
+    let state = api_test_state();
+    let app = create_routes(state);
+    let value = json_get_response(&app, "/api/config").await;
+
+    assert_eq!(value["runtime"]["full_agent_prompt_available"], false);
+    assert!(value["runtime"]["agent_runtime_entrypoint"].is_null());
+    assert_eq!(
+        value["runtime"]["session_prompt_endpoint"],
+        "/api/sessions/{id}/prompt"
+    );
+    assert!(value["context"]["token_counter"].is_string());
+}
+
+#[tokio::test]
+async fn config_reports_full_agent_prompt_available_with_runtime() {
+    let mut env = EnvVarGuard::acquire().await;
+    env.set("PRIORITY_AGENT_BRIDGE_TOKEN", TEST_BRIDGE_TOKEN);
+    let mut state = api_test_state();
+    Arc::get_mut(&mut state).unwrap().agent_runtime = Some(Arc::new(successful_fake_runtime(
+        Some("run"),
+        Some("idem-1"),
+    )));
+    let app = create_routes(state);
+    let value = json_get_response(&app, "/api/config").await;
+
+    assert_eq!(value["runtime"]["full_agent_prompt_available"], true);
+    assert_eq!(
+        value["runtime"]["agent_runtime_entrypoint"],
+        "RuntimeController"
+    );
 }
 
 #[tokio::test]
@@ -400,7 +437,7 @@ async fn session_prompt_without_runtime_still_returns_501() {
     assert_eq!(value["accepted"], false);
     assert_eq!(
         value["error"],
-        "full-agent prompt API is not wired to RuntimeController yet"
+        "full-agent prompt runtime is unavailable in this API state"
     );
 }
 

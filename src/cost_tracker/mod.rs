@@ -62,6 +62,9 @@ pub struct TokenCount {
     /// Cached prompt tokens (prefix cache hits from provider)
     #[serde(default)]
     pub cached: u64,
+    /// Prompt-cache write / creation tokens reported by the provider.
+    #[serde(default)]
+    pub cache_write: u64,
     /// Prompt tokens charged as cache misses by the provider.
     #[serde(default)]
     pub cache_miss: u64,
@@ -221,6 +224,26 @@ impl CostTracker {
         );
     }
 
+    pub fn record_api_call_with_cache_write(
+        &mut self,
+        model: &str,
+        prompt_tokens: u64,
+        completion_tokens: u64,
+        cached_tokens: Option<u64>,
+        cache_write_tokens: Option<u64>,
+    ) {
+        self.record_api_call_with_session_cache_shape_metadata_and_cache_write(
+            None,
+            model,
+            prompt_tokens,
+            completion_tokens,
+            cached_tokens,
+            cache_write_tokens,
+            None,
+            None,
+        );
+    }
+
     pub fn record_api_call_with_cache_shape(
         &mut self,
         model: &str,
@@ -229,13 +252,15 @@ impl CostTracker {
         cached_tokens: Option<u64>,
         cache_shape: Option<crate::engine::cache_stability::CacheDiagnosticShape>,
     ) {
-        self.record_api_call_with_session_and_cache_shape(
+        self.record_api_call_with_session_cache_shape_metadata_and_cache_write(
             None,
             model,
             prompt_tokens,
             completion_tokens,
             cached_tokens,
+            None,
             cache_shape,
+            None,
         );
     }
 
@@ -248,12 +273,13 @@ impl CostTracker {
         cached_tokens: Option<u64>,
         cache_shape: Option<crate::engine::cache_stability::CacheDiagnosticShape>,
     ) {
-        self.record_api_call_with_session_cache_shape_and_metadata(
+        self.record_api_call_with_session_cache_shape_metadata_and_cache_write(
             session_id,
             model,
             prompt_tokens,
             completion_tokens,
             cached_tokens,
+            None,
             cache_shape,
             None,
         );
@@ -270,20 +296,49 @@ impl CostTracker {
         cache_shape: Option<crate::engine::cache_stability::CacheDiagnosticShape>,
         metadata: Option<ApiUsageMetadata>,
     ) {
+        self.record_api_call_with_session_cache_shape_metadata_and_cache_write(
+            session_id,
+            model,
+            prompt_tokens,
+            completion_tokens,
+            cached_tokens,
+            None,
+            cache_shape,
+            metadata,
+        );
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn record_api_call_with_session_cache_shape_metadata_and_cache_write(
+        &mut self,
+        session_id: Option<&str>,
+        model: &str,
+        prompt_tokens: u64,
+        completion_tokens: u64,
+        cached_tokens: Option<u64>,
+        cache_write_tokens: Option<u64>,
+        cache_shape: Option<crate::engine::cache_stability::CacheDiagnosticShape>,
+        metadata: Option<ApiUsageMetadata>,
+    ) {
         self.total_requests += 1;
         let cache_usage =
             crate::engine::cache_stability::prompt_cache_usage(prompt_tokens, cached_tokens);
+        let cache_write_tokens = cache_write_tokens.unwrap_or(0);
         self.total_tokens.prompt += prompt_tokens;
         self.total_tokens.completion += completion_tokens;
         self.total_tokens.total += prompt_tokens + completion_tokens;
         self.total_tokens.cached += cache_usage.cached_tokens;
+        self.total_tokens.cache_write += cache_write_tokens;
         self.total_tokens.cache_miss += cache_usage.cache_miss_tokens;
 
-        let cost = calculate_cost(
+        let provider = metadata.as_ref().and_then(|m| m.provider.as_deref());
+        let cost = calculate_cost_with_cache_write(
             model,
+            provider,
             prompt_tokens,
             completion_tokens,
             cache_usage.cached_tokens,
+            cache_write_tokens,
         );
         self.estimated_cost_usd += cost;
 
@@ -294,6 +349,7 @@ impl CostTracker {
         stats.tokens.completion += completion_tokens;
         stats.tokens.total += prompt_tokens + completion_tokens;
         stats.tokens.cached += cache_usage.cached_tokens;
+        stats.tokens.cache_write += cache_write_tokens;
         stats.tokens.cache_miss += cache_usage.cache_miss_tokens;
         stats.estimated_cost += cost;
 
@@ -324,6 +380,7 @@ impl CostTracker {
             completion_tokens,
             total_tokens: prompt_tokens.saturating_add(completion_tokens),
             cache_hit_tokens: cache_usage.cached_tokens,
+            cache_write_tokens,
             cache_miss_tokens: cache_usage.cache_miss_tokens,
             cost_usd: cost,
             stable_prefix_hash: diagnostic
@@ -348,7 +405,7 @@ impl CostTracker {
             tool_round_count,
             compaction_decision,
             request_id: metadata.as_ref().and_then(|m| m.request_id.clone()),
-            provider: metadata.as_ref().and_then(|m| m.provider.clone()),
+            provider: provider.map(str::to_string),
             latency_ms: metadata.as_ref().and_then(|m| m.latency_ms),
             time_to_first_token_ms: metadata.as_ref().and_then(|m| m.time_to_first_token_ms),
             finish_reason: metadata.as_ref().and_then(|m| m.finish_reason.clone()),
@@ -672,6 +729,7 @@ impl CostTracker {
             "prompt_cache": {
                 "prompt_tokens": self.total_tokens.prompt,
                 "cached_tokens": self.total_tokens.cached,
+                "cache_write_tokens": self.total_tokens.cache_write,
                 "cache_miss_tokens": self.total_tokens.cache_miss,
                 "hit_rate": prompt_cache_hit_rate(self.total_tokens.prompt, self.total_tokens.cached),
             },
@@ -736,6 +794,7 @@ impl CostTracker {
                 "prompt_cache": {
                     "prompt_tokens": self.total_tokens.prompt,
                     "cached_tokens": self.total_tokens.cached,
+                    "cache_write_tokens": self.total_tokens.cache_write,
                     "cache_miss_tokens": self.total_tokens.cache_miss,
                     "hit_rate": prompt_cache_hit_rate(self.total_tokens.prompt, self.total_tokens.cached),
                 },
@@ -767,7 +826,7 @@ impl CostTracker {
              Session Duration: {}m {}s\n\
              Total Requests: {}\n\
              Total Tokens: {} (prompt: {}, completion: {})\n\
-             Prompt Cache: cached {} / miss {} / hit_rate {:.1}%\n\
+             Prompt Cache: cached {} / write {} / miss {} / hit_rate {:.1}%\n\
              Estimated Cost: ${:.4}\n\
              \n\
              Model Usage:\n\
@@ -782,6 +841,7 @@ impl CostTracker {
             self.total_tokens.prompt,
             self.total_tokens.completion,
             self.total_tokens.cached,
+            self.total_tokens.cache_write,
             self.total_tokens.cache_miss,
             prompt_cache_hit_rate_percent(self.total_tokens.prompt, self.total_tokens.cached),
             self.estimated_cost_usd,
@@ -830,6 +890,7 @@ impl CostTracker {
             format!("Requests: {}", self.total_requests),
             format!("Prompt Tokens: {}", self.total_tokens.prompt),
             format!("Cached Tokens: {}", self.total_tokens.cached),
+            format!("Cache Write Tokens: {}", self.total_tokens.cache_write),
             format!("Cache Miss Tokens: {}", self.total_tokens.cache_miss),
             format!(
                 "Hit Rate: {:.1}%",
@@ -848,11 +909,12 @@ impl CostTracker {
         rows.sort_by(|left, right| left.0.cmp(right.0));
         for (model, stats) in rows {
             lines.push(format!(
-                "  {}: {} requests, prompt={}, cached={}, miss={}, hit_rate={:.1}%",
+                "  {}: {} requests, prompt={}, cached={}, cache_write={}, miss={}, hit_rate={:.1}%",
                 model,
                 stats.requests,
                 stats.tokens.prompt,
                 stats.tokens.cached,
+                stats.tokens.cache_write,
                 stats.tokens.cache_miss,
                 prompt_cache_hit_rate_percent(stats.tokens.prompt, stats.tokens.cached)
             ));
@@ -978,28 +1040,138 @@ fn now_epoch_ms() -> u64 {
         .as_millis() as u64
 }
 
-/// 计算成本（基于 Kimi API 定价）
+#[derive(Debug, Clone, Copy)]
+struct CostRates {
+    prompt_per_1k: f64,
+    completion_per_1k: f64,
+    cached_prompt_per_1k: f64,
+    cache_write_per_1k: f64,
+}
+
+/// 计算成本。Input billing is split into uncached prompt, cached/read prompt,
+/// and cache-write/create tokens so providers can price each lane separately.
+#[cfg(test)]
 fn calculate_cost(
     model: &str,
     prompt_tokens: u64,
     completion_tokens: u64,
     cached_tokens: u64,
 ) -> f64 {
-    // 价格（每 1K tokens）
+    calculate_cost_with_cache_write(
+        model,
+        None,
+        prompt_tokens,
+        completion_tokens,
+        cached_tokens,
+        0,
+    )
+}
+
+fn calculate_cost_with_cache_write(
+    model: &str,
+    provider: Option<&str>,
+    prompt_tokens: u64,
+    completion_tokens: u64,
+    cached_tokens: u64,
+    cache_write_tokens: u64,
+) -> f64 {
+    let rates = cost_rates_for(model, provider);
+    let accounted_input = cached_tokens.saturating_add(cache_write_tokens);
+    let uncached_prompt = prompt_tokens.saturating_sub(accounted_input);
+    (uncached_prompt as f64 / 1000.0) * rates.prompt_per_1k
+        + (cached_tokens as f64 / 1000.0) * rates.cached_prompt_per_1k
+        + (cache_write_tokens as f64 / 1000.0) * rates.cache_write_per_1k
+        + (completion_tokens as f64 / 1000.0) * rates.completion_per_1k
+}
+
+fn cost_rates_for(model: &str, provider: Option<&str>) -> CostRates {
     let (prompt_price, completion_price) = match model {
         "kimi-k2.5" => (0.0015, 0.0060), // $1.5 / $6.0 per 1M tokens
         "kimi-k2-turbo" => (0.0010, 0.0040),
-        _ => (0.0015, 0.0060), // 默认
+        _ => (0.0015, 0.0060),
     };
+    let cached_prompt_per_1k = prompt_price
+        * env_rate_multiplier(
+            &[
+                provider_env_key(provider, "CACHED_PROMPT_MULTIPLIER"),
+                model_env_key(model, "CACHED_PROMPT_MULTIPLIER"),
+                "PRIORITY_AGENT_COST_CACHED_PROMPT_MULTIPLIER".to_string(),
+            ],
+            0.25,
+        );
+    let cache_write_per_1k = env_rate_value(
+        &[
+            provider_env_key(provider, "CACHE_WRITE_PER_1K"),
+            model_env_key(model, "CACHE_WRITE_PER_1K"),
+            "PRIORITY_AGENT_COST_CACHE_WRITE_PER_1K".to_string(),
+        ],
+        prompt_price,
+    );
 
-    // Cached tokens discount: 25% of normal prompt price (75% savings)
-    let cached_discount = 0.25;
-    let uncached_prompt = prompt_tokens.saturating_sub(cached_tokens);
-    let prompt_cost = (uncached_prompt as f64 / 1000.0) * prompt_price
-        + (cached_tokens as f64 / 1000.0) * prompt_price * cached_discount;
-    let completion_cost = (completion_tokens as f64 / 1000.0) * completion_price;
+    CostRates {
+        prompt_per_1k: env_rate_value(
+            &[
+                provider_env_key(provider, "PROMPT_PER_1K"),
+                model_env_key(model, "PROMPT_PER_1K"),
+                "PRIORITY_AGENT_COST_PROMPT_PER_1K".to_string(),
+            ],
+            prompt_price,
+        ),
+        completion_per_1k: env_rate_value(
+            &[
+                provider_env_key(provider, "COMPLETION_PER_1K"),
+                model_env_key(model, "COMPLETION_PER_1K"),
+                "PRIORITY_AGENT_COST_COMPLETION_PER_1K".to_string(),
+            ],
+            completion_price,
+        ),
+        cached_prompt_per_1k,
+        cache_write_per_1k,
+    }
+}
 
-    prompt_cost + completion_cost
+fn env_rate_value(keys: &[String], default: f64) -> f64 {
+    keys.iter()
+        .find_map(|key| std::env::var(key).ok()?.trim().parse::<f64>().ok())
+        .filter(|value| value.is_finite() && *value >= 0.0)
+        .unwrap_or(default)
+}
+
+fn env_rate_multiplier(keys: &[String], default: f64) -> f64 {
+    env_rate_value(keys, default)
+}
+
+fn provider_env_key(provider: Option<&str>, suffix: &str) -> String {
+    provider
+        .map(|provider| {
+            format!(
+                "PRIORITY_AGENT_COST_{}_{}",
+                normalize_env_segment(provider),
+                suffix
+            )
+        })
+        .unwrap_or_default()
+}
+
+fn model_env_key(model: &str, suffix: &str) -> String {
+    format!(
+        "PRIORITY_AGENT_COST_MODEL_{}_{}",
+        normalize_env_segment(model),
+        suffix
+    )
+}
+
+fn normalize_env_segment(value: &str) -> String {
+    value
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() {
+                ch.to_ascii_uppercase()
+            } else {
+                '_'
+            }
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -1054,6 +1226,38 @@ mod tests {
         // Test cached token discount
         let cost_cached = calculate_cost("kimi-k2.5", 1000, 500, 800);
         assert!(cost_cached < cost, "Cached tokens should reduce cost");
+    }
+
+    #[test]
+    fn cache_write_tokens_use_separate_pricing_lane() {
+        let mut tracker = CostTracker::new();
+        tracker.record_api_call_with_session_cache_shape_metadata_and_cache_write(
+            Some("session-price"),
+            "kimi-k2.5",
+            1000,
+            500,
+            Some(200),
+            Some(300),
+            None,
+            Some(ApiUsageMetadata {
+                provider: Some("minimax".to_string()),
+                ..Default::default()
+            }),
+        );
+
+        // 500 uncached prompt at 0.0015 + 200 cached at 25% + 300 cache-write
+        // at default prompt price + 500 completion at 0.0060.
+        assert!((tracker.estimated_cost_usd - 0.004275).abs() < 0.000001);
+    }
+
+    #[tokio::test]
+    async fn cache_write_pricing_accepts_provider_env_override() {
+        let mut env = crate::test_utils::env_guard::EnvVarGuard::acquire().await;
+        env.set("PRIORITY_AGENT_COST_MINIMAX_CACHE_WRITE_PER_1K", "0.0003");
+
+        let cost = calculate_cost_with_cache_write("kimi-k2.5", Some("minimax"), 1000, 0, 0, 1000);
+
+        assert!((cost - 0.0003).abs() < 0.000001);
     }
 
     #[test]
@@ -1150,6 +1354,7 @@ mod tests {
             completion_tokens: 25,
             total_tokens: 125,
             cache_hit_tokens: 80,
+            cache_write_tokens: 5,
             cache_miss_tokens: 20,
             cost_usd: 0.0,
             stable_prefix_hash: None,

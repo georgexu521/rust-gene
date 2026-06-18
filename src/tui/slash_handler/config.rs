@@ -395,10 +395,33 @@ pub fn handle_color(app: &mut TuiApp, args: &str) -> String {
 // ═══════════════════════════════════════
 
 fn format_effective_config() -> String {
+    let config = crate::services::config::AppConfig::load().unwrap_or_default();
+    let model = if config.api.model.trim().is_empty() {
+        crate::services::config::runtime_config().api.model
+    } else {
+        config.api.model.clone()
+    };
+    let profile =
+        crate::engine::model_context::ModelContextProfile::detect(&config.api.base_url, &model);
+    let token_counter =
+        crate::engine::context_compressor::TokenEstimateProfile::for_model_context(&profile)
+            .source_label();
     let mut lines = vec!["Effective Configuration\n".to_string()];
 
     // Provider settings
     lines.push("Provider:".to_string());
+    lines.push(format!(
+        "  model: {}",
+        if model.is_empty() { "unset" } else { &model }
+    ));
+    lines.push(format!(
+        "  base_url: {}",
+        if config.api.base_url.is_empty() {
+            "unset"
+        } else {
+            &config.api.base_url
+        }
+    ));
     lines.push(format!(
         "  timeout: {}s",
         crate::services::config::runtime_config()
@@ -432,6 +455,37 @@ fn format_effective_config() -> String {
         }
     ));
 
+    // Context and compression settings
+    lines.push("\nContext / Compression:".to_string());
+    lines.push(format!(
+        "  model_context: {} window={} reserved_output={} auto_compact_at={}",
+        profile.model_pattern,
+        profile.context_window_tokens,
+        profile.reserved_output_tokens,
+        profile.auto_compact_threshold_tokens
+    ));
+    lines.push(format!("  token_counter: {}", token_counter));
+    lines.push(format!(
+        "  cache_accounting: {:?}",
+        profile.cache_accounting
+    ));
+    lines.push(format!(
+        "  background_prune: {}",
+        effective_bool_env("PRIORITY_AGENT_BACKGROUND_PRUNE", true)
+    ));
+    lines.push(format!(
+        "  time_based_compression: {}",
+        effective_bool_env("PRIORITY_AGENT_TIME_BASED_COMPRESSION", true)
+    ));
+    lines.push(format!(
+        "  context_collapse: {}",
+        effective_bool_env("PRIORITY_AGENT_CONTEXT_COLLAPSE", false)
+    ));
+    lines.push(format!(
+        "  llm_compaction: {}",
+        effective_bool_env("PRIORITY_AGENT_LLM_COMPACTION", false)
+    ));
+
     // Memory settings
     lines.push("\nMemory:".to_string());
     lines.push(format!(
@@ -442,6 +496,22 @@ fn format_effective_config() -> String {
         "  active_memory: {} (env: PRIORITY_AGENT_ACTIVE_MEMORY)",
         std::env::var("PRIORITY_AGENT_ACTIVE_MEMORY").unwrap_or_else(|_| "0".to_string())
     ));
+
+    // Cost settings
+    lines.push("\nCost:".to_string());
+    lines.push("  cache_write_pricing: provider/model/global override lanes".to_string());
+    lines.push(format!(
+        "  active_overrides: {}",
+        active_cost_override_summary()
+    ));
+
+    // API settings
+    lines.push("\nAPI:".to_string());
+    lines.push(
+        "  full_agent_prompt: /api/sessions/{id}/prompt via RuntimeController when --api is started with runtime"
+            .to_string(),
+    );
+    lines.push("  runtime_status: /api/config runtime.full_agent_prompt_available".to_string());
 
     // Fallback settings
     lines.push("\nFallback:".to_string());
@@ -458,6 +528,55 @@ fn format_effective_config() -> String {
     lines.push("  - Use /config doctor to validate configuration".to_string());
 
     lines.join("\n")
+}
+
+fn effective_bool_env(name: &str, default: bool) -> String {
+    match std::env::var(name) {
+        Ok(raw) => format!(
+            "{} (env: {}={})",
+            if matches!(
+                raw.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            ) {
+                "true"
+            } else {
+                "false"
+            },
+            name,
+            raw
+        ),
+        Err(_) => format!("{} (default)", if default { "true" } else { "false" }),
+    }
+}
+
+fn active_cost_override_summary() -> String {
+    let suffixes = [
+        "PROMPT_PER_1K",
+        "COMPLETION_PER_1K",
+        "CACHED_PROMPT_MULTIPLIER",
+        "CACHE_WRITE_PER_1K",
+    ];
+    let exact_keys = suffixes
+        .iter()
+        .map(|suffix| format!("PRIORITY_AGENT_COST_{}", suffix));
+    let prefix_keys = std::env::vars().map(|(key, _)| key).filter(|key| {
+        key.starts_with("PRIORITY_AGENT_COST_MODEL_")
+            || suffixes
+                .iter()
+                .any(|suffix| key.starts_with("PRIORITY_AGENT_COST_") && key.ends_with(suffix))
+    });
+    let mut keys: Vec<String> = exact_keys.chain(prefix_keys).collect();
+    keys.sort();
+    keys.dedup();
+    let present: Vec<String> = keys
+        .into_iter()
+        .filter(|key| std::env::var(key).is_ok())
+        .collect();
+    if present.is_empty() {
+        "none".to_string()
+    } else {
+        present.join(", ")
+    }
 }
 
 /// /config - Configuration viewer/editor
@@ -687,4 +806,18 @@ pub fn handle_shortcuts(app: &TuiApp) -> String {
         kb.global_sidebar_toggle,
         kb.global_message_search,
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn effective_config_includes_runtime_overview_sections() {
+        let output = format_effective_config();
+        assert!(output.contains("Context / Compression:"));
+        assert!(output.contains("token_counter:"));
+        assert!(output.contains("cache_write_pricing:"));
+        assert!(output.contains("full_agent_prompt:"));
+    }
 }

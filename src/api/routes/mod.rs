@@ -420,7 +420,7 @@ async fn session_prompt_handler(
                 diagnostic: None,
                 agent_runtime_entrypoint: Some("RuntimeController".to_string()),
                 error: Some(
-                    "full-agent prompt API is not wired to RuntimeController yet".to_string(),
+                    "full-agent prompt runtime is unavailable in this API state".to_string(),
                 ),
             }),
         ));
@@ -844,6 +844,8 @@ pub struct ConfigResponse {
     pub api: ApiConfigInfo,
     pub ui: UiConfigInfo,
     pub features: FeatureFlagsInfo,
+    pub runtime: RuntimeConfigInfo,
+    pub context: ContextConfigInfo,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -865,6 +867,28 @@ pub struct FeatureFlagsInfo {
     pub mcp_enabled: bool,
     pub skills_enabled: bool,
     pub web_search: bool,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct RuntimeConfigInfo {
+    pub full_agent_prompt_available: bool,
+    pub agent_runtime_entrypoint: Option<String>,
+    pub session_prompt_endpoint: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ContextConfigInfo {
+    pub provider_family: String,
+    pub model_pattern: String,
+    pub context_window_tokens: u64,
+    pub reserved_output_tokens: u64,
+    pub auto_compact_threshold_tokens: u64,
+    pub token_counter: String,
+    pub cache_accounting: String,
+    pub background_prune_enabled: bool,
+    pub time_based_compression_enabled: bool,
+    pub context_collapse_enabled: bool,
+    pub llm_compaction_enabled: bool,
 }
 
 #[derive(Debug, Deserialize)]

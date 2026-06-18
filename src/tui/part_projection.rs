@@ -236,12 +236,14 @@ pub(crate) fn project_event(snapshot: &mut TuiSyncSnapshot, event: &SessionProje
             completion_tokens,
             reasoning_tokens,
             cached_tokens,
+            cache_write_tokens,
         } => {
             snapshot.usage = Some(StreamUsageSnapshot {
                 prompt_tokens: *prompt_tokens,
                 completion_tokens: *completion_tokens,
                 reasoning_tokens: *reasoning_tokens,
                 cached_tokens: *cached_tokens,
+                cache_write_tokens: *cache_write_tokens,
             });
         }
         SessionProjectionEvent::OutputTruncated => {

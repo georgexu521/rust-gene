@@ -3,7 +3,6 @@ use super::tool_result_controller::NormalizedToolResult;
 use crate::engine::context_compressor::{
     estimate_messages_tokens, estimate_tokens, estimate_tool_schemas_tokens, ContextCompressor,
 };
-use crate::engine::context_usage::ContextUsageSnapshot;
 use crate::services::api::{Message, Tool};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -48,10 +47,10 @@ impl ContextBudgetController {
         tools: &[Tool],
     ) -> PreflightBudgetDecision {
         let stats = compressor.stats();
-        let observation = Self::observe_request_with_context_limit(
-            messages,
+        let observation = Self::observe_request_with_context_limit_and_message_tokens(
             tools,
             Some(stats.max_context_tokens),
+            compressor.estimate_messages_tokens(messages),
         );
         let should_compact =
             compressor.preflight_check(messages, 0, observation.tool_schema_tokens);
@@ -132,28 +131,31 @@ impl ContextBudgetController {
         tools: &[Tool],
         max_context_tokens: Option<u64>,
     ) -> RequestBudgetObservation {
-        let message_tokens = estimate_messages_tokens(messages);
+        Self::observe_request_with_context_limit_and_message_tokens(
+            tools,
+            max_context_tokens,
+            estimate_messages_tokens(messages),
+        )
+    }
+
+    fn observe_request_with_context_limit_and_message_tokens(
+        tools: &[Tool],
+        max_context_tokens: Option<u64>,
+        message_tokens: u64,
+    ) -> RequestBudgetObservation {
         let tool_schema_tokens = estimate_tool_schemas_tokens(tools);
         let max = max_context_tokens.unwrap_or(128_000);
         let reserved_output_tokens = max_context_tokens.map(|_| 4_096).unwrap_or(0);
-        let snapshot = ContextUsageSnapshot::estimate_with_limits(
-            messages,
-            tools,
-            "",
-            "",
-            max,
-            reserved_output_tokens,
-            None,
-        );
         let total_request_tokens = message_tokens.saturating_add(tool_schema_tokens);
+        let pressure_tokens = total_request_tokens.saturating_add(reserved_output_tokens);
         let remaining_context_tokens =
-            max_context_tokens.map(|_| snapshot.remaining_context_tokens);
+            max_context_tokens.map(|_| max.saturating_sub(pressure_tokens));
         RequestBudgetObservation {
             message_tokens,
             tool_schema_tokens,
             total_request_tokens,
             reserved_output_tokens,
-            pressure_tokens: snapshot.pressure_tokens,
+            pressure_tokens,
             exposed_tools: tools.len(),
             max_context_tokens,
             remaining_context_tokens,

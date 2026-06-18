@@ -443,6 +443,8 @@ pub struct Usage {
     /// Cached tokens (prompt prefix cache hits from the provider)
     /// Providers like OpenAI, Kimi K2, MiniMax return this in usage.prompt_tokens_details.cached_tokens
     pub cached_tokens: Option<u32>,
+    /// Cache write / creation tokens reported by providers that bill prompt-cache writes separately.
+    pub cache_write_tokens: Option<u32>,
 }
 
 #[cfg(test)]
