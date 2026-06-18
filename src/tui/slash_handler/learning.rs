@@ -133,7 +133,7 @@ pub fn handle_active_task(app: &mut TuiApp) -> String {
     output.push_str(
         &crate::tui::slash_handler::agents::format_mode_product_summary(
             app,
-            &app.current_agent_mode_label(),
+            app.current_agent_mode_label(),
             &format!("{:?}", app.mode),
         ),
     );

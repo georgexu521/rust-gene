@@ -163,7 +163,7 @@ pub fn handle_mode(app: &mut TuiApp, args: &str) -> String {
              - review: Findings-first code review stance\n\n\
              UI modes: chat, settings, vim\n\
              Usage: /mode <auto|build|plan|explore|review>",
-            format_mode_product_summary(app, &current_agent_mode, &current_ui_mode),
+            format_mode_product_summary(app, current_agent_mode, &current_ui_mode),
         );
     }
 
