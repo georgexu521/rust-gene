@@ -51,14 +51,53 @@ impl PreflightCompressionController {
                 break;
             }
             if compressor.compaction_circuit_open() {
-                compressor.record_compaction_decision(CompactionAttemptInput::new(
-                    "preflight",
-                    ContextCompactionStrategy::AutoCompact,
-                    CompactionDecision::CircuitOpen,
-                    preflight.observation.message_tokens,
-                    context.messages.len(),
-                    "compaction circuit open after repeated no-gain/failure attempts",
-                ));
+                let before_tokens = preflight.observation.message_tokens;
+                let compaction_record_len = compressor.compaction_records().len();
+                if let Some(snipped) = compressor.snip_tool_results_if_reduces(context.messages) {
+                    let after_tokens = estimate_messages_tokens(&snipped);
+                    *context.messages = snipped;
+                    compressor.annotate_compaction_record_trigger(
+                        compaction_record_len,
+                        "preflight_circuit_open",
+                    );
+                    compressor.record_compaction_decision(
+                        CompactionAttemptInput::new(
+                            "preflight_circuit_open",
+                            ContextCompactionStrategy::Snip,
+                            CompactionDecision::Compacted,
+                            before_tokens,
+                            context.messages.len(),
+                            "compaction circuit open; deterministic tool snip reduced estimated tokens",
+                        )
+                        .with_after(Some(after_tokens), Some(context.messages.len())),
+                    );
+                    context.trace.record(TraceEvent::ContextCompacted {
+                        before_tokens: before_tokens as usize,
+                        after_tokens: after_tokens as usize,
+                        strategy: "snip".to_string(),
+                        trigger: Some("preflight_circuit_open".to_string()),
+                        token_pressure: None,
+                        boundary_id: None,
+                        sequence: None,
+                        messages_before: Some(context.messages.len()),
+                        messages_after: Some(context.messages.len()),
+                        preserved_tail_count: None,
+                        retained_items: vec!["recent_tool_results:last_3".to_string()],
+                        provenance: vec![
+                            "tool_result_snip".to_string(),
+                            "trigger:preflight_circuit_open".to_string(),
+                        ],
+                    });
+                } else {
+                    compressor.record_compaction_decision(CompactionAttemptInput::new(
+                        "preflight",
+                        ContextCompactionStrategy::AutoCompact,
+                        CompactionDecision::CircuitOpen,
+                        before_tokens,
+                        context.messages.len(),
+                        "compaction circuit open after repeated no-gain/failure attempts",
+                    ));
+                }
                 break;
             }
             debug!(
@@ -254,6 +293,71 @@ mod tests {
         assert_eq!(runtime_diet.exposed_tools, 1);
         assert!(runtime_diet.prompt_tokens > 0);
         assert!(runtime_diet.total_request_tokens >= runtime_diet.prompt_tokens);
+    }
+
+    #[tokio::test]
+    async fn circuit_open_still_allows_deterministic_tool_snip() {
+        let compressor = Arc::new(Mutex::new(ContextCompressor::new(1_000)));
+        {
+            let mut compressor = compressor.lock().await;
+            compressor.record_compaction_decision(
+                CompactionAttemptInput::new(
+                    "test",
+                    ContextCompactionStrategy::AutoCompact,
+                    CompactionDecision::NoGain,
+                    1_000,
+                    4,
+                    "no reduction",
+                )
+                .with_after(Some(1_000), Some(4)),
+            );
+            compressor.record_compaction_decision(
+                CompactionAttemptInput::new(
+                    "test",
+                    ContextCompactionStrategy::AutoCompact,
+                    CompactionDecision::NoGain,
+                    1_000,
+                    4,
+                    "no reduction",
+                )
+                .with_after(Some(1_000), Some(4)),
+            );
+            assert!(compressor.compaction_circuit_open());
+        }
+
+        let trace = TraceCollector::new(TurnTrace::new("session", 1, "test"));
+        let mut runtime_diet = RuntimeDietSnapshot::new(true);
+        let mut messages = vec![
+            Message::tool("call_0", "old output ".repeat(400)),
+            Message::tool("call_1", "recent"),
+            Message::tool("call_2", "recent"),
+            Message::tool("call_3", "recent"),
+        ];
+
+        PreflightCompressionController::run(PreflightCompressionContext {
+            compressor: Some(&compressor),
+            session_store: None,
+            session_id: "session",
+            messages: &mut messages,
+            tools: &[],
+            runtime_diet: &mut runtime_diet,
+            trace: &trace,
+        })
+        .await;
+
+        let first_tool = match &messages[0] {
+            Message::Tool { content, .. } => content,
+            _ => panic!("expected tool"),
+        };
+        assert!(first_tool.contains("(truncated)"));
+        let compressor = compressor.lock().await;
+        let last_attempt = compressor
+            .compaction_attempt_records()
+            .last()
+            .expect("missing attempt");
+        assert_eq!(last_attempt.strategy, ContextCompactionStrategy::Snip);
+        assert_eq!(last_attempt.decision, CompactionDecision::Compacted);
+        assert!(!last_attempt.circuit_open);
     }
 
     #[tokio::test]

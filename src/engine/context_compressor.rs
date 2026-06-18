@@ -144,13 +144,13 @@ through context compression. Do not paraphrase or override them.]";
 ///
 /// 基于会话历史的智能压缩：
 /// 1. 识别高频出现的文件/工具/模式，保留到 Critical Context
-/// 2. 自动提取用户偏好（从记忆系统）
+/// 2. 自动提取用户偏好（从已注入的记忆/用户画像上下文）
 /// 3. 识别并保留未完成的任务链
 #[derive(Debug, Clone, Default)]
 pub struct SessionMemoryCompact {
     /// 从会话中提取的关键文件（出现频率高的）
     pub hot_files: Vec<String>,
-    /// 用户偏好记忆（当前未由 analyze() 自动填充，需外部注入）
+    /// 用户偏好记忆（从已注入的 memory/user-profile 行中提取）
     pub user_preferences: Vec<String>,
     /// 未完成的任务链
     pub pending_tasks: Vec<String>,
@@ -166,9 +166,12 @@ impl SessionMemoryCompact {
         let mut file_counts: HashMap<String, usize> = HashMap::new();
         let mut tool_counts: HashMap<String, usize> = HashMap::new();
         let mut pending: Vec<String> = Vec::new();
+        let mut user_preferences: Vec<String> = Vec::new();
 
         for msg in messages {
             let text = msg.content();
+
+            Self::extract_user_preferences_from_text(&mut user_preferences, &text);
 
             // 提取文件路径（简单启发式）
             for word in text.split_whitespace() {
@@ -208,10 +211,59 @@ impl SessionMemoryCompact {
 
         Self {
             hot_files: hot_files.into_iter().take(5).map(|(f, _)| f).collect(),
-            user_preferences: Vec::new(), // 待接入：需从 MemoryManager 或用户画像注入
+            user_preferences,
             pending_tasks: pending.into_iter().take(10).collect(),
             tool_patterns: tool_patterns.into_iter().take(3).map(|(t, _)| t).collect(),
         }
+    }
+
+    fn extract_user_preferences_from_text(target: &mut Vec<String>, text: &str) {
+        for line in text.lines() {
+            if let Some(preference) = Self::normalize_user_preference_line(line) {
+                Self::push_unique_capped(target, preference, 8);
+            }
+        }
+    }
+
+    fn normalize_user_preference_line(line: &str) -> Option<String> {
+        let trimmed = line
+            .trim()
+            .trim_start_matches("- ")
+            .trim_start_matches("* ")
+            .trim();
+        let lower = trimmed.to_ascii_lowercase();
+        let prefixes = [
+            "user preference:",
+            "user preferences:",
+            "preference:",
+            "memory preference:",
+            "profile preference:",
+        ];
+        for prefix in prefixes {
+            if let Some(rest) = lower.strip_prefix(prefix) {
+                let offset = trimmed.len().saturating_sub(rest.len());
+                let preference = trimmed[offset..].trim();
+                if !preference.is_empty() {
+                    return Some(preference.chars().take(220).collect());
+                }
+            }
+        }
+        for prefix in ["用户偏好:", "用户偏好：", "偏好:", "偏好："] {
+            if let Some(preference) = trimmed.strip_prefix(prefix) {
+                let preference = preference.trim();
+                if !preference.is_empty() {
+                    return Some(preference.chars().take(220).collect());
+                }
+            }
+        }
+        None
+    }
+
+    fn push_unique_capped(target: &mut Vec<String>, value: String, max: usize) {
+        if target.len() >= max || target.iter().any(|item| item == &value) {
+            return;
+        }
+        target.push(value);
     }
 
     /// 将会话记忆注入到摘要文本中

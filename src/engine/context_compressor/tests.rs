@@ -323,6 +323,62 @@ fn successful_compaction_attempt_resets_circuit_counters() {
 }
 
 #[test]
+fn reactive_compaction_attempt_records_retrying_and_recovered() {
+    let mut compressor = ContextCompressor::new(10_000);
+
+    let retrying = compressor.record_compaction_decision(
+        CompactionAttemptInput::new(
+            "api_context_error",
+            ContextCompactionStrategy::ReactiveCompact,
+            CompactionDecision::Retrying,
+            12_000,
+            18,
+            "provider reported context limit; retrying after compaction",
+        )
+        .with_after(Some(7_500), Some(12)),
+    );
+    assert_eq!(retrying.decision, CompactionDecision::Retrying);
+    assert_eq!(retrying.trigger, "api_context_error");
+    assert_eq!(
+        retrying.strategy,
+        ContextCompactionStrategy::ReactiveCompact
+    );
+
+    compressor.record_compaction_decision(
+        CompactionAttemptInput::new(
+            "api_context_error",
+            ContextCompactionStrategy::ReactiveCompact,
+            CompactionDecision::NoGain,
+            7_500,
+            12,
+            "first reactive compaction did not reduce enough",
+        )
+        .with_after(Some(7_500), Some(12)),
+    );
+
+    let recovered = compressor.record_compaction_decision(
+        CompactionAttemptInput::new(
+            "api_context_error",
+            ContextCompactionStrategy::ReactiveCompact,
+            CompactionDecision::Recovered,
+            7_500,
+            12,
+            "retry succeeded after compaction",
+        )
+        .with_after(Some(6_000), Some(10))
+        .with_boundary_id(Some("boundary-reactive-1".to_string())),
+    );
+
+    assert_eq!(recovered.decision, CompactionDecision::Recovered);
+    assert_eq!(recovered.consecutive_no_gain, 0);
+    assert_eq!(
+        recovered.boundary_id.as_deref(),
+        Some("boundary-reactive-1")
+    );
+    assert_eq!(compressor.compaction_attempt_records().len(), 3);
+}
+
+#[test]
 fn test_align_boundary_forward_skips_orphan_tools() {
     // 头部之后有孤立的 tool results（被 summarize 后残留）
     let messages = vec![
@@ -349,6 +405,54 @@ fn test_align_boundary_forward_no_tools() {
 
     let aligned = ContextCompressor::align_boundary_forward(&messages, 0);
     assert_eq!(aligned, 0); // 第一条就是 user，不变
+}
+
+#[test]
+fn split_tail_keeps_multi_tool_call_group_together() {
+    let compressor = ContextCompressor::new(1_000);
+    let messages = vec![
+        Message::user("older"),
+        Message::assistant("older response"),
+        Message::user("run two commands"),
+        Message::assistant_with_tools(
+            "running",
+            vec![
+                ToolCall {
+                    id: "call_a".to_string(),
+                    name: "bash".to_string(),
+                    arguments: serde_json::json!({"command": "cargo check"}),
+                },
+                ToolCall {
+                    id: "call_b".to_string(),
+                    name: "bash".to_string(),
+                    arguments: serde_json::json!({"command": "cargo test"}),
+                },
+            ],
+        ),
+        Message::tool("call_a", "check output"),
+        Message::tool("call_b", "test output"),
+    ];
+
+    let (_middle, tail) = compressor.split_tail(&messages);
+
+    assert!(
+        matches!(
+            tail.first(),
+            Some(Message::Assistant {
+                tool_calls: Some(calls),
+                ..
+            }) if calls.len() == 2
+        ),
+        "tail should start at the assistant that owns both tool calls"
+    );
+    assert!(tail.iter().any(|m| matches!(
+        m,
+        Message::Tool { tool_call_id, .. } if tool_call_id == "call_a"
+    )));
+    assert!(tail.iter().any(|m| matches!(
+        m,
+        Message::Tool { tool_call_id, .. } if tool_call_id == "call_b"
+    )));
 }
 
 #[test]
@@ -406,6 +510,36 @@ fn test_prune_keeps_more_context_for_critical_tool_output() {
         first_tool.len() > 200,
         "critical tool output should preserve more context"
     );
+}
+
+#[test]
+fn test_prune_preserves_protected_runtime_tool_output() {
+    let protected = format!(
+        "permission_decision_evidence: allowed risk_level=high matched_rules=[git push]\n{}",
+        "raw evidence line\n".repeat(120)
+    );
+    let mut messages = vec![Message::user("start"), Message::assistant("ok")];
+    messages.push(Message::tool("call_0", protected.clone()));
+    for i in 1..6 {
+        messages.push(Message::tool(
+            format!("call_{}", i),
+            format!("ordinary output {}\n{}", i, "x".repeat(1500)),
+        ));
+    }
+
+    let pruned = ContextCompressor::prune_old_tool_results(&messages);
+    let first_tool = pruned
+        .iter()
+        .find_map(|m| match m {
+            Message::Tool {
+                tool_call_id,
+                content,
+            } if tool_call_id == "call_0" => Some(content.clone()),
+            _ => None,
+        })
+        .expect("missing call_0");
+
+    assert_eq!(first_tool, protected);
 }
 
 #[test]
@@ -1248,7 +1382,7 @@ fn test_compact_boundary_embedded_in_compression() {
 #[test]
 fn test_session_memory_compact_analyze() {
     let messages = vec![
-        Message::system("System prompt"),
+        Message::system("System prompt\nUser preference: Keep status updates concise."),
         Message::user("Read src/main.rs and src/lib.rs"),
         Message::assistant("I read src/main.rs and src/lib.rs"),
         Message::tool("call_1", "Content of src/main.rs"),
@@ -1272,6 +1406,10 @@ fn test_session_memory_compact_analyze() {
         smc.pending_tasks.iter().any(|t| t.contains("TODO")),
         "Should detect TODO"
     );
+    assert!(smc
+        .user_preferences
+        .iter()
+        .any(|p| p == "Keep status updates concise."));
 }
 
 #[test]

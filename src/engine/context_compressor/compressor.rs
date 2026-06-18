@@ -86,19 +86,44 @@ impl ContextCompressor {
 
     /// Snip old tool outputs without summarizing the conversation.
     pub fn snip_tool_results(&mut self, messages: &[Message]) -> Vec<Message> {
-        let tokens_before = estimate_messages_tokens(messages);
-        self.total_tokens_before += tokens_before;
+        let (result, tokens_before, tokens_after) = Self::snip_tool_results_candidate(messages);
+        self.record_tool_snip_compaction(messages.len(), result.len(), tokens_before, tokens_after);
+        result
+    }
 
+    /// Snip old tool outputs only when it reduces estimated tokens.
+    pub fn snip_tool_results_if_reduces(&mut self, messages: &[Message]) -> Option<Vec<Message>> {
+        let (result, tokens_before, tokens_after) = Self::snip_tool_results_candidate(messages);
+        if tokens_after >= tokens_before {
+            return None;
+        }
+        self.record_tool_snip_compaction(messages.len(), result.len(), tokens_before, tokens_after);
+        Some(result)
+    }
+
+    fn snip_tool_results_candidate(messages: &[Message]) -> (Vec<Message>, u64, u64) {
+        let tokens_before = estimate_messages_tokens(messages);
         let result = Self::prune_old_tool_results(messages);
         let tokens_after = estimate_messages_tokens(&result);
+        (result, tokens_before, tokens_after)
+    }
+
+    fn record_tool_snip_compaction(
+        &mut self,
+        messages_before: usize,
+        messages_after: usize,
+        tokens_before: u64,
+        tokens_after: u64,
+    ) {
+        self.total_tokens_before += tokens_before;
         self.total_tokens_after += tokens_after;
         self.record_compaction(CompactionRuntimeRecord {
             strategy: ContextCompactionStrategy::Snip,
             level: None,
             trigger: None,
             token_pressure: Some(self.token_pressure_for_tokens(tokens_before)),
-            messages_before: messages.len(),
-            messages_after: result.len(),
+            messages_before,
+            messages_after,
             tokens_before,
             tokens_after,
             token_delta: compaction_token_delta(tokens_before, tokens_after),
@@ -109,8 +134,6 @@ impl ContextCompressor {
             retained_items: vec!["recent_tool_results:last_3".to_string()],
             provenance: vec!["tool_result_snip".to_string()],
         });
-
-        result
     }
 
     fn micro_compress_with_strategy(
@@ -742,6 +765,8 @@ impl ContextCompressor {
                     let is_recent = tool_seen > tool_msg_count.saturating_sub(keep_last_n);
                     if is_recent || tool_msg_count <= keep_last_n {
                         result.push(msg.clone());
+                    } else if Self::is_protected_tool_output(content) {
+                        result.push(msg.clone());
                     } else {
                         let keep_len = if Self::is_critical_tool_output(content) {
                             1000
@@ -765,6 +790,28 @@ impl ContextCompressor {
             }
         }
         result
+    }
+
+    fn is_protected_tool_output(content: &str) -> bool {
+        let lower = content.to_ascii_lowercase();
+        content.contains("[exit status:")
+            || content.contains("required command")
+            || lower.contains("cargo test")
+            || lower.contains("cargo check")
+            || lower.contains("cargo build")
+            || (lower.contains("rg ") && lower.contains("fixtures/"))
+            || lower.contains("required validation:")
+            || lower.contains("permission_decision_evidence")
+            || lower.contains("permission decision:")
+            || lower.contains("permission denied")
+            || (lower.contains("permission") && lower.contains("risk_level"))
+            || (lower.contains("permission") && lower.contains("matched_rules"))
+            || lower.contains("checkpoint")
+            || lower.contains("failure_owner")
+            || lower.contains("failure owner")
+            || lower.contains("[preserved skills")
+            || lower.contains("preserved skills")
+            || lower.contains("active skill")
     }
 
     fn is_critical_tool_output(content: &str) -> bool {
@@ -811,7 +858,7 @@ impl ContextCompressor {
 
     /// 分离尾部（按 token 预算 + soft_ceiling 保护）
     /// 包含 tool group boundary alignment（不切割 tool_call/tool_result 对）
-    fn split_tail<'a>(&self, messages: &'a [Message]) -> (&'a [Message], &'a [Message]) {
+    pub(super) fn split_tail<'a>(&self, messages: &'a [Message]) -> (&'a [Message], &'a [Message]) {
         let target = self.budget.target_tokens();
         let soft_ceiling = self.budget.tail_soft_ceiling();
         let mut used_tokens = 0u64;

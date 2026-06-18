@@ -1,6 +1,6 @@
 # 缓存命中与动态压缩系统审计报告
 
-日期：2026-06-17  
+日期：2026-06-17
 更新：2026-06-18
 
 ## 审计范围
@@ -28,9 +28,9 @@
 
 - `CompactionDecision::Retrying` / `Recovered` 已经在 API 反应式压缩重试路径使用，不能再列为未使用死枚举。
 - `ContextCollapseService` 本体未接入生产对话循环，但同文件中的压缩元数据、决策、运行时记录类型被生产路径使用，不能简单建议删除整个文件。
-- `last_result_idx` 确实是死变量，但工具调用/工具结果边界对齐并非完全无效；当前问题是局部冗余代码和注释噪音。
+- `last_result_idx` 死变量已清理，复杂 tool-call group 边界已有回归测试。
 - `Message::content()` 不是重复实现；它是 `context_compressor.rs` 中的私有 helper。可以优化为公共借用 helper，但不是 Rust 维护冲突。
-- token 估算是粗略启发式，但因为 `str::len()` 返回字节数，不能简单说“CJK 严重低估”。更准确的问题是模型无关、混合内容误差不可控。
+- token 估算已从纯 `len()/4` 升级为按字符类别和 profile 估算；当前仍不是真实 tokenizer。
 - 后台修剪、时间触发压缩、`ContextCollapseService` 属于未接入或弱接入路径，需要在文档里和生产主链路分开。
 
 ## 当前架构事实
@@ -106,47 +106,46 @@
 
 ## 发现的问题与状态
 
-### 1. `SessionMemoryCompact.user_preferences` 仍未由生产代码填充
+### 1. `SessionMemoryCompact.user_preferences` 已从注入上下文提取
 
-**状态：未完成。**  
-`SessionMemoryCompact::analyze()` 仍将 `user_preferences` 设置为 `Vec::new()`，注释写着“由外部注入”，但当前未看到生产路径注入该字段。测试中存在手工构造偏好的用例，说明字段设计意图存在。
+**状态：已完成当前低风险接入。**
+`SessionMemoryCompact::analyze()` 不再固定返回空 `user_preferences`。当前会从已经进入消息上下文的 memory/profile 行中提取显式偏好，例如 `User preference:`、`Memory preference:`、`用户偏好：` 等，并在压缩摘要中写入 `## User Preferences`。
 
-建议二选一：
+这个实现刻意保守：它不把普通聊天里的“我喜欢/我希望”直接提升成长期偏好，只接受稳定记忆/画像上下文里的显式标签，避免压缩阶段制造伪记忆。
 
-- 如果要保留该字段，应从 memory manager、用户画像或稳定偏好来源注入，并在 compact metadata 中保留来源。
-- 如果近期不打算接入，应删除字段或改名为明确的 future field，避免审计误认为已具备用户偏好压缩能力。
+剩余增强项：如果未来希望做到完整来源追踪，可以让 memory retrieval 直接传入带 metadata 的偏好记录，而不是只从已注入文本中提取。
 
-### 2. `last_result_idx` 是死变量，但边界对齐不是完全无效
+### 2. `last_result_idx` 死变量已清理
 
-**状态：未完成。**  
-`compressor.rs` 中 `last_result_idx` 被计算后通过 `let _ = last_result_idx;` 丢弃。这段代码确实应该清理。
+**状态：已完成。**
+当前 `compressor.rs` 中已不存在 `last_result_idx` 死变量，也不再有 `let _ = last_result_idx;` 这类无效占位。
 
-不过原文“工具组边界对齐代码实际上没有效果”过强。当前代码仍会在 tail 起点落到 `Tool` 消息时向前找对应 assistant，也会通过后续 sanitize 处理孤立工具消息。问题应描述为：局部变量冗余、意图不清、缺少针对复杂 tool-call group 的边界测试。
+原文“工具组边界对齐代码实际上没有效果”过强。当前代码仍会在 tail 起点落到 `Tool` 消息时向前找对应 assistant，也会通过后续 sanitize 处理孤立工具消息。本次已增加复杂 multi-tool-call group 回归测试，确保 tail 包含对应 assistant 和完整 tool results。
 
 ### 3. `CompactionDecision::Retrying/Recovered` 已接入
 
-**状态：原问题已不成立。**  
+**状态：原问题已不成立。**
 `api_request_controller.rs` 在 provider 报上下文过长时记录 `Retrying`，压缩重试有效缩小时记录 `Recovered`，失败或无收益时记录 `Failed`。这两个枚举不应删除。
 
-后续可以补充测试，覆盖“上下文过长 -> 反应式压缩 -> retrying/recovered 记录”的行为，但不能再把它列为死代码。
+本次已补充 `Retrying` / `Recovered` attempt record 测试，覆盖 reactive compaction 的记录策略、boundary id 和 recovered 后计数器归零行为。它不是端到端 provider mock 测试，但已经锁住当前决策记录层。
 
-### 4. `ContextCollapseService` 本体未接入生产路径
+### 4. `ContextCollapseService` 已明确为实验服务
 
-**状态：未完成，需要明确归属。**  
+**状态：已完成当前归属决策。**
 `ContextCollapseService` 受 `PRIORITY_AGENT_CONTEXT_COLLAPSE` 门控，默认关闭，当前未看到主对话循环调用它。它更像早期 compact boundary / collapse 实验服务。
 
-但 `context_collapse.rs` 中的 `CompactMetadata`、`ContextCompactionStrategy`、`CompactionDecision`、`CompactionAttemptRecord`、`ContextTokenPressure`、`CompactionRuntimeRecord` 已被当前压缩主链路使用。后续如果清理，应该只清理或标注未接入的 service/config/persistence 片段，不能删除共享类型。
+当前代码已经在 `context_collapse.rs` 和 `context_compressor.rs` 模块文档中标注：`ContextCollapseService` 是实验性、未接入主运行时；但 `context_collapse.rs` 中的 `CompactMetadata`、`ContextCompactionStrategy`、`CompactionDecision`、`CompactionAttemptRecord`、`ContextTokenPressure`、`CompactionRuntimeRecord` 已被当前压缩主链路使用。后续如果清理，只能清理 service/config/persistence 片段，不能删除共享类型。
 
-### 5. `has_active_skills` 不是源自真实技能状态
+### 5. skills preserved marker 已改为明确策略
 
-**状态：未完成。**  
-`ContextCompressor` 初始化时将 `has_active_skills` 设为 `true`，`mark_skills_active()` 也只能设为 `true`。这意味着 preserved skills marker 基本是默认追加，而不是由当前技能上下文驱动。
+**状态：已完成当前策略。**
+原来的 `has_active_skills` / `mark_skills_active()` 语义已经改为 `preserve_skills_marker` / `preserve_skills_marker()` / `mark_skills_preserved()`，代码注释也明确：压缩摘要中永远保留技能提醒 marker。
 
-如果项目策略是“压缩摘要永远保留技能提醒”，应把字段改成明确常量或策略名。如果策略是“只有活跃技能时保留”，就需要接入真实技能上下文，并增加 inactive/clear 路径。
+这不是“真实技能状态驱动”，而是显式 always-preserve 策略。考虑到 skills 在压缩中被模型改写或丢失的风险，这个策略目前合理；如果以后要按真实技能状态细分，再接入 SkillRuntime。
 
 ### 6. `Message::content()` 不是重复实现，但可以优化
 
-**状态：原问题表述不准确，低优先级。**  
+**状态：原问题表述不准确，低优先级。**
 `Message` 在 `src/services/api/mod.rs` 中没有公共 `content()` 方法，`context_compressor.rs` 里的 `content()` 是私有 helper，不是重复 API。
 
 可以考虑后续优化为：
@@ -158,21 +157,21 @@
 
 ### 7. `ContextManager` 是平行旧路径
 
-**状态：未完成。**  
+**状态：已完成当前决策。**
 `src/engine/context_manager.rs` 包装了 `ContextCompressor` 并维护自己的阈值与 `manage()` 流程，但当前主对话路径使用的是 preflight、streaming、API reactive 和 request-local selective compression。
 
-建议确认它是否仍服务 API/测试/旧入口。如果无生产调用，应标记 deprecated 或删除，避免未来修复压缩行为时改错路径。
+当前文件顶部已经标注“旧路径，已废弃”，`ContextManager` 也带有 `#[deprecated]`，并说明主对话循环使用 `PreflightCompressionController + ContextBudgetController + ContextCompressor`。当前只保留测试/参考用途，避免未来修复压缩行为时改错路径。
 
-### 8. token 估算仍是模型无关启发式
+### 8. token 估算已升级为 profile-aware 启发式
 
-**状态：未完成。**  
-`estimate_tokens(text)` 使用 `text.len().div_ceil(4)`。因为 `len()` 是 UTF-8 字节长度，对中文不一定“严重低估”，但它仍然无法准确反映不同 provider/model、代码、JSON、emoji、工具 schema 的 tokenization。
+**状态：已完成当前启发式；真实 tokenizer 仍是增强项。**
+`estimate_tokens(text)` 已不再使用纯 `text.len().div_ceil(4)`，当前会按 ASCII word、whitespace、ASCII punctuation、CJK、其他 Unicode 分开估算。工具调用 JSON 和 provider tool schema 会走 `TokenEstimateProfile::JsonToolSchema`，并提供 `estimate_tokens_for_model_context()` 入口。
 
-建议后续引入 provider/model token profile，至少区分普通文本、CJK、代码块和 JSON/tool payload。压缩触发和 cache 诊断都依赖该估算，误差会直接影响“是否该压缩”的判断。
+剩余边界是它仍然不是真实 tokenizer。若后续需要更高精度，可接入 provider/model tokenizer 或在 `ModelContextProfile` 中增加 tokenizer hint。
 
-### 9. 压缩配置矩阵需要整理
+### 9. 压缩配置矩阵已补充，仍可拆成独立维护文档
 
-**状态：未完成。**  
+**状态：文档内已完成；独立维护文档可后续补。**
 原文只列了三个环境变量，但当前至少还包括 context collapse 和 time-based compression 相关变量。更大的问题不是变量数量，而是它们跨越不同层级：
 
 - 请求局部压缩：不改写历史，只减少本次请求体。
@@ -180,18 +179,29 @@
 - 实验服务：默认关闭，未接入主循环。
 - 判断 helper：测试存在，但生产触发路径不完整。
 
-建议新增一份压缩配置说明，明确每个开关的默认值、生产状态、是否持久化、是否影响 prompt cache。
+本文已经补充压缩配置矩阵，`context_compressor.rs` 模块文档也写明核心开关和影响面。后续如果要面向用户或维护者，可以再拆成独立配置文档。
 
-### 10. 经济守卫可能跳过有价值的压缩
+### 10. 经济守卫已保留 deterministic trim fallback
 
-**状态：未完成，需要测试和产品决策。**  
+**状态：已完成当前修复。**
 当前 compressor 会在短对话且连续 no-gain 后跳过 heavy work。这能避免反复做无收益压缩，但也可能在“短而巨大的工具输出”场景下跳过本该有效的轻量裁剪。
 
-建议增加针对短会话大工具输出、连续 no-gain 后再次增长、provider context error 后恢复的测试。更稳妥的策略可能是从 heavy/LLM 压缩降级到 deterministic trim，而不是完全跳过。
+当前策略已经调整为：preflight circuit open 后仍然允许一次 deterministic `snip_tool_results` fallback；如果它能减少 token，则记录 `ContextCompactionStrategy::Snip + CompactionDecision::Compacted` 并关闭 no-gain circuit；如果没有收益，才保留 `CircuitOpen`。这样不会重新启用 heavy/LLM 压缩，但能处理短会话巨大旧工具输出。
 
-### 11. 后台修剪和时间触发压缩不应写成已接入主路径
+本次已补充：
 
-**状态：文档已修正，代码未变。**  
+- short conversation huge old tool output 的 request-local selective compression 测试。
+- circuit open 后 deterministic tool snip 的 preflight 测试。
+- reactive `Retrying` / `Recovered` attempt record 测试。
+
+### 11. protected tool outputs 已扩展为 runtime evidence 保护
+
+**状态：已完成当前保护。**
+选择性工具输出压缩和历史工具输出 snip 现在都保护 validation、permission、checkpoint、failure_owner、preserved skills 等 runtime evidence。普通旧工具输出仍可被压缩为 `evidence_safe_for_closeout=false` 摘要，但这些 closeout/recovery 关键证据会保留原文。
+
+### 12. 后台修剪和时间触发压缩不应写成已接入主路径
+
+**状态：文档已修正，代码未变。**
 `background_prune_tool_outputs()` 和 `needs_time_based_compression()` 都有实现/测试痕迹，但当前未看到主对话循环稳定调用它们。后续要么接入主路径并补测试，要么明确标注为保留 helper。
 
 ## 与 opencode 对比的保留意见
@@ -223,19 +233,37 @@
 - [x] 补充 compact boundary、message replacement、runtime record 的持久化事实。
 - [x] 补充 context collapse、time-based compression、background prune 的未接入/弱接入状态。
 - [x] 补充压缩配置矩阵和后续整理建议。
+- [x] 复核并更新当前完成状态：`last_result_idx`、`ContextCollapseService` 标注、skills marker 策略、`ContextManager` deprecation、token estimator profile 已完成。
+- [x] 接入 `SessionMemoryCompact.user_preferences` 的显式 memory/profile 行提取。
+- [x] 补充复杂 multi-tool-call group 边界测试。
+- [x] 补充 API reactive `Retrying` / `Recovered` 压缩决策记录测试。
+- [x] 为 preflight circuit-open 场景增加 deterministic tool snip fallback。
+- [x] 扩展 protected tool outputs，避免验证、权限、checkpoint、skills、failure evidence 被普通压缩丢失。
+
+## 本次复核验证
+
+- `cargo test -q cache_stability`
+- `cargo test -q context_compressor`
+- `cargo test -q message_compression`
+- `cargo test -q preflight_compression_controller`
+- `cargo check -q`
+- `git diff --check`
 
 ## 后续行动
 
-- [ ] 决定 `SessionMemoryCompact.user_preferences` 是接入真实记忆偏好还是删除。
-- [ ] 删除 `last_result_idx` 死变量，并补充 tool-call group 边界测试。
-- [ ] 为 API reactive compression 增加 `Retrying` / `Recovered` 记录测试。
-- [ ] 标注或清理未接入的 `ContextCollapseService` 本体，保留生产路径使用的共享类型。
-- [ ] 将 `has_active_skills` 改为真实技能状态或明确的 always-preserve 策略。
-- [ ] 判断 `ContextManager` 是否仍有入口；无入口则标记 deprecated 或删除。
-- [ ] 改进 token 估算，至少引入 provider/model profile 或更细分的启发式。
-- [ ] 整理压缩相关环境变量文档，区分请求局部压缩、历史压缩和实验路径。
-- [ ] 为短会话巨大工具输出和 no-gain 后增长场景补测试。
-- [ ] 评估 protected tool outputs，避免验证、权限、checkpoint、skills、failure evidence 被压缩丢失。
+- [x] 接入 `SessionMemoryCompact.user_preferences` 的显式记忆/用户画像偏好提取。
+- [x] 删除 `last_result_idx` 死变量。
+- [x] 补充复杂 tool-call group 边界测试。
+- [x] 为 API reactive compression 增加 `Retrying` / `Recovered` 记录测试。
+- [x] 标注未接入的 `ContextCollapseService` 本体，保留生产路径使用的共享类型。
+- [x] 将 `has_active_skills` 改为明确的 always-preserve 策略。
+- [x] 判断 `ContextManager` 是否仍有入口；当前已标记 deprecated。
+- [x] 改进 token 估算，引入 JSON/tool schema 和 model context profile 启发式。
+- [x] 整理压缩相关环境变量文档，区分请求局部压缩、历史压缩和实验路径。
+- [x] 为短会话巨大工具输出和 no-gain 后增长场景补测试并保留 deterministic snip fallback。
+- [x] 评估并实现 protected tool outputs，避免验证、权限、checkpoint、skills、failure evidence 被压缩丢失。
+- [ ] 如需更高精度，接入真实 tokenizer 或 provider/model tokenizer hint。
+- [ ] 如果要面向用户暴露配置，拆出独立压缩配置文档。
 
 ## 建议验证
 

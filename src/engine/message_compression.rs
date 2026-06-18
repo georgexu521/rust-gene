@@ -43,7 +43,7 @@ fn compress_old_tool_outputs(
             if content.len() <= min_chars {
                 continue; // already short, skip
             }
-            if is_validation_evidence(content) {
+            if is_protected_tool_output(content) {
                 report.evidence_preserved += 1;
                 continue;
             }
@@ -159,8 +159,8 @@ pub fn background_prune_tool_outputs(messages: &mut [Message]) -> BackgroundPrun
             if content.len() <= 500 {
                 continue;
             }
-            // 保护: required validation evidence
-            if is_validation_evidence(content) {
+            // 保护: runtime evidence that must remain raw for closeout and recovery.
+            if is_protected_tool_output(content) {
                 report.evidence_preserved += 1;
                 continue;
             }
@@ -179,9 +179,9 @@ pub fn background_prune_tool_outputs(messages: &mut [Message]) -> BackgroundPrun
     report
 }
 
-/// 检查 tool output 是否是 required validation 证据。
-/// 保护: [exit status:], cargo test, rg, 所有 required command 的输出。
-fn is_validation_evidence(content: &str) -> bool {
+/// 检查 tool output 是否是必须保留原文的 runtime evidence。
+/// 保护 validation、permission、checkpoint、failure-owner 和 skill-state 证据。
+fn is_protected_tool_output(content: &str) -> bool {
     let lower = content.to_ascii_lowercase();
     content.contains("[exit status:")
         || content.contains("required command")
@@ -189,6 +189,18 @@ fn is_validation_evidence(content: &str) -> bool {
         || lower.contains("cargo check")
         || lower.contains("cargo build")
         || (lower.contains("rg ") && lower.contains("fixtures/"))
+        || lower.contains("required validation:")
+        || lower.contains("permission_decision_evidence")
+        || lower.contains("permission decision:")
+        || lower.contains("permission denied")
+        || (lower.contains("permission") && lower.contains("risk_level"))
+        || (lower.contains("permission") && lower.contains("matched_rules"))
+        || lower.contains("checkpoint")
+        || lower.contains("failure_owner")
+        || lower.contains("failure owner")
+        || lower.contains("[preserved skills")
+        || lower.contains("preserved skills")
+        || lower.contains("active skill")
 }
 
 pub fn background_prune_enabled() -> bool {
@@ -288,6 +300,63 @@ mod tests {
             _ => panic!("expected tool"),
         };
         assert!(content.contains("[exit status: 0]"));
+    }
+
+    #[test]
+    fn preserves_protected_runtime_evidence() {
+        let protected_cases = [
+            "permission_decision_evidence: allowed risk_level=high matched_rules=[git push]",
+            "checkpoint-backed file change round round_123 completed",
+            "failure_owner=agent_flow validation failed but proof is retained",
+            "[PRESERVED SKILLS] active skill definitions remain loaded",
+        ];
+
+        for protected in protected_cases {
+            let mut messages = vec![
+                Message::user("first"),
+                Message::Tool {
+                    tool_call_id: "t1".to_string(),
+                    content: format!("{}\n{}", protected, "raw evidence line\n".repeat(40)),
+                },
+            ];
+
+            let original = match &messages[1] {
+                Message::Tool { content, .. } => content.clone(),
+                _ => unreachable!(),
+            };
+            let report = compress_old_tool_outputs(&mut messages, 0, 300);
+
+            assert_eq!(report.compressed_count, 0);
+            assert_eq!(report.evidence_preserved, 1);
+            let content = match &messages[1] {
+                Message::Tool { content, .. } => content,
+                _ => panic!("expected tool"),
+            };
+            assert_eq!(content, &original);
+        }
+    }
+
+    #[test]
+    fn compresses_short_conversation_huge_old_tool_output_when_boundary_allows() {
+        let huge_output = format!("ordinary output\n{}", "line\n".repeat(200));
+        let mut messages = vec![
+            Message::user("first"),
+            Message::Tool {
+                tool_call_id: "t1".to_string(),
+                content: huge_output,
+            },
+        ];
+
+        let report = compress_old_tool_outputs(&mut messages, 0, 300);
+
+        assert_eq!(report.compressed_count, 1);
+        assert!(report.chars_after < report.chars_before);
+        let content = match &messages[1] {
+            Message::Tool { content, .. } => content,
+            _ => panic!("expected tool"),
+        };
+        assert!(content.contains("[compressed-tool-output]"));
+        assert!(content.contains("evidence_safe_for_closeout=false"));
     }
 
     #[test]
