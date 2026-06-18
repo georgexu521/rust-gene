@@ -215,6 +215,36 @@ fn confirmation_tool_is_typed_ask_user() {
 }
 
 #[test]
+fn explicit_permission_deny_is_typed_deny_not_approval() {
+    let tool = BashTool;
+    let tool_call = call("bash", serde_json::json!({"command": "cargo test -q"}));
+    let exposed = HashSet::from(["bash".to_string()]);
+    let mut permission_context = PermissionContext::new(".");
+    permission_context.mode = crate::permissions::PermissionMode::Default;
+    permission_context.rules = crate::permissions::PermissionRules::new().deny("bash");
+
+    let review = ActionReview::build(ActionReviewInput {
+        tool_call: &tool_call,
+        tool: Some(&tool),
+        exposed_tool_names: &exposed,
+        scheduled_count: 0,
+        max_tool_calls: 4,
+        action_decision: decision(&tool_call),
+        permission_context: Some(&permission_context),
+        task_state: None,
+        working_dir: None,
+        tool_allowed_by_context: true,
+        destructive_scope_check: None,
+        action_checkpoint_rejection: None,
+    });
+
+    assert_eq!(review.decision, ActionReviewDecision::Deny);
+    assert_eq!(review.primary_reason, ActionReviewReason::PermissionDenied);
+    assert!(review.permission.denied_by_rule);
+    assert!(!review.permission.requires_confirmation);
+}
+
+#[test]
 fn dependency_install_is_typed_ask_user_in_auto_all() {
     let tool = InstallDependenciesTool;
     let tool_call = call(

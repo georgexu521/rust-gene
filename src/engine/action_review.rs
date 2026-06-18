@@ -389,6 +389,7 @@ impl ActionWorthVerdict {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct PermissionReviewVerdict {
     pub allowed_by_context: bool,
+    pub denied_by_rule: bool,
     pub requires_confirmation: bool,
     pub permission_requires_confirmation: bool,
     pub raw_tool_requires_confirmation: bool,
@@ -426,12 +427,14 @@ impl PermissionReviewVerdict {
             }
             None => raw_tool_requires_confirmation,
         };
-        let requires_confirmation = permission_requires_confirmation || tool_requires_confirmation;
-
         let permission_fields = permission_fields(permission_explanation.as_ref());
+        let denied_by_rule = permission_fields.decision.as_deref() == Some("deny");
+        let requires_confirmation =
+            !denied_by_rule && (permission_requires_confirmation || tool_requires_confirmation);
 
         Self {
             allowed_by_context: input.tool_allowed_by_context,
+            denied_by_rule,
             requires_confirmation,
             permission_requires_confirmation,
             raw_tool_requires_confirmation,
@@ -775,6 +778,13 @@ fn final_decision(
         );
     }
     if !permission.allowed_by_context {
+        return (
+            ActionReviewDecision::Deny,
+            ActionReviewReason::PermissionDenied,
+            vec![ActionReviewReason::PermissionDenied],
+        );
+    }
+    if permission.denied_by_rule {
         return (
             ActionReviewDecision::Deny,
             ActionReviewReason::PermissionDenied,

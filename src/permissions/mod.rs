@@ -461,12 +461,21 @@ impl PermissionContext {
             }
             PermissionMode::Default => {
                 // 根据规则决定
-                matches!(
+                !matches!(
                     self.rule_decision_for_keys(&match_keys),
-                    PermissionDecision::Ask
+                    PermissionDecision::Allow
                 )
             }
         }
+    }
+
+    /// Whether the current explicit rules deny this tool call.
+    pub fn denies(&self, tool_name: &str, params: &serde_json::Value) -> bool {
+        let match_keys = permission_match_keys(tool_name, params);
+        matches!(
+            self.rule_decision_for_keys(&match_keys),
+            PermissionDecision::Deny
+        )
     }
 
     fn matching_rules_for_keys(&self, keys: &[String]) -> Vec<(PermissionDecision, &SourcedRule)> {

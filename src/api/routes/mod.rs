@@ -208,7 +208,7 @@ async fn provider_chat_handler(
 
 async fn chat_response(
     state: Arc<ApiState>,
-    req: ChatRequest,
+    mut req: ChatRequest,
     deprecated_route: Option<&'static str>,
     replacement_route: Option<&'static str>,
 ) -> Result<impl IntoResponse, ApiError> {
@@ -216,6 +216,7 @@ async fn chat_response(
         .session_id
         .clone()
         .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+    req.session_id = Some(session_id.clone());
 
     let result = state.chat(req).await?;
 

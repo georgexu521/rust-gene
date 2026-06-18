@@ -421,6 +421,19 @@ impl ToolExecutionController {
                             .reason
                             .unwrap_or_else(|| format!("blocked by pre-tool hook: {}", tool_name)),
                     )
+                } else if permission_evaluation.denied {
+                    let permission_source =
+                        permission_evaluation.record.as_ref().and_then(|record| {
+                            record
+                                .metadata
+                                .get("permission_source")
+                                .and_then(serde_json::Value::as_str)
+                        });
+                    PermissionController::denied_result(
+                        &tool_name,
+                        permission_evaluation.record.as_ref(),
+                        permission_source,
+                    )
                 } else if permission_evaluation.requires_approval {
                     let permission_outcome = PermissionController::request_user_permission(
                         &tc,

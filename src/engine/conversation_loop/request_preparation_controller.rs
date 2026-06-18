@@ -143,11 +143,6 @@ impl RequestPreparationController {
         Self::record_context_zones(&request_messages, trace, &zone_envelope_stats);
         Self::record_token_breakdown(&request_messages, trace);
         let canonical_tools = crate::engine::cache_stability::canonicalize_provider_tools(tools);
-        Self::record_cache_stability_snapshot(&request_messages, &canonical_tools, trace);
-
-        let request_budget =
-            ContextBudgetController::observe_request(&request_messages, &canonical_tools);
-        ContextBudgetController::record_runtime_diet(memory_context.runtime_diet, &request_budget);
 
         // Selective compression: compress old tool outputs to structured summaries.
         // Preserves last 2 turns of raw tool output for closeout verification.
@@ -185,6 +180,11 @@ impl RequestPreparationController {
                 ),
             });
         }
+        Self::record_cache_stability_snapshot(&request_messages, &canonical_tools, trace);
+
+        let request_budget =
+            ContextBudgetController::observe_request(&request_messages, &canonical_tools);
+        ContextBudgetController::record_runtime_diet(memory_context.runtime_diet, &request_budget);
 
         PreparedRequest {
             request: ChatRequest::new(model)

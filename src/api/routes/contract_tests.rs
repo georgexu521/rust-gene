@@ -143,6 +143,36 @@ async fn provider_chat_route_is_explicit_non_agent_lane() {
 }
 
 #[tokio::test]
+async fn provider_chat_without_session_id_persists_generated_session() {
+    let mut env = EnvVarGuard::acquire().await;
+    env.set("PRIORITY_AGENT_BRIDGE_TOKEN", TEST_BRIDGE_TOKEN);
+    let state = api_test_state();
+    let app = create_routes(state.clone());
+    let (status, value) = json_request_response(
+        &app,
+        "POST",
+        "/api/provider-chat",
+        Some(json!({
+            "message": "remember this provider chat"
+        })),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    let session_id = value["session_id"].as_str().expect("generated session_id");
+    assert!(!session_id.is_empty());
+
+    let store = state.session_store.read().await;
+    assert!(store.get_session(session_id).unwrap().is_some());
+    let messages = store.get_messages(session_id).unwrap();
+    assert_eq!(messages.len(), 2);
+    assert_eq!(messages[0].role, "user");
+    assert_eq!(messages[0].content, "remember this provider chat");
+    assert_eq!(messages[1].role, "assistant");
+    assert_eq!(messages[1].content, "ok");
+}
+
+#[tokio::test]
 async fn legacy_chat_route_points_to_provider_chat_replacement() {
     let mut env = EnvVarGuard::acquire().await;
     env.set("PRIORITY_AGENT_BRIDGE_TOKEN", TEST_BRIDGE_TOKEN);

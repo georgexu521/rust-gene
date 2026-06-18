@@ -133,6 +133,7 @@ impl PermissionRequestRecord {
 
 #[derive(Debug, Clone, PartialEq)]
 pub(super) struct ToolPermissionEvaluation {
+    pub(super) denied: bool,
     pub(super) requires_approval: bool,
     pub(super) prompt: Option<String>,
     pub(super) record: Option<PermissionRequestRecord>,
@@ -152,6 +153,9 @@ impl PermissionController {
         let permission_explanation = context
             .permission_context
             .explain_decision(tool_name, &tool_call.arguments);
+        let permission_denied = context
+            .permission_context
+            .denies(tool_name, &tool_call.arguments);
         let permission_requires = context
             .permission_context
             .requires_confirmation(tool_name, &tool_call.arguments);
@@ -162,8 +166,9 @@ impl PermissionController {
                 .auto_approves_tool_confirmation(tool_name, &tool_call.arguments);
         let drift_requires_approval = drift_check.requires_approval();
 
-        if !(permission_requires || tool_requires || drift_requires_approval) {
+        if !(permission_denied || permission_requires || tool_requires || drift_requires_approval) {
             return ToolPermissionEvaluation {
+                denied: false,
                 requires_approval: false,
                 prompt: None,
                 record: None,
@@ -246,6 +251,7 @@ impl PermissionController {
             "tool_name": tool_name,
             "arguments": tool_call.arguments,
             "permission_evidence": permission_evidence,
+            "permission_denied": permission_denied,
             "permission_requires": permission_requires,
             "tool_requires": tool_requires,
             "raw_tool_requires": raw_tool_requires,
@@ -289,7 +295,8 @@ impl PermissionController {
         };
 
         ToolPermissionEvaluation {
-            requires_approval: true,
+            denied: permission_denied,
+            requires_approval: !permission_denied,
             prompt: Some(prompt),
             record: Some(record),
         }

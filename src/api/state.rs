@@ -667,6 +667,9 @@ impl ApiState {
         // 如果有 session_id，保存消息
         if let Some(ref session_id) = req.session_id {
             let store = self.session_store.read().await;
+            if store.get_session(session_id)?.is_none() {
+                store.create_session(session_id, "API Session", model, None)?;
+            }
             let _ = store.add_message(session_id, "user", &req.message, None, None);
             let _ = store.add_message(session_id, "assistant", &response.content, None, None);
         }
