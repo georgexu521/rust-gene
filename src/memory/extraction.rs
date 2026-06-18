@@ -343,7 +343,7 @@ Do not save task progress, command history, or repeatable procedures; procedures
 // 自由函数
 // ---------------------------------------------------------------------------
 
-fn upsert_background_memory_proposal(
+pub(super) fn upsert_background_memory_proposal(
     source_task: &str,
     candidates: Vec<MemoryProposalCandidate>,
     reason: impl Into<String>,
@@ -363,7 +363,9 @@ fn upsert_background_memory_proposal(
     let _ = MemoryProposalReviewStore::default().upsert(&proposal);
 }
 
-fn memory_candidate_to_proposal_candidate(candidate: MemoryCandidate) -> MemoryProposalCandidate {
+pub(super) fn memory_candidate_to_proposal_candidate(
+    candidate: MemoryCandidate,
+) -> MemoryProposalCandidate {
     MemoryProposalCandidate {
         kind: kind_label(candidate.kind).to_string(),
         scope: "project".to_string(),

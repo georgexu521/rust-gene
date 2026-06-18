@@ -67,7 +67,7 @@
 | 系统 | 当前状态 | 说明 |
 |------|----------|------|
 | closeout memory proposal | 默认 review-first | closeout 可生成 `MemoryProposal`，`write_performed=false`，进入 review queue |
-| 后台 memory review nudge | 自动触发候选生成 | `MemoryManager::advance_nudge()` 默认每 10 轮触发后台审查，但结果仍是 review queue |
+| 后台 memory review nudge | 自动触发候选生成 | `MemoryManager::advance_nudge()` 默认每 10 轮触发后台审查，结果写入 review queue，不直接持久化长期记忆 |
 | project progress ledger | closeout 后台写入 | 这是执行进展证据，不等同于把长期记忆静默写入用户/项目记忆 |
 | memory repair proposal | 手动触发扫描 | `/memory-proposals repair-drift` 或相关 doctor/repair 流程生成 projection repair proposals |
 
@@ -170,8 +170,8 @@
 
 ### 2. “后台审查每 10 轮自动运行”需要加条件
 
-**状态：文档已修正，代码未变。**  
-`advance_nudge()` 默认 10 轮触发，但如果本轮调用了 memory tool 会重置；触发后还需要 provider 存在才会 spawn background review。生成结果仍进入 review queue。
+**状态：已修正。**
+`advance_nudge()` 默认 10 轮触发，但如果本轮调用了 memory tool 会重置；触发后还需要 provider 存在才会 spawn background review。生成结果进入 review queue，并保持 `write_policy=review_required` / `write_performed=false`，默认不直接写长期记忆。
 
 ### 3. “时间压缩自动触发”不准确
 

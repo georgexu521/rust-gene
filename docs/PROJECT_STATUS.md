@@ -400,13 +400,15 @@ state:
   `review_only` policy surfaces proposals for manual review via
   `/memory-proposals` instead of silently writing to long-term memory.
 - Active memory recall is opt-in (`PRIORITY_AGENT_ACTIVE_MEMORY=true`).
-- Background review and memory nudge generate proposals but do not auto-persist.
+- Closeout background review and memory nudge both generate review-required
+  proposals and do not auto-persist long-term memory by default.
 - Read paths (snapshot injection, dynamic recall, prefetch) and manual tool
   paths (`memory_save`, `memory_load`) are fully wired.
 - Three minor cleanup items were completed (dead async function removed,
-  duplicate constant unified, visibility tightened); three lower-priority items
-  (file lock consolidation, helper dedup, eval split) are deferred to
-  opportunistic refactoring passes.
+  duplicate constant unified, visibility tightened), and the nudge background
+  review path now preserves the proposal-only default boundary. Three
+  lower-priority items (file lock consolidation, helper dedup, eval split) are
+  deferred to opportunistic refactoring passes.
 - `src/agent/memory.rs` is intentionally separate from `src/memory/` — the
   former is a sub-agent KV store, the latter is long-term user/project memory.
 

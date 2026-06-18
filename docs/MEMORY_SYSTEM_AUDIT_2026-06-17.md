@@ -40,7 +40,7 @@
 
 - 默认 closeout 同步由 `memory_sync_controller` 执行，但默认 policy 是 review-only：记录边界事件，不直接写长期记忆。
 - 成功、失败、partial、not verified 的任务结果会通过 closeout 形成 `MemoryProposal`，写入 review store，并保持 `write_policy=review_required`。
-- 背景 review 和 memory nudge 可以生成或整理 proposal，但仍走 proposal/review 边界。
+- closeout 背景 review 和 memory nudge 均生成 review-required proposal，不默认写长期记忆。
 - 用户显式使用 memory tool 时，可以经由 `submit_candidate_with_provider_notifications` 进入质量、安全、去重和 provider notification 路径。
 - legacy workflow gate 仍使用同步 `save_workflow_decision` 保存 workflow 决策；这属于旧路径，应避免扩大它的默认自动写入范围。
 
@@ -65,6 +65,15 @@
    - 按角色/快照隔离，路径与长期项目记忆不同。
 
 这是合理的架构分离，不是重复实现问题。
+
+## 当前完成状态
+
+**核心清理已完成，但文档列出的事项并非全部完成。**
+
+- 已完成：1-4，其中 1-3 是低风险代码清理，4 是 nudge background review 的默认持久化边界修正；
+- 未完成：5-7，其中 5 和 6 可延后，7 应作为下一次 memory eval 改动的优先技术债；
+- 当前不建议为了“清零文档 TODO”单独推进 5 和 6；
+- 如果后续继续改 memory eval，建议先拆 `src/memory/eval.rs`，避免越过 1500 行 guardrail。
 
 ## 已完成工作
 
@@ -95,16 +104,24 @@
 
 函数已从 `pub(super)` 改为私有 `fn`。原 manager tests 中对该私有启发式的直接依赖已移除，测试迁移到 `extraction.rs` 内部，保持测试精度，同时减少跨模块 API 暴露。
 
+### 4. 修正 nudge background review 的持久化边界
+
+**原位置：** `src/memory/background_review.rs`
+
+**状态：已完成。**
+
+`MemoryManager::run_background_review` 原本会把 LLM 候选直接提交到 `submit_candidate_with_provider_notifications`，如果质量门接受，就可能绕过 review queue 写入长期记忆。现在该路径复用 background proposal helper，只生成 `source=background`、`write_policy=review_required`、`write_performed=false` 的提案，和 closeout 背景 review 保持同一默认边界。
+
 ## 未完成工作
 
-### 4. 文件锁实现重复
+### 5. 文件锁实现重复
 
 **位置：**
 
 - `src/memory/files.rs` 的 `MemoryFileLock`
 - `src/memory/provider.rs` 的 `LocalMemoryFileLock`
 
-**状态：未完成，建议延后。**
+**状态：未完成，低收益延后。**
 
 两个实现确实接近，后续可以抽出公共锁工具。但该项应保持低优先级，因为它触及 markdown memory files、JSONL records 和 operation journal 的并发写入路径。合并时必须保持现有 lock path 生成规则和非 Unix fallback 行为不变。
 
@@ -114,7 +131,7 @@
 - `cargo test -q memory`
 - `cargo check -q`
 
-### 5. `contains_any` 辅助函数重复
+### 6. `contains_any` 辅助函数重复
 
 **位置：**
 
@@ -128,13 +145,15 @@
 
 建议处理方式：只有在做统一 text utility 或 memory quality/scoring 重构时顺手整理，不作为当前 cleanup blocker。
 
-### 6. 拆分 `src/memory/eval.rs`
+### 7. 拆分 `src/memory/eval.rs`
 
 **位置：** `src/memory/eval.rs`
 
-**状态：未完成，建议 opportunistic 处理。**
+**状态：未完成；不是当前 blocker，但应作为下一次 memory eval 改动的优先技术债。**
 
 文件约 1417 行，接近 1500 行 guardrail。已有 `src/memory/eval/review_workflow.rs` 子模块，后续可以继续按 recall、quality、conflict、proposal review 等类别拆分。
+
+这项不建议为了文档收尾单独做机械拆分；但如果继续增加 memory eval 用例或 review workflow 逻辑，应先拆模块，避免该文件继续膨胀。
 
 建议验收：
 
@@ -159,10 +178,11 @@
 ## 后续计划
 
 1. 保持当前默认 `review_required` 边界，不为追求自动化而放宽 memory write gate。
-2. 下一次触碰 provider/file persistence 时，再合并文件锁实现，并保留现有锁文件路径语义。
-3. 下一次扩展 memory eval 时，把 `src/memory/eval.rs` 拆成更小的子模块。
+2. 不把剩余 3 项包装成“全部必须立刻完成”：当前核心清理已经完成。
+3. 下一次触碰 provider/file persistence 时，再合并文件锁实现，并保留现有锁文件路径语义。
 4. 不单独推进 `contains_any` 抽象；只有当 text utility 有更广泛需求时再统一。
-5. 如果更新项目状态文档，应明确记忆系统当前是“review-first memory persistence”，不是“silent auto-memory”。
+5. 下一次扩展 memory eval 时，优先把 `src/memory/eval.rs` 拆成更小的子模块。
+6. 如果更新项目状态文档，应明确记忆系统当前是“review-first memory persistence”，不是“silent auto-memory”。
 
 ## 本次验证
 
@@ -170,6 +190,7 @@
 
 ```bash
 cargo fmt --check
+cargo test -q background_review --lib
 cargo test -q memory
 cargo check -q
 ```
