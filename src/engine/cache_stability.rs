@@ -1,4 +1,7 @@
-use crate::engine::context_compressor::estimate_tokens;
+use crate::engine::context_compressor::{
+    estimate_tokens, estimate_tokens_for_profile, TokenEstimateProfile,
+};
+use crate::engine::dynamic_context;
 use crate::engine::prompt_context::stable_fingerprint;
 use crate::services::api::{Message, Tool as ProviderTool};
 use crate::tools::ToolRegistry;
@@ -446,21 +449,7 @@ pub fn infer_cache_miss_reason(
 }
 
 pub fn is_dynamic_context_system_message(content: &str) -> bool {
-    let trimmed = content.trim_start();
-    [
-        "<task-state>",
-        "<task_state>",
-        "<task-contract>",
-        "<context-pack>",
-        "<relevant_material>",
-        "<recent_observation>",
-        "<self-evolution-guidance>",
-        "<context_zones",
-        "<retrieval-context",
-        "MVA profile:",
-    ]
-    .iter()
-    .any(|prefix| trimmed.starts_with(prefix))
+    dynamic_context::is_dynamic_context_system_message(content)
 }
 
 fn message_contains_dynamic_context(message: &Message) -> bool {
@@ -480,20 +469,7 @@ fn message_dynamic_context_content(message: &Message) -> Option<&str> {
 }
 
 fn user_message_contains_dynamic_context(content: &str) -> bool {
-    [
-        "<task-state>",
-        "<task_state>",
-        "<task-contract>",
-        "<context-pack>",
-        "<relevant_material>",
-        "<recent_observation>",
-        "<self-evolution-guidance>",
-        "<context_zones",
-        "<retrieval-context",
-        "MVA profile:",
-    ]
-    .iter()
-    .any(|tag| content.contains(tag))
+    dynamic_context::user_message_contains_dynamic_context(content)
 }
 
 fn provider_tool_entry(tool: &ProviderTool) -> ToolSchemaCacheEntry {
@@ -511,7 +487,10 @@ fn manifest_from_entries(entries: Vec<ToolSchemaCacheEntry>) -> ToolSchemaCacheM
         .map(|entry| {
             estimate_tokens(&entry.name)
                 + estimate_tokens(&entry.description)
-                + estimate_tokens(&entry.parameters_canonical)
+                + estimate_tokens_for_profile(
+                    &entry.parameters_canonical,
+                    TokenEstimateProfile::JsonToolSchema,
+                )
                 + 10
         })
         .sum();

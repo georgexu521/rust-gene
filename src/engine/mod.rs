@@ -26,6 +26,7 @@ pub mod cron;
 pub mod desktop_context;
 pub mod destructive_scope;
 pub mod diagnostic_tracker;
+pub mod dynamic_context;
 pub mod product_readiness;
 pub use diagnostic_tracker::{
     DiagnosticEntry, DiagnosticRange, DiagnosticSeverity, DiagnosticTracker,

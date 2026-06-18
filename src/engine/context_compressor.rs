@@ -830,16 +830,98 @@ fn compaction_stage_order(strategy: ContextCompactionStrategy) -> Vec<String> {
 
 // ── Token 估算 ────────────────────────────────────────────
 
-/// 简单 token 估算（4 字符 ≈ 1 token）
-/// 估算文本的 token 数
-///
-/// 对 ASCII 和 CJK 文本使用不同的字节/令牌比率：
-/// - ASCII：~4 字节/令牌
-/// - CJK（UTF-8 3字节/字符）：~2 字节/令牌（每个 CJK 字符约 1.5–2 令牌）
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TokenEstimateProfile {
+    GeneralText,
+    JsonToolSchema,
+    CjkHeavy,
+}
+
+impl TokenEstimateProfile {
+    pub fn for_model_context(profile: &crate::engine::model_context::ModelContextProfile) -> Self {
+        use crate::services::api::provider_protocol::ProviderProtocolFamily;
+
+        match profile.provider_family {
+            ProviderProtocolFamily::MiniMax | ProviderProtocolFamily::Kimi => Self::CjkHeavy,
+            ProviderProtocolFamily::AnthropicLike
+            | ProviderProtocolFamily::ReasoningCapable
+            | ProviderProtocolFamily::OpenAiCompatible => Self::GeneralText,
+        }
+    }
+}
+
+/// 默认 token 估算，面向普通混合文本。
 pub fn estimate_tokens(text: &str) -> u64 {
-    let ascii_bytes = text.bytes().filter(|b| b.is_ascii()).count() as u64;
-    let cjk_bytes = (text.len() as u64).saturating_sub(ascii_bytes);
-    ascii_bytes.div_ceil(4) + cjk_bytes.div_ceil(2)
+    estimate_tokens_for_profile(text, TokenEstimateProfile::GeneralText)
+}
+
+pub fn estimate_tokens_for_model_context(
+    text: &str,
+    profile: &crate::engine::model_context::ModelContextProfile,
+) -> u64 {
+    estimate_tokens_for_profile(text, TokenEstimateProfile::for_model_context(profile))
+}
+
+pub fn estimate_tokens_for_profile(text: &str, profile: TokenEstimateProfile) -> u64 {
+    if text.is_empty() {
+        return 0;
+    }
+
+    let mut ascii_word = 0u64;
+    let mut ascii_whitespace = 0u64;
+    let mut ascii_punct = 0u64;
+    let mut cjk_chars = 0u64;
+    let mut other_unicode_bytes = 0u64;
+
+    for ch in text.chars() {
+        if ch.is_ascii_alphanumeric() || ch == '_' {
+            ascii_word += 1;
+        } else if ch.is_ascii_whitespace() {
+            ascii_whitespace += 1;
+        } else if ch.is_ascii() {
+            ascii_punct += 1;
+        } else if is_cjk_char(ch) {
+            cjk_chars += 1;
+        } else {
+            other_unicode_bytes += ch.len_utf8() as u64;
+        }
+    }
+
+    let ascii_word_tokens = ascii_word.div_ceil(4);
+    let whitespace_tokens = ascii_whitespace.div_ceil(16);
+    let ascii_punct_tokens = match profile {
+        TokenEstimateProfile::JsonToolSchema => ascii_punct,
+        TokenEstimateProfile::GeneralText | TokenEstimateProfile::CjkHeavy => {
+            ascii_punct.div_ceil(3)
+        }
+    };
+    let cjk_tokens = match profile {
+        TokenEstimateProfile::CjkHeavy => cjk_chars.saturating_mul(2),
+        TokenEstimateProfile::GeneralText | TokenEstimateProfile::JsonToolSchema => {
+            cjk_chars.saturating_mul(3).div_ceil(2)
+        }
+    };
+    let other_unicode_tokens = other_unicode_bytes.div_ceil(2);
+
+    ascii_word_tokens
+        .saturating_add(whitespace_tokens)
+        .saturating_add(ascii_punct_tokens)
+        .saturating_add(cjk_tokens)
+        .saturating_add(other_unicode_tokens)
+}
+
+fn is_cjk_char(ch: char) -> bool {
+    matches!(
+        ch as u32,
+        0x3400..=0x4DBF
+            | 0x4E00..=0x9FFF
+            | 0xF900..=0xFAFF
+            | 0x20000..=0x2A6DF
+            | 0x2A700..=0x2B73F
+            | 0x2B740..=0x2B81F
+            | 0x2B820..=0x2CEAF
+            | 0x30000..=0x3134F
+    )
 }
 
 /// 估算消息列表的总 token 数
@@ -854,7 +936,7 @@ fn estimate_message_tokens(message: &Message) -> u64 {
             tool_calls: Some(tool_calls),
             ..
         } if !tool_calls.is_empty() => serde_json::to_string(tool_calls)
-            .map(|json| estimate_tokens(&json))
+            .map(|json| estimate_tokens_for_profile(&json, TokenEstimateProfile::JsonToolSchema))
             .unwrap_or_default(),
         _ => 0,
     };

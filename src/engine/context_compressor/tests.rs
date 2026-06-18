@@ -27,6 +27,24 @@ fn test_estimate_tokens() {
     assert_eq!(estimate_tokens("hello"), 2); // 5 chars / 4 = 1.25 → 2
     assert_eq!(estimate_tokens("1234"), 1); // 4 chars / 4 = 1
     assert_eq!(estimate_tokens(""), 0);
+    assert!(estimate_tokens("上下文") > estimate_tokens("ctx"));
+    assert!(
+        estimate_tokens_for_profile(
+            r#"{"type":"object","properties":{"path":{"type":"string"}}}"#,
+            TokenEstimateProfile::JsonToolSchema,
+        ) > estimate_tokens(r#"{"type":"object","properties":{"path":{"type":"string"}}}"#)
+    );
+}
+
+#[test]
+fn estimate_tokens_for_model_context_uses_provider_family_profile() {
+    let profile = crate::engine::model_context::ModelContextProfile::detect(
+        "https://api.minimaxi.com/v1",
+        "MiniMax-M3",
+    );
+    assert!(
+        estimate_tokens_for_model_context("上下文预算", &profile) >= estimate_tokens("上下文预算")
+    );
 }
 
 #[test]

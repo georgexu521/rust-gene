@@ -9,6 +9,7 @@
 //! - 不暴露完整公式，避免 LLM 过拟合分数。
 
 use crate::engine::trace::{TraceCollector, TraceEvent};
+#[cfg(test)]
 use crate::services::api::Message;
 
 /// 是否启用了 task-guidance 注入。
@@ -19,11 +20,26 @@ pub fn task_guidance_enabled() -> bool {
 /// 组装并注入 task-guidance 到请求消息。
 ///
 /// 从 trace 事件中提取当前 stage、top plan step、风险等级、最近动作分数。
+#[cfg(test)]
 pub fn inject_task_guidance(messages: &mut [Message], trace: &TraceCollector) {
-    if !task_guidance_enabled() {
+    let Some(block) = build_task_guidance_recent_observation(trace) else {
         return;
-    }
+    };
+    let Some(Message::User { content }) = messages
+        .iter_mut()
+        .rev()
+        .find(|message| matches!(message, Message::User { .. }))
+    else {
+        return;
+    };
+    let original = std::mem::take(content);
+    *content = format!("{block}\n\n{original}");
+}
 
+pub fn build_task_guidance_recent_observation(trace: &TraceCollector) -> Option<String> {
+    if !task_guidance_enabled() {
+        return None;
+    }
     let snapshot = trace.snapshot();
     let events = &snapshot.events;
 
@@ -159,23 +175,14 @@ pub fn inject_task_guidance(messages: &mut [Message], trace: &TraceCollector) {
     }
 
     if lines.is_empty() {
-        return;
+        return None;
     }
 
     let block = format!("<task-guidance>\n{}\n</task-guidance>", lines.join("\n"));
-
-    let Some(Message::User { content }) = messages
-        .iter_mut()
-        .rev()
-        .find(|message| matches!(message, Message::User { .. }))
-    else {
-        return;
-    };
-    let original = std::mem::take(content);
-    *content = format!(
-        "<recent_observation>\n{}\n</recent_observation>\n\n{}",
-        block, original
-    );
+    Some(format!(
+        "<recent_observation>\n{}\n</recent_observation>",
+        block
+    ))
 }
 
 fn compact_fact(value: &str, max_chars: usize) -> String {
