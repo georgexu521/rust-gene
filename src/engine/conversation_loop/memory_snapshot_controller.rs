@@ -1,5 +1,6 @@
 use super::runtime_diet::RuntimeDietSnapshot;
 use crate::engine::intent_router::RetrievalPolicy;
+#[cfg(test)]
 use crate::engine::retrieval_context::{RetrievalContext, RetrievalSource};
 use crate::engine::trace::{TraceCollector, TraceEvent};
 use crate::memory::MemoryManager;
@@ -41,7 +42,7 @@ impl MemorySnapshotController {
         )
     }
 
-    #[allow(dead_code)] // kept for diagnostics/trace (Phase 0 Risk 2)
+    #[cfg(test)]
     fn has_dynamic_memory_recall(retrieval_context: Option<&RetrievalContext>) -> bool {
         retrieval_context
             .map(|ctx| ctx.item_count_by_source(RetrievalSource::Memory) > 0)

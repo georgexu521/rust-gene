@@ -16,7 +16,6 @@ use crate::memory::MemoryManager;
 use crate::services::api::{ChatRequest, LlmProvider, Message, Tool};
 use crate::session_store::SessionStore;
 use std::collections::HashSet;
-use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tracing::debug;
@@ -40,6 +39,7 @@ pub(super) struct RequestPreparationContext<'a> {
     pub(super) trace: &'a TraceCollector,
     pub(super) runtime_diet: &'a mut RuntimeDietSnapshot,
     pub(super) inject_dynamic_context: bool,
+    pub(super) consecutive_repairs: &'a mut u32,
 }
 
 pub(super) struct PreparedRequest {
@@ -79,6 +79,7 @@ impl RequestPreparationController {
             trace,
             runtime_diet,
             inject_dynamic_context,
+            consecutive_repairs,
         } = context;
 
         let is_repair_turn = focused_repair_prompt.is_some();
@@ -158,7 +159,11 @@ impl RequestPreparationController {
                 .with_messages(request_messages)
                 .with_tools(canonical_tools)
                 .with_temperature(temperature)
-                .with_output_cap(output_cap_for_turn(is_repair_turn, inject_dynamic_context)),
+                .with_output_cap(output_cap_for_turn(
+                    is_repair_turn,
+                    inject_dynamic_context,
+                    consecutive_repairs,
+                )),
         }
     }
 
@@ -1286,21 +1291,23 @@ fn compact_text(value: &str, max_chars: usize) -> String {
 /// 1st repair → 4096
 /// 2nd repair → 2048
 /// 3rd+ repair → 1024
-fn output_cap_for_turn(is_repair: bool, has_dynamic_context: bool) -> Option<u32> {
-    static CONSECUTIVE_REPAIRS: AtomicU32 = AtomicU32::new(0);
-
+fn output_cap_for_turn(
+    is_repair: bool,
+    has_dynamic_context: bool,
+    consecutive_repairs: &mut u32,
+) -> Option<u32> {
     if !has_dynamic_context {
         return None;
     }
     if is_repair {
-        let count = CONSECUTIVE_REPAIRS.fetch_add(1, Ordering::Relaxed) + 1;
-        match count {
+        *consecutive_repairs += 1;
+        match *consecutive_repairs {
             1 => Some(4096),
             2 => Some(2048),
             _ => Some(1024),
         }
     } else {
-        CONSECUTIVE_REPAIRS.store(0, Ordering::Relaxed);
+        *consecutive_repairs = 0;
         None
     }
 }

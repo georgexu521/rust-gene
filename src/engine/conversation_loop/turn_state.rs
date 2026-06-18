@@ -37,6 +37,8 @@ pub(super) struct TurnLoopState {
     pub(super) failed_tool_fingerprints: HashMap<String, usize>,
     pub(super) failed_tool_names: HashMap<String, usize>,
     pub(super) successful_required_validation_commands: HashSet<String>,
+    /// Session-scoped consecutive repair count for progressive output cap.
+    pub(super) consecutive_repairs: u32,
 }
 
 pub(super) struct TurnLoopStateController;

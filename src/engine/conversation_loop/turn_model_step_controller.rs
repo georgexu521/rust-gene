@@ -101,6 +101,7 @@ impl TurnModelStepController {
             trace: context.trace,
             runtime_diet: &mut context.turn_state.runtime_diet,
             inject_dynamic_context: context.profile.inject_dynamic_context(),
+            consecutive_repairs: &mut context.loop_state.consecutive_repairs,
         })
         .await;
 

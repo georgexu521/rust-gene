@@ -36,6 +36,7 @@ async fn prepare_wraps_focused_prompt_as_dynamic_recent_observation() {
         trace: &trace,
         runtime_diet: &mut runtime_diet,
         inject_dynamic_context: true,
+        consecutive_repairs: &mut 0,
     })
     .await;
 
@@ -94,6 +95,7 @@ async fn prepare_skips_memory_prefetch_without_memory_manager() {
         trace: &trace,
         runtime_diet: &mut runtime_diet,
         inject_dynamic_context: true,
+        consecutive_repairs: &mut 0,
     })
     .await;
 
@@ -131,6 +133,7 @@ async fn prepare_quiet_direct_skips_dynamic_context_injections() {
         trace: &trace,
         runtime_diet: &mut runtime_diet,
         inject_dynamic_context: false,
+        consecutive_repairs: &mut 0,
     })
     .await;
 
@@ -205,6 +208,7 @@ async fn prepare_injects_context_ledger_hint_before_user_message() {
         trace: &trace,
         runtime_diet: &mut runtime_diet,
         inject_dynamic_context: true,
+        consecutive_repairs: &mut 0,
     })
     .await;
 
@@ -249,6 +253,7 @@ async fn prepare_records_relevant_material_without_counting_it_as_stable_prefix(
         trace: &trace,
         runtime_diet: &mut runtime_diet,
         inject_dynamic_context: true,
+        consecutive_repairs: &mut 0,
     })
     .await;
 
@@ -305,6 +310,7 @@ async fn prepare_merges_dynamic_zone_messages_into_single_envelope() {
         trace: &trace,
         runtime_diet: &mut runtime_diet,
         inject_dynamic_context: true,
+        consecutive_repairs: &mut 0,
     })
     .await;
 
@@ -375,6 +381,7 @@ async fn prepare_does_not_consume_stable_prompt_that_mentions_zone_tags() {
         trace: &trace,
         runtime_diet: &mut runtime_diet,
         inject_dynamic_context: true,
+        consecutive_repairs: &mut 0,
     })
     .await;
 
@@ -441,6 +448,7 @@ async fn prepare_keeps_hostile_retrieved_content_fenced_out_of_stable_prefix() {
         trace: &trace,
         runtime_diet: &mut runtime_diet,
         inject_dynamic_context: true,
+        consecutive_repairs: &mut 0,
     })
     .await;
 
@@ -580,6 +588,7 @@ async fn prepare_injects_structured_tool_evidence_from_context_ledger() {
         trace: &trace,
         runtime_diet: &mut runtime_diet,
         inject_dynamic_context: true,
+        consecutive_repairs: &mut 0,
     })
     .await;
 
@@ -631,6 +640,7 @@ async fn prepare_injects_task_state_after_stable_system_prompt() {
         trace: &trace,
         runtime_diet: &mut runtime_diet,
         inject_dynamic_context: true,
+        consecutive_repairs: &mut 0,
     })
     .await;
 
@@ -691,6 +701,7 @@ async fn prepare_places_dynamic_task_zones_at_tail_after_history() {
         trace: &trace,
         runtime_diet: &mut runtime_diet,
         inject_dynamic_context: true,
+        consecutive_repairs: &mut 0,
     })
     .await;
 
@@ -784,6 +795,7 @@ async fn prepare_keeps_stable_prefix_fingerprint_when_dynamic_task_context_chang
         trace: &trace_a,
         runtime_diet: &mut runtime_diet_a,
         inject_dynamic_context: true,
+        consecutive_repairs: &mut 0,
     })
     .await;
 
@@ -821,6 +833,7 @@ async fn prepare_keeps_stable_prefix_fingerprint_when_dynamic_task_context_chang
         trace: &trace_b,
         runtime_diet: &mut runtime_diet_b,
         inject_dynamic_context: true,
+        consecutive_repairs: &mut 0,
     })
     .await;
 
@@ -912,6 +925,7 @@ async fn prepare_sorts_provider_tools_for_schema_cache_stability() {
         trace: &trace,
         runtime_diet: &mut runtime_diet,
         inject_dynamic_context: true,
+        consecutive_repairs: &mut 0,
     })
     .await;
 
@@ -970,6 +984,7 @@ async fn prepare_treats_self_evolution_guidance_as_dynamic_context() {
         trace: &trace,
         runtime_diet: &mut runtime_diet,
         inject_dynamic_context: true,
+        consecutive_repairs: &mut 0,
     })
     .await;
 
@@ -1028,6 +1043,7 @@ async fn prepare_injects_task_contract_and_context_pack_for_executor() {
         trace: &trace,
         runtime_diet: &mut runtime_diet,
         inject_dynamic_context: true,
+        consecutive_repairs: &mut 0,
     })
     .await;
 

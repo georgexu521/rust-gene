@@ -7,6 +7,22 @@
 //! - 迭代式摘要更新（累积知识而非丢失）
 //! - Token-budget 尾部保护（soft_ceiling = budget * 1.5）
 //! - 工具调用对完整性校验（孤立项清理 + stub 插入）
+//!
+//! ## 压缩路径职责边界
+//!
+//! 当前有多条压缩/修复路径，它们的职责不同：
+//!
+//! | 路径 | 位置 | 触发时机 | 改变历史？ | 记录边界？ |
+//! |------|------|---------|-----------|-----------|
+//! | **Full-message compaction** | `ContextCompressor` (preflight) | token 压力 > 80% | ✅ | ✅ `compact_boundary` |
+//! | **Streaming pre-query** | `streaming.rs` | 每次 query 前 | ✅ | 通过 `ContextCompressor` |
+//! | **API reactive compaction** | `api_request_controller` | provider 返回 context limit | ✅ | ✅ `CompactionRuntimeRecord` |
+//! | **Selective tool-output** | `message_compression` | 每轮 request preparation | ❌ (仅本轮) | ❌ |
+//! | **Message healing** | `message_healing` | 发送到 provider 前 | ❌ (仅本轮) | ❌ |
+//!
+//! - 前三条路径会改变持久化消息历史，后两条只影响本次 request。
+//! - `message_healing` 不属于语义压缩，但对可发送性至关重要。
+//! - `ContextCollapseService` 是磁盘折叠的实验性替代路径，当前未接入主运行时。
 
 pub use crate::engine::context_collapse::{
     extract_compact_boundaries, CompactMetadata, CompactionAttemptRecord, CompactionDecision,
@@ -815,8 +831,15 @@ fn compaction_stage_order(strategy: ContextCompactionStrategy) -> Vec<String> {
 // ── Token 估算 ────────────────────────────────────────────
 
 /// 简单 token 估算（4 字符 ≈ 1 token）
+/// 估算文本的 token 数
+///
+/// 对 ASCII 和 CJK 文本使用不同的字节/令牌比率：
+/// - ASCII：~4 字节/令牌
+/// - CJK（UTF-8 3字节/字符）：~2 字节/令牌（每个 CJK 字符约 1.5–2 令牌）
 pub fn estimate_tokens(text: &str) -> u64 {
-    (text.len() as u64).div_ceil(4)
+    let ascii_bytes = text.bytes().filter(|b| b.is_ascii()).count() as u64;
+    let cjk_bytes = (text.len() as u64).saturating_sub(ascii_bytes);
+    ascii_bytes.div_ceil(4) + cjk_bytes.div_ceil(2)
 }
 
 /// 估算消息列表的总 token 数

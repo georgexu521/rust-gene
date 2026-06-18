@@ -108,6 +108,12 @@ pub struct ContextAssemblyReport {
     pub cache_report: ContextCacheReport,
 }
 
+/// 上下文组装计划 — 用于命名、预算、fingerprint 和 trace 的观测模型
+///
+/// 这 5 个 typed zones 是运行时的**观测脊线**，不是发送给 LLM 的唯一渲染路径。
+/// 实际发送给 LLM 的消息还混合了 stable system prompt、user-tail 动态块、
+/// retrieval context、tool messages 和压缩修复后的 request messages。
+/// 不要把此结构当成上下文的唯一渲染器。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ContextAssemblyPlan {
     pub stable_prefix: ContextZone,
@@ -188,25 +194,6 @@ impl ContextAssemblyPlan {
             &self.recent_observation,
             &self.current_decision_request,
         ]
-    }
-
-    pub fn render_zoned_context(&self) -> String {
-        let mut rendered = String::new();
-        for zone in self.zones() {
-            if zone.is_empty() {
-                continue;
-            }
-            if !rendered.is_empty() {
-                rendered.push_str("\n\n");
-            }
-            rendered.push_str(&format!(
-                "<{}>\n{}\n</{}>",
-                zone.name.label(),
-                zone.content.trim(),
-                zone.name.label()
-            ));
-        }
-        rendered
     }
 
     pub fn render_legacy_system_prompt(&self) -> String {

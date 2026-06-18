@@ -340,7 +340,12 @@ impl Default for ContextCollapseConfig {
     }
 }
 
-/// 上下文折叠服务
+/// 上下文折叠服务（实验性，未接入主运行时）
+///
+/// 当前未接入主对话循环。运行时使用 `ContextCompressor`（内存压缩）替代。
+/// 保留此服务用于未来可能的磁盘持久化折叠需求。
+/// 由 `PRIORITY_AGENT_CONTEXT_COLLAPSE=1` 门控。
+#[allow(dead_code)]
 pub struct ContextCollapseService {
     config: ContextCollapseConfig,
     /// 当前会话的折叠条目
@@ -349,6 +354,8 @@ pub struct ContextCollapseService {
     session_id: Option<String>,
 }
 
+/// 实验性：未接入主运行时。见 `ContextCollapseService` 文档。
+#[allow(dead_code)]
 impl ContextCollapseService {
     /// 创建新的折叠服务
     pub fn new() -> Self {

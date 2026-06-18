@@ -63,13 +63,6 @@ impl PromptContextAssembler {
         }
     }
 
-    pub fn build_for_single_user_message(&self, user_message: &str) -> PromptContext {
-        let plan = self.assembly_plan_for_single_user_message(user_message);
-        PromptContext {
-            system_prompt: plan.render_legacy_system_prompt(),
-        }
-    }
-
     pub fn assembly_plan_for_turn(
         &self,
         user_message: &str,
