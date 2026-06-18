@@ -776,7 +776,10 @@ impl ContextCompressor {
                 } => {
                     tool_seen += 1;
                     let is_recent = tool_seen > tool_msg_count.saturating_sub(keep_last_n);
-                    if is_recent || tool_msg_count <= keep_last_n || Self::is_protected_tool_output(content) {
+                    if is_recent
+                        || tool_msg_count <= keep_last_n
+                        || Self::is_protected_tool_output(content)
+                    {
                         result.push(msg.clone());
                     } else {
                         let keep_len = if Self::is_critical_tool_output(content) {
