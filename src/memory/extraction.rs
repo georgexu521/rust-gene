@@ -5,7 +5,8 @@
 //! `submit_candidate_with_provider_notifications` 完成实际的记忆写入。
 
 use super::manager::{
-    kind_label, memory_llm_timeout, MemoryManager, MemoryWriteTarget, MAX_LEARNINGS_PER_TURN,
+    kind_label, memory_llm_timeout, MemoryManager, MemoryWriteTarget,
+    MAX_LEARNINGS_PER_SESSION_EXTRACT, MAX_LEARNINGS_PER_TURN,
 };
 use super::provider::MemoryProviderCallStatus;
 use super::types::{
@@ -18,8 +19,6 @@ use crate::engine::task_contract::{
 use crate::services::api::{ChatRequest, LlmProvider, Message};
 use std::sync::Arc;
 use tracing::{debug, info, warn};
-
-const MAX_LEARNINGS_PER_SESSION_EXTRACT: usize = 6;
 
 // ---------------------------------------------------------------------------
 // impl MemoryManager 方法
@@ -568,7 +567,7 @@ fn json_string(value: &serde_json::Value, key: &str) -> Option<String> {
 }
 
 /// 从单轮对话中提取学习内容
-pub(super) fn extract_learnings_from_turn(user: &str, assistant: &str) -> Vec<String> {
+fn extract_learnings_from_turn(user: &str, assistant: &str) -> Vec<String> {
     let mut learnings = Vec::new();
 
     // 检测用户偏好信号
@@ -695,4 +694,19 @@ pub(super) fn infer_memory_tags(content: &str, category: &str) -> Vec<String> {
     tags.sort();
     tags.dedup();
     tags
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn extracts_turn_learnings_from_preferences_and_solution_text() {
+        let learnings = extract_learnings_from_turn(
+            "I prefer using async/await",
+            "Sure, here's the solution using async/await...",
+        );
+
+        assert!(!learnings.is_empty());
+    }
 }

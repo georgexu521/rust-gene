@@ -1,6 +1,6 @@
 use super::*;
 use crate::engine::task_contract::MemoryProposalStatus;
-use crate::memory::extraction::{extract_learnings_from_turn, parse_llm_memory_candidates};
+use crate::memory::extraction::parse_llm_memory_candidates;
 use crate::memory::files::{collect_memory_file_paths, parse_rerank_ids};
 use crate::memory::provider::MemoryProvider;
 use crate::memory::retrieval::rerank_memory_matches_with_llm;
@@ -490,15 +490,6 @@ fn test_maintain_memory_archives_large_topic_file() {
     assert_eq!(archives.len(), 1);
 
     let _ = std::fs::remove_dir_all(base);
-}
-
-#[test]
-fn test_extract_learnings() {
-    let learnings = extract_learnings_from_turn(
-        "I prefer using async/await",
-        "Sure, here's the solution using async/await...",
-    );
-    assert!(!learnings.is_empty());
 }
 
 #[test]

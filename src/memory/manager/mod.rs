@@ -502,21 +502,6 @@ impl MemoryManager {
         self.add_learning(&content, "workflow");
     }
 
-    /// 异步保存 Workflow 决策
-    pub async fn save_workflow_decision_async(
-        &self,
-        decision_type: &str,
-        task: &str,
-        outcome: &str,
-        reasoning: &str,
-    ) {
-        let content = format!(
-            "[{}] Task: {} | Outcome: {} | Reason: {}",
-            decision_type, task, outcome, reasoning
-        );
-        self.add_learning_async(&content, "workflow").await;
-    }
-
     /// 重置预取状态（每轮开始时调用）
     pub fn reset_turn(&mut self) {
         self.prefetched_this_turn = false;
