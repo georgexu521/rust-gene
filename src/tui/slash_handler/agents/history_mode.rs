@@ -155,7 +155,7 @@ pub fn handle_mode(app: &mut TuiApp, args: &str) -> String {
     let current_ui_mode = format!("{:?}", app.mode);
     if args.is_empty() {
         return format!(
-            "Current agent mode: {}\nUI mode: {}\n\nAgent modes:\n\
+            "{}\n\nAgent modes:\n\
              - auto: Route each request from its content\n\
              - build: Bias ambiguous coding requests toward implementation\n\
              - plan: Inspect and plan before implementation\n\
@@ -163,14 +163,18 @@ pub fn handle_mode(app: &mut TuiApp, args: &str) -> String {
              - review: Findings-first code review stance\n\n\
              UI modes: chat, settings, vim\n\
              Usage: /mode <auto|build|plan|explore|review>",
-            current_agent_mode, current_ui_mode
+            format_mode_product_summary(app, &current_agent_mode, &current_ui_mode),
         );
     }
 
     let new_mode = args.trim().to_lowercase();
     if let Some(mode) = AgentMode::parse(&new_mode) {
         app.set_agent_mode(mode);
-        return format!("Agent mode switched to {}.", mode.label());
+        return format!(
+            "Agent mode switched to {}.\n\n{}",
+            mode.label(),
+            format_mode_product_summary(app, mode.label(), &current_ui_mode)
+        );
     }
 
     match new_mode.as_str() {
@@ -197,4 +201,38 @@ pub fn handle_mode(app: &mut TuiApp, args: &str) -> String {
             new_mode
         ),
     }
+}
+
+pub fn format_mode_product_summary(app: &TuiApp, agent_mode: &str, ui_mode: &str) -> String {
+    let session_id = app.session_manager.current_session_id();
+    let todo = session_id
+        .and_then(|id| app.session_manager.store().todo_status_summary(id).ok())
+        .filter(|summary| !summary.trim().is_empty())
+        .unwrap_or_else(|| "none".to_string());
+    let goal = app
+        .current_goal_label()
+        .or_else(|| goal_runner_compact_line(app))
+        .unwrap_or_else(|| "none".to_string());
+    let posture = match app.agent_mode {
+        AgentMode::Auto => "route-by-request",
+        AgentMode::Build => "implement-and-verify",
+        AgentMode::Plan => "inspect-before-edit",
+        AgentMode::Explore => "evidence-first-read",
+        AgentMode::Review => "findings-first-review",
+    };
+    format!(
+        "Mode Stack\n- Agent mode: {} ({})\n- UI mode: {}\n- Goal: {}\n- Todos: {}\n- Entrypoints: /mode sets stance, /goal tracks durable work, todo_write tracks this turn",
+        agent_mode, posture, ui_mode, goal, todo
+    )
+}
+
+fn goal_runner_compact_line(app: &TuiApp) -> Option<String> {
+    let runner = app.goal_runner.as_ref()?;
+    let session_id = app.session_manager.current_session_id()?;
+    let info = runner.status(session_id).ok()?;
+    let goal = info.goal?;
+    Some(format!(
+        "goal:{:?} turn {}/{}",
+        goal.status, goal.turn_count, goal.budget.max_turns
+    ))
 }

@@ -36,6 +36,8 @@ pub struct SessionPartItem {
     pub tool_call_id: Option<String>,
     pub tool_name: Option<String>,
     pub status: Option<String>,
+    pub timeline_label: String,
+    pub diff_summary: Option<String>,
     pub payload: serde_json::Value,
     pub projected_to_seq: i64,
     pub updated_at: String,

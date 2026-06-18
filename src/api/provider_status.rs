@@ -6,6 +6,64 @@ use crate::services::api::provider_catalog::{builtin_catalog, ProviderCatalogEnt
 use crate::services::api::provider_protocol::{ProviderCapabilities, ProviderRuntimeProfile};
 use std::collections::HashSet;
 
+#[derive(Debug, Clone)]
+pub(crate) struct ProviderCatalogFacts {
+    pub auto_compact_threshold: Option<u64>,
+    pub token_counter: String,
+    pub cache_accounting: String,
+    pub tool_schema_transform: String,
+    pub prompt_delta: String,
+    pub cost_input_per_1m: Option<f64>,
+    pub cost_output_per_1m: Option<f64>,
+    pub cost_cache_read_per_1m: Option<f64>,
+    pub cost_cache_write_per_1m: Option<f64>,
+}
+
+pub(crate) fn provider_catalog_facts(
+    capabilities: &ProviderCapabilities,
+    context: &crate::engine::model_context::ModelContextProfile,
+) -> ProviderCatalogFacts {
+    let token_counter =
+        crate::engine::context_compressor::TokenEstimateProfile::for_model_context(context)
+            .source_label()
+            .to_string();
+    let tool_schema_transform = if capabilities.requires_nonstreaming_tool_calls {
+        "nonstreaming-tool-call-route".to_string()
+    } else if capabilities.supports_streaming_tool_calls {
+        "streaming-tool-calls".to_string()
+    } else {
+        "text-only-or-provider-default".to_string()
+    };
+    let prompt_delta = match context.provider_family {
+        crate::services::api::provider_protocol::ProviderProtocolFamily::MiniMax => {
+            "minimax-profile".to_string()
+        }
+        crate::services::api::provider_protocol::ProviderProtocolFamily::Kimi => {
+            "kimi-profile".to_string()
+        }
+        crate::services::api::provider_protocol::ProviderProtocolFamily::ReasoningCapable => {
+            "reasoning-profile".to_string()
+        }
+        crate::services::api::provider_protocol::ProviderProtocolFamily::AnthropicLike => {
+            "anthropic-profile".to_string()
+        }
+        crate::services::api::provider_protocol::ProviderProtocolFamily::OpenAiCompatible => {
+            "openai-compatible-default".to_string()
+        }
+    };
+    ProviderCatalogFacts {
+        auto_compact_threshold: Some(context.auto_compact_threshold_tokens),
+        token_counter,
+        cache_accounting: format!("{:?}", context.cache_accounting),
+        tool_schema_transform,
+        prompt_delta,
+        cost_input_per_1m: None,
+        cost_output_per_1m: None,
+        cost_cache_read_per_1m: None,
+        cost_cache_write_per_1m: None,
+    }
+}
+
 pub(crate) fn provider_product_statuses(
     state: &ApiState,
     configured_max_output: Option<u64>,
@@ -59,6 +117,7 @@ fn status_from_current_api_provider(
     let profile = ProviderRuntimeProfile::snapshot(&capabilities, &state.model, "api-current");
     let context =
         crate::engine::model_context::ModelContextProfile::detect(&base_url, &state.model);
+    let facts = provider_catalog_facts(&capabilities, &context);
     let (latest_health_status, latest_timeout_category, last_request_latency_ms) =
         latest_provider_health_fields(latest_health, &state.model, &base_url);
     dto::provider::ProviderProductStatus {
@@ -76,10 +135,16 @@ fn status_from_current_api_provider(
         requires_nonstreaming: profile.requires_nonstreaming_tool_calls,
         context_limit: Some(context.context_window_tokens),
         output_limit: Some(context.reserved_output_tokens),
+        auto_compact_threshold: facts.auto_compact_threshold,
+        token_counter: facts.token_counter,
+        cache_accounting: facts.cache_accounting,
         configured_max_output,
-        cost_input_per_1m: None,
-        cost_output_per_1m: None,
-        cost_cache_read_per_1m: None,
+        cost_input_per_1m: facts.cost_input_per_1m,
+        cost_output_per_1m: facts.cost_output_per_1m,
+        cost_cache_read_per_1m: facts.cost_cache_read_per_1m,
+        cost_cache_write_per_1m: facts.cost_cache_write_per_1m,
+        tool_schema_transform: facts.tool_schema_transform,
+        prompt_delta: facts.prompt_delta,
         latest_health_status,
         latest_timeout_category,
         last_request_latency_ms,
@@ -103,6 +168,7 @@ fn status_from_config(
         ProviderRuntimeProfile::snapshot(&capabilities, &config.default_model, &config.name);
     let context =
         crate::engine::model_context::ModelContextProfile::detect(&base_url, &config.default_model);
+    let facts = provider_catalog_facts(&capabilities, &context);
     let (latest_health_status, latest_timeout_category, last_request_latency_ms) =
         latest_provider_health_fields(latest_health, &config.default_model, &base_url);
     dto::provider::ProviderProductStatus {
@@ -120,10 +186,16 @@ fn status_from_config(
         requires_nonstreaming: profile.requires_nonstreaming_tool_calls,
         context_limit: Some(context.context_window_tokens),
         output_limit: Some(context.reserved_output_tokens),
+        auto_compact_threshold: facts.auto_compact_threshold,
+        token_counter: facts.token_counter,
+        cache_accounting: facts.cache_accounting,
         configured_max_output,
-        cost_input_per_1m: None,
-        cost_output_per_1m: None,
-        cost_cache_read_per_1m: None,
+        cost_input_per_1m: facts.cost_input_per_1m,
+        cost_output_per_1m: facts.cost_output_per_1m,
+        cost_cache_read_per_1m: facts.cost_cache_read_per_1m,
+        cost_cache_write_per_1m: facts.cost_cache_write_per_1m,
+        tool_schema_transform: facts.tool_schema_transform,
+        prompt_delta: facts.prompt_delta,
         latest_health_status,
         latest_timeout_category,
         last_request_latency_ms,
@@ -146,6 +218,7 @@ fn status_from_catalog_entry(
         &entry.default_base_url,
         &entry.default_model,
     );
+    let facts = provider_catalog_facts(&capabilities, &context);
     let (latest_health_status, latest_timeout_category, last_request_latency_ms) =
         latest_provider_health_fields(latest_health, &entry.default_model, &entry.default_base_url);
     dto::provider::ProviderProductStatus {
@@ -163,10 +236,16 @@ fn status_from_catalog_entry(
         requires_nonstreaming: profile.requires_nonstreaming_tool_calls,
         context_limit: Some(context.context_window_tokens),
         output_limit: Some(context.reserved_output_tokens),
+        auto_compact_threshold: facts.auto_compact_threshold,
+        token_counter: facts.token_counter,
+        cache_accounting: facts.cache_accounting,
         configured_max_output,
-        cost_input_per_1m: None,
-        cost_output_per_1m: None,
-        cost_cache_read_per_1m: None,
+        cost_input_per_1m: facts.cost_input_per_1m,
+        cost_output_per_1m: facts.cost_output_per_1m,
+        cost_cache_read_per_1m: facts.cost_cache_read_per_1m,
+        cost_cache_write_per_1m: facts.cost_cache_write_per_1m,
+        tool_schema_transform: facts.tool_schema_transform,
+        prompt_delta: facts.prompt_delta,
         latest_health_status,
         latest_timeout_category,
         last_request_latency_ms,

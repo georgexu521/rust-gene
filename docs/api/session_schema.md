@@ -46,6 +46,8 @@ closeout, revert, compaction, permissions).
       "tool_call_id": "string | null",
       "tool_name": "string | null",
       "status": "pending | running | completed | failed | timed_out | cancelled",
+      "timeline_label": "string",
+      "diff_summary": "string | null",
       "payload": "<SessionPart as JSON>",
       "projected_to_seq": "i64",
       "updated_at": "datetime"
@@ -229,10 +231,16 @@ with stable product fields.
       "requires_nonstreaming": "bool",
       "context_limit": "u64 | null",
       "output_limit": "u64 | null",
+      "auto_compact_threshold": "u64 | null",
+      "token_counter": "string",
+      "cache_accounting": "string",
       "configured_max_output": "u64 | null",
       "cost_input_per_1m": "f64 | null",
       "cost_output_per_1m": "f64 | null",
       "cost_cache_read_per_1m": "f64 | null",
+      "cost_cache_write_per_1m": "f64 | null",
+      "tool_schema_transform": "string",
+      "prompt_delta": "string",
       "latest_health_status": "ok | failed | null",
       "latest_timeout_category": "string | null",
       "last_request_latency_ms": "u64 | null",
@@ -254,6 +262,40 @@ with stable product fields.
 
 API:
 - `GET /api/provider/status` → `ProviderStatusPage`
+- `GET /api/provider/catalog` → `ProviderCatalogDto`
+
+Provider catalog entries expose the same product facts for catalog/model picker
+surfaces:
+
+```json
+{
+  "schema": "provider_catalog.v1",
+  "providers": [
+    {
+      "provider_id": "string",
+      "label": "string",
+      "enabled": "bool",
+      "source": "runtime | env | config | builtin",
+      "base_url_host": "string",
+      "default_model": "string",
+      "available_model_ids": ["string"],
+      "context_limit": "u64 | null",
+      "output_limit": "u64 | null",
+      "auto_compact_threshold": "u64 | null",
+      "token_counter": "string",
+      "cache_accounting": "string",
+      "protocol_family": "string",
+      "supports_streaming": "bool",
+      "requires_nonstreaming": "bool",
+      "tool_schema_transform": "string",
+      "prompt_delta": "string",
+      "request_timeout_secs": "u64",
+      "stream_idle_timeout_secs": "u64",
+      "cost_cache_write_per_1m": "f64 | null"
+    }
+  ]
+}
+```
 
 ---
 

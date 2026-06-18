@@ -714,6 +714,7 @@ async fn get_provider_catalog_handler(
     );
     let context =
         crate::engine::model_context::ModelContextProfile::detect(&base_url, &state.model);
+    let facts = crate::api::provider_status::provider_catalog_facts(&capabilities, &context);
 
     Ok(Json(dto::provider_catalog::ProviderCatalogDto {
         schema: "provider_catalog.v1".to_string(),
@@ -727,14 +728,23 @@ async fn get_provider_catalog_handler(
             available_model_ids: vec![state.model.clone()],
             context_limit: Some(context.context_window_tokens),
             output_limit: Some(context.reserved_output_tokens),
+            auto_compact_threshold: facts.auto_compact_threshold,
+            token_counter: facts.token_counter,
+            cache_accounting: facts.cache_accounting,
             protocol_family: profile.protocol_family.label().to_string(),
             supports_streaming: profile.supports_streaming_tool_calls,
             requires_nonstreaming: profile.requires_nonstreaming_tool_calls,
+            tool_schema_transform: facts.tool_schema_transform,
+            prompt_delta: facts.prompt_delta,
+            request_timeout_secs: profile.request_timeout_secs,
+            stream_idle_timeout_secs: profile.stream_idle_timeout_secs,
             last_health_status: profile.last_health_status.clone(),
             last_latency_ms: None,
             recent_timeout_category: profile.last_timeout_category.clone(),
-            cost_input_per_1m: None,
-            cost_output_per_1m: None,
+            cost_input_per_1m: facts.cost_input_per_1m,
+            cost_output_per_1m: facts.cost_output_per_1m,
+            cost_cache_read_per_1m: facts.cost_cache_read_per_1m,
+            cost_cache_write_per_1m: facts.cost_cache_write_per_1m,
         }],
     }))
 }
@@ -1384,16 +1394,23 @@ async fn get_session_parts_handler(
     let has_more = parts.len() >= limit;
     let items: Vec<dto::session::SessionPartItem> = parts
         .into_iter()
-        .map(|p| dto::session::SessionPartItem {
-            part_id: p.part_id,
-            part_index: p.part_index,
-            kind: p.kind,
-            tool_call_id: p.tool_call_id,
-            tool_name: p.tool_name,
-            status: p.status,
-            payload: p.payload,
-            projected_to_seq: p.projected_to_seq,
-            updated_at: p.updated_at,
+        .map(|p| {
+            let timeline_label =
+                session_part_timeline_label(&p.kind, p.tool_name.as_deref(), p.status.as_deref());
+            let diff_summary = session_part_diff_summary(&p.payload);
+            dto::session::SessionPartItem {
+                part_id: p.part_id,
+                part_index: p.part_index,
+                kind: p.kind,
+                tool_call_id: p.tool_call_id,
+                tool_name: p.tool_name,
+                status: p.status,
+                timeline_label,
+                diff_summary,
+                payload: p.payload,
+                projected_to_seq: p.projected_to_seq,
+                updated_at: p.updated_at,
+            }
         })
         .collect();
     let cursor = dto::session::PartsCursor {
@@ -1406,6 +1423,47 @@ async fn get_session_parts_handler(
         parts: items,
         cursor,
     }))
+}
+
+fn session_part_timeline_label(
+    kind: &str,
+    tool_name: Option<&str>,
+    status: Option<&str>,
+) -> String {
+    match (kind, tool_name, status) {
+        ("tool", Some(tool), Some(status)) => format!("{tool} {status}"),
+        ("shell", _, Some(status)) => format!("shell {status}"),
+        ("permission", Some(tool), Some(status)) => format!("permission {tool} {status}"),
+        ("revert", _, Some(status)) => format!("revert {status}"),
+        ("closeout", _, Some(status)) => format!("closeout {status}"),
+        ("compaction", _, _) => "context compaction".to_string(),
+        ("reasoning", _, _) => "reasoning".to_string(),
+        ("assistant_text", _, _) => "assistant text".to_string(),
+        (kind, Some(tool), _) => format!("{kind} {tool}"),
+        (kind, _, Some(status)) => format!("{kind} {status}"),
+        (kind, _, _) => kind.to_string(),
+    }
+}
+
+fn session_part_diff_summary(payload: &serde_json::Value) -> Option<String> {
+    for key in ["diff_summary", "diff_preview", "result_preview", "content"] {
+        let Some(value) = payload.get(key).and_then(|value| value.as_str()) else {
+            continue;
+        };
+        if value.contains("@@") || value.contains("diff --git") || key == "diff_summary" {
+            return Some(compact_api_text(value, 220));
+        }
+    }
+    None
+}
+
+fn compact_api_text(value: &str, max_chars: usize) -> String {
+    let mut text = value.replace('\n', " ");
+    if text.chars().count() > max_chars {
+        text = text.chars().take(max_chars).collect::<String>();
+        text.push_str("...");
+    }
+    text
 }
 
 #[derive(Debug, Deserialize)]

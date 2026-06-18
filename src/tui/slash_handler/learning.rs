@@ -129,6 +129,14 @@ pub fn handle_quick(app: &mut TuiApp) -> String {
 /// /active-task - Unified current task/progress panel
 pub fn handle_active_task(app: &mut TuiApp) -> String {
     let mut output = active_task_plan_for_app(app).format();
+    output.push_str("\n\nMode stack:\n");
+    output.push_str(
+        &crate::tui::slash_handler::agents::format_mode_product_summary(
+            app,
+            &app.current_agent_mode_label(),
+            &format!("{:?}", app.mode),
+        ),
+    );
     let runner_line = goal_runner_detail_line(app);
     if !runner_line.is_empty() {
         output.push_str("\n\nGoal runner:\n");

@@ -193,6 +193,37 @@ impl ComposerState {
 
         let mut sections = Vec::new();
 
+        if !files.is_empty() || !pasted.is_empty() || !images.is_empty() {
+            let mut lines = vec!["<reference-provenance>".to_string()];
+            for token in &files {
+                lines.push(format!(
+                    "- type=file source={} label={} path={}",
+                    attachment_source_label(token.source),
+                    token.label,
+                    token.path
+                ));
+            }
+            for (id, label, placeholder, content) in &pasted {
+                lines.push(format!(
+                    "- type=paste id={} label={} placeholder={} chars={}",
+                    id,
+                    label,
+                    placeholder,
+                    content.chars().count()
+                ));
+            }
+            for (id, label, content) in &images {
+                lines.push(format!(
+                    "- type=image id={} label={} chars={}",
+                    id,
+                    label,
+                    content.chars().count()
+                ));
+            }
+            lines.push("</reference-provenance>".to_string());
+            sections.push(lines.join("\n"));
+        }
+
         if !files.is_empty() {
             let mut lines = vec!["Attached context:".to_string()];
             for token in files {
@@ -227,6 +258,14 @@ impl ComposerState {
     }
 }
 
+fn attachment_source_label(source: AttachmentSource) -> &'static str {
+    match source {
+        AttachmentSource::File => "file_picker",
+        AttachmentSource::Pasted => "pasted_path",
+        AttachmentSource::Autocomplete => "autocomplete",
+    }
+}
+
 impl Default for ComposerState {
     fn default() -> Self {
         Self::new()
@@ -243,10 +282,26 @@ mod tests {
         composer.text.insert_str("summarize this");
         composer.add_file("Cargo.toml", AttachmentSource::File);
         let payload = composer.build_submission();
+        assert!(payload.contains("<reference-provenance>"));
         assert!(payload.contains("Attached context:"));
         assert!(payload.contains("Cargo.toml"));
         assert!(payload.contains("User request:"));
         assert!(payload.contains("summarize this"));
+    }
+
+    #[test]
+    fn composer_provenance_records_pasted_context_without_duplicate_placeholder() {
+        let mut composer = ComposerState::new();
+        let placeholder = "[[paste:1 2 lines 10 chars]]";
+        composer.text.insert_str(placeholder);
+        composer.add_pasted_text("paste 1", placeholder, "hello\nthere");
+
+        let payload = composer.build_submission();
+
+        assert!(payload.contains("type=paste"));
+        assert!(payload.contains("chars=11"));
+        assert!(payload.contains("Pasted context:"));
+        assert!(!payload.contains("User request:\n[[paste:1"));
     }
 
     #[test]

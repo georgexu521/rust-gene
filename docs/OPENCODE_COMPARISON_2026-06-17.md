@@ -319,11 +319,20 @@ opencode 的产品感很大一部分来自更直接的 edit/write diff、session
 
 ### P1：值得实际推进
 
-- [ ] Provider/model catalog：统一模型能力、提示 delta、tool schema transform、timeout、context window、成本。
-- [ ] Dynamic context block builder：统一动态上下文的排序、dedupe、预算和 provenance。
-- [ ] Protected output policy：保护 skill、validation、permission、checkpoint、failure evidence。
-- [ ] Plan/build UX 收敛：把 `/mode`、plan tools、goal runner、todo 状态统一展示。
-- [ ] Reference/composer 体验：在已有 `@` 文件补全/附件基础上增加更清晰的 reference provenance 和多源引用。
+- [x] Provider/model catalog 产品字段：`ProviderStatusPage` 和 `ProviderCatalogDto` 已暴露 context window、auto compact threshold、token counter、cache accounting、prompt delta、tool schema transform、timeout 和 cache-write cost lane。
+- [x] Dynamic context block builder：request preparation 已接入 `DynamicContextBlockBuilder`，负责动态块集中收集、去重和 prepend；后续增强是 per-block token cap 和更细预算裁剪。
+- [x] Protected output policy：压缩路径已保护 skill、validation、permission、checkpoint、failure evidence，避免被普通 tool-output 裁剪误删。
+- [x] Plan/build UX 收敛第一步：`/mode` 和 `/active-task` 现在显示统一 Mode Stack，包含 agent mode、goal runner 和 session todo 摘要。
+- [x] Reference/composer provenance 第一块：composer 提交会生成 `<reference-provenance>`，列出 file/paste/image 来源、标签、路径或占位符。
+- [x] Session timeline / diff DTO：`SessionPartItem` 增加 `timeline_label` 和 `diff_summary`，前端可以直接渲染 timeline 而不必重新解析 payload。
+
+### P1 剩余增强
+
+- [ ] Provider/model catalog 继续收敛为真正单一事实源：把 provider cost 表、model discovery、desktop settings、`/model` picker 和 provider health 统一消费同一 DTO。
+- [ ] Dynamic context builder 增加 per-block token cap、排序权重和 provenance 预算报告。
+- [ ] Plan/build UX 下一步：让 status bar、desktop goal row、plan tool state 使用同一个 Mode Stack view model。
+- [ ] Reference/composer 下一步：把 `<reference-provenance>` 同步进 trace/session parts，给 UI 一个可点击 provenance 面板。
+- [ ] Diff/timeline 下一步：TUI/desktop 渲染 `timeline_label` / `diff_summary`，并支持从 timeline 进入完整 tool-output/diff view。
 
 ### P2：可借鉴但不急
 

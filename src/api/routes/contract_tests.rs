@@ -188,6 +188,40 @@ async fn provider_status_has_required_fields() {
     assert!(first["provider_id"].is_string(), "provider_id");
     assert!(first["model_id"].is_string(), "model_id");
     assert!(first["protocol_family"].is_string(), "protocol_family");
+    assert!(first["token_counter"].is_string(), "token_counter");
+    assert!(first["cache_accounting"].is_string(), "cache_accounting");
+    assert!(
+        first["tool_schema_transform"].is_string(),
+        "tool_schema_transform"
+    );
+    assert!(first["prompt_delta"].is_string(), "prompt_delta");
+    assert!(
+        first.get("cost_cache_write_per_1m").is_some(),
+        "cost_cache_write_per_1m"
+    );
+}
+
+#[tokio::test]
+async fn provider_catalog_reports_context_and_product_fields() {
+    let mut env = EnvVarGuard::acquire().await;
+    env.set("PRIORITY_AGENT_BRIDGE_TOKEN", TEST_BRIDGE_TOKEN);
+    let state = api_test_state();
+    let app = create_routes(state);
+    let value = json_get_response(&app, "/api/provider/catalog").await;
+    let first = &value["providers"][0];
+
+    assert_eq!(value["schema"], "provider_catalog.v1");
+    assert!(first["token_counter"].is_string(), "token_counter");
+    assert!(first["cache_accounting"].is_string(), "cache_accounting");
+    assert!(
+        first["auto_compact_threshold"].is_number(),
+        "auto_compact_threshold"
+    );
+    assert!(
+        first["request_timeout_secs"].is_number(),
+        "request_timeout_secs"
+    );
+    assert!(first["prompt_delta"].is_string(), "prompt_delta");
 }
 
 #[tokio::test]
@@ -250,11 +284,19 @@ async fn session_parts_returns_cursor_shape() {
     {
         let store = state.session_store.read().await;
         let _ = store.create_session("test", "Test Session", "mock-model", None);
+        let writer = crate::session_store::SessionEventWriter::new(store.shared_conn(), "test");
+        writer.tool_called("call-1", "file_edit").unwrap();
+        writer
+            .tool_succeeded("call-1", "@@ -1,1 +1,1 @@\n-old\n+new")
+            .unwrap();
     }
     let app = create_routes(state);
     let value = json_get_response(&app, "/api/sessions/test/parts?limit=10").await;
     assert_eq!(value["session_id"], "test");
     assert!(value["parts"].is_array(), "parts is array");
+    let first = &value["parts"][0];
+    assert_eq!(first["timeline_label"], "file_edit completed");
+    assert!(first["diff_summary"].is_string(), "diff_summary");
     assert!(value["cursor"].is_object(), "cursor is object");
     assert!(value["cursor"]["has_more"].is_boolean(), "cursor.has_more");
     assert!(value["cursor"]["limit"].is_number(), "cursor.limit");
