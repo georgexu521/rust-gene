@@ -23,6 +23,17 @@
 //! - 前三条路径会改变持久化消息历史，后两条只影响本次 request。
 //! - `message_healing` 不属于语义压缩，但对可发送性至关重要。
 //! - `ContextCollapseService` 是磁盘折叠的实验性替代路径，当前未接入主运行时。
+//!
+//! ## 环境变量配置
+//!
+//! 详见 `docs/CACHE_COMPRESSION_AUDIT_2026-06-17.md`。
+//! 核心开关：`PRIORITY_AGENT_SELECTIVE_COMPRESSION`（默认开）、
+//! `PRIORITY_AGENT_BACKGROUND_PRUNE`（默认关，未接入主循环）、
+//! `PRIORITY_AGENT_LLM_COMPACTION`（默认关）、
+//! `PRIORITY_AGENT_CONTEXT_COLLAPSE`（默认关，实验服务）。
+//!
+//! 注意：请求局部压缩（selective compression）不改写历史，而 full-message compaction
+//! 会写入 compact boundary 并可能替换 session messages。两者对用户可见性含义不同。
 
 pub use crate::engine::context_collapse::{
     extract_compact_boundaries, CompactMetadata, CompactionAttemptRecord, CompactionDecision,
@@ -139,7 +150,7 @@ through context compression. Do not paraphrase or override them.]";
 pub struct SessionMemoryCompact {
     /// 从会话中提取的关键文件（出现频率高的）
     pub hot_files: Vec<String>,
-    /// 用户偏好记忆（从 MemoryManager 注入）
+    /// 用户偏好记忆（当前未由 analyze() 自动填充，需外部注入）
     pub user_preferences: Vec<String>,
     /// 未完成的任务链
     pub pending_tasks: Vec<String>,
@@ -197,7 +208,7 @@ impl SessionMemoryCompact {
 
         Self {
             hot_files: hot_files.into_iter().take(5).map(|(f, _)| f).collect(),
-            user_preferences: Vec::new(), // 由外部注入
+            user_preferences: Vec::new(), // 待接入：需从 MemoryManager 或用户画像注入
             pending_tasks: pending.into_iter().take(10).collect(),
             tool_patterns: tool_patterns.into_iter().take(3).map(|(t, _)| t).collect(),
         }
@@ -1314,7 +1325,10 @@ pub struct ContextCompressor {
     max_consecutive_compaction_failures: u32,
     max_consecutive_no_gain_compactions: u32,
     /// Whether active skills are loaded (marker injected in summary).
-    has_active_skills: bool,
+    /// 策略：压缩摘要中始终保留技能提醒 marker。
+    /// 当前默认 true（skills 在会话启动时加载），
+    /// 如果未来需要按实时技能状态决定，需接入 SkillRuntime。
+    preserve_skills_marker: bool,
 }
 
 /// 压缩统计

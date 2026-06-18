@@ -27,7 +27,9 @@ impl ContextCompressor {
             consecutive_no_gain_compactions: 0,
             max_consecutive_compaction_failures: 2,
             max_consecutive_no_gain_compactions: 2,
-            has_active_skills: true, // skills are loaded at session start
+            // 策略：压缩摘要中永远保留技能提醒 marker。
+            // 如果未来希望按真实技能状态决定是否保留，需要接入 SkillRuntime。
+            preserve_skills_marker: true,
         }
     }
 
@@ -528,7 +530,7 @@ impl ContextCompressor {
         // Preserve active skills through compression (Reasonix skill-pin pattern).
         // Skills loaded by the agent are embedded in the system prompt pre-compression;
         // this marker tells the model those definitions are still active.
-        if self.has_active_skills() {
+        if self.preserve_skills_marker() {
             summary_text.push_str("\n\n");
             summary_text.push_str(PRESERVED_SKILLS_MARKER);
         }
@@ -865,23 +867,8 @@ impl ContextCompressor {
             } = &messages[tail_start]
             {
                 if !calls.is_empty() {
-                    // 找到最后一个 tool result 的位置
-                    let call_ids: std::collections::HashSet<&str> =
-                        calls.iter().map(|tc| tc.id.as_str()).collect();
-                    let mut last_result_idx = tail_start;
-                    #[allow(clippy::needless_range_loop)]
-                    for j in (tail_start + 1)..messages.len() {
-                        if let Message::Tool { tool_call_id, .. } = &messages[j] {
-                            if call_ids.contains(tool_call_id.as_str()) {
-                                last_result_idx = j;
-                            }
-                        } else {
-                            break; // tool results 必须连续
-                        }
-                    }
-                    // 确保所有 tool results 都在 tail 中
-                    // （tail 已经包含 tail_start 之后的所有消息，所以这里不需要调整）
-                    let _ = last_result_idx;
+                    // tail 已包含 tail_start 之后的所有消息，
+                    // 后续 sanitize 会处理孤立 tool pairs，这里不需要额外边界对齐。
                 }
             }
         }
@@ -1142,14 +1129,15 @@ impl ContextCompressor {
         self.llm_provider.is_some()
     }
 
-    /// Whether active skills were loaded this session (marker injected in summaries).
-    pub fn has_active_skills(&self) -> bool {
-        self.has_active_skills
+    /// 是否在压缩摘要中保留技能提醒 marker。
+    /// 当前默认 true：skills 在会话启动时加载，压缩中始终保留。
+    pub fn preserve_skills_marker(&self) -> bool {
+        self.preserve_skills_marker
     }
 
-    /// Mark that skills are active so the compression pipeline preserves them.
-    pub fn mark_skills_active(&mut self) {
-        self.has_active_skills = true;
+    /// 标记技能应被保留。当前默认即为 true，仅用于确保 marker 不被意外关闭。
+    pub fn mark_skills_preserved(&mut self) {
+        self.preserve_skills_marker = true;
     }
 
     /// 记录压缩失败（进入冷却期）

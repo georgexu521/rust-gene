@@ -1,7 +1,15 @@
+//! 上下文管理器（旧路径，已废弃）
+//!
+//! 当前主对话循环使用 `PreflightCompressionController`、`ContextBudgetController`
+//! 和 `ContextCompressor` 的组合。此模块无生产调用，保留用于参考。
+
 use crate::engine::context_compressor::{estimate_tokens, ContextCompressor};
 use crate::services::api::Message;
 use tracing::{debug, info};
 
+#[deprecated(
+    note = "使用 PreflightCompressionController + ContextBudgetController + ContextCompressor 替代。此模块无生产调用。"
+)]
 pub struct ContextManager {
     tool_result_budget: usize,
     snip_threshold: f64,
@@ -19,6 +27,7 @@ pub enum ContextAction {
     Compressed { before: usize, after: usize },
 }
 
+#[allow(deprecated)]
 impl ContextManager {
     pub fn new(max_context_tokens: u64) -> Self {
         Self {
@@ -178,6 +187,7 @@ impl ContextManager {
 }
 
 #[cfg(test)]
+#[allow(deprecated)]
 mod tests {
     use super::*;
     use crate::services::api::ToolCall;
