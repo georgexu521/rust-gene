@@ -101,6 +101,7 @@ async fn cancel_active_run_interrupts_query_and_marks_tool_cancelled() {
             id: "call_1".to_string(),
             name: "bash".to_string(),
         });
+        app.sync_snapshot = sync.snapshot();
     }
 
     assert!(app.cancel_active_run("Run interrupted").await);
@@ -118,7 +119,7 @@ async fn cancel_active_run_interrupts_query_and_marks_tool_cancelled() {
     );
     let projected_runs = app
         .sync_snapshot
-        .tool_runs_for_message("msg_0")
+        .tool_runs_for_message("msg_1")
         .expect("projected tool runs");
     assert_eq!(projected_runs[0].status, ToolRunStatus::Cancelled);
 }
@@ -636,7 +637,7 @@ fn test_stream_usage_label_includes_reasoning_and_cached_tokens() {
 
     assert_eq!(
         app.stream_usage_label().as_deref(),
-        Some("125 tokens / 12 reasoning / 80 cached / 20 miss / 80.0% hit")
+        Some("125 tokens / 12 reasoning / 80 cached / 10 cache write / 20 miss / 80.0% hit")
     );
 }
 

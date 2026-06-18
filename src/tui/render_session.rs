@@ -304,7 +304,7 @@ mod tests {
                 id: 2,
                 session_id: "sess_1".to_string(),
                 part_index: 1,
-                part_id: "user_1:tool:tool_1".to_string(),
+                part_id: "assistant_1:tool:tool_1".to_string(),
                 kind: "tool".to_string(),
                 tool_call_id: Some("tool_1".to_string()),
                 tool_name: Some("bash".to_string()),
@@ -316,7 +316,7 @@ mod tests {
                 }),
                 projected_to_seq: 2,
                 updated_at: "2026-01-01T00:00:01Z".to_string(),
-                message_id: Some("user_1".to_string()),
+                message_id: Some("assistant_1".to_string()),
             },
         ]
     }

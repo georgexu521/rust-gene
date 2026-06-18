@@ -2689,7 +2689,7 @@ cargo check finished successfully"
 
         assert_eq!(
             rendered_cell_fg_for_text(&mut app, 120, 35, "Ran cargo"),
-            Some(app.theme.tokens.tone.ok)
+            Some(app.theme.tokens.fg.faint)
         );
         assert_eq!(
             rendered_cell_fg_for_text(&mut app, 120, 35, "Reply"),

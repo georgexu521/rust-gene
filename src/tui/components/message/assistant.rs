@@ -156,8 +156,13 @@ fn append_part_lines(
                 if part.text.trim().is_empty() {
                     continue;
                 }
+                let text = if assistant_message_is_error(&part.text) {
+                    assistant_error_body(&part.text)
+                } else {
+                    part.text.clone()
+                };
                 let mut answer_lines = Vec::new();
-                append_markdown_lines(&mut answer_lines, &part.text, theme, "  ");
+                append_markdown_lines(&mut answer_lines, &text, theme, "  ");
                 lines.extend(flatten_line_breaks(answer_lines));
             }
             TuiPartKind::Tool => {
