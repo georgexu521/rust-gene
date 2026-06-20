@@ -2877,6 +2877,19 @@ optional lab meeting.
   passed. The Lab graduate path remained correctly blocked by the graduate
   provider certification gate in control-plane mode.
 
+### Completed in P0.165 Live background completion-sink validation
+
+- `/lab provider compare` now waits for the launched background subagent result
+  through the in-process `AgentManager` before reading durable task state.
+- `scripts/lab-live-validation.sh` now hard-gates the background subagent
+  comparison on all three runtime proofs: `success: true`,
+  `completion_sink: agent_manager`, and `hard_file_proof: true`.
+- Re-ran DeepSeek v4 flash control-plane validation in
+  `target/lab-live-validation/p0-165-background-sink-live-control/report.md`.
+  The background subagent completed with a persisted result artifact,
+  `agent_manager` completion sink, runtime-observed tools, and isolated
+  worktree file proof.
+
 ### Still pending
 
 - Full release-ready autonomous multi-cycle professor/postdoc/graduate LLM
@@ -2912,8 +2925,9 @@ optional lab meeting.
 - Persistent opencode-style subagent sessions with `task_id` resume, parent
   session IDs, durable artifacts, parent synthetic result injection, UI/API
   result projection, and restart recovery are implemented through
-  P0.118-P0.121. Remaining work is live background completion-sink validation
-  across multiple providers and long-running desktop sessions.
+  P0.118-P0.121. DeepSeek live control-plane now hard-gates the background
+  completion sink; remaining work is cross-provider validation and long-running
+  desktop sessions.
 - DeepSeek proves Professor-side provider control-plane use, structured
   graduate JSON emission, direct provider `tool_choice=auto` function calling
   with production tool schemas, and generic foreground/background subagent

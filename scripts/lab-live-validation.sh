@@ -343,6 +343,9 @@ if [[ "$MODE" == "live_control_plane" || "$MODE" == "live_graduate" ]]; then
   grep -q "Provider subagent comparison:" "$ARTIFACT_DIR/13b-provider-compare.txt"
   grep -q "Generic subagent:" "$ARTIFACT_DIR/13b-provider-compare.txt"
   grep -q "Background subagent:" "$ARTIFACT_DIR/13b-provider-compare.txt"
+  grep -A12 "Background subagent:" "$ARTIFACT_DIR/13b-provider-compare.txt" | grep -q "success: true"
+  grep -A12 "Background subagent:" "$ARTIFACT_DIR/13b-provider-compare.txt" | grep -q "completion_sink: agent_manager"
+  grep -A12 "Background subagent:" "$ARTIFACT_DIR/13b-provider-compare.txt" | grep -q "hard_file_proof: true"
   grep -q "completion_sink:" "$ARTIFACT_DIR/13b-provider-compare.txt"
   grep -q "Lab graduate:" "$ARTIFACT_DIR/13b-provider-compare.txt"
 

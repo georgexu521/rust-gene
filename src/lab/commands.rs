@@ -1,3 +1,4 @@
+use crate::agent::types::AgentId;
 use crate::lab::context::{
     build_lab_context_packet_with_evidence_retries_and_artifact_refs,
     evaluate_lab_context_compression, LabContextPacket,
@@ -1022,7 +1023,7 @@ async fn run_generic_background_subagent_provider_smoke(
         "background": true
     });
     let launch = AgentTool::with_working_dir(project_root)
-        .execute(params, tool_context)
+        .execute(params, tool_context.clone())
         .await;
     if !launch.success {
         return ProviderComparePathResult {
@@ -1041,6 +1042,19 @@ async fn run_generic_background_subagent_provider_smoke(
             used_mutating_tool: false,
             blocked_by_certification: false,
         };
+    }
+
+    if let (Some(manager), Some(agent_id)) = (
+        tool_context.agent_manager.as_ref(),
+        launch
+            .data
+            .as_ref()
+            .and_then(|data| data.get("agent_id"))
+            .and_then(Value::as_str),
+    ) {
+        let _ = manager
+            .wait_for_result(&AgentId(agent_id.to_string()), 180)
+            .await;
     }
 
     let mut final_state = None;
