@@ -257,6 +257,8 @@ cargo test -q provider_compare_recovers_generic_foreground_from_durable_sink \
   >"$ARTIFACT_DIR/10aq-provider-compare-foreground-durable-recovery-test.txt" 2>&1
 cargo test -q command_claims_stale_active_lease_without_pausing_run \
   >"$ARTIFACT_DIR/10ar-command-lease-claim-test.txt" 2>&1
+cargo test -q command_claims_active_run_when_lease_file_is_missing \
+  >"$ARTIFACT_DIR/10ar2-command-missing-lease-claim-test.txt" 2>&1
 cargo test -q workspace_change_delta_ignores_preexisting_dirty_files \
   >"$ARTIFACT_DIR/10as-runtime-internal-path-filter-test.txt" 2>&1
 cargo test -q unbound_graduate_success_can_bind_runtime_verified_result \
@@ -316,6 +318,7 @@ cargo test -q structured_postdoc_plan_accepts_object_list_items_from_provider \
   echo "- desktop daemon cycle-bound status test: passed"
   echo "- provider compare foreground durable recovery test: passed"
   echo "- command lease claim without pause test: passed"
+  echo "- command missing lease claim test: passed"
   echo "- runtime internal path filter test: passed"
   echo "- unbound runtime-verified graduate result test: passed"
   echo "- provider draft parser normalization test: passed"
