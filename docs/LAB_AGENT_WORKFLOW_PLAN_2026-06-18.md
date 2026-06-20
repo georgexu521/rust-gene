@@ -2862,6 +2862,21 @@ optional lab meeting.
   now records it as experimental runtime-path evidence and intentionally skips
   formal `graduate passed` provider certification.
 
+### Completed in P0.164 Live provider Lab meeting validation
+
+- Extended `scripts/lab-live-validation.sh --live-control-plane` and
+  `--live-graduate` to run `/lab meeting llm` after sponsor-message
+  classification and resume.
+- The live check now proves the provider can draft a read-only
+  `LabMeetingSummary`, persist artifact/report output, and record usage without
+  mutating code.
+- Re-ran DeepSeek v4 flash control-plane validation in
+  `target/lab-live-validation/p0-164-provider-meeting-live-control/report.md`.
+  Sponsor classification, provider diagnostics, provider Lab meeting summary,
+  provider compare, daemon validation, and control-plane certification recording
+  passed. The Lab graduate path remained correctly blocked by the graduate
+  provider certification gate in control-plane mode.
+
 ### Still pending
 
 - Full release-ready autonomous multi-cycle professor/postdoc/graduate LLM
@@ -5303,6 +5318,9 @@ Current status:
 - Completed experimentally: live end-to-end validation of real graduate agent
   execution, runtime verification, worktree review, merge, cleanup, and daemon
   validation has passed under the explicit uncertified-provider override.
+- Completed for DeepSeek v4 flash control-plane: live sponsor-message
+  classification and provider-backed read-only Lab meeting summaries are now
+  covered by `scripts/lab-live-validation.sh --live-control-plane`.
 - Not yet complete: formal live provider certification that structured result
   emission or runtime-verified fallback is reliable across supported models.
 - Not yet complete: live provider validation that sponsor-message
@@ -5370,8 +5388,9 @@ Current status:
   shutdown-paused, or needs-user LabRuns without auto-resuming work; Lab Mode
   shell welcome also points recoverable runs to `/lab resume` and
   `/lab recovery`.
-- Not yet complete: live provider validation remains outside Phase 7's UI
-  slice.
+- Completed experimentally: DeepSeek v4 flash live control-plane validation now
+  covers provider-backed read-only Lab meeting summaries; cross-provider UI
+  live validation remains outside Phase 7's UI slice.
 
 Meeting recommendation and professor-trigger triggers:
 

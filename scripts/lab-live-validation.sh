@@ -335,12 +335,16 @@ if [[ "$MODE" == "live_control_plane" || "$MODE" == "live_graduate" ]]; then
   grep -q "Probe: runtime_subagent_allowed_auto" "$ARTIFACT_DIR/12b-provider-tool-diagnostics.txt"
   run_lab "resume" "$ARTIFACT_DIR/13-resume-after-sponsor-classification.txt"
   grep -q "Resumed LabRun" "$ARTIFACT_DIR/13-resume-after-sponsor-classification.txt"
-  run_lab_provider "provider compare" "$ARTIFACT_DIR/13a-provider-compare.txt"
-  grep -q "Provider subagent comparison:" "$ARTIFACT_DIR/13a-provider-compare.txt"
-  grep -q "Generic subagent:" "$ARTIFACT_DIR/13a-provider-compare.txt"
-  grep -q "Background subagent:" "$ARTIFACT_DIR/13a-provider-compare.txt"
-  grep -q "completion_sink:" "$ARTIFACT_DIR/13a-provider-compare.txt"
-  grep -q "Lab graduate:" "$ARTIFACT_DIR/13a-provider-compare.txt"
+  run_lab_provider "meeting llm Lab live validation provider meeting" "$ARTIFACT_DIR/13a-provider-meeting.txt"
+  grep -q "Provider Lab meeting summary created:" "$ARTIFACT_DIR/13a-provider-meeting.txt"
+  grep -q "This meeting is read-only and does not mutate code." "$ARTIFACT_DIR/13a-provider-meeting.txt"
+  grep -q "Usage recorded: true" "$ARTIFACT_DIR/13a-provider-meeting.txt"
+  run_lab_provider "provider compare" "$ARTIFACT_DIR/13b-provider-compare.txt"
+  grep -q "Provider subagent comparison:" "$ARTIFACT_DIR/13b-provider-compare.txt"
+  grep -q "Generic subagent:" "$ARTIFACT_DIR/13b-provider-compare.txt"
+  grep -q "Background subagent:" "$ARTIFACT_DIR/13b-provider-compare.txt"
+  grep -q "completion_sink:" "$ARTIFACT_DIR/13b-provider-compare.txt"
+  grep -q "Lab graduate:" "$ARTIFACT_DIR/13b-provider-compare.txt"
 
   if [[ "$MODE" == "live_graduate" ]]; then
     run_lab "task create Live graduate proof | lab-live-graduate-proof.md | test -f lab-live-graduate-proof.md | Create lab-live-graduate-proof.md with one line, run the required validation, and return the required graduate_result JSON." "$ARTIFACT_DIR/14-live-task-create.txt"
@@ -382,6 +386,7 @@ if [[ "$MODE" == "live_control_plane" || "$MODE" == "live_graduate" ]]; then
     echo "- sponsor classification command: completed"
     echo "- provider certification report: completed"
     echo "- provider direct tool-call diagnostics: completed"
+    echo "- provider Lab meeting summary: completed"
     echo "- provider generic/background-vs-Lab subagent comparison: completed"
     if [[ "$MODE" == "live_graduate" ]]; then
       echo "- live graduate task run, runtime validation, and JSON binding: passed"
@@ -415,7 +420,7 @@ if [[ "$MODE" == "live_control_plane" || "$MODE" == "live_graduate" ]]; then
       } >>"$report"
     fi
   else
-    run_lab_provider "provider record control-plane passed $ARTIFACT_DIR/report.md live control-plane sponsor classification, provider diagnostics, provider comparison, and daemon validation passed" "$ARTIFACT_DIR/21a-provider-record-control-plane.txt"
+    run_lab_provider "provider record control-plane passed $ARTIFACT_DIR/report.md live control-plane sponsor classification, provider diagnostics, provider Lab meeting, provider comparison, and daemon validation passed" "$ARTIFACT_DIR/21a-provider-record-control-plane.txt"
     grep -q "Recorded provider certification:" "$ARTIFACT_DIR/21a-provider-record-control-plane.txt"
     CERTIFICATION_RECORD_WRITTEN=1
   fi
