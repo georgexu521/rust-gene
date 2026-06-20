@@ -51,6 +51,15 @@ cargo build -q
 WORKSPACE="$ARTIFACT_DIR/workspace"
 rm -rf "$WORKSPACE"
 mkdir -p "$WORKSPACE"
+(
+  cd "$WORKSPACE"
+  git init -q
+  git config user.email "lab-validation@example.local"
+  git config user.name "Lab Validation"
+  printf '# Lab validation workspace\n' >README.md
+  git add README.md
+  git commit -q -m "Initialize Lab validation workspace"
+)
 
 run_lab() {
   local command="$1"
@@ -66,9 +75,19 @@ run_lab_provider() {
 
 CERTIFICATION_RECORD_WRITTEN=0
 
+formal_provider_certification_allowed() {
+  if [[ "$MODE" == "live_graduate" && "${PRIORITY_AGENT_LAB_ALLOW_UNCERTIFIED_GRADUATE_PROVIDER:-}" == "1" ]]; then
+    return 1
+  fi
+  return 0
+}
+
 record_provider_certification_failure() {
   local status="$1"
   if [[ "$MODE" != "live_control_plane" && "$MODE" != "live_graduate" ]]; then
+    return 0
+  fi
+  if ! formal_provider_certification_allowed; then
     return 0
   fi
   if [[ "$CERTIFICATION_RECORD_WRITTEN" == "1" ]]; then
@@ -236,6 +255,12 @@ cargo test -q daemon_enable_accepts_hybrid_cycles_mode \
   >"$ARTIFACT_DIR/10ap-desktop-daemon-cycle-bound-status-test.txt" 2>&1
 cargo test -q provider_compare_recovers_generic_foreground_from_durable_sink \
   >"$ARTIFACT_DIR/10aq-provider-compare-foreground-durable-recovery-test.txt" 2>&1
+cargo test -q command_claims_stale_active_lease_without_pausing_run \
+  >"$ARTIFACT_DIR/10ar-command-lease-claim-test.txt" 2>&1
+cargo test -q workspace_change_delta_ignores_preexisting_dirty_files \
+  >"$ARTIFACT_DIR/10as-runtime-internal-path-filter-test.txt" 2>&1
+cargo test -q unbound_graduate_success_can_bind_runtime_verified_result \
+  >"$ARTIFACT_DIR/10at-unbound-runtime-verified-graduate-result-test.txt" 2>&1
 
 {
   echo "## Offline Checks"
@@ -288,6 +313,9 @@ cargo test -q provider_compare_recovers_generic_foreground_from_durable_sink \
   echo "- daemon hybrid-cycles command test: passed"
   echo "- desktop daemon cycle-bound status test: passed"
   echo "- provider compare foreground durable recovery test: passed"
+  echo "- command lease claim without pause test: passed"
+  echo "- runtime internal path filter test: passed"
+  echo "- unbound runtime-verified graduate result test: passed"
   echo
 } >>"$report"
 
@@ -370,9 +398,22 @@ if [[ "$MODE" == "live_control_plane" || "$MODE" == "live_graduate" ]]; then
     exit "$daemon_status"
   fi
   if [[ "$MODE" == "live_graduate" ]]; then
-    run_lab_provider "provider record graduate passed $ARTIFACT_DIR/report.md live graduate task, runtime validation, worktree review, merge, cleanup, and daemon validation passed" "$ARTIFACT_DIR/21a-provider-record-graduate.txt"
-    grep -q "Recorded provider certification:" "$ARTIFACT_DIR/21a-provider-record-graduate.txt"
-    CERTIFICATION_RECORD_WRITTEN=1
+    if formal_provider_certification_allowed; then
+      run_lab_provider "provider record graduate passed $ARTIFACT_DIR/report.md live graduate task, runtime validation, worktree review, merge, cleanup, and daemon validation passed" "$ARTIFACT_DIR/21a-provider-record-graduate.txt"
+      grep -q "Recorded provider certification:" "$ARTIFACT_DIR/21a-provider-record-graduate.txt"
+      CERTIFICATION_RECORD_WRITTEN=1
+    else
+      {
+        echo "Skipped formal graduate provider certification because PRIORITY_AGENT_LAB_ALLOW_UNCERTIFIED_GRADUATE_PROVIDER=1 was set."
+        echo "This run is experimental evidence for the runtime path, not a provider support record."
+      } >"$ARTIFACT_DIR/21a-provider-record-graduate.txt"
+      {
+        echo "## Provider Certification"
+        echo
+        echo "- formal graduate provider certification: skipped because uncertified-provider override was enabled"
+        echo
+      } >>"$report"
+    fi
   else
     run_lab_provider "provider record control-plane passed $ARTIFACT_DIR/report.md live control-plane sponsor classification, provider diagnostics, provider comparison, and daemon validation passed" "$ARTIFACT_DIR/21a-provider-record-control-plane.txt"
     grep -q "Recorded provider certification:" "$ARTIFACT_DIR/21a-provider-record-control-plane.txt"

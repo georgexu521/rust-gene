@@ -2126,6 +2126,36 @@ impl LabOrchestrator {
                     None,
                 );
             }
+            match self.create_runtime_verified_graduate_result_for_unbound_success(
+                &task,
+                &context,
+                agent_id.as_deref(),
+                &changed_by_agent,
+                &result.content,
+            ) {
+                Ok(created) => {
+                    return self.store.update_graduate_dispatch_status(
+                        &run.lab_run_id,
+                        &running.dispatch_id,
+                        GraduateDispatchStatus::Succeeded,
+                        agent_id,
+                        Some(created.artifact.artifact_id().to_string()),
+                        None,
+                    );
+                }
+                Err(err) => {
+                    let _ = self.store.record_run_event(
+                        &run.lab_run_id,
+                        "graduate_unbound_runtime_verify_failed",
+                        serde_json::json!({
+                            "task_id": task.task_id,
+                            "dispatch_id": running.dispatch_id,
+                            "agent_id": agent_id,
+                            "error": err.to_string(),
+                        }),
+                    );
+                }
+            }
             self.mark_unbound_graduate_success_failed(
                 &run,
                 &task,
@@ -2184,6 +2214,50 @@ impl LabOrchestrator {
                 Some(error),
             )
         }
+    }
+
+    fn create_runtime_verified_graduate_result_for_unbound_success(
+        &self,
+        task: &GraduateTask,
+        context: &ToolContext,
+        agent_id: Option<&str>,
+        parent_changed_files: &[String],
+        result_content: &str,
+    ) -> anyhow::Result<CreatedStageArtifact> {
+        let agent_task_id = graduate_agent_task_id(task);
+        let runtime_evidence = runtime_verify_graduate_task_result(
+            task,
+            context,
+            agent_id,
+            &agent_task_id,
+            parent_changed_files,
+        )?;
+        let mut evidence_ids = vec![
+            format!("agent_task:{agent_task_id}"),
+            format!("runtime_verification:{}", task.task_id),
+        ];
+        if let Some(agent_id) = agent_id {
+            evidence_ids.push(format!("agent:{agent_id}"));
+        }
+        evidence_ids.sort();
+        evidence_ids.dedup();
+        let preview = compact_result_preview(result_content, 240);
+        let task_summary = if preview.is_empty() {
+            "Runtime verified graduate task output without bindable GraduateResult JSON."
+                .to_string()
+        } else {
+            format!(
+                "Runtime verified graduate task output without bindable GraduateResult JSON. Subagent preview: {preview}"
+            )
+        };
+        self.create_graduate_result_for_task_latest(
+            &task.task_id,
+            &task_summary,
+            runtime_evidence.changed_files,
+            runtime_evidence.validation_attempts,
+            Vec::new(),
+            evidence_ids,
+        )
     }
 
     fn record_graduate_workspace_snapshot(
@@ -3549,7 +3623,7 @@ fn current_git_changed_paths(worktree_root: &Path, target_root: Option<&Path>) -
                     committed
                         .lines()
                         .map(str::trim)
-                        .filter(|line| !line.is_empty())
+                        .filter(|line| !line.is_empty() && !is_internal_lab_runtime_path(line))
                         .map(str::to_string),
                 );
             }
@@ -3621,7 +3695,7 @@ fn workspace_change_snapshot(project_root: &Path) -> BTreeMap<String, String> {
     String::from_utf8_lossy(&output.stdout)
         .lines()
         .filter_map(parse_git_status_path)
-        .filter(|path| !path.starts_with(".priority-agent/") && !path.starts_with(".git/"))
+        .filter(|path| !is_internal_lab_runtime_path(path))
         .map(|path| {
             let fingerprint = workspace_path_fingerprint(project_root, &path);
             (path, fingerprint)
@@ -3687,9 +3761,20 @@ fn changed_paths_between(
     after
         .iter()
         .filter_map(|(path, fingerprint)| {
-            (before.get(path) != Some(fingerprint)).then_some(path.clone())
+            (!is_internal_lab_runtime_path(path) && before.get(path) != Some(fingerprint))
+                .then_some(path.clone())
         })
         .collect()
+}
+
+fn is_internal_lab_runtime_path(path: &str) -> bool {
+    let path = path.trim().trim_start_matches("./");
+    path.starts_with(".priority-agent/")
+        || path == ".priority-agent"
+        || path.starts_with(".git/")
+        || path == ".git"
+        || path.starts_with(".claude/worktrees/")
+        || path == ".claude/worktrees"
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -5105,6 +5190,14 @@ mod tests {
             ("src/main.rs".to_string(), "file:1:bbb".to_string()),
         ]);
         let after = BTreeMap::from([
+            (
+                ".claude/worktrees/agent-live-proof/".to_string(),
+                "non_file:64".to_string(),
+            ),
+            (
+                ".priority-agent/lab/events.jsonl".to_string(),
+                "file:1:eee".to_string(),
+            ),
             ("src/lib.rs".to_string(), "file:1:aaa".to_string()),
             ("src/lab/model.rs".to_string(), "file:1:ddd".to_string()),
             ("src/main.rs".to_string(), "file:2:ccc".to_string()),
@@ -5384,6 +5477,88 @@ Thanks."#,
             .contains("without bindable GraduateResult JSON"));
         let saved_run = orchestrator.store().load_run(&run.lab_run_id).unwrap();
         assert_eq!(saved_run.failure_count, 1);
+    }
+
+    #[test]
+    fn unbound_graduate_success_can_bind_runtime_verified_result() {
+        let temp = tempfile::tempdir().unwrap();
+        let orchestrator = LabOrchestrator::for_project(temp.path());
+        let proposal = orchestrator
+            .store()
+            .create_proposal("Build LabRun", None)
+            .unwrap();
+        let run = orchestrator
+            .approve_proposal(&proposal.proposal_id)
+            .unwrap();
+        let task = orchestrator
+            .store()
+            .create_graduate_task(
+                &run.lab_run_id,
+                "Create proof file",
+                "Create only the proof file.",
+                vec!["lab-live-graduate-proof.md".to_string()],
+                vec!["test -f lab-live-graduate-proof.md".to_string()],
+            )
+            .unwrap();
+        orchestrator
+            .store()
+            .start_graduate_task(&run.lab_run_id, &task.task_id)
+            .unwrap();
+
+        let worktree = temp.path().join("graduate-unbound-runtime-worktree");
+        std::fs::create_dir_all(&worktree).unwrap();
+        init_git_dir(&worktree);
+        std::fs::write(
+            worktree.join("lab-live-graduate-proof.md"),
+            "runtime verified\n",
+        )
+        .unwrap();
+        let agent_task_id = graduate_agent_task_id(&task);
+        let context = lab_context_with_agent_worktree_task_id(
+            temp.path(),
+            "lab-test",
+            &agent_task_id,
+            "agent_runtime_verified",
+            &worktree,
+        );
+
+        let created = orchestrator
+            .create_runtime_verified_graduate_result_for_unbound_success(
+                &task,
+                &context,
+                Some("agent_runtime_verified"),
+                &[],
+                "The iteration limit was reached before final JSON.",
+            )
+            .unwrap();
+
+        match created.artifact {
+            StageArtifact::GraduateResult(envelope) => {
+                assert_eq!(
+                    envelope.body.changed_files,
+                    vec!["lab-live-graduate-proof.md".to_string()]
+                );
+                assert!(envelope.body.validation_attempts.contains(
+                    &"runtime validation `test -f lab-live-graduate-proof.md` passed".to_string()
+                ));
+                assert!(envelope
+                    .body
+                    .task_summary
+                    .contains("without bindable GraduateResult JSON"));
+                assert!(envelope
+                    .evidence_refs
+                    .contains(&format!("agent_task:{agent_task_id}")));
+                assert!(envelope
+                    .evidence_refs
+                    .contains(&"agent:agent_runtime_verified".to_string()));
+            }
+            other => panic!("expected GraduateResult, got {:?}", other.artifact_type()),
+        }
+        let saved_task = orchestrator
+            .store()
+            .load_graduate_task(&run.lab_run_id, &task.task_id)
+            .unwrap();
+        assert_eq!(saved_task.status, LabTaskStatus::Completed);
     }
 
     #[tokio::test]

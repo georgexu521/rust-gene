@@ -644,6 +644,86 @@ impl LabStore {
         Ok(())
     }
 
+    pub fn claim_latest_active_run_for_current_process(&self) -> anyhow::Result<Option<LabRun>> {
+        let Some(mut run) = self.latest_run()? else {
+            return Ok(None);
+        };
+        if !matches!(run.status, LabRunStatus::Active) {
+            return Ok(None);
+        }
+        let now = Utc::now();
+        if let Some(lease) = self.read_active_lease()? {
+            if lease.lab_run_id != run.lab_run_id {
+                if lease.is_stale_at(now) {
+                    self.release_lease_for_run(&lease.lab_run_id)?;
+                }
+                return Ok(None);
+            }
+            if !lease.is_stale_at(now) && lease.lease_owner != lease_owner() {
+                return Ok(None);
+            }
+            if lease.is_stale_at(now) {
+                self.release_lease_for_run(&lease.lab_run_id)?;
+                self.append_run_event(
+                    &run.lab_run_id,
+                    "lab_command_stale_lease_claimed",
+                    serde_json::json!({
+                        "previous_lease_id": lease.lease_id,
+                        "previous_lease_owner": lease.lease_owner,
+                        "heartbeat_at": lease.heartbeat_at,
+                        "claimed_at": now,
+                    }),
+                )?;
+            }
+        }
+
+        let lease = self.acquire_lease_for_run(&mut run, now)?;
+        run.updated_at = now;
+        self.save_run(&run)?;
+        self.write_active_run_pointer(&run.lab_run_id)?;
+        self.append_run_event(
+            &run.lab_run_id,
+            "lab_command_lease_claimed",
+            serde_json::json!({
+                "lease_id": lease.lease_id,
+                "lease_owner": lease.lease_owner,
+            }),
+        )?;
+        Ok(Some(run))
+    }
+
+    pub fn release_current_process_lease_without_pausing(
+        &self,
+    ) -> anyhow::Result<Option<LabLease>> {
+        let Some(lease) = self.read_active_lease()? else {
+            return Ok(None);
+        };
+        if lease.lease_owner != lease_owner() {
+            return Ok(None);
+        }
+        let mut run = match self.load_run(&lease.lab_run_id) {
+            Ok(run) => run,
+            Err(_) => {
+                self.release_lease_for_run(&lease.lab_run_id)?;
+                return Ok(Some(lease));
+            }
+        };
+        run.lease_id = None;
+        run.lease_owner = None;
+        run.updated_at = Utc::now();
+        self.save_run(&run)?;
+        self.release_lease_for_run(&run.lab_run_id)?;
+        self.append_run_event(
+            &run.lab_run_id,
+            "lab_command_lease_released",
+            serde_json::json!({
+                "lease_id": lease.lease_id,
+                "lease_owner": lease.lease_owner,
+            }),
+        )?;
+        Ok(Some(lease))
+    }
+
     pub fn open_run_pointer(&self, lab_run_id: &str) -> anyhow::Result<LabRun> {
         let lab_run_id = lab_run_id.trim();
         if lab_run_id.is_empty() {
@@ -1366,7 +1446,24 @@ impl LabStore {
         &self,
         launch_mode: &str,
     ) -> anyhow::Result<LabAppLifecycleState> {
-        self.recover_stale_active_lease()?;
+        self.record_app_lifecycle_startup_with_options(launch_mode, true)
+    }
+
+    pub fn record_app_lifecycle_startup_for_command(
+        &self,
+        launch_mode: &str,
+    ) -> anyhow::Result<LabAppLifecycleState> {
+        self.record_app_lifecycle_startup_with_options(launch_mode, false)
+    }
+
+    fn record_app_lifecycle_startup_with_options(
+        &self,
+        launch_mode: &str,
+        recover_stale_lease: bool,
+    ) -> anyhow::Result<LabAppLifecycleState> {
+        if recover_stale_lease {
+            self.recover_stale_active_lease()?;
+        }
         let recovered_scheduler = self.recover_interrupted_scheduler()?;
         let now = Utc::now();
         let state = LabAppLifecycleState {
@@ -3070,6 +3167,52 @@ mod tests {
             store.latest_run().unwrap().unwrap().lab_run_id,
             run.lab_run_id
         );
+    }
+
+    #[test]
+    fn command_claims_stale_active_lease_without_pausing_run() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = LabStore::for_project(temp.path());
+        let proposal = store.create_proposal("Build LabRun", None).unwrap();
+        let run = store.approve_proposal(&proposal.proposal_id).unwrap();
+        let lease_path = store.root().join("active_lease.json");
+        let mut lease: LabLease = read_json(&lease_path).unwrap();
+        lease.heartbeat_at =
+            Utc::now() - chrono::Duration::seconds(lease.lease_ttl_seconds as i64 + 5);
+        atomic_write_json(&lease_path, &lease).unwrap();
+
+        let claimed = store
+            .claim_latest_active_run_for_current_process()
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(claimed.lab_run_id, run.lab_run_id);
+        assert_eq!(claimed.status, LabRunStatus::Active);
+        assert!(claimed.lease_id.is_some());
+        assert!(store.root().join("active_lease.json").exists());
+        let saved = store.load_run(&run.lab_run_id).unwrap();
+        assert_eq!(saved.status, LabRunStatus::Active);
+        assert_eq!(saved.pause_reason, None);
+        let events = fs::read_to_string(
+            store
+                .root()
+                .join("runs")
+                .join(&run.lab_run_id)
+                .join("events.jsonl"),
+        )
+        .unwrap();
+        assert!(events.contains("lab_command_stale_lease_claimed"));
+        assert!(events.contains("lab_command_lease_claimed"));
+
+        let released = store
+            .release_current_process_lease_without_pausing()
+            .unwrap();
+        assert!(released.is_some());
+        assert!(!store.root().join("active_lease.json").exists());
+        let saved = store.load_run(&run.lab_run_id).unwrap();
+        assert_eq!(saved.status, LabRunStatus::Active);
+        assert!(saved.lease_id.is_none());
+        assert!(saved.lease_owner.is_none());
     }
 
     #[test]

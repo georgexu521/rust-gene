@@ -2815,6 +2815,34 @@ optional lab meeting.
 - Added deterministic coverage for this recovery path as
   `10aq-provider-compare-foreground-durable-recovery-test.txt`.
 
+### Completed in P0.162 Command-mode LabRun lease ownership
+
+- Ran an explicit DeepSeek v4 flash `--live-graduate` experiment with
+  `PRIORITY_AGENT_LAB_ALLOW_UNCERTIFIED_GRADUATE_PROVIDER=1`. The provider
+  compare phase proved the Lab graduate route can create an isolated-worktree
+  file with durable completion-sink proof under the override.
+- The full live graduate script still failed, but the failure was not tool
+  exposure: a later `lab --command` process recovered a stale lease from a
+  previous one-shot command and changed the LabRun to `PausedShutdown`, so
+  `/lab task run` rejected the queued task as not active.
+- Added command-mode lease ownership: one-shot `lab --command` and
+  provider-backed `lab --command --with-provider` startup now skip stale-lease
+  pause recovery, claim the latest active LabRun lease for the current process,
+  and release that process-owned lease at command exit without pausing the
+  LabRun.
+- The live validation workspace is now initialized as its own small git
+  repository before LabRun commands execute. Worktree review/merge/cleanup
+  therefore validates against the temporary LabRun project instead of depending
+  on whether the outer `rust-agent` development checkout is clean.
+- The follow-up live run reached graduate task execution and worktree review,
+  then exposed a runtime proof filter bug: `.claude/worktrees/...` internal
+  storage was counted as an out-of-scope graduate file change. Runtime graduate
+  change detection now filters `.claude/worktrees`, `.priority-agent`, and
+  `.git` paths before allowed-scope validation.
+- Added deterministic coverage as
+  `10ar-command-lease-claim-test.txt` and
+  `10as-runtime-internal-path-filter-test.txt`.
+
 ### Still pending
 
 - Full release-ready autonomous multi-cycle professor/postdoc/graduate LLM
@@ -5165,6 +5193,12 @@ Current status:
   using before/after workspace snapshots before dispatch success is accepted.
 - Completed: structured graduate agent JSON output can automatically bind a
   `GraduateResult` artifact and dispatch result artifact ID.
+- Completed: if a graduate agent succeeds but misses the structured JSON
+  contract, the runtime can still bind a `GraduateResult` only after
+  parent-side verification proves scoped file changes and required validation.
+- Completed: live graduate validation can run with the uncertified-provider
+  override for runtime-path evidence without writing a formal
+  `graduate passed` provider certification record.
 - Completed: the `lab-graduate` profile and generated graduate task prompt now
   require the JSON shape consumed by automatic result binding.
 - Completed: `/lab integrate [note]` turns bound `GraduateResult` artifacts

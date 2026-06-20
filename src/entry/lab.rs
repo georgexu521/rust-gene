@@ -22,7 +22,8 @@ pub async fn run_cli(engine: Arc<StreamingQueryEngine>, no_footer: bool) -> anyh
 pub async fn run_command(command: &str) -> anyhow::Result<()> {
     let project_root = std::env::current_dir().context("failed to resolve current project root")?;
     let store = LabStore::for_project(&project_root);
-    store.record_app_lifecycle_startup("lab_command")?;
+    store.record_app_lifecycle_startup_for_command("lab_command")?;
+    store.claim_latest_active_run_for_current_process()?;
     let command = command
         .trim()
         .strip_prefix("/lab")
@@ -30,6 +31,7 @@ pub async fn run_command(command: &str) -> anyhow::Result<()> {
         .trim();
     let output = crate::lab::commands::handle_lab_command(&project_root, None, command);
     println!("{output}");
+    store.release_current_process_lease_without_pausing()?;
     Ok(())
 }
 
@@ -39,7 +41,8 @@ pub async fn run_command_with_components(
 ) -> anyhow::Result<()> {
     let project_root = std::env::current_dir().context("failed to resolve current project root")?;
     let store = LabStore::for_project(&project_root);
-    store.record_app_lifecycle_startup("lab_provider_command")?;
+    store.record_app_lifecycle_startup_for_command("lab_provider_command")?;
+    store.claim_latest_active_run_for_current_process()?;
     components.streaming_engine.set_lab_context_enabled(true);
     let command = command
         .trim()
@@ -55,6 +58,7 @@ pub async fn run_command_with_components(
     )
     .await;
     println!("{output}");
+    store.release_current_process_lease_without_pausing()?;
     Ok(())
 }
 
