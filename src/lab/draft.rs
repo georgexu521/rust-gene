@@ -1769,7 +1769,10 @@ fn build_structured_stage_artifact(
             artifact_type,
             title,
             now,
-            serde_json::from_value::<ProfessorPlan>(body)?,
+            serde_json::from_value::<ProfessorPlan>(normalize_structured_stage_body(
+                artifact_type,
+                body,
+            ))?,
         )),
         LabArtifactType::PostdocPlan => StageArtifact::PostdocPlan(LabArtifactEnvelope::new(
             artifact_id,
@@ -1777,7 +1780,10 @@ fn build_structured_stage_artifact(
             artifact_type,
             title,
             now,
-            serde_json::from_value::<PostdocPlan>(body)?,
+            serde_json::from_value::<PostdocPlan>(normalize_structured_stage_body(
+                artifact_type,
+                body,
+            ))?,
         )),
         LabArtifactType::GraduateResult => StageArtifact::GraduateResult(LabArtifactEnvelope::new(
             artifact_id,
@@ -1785,7 +1791,10 @@ fn build_structured_stage_artifact(
             artifact_type,
             title,
             now,
-            serde_json::from_value::<GraduateResult>(body)?,
+            serde_json::from_value::<GraduateResult>(normalize_structured_stage_body(
+                artifact_type,
+                body,
+            ))?,
         )),
         LabArtifactType::PostdocIntegrationSummary => {
             StageArtifact::PostdocIntegrationSummary(LabArtifactEnvelope::new(
@@ -1794,7 +1803,9 @@ fn build_structured_stage_artifact(
                 artifact_type,
                 title,
                 now,
-                serde_json::from_value::<PostdocIntegrationSummary>(body)?,
+                serde_json::from_value::<PostdocIntegrationSummary>(
+                    normalize_structured_stage_body(artifact_type, body),
+                )?,
             ))
         }
         LabArtifactType::ProfessorReview => {
@@ -1804,7 +1815,10 @@ fn build_structured_stage_artifact(
                 artifact_type,
                 title,
                 now,
-                serde_json::from_value::<ProfessorReview>(body)?,
+                serde_json::from_value::<ProfessorReview>(normalize_structured_stage_body(
+                    artifact_type,
+                    body,
+                ))?,
             ))
         }
         _ => {
@@ -1814,6 +1828,126 @@ fn build_structured_stage_artifact(
         }
     };
     Ok(artifact)
+}
+
+fn normalize_structured_stage_body(
+    artifact_type: LabArtifactType,
+    mut body: serde_json::Value,
+) -> serde_json::Value {
+    let fields: &[&str] = match artifact_type {
+        LabArtifactType::ProfessorPlan => &["success_criteria", "constraints", "risks"],
+        LabArtifactType::PostdocPlan => &["slices", "files_expected", "validation_plan"],
+        LabArtifactType::GraduateResult => &["changed_files", "validation_attempts", "blockers"],
+        LabArtifactType::PostdocIntegrationSummary => &["accepted_results", "remaining_risks"],
+        LabArtifactType::ProfessorReview => &["required_revisions"],
+        _ => &[],
+    };
+    if let Some(object) = body.as_object_mut() {
+        for field in fields {
+            if let Some(value) = object.get_mut(*field) {
+                normalize_string_list_value(value);
+            }
+        }
+        for field in structured_string_fields(artifact_type) {
+            if let Some(value) = object.get_mut(*field) {
+                normalize_string_value(value);
+            }
+        }
+    }
+    body
+}
+
+fn structured_string_fields(artifact_type: LabArtifactType) -> &'static [&'static str] {
+    match artifact_type {
+        LabArtifactType::ProfessorPlan => &[
+            "problem_statement",
+            "strategic_direction",
+            "handoff_to_postdoc",
+        ],
+        LabArtifactType::PostdocPlan => &["implementation_summary", "graduate_handoff"],
+        LabArtifactType::GraduateResult => &["task_summary", "handoff_to_postdoc"],
+        LabArtifactType::PostdocIntegrationSummary => &[
+            "integration_summary",
+            "validation_status",
+            "handoff_to_professor",
+        ],
+        LabArtifactType::ProfessorReview => {
+            &["review_summary", "strategic_assessment", "user_report"]
+        }
+        _ => &[],
+    }
+}
+
+fn normalize_string_value(value: &mut serde_json::Value) {
+    if let Some(item) = structured_value_to_string(value) {
+        *value = serde_json::Value::String(item);
+    }
+}
+
+fn normalize_string_list_value(value: &mut serde_json::Value) {
+    match value {
+        serde_json::Value::Array(items) => {
+            let normalized = items
+                .iter()
+                .filter_map(structured_value_to_string)
+                .filter(|item| !item.trim().is_empty())
+                .map(serde_json::Value::String)
+                .collect::<Vec<_>>();
+            *items = normalized;
+        }
+        serde_json::Value::String(item) => {
+            let item = item.trim().to_string();
+            if item.is_empty() {
+                *value = serde_json::Value::Array(Vec::new());
+            } else {
+                *value = serde_json::Value::Array(vec![serde_json::Value::String(item)]);
+            }
+        }
+        other => {
+            if let Some(item) = structured_value_to_string(other) {
+                *other = serde_json::Value::Array(vec![serde_json::Value::String(item)]);
+            }
+        }
+    }
+}
+
+fn structured_value_to_string(value: &serde_json::Value) -> Option<String> {
+    match value {
+        serde_json::Value::Null => None,
+        serde_json::Value::String(value) => Some(value.trim().to_string()),
+        serde_json::Value::Bool(value) => Some(value.to_string()),
+        serde_json::Value::Number(value) => Some(value.to_string()),
+        serde_json::Value::Array(items) => {
+            let joined = items
+                .iter()
+                .filter_map(structured_value_to_string)
+                .filter(|item| !item.trim().is_empty())
+                .collect::<Vec<_>>()
+                .join("; ");
+            (!joined.is_empty()).then_some(joined)
+        }
+        serde_json::Value::Object(object) => {
+            for key in [
+                "path",
+                "file",
+                "command",
+                "title",
+                "name",
+                "summary",
+                "description",
+                "task",
+                "goal",
+            ] {
+                if let Some(value) = object.get(key).and_then(serde_json::Value::as_str) {
+                    let value = value.trim();
+                    if !value.is_empty() {
+                        return Some(value.to_string());
+                    }
+                }
+            }
+            serde_json::to_string(value).ok()
+        }
+    }
 }
 
 fn artifact_type_for_stage(stage: &str) -> anyhow::Result<LabArtifactType> {
@@ -1905,6 +2039,60 @@ mod tests {
         .unwrap_err()
         .to_string()
         .contains("next_actions"));
+    }
+
+    #[test]
+    fn structured_postdoc_plan_accepts_object_list_items_from_provider() {
+        let now = Utc::now();
+        let proposal = LabProposal::new(
+            "proposal_test".to_string(),
+            "/tmp/lab".to_string(),
+            None,
+            "Validate hybrid cycle parser".to_string(),
+            now,
+        );
+        let mut run = LabRun::from_proposal("labrun_test".to_string(), &proposal, now);
+        run.current_stage = "postdoc_plan".to_string();
+
+        let artifact = parse_structured_stage_artifact(
+            &run,
+            r#"{
+                "postdoc_plan": {
+                    "implementation_summary": "Use a minimal scoped proof.",
+                    "slices": [
+                        {"title": "Create proof file", "description": "Write one file"},
+                        "Verify proof file"
+                    ],
+                    "files_expected": [
+                        {"path": "lab-proof.md"},
+                        "README.md"
+                    ],
+                    "validation_plan": "test -f lab-proof.md",
+                    "graduate_handoff": {"summary": "Create the scoped proof file only."}
+                }
+            }"#,
+        )
+        .unwrap()
+        .expect("structured artifact");
+
+        let StageArtifact::PostdocPlan(plan) = artifact else {
+            panic!("expected PostdocPlan");
+        };
+        assert_eq!(
+            plan.body.slices,
+            vec![
+                "Create proof file".to_string(),
+                "Verify proof file".to_string()
+            ]
+        );
+        assert_eq!(
+            plan.body.files_expected,
+            vec!["lab-proof.md".to_string(), "README.md".to_string()]
+        );
+        assert_eq!(
+            plan.body.validation_plan,
+            vec!["test -f lab-proof.md".to_string()]
+        );
     }
 
     struct DraftProvider {
