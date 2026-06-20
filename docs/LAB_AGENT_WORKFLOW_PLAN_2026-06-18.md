@@ -2843,6 +2843,25 @@ optional lab meeting.
   `10ar-command-lease-claim-test.txt` and
   `10as-runtime-internal-path-filter-test.txt`.
 
+### Completed in P0.163 Runtime-verified graduate fallback and live proof
+
+- Added a runtime-verified fallback for successful graduate subagents that miss
+  the structured JSON contract. The fallback still requires parent-side
+  evidence: actual scoped file changes from the graduate worktree and all
+  required validation commands must pass before a `GraduateResult` can be
+  bound.
+- Added deterministic coverage as
+  `10at-unbound-runtime-verified-graduate-result-test.txt`.
+- Re-ran DeepSeek v4 flash with
+  `PRIORITY_AGENT_LAB_ALLOW_UNCERTIFIED_GRADUATE_PROVIDER=1` after the lease,
+  workspace, internal-path, and runtime fallback fixes. The live graduate task
+  succeeded, runtime validation passed, and worktree review/merge/cleanup
+  passed in
+  `target/lab-live-validation/p0-162-live-graduate-cert-skip/report.md`.
+- Because the run used the uncertified-provider override, the validation script
+  now records it as experimental runtime-path evidence and intentionally skips
+  formal `graduate passed` provider certification.
+
 ### Still pending
 
 - Full release-ready autonomous multi-cycle professor/postdoc/graduate LLM
@@ -2856,10 +2875,9 @@ optional lab meeting.
   lifecycle checkpoints, professor revision tasks, postdoc revision resume, and
   revision-task consumption now exists.
 - Full live graduate subagent execution now requires runtime-observed file
-  changes and validation, not only bindable JSON. DeepSeek v4 flash currently
-  fails that stricter graduate code-writing certification and is now blocked by
-  the graduate provider certification gate unless explicitly overridden for an
-  experimental run.
+  changes and validation, not only bindable JSON. DeepSeek v4 flash has passed
+  this runtime path under the explicit uncertified-provider override, but it is
+  still not formally certified as a supported graduate provider.
 - Desktop-managed persistent background ownership is implemented at the
   control-plane level: provider calls restart from persisted policy when
   `pa lab` opens, can run via the non-interactive `lab-daemon` worker, have a
@@ -5282,10 +5300,11 @@ Current status:
   planned placeholder.
 - Completed: desktop app timer invokes the active supervisor backend without
   requiring the Workbench drawer to be open.
-- Not yet complete: live end-to-end validation of worktree merge/cleanup after
-  real graduate agent execution.
-- Not yet complete: live provider validation that structured result emission is
-  reliable across supported models.
+- Completed experimentally: live end-to-end validation of real graduate agent
+  execution, runtime verification, worktree review, merge, cleanup, and daemon
+  validation has passed under the explicit uncertified-provider override.
+- Not yet complete: formal live provider certification that structured result
+  emission or runtime-verified fallback is reliable across supported models.
 - Not yet complete: live provider validation that sponsor-message
   classification is reliable across supported models.
 - Not yet complete: live end-to-end provider validation for Lab meeting and
