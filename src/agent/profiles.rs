@@ -171,6 +171,8 @@ pub struct AgentProfile {
     pub role: AgentRole,
     #[serde(default)]
     pub system_prompt: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt_version: Option<String>,
     #[serde(default)]
     pub allowed_tools: Vec<String>,
     #[serde(default)]
@@ -207,6 +209,8 @@ pub struct AgentDefinition {
     pub role: AgentRole,
     #[serde(default, skip_serializing)]
     pub system_prompt: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt_version: Option<String>,
     pub tools: Vec<String>,
     pub disallowed_tools: Vec<String>,
     pub permission_mode: AgentPermissionMode,
@@ -235,6 +239,9 @@ impl AgentDefinition {
             format!("Model policy: {}", self.model_policy.model),
             format!("Max turns: {}", self.max_turns),
         ];
+        if let Some(prompt_version) = &self.prompt_version {
+            lines.push(format!("Prompt version: {}", prompt_version));
+        }
         if let Some(effort) = &self.model_policy.effort {
             lines.push(format!("Effort: {}", effort));
         }
@@ -264,6 +271,9 @@ impl AgentDefinition {
             format!("model={}", self.model_policy.model),
             format!("memory={}", self.memory_policy),
         ];
+        if let Some(prompt_version) = &self.prompt_version {
+            constraints.push(format!("prompt_version={prompt_version}"));
+        }
         if !self.mcp_servers.is_empty() {
             constraints.push(format!("mcp_servers={}", self.mcp_servers.join(",")));
         }
@@ -324,6 +334,7 @@ impl AgentProfile {
             when_to_use: self.description.clone(),
             role: self.role,
             system_prompt: self.system_prompt.clone(),
+            prompt_version: self.prompt_version.clone(),
             tools: self.allowed_tools.clone(),
             disallowed_tools: self.disallowed_tools.clone(),
             permission_mode,
@@ -430,6 +441,7 @@ fn builtin_profiles() -> Vec<AgentProfile> {
             role: AgentRole::Default,
             system_prompt: "Complete the assigned task with the narrowest useful tool set. Do not delegate recursively."
                 .to_string(),
+            prompt_version: None,
             allowed_tools: vec![
                 "project_list".into(),
                 "glob".into(),
@@ -460,6 +472,7 @@ fn builtin_profiles() -> Vec<AgentProfile> {
             role: AgentRole::Plan,
             system_prompt: "Focus on discovering structure and risks. Do not edit files."
                 .to_string(),
+            prompt_version: None,
             allowed_tools: vec!["project_list".into(), "grep".into(), "file_read".into()],
             disallowed_tools: vec!["file_edit".into(), "file_write".into(), "agent".into()],
             context: Some(AgentContextMode::InheritedSummary),
@@ -480,6 +493,7 @@ fn builtin_profiles() -> Vec<AgentProfile> {
             role: AgentRole::Plan,
             system_prompt: "Read relevant context and produce a concrete plan. Do not edit files."
                 .to_string(),
+            prompt_version: None,
             allowed_tools: vec![
                 "project_list".into(),
                 "glob".into(),
@@ -507,6 +521,7 @@ fn builtin_profiles() -> Vec<AgentProfile> {
             role: AgentRole::Verification,
             system_prompt: "Try to falsify the change with tests and concrete evidence."
                 .to_string(),
+            prompt_version: None,
             allowed_tools: vec!["bash".into(), "grep".into(), "file_read".into()],
             disallowed_tools: vec!["file_edit".into(), "file_write".into(), "agent".into()],
             context: Some(AgentContextMode::InheritedSummary),
@@ -522,10 +537,97 @@ fn builtin_profiles() -> Vec<AgentProfile> {
             max_cost_usd: None,
         },
         AgentProfile {
+            name: "lab-professor".to_string(),
+            description: "LabRun professor: project intake, strategy, architecture, and sponsor steering".to_string(),
+            role: AgentRole::Advisor,
+            system_prompt: lab_professor_prompt().to_string(),
+            prompt_version: Some("lab-professor.v1".to_string()),
+            allowed_tools: vec![
+                "project_list".into(),
+                "glob".into(),
+                "grep".into(),
+                "file_read".into(),
+                "git_status".into(),
+            ],
+            disallowed_tools: vec!["file_edit".into(), "file_write".into(), "bash".into(), "agent".into()],
+            context: Some(AgentContextMode::InheritedSummary),
+            permission_mode: Some(AgentPermissionMode::ReadOnly),
+            risk_policy: Some(AgentRiskPolicy::ReadOnly),
+            output_contract: Some(AgentOutputContract::Findings),
+            model: None,
+            effort: Some("high".to_string()),
+            mcp_servers: Vec::new(),
+            memory: Some(AgentMemoryPolicy::Project),
+            timeout_secs: Some(300),
+            max_turns: Some(8),
+            max_cost_usd: None,
+        },
+        AgentProfile {
+            name: "lab-postdoc".to_string(),
+            description: "LabRun postdoc: code-aware technical owner and integration reviewer".to_string(),
+            role: AgentRole::Specialist,
+            system_prompt: lab_postdoc_prompt().to_string(),
+            prompt_version: Some("lab-postdoc.v1".to_string()),
+            allowed_tools: vec![
+                "project_list".into(),
+                "glob".into(),
+                "grep".into(),
+                "file_read".into(),
+                "file_edit".into(),
+                "file_write".into(),
+                "bash".into(),
+                "diff".into(),
+                "format".into(),
+                "git_status".into(),
+                "git_diff".into(),
+            ],
+            disallowed_tools: vec!["swarm".into()],
+            context: Some(AgentContextMode::IsolatedWorktreeFork),
+            permission_mode: Some(AgentPermissionMode::IsolatedWrite),
+            risk_policy: Some(AgentRiskPolicy::CodeChange),
+            output_contract: Some(AgentOutputContract::PatchSummary),
+            model: None,
+            effort: Some("high".to_string()),
+            mcp_servers: Vec::new(),
+            memory: Some(AgentMemoryPolicy::Project),
+            timeout_secs: Some(600),
+            max_turns: Some(12),
+            max_cost_usd: None,
+        },
+        AgentProfile {
+            name: "lab-graduate".to_string(),
+            description: "LabRun graduate: narrow scoped implementation worker".to_string(),
+            role: AgentRole::Specialist,
+            system_prompt: lab_graduate_prompt().to_string(),
+            prompt_version: Some("lab-graduate.v1".to_string()),
+            allowed_tools: vec![
+                "grep".into(),
+                "file_read".into(),
+                "file_edit".into(),
+                "file_write".into(),
+                "bash".into(),
+                "diff".into(),
+                "format".into(),
+            ],
+            disallowed_tools: vec!["agent".into(), "swarm".into()],
+            context: Some(AgentContextMode::IsolatedWorktreeFork),
+            permission_mode: Some(AgentPermissionMode::IsolatedWrite),
+            risk_policy: Some(AgentRiskPolicy::CodeChange),
+            output_contract: Some(AgentOutputContract::PatchSummary),
+            model: None,
+            effort: None,
+            mcp_servers: Vec::new(),
+            memory: Some(AgentMemoryPolicy::Session),
+            timeout_secs: Some(420),
+            max_turns: Some(6),
+            max_cost_usd: None,
+        },
+        AgentProfile {
             name: "implementer".to_string(),
             description: "Focused code-change worker".to_string(),
             role: AgentRole::Specialist,
             system_prompt: "Make focused edits and report changed files clearly.".to_string(),
+            prompt_version: None,
             allowed_tools: vec![
                 "project_list".into(),
                 "glob".into(),
@@ -553,6 +655,36 @@ fn builtin_profiles() -> Vec<AgentProfile> {
     ]
 }
 
+fn lab_professor_prompt() -> &'static str {
+    "You are the LabRun professor. Act as a principal investigator and product architect. \
+Clarify project goals before formal approval, protect product thesis and architecture boundaries, \
+review postdoc reports strategically, and communicate with the user as sponsor. Do not edit code. \
+Do not command graduate workers directly. Turn sponsor concerns into explicit steering decisions, \
+proposal revisions, lab meetings, or postdoc requests. Require evidence for completion claims."
+}
+
+fn lab_postdoc_prompt() -> &'static str {
+    "You are the LabRun postdoc. You own technical execution quality. Translate professor plans \
+into concrete slices, read code before planning, delegate only narrow tasks, review graduate output, \
+run validation, and write integration reports. You may edit code only inside approved implementation \
+cycles. Do not redefine product direction without professor or user approval. Never claim done without \
+validation evidence or an explicit not_verified reason."
+}
+
+fn lab_graduate_prompt() -> &'static str {
+    "You are the LabRun graduate worker. Execute exactly one scoped task from the postdoc. Stay inside \
+allowed files and allowed actions. Create or edit only files named in the allowed scope. Run required \
+validation when available. Report blockers instead of changing architecture or expanding scope. Your final \
+answer must contain only one JSON object, with no Markdown fence or extra prose. The JSON object must have \
+a top-level graduate_result object containing summary, changed_files, validation_results, blockers, and \
+evidence_ids. Use the exact file paths and validation commands you actually touched or ran. You cannot \
+self-certify project completion. Do not write XML-like pseudo tool tags such as <bash> or <file_edit>; \
+use the provided tools for file changes and validation commands. For any task that asks you to create or \
+edit a file, you must call file_write or file_edit before your final JSON. For any required validation, \
+you must call bash with the validation command before your final JSON. If you cannot call the required \
+tools, return a blocker instead of claiming the task is done."
+}
+
 // ── Product-facing agent profiles ──────────────────────────────
 
 /// Built-in product profiles exposed to the user via /agent and the
@@ -565,6 +697,7 @@ pub fn product_profiles() -> Vec<AgentProfile> {
             description: "Full coding mode — read, edit, shell, and validation".into(),
             role: AgentRole::Specialist,
             system_prompt: "You are in BUILD mode. Make focused code changes directly when asked, then verify the changed behavior before finishing.".into(),
+            prompt_version: None,
             allowed_tools: Vec::new(),
             disallowed_tools: Vec::new(),
             context: Some(AgentContextMode::InheritedSummary),
@@ -584,6 +717,7 @@ pub fn product_profiles() -> Vec<AgentProfile> {
             description: "Read-only planner — explore, search, and ask questions".into(),
             role: AgentRole::Plan,
             system_prompt: "You are in PLAN mode. Inspect and reason about the project, but do not modify files unless the user explicitly asks you to implement.".into(),
+            prompt_version: None,
             allowed_tools: vec![
                 "file_read".into(),
                 "glob".into(),
@@ -610,6 +744,7 @@ pub fn product_profiles() -> Vec<AgentProfile> {
             description: "Read/search only — glob, grep, read, LSP, and web fetch".into(),
             role: AgentRole::Guide,
             system_prompt: "You are in EXPLORE mode. Search, read, and map the codebase with evidence. Avoid mutations unless the user changes the task.".into(),
+            prompt_version: None,
             allowed_tools: vec![
                 "file_read".into(),
                 "glob".into(),
@@ -638,6 +773,7 @@ pub fn product_profiles() -> Vec<AgentProfile> {
             description: "Diff reviewer — read changed files, report findings, no edits".into(),
             role: AgentRole::Advisor,
             system_prompt: "You are in REVIEW mode. Lead with concrete findings grounded in diffs, files, and command output. Avoid edits unless explicitly requested.".into(),
+            prompt_version: None,
             allowed_tools: vec![
                 "file_read".into(),
                 "git_diff".into(),
@@ -667,6 +803,7 @@ pub fn product_profiles() -> Vec<AgentProfile> {
             description: "Validator — run tests, check closeout, summarize proof".into(),
             role: AgentRole::Verification,
             system_prompt: "You are in VERIFY mode. Run validation commands, check correctness, and summarize proof status. Report pass or fail clearly.".into(),
+            prompt_version: None,
             allowed_tools: vec![
                 "file_read".into(),
                 "grep".into(),
@@ -694,6 +831,7 @@ pub fn product_profiles() -> Vec<AgentProfile> {
             description: "External research — web search, fetch docs, read-only local context".into(),
             role: AgentRole::Guide,
             system_prompt: "You are in SCOUT mode. Search the web, fetch external documentation, and read local context. Report findings with source URLs. Do not edit files.".into(),
+            prompt_version: None,
             allowed_tools: vec![
                 "web_search".into(),
                 "web_fetch".into(),
@@ -795,6 +933,9 @@ mod tests {
         assert!(profiles.iter().any(|profile| profile.name == "explorer"));
         assert!(profiles.iter().any(|profile| profile.name == "planner"));
         assert!(find_profile(".", "verifier").is_some());
+        assert!(find_profile(".", "lab-professor").is_some());
+        assert!(find_profile(".", "lab-postdoc").is_some());
+        assert!(find_profile(".", "lab-graduate").is_some());
         let default = find_profile(".", "default").unwrap();
         assert_eq!(
             default.context,
@@ -855,6 +996,29 @@ mod tests {
                         "{} profile must not edit files",
                         profile.name
                     );
+                }
+                "lab-professor" => {
+                    assert_eq!(profile.permission_mode, Some(AgentPermissionMode::ReadOnly));
+                    assert_eq!(profile.prompt_version.as_deref(), Some("lab-professor.v1"));
+                    assert!(!profile
+                        .allowed_tools
+                        .iter()
+                        .any(|tool| tool == "file_write" || tool == "file_edit"));
+                    assert!(profile.system_prompt.contains("principal investigator"));
+                }
+                "lab-postdoc" => {
+                    assert_eq!(profile.risk_policy, Some(AgentRiskPolicy::CodeChange));
+                    assert!(profile
+                        .system_prompt
+                        .contains("technical execution quality"));
+                }
+                "lab-graduate" => {
+                    assert!(profile.disallowed_tools.contains(&"agent".to_string()));
+                    assert!(profile.system_prompt.contains("one scoped task"));
+                    assert!(profile.system_prompt.contains("graduate_result"));
+                    assert!(profile.system_prompt.contains("no Markdown fence"));
+                    assert!(profile.system_prompt.contains("pseudo tool tags"));
+                    assert!(profile.allowed_tools.contains(&"file_write".to_string()));
                 }
                 "implementer" => {
                     assert!(profile.allowed_tools.contains(&"file_edit".to_string()));
@@ -936,6 +1100,24 @@ context = "fork"
         assert!(implementer
             .envelope_constraints()
             .contains(&"agent_definition=implementer".to_string()));
+
+        let professor = definitions
+            .iter()
+            .find(|definition| definition.name == "lab-professor")
+            .unwrap();
+        assert_eq!(
+            professor.prompt_version.as_deref(),
+            Some("lab-professor.v1")
+        );
+        assert!(professor
+            .envelope_constraints()
+            .contains(&"prompt_version=lab-professor.v1".to_string()));
+
+        let lab_roles = crate::lab::model::LabRoles::default();
+        assert_eq!(
+            professor.prompt_version.as_deref(),
+            Some(lab_roles.professor.prompt_version.as_str())
+        );
     }
 
     #[test]
@@ -945,6 +1127,7 @@ context = "fork"
             description: "writes code".to_string(),
             role: AgentRole::Specialist,
             system_prompt: String::new(),
+            prompt_version: None,
             allowed_tools: vec!["file_edit".to_string(), "bash".to_string()],
             disallowed_tools: Vec::new(),
             context: None,

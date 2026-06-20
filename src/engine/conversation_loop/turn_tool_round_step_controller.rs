@@ -97,6 +97,9 @@ impl TurnToolRoundStepController {
                 .successful_required_validation_commands,
         })
         .await;
+        context
+            .loop_state
+            .record_executed_tool_calls(context.tool_calls);
 
         TurnToolRoundOutcomeController::from_batch(batch_processing)
     }

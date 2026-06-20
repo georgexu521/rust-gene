@@ -7,6 +7,7 @@ use crate::agent::envelope::{AgentTaskEnvelope, AgentTaskPriority};
 use crate::agent::manager::AgentResult as ManagerAgentResult;
 use crate::agent::profiles::{AgentContextMode, AgentDefinition, AgentProfile};
 use crate::agent::roles::AgentRole;
+use crate::agent::subagent_session::derive_subagent_session_policy;
 use crate::agent::types::{AgentId, AgentMessage, AgentMessageType, AgentStatus};
 use crate::tools::{Tool, ToolContext, ToolOperationKind, ToolResult};
 use async_trait::async_trait;
@@ -291,6 +292,8 @@ struct ExecuteParams<'a> {
     max_turns: usize,
     max_cost_usd: Option<f64>,
     allowed_tools: Vec<String>,
+    task_id: Option<String>,
+    background: bool,
     role: AgentRole,
     template: Option<AgentTemplate>,
     definition: Option<AgentDefinition>,
@@ -407,12 +410,14 @@ fn resolve_subagent_allowed_tools(
     deduped
 }
 
-/// 处理恢复已有代理
+/// 处理恢复已有代理。优先返回内存中的 live result；如果进程重启或前台等待错过
+/// completion channel，则回退读取 durable task/artifact state。
 async fn handle_resume(
     agent_manager: &crate::agent::AgentManager,
-    agent_id_str: &str,
+    context: &ToolContext,
+    agent_id_or_task_id: &str,
 ) -> ToolResult {
-    let agent_id = AgentId(agent_id_str.to_string());
+    let agent_id = AgentId(agent_id_or_task_id.to_string());
     match agent_manager.get_result(&agent_id).await {
         Some(result) => {
             let status_str = format!("{:?}", result.status);
@@ -439,10 +444,15 @@ async fn handle_resume(
                 data,
             )
         }
-        None => ToolResult::error(format!(
-            "Agent {} not found or has no result yet",
-            agent_id_str
-        )),
+        None => {
+            if context.session_store.is_some() {
+                return read_durable_agent_state(context, agent_id_or_task_id);
+            }
+            ToolResult::error(format!(
+                "Agent {} not found or has no result yet",
+                agent_id_or_task_id
+            ))
+        }
     }
 }
 
@@ -675,6 +685,25 @@ fn persist_cancelled_agent_task_state(context: &ToolContext, agent_id: &str) -> 
     }
 }
 
+fn durable_cancel_tool_result(
+    context: &ToolContext,
+    agent_id_or_task_id: &str,
+) -> Option<ToolResult> {
+    persist_cancelled_agent_task_state(context, agent_id_or_task_id).map(|state| {
+        ToolResult::success_with_data(
+            format!(
+                "Marked durable sub-agent task {} as cancelled.\n{}",
+                agent_id_or_task_id, state
+            ),
+            json!({
+                "agent_id_or_task_id": agent_id_or_task_id,
+                "status": "cancelled",
+                "durable_state": state,
+            }),
+        )
+    })
+}
+
 async fn handle_cancel(
     agent_manager: &crate::agent::AgentManager,
     context: &ToolContext,
@@ -694,10 +723,24 @@ async fn handle_cancel(
                 }),
             )
         }
-        Err(error) => ToolResult::error(format!(
-            "Failed to cancel sub-agent {}: {}",
-            agent_id, error
-        )),
+        Err(error) => {
+            if let Some(mut result) = durable_cancel_tool_result(context, agent_id_str) {
+                if let Some(data) = result.data.as_mut() {
+                    data["agent_id"] = json!(agent_id.to_string());
+                    data["live_cancel_error"] = json!(error.to_string());
+                }
+                result.content = format!(
+                    "No active in-memory sub-agent {} was cancelled.\n{}",
+                    agent_id, result.content
+                );
+                result
+            } else {
+                ToolResult::error(format!(
+                    "Failed to cancel sub-agent {}: {}",
+                    agent_id, error
+                ))
+            }
+        }
     }
 }
 
@@ -749,6 +792,8 @@ async fn handle_fork_branches(ctx: ExecuteParams<'_>) -> ToolResult {
             &format!("{}: {}", description, branch_desc),
             branch_prompt,
             &files,
+            None,
+            true,
             ctx.timeout_secs,
             ctx.max_turns,
             ctx.max_cost_usd,
@@ -763,13 +808,6 @@ async fn handle_fork_branches(ctx: ExecuteParams<'_>) -> ToolResult {
         .await
         {
             Ok(result) => {
-                persist_agent_artifact(
-                    ctx.context,
-                    &format!("{}: {}", description, branch_desc),
-                    ctx.role,
-                    ctx.definition.as_ref(),
-                    &result,
-                );
                 // If parent memory exists, copy to branch agent
                 if let Some(ref parent_mem) = parent_memory {
                     let branch_memory = crate::agent::memory::global_memory_manager()
@@ -913,6 +951,8 @@ async fn handle_subtasks(ctx: ExecuteParams<'_>) -> ToolResult {
                     &st.description,
                     &st.prompt,
                     &st.files,
+                    None,
+                    true,
                     ctx.timeout_secs,
                     ctx.max_turns,
                     ctx.max_cost_usd,
@@ -928,19 +968,7 @@ async fn handle_subtasks(ctx: ExecuteParams<'_>) -> ToolResult {
             .collect();
 
         let completed = futures::future::join_all(futures).await;
-        completed
-            .into_iter()
-            .filter_map(|r| r.ok())
-            .inspect(|result| {
-                persist_agent_artifact(
-                    ctx.context,
-                    description,
-                    ctx.role,
-                    ctx.definition.as_ref(),
-                    result,
-                );
-            })
-            .collect()
+        completed.into_iter().filter_map(|r| r.ok()).collect()
     } else {
         let st = &subtasks[0];
         match spawn_single_agent(
@@ -948,6 +976,8 @@ async fn handle_subtasks(ctx: ExecuteParams<'_>) -> ToolResult {
             &st.description,
             &st.prompt,
             &st.files,
+            None,
+            true,
             ctx.timeout_secs,
             ctx.max_turns,
             ctx.max_cost_usd,
@@ -962,13 +992,6 @@ async fn handle_subtasks(ctx: ExecuteParams<'_>) -> ToolResult {
         .await
         {
             Ok(r) => {
-                persist_agent_artifact(
-                    ctx.context,
-                    &st.description,
-                    ctx.role,
-                    ctx.definition.as_ref(),
-                    &r,
-                );
                 vec![r]
             }
             Err(e) => {
@@ -1016,11 +1039,35 @@ async fn handle_single_agent(ctx: ExecuteParams<'_>) -> ToolResult {
         })
         .unwrap_or_default();
 
+    if let (Some(task_id), Some(store)) =
+        (ctx.task_id.as_deref(), ctx.context.session_store.as_ref())
+    {
+        match store.agent_task_state(&ctx.context.session_id, task_id) {
+            Ok(Some(state))
+                if matches!(
+                    state.status.as_str(),
+                    "running" | "completed" | "failed" | "timed_out" | "cancelled"
+                ) =>
+            {
+                return read_durable_agent_state(ctx.context, task_id);
+            }
+            Ok(_) => {}
+            Err(error) => {
+                return ToolResult::error(format!(
+                    "Failed to inspect existing sub-agent task_id '{}': {}",
+                    task_id, error
+                ));
+            }
+        }
+    }
+
     match spawn_single_agent(
         ctx.agent_manager,
         description,
         prompt,
         &files,
+        ctx.task_id.as_deref(),
+        !ctx.background,
         ctx.timeout_secs,
         ctx.max_turns,
         ctx.max_cost_usd,
@@ -1035,13 +1082,6 @@ async fn handle_single_agent(ctx: ExecuteParams<'_>) -> ToolResult {
     .await
     {
         Ok(result) => {
-            persist_agent_artifact(
-                ctx.context,
-                description,
-                ctx.role,
-                ctx.definition.as_ref(),
-                &result,
-            );
             let status_str = format!("{:?}", result.status);
             let files_info = if files.is_empty() {
                 String::new()
@@ -1101,6 +1141,15 @@ async fn handle_single_agent(ctx: ExecuteParams<'_>) -> ToolResult {
                 &ctx.allowed_tools,
                 false,
             );
+            if result.status == AgentStatus::Running {
+                return ToolResult::success_with_data(
+                    format!(
+                        "Sub-agent {} launched in background.\n\nTask: {}{}\n\n{}",
+                        result.agent_id, description, files_info, result.content
+                    ),
+                    data,
+                );
+            }
 
             ToolResult::success_with_data(
                 format!(
@@ -1190,6 +1239,10 @@ impl Tool for AgentTool {
                     "type": "string",
                     "description": "Operate on an existing agent by ID instead of creating a new one"
                 },
+                "task_id": {
+                    "type": "string",
+                    "description": "Stable durable task ID for opencode-style sub-agent resume. Reusing a task_id lets the runtime read or resume the same child task state instead of treating every run as unrelated."
+                },
                 "action": {
                     "type": "string",
                     "enum": ["list", "resume", "read", "cancel"],
@@ -1219,6 +1272,11 @@ impl Tool for AgentTool {
                     "type": "boolean",
                     "default": false,
                     "description": "When true and subtasks are provided, execute them in parallel"
+                },
+                "background": {
+                    "type": "boolean",
+                    "default": false,
+                    "description": "For a single sub-agent task, return immediately after launch. The runtime completion sink will persist the final artifact and inject a synthetic result into the parent session when the child finishes."
                 },
                 "memory_key": {
                     "type": "string",
@@ -1292,6 +1350,28 @@ impl Tool for AgentTool {
             let limit = params["limit"].as_i64().unwrap_or(20).clamp(1, 100);
             return list_agent_progress(&context, context.agent_manager.as_ref(), limit).await;
         }
+        if params["agent_id"].is_null() {
+            if let Some(task_id) = params["task_id"].as_str() {
+                if params["fork_branches"].is_null()
+                    && params["subtasks"].is_null()
+                    && params["description"].is_null()
+                {
+                    match params["action"].as_str().unwrap_or("resume") {
+                        "read" | "resume" => return read_durable_agent_state(&context, task_id),
+                        "cancel" => {
+                            return durable_cancel_tool_result(&context, task_id).unwrap_or_else(
+                                || {
+                                    ToolResult::error(
+                                        "Session store not available for durable cancel",
+                                    )
+                                },
+                            );
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
         if let Some(agent_id_str) = params["agent_id"].as_str() {
             if params["fork_branches"].is_null()
                 && params["subtasks"].is_null()
@@ -1308,6 +1388,14 @@ impl Tool for AgentTool {
                         )
                         .await;
                     }
+                    Some("resume") if context.agent_manager.is_none() => {
+                        return read_durable_agent_state(&context, agent_id_str);
+                    }
+                    Some("cancel") if context.agent_manager.is_none() => {
+                        return durable_cancel_tool_result(&context, agent_id_str).unwrap_or_else(
+                            || ToolResult::error("Session store not available for durable cancel"),
+                        );
+                    }
                     _ => {}
                 }
             }
@@ -1323,7 +1411,17 @@ impl Tool for AgentTool {
         };
 
         // 1. Resume existing agent
-        if let Some(agent_id_str) = params["agent_id"].as_str() {
+        let agent_ref = params["agent_id"].as_str().map(str::to_string).or_else(|| {
+            params["task_id"].as_str().and_then(|task_id| {
+                context
+                    .session_store
+                    .as_ref()
+                    .and_then(|store| store.agent_task_state(&context.session_id, task_id).ok())
+                    .flatten()
+                    .map(|state| state.agent_id)
+            })
+        });
+        if let Some(agent_id_str) = agent_ref.as_deref() {
             // Only resume if no other action specified
             if params["fork_branches"].is_null()
                 && params["subtasks"].is_null()
@@ -1331,7 +1429,7 @@ impl Tool for AgentTool {
             {
                 return match params["action"].as_str().unwrap_or("resume") {
                     "list" => list_agent_progress(&context, Some(&agent_manager), 20).await,
-                    "resume" => handle_resume(&agent_manager, agent_id_str).await,
+                    "resume" => handle_resume(&agent_manager, &context, agent_id_str).await,
                     "read" => read_durable_agent_state(&context, agent_id_str),
                     "cancel" => handle_cancel(&agent_manager, &context, agent_id_str).await,
                     other => ToolResult::error(format!(
@@ -1342,7 +1440,7 @@ impl Tool for AgentTool {
             }
         } else if let Some(action) = params["action"].as_str() {
             if action != "resume" && action != "list" {
-                return ToolResult::error("agent_id is required for agent action");
+                return ToolResult::error("agent_id or task_id is required for agent action");
             }
         }
 
@@ -1384,6 +1482,10 @@ impl Tool for AgentTool {
                     .collect()
             })
             .unwrap_or_default();
+        let task_id = params["task_id"]
+            .as_str()
+            .map(|value| durable_subagent_task_id(Some(value)))
+            .filter(|value| !value.is_empty());
         let max_turns = profile
             .as_ref()
             .and_then(|profile| profile.max_turns)
@@ -1414,6 +1516,8 @@ impl Tool for AgentTool {
             max_turns,
             max_cost_usd,
             allowed_tools,
+            task_id,
+            background: params["background"].as_bool().unwrap_or(false),
             role,
             template,
             definition,

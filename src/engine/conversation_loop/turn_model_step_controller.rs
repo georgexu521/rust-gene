@@ -76,6 +76,7 @@ impl TurnModelStepController {
                 .working_dir_override
                 .as_deref()
                 .unwrap_or_else(|| std::path::Path::new(".")),
+            lab_context_enabled: context.conversation.lab_context_enabled,
             focused_repair_prompt: context.focused_repair_prompt,
             agent_task_state: context
                 .profile

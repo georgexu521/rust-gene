@@ -28,6 +28,9 @@ impl ConversationLoop {
 
     pub(super) fn get_tools_for_route(&self, route: &IntentRoute) -> Vec<Tool> {
         let tools = self.get_tools();
+        if self.allowed_tools.is_some() {
+            return tools;
+        }
         Self::route_scoped_tools(&tools, route)
     }
 
@@ -220,5 +223,83 @@ impl ConversationLoop {
 
     pub(super) fn is_code_write_tool_name(name: &str) -> bool {
         matches!(name, "file_edit" | "file_write" | "file_patch")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::cost_tracker::CostTracker;
+    use crate::engine::intent_router::{
+        IntentKind, IntentRoute, ReasoningPolicy, RetrievalPolicy, RiskLevel, WorkflowKind,
+    };
+    use crate::services::api::{ChatRequest, ChatResponse, LlmProvider};
+    use crate::tools::ToolRegistry;
+    use async_openai::types::ChatCompletionResponseStream;
+    use std::sync::Arc;
+    use tokio::sync::Mutex;
+
+    struct MockProvider;
+
+    #[async_trait::async_trait]
+    impl LlmProvider for MockProvider {
+        async fn chat(&self, _request: ChatRequest) -> anyhow::Result<ChatResponse> {
+            Err(anyhow::anyhow!("chat not used in this test"))
+        }
+
+        async fn chat_stream(
+            &self,
+            _request: ChatRequest,
+        ) -> anyhow::Result<ChatCompletionResponseStream> {
+            Err(anyhow::anyhow!("streaming not used in this test"))
+        }
+
+        fn base_url(&self) -> &str {
+            "mock://tool-orchestrator"
+        }
+
+        fn default_model(&self) -> &str {
+            "mock"
+        }
+    }
+
+    fn direct_route() -> IntentRoute {
+        IntentRoute {
+            intent: IntentKind::DirectAnswer,
+            confidence: 0.9,
+            workflow: WorkflowKind::Direct,
+            retrieval: RetrievalPolicy::Light,
+            reasoning: ReasoningPolicy::Low,
+            risk: RiskLevel::Low,
+            recommended_tools: Vec::new(),
+            dependency_install_intent: false,
+            mcp_auth_intent: false,
+            reason: "direct route would normally hide write tools".to_string(),
+        }
+    }
+
+    #[test]
+    fn explicit_allowed_tools_bypass_route_scoped_request_exposure() {
+        let mut conversation = ConversationLoop::new(
+            Arc::new(MockProvider),
+            Arc::new(ToolRegistry::default_registry()),
+            Arc::new(Mutex::new(CostTracker::new())),
+            "mock".to_string(),
+        );
+        conversation.allowed_tools = Some(HashSet::from([
+            "file_write".to_string(),
+            "bash".to_string(),
+        ]));
+
+        let names = conversation
+            .get_tools_for_route(&direct_route())
+            .into_iter()
+            .map(|tool| tool.name)
+            .collect::<HashSet<_>>();
+
+        assert_eq!(
+            names,
+            HashSet::from(["file_write".to_string(), "bash".to_string()])
+        );
     }
 }

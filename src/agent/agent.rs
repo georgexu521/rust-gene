@@ -1,8 +1,9 @@
 //! Agent 实现
 
 use crate::agent::envelope::{AgentArtifact, AgentTaskEnvelope};
-use crate::agent::manager::AgentResult;
+use crate::agent::manager::{AgentCompletionSink, AgentResult};
 use crate::agent::roles::AgentRole;
+use crate::agent::subagent_session::SubagentSessionPolicy;
 use crate::agent::types::{AgentId, AgentMessage, AgentMessageType, AgentStatus};
 use crate::engine::QueryEngine;
 use crate::services::api::Message;
@@ -34,12 +35,20 @@ pub struct AgentConfig {
     pub role: AgentRole,
     /// 允许的工具白名单（None 表示不限制）
     pub allowed_tools: Option<Vec<String>>,
+    /// Runtime-derived child session policy, including inherited deny rules.
+    pub subagent_session_policy: Option<SubagentSessionPolicy>,
     /// MCP servers this agent may access when MCP tools are exposed.
     pub mcp_servers: Vec<String>,
     /// Initial context inherited by forked subagents.
     pub context_messages: Vec<Message>,
     /// Optional isolated working directory for this agent.
     pub working_dir: Option<PathBuf>,
+    /// Optional durable child session store used for sub-agent transcripts.
+    pub child_session_store: Option<Arc<crate::session_store::SessionStore>>,
+    /// Optional durable child session ID for this agent run.
+    pub child_session_id: Option<String>,
+    /// Optional durable completion target for background/foreground result persistence.
+    pub completion_sink: Option<AgentCompletionSink>,
 }
 
 impl Default for AgentConfig {
@@ -55,9 +64,13 @@ impl Default for AgentConfig {
             max_cost_usd: None,
             role: AgentRole::default(),
             allowed_tools: None,
+            subagent_session_policy: None,
             mcp_servers: Vec::new(),
             context_messages: Vec::new(),
             working_dir: None,
+            child_session_store: None,
+            child_session_id: None,
+            completion_sink: None,
         }
     }
 }
@@ -116,6 +129,12 @@ impl AgentConfig {
         self
     }
 
+    pub fn with_subagent_session_policy(mut self, policy: SubagentSessionPolicy) -> Self {
+        self.allowed_tools = Some(policy.exposed_tools.clone());
+        self.subagent_session_policy = Some(policy);
+        self
+    }
+
     pub fn with_mcp_servers(mut self, servers: Vec<String>) -> Self {
         self.mcp_servers = servers
             .into_iter()
@@ -132,6 +151,21 @@ impl AgentConfig {
 
     pub fn with_working_dir(mut self, working_dir: impl Into<PathBuf>) -> Self {
         self.working_dir = Some(working_dir.into());
+        self
+    }
+
+    pub fn with_child_session(
+        mut self,
+        store: Arc<crate::session_store::SessionStore>,
+        session_id: impl Into<String>,
+    ) -> Self {
+        self.child_session_store = Some(store);
+        self.child_session_id = Some(session_id.into());
+        self
+    }
+
+    pub fn with_completion_sink(mut self, sink: AgentCompletionSink) -> Self {
+        self.completion_sink = Some(sink);
         self
     }
 
@@ -180,6 +214,8 @@ pub struct Agent {
     pub task_history: Vec<String>,
     /// 最后一次执行结果（实际 LLM 输出）
     pub last_result: Option<String>,
+    /// Runtime-observed tool names used by this agent.
+    pub tools_used: Vec<String>,
 }
 
 impl Agent {
@@ -205,6 +241,7 @@ impl Agent {
             query_engine,
             task_history: Vec::new(),
             last_result: None,
+            tools_used: Vec::new(),
         }
     }
 
@@ -226,6 +263,17 @@ impl Agent {
     /// 设置状态
     fn set_status(&self, status: AgentStatus) {
         let _ = self.status_tx.send(status);
+    }
+
+    fn record_tools_used(&mut self, tools: Vec<String>) {
+        for tool in tools {
+            if tool.trim().is_empty() {
+                continue;
+            }
+            if !self.tools_used.iter().any(|existing| existing == &tool) {
+                self.tools_used.push(tool);
+            }
+        }
     }
 
     /// 启动 Agent
@@ -278,9 +326,9 @@ impl Agent {
                     .clone()
                     .unwrap_or_else(|| self.task_history.join("\n")),
                 completed_at: std::time::Instant::now(),
-                tools_used: Vec::new(), // 工具历史可在此扩展
-                confidence: 1.0,        // 默认置信度
-                has_conflict: false,    // 默认无冲突
+                tools_used: self.tools_used.clone(),
+                confidence: 1.0,     // 默认置信度
+                has_conflict: false, // 默认无冲突
             };
             let _ = result_sender.send(result).await;
         }
@@ -331,7 +379,12 @@ impl Agent {
         // 使用 QueryEngine 的 query_with_tools 执行任务（子 Agent 也能使用工具）
         let mut options = crate::engine::query_engine::QueryOptions::default()
             .with_max_iterations(self.config.max_turns.min(self.config.max_tool_calls));
-        if let Some(ref allowed) = self.config.allowed_tools {
+        if let Some(ref policy) = self.config.subagent_session_policy {
+            options = options
+                .with_allowed_tools(policy.exposed_tools.clone())
+                .with_permission_mode(policy.permission_mode)
+                .with_session_permission_rules(policy.permission_rules.clone());
+        } else if let Some(ref allowed) = self.config.allowed_tools {
             options = options.with_allowed_tools(allowed.clone());
         }
         if !self.config.mcp_servers.is_empty() {
@@ -346,13 +399,15 @@ impl Agent {
         if let Some(working_dir) = self.config.working_dir.clone() {
             options = options.with_working_dir(working_dir);
         }
+        if let (Some(store), Some(session_id)) = (
+            self.config.child_session_store.clone(),
+            self.config.child_session_id.clone(),
+        ) {
+            options = options.with_session_store(store, session_id);
+        }
         let agent_system_prompt = self.config.build_system_prompt();
         let cost_before = self.query_engine.estimated_cost_usd().await;
-        let user_task = if fork_context_active {
-            "Execute the fork directive above. Do not spawn additional sub-agents.".to_string()
-        } else {
-            executable_task.clone()
-        };
+        let user_task = child_agent_user_task(fork_context_active, &executable_task);
 
         let result = self
             .query_engine
@@ -364,6 +419,7 @@ impl Agent {
         // 发送结果给父 Agent
         let result_content = match result {
             Ok(query_result) => {
+                self.record_tools_used(query_result.tools_used.clone());
                 if let Some(limit) = self.config.max_cost_usd {
                     if cost_delta > limit {
                         self.set_status(AgentStatus::Failed);
@@ -482,6 +538,20 @@ fn extract_task_envelope(task: &str) -> (Option<AgentTaskEnvelope>, String) {
     }
 }
 
+fn child_agent_user_task(fork_context_active: bool, executable_task: &str) -> String {
+    if !fork_context_active {
+        return executable_task.to_string();
+    }
+
+    format!(
+        "Implement this code-writing task by using the provided tools directly. \
+Execute the fork directive above. \
+Do not describe, simulate, or narrate tool use without real tool calls. \
+Do not spawn additional sub-agents.\n\nDirective summary:\n{}",
+        executable_task.trim()
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -513,5 +583,15 @@ mod tests {
         let (parsed, executable) = extract_task_envelope(&wrapped);
         assert!(parsed.is_some());
         assert_eq!(executable, "fallback prompt");
+    }
+
+    #[test]
+    fn forked_child_user_task_repeats_directive_and_requires_real_tools() {
+        let prompt = child_agent_user_task(true, "create lab-provider-compare-generic.txt");
+
+        assert!(prompt.starts_with("Implement this code-writing task"));
+        assert!(prompt.contains("provided tools directly"));
+        assert!(prompt.contains("Do not describe, simulate, or narrate tool use"));
+        assert!(prompt.contains("create lab-provider-compare-generic.txt"));
     }
 }

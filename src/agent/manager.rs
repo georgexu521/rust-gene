@@ -6,10 +6,133 @@ use crate::agent::agent::{Agent, AgentConfig, AgentHandle};
 use crate::agent::progress::AgentProgressEvent;
 use crate::agent::types::{AgentId, AgentMessage, AgentStatus};
 use crate::engine::QueryEngine;
+use crate::session_store::{AgentTaskStateUpsert, SessionEventWriter, SessionStore};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use tokio::sync::{broadcast, mpsc, RwLock};
 use tracing::{debug, info, warn};
+
+/// Durable completion target for a sub-agent task.
+#[derive(Debug, Clone)]
+pub struct AgentCompletionSink {
+    pub store: Arc<SessionStore>,
+    pub parent_session_id: String,
+    pub task_id: String,
+    pub profile: Option<String>,
+    pub role: String,
+    pub description: String,
+}
+
+impl AgentCompletionSink {
+    pub fn persist_completion(&self, result: &AgentResult) {
+        let status = format!("{:?}", result.status).to_ascii_lowercase();
+        let artifact_payload = serde_json::json!({
+            "task_id": self.task_id,
+            "tools_used": result.tools_used,
+            "confidence": result.confidence,
+            "has_conflict": result.has_conflict,
+            "completion_sink": "agent_manager",
+        });
+        let artifact_id = match self.store.add_agent_artifact(
+            &self.parent_session_id,
+            &result.agent_id.to_string(),
+            self.profile.as_deref(),
+            &self.role,
+            &status,
+            &self.description,
+            &result.content,
+            &artifact_payload,
+        ) {
+            Ok(id) => Some(id),
+            Err(error) => {
+                warn!(
+                    "Failed to persist sub-agent completion artifact for {}: {}",
+                    result.agent_id, error
+                );
+                None
+            }
+        };
+
+        let existing = self
+            .store
+            .agent_task_state(&self.parent_session_id, &self.task_id)
+            .ok()
+            .flatten();
+        let mut payload = existing
+            .as_ref()
+            .map(|state| state.payload.clone())
+            .unwrap_or_else(|| serde_json::json!({}));
+        payload["tools_used"] = serde_json::json!(result.tools_used);
+        payload["confidence"] = serde_json::json!(result.confidence);
+        payload["has_conflict"] = serde_json::json!(result.has_conflict);
+        payload["result_status"] = serde_json::json!(status.clone());
+        payload["completion_sink"] = serde_json::json!("agent_manager");
+        payload["completed_agent_id"] = serde_json::json!(result.agent_id.to_string());
+
+        let upsert = AgentTaskStateUpsert {
+            session_id: self.parent_session_id.clone(),
+            task_id: self.task_id.clone(),
+            agent_id: result.agent_id.to_string(),
+            profile: self.profile.clone(),
+            role: self.role.clone(),
+            status: status.clone(),
+            description: self.description.clone(),
+            transcript_path: existing
+                .as_ref()
+                .and_then(|state| state.transcript_path.clone()),
+            tool_ids_in_progress: Vec::new(),
+            permission_requests: existing
+                .as_ref()
+                .map(|state| state.permission_requests.clone())
+                .unwrap_or_default(),
+            result_artifact_id: artifact_id
+                .or_else(|| existing.as_ref().and_then(|state| state.result_artifact_id)),
+            cleanup_hooks: existing
+                .as_ref()
+                .map(|state| state.cleanup_hooks.clone())
+                .unwrap_or_default(),
+            payload,
+        };
+        if let Err(error) = self.store.upsert_agent_task_state(&upsert) {
+            warn!(
+                "Failed to update sub-agent task state for task {}: {}",
+                self.task_id, error
+            );
+        }
+
+        self.inject_parent_result(result, artifact_id);
+    }
+
+    fn inject_parent_result(&self, result: &AgentResult, artifact_id: Option<i64>) {
+        let writer = SessionEventWriter::new(self.store.shared_conn(), &self.parent_session_id);
+        let status = format!("{:?}", result.status).to_ascii_lowercase();
+        let text = format!(
+            "<subagent-result task_id=\"{}\" agent_id=\"{}\" status=\"{}\" artifact_id=\"{}\">\n{}\n</subagent-result>",
+            xml_escape(&self.task_id),
+            xml_escape(&result.agent_id.to_string()),
+            xml_escape(&status),
+            artifact_id
+                .map(|id| id.to_string())
+                .unwrap_or_else(|| "none".to_string()),
+            xml_escape(&result.content)
+        );
+        if let Err(error) = writer.text_completed(&text) {
+            warn!(
+                "Failed to inject sub-agent result into parent session {}: {}",
+                self.parent_session_id, error
+            );
+        }
+    }
+}
+
+fn xml_escape(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&apos;")
+}
 
 /// Agent 结果
 #[derive(Debug, Clone)]
@@ -491,6 +614,7 @@ impl AgentManager {
         // 创建 Agent
         let mut config = config;
         config.parent_id = parent_id;
+        let completion_sink = config.completion_sink.clone();
 
         let agent = Agent::new(agent_id.clone(), config, rx, parent_sender, query_engine)
             .with_result_sender(result_tx);
@@ -529,6 +653,9 @@ impl AgentManager {
             if let Some(msg) = result_rx.recv().await {
                 let mut results_map = results.write().await;
                 results_map.insert(agent_id_for_task.clone(), msg.clone());
+                if let Some(sink) = completion_sink.as_ref() {
+                    sink.persist_completion(&msg);
+                }
                 // 通知等待者
                 let _ = completion_tx.send(msg);
             }
@@ -913,6 +1040,72 @@ mod tests {
             .read()
             .await
             .contains_key(&agent_id));
+    }
+
+    #[test]
+    fn completion_sink_persists_artifact_state_and_parent_event() {
+        let store = Arc::new(crate::session_store::SessionStore::in_memory().unwrap());
+        store
+            .create_session("parent", "Parent", "model", Some("/repo"))
+            .unwrap();
+        store
+            .upsert_agent_task_state(&crate::session_store::AgentTaskStateUpsert {
+                session_id: "parent".to_string(),
+                task_id: "task-1".to_string(),
+                agent_id: "agent-old".to_string(),
+                profile: Some("implementer".to_string()),
+                role: "specialist".to_string(),
+                status: "running".to_string(),
+                description: "edit code".to_string(),
+                transcript_path: Some("/tmp/a2a.jsonl".to_string()),
+                tool_ids_in_progress: vec!["tool-1".to_string()],
+                permission_requests: vec!["edit".to_string()],
+                result_artifact_id: None,
+                cleanup_hooks: vec!["worktree_cleanup".to_string()],
+                payload: serde_json::json!({"child_session_id": "parent:subagent:task-1"}),
+            })
+            .unwrap();
+        let sink = AgentCompletionSink {
+            store: store.clone(),
+            parent_session_id: "parent".to_string(),
+            task_id: "task-1".to_string(),
+            profile: Some("implementer".to_string()),
+            role: "specialist".to_string(),
+            description: "edit code".to_string(),
+        };
+        let result = AgentResult {
+            agent_id: AgentId("agent-new".to_string()),
+            status: AgentStatus::Completed,
+            content: "done </subagent-result> & ok".to_string(),
+            completed_at: std::time::Instant::now(),
+            tools_used: vec!["file_write".to_string()],
+            confidence: 1.0,
+            has_conflict: false,
+        };
+
+        sink.persist_completion(&result);
+
+        let state = store.agent_task_state("parent", "task-1").unwrap().unwrap();
+        assert_eq!(state.agent_id, "agent-new");
+        assert_eq!(state.status, "completed");
+        assert_eq!(state.result_artifact_id, Some(1));
+        assert_eq!(state.cleanup_hooks, vec!["worktree_cleanup"]);
+        assert_eq!(state.payload["completion_sink"], "agent_manager");
+        assert_eq!(state.payload["tools_used"][0], "file_write");
+
+        let artifact = store.agent_artifact("parent", 1).unwrap().unwrap();
+        assert_eq!(artifact.output, "done </subagent-result> & ok");
+        assert_eq!(artifact.payload["task_id"], "task-1");
+
+        let events = store.get_session_events_after("parent", 0).unwrap();
+        assert!(events.iter().any(|event| {
+            event.event_type == "assistant_text_completed"
+                && event.payload.contains("<subagent-result")
+                && event.payload.contains("task-1")
+                && event
+                    .payload
+                    .contains("done &lt;/subagent-result&gt; &amp; ok")
+        }));
     }
 
     // ─── DAG Tests ─────────────────────────────────────────────────────────────

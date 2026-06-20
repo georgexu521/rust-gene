@@ -213,6 +213,8 @@ impl QueryEngine {
         let context_ref = options.context_messages.as_deref();
         let working_dir = options.working_dir.clone();
         let allowed_mcp_servers = options.allowed_mcp_servers.clone();
+        let session_store = options.session_store.clone();
+        let session_id = options.session_id.clone();
 
         // 构建消息
         let system_prompt =
@@ -230,11 +232,20 @@ impl QueryEngine {
         if let Some(temperature) = options.temperature {
             lp = lp.with_temperature(temperature);
         }
+        if let Some(permission_mode) = options.permission_mode {
+            lp = lp.with_permission_mode(permission_mode);
+        }
+        if let Some(permission_rules) = options.session_permission_rules {
+            lp = lp.with_session_permission_rules(permission_rules);
+        }
         if let Some(working_dir) = working_dir {
             lp = lp.with_working_dir(working_dir);
         }
         if let Some(servers) = allowed_mcp_servers {
             lp = lp.with_allowed_mcp_servers(servers);
+        }
+        if let (Some(store), Some(session_id)) = (session_store, session_id) {
+            lp = lp.with_session_store(store, session_id);
         }
         let result = lp.run(messages).await?;
 
@@ -242,6 +253,7 @@ impl QueryEngine {
             content: result.content,
             iterations: result.iterations,
             tool_calls_made: result.tool_calls_made,
+            tools_used: result.tools_used,
         })
     }
 }
@@ -291,10 +303,18 @@ pub struct QueryOptions {
     pub temperature: Option<f32>,
     /// 允许的工具白名单（None 表示不限制）
     pub allowed_tools: Option<Vec<String>>,
+    /// Optional permission mode override for scoped sub-agent sessions.
+    pub permission_mode: Option<crate::permissions::PermissionMode>,
+    /// Optional session-local permission rules for scoped sub-agent sessions.
+    pub session_permission_rules: Option<crate::permissions::PermissionRules>,
     /// Optional working directory override for isolated agent/worktree runs.
     pub working_dir: Option<PathBuf>,
     /// Optional MCP server allowlist for scoped sub-agent runs.
     pub allowed_mcp_servers: Option<Vec<String>>,
+    /// Optional durable session store for child/sub-agent transcripts.
+    pub session_store: Option<Arc<crate::session_store::SessionStore>>,
+    /// Optional durable session ID paired with `session_store`.
+    pub session_id: Option<String>,
 }
 
 impl Default for QueryOptions {
@@ -304,8 +324,12 @@ impl Default for QueryOptions {
             context_messages: None,
             temperature: Some(0.2),
             allowed_tools: None,
+            permission_mode: None,
+            session_permission_rules: None,
             working_dir: None,
             allowed_mcp_servers: None,
+            session_store: None,
+            session_id: None,
         }
     }
 }
@@ -330,6 +354,19 @@ impl QueryOptions {
         self
     }
 
+    pub fn with_permission_mode(mut self, mode: crate::permissions::PermissionMode) -> Self {
+        self.permission_mode = Some(mode);
+        self
+    }
+
+    pub fn with_session_permission_rules(
+        mut self,
+        rules: crate::permissions::PermissionRules,
+    ) -> Self {
+        self.session_permission_rules = Some(rules);
+        self
+    }
+
     pub fn with_temperature(mut self, temperature: f32) -> Self {
         self.temperature = Some(temperature.clamp(0.0, 2.0));
         self
@@ -350,6 +387,16 @@ impl QueryOptions {
         );
         self
     }
+
+    pub fn with_session_store(
+        mut self,
+        store: Arc<crate::session_store::SessionStore>,
+        session_id: impl Into<String>,
+    ) -> Self {
+        self.session_store = Some(store);
+        self.session_id = Some(session_id.into());
+        self
+    }
 }
 
 /// 查询结果
@@ -360,6 +407,8 @@ pub struct QueryResult {
     pub iterations: usize,
     /// 是否执行了工具调用
     pub tool_calls_made: bool,
+    /// Runtime-observed tool names that entered the tool execution pipeline.
+    pub tools_used: Vec<String>,
 }
 
 #[cfg(test)]

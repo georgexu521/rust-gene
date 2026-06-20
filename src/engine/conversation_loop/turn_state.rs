@@ -24,6 +24,7 @@ pub(super) struct TurnLoopState {
     pub(super) final_content: String,
     pub(super) final_tool_calls: Vec<ToolCall>,
     pub(super) tool_calls_made: bool,
+    pub(super) tools_used: Vec<String>,
     pub(super) pseudo_tool_retry_used: bool,
     pub(super) filesystem_grounding_retry_used: bool,
     pub(super) continuation_retry_used: bool,
@@ -46,6 +47,19 @@ pub(super) struct TurnLoopStateController;
 impl TurnLoopStateController {
     pub(super) fn initial_state() -> TurnLoopState {
         TurnLoopState::default()
+    }
+}
+
+impl TurnLoopState {
+    pub(super) fn record_executed_tool_calls(&mut self, tool_calls: &[ToolCall]) {
+        for tool_call in tool_calls {
+            if tool_call.name.trim().is_empty() {
+                continue;
+            }
+            if !self.tools_used.iter().any(|name| name == &tool_call.name) {
+                self.tools_used.push(tool_call.name.clone());
+            }
+        }
     }
 }
 
@@ -157,6 +171,7 @@ mod tests {
         assert!(state.final_content.is_empty());
         assert!(state.final_tool_calls.is_empty());
         assert!(!state.tool_calls_made);
+        assert!(state.tools_used.is_empty());
         assert!(!state.pseudo_tool_retry_used);
         assert!(!state.filesystem_grounding_retry_used);
         assert!(!state.continuation_retry_used);
@@ -165,6 +180,30 @@ mod tests {
         assert!(state.failed_tool_fingerprints.is_empty());
         assert!(state.failed_tool_names.is_empty());
         assert!(state.successful_required_validation_commands.is_empty());
+    }
+
+    #[test]
+    fn turn_loop_state_records_executed_tool_names_once_in_order() {
+        let mut state = TurnLoopStateController::initial_state();
+        state.record_executed_tool_calls(&[
+            ToolCall {
+                id: "call_1".to_string(),
+                name: "file_write".to_string(),
+                arguments: serde_json::json!({}),
+            },
+            ToolCall {
+                id: "call_2".to_string(),
+                name: "bash".to_string(),
+                arguments: serde_json::json!({}),
+            },
+            ToolCall {
+                id: "call_3".to_string(),
+                name: "file_write".to_string(),
+                arguments: serde_json::json!({}),
+            },
+        ]);
+
+        assert_eq!(state.tools_used, vec!["file_write", "bash"]);
     }
 
     #[test]

@@ -178,6 +178,7 @@ pub struct ConversationLoopBuilder {
         std::sync::Arc<tokio::sync::Mutex<crate::engine::context_compressor::ContextCompressor>>,
     >,
     agent_mode: self::agent_mode::AgentMode,
+    lab_context_enabled: bool,
 }
 
 impl ConversationLoopBuilder {
@@ -216,6 +217,7 @@ impl ConversationLoopBuilder {
             session_id: None,
             compressor: None,
             agent_mode: self::agent_mode::AgentMode::Auto,
+            lab_context_enabled: false,
         }
     }
 
@@ -392,6 +394,11 @@ impl ConversationLoopBuilder {
         self
     }
 
+    pub fn with_lab_context(mut self, enabled: bool) -> Self {
+        self.lab_context_enabled = enabled;
+        self
+    }
+
     pub fn build(self) -> self::conversation_loop::ConversationLoop {
         let mut lp = self::conversation_loop::ConversationLoop::new(
             self.provider,
@@ -407,7 +414,8 @@ impl ConversationLoopBuilder {
         .with_memory_generate(self.memory_generate_enabled)
         .with_memory_recall_mode(self.memory_recall_mode)
         .with_llm_memory_extraction(self.llm_memory_extraction)
-        .with_agent_mode(self.agent_mode);
+        .with_agent_mode(self.agent_mode)
+        .with_lab_context(self.lab_context_enabled);
 
         if let Some(manager) = self.agent_manager {
             lp = lp.with_agent_manager(manager);

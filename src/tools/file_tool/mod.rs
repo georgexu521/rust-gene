@@ -193,7 +193,7 @@ fn high_risk_file_target_diagnostic(
             "target is inside .git metadata",
             "use_git_tool_or_choose_project_file",
         ))
-    } else if is_live_eval_worktree_path(path, working_dir) {
+    } else if is_generated_dir_worktree_path(path, working_dir) {
         None
     } else if components.iter().any(|component| {
         matches!(
@@ -257,7 +257,7 @@ fn high_risk_file_target_diagnostic(
     ))
 }
 
-fn is_live_eval_worktree_path(path: &Path, working_dir: &Path) -> bool {
+fn is_generated_dir_worktree_path(path: &Path, working_dir: &Path) -> bool {
     let normalized_path = normalize_path(path);
     let normalized_working_dir = normalize_path(working_dir);
     let canonical_path = canonicalize_or_normalize(path);
@@ -271,11 +271,14 @@ fn is_live_eval_worktree_path(path: &Path, working_dir: &Path) -> bool {
         return false;
     }
 
-    let is_live_eval_worktree = [&normalized_working_dir, &canonical_working_dir]
+    let is_worktree = [&normalized_working_dir, &canonical_working_dir]
         .into_iter()
         .map(|path| path.to_string_lossy().to_ascii_lowercase())
-        .any(|lower| lower.contains("/target/live-evals/") && lower.ends_with("/worktree"));
-    is_live_eval_worktree
+        .any(|lower| {
+            (lower.contains("/target/live-evals/") && lower.ends_with("/worktree"))
+                || lower.contains("/.claude/worktrees/")
+        });
+    is_worktree
 }
 
 fn high_risk_file_target_result(

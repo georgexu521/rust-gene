@@ -128,8 +128,16 @@ pub const CMD_PANEL: CommandDef = CommandDef::new(
     "/panel",
     &["/panels", "/runtime"],
     "Info",
-    "/panel [all|diff|approval|hooks|context|tasks|agents|mcp|bridge|trace]",
-    "Show runtime panels for diffs, approvals, hooks, context, tasks, agents, MCP, bridge, and traces",
+    "/panel [all|diff|approval|hooks|context|tasks|agents|mcp|bridge|trace|lab]",
+    "Show runtime panels for diffs, approvals, hooks, context, tasks, agents, MCP, bridge, traces, and LabRun",
+);
+
+pub const CMD_LAB: CommandDef = CommandDef::new(
+    "/lab",
+    &[],
+    "Lab",
+    "/lab [status|dashboard|recovery|meeting recommend|meeting open|messages|daemon health]",
+    "Manage LabRun projects, professor intake, meetings, recovery, and daemon health",
 );
 
 pub const CMD_TASKS: CommandDef = CommandDef::new(

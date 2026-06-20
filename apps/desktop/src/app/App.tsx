@@ -70,6 +70,7 @@ import {
   setProviderModel,
   setDetailLevel,
   setPermissionMode,
+  superviseLabDaemon,
   goalStatus,
   goalStart,
   goalPause,
@@ -137,6 +138,7 @@ export function App() {
   const [lastArchivedSession, setLastArchivedSession] = useState<RecentSession | null>(null);
   const [pendingDeleteSession, setPendingDeleteSession] = useState<RecentSession | null>(null);
   const [currentGoal, setCurrentGoal] = useState<DesktopGoalStatus | null>(null);
+  const [dismissedStartupLabRecoveryId, setDismissedStartupLabRecoveryId] = useState<string | null>(null);
   const [runState, setRunState] = useState(initialRunViewState);
   const permissionRecoveryRef = useRef<HTMLDivElement | null>(null);
   const activeRunSessionIdRef = useRef<string | null>(null);
@@ -176,6 +178,26 @@ export function App() {
     const fetchGoal = () => { void goalStatus().then(setCurrentGoal).catch(() => {}); };
     fetchGoal();
     const interval = setInterval(fetchGoal, 5000);
+    return () => clearInterval(interval);
+  }, []);
+
+  useEffect(() => {
+    let busy = false;
+    const supervise = async () => {
+      if (busy) {
+        return;
+      }
+      busy = true;
+      try {
+        await handleSuperviseLabDaemon();
+      } finally {
+        busy = false;
+      }
+    };
+    void supervise();
+    const interval = setInterval(() => {
+      void supervise();
+    }, 120_000);
     return () => clearInterval(interval);
   }, []);
 
@@ -356,6 +378,15 @@ export function App() {
       if (snapshot.runtime_context) {
         setContextSnapshot(snapshot.runtime_context);
       }
+    } catch (err) {
+      setRunState((current) => withError(current, err));
+    }
+  }
+
+  async function handleSuperviseLabDaemon() {
+    try {
+      await superviseLabDaemon();
+      await refreshWorkbenchSnapshot();
     } catch (err) {
       setRunState((current) => withError(current, err));
     }
@@ -800,10 +831,46 @@ export function App() {
   const conversationTitle =
     selectedSessionSummary?.title || (isEmptyConversation ? "New Chat" : "Priority Agent");
 
+  function stageSlashCommand(command: string) {
+    setComposer(command);
+  }
+
   const commands: Command[] = [
     { id: "new-chat", label: "New Chat", icon: <Plus size={14} />, group: "action", run: () => void handleNewChat() },
     { id: "settings", label: "Open Settings", icon: <Settings size={14} />, group: "settings", run: () => setIsSettingsOpen(true) },
     { id: "browse-project", label: "Switch Project", icon: <Folder size={14} />, group: "workspace", run: () => void handleBrowseProject() },
+    {
+      id: "lab-dashboard",
+      label: "Lab Dashboard",
+      hint: "/lab dashboard",
+      icon: <LayoutDashboard size={14} />,
+      group: "workspace",
+      run: () => stageSlashCommand("/lab dashboard"),
+    },
+    {
+      id: "lab-meeting",
+      label: "Lab Meeting",
+      hint: "/lab meeting open",
+      icon: <FileText size={14} />,
+      group: "workspace",
+      run: () => stageSlashCommand("/lab meeting open"),
+    },
+    {
+      id: "lab-recovery",
+      label: "Lab Recovery",
+      hint: "/lab recovery",
+      icon: <RotateCcw size={14} />,
+      group: "workspace",
+      run: () => stageSlashCommand("/lab recovery"),
+    },
+    {
+      id: "lab-daemon-health",
+      label: "Lab Daemon Health",
+      hint: "/lab daemon health",
+      icon: <Activity size={14} />,
+      group: "workspace",
+      run: () => stageSlashCommand("/lab daemon health"),
+    },
   ];
 
   if (showSplash) {
@@ -922,10 +989,39 @@ export function App() {
           </div>
         </header>
 
-        {settings && settings.startup_state.status !== "new_conversation" ? (
+        {settings &&
+        settings.startup_state.status !== "new_conversation" &&
+        !(
+          settings.startup_state.status === "lab_recovery" &&
+          settings.startup_state.lab_run_id === dismissedStartupLabRecoveryId
+        ) ? (
           <div className={`startup-state-card ${settings.startup_state.status}`} role="status">
             <span>{startupStateLabel(settings.startup_state.status)}</span>
             <strong>{startupStateDetail(settings, selectedSessionSummary, projectPath)}</strong>
+            {settings.startup_state.status === "lab_recovery" ? (
+              <div className="startup-state-actions" aria-label="Lab recovery actions">
+                <button type="button" onClick={() => stageSlashCommand("/lab resume")}>
+                  Resume
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    stageSlashCommand("/lab dashboard");
+                    setIsWorkbenchOpen(true);
+                  }}
+                >
+                  Dashboard
+                </button>
+                <button
+                  type="button"
+                  onClick={() =>
+                    setDismissedStartupLabRecoveryId(settings.startup_state.lab_run_id || "dismissed")
+                  }
+                >
+                  Keep paused
+                </button>
+              </div>
+            ) : null}
           </div>
         ) : null}
 
@@ -973,8 +1069,13 @@ export function App() {
           isOpen={isWorkbenchOpen}
           snapshot={workbenchSnapshot}
           onClose={() => setIsWorkbenchOpen(false)}
+          onOpenLabReport={(path) => {
+            openFilePath(path).catch(console.error);
+          }}
           onRefreshDiagnostics={() => void refreshDiagnostics()}
           onRefreshWorkbench={() => void refreshWorkbenchSnapshot()}
+          onStageLabCommand={stageSlashCommand}
+          onSuperviseLabDaemon={() => void handleSuperviseLabDaemon()}
         />
 
         <ContextDetailDrawer
@@ -1129,6 +1230,9 @@ export function App() {
 }
 
 function startupStateLabel(status: string) {
+  if (status === "lab_recovery") {
+    return "Lab recovery";
+  }
   if (status === "restored_session") {
     return "Restored session";
   }
@@ -1143,6 +1247,10 @@ function startupStateDetail(
   selectedSession: RecentSession | null,
   projectPath: string,
 ) {
+  if (settings.startup_state.status === "lab_recovery") {
+    const lab = settings.startup_state;
+    return `Recover ${lab.lab_run_id || "LabRun"} at ${lab.lab_stage || "unknown stage"} with ${lab.lab_owner || "unknown owner"}: ${lab.lab_pause_reason || lab.detail}`;
+  }
   if (settings.startup_state.status === "restored_session" && selectedSession) {
     return `Continuing ${selectedSession.title} in ${basename(projectPath)}`;
   }

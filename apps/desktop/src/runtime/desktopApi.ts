@@ -36,6 +36,70 @@ export type DesktopWorkbenchSnapshot = {
   project_map: DesktopProjectMapSnapshot;
   symbol_index: DesktopSymbolIndexSnapshot;
   runtime_context?: DesktopContextSnapshot | null;
+  lab_status: DesktopLabStatusSnapshot;
+  subagent_tasks: DesktopSubagentTaskSnapshot[];
+};
+
+export type DesktopLabStatusSnapshot = {
+  available: boolean;
+  state: string;
+  detail: string;
+  lab_run_id?: string | null;
+  proposal_id?: string | null;
+  proposal_status?: string | null;
+  run_status?: string | null;
+  stage?: string | null;
+  owner?: string | null;
+  needs_user: boolean;
+  cycle_count: number;
+  artifact_count: number;
+  meeting_count: number;
+  task_total: number;
+  task_open: number;
+  task_blocked: number;
+  blockers: string[];
+  validation_retry_count: number;
+  validation_retry_escalated_count: number;
+  latest_validation_retry?: string | null;
+  meeting_recommended: boolean;
+  meeting_topic?: string | null;
+  latest_report_path?: string | null;
+  daemon_policy?: DesktopLabDaemonPolicySnapshot | null;
+};
+
+export type DesktopLabDaemonPolicySnapshot = {
+  enabled: boolean;
+  mode: string;
+  max_steps: number;
+  max_steps_per_cycle: number;
+  interval_ms: number;
+  last_started_at?: string | null;
+  last_start_error?: string | null;
+};
+
+export type DesktopLabDaemonActionResult = {
+  action: string;
+  output: string;
+  lab_status: DesktopLabStatusSnapshot;
+};
+
+export type DesktopSubagentTaskSnapshot = {
+  task_id: string;
+  agent_id: string;
+  profile?: string | null;
+  role: string;
+  status: string;
+  description: string;
+  child_session_id?: string | null;
+  result_artifact_id?: number | null;
+  artifact_status?: string | null;
+  result_preview?: string | null;
+  tools_used: string[];
+  proof_kind?: string | null;
+  completion_sink?: string | null;
+  recovery_status?: string | null;
+  recovery_action?: string | null;
+  updated_at: string;
 };
 
 export type DesktopProjectMapSnapshot = {
@@ -224,6 +288,10 @@ export type DesktopSettings = {
 export type DesktopStartupState = {
   status: string;
   detail: string;
+  lab_run_id?: string | null;
+  lab_stage?: string | null;
+  lab_owner?: string | null;
+  lab_pause_reason?: string | null;
 };
 
 export type DetailLevelId = "coding" | "daily";
@@ -402,6 +470,10 @@ let webPreviewSettings: DesktopSettings = {
   startup_state: {
     status: "restored_session",
     detail: "Restored web-preview in rust-agent",
+    lab_run_id: null,
+    lab_stage: null,
+    lab_owner: null,
+    lab_pause_reason: null,
   },
 };
 let webPreviewSessions: RecentSession[] = [
@@ -614,10 +686,77 @@ export function desktopWorkbenchSnapshot(): Promise<DesktopWorkbenchSnapshot> {
           circuit_open: false,
         },
       },
+      lab_status: {
+        available: true,
+        state: "run",
+        detail: "Active at graduate_work with Postdoc",
+        lab_run_id: "labrun_preview",
+        proposal_id: "labproposal_preview",
+        proposal_status: null,
+        run_status: "Active",
+        stage: "graduate_work",
+        owner: "Postdoc",
+        needs_user: false,
+        cycle_count: 2,
+        artifact_count: 5,
+        meeting_count: 1,
+        task_total: 3,
+        task_open: 1,
+        task_blocked: 1,
+        blockers: ["Wire status actions: Playwright panel action check failed"],
+        validation_retry_count: 2,
+        validation_retry_escalated_count: 1,
+        latest_validation_retry: "gradtask_preview attempt 2: Playwright panel action check failed",
+        meeting_recommended: true,
+        meeting_topic: "resolve 1 blocked graduate task at stage graduate_work",
+        latest_report_path: `${webPreviewSettings.selected_project}/.priority-agent/lab/runs/labrun_preview/reports/artifact_professor_review.md`,
+        daemon_policy: {
+          enabled: true,
+          mode: "hybrid_cycles",
+          max_steps: 4,
+          max_steps_per_cycle: 6,
+          interval_ms: 500,
+          last_started_at: null,
+          last_start_error: null,
+        },
+      },
+      subagent_tasks: [
+        {
+          task_id: "provider-compare-background",
+          agent_id: "agent_preview",
+          profile: "implementer",
+          role: "Specialist",
+          status: "completed",
+          description: "Provider comparison background implementer smoke",
+          child_session_id: "preview-session:subagent:provider-compare-background",
+          result_artifact_id: 1,
+          artifact_status: "completed",
+          result_preview: "background subagent tool smoke",
+          tools_used: ["bash", "file_write", "file_read"],
+          proof_kind: "subagent_claim_only",
+          completion_sink: "agent_manager",
+          recovery_status: null,
+          recovery_action: null,
+          updated_at: "preview",
+        },
+      ],
     });
   }
 
   return invoke("desktop_workbench_snapshot");
+}
+
+export async function superviseLabDaemon(): Promise<DesktopLabDaemonActionResult> {
+  if (!isTauriRuntime()) {
+    const snapshot = await desktopWorkbenchSnapshot();
+    return {
+      action: "supervise",
+      output: "Lab daemon service supervision repaired missing service.\nPreview mode",
+      lab_status: snapshot.lab_status,
+    };
+  }
+
+  return invoke("lab_daemon_supervise");
 }
 
 export function selectProject(path: string): Promise<SelectedProject> {
@@ -630,6 +769,10 @@ export function selectProject(path: string): Promise<SelectedProject> {
       startup_state: {
         status: "new_conversation",
         detail: `Ready for a new conversation in ${basename(path)}`,
+        lab_run_id: null,
+        lab_stage: null,
+        lab_owner: null,
+        lab_pause_reason: null,
       },
     };
     return Promise.resolve({ path });
@@ -640,6 +783,19 @@ export function selectProject(path: string): Promise<SelectedProject> {
 
 export function desktopSettings(): Promise<DesktopSettings> {
   if (!isTauriRuntime()) {
+    if (webPreviewFixtureName() === "labRecovery") {
+      return Promise.resolve({
+        ...webPreviewSettings,
+        startup_state: {
+          status: "lab_recovery",
+          detail: "LabRun labrun_preview is recoverable at graduate_work with Postdoc: app_shutdown",
+          lab_run_id: "labrun_preview",
+          lab_stage: "graduate_work",
+          lab_owner: "Postdoc",
+          lab_pause_reason: "app_shutdown",
+        },
+      });
+    }
     return Promise.resolve(webPreviewSettings);
   }
 
@@ -654,6 +810,10 @@ export function newConversation(): Promise<DesktopSettings> {
       startup_state: {
         status: "new_conversation",
         detail: `Ready for a new conversation in ${basename(webPreviewSettings.selected_project)}`,
+        lab_run_id: null,
+        lab_stage: null,
+        lab_owner: null,
+        lab_pause_reason: null,
       },
     };
     return Promise.resolve(webPreviewSettings);
@@ -996,6 +1156,10 @@ export function saveProviderCredential(providerId: string, key: string): Promise
 }
 
 export function openFilePath(path: string): Promise<void> {
+  if (!isTauriRuntime()) {
+    return Promise.resolve();
+  }
+
   return invoke("open_file_path", { path });
 }
 
@@ -1495,6 +1659,13 @@ function webPreviewFixtureMode() {
     params.has("previewFixture") ||
     window.localStorage.getItem("priority-agent.previewFixture") === "1"
   );
+}
+
+function webPreviewFixtureName() {
+  if (typeof window === "undefined") {
+    return "";
+  }
+  return new URLSearchParams(window.location.search).get("previewFixture") || "";
 }
 
 function emitWebPreviewUnavailableResponse(message: string, contexts: DesktopRunContext[]) {

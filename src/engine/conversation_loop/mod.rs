@@ -223,6 +223,8 @@ pub struct ConversationLoop {
     workflow_policy: WorkflowPolicy,
     /// Product-level coding agent mode selected by the user.
     agent_mode: crate::engine::agent_mode::AgentMode,
+    /// Whether LabRun context packets may be injected into live model requests.
+    lab_context_enabled: bool,
     /// 拒绝追踪器
     denial_tracker: Option<Arc<crate::security::DenialTracker>>,
     /// 安全审计日志
@@ -245,6 +247,7 @@ pub struct LoopResult {
     pub content: String,
     pub tool_calls: Vec<ToolCall>,
     pub tool_calls_made: bool,
+    pub tools_used: Vec<String>,
     pub iterations: usize,
     /// 流式预执行的只读工具结果（tool_index → result）
     /// execute_tools_parallel 应跳过已有结果的只读工具
@@ -285,6 +288,7 @@ impl ConversationLoop {
             workflow_triggered_this_turn: std::sync::atomic::AtomicBool::new(false),
             workflow_policy: WorkflowPolicy::from_env(),
             agent_mode: crate::engine::agent_mode::AgentMode::Auto,
+            lab_context_enabled: false,
             session_id: format!("session-{}", uuid::Uuid::new_v4()),
             denial_tracker: None,
             audit_log: None,
@@ -458,6 +462,11 @@ impl ConversationLoop {
 
     pub fn with_agent_mode(mut self, mode: crate::engine::agent_mode::AgentMode) -> Self {
         self.agent_mode = mode;
+        self
+    }
+
+    pub fn with_lab_context(mut self, enabled: bool) -> Self {
+        self.lab_context_enabled = enabled;
         self
     }
 
@@ -697,6 +706,7 @@ impl ConversationLoop {
                     content,
                     tool_calls: Vec::new(),
                     tool_calls_made: false,
+                    tools_used: Vec::new(),
                     iterations: 0,
                     pre_executed_results: std::collections::HashMap::new(),
                 });
@@ -757,6 +767,7 @@ impl ConversationLoop {
                 final_tool_calls: &loop_state.final_tool_calls,
                 messages: &mut messages,
                 claim_gate_repair_used: &mut loop_state.claim_gate_repair_used,
+                tools_used: &loop_state.tools_used,
                 iterations_used: turn_state.iterations_used,
                 max_iterations: self.max_iterations,
                 tool_calls_made: loop_state.tool_calls_made,

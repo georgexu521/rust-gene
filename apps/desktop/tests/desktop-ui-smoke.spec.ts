@@ -28,6 +28,23 @@ test.describe("desktop UI smoke", () => {
     await expect(page.getByText("Environment diagnostics")).toBeVisible();
     await expect(page.getByRole("region", { name: "Frontend workbench" })).toContainText("Project intelligence");
     await expect(page.getByRole("region", { name: "Frontend workbench" })).toContainText("Project map");
+    await expect(page.getByRole("region", { name: "Frontend workbench" })).toContainText("LabRun");
+    await expect(page.getByRole("region", { name: "Lab status panel" })).toContainText("graduate_work");
+    await expect(page.getByRole("region", { name: "Lab status panel" })).toContainText("recommended");
+    await expect(page.getByRole("region", { name: "Lab status panel" })).toContainText("Playwright panel action check failed");
+    await expect(page.getByRole("region", { name: "Lab status panel" })).toContainText("2 total");
+    await page.getByRole("button", { name: "Open latest Lab report" }).click();
+    await page.getByRole("button", { name: "Supervise Lab daemon" }).click();
+    await expect(page.getByRole("region", { name: "Lab status panel" })).toContainText("graduate_work");
+    await page.getByRole("button", { name: "Stage Lab meeting" }).click();
+    await expect(page.getByRole("textbox", { name: "Message" })).toHaveValue("/lab meeting open");
+    await page.getByRole("button", { name: "Stage Lab intervention" }).click();
+    await expect(page.getByRole("textbox", { name: "Message" })).toHaveValue("/lab intervene ");
+    await page.getByRole("button", { name: "Stage Lab continue" }).click();
+    await expect(page.getByRole("textbox", { name: "Message" })).toHaveValue("/lab continue ");
+    await page.getByRole("button", { name: "Stage Lab closeout" }).click();
+    await expect(page.getByRole("textbox", { name: "Message" })).toHaveValue("/lab closeout auto");
+    await page.getByRole("textbox", { name: "Message" }).fill("");
     await expect(page.getByRole("region", { name: "Frontend workbench" })).toContainText("Symbol index");
     await expect(page.getByRole("region", { name: "Symbol index preview" })).toContainText(
       "src/engine/conversation_loop/request_preparation_controller.rs",
@@ -261,6 +278,44 @@ test.describe("desktop UI smoke", () => {
       path: testInfo.outputPath("desktop-settings.png"),
       fullPage: true,
     });
+  });
+
+  test("command palette stages Lab slash commands", async ({ page }) => {
+    await page.goto("/?previewFixture=1");
+
+    await page.keyboard.press("Control+K");
+    await expect(page.getByRole("dialog", { name: "Command palette" })).toBeVisible();
+    await page.getByPlaceholder("Type a command...").fill("lab meeting");
+    await page.getByRole("button", { name: /Lab Meeting/ }).click();
+
+    await expect(page.getByRole("dialog", { name: "Command palette" })).not.toBeVisible();
+    await expect(page.getByRole("textbox", { name: "Message" })).toHaveValue("/lab meeting open");
+
+    await page.keyboard.press("Control+K");
+    await page.getByPlaceholder("Type a command...").fill("daemon");
+    await page.getByRole("button", { name: /Lab Daemon Health/ }).click();
+    await expect(page.getByRole("textbox", { name: "Message" })).toHaveValue("/lab daemon health");
+  });
+
+  test("startup Lab recovery card stages safe actions", async ({ page }) => {
+    await page.goto("/?previewFixture=labRecovery");
+
+    const card = page.locator(".startup-state-card.lab_recovery");
+    await expect(card).toContainText("Lab recovery");
+    await expect(card).toContainText("labrun_preview");
+    await expect(card).toContainText("graduate_work");
+
+    await page.getByRole("button", { name: "Resume" }).click();
+    await expect(page.getByRole("textbox", { name: "Message" })).toHaveValue("/lab resume");
+
+    await page.getByRole("button", { name: "Dashboard" }).click();
+    await expect(page.getByRole("textbox", { name: "Message" })).toHaveValue("/lab dashboard");
+    await expect(page.getByRole("complementary", { name: "Workbench" })).toBeVisible();
+    await page.getByRole("button", { name: "Close workbench" }).click();
+    await expect(page.getByRole("complementary", { name: "Workbench" })).not.toBeVisible();
+
+    await page.getByRole("button", { name: "Keep paused" }).click();
+    await expect(card).not.toBeVisible();
   });
 
   test("mobile layout keeps composer controls inside viewport", async ({ page }, testInfo) => {

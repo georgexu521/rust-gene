@@ -954,6 +954,13 @@ impl TuiApp {
                     unavailable_line
                 )
             }
+            "/lab" => crate::lab::commands::handle_lab_command(
+                &self.workspace.root,
+                self.session_manager
+                    .current_session_id()
+                    .map(str::to_string),
+                args,
+            ),
             "/tasks" => slash::handle_tasks(self).await,
             "/agents" => slash::handle_agents(self, args).await,
             "/agent" => slash::handle_agent_list(self, args).await,

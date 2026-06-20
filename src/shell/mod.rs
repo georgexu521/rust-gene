@@ -30,6 +30,7 @@ pub mod test_support;
 use crate::components::attachment_token::AttachmentSource;
 use crate::engine::runtime_controller::RuntimeController;
 use crate::engine::streaming::StreamingQueryEngine;
+use crate::lab::store::LabStore;
 use crate::session_store::{SessionRecord, SessionStore};
 use crate::shell::attachment::AttachmentManager;
 use crate::shell::completion::find_candidates;
@@ -51,7 +52,7 @@ use crate::shell::theme::*;
 use crate::shell::turn::run_turn;
 use crossterm::event::{Event, KeyCode, KeyEventKind, KeyModifiers, MouseEvent, MouseEventKind};
 use std::io::{self, IsTerminal};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 const LOCAL_COMMANDS: &[ShellCommand] = &[
@@ -85,6 +86,7 @@ const LOCAL_COMMANDS: &[ShellCommand] = &[
     ShellCommand::new("/skills", "list installed skills"),
     ShellCommand::new("/agents", "list active agents"),
     ShellCommand::new("/tasks", "list tasks"),
+    ShellCommand::new("/lab", "manage LabRun projects"),
     ShellCommand::new("/mcp", "show MCP server status"),
     ShellCommand::new("/tui", "open the full-screen TUI"),
     ShellCommand::new("/exit", "quit"),
@@ -97,6 +99,9 @@ pub struct ShellOptions {
     /// bottom footer. Useful for pipe/redirection environments or minimal
     /// terminals.
     pub no_footer: bool,
+    /// Start in Lab Mode, where the user-facing surface is professor intake
+    /// and LabRun commands are first-class.
+    pub lab_mode: bool,
 }
 
 pub async fn run_shell(engine: Arc<StreamingQueryEngine>) -> anyhow::Result<()> {
@@ -125,6 +130,7 @@ async fn run_shell_inner(
     let controller = RuntimeController::new(engine.clone());
     let mut host =
         CliHost::new(engine.clone(), session_manager).with_controller(controller.clone());
+    let lab_daemon_startup_message = maybe_start_lab_daemon_on_shell_start(&engine, &host, options);
 
     let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel::<Event>();
     tokio::spawn(event_reader(event_tx));
@@ -134,9 +140,12 @@ async fn run_shell_inner(
     let mut completion_state: Option<CompletionState> = None;
     let interrupt = InterruptState::new();
 
-    let welcome = render_welcome(&engine).await;
+    let welcome = render_welcome(&engine, options).await;
     for line in welcome.lines() {
         print!("{line}\r\n");
+    }
+    if let Some(message) = lab_daemon_startup_message {
+        print!("{message}\r\n");
     }
     let _ = io::Write::flush(&mut io::stdout());
     let mut surface = ShellSurface::Plain(PlainSurface::new());
@@ -439,7 +448,47 @@ async fn run_shell_inner(
         }
     }
 
+    pause_lab_run_on_shell_exit(options);
     Ok(())
+}
+
+fn maybe_start_lab_daemon_on_shell_start(
+    engine: &StreamingQueryEngine,
+    host: &dyn ShellHost,
+    options: ShellOptions,
+) -> Option<String> {
+    if !options.lab_mode {
+        return None;
+    }
+    let project_root = std::env::current_dir().ok()?;
+    let store = LabStore::for_project(&project_root);
+    let policy = match store.load_daemon_state() {
+        Ok(Some(policy)) if policy.enabled => policy,
+        Ok(_) => return None,
+        Err(err) => {
+            return Some(format!(
+                "{YELLOW}Lab daemon policy read failed:{RESET} {err}"
+            ))
+        }
+    };
+    Some(start_lab_daemon_from_policy(
+        engine,
+        host,
+        &project_root,
+        Some(format!("auto {:?} daemon", policy.mode)),
+    ))
+}
+
+fn pause_lab_run_on_shell_exit(options: ShellOptions) {
+    if !options.lab_mode {
+        return;
+    }
+    let Ok(project_root) = std::env::current_dir() else {
+        return;
+    };
+    if let Err(err) = LabStore::for_project(project_root).record_app_lifecycle_shutdown("lab_cli") {
+        tracing::warn!("failed to record LabRun app lifecycle shutdown: {err}");
+    }
 }
 
 enum ShellSurface {
@@ -529,7 +578,7 @@ fn update_completion_after_edit(
     CompletionState::update_after_edit(editor, state, current_cursor_col(editor))
 }
 
-async fn render_welcome(engine: &StreamingQueryEngine) -> String {
+async fn render_welcome(engine: &StreamingQueryEngine, options: ShellOptions) -> String {
     let usage = engine.context_usage_report().await;
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     let dir = compact_home_path(&cwd);
@@ -555,6 +604,12 @@ async fn render_welcome(engine: &StreamingQueryEngine) -> String {
         out.push_str(&format!(
             "{DIM}/help{RESET} commands {DIM}·{RESET} /status {DIM}·{RESET} /exit\n"
         ));
+        if options.lab_mode {
+            out.push_str(&format!(
+                "{DIM}Lab{RESET} {}\n",
+                compact_line(&lab_welcome_hint(&cwd), 72)
+            ));
+        }
         out.push('\n');
         return out;
     }
@@ -587,12 +642,61 @@ async fn render_welcome(engine: &StreamingQueryEngine) -> String {
         "{BLUE}│{RESET}  {DIM}{:<10}{RESET}/help commands · /status details · /exit quit\n",
         "Shortcuts"
     ));
+    if options.lab_mode {
+        out.push_str(&format!(
+            "{BLUE}│{RESET}  {DIM}{:<10}{RESET}/lab propose <idea> · /lab status · /lab approve <id>\n",
+            "Lab"
+        ));
+        out.push_str(&format!(
+            "{BLUE}│{RESET}  {DIM}{:<10}{RESET}{}\n",
+            "Professor",
+            compact_line(&lab_welcome_hint(&cwd), inner.saturating_sub(12))
+        ));
+    }
     out.push_str(&format!(
         "{BLUE}╰{}╯{RESET}\n",
         "─".repeat(width.saturating_sub(2))
     ));
     out.push('\n');
     out
+}
+
+fn lab_welcome_hint(project_root: &Path) -> String {
+    let store = LabStore::for_project(project_root);
+    match store.latest_run() {
+        Ok(Some(run)) => {
+            if matches!(
+                run.status,
+                crate::lab::model::LabRunStatus::Paused
+                    | crate::lab::model::LabRunStatus::PausedShutdown
+                    | crate::lab::model::LabRunStatus::NeedsUser
+            ) {
+                format!(
+                    "Recover LabRun {} stage={} owner={:?} reason={} · /lab resume · /lab recovery",
+                    run.lab_run_id,
+                    run.current_stage,
+                    run.internal_owner,
+                    run.pause_reason.as_deref().unwrap_or("needs_user")
+                )
+            } else {
+                format!(
+                    "LabRun {} stage={} owner={:?} · /lab dashboard · /lab recovery",
+                    run.lab_run_id, run.current_stage, run.internal_owner
+                )
+            }
+        }
+        Ok(None) => match store.latest_proposal() {
+            Ok(Some(proposal)) => format!(
+                "Proposal {} status={:?} · approve with /lab approve {}",
+                proposal.proposal_id, proposal.status, proposal.proposal_id
+            ),
+            Ok(None) => {
+                "Professor intake ready · discuss scope with /lab propose <idea>".to_string()
+            }
+            Err(err) => format!("Professor intake ready · latest proposal unavailable: {err}"),
+        },
+        Err(err) => format!("Professor intake ready · latest LabRun unavailable: {err}"),
+    }
 }
 
 async fn build_session_manager(
@@ -894,6 +998,71 @@ async fn handle_local_command(
             surface.push_line(&response)?;
             Ok(true)
         }
+        "/lab" => {
+            let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+            let response = crate::lab::commands::handle_lab_command_with_context(
+                &cwd,
+                engine.current_session_id(),
+                "",
+                host.build_tool_context(),
+            )
+            .await;
+            surface.push_line(&response)?;
+            Ok(true)
+        }
+        command if command.starts_with("/lab ") => {
+            let args = command.strip_prefix("/lab ").unwrap_or("").trim();
+            let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+            let response = if args == "draft" || args.starts_with("draft ") {
+                let instructions = args.strip_prefix("draft").unwrap_or("").trim();
+                handle_lab_draft_command(engine, &cwd, instructions).await
+            } else if args == "professor-review llm" || args.starts_with("professor-review llm ") {
+                let instructions = args
+                    .strip_prefix("professor-review llm")
+                    .unwrap_or("")
+                    .trim();
+                handle_lab_provider_professor_review_command(engine, &cwd, instructions).await
+            } else if args == "background hybrid" || args.starts_with("background hybrid ") {
+                let run_args = args.strip_prefix("background hybrid").unwrap_or("").trim();
+                handle_lab_background_hybrid_command(
+                    engine,
+                    &cwd,
+                    run_args,
+                    host.build_tool_context(),
+                )
+                .await
+            } else if args == "daemon start" {
+                start_lab_daemon_from_policy(
+                    engine,
+                    host,
+                    &cwd,
+                    Some("manual daemon start".to_string()),
+                )
+            } else if args == "step llm" || args.starts_with("step llm ") {
+                let instructions = args.strip_prefix("step llm").unwrap_or("").trim();
+                handle_lab_provider_step_command(engine, &cwd, instructions).await
+            } else if args == "run llm" || args.starts_with("run llm ") {
+                let run_args = args.strip_prefix("run llm").unwrap_or("").trim();
+                handle_lab_provider_run_command(engine, &cwd, run_args).await
+            } else if args == "run hybrid" || args.starts_with("run hybrid ") {
+                let run_args = args.strip_prefix("run hybrid").unwrap_or("").trim();
+                handle_lab_hybrid_run_command(engine, &cwd, run_args, host.build_tool_context())
+                    .await
+            } else if args.starts_with("review artifact ") {
+                let review_args = args.strip_prefix("review artifact ").unwrap_or("").trim();
+                handle_lab_artifact_review_command(engine, &cwd, review_args).await
+            } else {
+                crate::lab::commands::handle_lab_command_with_context(
+                    &cwd,
+                    engine.current_session_id(),
+                    args,
+                    host.build_tool_context(),
+                )
+                .await
+            };
+            surface.push_line(&response)?;
+            Ok(true)
+        }
         "/mcp" => {
             let response = crate::shell::slash::handle_mcp(host);
             surface.push_line(&response)?;
@@ -907,6 +1076,393 @@ async fn handle_local_command(
         }
         _ => Ok(false),
     }
+}
+
+async fn handle_lab_provider_professor_review_command(
+    engine: &StreamingQueryEngine,
+    project_root: &std::path::Path,
+    instructions: &str,
+) -> String {
+    match crate::lab::draft::draft_professor_review_with_provider(
+        project_root,
+        engine.provider(),
+        engine.model_name(),
+        instructions,
+    )
+    .await
+    {
+        Ok(outcome) => {
+            let mut lines = vec![
+                format!(
+                    "Drafted provider ProfessorReview: {}",
+                    outcome.created.artifact.artifact_id()
+                ),
+                format!("Gate: {}", outcome.created.gate.stage),
+                format!(
+                    "Validation: {}",
+                    outcome
+                        .created
+                        .gate
+                        .validation_status
+                        .as_deref()
+                        .unwrap_or("none")
+                ),
+                format!("Artifact: {}", outcome.created.path.display()),
+                format!("Report: {}", outcome.created.report_path.display()),
+            ];
+            if let Some(usage) = outcome.usage {
+                lines.push(format!(
+                    "Usage: prompt={} completion={} total={} cached={} cache_write={}",
+                    usage.prompt_tokens,
+                    usage.completion_tokens,
+                    usage.total_tokens,
+                    usage.cached_tokens.unwrap_or(0),
+                    usage.cache_write_tokens.unwrap_or(0)
+                ));
+            }
+            lines.join("\n")
+        }
+        Err(err) => format!("Failed to draft provider ProfessorReview: {err}"),
+    }
+}
+
+fn start_lab_daemon_from_policy(
+    engine: &StreamingQueryEngine,
+    host: &dyn ShellHost,
+    project_root: &std::path::Path,
+    prefix: Option<String>,
+) -> String {
+    match crate::lab::scheduler::start_daemon_scheduler_from_policy(
+        project_root,
+        host.build_tool_context(),
+        engine.provider(),
+        engine.model_name(),
+    ) {
+        Ok(started) => format!(
+            "{}Lab daemon started for {}.\nMode: {:?}\nMax steps: {}\nInterval ms: {}",
+            prefix
+                .as_deref()
+                .map(|value| format!("{value}: "))
+                .unwrap_or_default(),
+            started.lab_run_id,
+            started.mode,
+            started.max_steps,
+            started.interval_ms
+        ),
+        Err(err) => {
+            let _ = LabStore::for_project(project_root)
+                .record_daemon_start_result(None, Some(&err.to_string()));
+            format!("Failed to start Lab daemon from policy: {err}")
+        }
+    }
+}
+
+async fn handle_lab_background_hybrid_command(
+    engine: &StreamingQueryEngine,
+    project_root: &std::path::Path,
+    args: &str,
+    tool_context: crate::tools::ToolContext,
+) -> String {
+    let (max_steps, interval_ms, instructions) = match parse_lab_background_hybrid_args(args) {
+        Ok(parsed) => parsed,
+        Err(message) => return message,
+    };
+    match crate::lab::scheduler::start_background_hybrid_scheduler(
+        project_root,
+        tool_context,
+        engine.provider(),
+        engine.model_name(),
+        max_steps,
+        interval_ms,
+        instructions.to_string(),
+    ) {
+        Ok(started) => format!(
+            "Started Lab hybrid background scheduler for {}.\nMax steps: {}\nInterval ms: {}",
+            started.lab_run_id, started.max_steps, started.interval_ms
+        ),
+        Err(err) => format!("Failed to start Lab hybrid background scheduler: {err}"),
+    }
+}
+
+async fn handle_lab_hybrid_run_command(
+    engine: &StreamingQueryEngine,
+    project_root: &std::path::Path,
+    args: &str,
+    tool_context: crate::tools::ToolContext,
+) -> String {
+    let (max_steps, instructions) = match parse_lab_run_args(args, "/lab run hybrid") {
+        Ok(parsed) => parsed,
+        Err(message) => return message,
+    };
+    match crate::lab::draft::run_hybrid_lab_steps_until_boundary(
+        project_root,
+        engine.provider(),
+        engine.model_name(),
+        max_steps,
+        instructions,
+        tool_context,
+    )
+    .await
+    {
+        Ok(outcome) => {
+            let mut lines = vec![
+                format!("Lab hybrid run: {} step(s)", outcome.steps.len()),
+                format!("LabRun: {}", outcome.lab_run_id),
+                format!("Final stage: {}", outcome.final_stage),
+                format!("Stop reason: {:?}", outcome.stop_reason),
+            ];
+            for (idx, step) in outcome.steps.iter().enumerate() {
+                match step {
+                    crate::lab::draft::LabHybridRunStep::Provider(step) => {
+                        lines.push(format!(
+                            "{}. provider {} -> {} artifact={} review={:?} advanced={} note={}",
+                            idx + 1,
+                            step.from_stage,
+                            step.to_stage,
+                            step.artifact_id,
+                            step.review_decision,
+                            step.advanced,
+                            step.review_note
+                        ));
+                    }
+                    crate::lab::draft::LabHybridRunStep::Scheduler(step) => {
+                        lines.push(format!(
+                            "{}. scheduler {:?} stage={} task={} dispatch={} - {}",
+                            idx + 1,
+                            step.action,
+                            step.stage,
+                            step.task_id.as_deref().unwrap_or("none"),
+                            step.dispatch_id.as_deref().unwrap_or("none"),
+                            step.message
+                        ));
+                    }
+                    crate::lab::draft::LabHybridRunStep::Deterministic(step) => {
+                        lines.push(format!(
+                            "{}. deterministic {} -> {} artifact={} gate_satisfied={} - {}",
+                            idx + 1,
+                            step.from_stage,
+                            step.to_stage,
+                            step.artifact_id,
+                            step.gate_satisfied,
+                            step.message
+                        ));
+                    }
+                }
+            }
+            lines.join("\n")
+        }
+        Err(err) => format!("Failed to run hybrid Lab stages: {err}"),
+    }
+}
+
+async fn handle_lab_provider_run_command(
+    engine: &StreamingQueryEngine,
+    project_root: &std::path::Path,
+    args: &str,
+) -> String {
+    let (max_steps, instructions) = match parse_lab_run_args(args, "/lab run llm") {
+        Ok(parsed) => parsed,
+        Err(message) => return message,
+    };
+    match crate::lab::draft::run_provider_stage_steps_until_boundary(
+        project_root,
+        engine.provider(),
+        engine.model_name(),
+        max_steps,
+        instructions,
+    )
+    .await
+    {
+        Ok(outcome) => {
+            let mut lines = vec![
+                format!("Lab provider run: {} step(s)", outcome.steps.len()),
+                format!("LabRun: {}", outcome.lab_run_id),
+                format!("Final stage: {}", outcome.final_stage),
+                format!("Stop reason: {:?}", outcome.stop_reason),
+            ];
+            for (idx, step) in outcome.steps.iter().enumerate() {
+                lines.push(format!(
+                    "{}. {} -> {} artifact={} review={:?} advanced={} note={}",
+                    idx + 1,
+                    step.from_stage,
+                    step.to_stage,
+                    step.artifact_id,
+                    step.review_decision,
+                    step.advanced,
+                    step.review_note
+                ));
+            }
+            lines.join("\n")
+        }
+        Err(err) => format!("Failed to run Lab provider stages: {err}"),
+    }
+}
+
+async fn handle_lab_provider_step_command(
+    engine: &StreamingQueryEngine,
+    project_root: &std::path::Path,
+    instructions: &str,
+) -> String {
+    match crate::lab::draft::run_provider_stage_step(
+        project_root,
+        engine.provider(),
+        engine.model_name(),
+        instructions,
+    )
+    .await
+    {
+        Ok(outcome) => [
+            "Lab provider stage step".to_string(),
+            format!("LabRun: {}", outcome.lab_run_id),
+            format!("Stage: {} -> {}", outcome.from_stage, outcome.to_stage),
+            format!("Artifact: {}", outcome.artifact_id),
+            format!("Review: {:?}", outcome.review_decision),
+            format!("Advanced: {}", outcome.advanced),
+            format!("Note: {}", outcome.review_note),
+        ]
+        .join("\n"),
+        Err(err) => format!("Failed to run Lab provider stage step: {err}"),
+    }
+}
+
+async fn handle_lab_artifact_review_command(
+    engine: &StreamingQueryEngine,
+    project_root: &std::path::Path,
+    args: &str,
+) -> String {
+    let (artifact_id, instructions) = split_once_local(args);
+    if artifact_id.trim().is_empty() {
+        return "Usage: /lab review artifact <artifact_id> [instructions]".to_string();
+    }
+    match crate::lab::draft::review_stage_artifact_with_provider(
+        project_root,
+        engine.provider(),
+        engine.model_name(),
+        artifact_id,
+        instructions,
+    )
+    .await
+    {
+        Ok(outcome) => {
+            let mut lines = vec![
+                format!("Reviewed artifact: {}", outcome.artifact_id),
+                format!("Decision: {:?}", outcome.decision),
+                format!("Gate: {}", outcome.gate.stage),
+                format!("Note: {}", outcome.note),
+            ];
+            if let Some(usage) = outcome.usage {
+                lines.push(format!(
+                    "Usage: prompt={} completion={} total={} cached={} cache_write={}",
+                    usage.prompt_tokens,
+                    usage.completion_tokens,
+                    usage.total_tokens,
+                    usage.cached_tokens.unwrap_or(0),
+                    usage.cache_write_tokens.unwrap_or(0)
+                ));
+            }
+            lines.join("\n")
+        }
+        Err(err) => format!("Failed to review Lab artifact: {err}"),
+    }
+}
+
+async fn handle_lab_draft_command(
+    engine: &StreamingQueryEngine,
+    project_root: &std::path::Path,
+    instructions: &str,
+) -> String {
+    match crate::lab::draft::draft_current_stage_artifact(
+        project_root,
+        engine.provider(),
+        engine.model_name(),
+        instructions,
+    )
+    .await
+    {
+        Ok(outcome) => {
+            let mut lines = vec![
+                format!(
+                    "Drafted {} artifact: {}",
+                    outcome.created.artifact.artifact_type().as_str(),
+                    outcome.created.artifact.artifact_id()
+                ),
+                format!("Gate satisfied for stage '{}'.", outcome.created.gate.stage),
+                format!("Artifact: {}", outcome.created.path.display()),
+                format!("Report: {}", outcome.created.report_path.display()),
+            ];
+            if let Some(usage) = outcome.usage {
+                lines.push(format!(
+                    "Usage: prompt={} completion={} total={} cached={} cache_write={}",
+                    usage.prompt_tokens,
+                    usage.completion_tokens,
+                    usage.total_tokens,
+                    usage.cached_tokens.unwrap_or(0),
+                    usage.cache_write_tokens.unwrap_or(0)
+                ));
+            }
+            lines.join("\n")
+        }
+        Err(err) => format!("Failed to draft Lab artifact: {err}"),
+    }
+}
+
+fn split_once_local(input: &str) -> (&str, &str) {
+    let trimmed = input.trim();
+    match trimmed.find(char::is_whitespace) {
+        Some(idx) => (&trimmed[..idx], trimmed[idx..].trim()),
+        None => (trimmed, ""),
+    }
+}
+
+fn parse_lab_run_args<'a>(args: &'a str, command: &str) -> Result<(usize, &'a str), String> {
+    let trimmed = args.trim();
+    if trimmed.is_empty() {
+        return Ok((5, ""));
+    }
+    let (first, rest) = split_once_local(trimmed);
+    match first.parse::<usize>() {
+        Ok(max_steps) if max_steps > 0 => Ok((max_steps, rest)),
+        Ok(_) => Err(format!("Usage: {command} [max_steps] [instructions]")),
+        Err(_) => Ok((5, trimmed)),
+    }
+}
+
+fn parse_lab_background_hybrid_args(args: &str) -> Result<(usize, u64, &str), String> {
+    let trimmed = args.trim();
+    let default_max_steps = crate::lab::scheduler::default_background_max_steps();
+    let default_interval_ms = crate::lab::scheduler::default_background_interval_ms();
+    if trimmed.is_empty() {
+        return Ok((default_max_steps, default_interval_ms, ""));
+    }
+
+    let (first, rest) = split_once_local(trimmed);
+    let max_steps = match first.parse::<usize>() {
+        Ok(value) if value > 0 => value,
+        Ok(_) => {
+            return Err(
+                "Usage: /lab background hybrid [max_steps] [interval_ms] [instructions]"
+                    .to_string(),
+            );
+        }
+        Err(_) => return Ok((default_max_steps, default_interval_ms, trimmed)),
+    };
+
+    let rest = rest.trim();
+    if rest.is_empty() {
+        return Ok((max_steps, default_interval_ms, ""));
+    }
+    let (second, instructions) = split_once_local(rest);
+    let interval_ms = match second.parse::<u64>() {
+        Ok(value) if value > 0 => value,
+        Ok(_) => {
+            return Err(
+                "Usage: /lab background hybrid [max_steps] [interval_ms] [instructions]"
+                    .to_string(),
+            );
+        }
+        Err(_) => return Ok((max_steps, default_interval_ms, rest)),
+    };
+    Ok((max_steps, interval_ms, instructions))
 }
 
 fn handle_attach_command(
@@ -1108,6 +1664,63 @@ mod tests {
     use super::*;
     use crate::shell::surface::TestSurface;
     use crate::shell::test_support::{test_cli_host, test_engine};
+
+    #[test]
+    fn parse_lab_background_hybrid_args_supports_numeric_prefixes_and_instructions() {
+        let (steps, interval, instructions) =
+            parse_lab_background_hybrid_args("7 250 refine professor plan").unwrap();
+        assert_eq!(steps, 7);
+        assert_eq!(interval, 250);
+        assert_eq!(instructions, "refine professor plan");
+
+        let (steps, interval, instructions) =
+            parse_lab_background_hybrid_args("refine professor plan").unwrap();
+        assert_eq!(steps, crate::lab::scheduler::default_background_max_steps());
+        assert_eq!(
+            interval,
+            crate::lab::scheduler::default_background_interval_ms()
+        );
+        assert_eq!(instructions, "refine professor plan");
+
+        let (steps, interval, instructions) =
+            parse_lab_background_hybrid_args("3 refine professor plan").unwrap();
+        assert_eq!(steps, 3);
+        assert_eq!(
+            interval,
+            crate::lab::scheduler::default_background_interval_ms()
+        );
+        assert_eq!(instructions, "refine professor plan");
+    }
+
+    #[test]
+    fn lab_welcome_hint_reflects_intake_proposal_and_active_run() {
+        let temp = tempfile::tempdir().unwrap();
+
+        let empty = lab_welcome_hint(temp.path());
+        assert!(empty.contains("Professor intake ready"));
+        assert!(empty.contains("/lab propose <idea>"));
+
+        let store = LabStore::for_project(temp.path());
+        let proposal = store.create_proposal("Build Lab Mode", None).unwrap();
+        let proposed = lab_welcome_hint(temp.path());
+        assert!(proposed.contains(&proposal.proposal_id));
+        assert!(proposed.contains("approve with /lab approve"));
+
+        let run = store.approve_proposal(&proposal.proposal_id).unwrap();
+        let active = lab_welcome_hint(temp.path());
+        assert!(active.contains(&run.lab_run_id));
+        assert!(active.contains("stage=professor_discussion"));
+        assert!(active.contains("/lab dashboard"));
+        assert!(active.contains("/lab recovery"));
+
+        let paused = store.pause_latest_run_for_shutdown().unwrap().unwrap();
+        let recover = lab_welcome_hint(temp.path());
+        assert!(recover.contains(&paused.lab_run_id));
+        assert!(recover.contains("Recover LabRun"));
+        assert!(recover.contains("/lab resume"));
+        assert!(recover.contains("/lab recovery"));
+    }
+
     #[tokio::test]
     async fn handle_help_command_prints_commands() {
         let engine = test_engine();

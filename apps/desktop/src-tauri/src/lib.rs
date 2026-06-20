@@ -173,6 +173,10 @@ struct DesktopSettingsResponse {
 struct DesktopStartupState {
     status: &'static str,
     detail: String,
+    lab_run_id: Option<String>,
+    lab_stage: Option<String>,
+    lab_owner: Option<String>,
+    lab_pause_reason: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -204,6 +208,13 @@ struct DesktopDiagnosticsResponse {
 }
 
 #[derive(Debug, Serialize)]
+struct DesktopLabDaemonActionResult {
+    action: &'static str,
+    output: String,
+    lab_status: DesktopLabStatusSnapshot,
+}
+
+#[derive(Debug, Serialize)]
 struct DesktopExportResult {
     session_id: String,
     path: String,
@@ -214,7 +225,7 @@ struct DesktopExportResult {
 #[derive(Debug, Serialize)]
 struct ProviderSetupInfo {
     shell_profile_path: String,
-    provider_env_vars: Vec<&'static str>,
+    provider_env_vars: Vec<String>,
     example: &'static str,
 }
 
@@ -495,6 +506,7 @@ async fn export_session(
         session_id.clone(),
         session.title,
         &session.model,
+        session.workspace_root.as_deref(),
     )
     .map_err(|err| err.to_string())?;
     let path = manager
@@ -1224,6 +1236,10 @@ fn desktop_stream_event_log(event: &StreamEvent) -> Option<String> {
             sanitize_log_value(id),
             result.chars().count()
         )),
+        StreamEvent::ToolResultsReadyForModel { ids } => Some(format!(
+            "stream_event tool_results_ready_for_model count={}",
+            ids.len()
+        )),
         StreamEvent::PermissionRequest { id, tool_name, .. } => Some(format!(
             "stream_event permission_request id={} tool={}",
             sanitize_log_value(id),
@@ -1234,14 +1250,19 @@ fn desktop_stream_event_log(event: &StreamEvent) -> Option<String> {
             completion_tokens,
             reasoning_tokens,
             cached_tokens,
+            cache_write_tokens,
         } => Some(format!(
-            "stream_event usage prompt_tokens={} completion_tokens={} reasoning_tokens={} cached_tokens={}",
+            "stream_event usage prompt_tokens={} completion_tokens={} reasoning_tokens={} cached_tokens={} cache_write_tokens={}",
             prompt_tokens,
             completion_tokens,
             reasoning_tokens
                 .map(|value| value.to_string())
                 .unwrap_or_else(|| "none".to_string()),
             cached_tokens
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "none".to_string())
+            ,
+            cache_write_tokens
                 .map(|value| value.to_string())
                 .unwrap_or_else(|| "none".to_string())
         )),
@@ -1350,6 +1371,11 @@ async fn desktop_workbench_snapshot(
             None => None,
         }
     };
+    let active_session_id = state.active_session_id.lock().await.clone();
+    let subagent_tasks = match open_session_store() {
+        Ok(store) => desktop_subagent_tasks_for_session(&store, active_session_id.as_deref()),
+        Err(_) => Vec::new(),
+    };
 
     Ok(DesktopWorkbenchSnapshot {
         selected_project: selected_project.display().to_string(),
@@ -1361,7 +1387,29 @@ async fn desktop_workbench_snapshot(
             truncated: index.truncated,
         },
         runtime_context,
+        lab_status: desktop_lab_status_for_project(&selected_project),
+        subagent_tasks,
     })
+}
+
+#[tauri::command]
+async fn lab_daemon_supervise(
+    state: State<'_, DesktopAppState>,
+) -> Result<DesktopLabDaemonActionResult, String> {
+    let selected_project = state.selected_project.lock().await.clone();
+    Ok(desktop_lab_daemon_supervise_for_project(&selected_project))
+}
+
+fn desktop_lab_daemon_supervise_for_project(
+    project: &std::path::Path,
+) -> DesktopLabDaemonActionResult {
+    let output =
+        priority_agent::lab::commands::handle_lab_command(project, None, "daemon service supervise");
+    DesktopLabDaemonActionResult {
+        action: "supervise",
+        output,
+        lab_status: desktop_lab_status_for_project(project),
+    }
 }
 
 #[tauri::command]
@@ -1669,6 +1717,7 @@ async fn emit_native_smoke_permission_resolution(
                 completion_tokens: 18,
                 reasoning_tokens: Some(4),
                 cached_tokens: Some(8),
+                cache_write_tokens: Some(12),
             },
             DesktopRunEvent::RunCompleted,
         ];
@@ -2028,6 +2077,7 @@ pub fn run() {
             compact_context,
             desktop_context_snapshot,
             desktop_workbench_snapshot,
+            lab_daemon_supervise,
             desktop_run_context_detail,
             answer_permission,
             goal_status,

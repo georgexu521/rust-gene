@@ -9,6 +9,7 @@ fn test_command_lookup() {
     assert!(registry.get("/tool").is_some()); // alias
     assert!(registry.get("/panel").is_some());
     assert!(registry.get("/runtime").is_some()); // alias
+    assert!(registry.get("/lab").is_some());
     assert!(registry.get("/quit").is_some());
     assert!(registry.get("/exit").is_some()); // alias
     assert!(registry.get("/nonexistent").is_none());
@@ -20,6 +21,9 @@ fn test_help_text() {
     let help = registry.help_text();
     assert!(help.contains("/help"));
     assert!(help.contains("/cost"));
+    assert!(
+        help.contains("/panel [all|diff|approval|hooks|context|tasks|agents|mcp|bridge|trace|lab]")
+    );
     assert!(help.contains("General:"));
     assert!(help.contains("Memory:"));
     assert!(help.contains("[production]"));
@@ -59,6 +63,11 @@ fn test_command_maturity_labels_are_explicit() {
         registry.get("/tool").map(|cmd| cmd.maturity),
         Some(CommandMaturity::Usable)
     );
+    assert_eq!(
+        registry.get("/lab").map(|cmd| cmd.maturity),
+        Some(CommandMaturity::Production)
+    );
+    assert_eq!(registry.get("/lab").map(|cmd| cmd.placeholder), Some(false));
     assert_eq!(
         registry.get("/desktop").map(|cmd| cmd.maturity),
         Some(CommandMaturity::Placeholder)
@@ -150,6 +159,24 @@ fn test_palette_items_support_subsequence_query() {
     let registry = default_command_registry();
     let items = registry.palette_items("prv", 20, &[]);
     assert!(items.iter().any(|cmd| cmd.name == "/provider"));
+}
+
+#[test]
+fn test_palette_items_include_lab_workflow_commands() {
+    let registry = default_command_registry();
+    let lab_items = registry.palette_items("lab", 20, &[]);
+    assert_eq!(lab_items.first().map(|cmd| cmd.name), Some("/lab"));
+
+    let meeting_items = registry.palette_items("meeting", 20, &[]);
+    assert!(meeting_items.iter().any(|cmd| cmd.name == "/lab"));
+
+    let recovery_items = registry.palette_items("recovery", 20, &[]);
+    assert!(recovery_items.iter().any(|cmd| cmd.name == "/lab"));
+
+    assert_eq!(
+        registry.get("/lab").map(command_accept_behavior),
+        Some(CommandAcceptBehavior::Execute)
+    );
 }
 
 #[test]

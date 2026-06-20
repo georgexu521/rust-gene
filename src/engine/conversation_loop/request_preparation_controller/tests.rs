@@ -1,6 +1,9 @@
 use super::*;
 use crate::engine::task_contract::TaskContractBundleExt;
 use crate::engine::trace::{TraceEvent, TurnTrace};
+use crate::lab::model::{LabCompressionAction, StageArtifact};
+use crate::lab::orchestrator::LabOrchestrator;
+use crate::lab::store::LabStore;
 
 fn tool(name: &str) -> Tool {
     Tool {
@@ -20,6 +23,7 @@ async fn prepare_wraps_focused_prompt_as_dynamic_recent_observation() {
     let prepared = RequestPreparationController::prepare(RequestPreparationContext {
         messages: &[Message::user("change src/lib.rs")],
         working_dir: std::path::Path::new("."),
+        lab_context_enabled: false,
         focused_repair_prompt: Some(focused_prompt),
         agent_task_state: None,
         task_contract: None,
@@ -60,6 +64,10 @@ async fn prepare_wraps_focused_prompt_as_dynamic_recent_observation() {
         Some(Message::User { content }) if content.contains("change src/lib.rs")
     ));
     assert_eq!(prepared.request.tools.as_ref().map(Vec::len), Some(2));
+    assert!(matches!(
+        prepared.request.tool_choice,
+        Some(ToolChoice::Auto)
+    ));
     assert_eq!(runtime_diet.exposed_tools, 2);
     assert!(runtime_diet.total_request_tokens > 0);
 
@@ -79,6 +87,7 @@ async fn prepare_skips_memory_prefetch_without_memory_manager() {
     let prepared = RequestPreparationController::prepare(RequestPreparationContext {
         messages: &[Message::user("remembered context should not be injected")],
         working_dir: std::path::Path::new("."),
+        lab_context_enabled: false,
         focused_repair_prompt: None,
         agent_task_state: None,
         task_contract: None,
@@ -110,6 +119,161 @@ async fn prepare_skips_memory_prefetch_without_memory_manager() {
 }
 
 #[tokio::test]
+async fn prepare_injects_lab_context_only_when_enabled() {
+    let temp = tempfile::tempdir().unwrap();
+    let store = LabStore::for_project(temp.path());
+    let proposal = store.create_proposal("Build LabRun", None).unwrap();
+    let run = store.approve_proposal(&proposal.proposal_id).unwrap();
+    let orchestrator = LabOrchestrator::for_project(temp.path());
+    let created = orchestrator
+        .create_current_stage_artifact_for_latest("Initial professor direction")
+        .unwrap();
+    let trace = TraceCollector::new(TurnTrace::new(
+        "session-test".to_string(),
+        1,
+        "continue lab",
+    ));
+    let mut runtime_diet = RuntimeDietSnapshot::new(true);
+    let tools = vec![tool("file_read")];
+
+    let prepared = RequestPreparationController::prepare(RequestPreparationContext {
+        messages: &[Message::user("continue")],
+        working_dir: temp.path(),
+        lab_context_enabled: true,
+        focused_repair_prompt: None,
+        agent_task_state: None,
+        task_contract: None,
+        context_pack: None,
+        turn_retrieval_context: None,
+        retrieval_policy: RetrievalPolicy::None,
+        memory_manager: None,
+        provider: None,
+        session_store: None,
+        session_id: "session-test",
+        model: "test-model",
+        temperature: 0.2,
+        tools: &tools,
+        trace: &trace,
+        runtime_diet: &mut runtime_diet,
+        inject_dynamic_context: true,
+        consecutive_repairs: &mut 0,
+    })
+    .await;
+
+    assert!(matches!(
+        prepared.request.messages.last(),
+        Some(Message::User { content })
+            if content.contains("<lab-context>")
+                && content.contains(&run.lab_run_id)
+                && content.contains("current_stage: professor_discussion")
+                && content.contains("stable_prefix:")
+                && content.contains("dynamic_tail:")
+                && content.contains("compression_decision:")
+                && content.contains("L6 artifact-and-gate-evidence-refs")
+                && content.contains("gate:professor_discussion:ProfessorPlan")
+                && content.contains(created.path.to_string_lossy().as_ref())
+                && content.contains("continue")
+    ));
+    let decisions = store.list_compression_decisions(&run.lab_run_id).unwrap();
+    assert_eq!(decisions.len(), 1);
+    assert_eq!(decisions[0].role, run.internal_owner);
+}
+
+#[tokio::test]
+async fn prepare_auto_writes_lab_compression_summary_once_per_cycle() {
+    let temp = tempfile::tempdir().unwrap();
+    let store = LabStore::for_project(temp.path());
+    let proposal = store.create_proposal("Build LabRun", None).unwrap();
+    let mut run = store.approve_proposal(&proposal.proposal_id).unwrap();
+    run.cost_policy.professor_context_budget = 10;
+    store.save_run(&run).unwrap();
+    let trace = TraceCollector::new(TurnTrace::new(
+        "session-test".to_string(),
+        1,
+        "continue lab",
+    ));
+    let mut runtime_diet = RuntimeDietSnapshot::new(true);
+    let tools = vec![tool("file_read")];
+
+    let first = RequestPreparationController::prepare(RequestPreparationContext {
+        messages: &[Message::user("continue")],
+        working_dir: temp.path(),
+        lab_context_enabled: true,
+        focused_repair_prompt: None,
+        agent_task_state: None,
+        task_contract: None,
+        context_pack: None,
+        turn_retrieval_context: None,
+        retrieval_policy: RetrievalPolicy::None,
+        memory_manager: None,
+        provider: None,
+        session_store: None,
+        session_id: "session-test",
+        model: "test-model",
+        temperature: 0.2,
+        tools: &tools,
+        trace: &trace,
+        runtime_diet: &mut runtime_diet,
+        inject_dynamic_context: true,
+        consecutive_repairs: &mut 0,
+    })
+    .await;
+
+    assert!(matches!(
+        first.request.messages.last(),
+        Some(Message::User { content })
+            if content.contains("compression_decision:")
+                && content.contains("action=Required")
+                && content.contains("auto_compression_artifact:")
+    ));
+    let artifacts = store.list_stage_artifacts(&run.lab_run_id).unwrap();
+    let compression_summaries = artifacts
+        .iter()
+        .filter_map(|artifact| match artifact {
+            StageArtifact::CompressionSummary(summary) => Some(summary),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(compression_summaries.len(), 1);
+    assert_eq!(
+        compression_summaries[0].body.action,
+        LabCompressionAction::Required
+    );
+
+    let mut second_runtime_diet = RuntimeDietSnapshot::new(true);
+    RequestPreparationController::prepare(RequestPreparationContext {
+        messages: &[Message::user("continue again")],
+        working_dir: temp.path(),
+        lab_context_enabled: true,
+        focused_repair_prompt: None,
+        agent_task_state: None,
+        task_contract: None,
+        context_pack: None,
+        turn_retrieval_context: None,
+        retrieval_policy: RetrievalPolicy::None,
+        memory_manager: None,
+        provider: None,
+        session_store: None,
+        session_id: "session-test",
+        model: "test-model",
+        temperature: 0.2,
+        tools: &tools,
+        trace: &trace,
+        runtime_diet: &mut second_runtime_diet,
+        inject_dynamic_context: true,
+        consecutive_repairs: &mut 0,
+    })
+    .await;
+
+    let artifacts = store.list_stage_artifacts(&run.lab_run_id).unwrap();
+    let compression_count = artifacts
+        .iter()
+        .filter(|artifact| matches!(artifact, StageArtifact::CompressionSummary(_)))
+        .count();
+    assert_eq!(compression_count, 1);
+}
+
+#[tokio::test]
 async fn prepare_quiet_direct_skips_dynamic_context_injections() {
     let trace = TraceCollector::new(TurnTrace::new("session-quiet".to_string(), 1, "你好"));
     let mut runtime_diet = RuntimeDietSnapshot::new(true);
@@ -117,6 +281,7 @@ async fn prepare_quiet_direct_skips_dynamic_context_injections() {
     let prepared = RequestPreparationController::prepare(RequestPreparationContext {
         messages: &[Message::user("你好")],
         working_dir: std::path::Path::new("."),
+        lab_context_enabled: false,
         focused_repair_prompt: Some(Message::system("repair prompt should be skipped")),
         agent_task_state: None,
         task_contract: None,
@@ -192,6 +357,7 @@ async fn prepare_injects_context_ledger_hint_before_user_message() {
     let prepared = RequestPreparationController::prepare(RequestPreparationContext {
         messages: &[Message::user("summarize README")],
         working_dir: std::path::Path::new("."),
+        lab_context_enabled: false,
         focused_repair_prompt: None,
         agent_task_state: None,
         task_contract: None,
@@ -237,6 +403,7 @@ async fn prepare_records_relevant_material_without_counting_it_as_stable_prefix(
             Message::user("use retrieved context"),
         ],
         working_dir: std::path::Path::new("."),
+        lab_context_enabled: false,
         focused_repair_prompt: None,
         agent_task_state: None,
         task_contract: None,
@@ -294,6 +461,7 @@ async fn prepare_merges_dynamic_zone_messages_into_single_envelope() {
             Message::user("use retrieved context"),
         ],
         working_dir: std::path::Path::new("."),
+        lab_context_enabled: false,
         focused_repair_prompt: None,
         agent_task_state: None,
         task_contract: None,
@@ -365,6 +533,7 @@ async fn prepare_does_not_consume_stable_prompt_that_mentions_zone_tags() {
             Message::user("use retrieved context"),
         ],
         working_dir: std::path::Path::new("."),
+        lab_context_enabled: false,
         focused_repair_prompt: None,
         agent_task_state: None,
         task_contract: None,
@@ -432,6 +601,7 @@ async fn prepare_keeps_hostile_retrieved_content_fenced_out_of_stable_prefix() {
             Message::user("inspect retrieved context"),
         ],
         working_dir: std::path::Path::new("."),
+        lab_context_enabled: false,
         focused_repair_prompt: None,
         agent_task_state: None,
         task_contract: None,
@@ -572,6 +742,7 @@ async fn prepare_injects_structured_tool_evidence_from_context_ledger() {
     let prepared = RequestPreparationController::prepare(RequestPreparationContext {
         messages: &[Message::user("continue changes")],
         working_dir: std::path::Path::new("."),
+        lab_context_enabled: false,
         focused_repair_prompt: None,
         agent_task_state: None,
         task_contract: None,
@@ -624,6 +795,7 @@ async fn prepare_injects_task_state_after_stable_system_prompt() {
             Message::user("change"),
         ],
         working_dir: std::path::Path::new("."),
+        lab_context_enabled: false,
         focused_repair_prompt: None,
         agent_task_state: Some(&task_bundle.agent_state),
         task_contract: None,
@@ -685,6 +857,7 @@ async fn prepare_places_dynamic_task_zones_at_tail_after_history() {
             Message::user("next change"),
         ],
         working_dir: std::path::Path::new("."),
+        lab_context_enabled: false,
         focused_repair_prompt: None,
         agent_task_state: Some(&task_bundle.agent_state),
         task_contract: Some(&contract),
@@ -779,6 +952,7 @@ async fn prepare_keeps_stable_prefix_fingerprint_when_dynamic_task_context_chang
             Message::user("next"),
         ],
         working_dir: std::path::Path::new("."),
+        lab_context_enabled: false,
         focused_repair_prompt: None,
         agent_task_state: Some(&task_a.agent_state),
         task_contract: Some(&contract_a),
@@ -817,6 +991,7 @@ async fn prepare_keeps_stable_prefix_fingerprint_when_dynamic_task_context_chang
             Message::user("next"),
         ],
         working_dir: std::path::Path::new("."),
+        lab_context_enabled: false,
         focused_repair_prompt: None,
         agent_task_state: Some(&task_b.agent_state),
         task_contract: Some(&contract_b),
@@ -909,6 +1084,7 @@ async fn prepare_sorts_provider_tools_for_schema_cache_stability() {
     let prepared = RequestPreparationController::prepare(RequestPreparationContext {
         messages: &[Message::user("use tools")],
         working_dir: std::path::Path::new("."),
+        lab_context_enabled: false,
         focused_repair_prompt: None,
         agent_task_state: None,
         task_contract: None,
@@ -968,6 +1144,7 @@ async fn prepare_treats_self_evolution_guidance_as_dynamic_context() {
             Message::user("run validation"),
         ],
         working_dir: std::path::Path::new("."),
+        lab_context_enabled: false,
         focused_repair_prompt: None,
         agent_task_state: None,
         task_contract: None,
@@ -1027,6 +1204,7 @@ async fn prepare_injects_task_contract_and_context_pack_for_executor() {
             Message::user("change"),
         ],
         working_dir: std::path::Path::new("."),
+        lab_context_enabled: false,
         focused_repair_prompt: None,
         agent_task_state: Some(&task_bundle.agent_state),
         task_contract: Some(&contract),

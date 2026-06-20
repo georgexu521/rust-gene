@@ -786,7 +786,7 @@ h1 {
 
 .workbench-metrics {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 8px;
 }
 
@@ -837,13 +837,15 @@ h1 {
 
 .workbench-body {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(260px, 0.9fr);
+  grid-template-columns: minmax(0, 1fr) minmax(220px, 0.7fr) minmax(260px, 0.9fr);
   gap: 10px;
   min-height: 0;
   overflow: hidden;
 }
 
 .workbench-map,
+.workbench-lab,
+.workbench-subagents,
 .workbench-index {
   min-width: 0;
   min-height: 0;
@@ -852,6 +854,105 @@ h1 {
   border-radius: 8px;
   background: #ffffff;
   overflow: hidden;
+}
+
+.workbench-lab-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 190px;
+  overflow: auto;
+}
+
+.workbench-lab-row {
+  display: grid;
+  grid-template-columns: 64px minmax(0, 1fr);
+  gap: 8px;
+  align-items: center;
+  min-width: 0;
+}
+
+.workbench-lab-row span,
+.workbench-lab-row strong,
+.workbench-lab-grid p,
+.workbench-lab-grid code {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workbench-lab-row span {
+  color: #7a8490;
+  font-size: 11px;
+  font-weight: 760;
+}
+
+.workbench-agent-tools {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  min-width: 0;
+  margin-top: 4px;
+}
+
+.workbench-agent-tools code {
+  max-width: 96px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workbench-lab-row strong {
+  color: #252a31;
+  font-size: 12px;
+}
+
+.workbench-lab-grid p {
+  margin: 2px 0 0;
+  color: #68717d;
+  font-size: 11px;
+}
+
+.workbench-lab-actions {
+  display: grid;
+  grid-template-columns: repeat(4, 28px);
+  gap: 6px;
+  align-items: center;
+}
+
+.workbench-lab-actions button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 26px;
+  border: 1px solid #d9e1ea;
+  border-radius: 7px;
+  color: #334155;
+  background: #f8fafc;
+  cursor: pointer;
+}
+
+.workbench-lab-actions button:hover {
+  border-color: #b7c4d1;
+  background: #eef4f9;
+}
+
+.workbench-lab-blockers {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.workbench-lab-grid code {
+  display: block;
+  padding: 3px 5px;
+  border-radius: 5px;
+  color: #38414c;
+  background: #eef2f6;
+  font-size: 10px;
 }
 
 .workbench-section-title {
@@ -972,7 +1073,6 @@ h1 {
   color: #4d5662;
   background: #fbfcfd;
   font-size: 12px;
-  pointer-events: none;
 }
 
 .startup-state-card span {
@@ -997,6 +1097,41 @@ h1 {
 .startup-state-card.restored_session span {
   color: #326147;
   background: #eaf7ef;
+}
+
+.startup-state-card.lab_recovery {
+  border-color: #d7cdb7;
+  background: #fffdf7;
+}
+
+.startup-state-card.lab_recovery span {
+  color: #6d541f;
+  background: #f7edd3;
+}
+
+.startup-state-actions {
+  display: inline-flex;
+  flex: 0 0 auto;
+  gap: 6px;
+  margin-left: auto;
+}
+
+.startup-state-actions button {
+  min-width: 78px;
+  height: 26px;
+  padding: 0 8px;
+  border: 1px solid #d8dfE7;
+  border-radius: 7px;
+  color: #394552;
+  background: #ffffff;
+  font-size: 11px;
+  font-weight: 740;
+  cursor: pointer;
+}
+
+.startup-state-actions button:hover {
+  border-color: #bec8d4;
+  background: #f4f7fa;
 }
 
 .workspace:has(.composer-menu-open) .startup-state-card {

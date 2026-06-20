@@ -62,6 +62,7 @@ fn test_pure_text_flow() {
     let result = run_loop(&rt, lp, "hello");
     assert_eq!(result.content, "Hello! I'm ready to help.");
     assert!(!result.tool_calls_made);
+    assert!(result.tools_used.is_empty());
     assert_eq!(result.iterations, 1);
 }
 
@@ -86,6 +87,7 @@ fn test_file_read_flow() {
         &format!("read {} and review the code", test_file.display()),
     );
     assert!(result.tool_calls_made);
+    assert_eq!(result.tools_used, vec!["file_read"]);
     assert!(result.iterations > 1, "iterations={}", result.iterations);
 }
 
@@ -106,6 +108,7 @@ fn test_multi_tool_flow() {
     let result = run_loop(&rt, lp, "read Cargo.toml and find main function");
 
     assert!(result.tool_calls_made);
+    assert_eq!(result.tools_used, vec!["file_read", "grep"]);
     assert!(result.iterations >= 2, "iterations={}", result.iterations);
     assert!(!result.content.is_empty());
 }
@@ -121,6 +124,7 @@ fn test_tool_failure_recovery() {
     let result = run_loop(&rt, lp, "read the missing file and recover if needed");
 
     assert!(result.tool_calls_made);
+    assert_eq!(result.tools_used, vec!["file_read"]);
     assert!(result.iterations >= 2, "iterations={}", result.iterations);
     assert!(result.content.contains("recovered"));
 }

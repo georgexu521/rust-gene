@@ -9,9 +9,11 @@ use super::ConversationLoop;
 use crate::engine::hooks::HookDecision;
 use crate::engine::streaming::{emit_text_progressively, StreamEvent};
 use crate::engine::trace::{TraceCollector, TurnStatus};
+use crate::lab::model::LabRunStatus;
+use crate::lab::store::{LabCostTokens, LabStore};
 use crate::services::api::provider_protocol::ProviderCapabilities;
 use crate::services::api::tool_call_repair::ToolCallRepairReport;
-use crate::services::api::{ChatRequest, ChatResponse, ToolCall, Usage};
+use crate::services::api::{ChatRequest, ChatResponse, ToolCall, ToolChoice, Usage};
 use crate::tools::ToolResult;
 use anyhow::Result;
 use futures::StreamExt;
@@ -219,7 +221,10 @@ impl ConversationLoop {
             .with_output_cap(Some(8192));
         let default_timeout = llm_request_timeout();
         let (response, cache_shape) = if let Some(tools) = fallback_tools.clone() {
-            let request_with_tools = base_request.clone().with_tools(tools);
+            let request_with_tools = base_request
+                .clone()
+                .with_tools(tools)
+                .with_tool_choice(ToolChoice::Auto);
             match self
                 .provider_chat_with_timeout(
                     request_with_tools.clone(),
@@ -736,17 +741,76 @@ impl ConversationLoop {
         cache_shape: Option<crate::engine::cache_stability::CacheDiagnosticShape>,
         metadata: Option<crate::cost_tracker::ApiUsageMetadata>,
     ) {
-        let mut tracker = self.cost_tracker.lock().await;
-        tracker.record_api_call_with_session_cache_shape_metadata_and_cache_write(
-            Some(&self.session_id),
+        let provider = metadata
+            .as_ref()
+            .and_then(|metadata| metadata.provider.clone());
+        let cost_delta = {
+            let mut tracker = self.cost_tracker.lock().await;
+            let before_cost = tracker.estimated_cost_usd;
+            tracker.record_api_call_with_session_cache_shape_metadata_and_cache_write(
+                Some(&self.session_id),
+                &self.model,
+                usage.prompt_tokens as u64,
+                usage.completion_tokens as u64,
+                usage.cached_tokens.map(|t| t as u64),
+                usage.cache_write_tokens.map(|t| t as u64),
+                cache_shape,
+                metadata,
+            );
+            (tracker.estimated_cost_usd - before_cost).max(0.0)
+        };
+        if let Err(err) = self.record_lab_usage_from_provider(usage, cost_delta, provider) {
+            debug!("failed to record LabRun provider usage: {}", err);
+        }
+    }
+
+    fn record_lab_usage_from_provider(
+        &self,
+        usage: &Usage,
+        estimated_cost_usd: f64,
+        provider: Option<String>,
+    ) -> anyhow::Result<()> {
+        let project_root = self
+            .working_dir_override
+            .clone()
+            .or_else(|| std::env::current_dir().ok())
+            .unwrap_or_else(|| std::path::PathBuf::from("."));
+        let store = LabStore::for_project(&project_root);
+        let Some(run) = store.latest_run()? else {
+            return Ok(());
+        };
+        if matches!(
+            run.status,
+            LabRunStatus::Completed | LabRunStatus::Cancelled | LabRunStatus::Failed
+        ) {
+            return Ok(());
+        }
+        let note = provider
+            .as_deref()
+            .map(|provider| {
+                format!(
+                    "auto_provider_usage session={} provider={}",
+                    self.session_id, provider
+                )
+            })
+            .unwrap_or_else(|| format!("auto_provider_usage session={}", self.session_id));
+        store.record_cost_usage(
+            &run.lab_run_id,
+            run.internal_owner,
             &self.model,
-            usage.prompt_tokens as u64,
-            usage.completion_tokens as u64,
-            usage.cached_tokens.map(|t| t as u64),
-            usage.cache_write_tokens.map(|t| t as u64),
-            cache_shape,
-            metadata,
-        );
+            LabCostTokens {
+                prompt_tokens: usage.prompt_tokens as u64,
+                completion_tokens: usage.completion_tokens as u64,
+                reasoning_tokens: usage.reasoning_tokens.unwrap_or(0) as u64,
+                cached_tokens: usage.cached_tokens.unwrap_or(0) as u64,
+                cache_write_tokens: usage.cache_write_tokens.unwrap_or(0) as u64,
+                cycle_id: Some(run.cycle_count.to_string()),
+                meeting_id: None,
+            },
+            estimated_cost_usd,
+            Some(&note),
+        )?;
+        Ok(())
     }
 
     pub(super) async fn finish_trace(&self, trace: TraceCollector, status: TurnStatus) {
@@ -778,7 +842,36 @@ impl ConversationLoop {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::services::api::Message;
+    use crate::services::api::{ChatResponse, LlmProvider, Message};
+    use crate::tools::ToolRegistry;
+    use async_openai::types::ChatCompletionResponseStream;
+    use std::sync::Arc;
+
+    struct NoopProvider;
+
+    #[async_trait::async_trait]
+    impl LlmProvider for NoopProvider {
+        async fn chat(&self, _request: ChatRequest) -> anyhow::Result<ChatResponse> {
+            Err(anyhow::anyhow!("chat not used in session processor tests"))
+        }
+
+        async fn chat_stream(
+            &self,
+            _request: ChatRequest,
+        ) -> anyhow::Result<ChatCompletionResponseStream> {
+            Err(anyhow::anyhow!(
+                "chat_stream not used in session processor tests"
+            ))
+        }
+
+        fn base_url(&self) -> &str {
+            "https://api.openai.com/v1"
+        }
+
+        fn default_model(&self) -> &str {
+            "gpt-test"
+        }
+    }
 
     #[test]
     fn cache_shape_for_request_captures_output_cap_and_tool_rounds() {
@@ -804,5 +897,67 @@ mod tests {
         assert!(finish_reason_indicates_length(Some("max_tokens")));
         assert!(!finish_reason_indicates_length(Some("Stop")));
         assert!(!finish_reason_indicates_length(None));
+    }
+
+    #[tokio::test]
+    async fn provider_usage_is_mirrored_into_active_labrun_cost_ledger() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = LabStore::for_project(temp.path());
+        let proposal = store.create_proposal("Build LabRun", None).unwrap();
+        let run = store.approve_proposal(&proposal.proposal_id).unwrap();
+        let cost_tracker = Arc::new(tokio::sync::Mutex::new(
+            crate::cost_tracker::CostTracker::new(),
+        ));
+        let mut conversation = ConversationLoop::new(
+            Arc::new(NoopProvider),
+            Arc::new(ToolRegistry::new()),
+            cost_tracker,
+            "gpt-test".to_string(),
+        )
+        .with_working_dir(temp.path());
+        conversation.session_id = "lab-session-usage".to_string();
+        let step = SessionStepResult {
+            assistant_text: "ok".to_string(),
+            tool_calls: Vec::new(),
+            pre_executed_results: std::collections::HashMap::new(),
+            usage: Some(Usage {
+                prompt_tokens: 100,
+                completion_tokens: 20,
+                total_tokens: 120,
+                reasoning_tokens: Some(5),
+                cached_tokens: Some(40),
+                cache_write_tokens: Some(10),
+            }),
+            tool_call_repair: None,
+            finish_reason: Some("stop".to_string()),
+            source: SessionStepSource::NonStreaming,
+            cache_shape: None,
+        };
+
+        conversation
+            .record_session_step_usage(
+                &step,
+                Some(crate::cost_tracker::ApiUsageMetadata {
+                    provider: Some("openai".to_string()),
+                    ..Default::default()
+                }),
+            )
+            .await;
+
+        let usage = store.list_cost_usage(&run.lab_run_id).unwrap();
+        assert_eq!(usage.len(), 1);
+        assert_eq!(usage[0].role, run.internal_owner);
+        assert_eq!(usage[0].model, "gpt-test");
+        assert_eq!(usage[0].prompt_tokens, 100);
+        assert_eq!(usage[0].completion_tokens, 20);
+        assert_eq!(usage[0].reasoning_tokens, 5);
+        assert_eq!(usage[0].cached_tokens, 40);
+        assert_eq!(usage[0].cache_write_tokens, 10);
+        assert_eq!(usage[0].cache_miss_tokens, 60);
+        assert!(usage[0]
+            .note
+            .as_deref()
+            .unwrap_or_default()
+            .contains("provider=openai"));
     }
 }

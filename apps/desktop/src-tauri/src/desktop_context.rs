@@ -1,4 +1,5 @@
 use priority_agent::desktop_runtime::DesktopContextSnapshot;
+use priority_agent::session_store::SessionStore;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -47,6 +48,8 @@ pub(crate) struct DesktopWorkbenchSnapshot {
     pub(crate) project_map: DesktopProjectMapSnapshot,
     pub(crate) symbol_index: DesktopSymbolIndexSnapshot,
     pub(crate) runtime_context: Option<DesktopContextSnapshot>,
+    pub(crate) lab_status: DesktopLabStatusSnapshot,
+    pub(crate) subagent_tasks: Vec<DesktopSubagentTaskSnapshot>,
 }
 
 #[derive(Debug, Serialize)]
@@ -67,6 +70,363 @@ pub(crate) struct DesktopSymbolIndexSnapshot {
     pub(crate) truncated: bool,
 }
 
+#[derive(Debug, Serialize)]
+pub(crate) struct DesktopLabStatusSnapshot {
+    pub(crate) available: bool,
+    pub(crate) state: String,
+    pub(crate) detail: String,
+    pub(crate) lab_run_id: Option<String>,
+    pub(crate) proposal_id: Option<String>,
+    pub(crate) proposal_status: Option<String>,
+    pub(crate) run_status: Option<String>,
+    pub(crate) stage: Option<String>,
+    pub(crate) owner: Option<String>,
+    pub(crate) needs_user: bool,
+    pub(crate) cycle_count: u64,
+    pub(crate) artifact_count: usize,
+    pub(crate) meeting_count: usize,
+    pub(crate) task_total: usize,
+    pub(crate) task_open: usize,
+    pub(crate) task_blocked: usize,
+    pub(crate) blockers: Vec<String>,
+    pub(crate) validation_retry_count: usize,
+    pub(crate) validation_retry_escalated_count: usize,
+    pub(crate) latest_validation_retry: Option<String>,
+    pub(crate) meeting_recommended: bool,
+    pub(crate) meeting_topic: Option<String>,
+    pub(crate) latest_report_path: Option<String>,
+    pub(crate) daemon_policy: Option<DesktopLabDaemonPolicySnapshot>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub(crate) struct DesktopLabDaemonPolicySnapshot {
+    pub(crate) enabled: bool,
+    pub(crate) mode: priority_agent::lab::model::LabDaemonMode,
+    pub(crate) max_steps: usize,
+    pub(crate) max_steps_per_cycle: usize,
+    pub(crate) interval_ms: u64,
+    pub(crate) last_started_at: Option<String>,
+    pub(crate) last_start_error: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub(crate) struct DesktopSubagentTaskSnapshot {
+    pub(crate) task_id: String,
+    pub(crate) agent_id: String,
+    pub(crate) profile: Option<String>,
+    pub(crate) role: String,
+    pub(crate) status: String,
+    pub(crate) description: String,
+    pub(crate) child_session_id: Option<String>,
+    pub(crate) result_artifact_id: Option<i64>,
+    pub(crate) artifact_status: Option<String>,
+    pub(crate) result_preview: Option<String>,
+    pub(crate) tools_used: Vec<String>,
+    pub(crate) proof_kind: Option<String>,
+    pub(crate) completion_sink: Option<String>,
+    pub(crate) recovery_status: Option<String>,
+    pub(crate) recovery_action: Option<String>,
+    pub(crate) updated_at: String,
+}
+
+pub(crate) fn desktop_subagent_tasks_for_session(
+    store: &SessionStore,
+    session_id: Option<&str>,
+) -> Vec<DesktopSubagentTaskSnapshot> {
+    let Some(session_id) = session_id else {
+        return Vec::new();
+    };
+    store
+        .recent_agent_task_states(session_id, 8)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|state| {
+            let artifact = state
+                .result_artifact_id
+                .and_then(|id| store.agent_artifact(session_id, id).ok().flatten());
+            let result_preview = artifact.as_ref().map(|artifact| {
+                compact_desktop_lab_text(
+                    artifact
+                        .output
+                        .lines()
+                        .next()
+                        .filter(|line| !line.trim().is_empty())
+                        .unwrap_or(&artifact.description),
+                    120,
+                )
+            });
+            DesktopSubagentTaskSnapshot {
+                task_id: state.task_id,
+                agent_id: state.agent_id,
+                profile: state.profile,
+                role: state.role,
+                status: state.status,
+                description: compact_desktop_lab_text(&state.description, 120),
+                child_session_id: state
+                    .payload
+                    .get("child_session_id")
+                    .and_then(|value| value.as_str())
+                    .map(str::to_string),
+                result_artifact_id: state.result_artifact_id,
+                artifact_status: artifact.as_ref().map(|artifact| artifact.status.clone()),
+                result_preview,
+                tools_used: artifact
+                    .as_ref()
+                    .and_then(|artifact| string_array_field(&artifact.payload, "tools_used"))
+                    .or_else(|| string_array_field(&state.payload, "tools_used"))
+                    .unwrap_or_default(),
+                proof_kind: state
+                    .payload
+                    .get("proof_kind")
+                    .and_then(|value| value.as_str())
+                    .map(str::to_string),
+                completion_sink: artifact
+                    .as_ref()
+                    .and_then(|artifact| artifact.payload.get("completion_sink"))
+                    .and_then(|value| value.as_str())
+                    .map(str::to_string)
+                    .or_else(|| {
+                        state
+                            .payload
+                            .get("completion_sink")
+                            .and_then(|value| value.as_str())
+                            .map(str::to_string)
+                    }),
+                recovery_status: state
+                    .payload
+                    .get("recovery_status")
+                    .and_then(|value| value.as_str())
+                    .map(str::to_string),
+                recovery_action: state
+                    .payload
+                    .get("recovery_action")
+                    .and_then(|value| value.as_str())
+                    .map(|value| compact_desktop_lab_text(value, 120)),
+                updated_at: state.updated_at,
+            }
+        })
+        .collect()
+}
+
+fn string_array_field(value: &serde_json::Value, field: &str) -> Option<Vec<String>> {
+    Some(
+        value
+            .get(field)?
+            .as_array()?
+            .iter()
+            .filter_map(serde_json::Value::as_str)
+            .map(str::to_string)
+            .collect(),
+    )
+}
+
+pub(crate) fn desktop_lab_status_for_project(project: &Path) -> DesktopLabStatusSnapshot {
+    let store = priority_agent::lab::store::LabStore::for_project(project);
+    let daemon_policy = match store.load_daemon_state() {
+        Ok(state) => state.map(desktop_lab_daemon_policy_snapshot),
+        Err(err) => return desktop_lab_status_error(err),
+    };
+    match store.latest_run() {
+        Ok(Some(run)) => {
+            let tasks = store
+                .list_graduate_tasks(&run.lab_run_id)
+                .unwrap_or_default();
+            let task_open = tasks.iter().filter(|task| task.status.is_open()).count();
+            let task_blocked = tasks
+                .iter()
+                .filter(|task| {
+                    matches!(
+                        task.status,
+                        priority_agent::lab::model::LabTaskStatus::Blocked
+                    )
+                })
+                .count();
+            let blockers = tasks
+                .iter()
+                .filter_map(|task| {
+                    task.blocker.as_ref().map(|blocker| {
+                        format!(
+                            "{}: {}",
+                            task.title,
+                            compact_desktop_lab_text(blocker, 96)
+                        )
+                    })
+                })
+                .chain(run.blocked_reason.as_ref().map(|reason| {
+                    format!("Run: {}", compact_desktop_lab_text(reason, 96))
+                }))
+                .take(6)
+                .collect::<Vec<_>>();
+            let validation_retries = store
+                .list_validation_retries(&run.lab_run_id)
+                .unwrap_or_default();
+            let validation_retry_escalated_count = validation_retries
+                .iter()
+                .filter(|retry| retry.escalated)
+                .count();
+            let latest_validation_retry = validation_retries.last().map(|retry| {
+                format!(
+                    "{} attempt {}: {}",
+                    retry.task_id,
+                    retry.attempt,
+                    compact_desktop_lab_text(&retry.validation_summary, 96)
+                )
+            });
+            let latest_report_path = store
+                .list_stage_artifact_report_paths(&run.lab_run_id)
+                .ok()
+                .and_then(|reports| reports.last().map(|(_, path)| path.display().to_string()));
+            let recommendation =
+                priority_agent::lab::orchestrator::LabOrchestrator::for_project(project)
+                    .meeting_recommendation_for_latest()
+                    .ok();
+            DesktopLabStatusSnapshot {
+                available: true,
+                state: "run".to_string(),
+                detail: format!(
+                    "{:?} at {} with {:?}",
+                    run.status, run.current_stage, run.internal_owner
+                ),
+                lab_run_id: Some(run.lab_run_id),
+                proposal_id: run.proposal_id,
+                proposal_status: None,
+                run_status: Some(format!("{:?}", run.status)),
+                stage: Some(run.current_stage),
+                owner: Some(format!("{:?}", run.internal_owner)),
+                needs_user: run.needs_user,
+                cycle_count: run.cycle_count,
+                artifact_count: run.artifact_ids.len(),
+                meeting_count: run.meeting_ids.len(),
+                task_total: tasks.len(),
+                task_open,
+                task_blocked,
+                blockers,
+                validation_retry_count: validation_retries.len(),
+                validation_retry_escalated_count,
+                latest_validation_retry,
+                meeting_recommended: recommendation
+                    .as_ref()
+                    .map(|meeting| meeting.recommended)
+                    .unwrap_or(false),
+                meeting_topic: recommendation.map(|meeting| meeting.topic),
+                latest_report_path,
+                daemon_policy: daemon_policy.clone(),
+            }
+        }
+        Ok(None) => match store.latest_proposal() {
+            Ok(Some(proposal)) => DesktopLabStatusSnapshot {
+                available: true,
+                state: "proposal".to_string(),
+                detail: format!(
+                    "{:?}: {}",
+                    proposal.status,
+                    compact_desktop_lab_text(&proposal.user_goal, 96)
+                ),
+                lab_run_id: proposal.approval.created_lab_run_id,
+                proposal_id: Some(proposal.proposal_id),
+                proposal_status: Some(format!("{:?}", proposal.status)),
+                run_status: None,
+                stage: None,
+                owner: Some("Professor".to_string()),
+                needs_user: true,
+                cycle_count: 0,
+                artifact_count: 0,
+                meeting_count: 0,
+                task_total: 0,
+                task_open: 0,
+                task_blocked: 0,
+                blockers: Vec::new(),
+                validation_retry_count: 0,
+                validation_retry_escalated_count: 0,
+                latest_validation_retry: None,
+                meeting_recommended: false,
+                meeting_topic: None,
+                latest_report_path: None,
+                daemon_policy: daemon_policy.clone(),
+            },
+            Ok(None) => DesktopLabStatusSnapshot {
+                available: false,
+                state: "none".to_string(),
+                detail: "No LabRun or proposal found for this project.".to_string(),
+                lab_run_id: None,
+                proposal_id: None,
+                proposal_status: None,
+                run_status: None,
+                stage: None,
+                owner: None,
+                needs_user: false,
+                cycle_count: 0,
+                artifact_count: 0,
+                meeting_count: 0,
+                task_total: 0,
+                task_open: 0,
+                task_blocked: 0,
+                blockers: Vec::new(),
+                validation_retry_count: 0,
+                validation_retry_escalated_count: 0,
+                latest_validation_retry: None,
+                meeting_recommended: false,
+                meeting_topic: None,
+                latest_report_path: None,
+                daemon_policy: daemon_policy.clone(),
+            },
+            Err(err) => desktop_lab_status_error(err),
+        },
+        Err(err) => desktop_lab_status_error(err),
+    }
+}
+
+fn desktop_lab_status_error(err: anyhow::Error) -> DesktopLabStatusSnapshot {
+    DesktopLabStatusSnapshot {
+        available: false,
+        state: "error".to_string(),
+        detail: format!("Failed to read LabRun state: {err}"),
+        lab_run_id: None,
+        proposal_id: None,
+        proposal_status: None,
+        run_status: None,
+        stage: None,
+        owner: None,
+        needs_user: false,
+        cycle_count: 0,
+        artifact_count: 0,
+        meeting_count: 0,
+        task_total: 0,
+        task_open: 0,
+        task_blocked: 0,
+        blockers: Vec::new(),
+        validation_retry_count: 0,
+        validation_retry_escalated_count: 0,
+        latest_validation_retry: None,
+        meeting_recommended: false,
+        meeting_topic: None,
+        latest_report_path: None,
+        daemon_policy: None,
+    }
+}
+
+fn desktop_lab_daemon_policy_snapshot(
+    state: priority_agent::lab::model::LabDaemonState,
+) -> DesktopLabDaemonPolicySnapshot {
+    DesktopLabDaemonPolicySnapshot {
+        enabled: state.enabled,
+        mode: state.mode,
+        max_steps: state.max_steps,
+        max_steps_per_cycle: state.max_steps_per_cycle,
+        interval_ms: state.interval_ms,
+        last_started_at: state.last_started_at.map(|at| at.to_rfc3339()),
+        last_start_error: state.last_start_error,
+    }
+}
+
+fn compact_desktop_lab_text(input: &str, max_chars: usize) -> String {
+    let mut compact = input.split_whitespace().collect::<Vec<_>>().join(" ");
+    if compact.chars().count() > max_chars {
+        compact = compact.chars().take(max_chars).collect::<String>();
+        compact.push_str("...");
+    }
+    compact
+}
 
 pub(crate) fn enrich_message_with_desktop_contexts(
     message: String,
@@ -227,6 +587,7 @@ pub(crate) fn resolve_file_context(
     })
 }
 
+#[derive(Debug)]
 struct FileContextSelection {
     preview: String,
     line_start: Option<usize>,

@@ -1059,6 +1059,30 @@ async fn test_command_palette_accept_executes_no_arg_command() {
     assert!(!app.messages.is_empty());
 }
 
+#[tokio::test]
+async fn test_lab_slash_command_uses_workspace_lab_backend() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut app = TuiApp::new();
+    app.workspace = crate::workspace::Workspace::detect(temp.path());
+
+    app.handle_slash_command("/lab").await;
+    let help = app.messages.last().expect("lab help message expected");
+    assert_eq!(help.role, MessageRole::System);
+    assert!(help.content.contains("Lab commands:"));
+    assert!(help.content.contains("/lab dashboard"));
+
+    app.handle_slash_command("/lab propose Build the lab workflow")
+        .await;
+    let proposed = app.messages.last().expect("proposal message expected");
+    assert!(proposed.content.contains("Lab proposal created"));
+    assert!(temp.path().join(".priority-agent/lab/proposals").exists());
+
+    app.handle_slash_command("/lab status").await;
+    let status = app.messages.last().expect("status message expected");
+    assert!(status.content.contains("No LabRun yet."));
+    assert!(status.content.contains("Latest proposal:"));
+}
+
 #[test]
 fn test_model_select_filters_choices() {
     let mut app = TuiApp::new();

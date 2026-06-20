@@ -39,6 +39,10 @@ fn agent_tool_contract_discourages_blocking_delegation() {
             .unwrap_or("")
             .contains("isolated_worktree_fork")
     );
+    assert!(tool.parameters()["properties"]["background"]["description"]
+        .as_str()
+        .unwrap_or("")
+        .contains("completion sink"));
 }
 
 #[test]
@@ -189,6 +193,15 @@ fn agent_wait_failure_status_distinguishes_timeout() {
 }
 
 #[test]
+fn durable_subagent_task_id_sanitizes_user_supplied_ids() {
+    assert_eq!(
+        durable_subagent_task_id(Some(" lab task / 1 ")),
+        "lab-task-1"
+    );
+    assert!(durable_subagent_task_id(None).starts_with("task-"));
+}
+
+#[test]
 fn cancelled_agent_task_state_preserves_cleanup_metadata() {
     let state = crate::session_store::AgentTaskStateRecord {
         id: 1,
@@ -224,6 +237,30 @@ fn cancelled_agent_task_state_preserves_cleanup_metadata() {
         Some("codex/agent-1234")
     );
     assert!(upsert.payload["cancelled_at"].as_str().is_some());
+}
+
+#[test]
+fn ensure_child_session_creates_parent_linked_session() {
+    let store = crate::session_store::SessionStore::in_memory().unwrap();
+    store
+        .create_session("parent", "parent", "test-model", Some("/repo"))
+        .unwrap();
+
+    ensure_child_session(
+        &store,
+        "parent:subagent:task-1",
+        "edit code",
+        "parent",
+        "test-model",
+        Some("/repo"),
+    );
+
+    let child = store
+        .get_session("parent:subagent:task-1")
+        .unwrap()
+        .unwrap();
+    assert_eq!(child.parent_session_id.as_deref(), Some("parent"));
+    assert_eq!(child.workspace_root.as_deref(), Some("/repo"));
 }
 
 #[test]
@@ -329,6 +366,113 @@ async fn agent_read_does_not_require_manager() {
     assert!(result.success, "read failed: {:?}", result.error);
     assert!(result.content.contains("Sub-agent agent_1"));
     assert_eq!(result.data.unwrap()["status"], "completed");
+}
+
+#[tokio::test]
+async fn agent_resume_by_task_id_reads_durable_state_without_manager() {
+    let store = Arc::new(crate::session_store::SessionStore::in_memory().unwrap());
+    store
+        .create_session("s1", "agent resume test", "test-model", None)
+        .unwrap();
+    store
+        .upsert_agent_task_state(&crate::session_store::AgentTaskStateUpsert {
+            session_id: "s1".to_string(),
+            task_id: "task_1".to_string(),
+            agent_id: "agent_1".to_string(),
+            profile: Some("implementer".to_string()),
+            role: "specialist".to_string(),
+            status: "completed".to_string(),
+            description: "edit code".to_string(),
+            transcript_path: None,
+            tool_ids_in_progress: Vec::new(),
+            permission_requests: Vec::new(),
+            result_artifact_id: None,
+            cleanup_hooks: Vec::new(),
+            payload: json!({}),
+        })
+        .unwrap();
+
+    let result = AgentTool::new()
+        .execute(
+            json!({"task_id": "task_1", "action": "resume"}),
+            ToolContext::new(".", "s1").with_session_store(store),
+        )
+        .await;
+
+    assert!(result.success, "resume failed: {:?}", result.error);
+    assert_eq!(result.data.unwrap()["task_id"], "task_1");
+}
+
+#[tokio::test]
+async fn agent_resume_by_agent_id_reads_durable_state_without_manager() {
+    let store = Arc::new(crate::session_store::SessionStore::in_memory().unwrap());
+    store
+        .create_session("s1", "agent resume test", "test-model", None)
+        .unwrap();
+    store
+        .upsert_agent_task_state(&crate::session_store::AgentTaskStateUpsert {
+            session_id: "s1".to_string(),
+            task_id: "task_1".to_string(),
+            agent_id: "agent_1".to_string(),
+            profile: Some("implementer".to_string()),
+            role: "specialist".to_string(),
+            status: "completed".to_string(),
+            description: "edit code".to_string(),
+            transcript_path: None,
+            tool_ids_in_progress: Vec::new(),
+            permission_requests: Vec::new(),
+            result_artifact_id: None,
+            cleanup_hooks: Vec::new(),
+            payload: json!({}),
+        })
+        .unwrap();
+
+    let result = AgentTool::new()
+        .execute(
+            json!({"agent_id": "agent_1", "action": "resume"}),
+            ToolContext::new(".", "s1").with_session_store(store),
+        )
+        .await;
+
+    assert!(result.success, "resume failed: {:?}", result.error);
+    assert_eq!(result.data.unwrap()["agent_id"], "agent_1");
+}
+
+#[tokio::test]
+async fn agent_cancel_by_task_id_marks_durable_state_without_manager() {
+    let store = Arc::new(crate::session_store::SessionStore::in_memory().unwrap());
+    store
+        .create_session("s1", "agent cancel test", "test-model", None)
+        .unwrap();
+    store
+        .upsert_agent_task_state(&crate::session_store::AgentTaskStateUpsert {
+            session_id: "s1".to_string(),
+            task_id: "task_1".to_string(),
+            agent_id: "agent_1".to_string(),
+            profile: Some("implementer".to_string()),
+            role: "specialist".to_string(),
+            status: "running".to_string(),
+            description: "edit code".to_string(),
+            transcript_path: None,
+            tool_ids_in_progress: vec!["tool_1".to_string()],
+            permission_requests: Vec::new(),
+            result_artifact_id: None,
+            cleanup_hooks: vec!["worktree_cleanup".to_string()],
+            payload: json!({}),
+        })
+        .unwrap();
+
+    let result = AgentTool::new()
+        .execute(
+            json!({"task_id": "task_1", "action": "cancel"}),
+            ToolContext::new(".", "s1").with_session_store(store.clone()),
+        )
+        .await;
+
+    assert!(result.success, "cancel failed: {:?}", result.error);
+    let state = store.agent_task_state("s1", "task_1").unwrap().unwrap();
+    assert_eq!(state.status, "cancelled");
+    assert_eq!(state.cleanup_hooks, vec!["worktree_cleanup"]);
 }
 
 #[test]

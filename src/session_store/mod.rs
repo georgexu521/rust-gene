@@ -45,6 +45,12 @@ pub struct SessionStore {
     conn: Arc<Mutex<Connection>>,
 }
 
+impl std::fmt::Debug for SessionStore {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SessionStore").finish_non_exhaustive()
+    }
+}
+
 impl SessionStore {
     /// 安全获取连接（处理 Mutex poison）
     fn conn(&self) -> std::sync::MutexGuard<'_, Connection> {
@@ -801,6 +807,92 @@ mod tests {
         let by_task = store.agent_task_state("s1", "task_123").unwrap().unwrap();
         assert_eq!(by_task.agent_id, "agent_123");
         assert!(store.agent_task_state("s1", "missing").unwrap().is_none());
+    }
+
+    #[test]
+    fn test_recover_interrupted_agent_task_states_marks_running_as_paused_restart() {
+        let store = SessionStore::in_memory().unwrap();
+        store.create_session("s1", "Test", "model", None).unwrap();
+        store.create_session("s2", "Other", "model", None).unwrap();
+
+        store
+            .upsert_agent_task_state(&AgentTaskStateUpsert {
+                session_id: "s1".to_string(),
+                task_id: "task_running".to_string(),
+                agent_id: "agent_running".to_string(),
+                profile: Some("implementer".to_string()),
+                role: "specialist".to_string(),
+                status: "running".to_string(),
+                description: "background edit".to_string(),
+                transcript_path: Some("/tmp/agent.jsonl".to_string()),
+                tool_ids_in_progress: vec!["file_write_1".to_string()],
+                permission_requests: vec!["file_write".to_string()],
+                result_artifact_id: None,
+                cleanup_hooks: vec!["cleanup".to_string()],
+                payload: serde_json::json!({"child_session_id": "s1:subagent:task_running"}),
+            })
+            .unwrap();
+        store
+            .upsert_agent_task_state(&AgentTaskStateUpsert {
+                session_id: "s1".to_string(),
+                task_id: "task_done".to_string(),
+                agent_id: "agent_done".to_string(),
+                profile: None,
+                role: "specialist".to_string(),
+                status: "completed".to_string(),
+                description: "done".to_string(),
+                transcript_path: None,
+                tool_ids_in_progress: Vec::new(),
+                permission_requests: Vec::new(),
+                result_artifact_id: None,
+                cleanup_hooks: Vec::new(),
+                payload: serde_json::json!({}),
+            })
+            .unwrap();
+        store
+            .upsert_agent_task_state(&AgentTaskStateUpsert {
+                session_id: "s2".to_string(),
+                task_id: "task_other".to_string(),
+                agent_id: "agent_other".to_string(),
+                profile: None,
+                role: "specialist".to_string(),
+                status: "running".to_string(),
+                description: "other".to_string(),
+                transcript_path: None,
+                tool_ids_in_progress: vec!["bash_1".to_string()],
+                permission_requests: Vec::new(),
+                result_artifact_id: None,
+                cleanup_hooks: Vec::new(),
+                payload: serde_json::json!({}),
+            })
+            .unwrap();
+
+        assert_eq!(
+            store
+                .recover_interrupted_agent_task_states(Some("s1"))
+                .unwrap(),
+            1
+        );
+
+        let recovered = store
+            .agent_task_state("s1", "task_running")
+            .unwrap()
+            .unwrap();
+        assert_eq!(recovered.status, "paused_restart");
+        assert!(recovered.tool_ids_in_progress.is_empty());
+        assert_eq!(recovered.permission_requests, vec!["file_write"]);
+        assert_eq!(recovered.cleanup_hooks, vec!["cleanup"]);
+        assert_eq!(recovered.payload["previous_status"], "running");
+        assert_eq!(recovered.payload["recovery_status"], "paused_restart");
+        assert!(recovered.payload["recovery_action"]
+            .as_str()
+            .unwrap()
+            .contains("task_id"));
+
+        let completed = store.agent_task_state("s1", "task_done").unwrap().unwrap();
+        assert_eq!(completed.status, "completed");
+        let other = store.agent_task_state("s2", "task_other").unwrap().unwrap();
+        assert_eq!(other.status, "running");
     }
 
     #[test]

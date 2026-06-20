@@ -9,13 +9,15 @@ use tracing_subscriber::EnvFilter;
 
 #[cfg(feature = "experimental-api-server")]
 use priority_agent::api;
-use priority_agent::{bootstrap, diagnostics, shell, tui};
+use priority_agent::{bootstrap, diagnostics, entry, tui};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum StartupMode {
     Help,
     Api,
     Cli,
+    LabCli,
+    LabDaemon,
     Tui,
     EvalRun,
     ProviderHealth,
@@ -28,6 +30,8 @@ fn detect_startup_mode(args: &[String]) -> StartupMode {
         Some("--help") | Some("-h") | Some("help") => StartupMode::Help,
         Some("--api") => StartupMode::Api,
         Some("--cli") => StartupMode::Cli,
+        Some("lab") | Some("--lab") => StartupMode::LabCli,
+        Some("lab-daemon") | Some("--lab-daemon") => StartupMode::LabDaemon,
         Some("--tui") => StartupMode::Tui,
         Some("--eval-run") => StartupMode::EvalRun,
         Some("--provider-health") => StartupMode::ProviderHealth,
@@ -46,7 +50,9 @@ fn print_help() {
     println!("Priority Agent");
     println!();
     println!("Usage:");
-    println!("  {bin} [--api [--port <PORT>]] [--cli] [--tui] [--no-footer] [--help]");
+    println!(
+        "  {bin} [lab|lab-daemon] [--api [--port <PORT>]] [--cli] [--tui] [--no-footer] [--help]"
+    );
     println!();
     println!("Modes:");
     println!("  --api    Start HTTP API server (feature: experimental-api-server)");
@@ -54,6 +60,14 @@ fn print_help() {
         "  --cli    Start the default terminal interface
   --no-footer  Disable the fixed bottom footer in CLI mode (use plain stdin/stdout)"
     );
+    println!("  lab      Start Lab Mode professor intake and LabRun command surface");
+    println!(
+        "           Use: {bin} lab --command \"dashboard\" for one non-interactive Lab command"
+    );
+    println!(
+        "           Add --with-provider to route provider-backed Lab commands through the active model"
+    );
+    println!("  lab-daemon  Run one non-interactive Lab daemon worker pass from persisted policy");
     println!("  --tui    Start the legacy full-screen terminal interface (alternative)");
     println!("  --eval-run --prompt-file <PATH> [--output <PATH>] [--events <PATH>]");
     println!("           Run one non-interactive evaluation task");
@@ -65,6 +79,7 @@ fn print_help() {
     println!();
     println!("Examples:");
     println!("  {bin}                  # Default terminal interface");
+    println!("  {bin} lab              # Lab Mode professor intake");
     println!("  {bin} --api --port 8787 # HTTP API server");
     println!("  {bin} --cli            # Same as default");
     println!("  {bin} --tui            # Legacy full-screen interface");
@@ -145,6 +160,14 @@ fn env_flag(name: &str) -> Option<bool> {
     })
 }
 
+fn exit_success_after_one_shot_command() -> ! {
+    use std::io::Write;
+
+    let _ = std::io::stdout().flush();
+    let _ = std::io::stderr().flush();
+    std::process::exit(0);
+}
+
 fn configure_eval_memory_isolation(output_file: Option<&str>, events_file: Option<&str>) {
     let base_dir = output_file
         .or(events_file)
@@ -180,6 +203,8 @@ fn default_log_level(startup_mode: StartupMode) -> &'static str {
         StartupMode::Tui => "off",
         StartupMode::Help
         | StartupMode::Cli
+        | StartupMode::LabCli
+        | StartupMode::LabDaemon
         | StartupMode::EvalRun
         | StartupMode::ProviderHealth
         | StartupMode::ContextAttach => "warn",
@@ -187,7 +212,10 @@ fn default_log_level(startup_mode: StartupMode) -> &'static str {
 }
 
 fn suppress_terminal_logs(startup_mode: StartupMode) -> bool {
-    matches!(startup_mode, StartupMode::Tui | StartupMode::Cli)
+    matches!(
+        startup_mode,
+        StartupMode::Tui | StartupMode::Cli | StartupMode::LabCli
+    )
 }
 
 async fn answer_pending_approval(
@@ -540,7 +568,10 @@ async fn init_app_or_exit(
             let msg = e.to_string();
             if msg.contains("No LLM provider configured") {
                 // Only CLI and TUI should reach onboarding; API/eval still exit.
-                if matches!(mode, StartupMode::Cli | StartupMode::Tui) {
+                if matches!(
+                    mode,
+                    StartupMode::Cli | StartupMode::LabCli | StartupMode::Tui
+                ) {
                     eprintln!("No provider configured — starting onboarding.");
                     return None;
                 }
@@ -685,13 +716,64 @@ async fn main() {
                 eprintln!("No provider configured. Run /connect <provider> <key>");
                 std::process::exit(1);
             };
-            if let Err(e) = shell::run_shell_with_options(
-                components.streaming_engine,
-                shell::ShellOptions { no_footer },
-            )
-            .await
-            {
+            if let Err(e) = entry::direct::run_cli(components.streaming_engine, no_footer).await {
                 error!("Priority Agent CLI failed: {}", e);
+                std::process::exit(1);
+            }
+        }
+        StartupMode::LabCli => {
+            if let Some(command) = arg_value(&args, "--command") {
+                if has_flag(&args, "--with-provider") {
+                    info!("Running one provider-backed non-interactive Lab command...");
+                    let components = init_app_or_exit(&working_dir, startup_mode).await;
+                    let Some(components) = components else {
+                        eprintln!("No provider configured. Run /connect <provider> <key>");
+                        std::process::exit(1);
+                    };
+                    if let Err(e) =
+                        entry::lab::run_command_with_components(&command, components).await
+                    {
+                        error!("Priority Agent provider-backed Lab command failed: {}", e);
+                        std::process::exit(1);
+                    }
+                } else {
+                    info!("Running one non-interactive Lab command...");
+                    if let Err(e) = entry::lab::run_command(&command).await {
+                        error!("Priority Agent Lab command failed: {}", e);
+                        std::process::exit(1);
+                    }
+                }
+                exit_success_after_one_shot_command();
+            }
+            if !std::io::IsTerminal::is_terminal(&std::io::stdin()) {
+                eprintln!("Error: Lab mode requires an interactive terminal.");
+                eprintln!("       Use --api to start the HTTP API server.");
+                eprintln!();
+                print_help();
+                std::process::exit(1);
+            }
+            let no_footer = has_flag(&args, "--no-footer");
+            info!("Starting Priority Agent Lab Mode...");
+            let components = init_app_or_exit(&working_dir, startup_mode).await;
+            let Some(components) = components else {
+                eprintln!("No provider configured. Run /connect <provider> <key>");
+                std::process::exit(1);
+            };
+            if let Err(e) = entry::lab::run_cli(components.streaming_engine, no_footer).await {
+                error!("Priority Agent Lab Mode failed: {}", e);
+                std::process::exit(1);
+            }
+        }
+        StartupMode::LabDaemon => {
+            info!("Starting Priority Agent Lab daemon worker...");
+            let components = init_app_or_exit(&working_dir, startup_mode).await;
+            let Some(components) = components else {
+                eprintln!("No provider configured. Run /connect <provider> <key>");
+                std::process::exit(1);
+            };
+            if let Err(e) = entry::lab::run_daemon_worker(components).await {
+                error!("Priority Agent Lab daemon worker failed: {}", e);
+                eprintln!("Lab daemon worker failed: {e}");
                 std::process::exit(1);
             }
         }
@@ -834,6 +916,22 @@ mod tests {
             StartupMode::Cli
         );
         assert_eq!(
+            detect_startup_mode(&["priority-agent".into(), "lab".into()]),
+            StartupMode::LabCli
+        );
+        assert_eq!(
+            detect_startup_mode(&["priority-agent".into(), "--lab".into()]),
+            StartupMode::LabCli
+        );
+        assert_eq!(
+            detect_startup_mode(&["priority-agent".into(), "lab-daemon".into()]),
+            StartupMode::LabDaemon
+        );
+        assert_eq!(
+            detect_startup_mode(&["priority-agent".into(), "--lab-daemon".into()]),
+            StartupMode::LabDaemon
+        );
+        assert_eq!(
             detect_startup_mode(&["priority-agent".into(), "--tui".into()]),
             StartupMode::Tui
         );
@@ -862,6 +960,10 @@ mod tests {
 
         assert_eq!(default_log_level(StartupMode::Cli), "warn");
         assert!(suppress_terminal_logs(StartupMode::Cli));
+        assert_eq!(default_log_level(StartupMode::LabCli), "warn");
+        assert!(suppress_terminal_logs(StartupMode::LabCli));
+        assert_eq!(default_log_level(StartupMode::LabDaemon), "warn");
+        assert!(!suppress_terminal_logs(StartupMode::LabDaemon));
         assert_eq!(default_log_level(StartupMode::Api), "info");
         assert!(!suppress_terminal_logs(StartupMode::Api));
     }

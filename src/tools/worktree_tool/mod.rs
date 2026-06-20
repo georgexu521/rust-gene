@@ -46,9 +46,9 @@ fn status_without_internal_worktree_storage(status: &str) -> String {
     status
         .lines()
         .filter(|line| {
-            !line
-                .strip_prefix("?? ")
-                .is_some_and(|path| path.starts_with(".claude/worktrees/"))
+            !line.strip_prefix("?? ").is_some_and(|path| {
+                path.starts_with(".claude/worktrees/") || path.starts_with(".priority-agent/")
+            })
         })
         .collect::<Vec<_>>()
         .join("\n")
@@ -480,11 +480,20 @@ async fn handle_agent_merge(
     };
     let untracked = untracked_paths(&child_status);
     if !untracked.is_empty() {
-        return ToolResult::error(format!(
-            "Agent worktree has untracked files that cannot be safely merged automatically: {}. Commit them in the worktree or copy them intentionally before retrying.",
-            untracked.join(", ")
-        ));
+        let mut args = vec!["add".to_string(), "-N".to_string(), "--".to_string()];
+        args.extend(untracked.iter().cloned());
+        if let Err(err) = run_git(&agent.path, args).await {
+            return ToolResult::error(format!(
+                "Agent worktree has untracked files but they could not be prepared for diff merge: {}. Files: {}",
+                err,
+                untracked.join(", ")
+            ));
+        }
     }
+    let child_status = match run_git(&agent.path, vec!["status".into(), "--short".into()]).await {
+        Ok(status) => status,
+        Err(err) => return ToolResult::error(err),
+    };
 
     let ahead = match commits_ahead(target_dir, agent.branch.as_deref()).await {
         Ok(count) => count,
@@ -1046,10 +1055,11 @@ mod tests {
     #[test]
     fn parent_status_filter_ignores_internal_worktree_storage_only() {
         let filtered = status_without_internal_worktree_storage(
-            "?? .claude/worktrees/agent-1/.git\n?? .claude/settings.json\n M src/main.rs\n",
+            "?? .claude/worktrees/agent-1/.git\n?? .priority-agent/lab/state.json\n?? .claude/settings.json\n M src/main.rs\n",
         );
 
         assert!(!filtered.contains(".claude/worktrees"));
+        assert!(!filtered.contains(".priority-agent"));
         assert!(filtered.contains(".claude/settings.json"));
         assert!(filtered.contains("src/main.rs"));
     }

@@ -8,8 +8,11 @@ type WorkbenchDrawerProps = {
   isOpen: boolean;
   snapshot: DesktopWorkbenchSnapshot | null;
   onClose: () => void;
+  onOpenLabReport: (path: string) => void;
   onRefreshDiagnostics: () => void;
   onRefreshWorkbench: () => void;
+  onStageLabCommand: (command: string) => void;
+  onSuperviseLabDaemon: () => void;
 };
 
 export function WorkbenchDrawer({
@@ -17,8 +20,11 @@ export function WorkbenchDrawer({
   isOpen,
   snapshot,
   onClose,
+  onOpenLabReport,
   onRefreshDiagnostics,
   onRefreshWorkbench,
+  onStageLabCommand,
+  onSuperviseLabDaemon,
 }: WorkbenchDrawerProps) {
   if (!isOpen) {
     return null;
@@ -38,7 +44,13 @@ export function WorkbenchDrawer({
 
       <div className="workbench-drawer-body">
         <DiagnosticsPanel diagnostics={diagnostics} onRefresh={onRefreshDiagnostics} />
-        <WorkbenchPanel snapshot={snapshot} onRefresh={onRefreshWorkbench} />
+        <WorkbenchPanel
+          snapshot={snapshot}
+          onOpenLabReport={onOpenLabReport}
+          onRefresh={onRefreshWorkbench}
+          onStageLabCommand={onStageLabCommand}
+          onSuperviseLabDaemon={onSuperviseLabDaemon}
+        />
       </div>
     </aside>
   );

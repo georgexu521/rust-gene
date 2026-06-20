@@ -76,6 +76,8 @@ pub struct StreamingConfig {
     /// Read-before-edit guard — cleared on context fold so stale
     /// read-tracking doesn't survive across compacted history.
     pub read_tracker: Option<Arc<crate::engine::read_tracker::ReadTracker>>,
+    /// Whether LabRun context packets may be injected into live model requests.
+    pub lab_context_enabled: std::sync::atomic::AtomicBool,
 }
 
 impl StreamingConfig {
@@ -129,6 +131,7 @@ impl StreamingConfig {
             approval_channel: None,
             fallback_model: crate::services::config::runtime_config().fallback_model(),
             read_tracker: None,
+            lab_context_enabled: std::sync::atomic::AtomicBool::new(false),
         }
     }
 

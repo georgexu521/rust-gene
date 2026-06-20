@@ -8,8 +8,8 @@ use crate::engine::context_ledger::{
     validation_entry_from_event, CONTEXT_LEDGER_BASH_READ_KIND,
 };
 use crate::engine::dynamic_context::{
-    tagged_block, DynamicContextBlockBuilder, CONTEXT_PACK_TAG, RECENT_OBSERVATION_TAG,
-    RELEVANT_MATERIAL_TAG, TASK_CONTRACT_TAG, TASK_STATE_TAG,
+    tagged_block, DynamicContextBlockBuilder, CONTEXT_PACK_TAG, LAB_CONTEXT_TAG,
+    RECENT_OBSERVATION_TAG, RELEVANT_MATERIAL_TAG, TASK_CONTRACT_TAG, TASK_STATE_TAG,
 };
 use crate::engine::intent_router::RetrievalPolicy;
 use crate::engine::retrieval_context::{RetrievalContext, RetrievalSource};
@@ -17,7 +17,7 @@ use crate::engine::task_context::AgentTaskState;
 use crate::engine::task_contract::{ContextPack, TaskContract};
 use crate::engine::trace::{TraceCollector, TraceEvent};
 use crate::memory::MemoryManager;
-use crate::services::api::{ChatRequest, LlmProvider, Message, Tool};
+use crate::services::api::{ChatRequest, LlmProvider, Message, Tool, ToolChoice};
 use crate::session_store::SessionStore;
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -27,6 +27,7 @@ use tracing::debug;
 pub(super) struct RequestPreparationContext<'a> {
     pub(super) messages: &'a [Message],
     pub(super) working_dir: &'a std::path::Path,
+    pub(super) lab_context_enabled: bool,
     pub(super) focused_repair_prompt: Option<Message>,
     pub(super) agent_task_state: Option<&'a AgentTaskState>,
     pub(super) task_contract: Option<&'a TaskContract>,
@@ -67,6 +68,7 @@ impl RequestPreparationController {
         let RequestPreparationContext {
             messages,
             working_dir,
+            lab_context_enabled,
             focused_repair_prompt,
             agent_task_state,
             task_contract,
@@ -110,6 +112,12 @@ impl RequestPreparationController {
                 &request_messages,
                 trace,
                 working_dir,
+                &mut dynamic_blocks,
+            );
+            Self::inject_lab_context_zone(
+                &request_messages,
+                working_dir,
+                lab_context_enabled,
                 &mut dynamic_blocks,
             );
             if let Some(block) =
@@ -186,17 +194,20 @@ impl RequestPreparationController {
             ContextBudgetController::observe_request(&request_messages, &canonical_tools);
         ContextBudgetController::record_runtime_diet(memory_context.runtime_diet, &request_budget);
 
-        PreparedRequest {
-            request: ChatRequest::new(model)
-                .with_messages(request_messages)
-                .with_tools(canonical_tools)
-                .with_temperature(temperature)
-                .with_output_cap(output_cap_for_turn(
-                    is_repair_turn,
-                    inject_dynamic_context,
-                    consecutive_repairs,
-                )),
+        let mut request = ChatRequest::new(model)
+            .with_messages(request_messages)
+            .with_tools(canonical_tools.clone())
+            .with_temperature(temperature)
+            .with_output_cap(output_cap_for_turn(
+                is_repair_turn,
+                inject_dynamic_context,
+                consecutive_repairs,
+            ));
+        if !canonical_tools.is_empty() {
+            request = request.with_tool_choice(ToolChoice::Auto);
         }
+
+        PreparedRequest { request }
     }
 
     fn inject_task_state_zone(
@@ -344,6 +355,118 @@ impl RequestPreparationController {
             content
         );
         if let Some(block) = tagged_block(RECENT_OBSERVATION_TAG, body) {
+            dynamic_blocks.push(block);
+        }
+    }
+
+    fn inject_lab_context_zone(
+        request_messages: &[Message],
+        working_dir: &std::path::Path,
+        enabled: bool,
+        dynamic_blocks: &mut DynamicContextBlockBuilder,
+    ) {
+        if !enabled {
+            return;
+        }
+        if request_messages.iter().any(
+            |message| matches!(message, Message::System { content } | Message::User { content } if content.contains("<lab-context>")),
+        ) {
+            return;
+        }
+        let store = crate::lab::store::LabStore::for_project(working_dir);
+        let Ok(Some(run)) = store.latest_run() else {
+            return;
+        };
+        if run.top_level_mode != "lab"
+            || matches!(
+                run.status,
+                crate::lab::model::LabRunStatus::Completed
+                    | crate::lab::model::LabRunStatus::Cancelled
+                    | crate::lab::model::LabRunStatus::Failed
+            )
+        {
+            return;
+        }
+        let cost = store
+            .cost_summary(&run.lab_run_id)
+            .unwrap_or_else(|_| crate::lab::model::LabCostSummary::empty(&run.lab_run_id));
+        let evidence = store
+            .list_evidence_refs(&run.lab_run_id)
+            .unwrap_or_default();
+        let retries = store
+            .list_validation_retries(&run.lab_run_id)
+            .unwrap_or_default();
+        let artifact_gate_refs =
+            crate::lab::orchestrator::LabOrchestrator::for_project(working_dir)
+                .artifact_gate_evidence_context_for_run(&run.lab_run_id, 20)
+                .unwrap_or_default();
+        let packet =
+            crate::lab::context::build_lab_context_packet_with_evidence_retries_and_artifact_refs(
+                &run,
+                run.internal_owner,
+                &cost,
+                &evidence,
+                &retries,
+                &artifact_gate_refs,
+            );
+        let compression_decision =
+            crate::lab::context::evaluate_lab_context_compression(&run, &packet);
+        let recorded_decision = store.record_compression_decision(compression_decision).ok();
+        let auto_compression_artifact_id = recorded_decision.as_ref().and_then(|decision| {
+            if matches!(
+                decision.action,
+                crate::lab::model::LabCompressionAction::None
+            ) {
+                return None;
+            }
+            match crate::lab::orchestrator::LabOrchestrator::for_project(working_dir)
+                .auto_create_compression_summary_for_decision(decision)
+            {
+                Ok(Some(created)) => Some(created.artifact.artifact_id().to_string()),
+                Ok(None) => None,
+                Err(err) => {
+                    debug!(
+                        target: "lab",
+                        error = %err,
+                        lab_run_id = %decision.lab_run_id,
+                        "failed to auto-create LabRun compression summary"
+                    );
+                    None
+                }
+            }
+        });
+        let mut lines = vec![
+            format!("lab_run_id: {}", packet.lab_run_id),
+            format!("role: {:?}", packet.role),
+            format!(
+                "stable_prefix: hash={} tokens={}",
+                packet.stable_prefix_fingerprint, packet.stable_prefix_tokens
+            ),
+            format!(
+                "dynamic_tail: hash={} tokens={}",
+                packet.dynamic_tail_fingerprint, packet.dynamic_tail_tokens
+            ),
+            format!("total_estimated_tokens: {}", packet.total_estimated_tokens),
+        ];
+        if let Some(decision) = recorded_decision {
+            lines.push(format!(
+                "compression_decision: id={} action={:?} usage={:.1}% reason={}",
+                decision.decision_id,
+                decision.action,
+                decision.usage_ratio_percent,
+                decision.reason
+            ));
+        }
+        if let Some(artifact_id) = auto_compression_artifact_id {
+            lines.push(format!("auto_compression_artifact: {artifact_id}"));
+        }
+        for layer in &packet.layers {
+            lines.push(format!(
+                "\n[{} {} {:?} estimated_tokens={}]\n{}",
+                layer.layer, layer.label, layer.stability, layer.estimated_tokens, layer.content
+            ));
+        }
+        if let Some(block) = tagged_block(LAB_CONTEXT_TAG, lines.join("\n")) {
             dynamic_blocks.push(block);
         }
     }

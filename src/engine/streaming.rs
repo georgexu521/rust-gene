@@ -320,6 +320,15 @@ impl StreamingQueryEngine {
             *self.config.session_id.write() = Some(sid);
         }
         let session_id = self.current_session_id()?;
+        if let Ok(recovered) = store.recover_interrupted_agent_task_states(Some(&session_id)) {
+            if recovered > 0 {
+                tracing::warn!(
+                    "Recovered {} interrupted sub-agent task(s) for session {} as paused_restart",
+                    recovered,
+                    session_id
+                );
+            }
+        }
         Some((store.clone(), session_id))
     }
 
@@ -608,6 +617,25 @@ impl StreamingQueryEngine {
     pub fn with_working_dir(mut self, working_dir: impl Into<PathBuf>) -> Self {
         self.config.working_dir_override = Some(working_dir.into());
         self
+    }
+
+    pub fn with_lab_context(self, enabled: bool) -> Self {
+        self.config
+            .lab_context_enabled
+            .store(enabled, std::sync::atomic::Ordering::Relaxed);
+        self
+    }
+
+    pub fn set_lab_context_enabled(&self, enabled: bool) {
+        self.config
+            .lab_context_enabled
+            .store(enabled, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    pub fn lab_context_enabled(&self) -> bool {
+        self.config
+            .lab_context_enabled
+            .load(std::sync::atomic::Ordering::Relaxed)
     }
 
     /// 设置记忆管理器（覆盖 lazy init）
@@ -950,6 +978,7 @@ impl StreamingQueryEngine {
                     .load(std::sync::atomic::Ordering::Relaxed),
             approval_channel: self.config.approval_channel.clone(),
             fallback_model: self.config.fallback_model.clone(),
+            lab_context_enabled: self.lab_context_enabled(),
             fallback_state: None,
         };
 
@@ -1319,6 +1348,7 @@ impl StreamingQueryEngine {
                                 llm_memory_extraction: engine.llm_memory_extraction,
                                 approval_channel: engine.approval_channel.clone(),
                                 fallback_model: None, // 防止无限 fallback
+                                lab_context_enabled: engine.lab_context_enabled,
                                 fallback_state: Some(fb_state),
                             };
                             let turn_timeout = config::turn_execution_timeout();
@@ -1451,6 +1481,7 @@ struct StreamingEngineInner {
     llm_memory_extraction: bool,
     approval_channel: Option<Arc<crate::engine::conversation_loop::ToolApprovalChannel>>,
     fallback_model: Option<String>,
+    lab_context_enabled: bool,
     /// Fallback 状态追踪（连续错误计数）
     fallback_state: Option<FallbackState>,
 }
@@ -1479,7 +1510,8 @@ impl StreamingEngineInner {
         .with_compressor(self.compressor.clone())
         .with_trace_store(self.trace_store.clone())
         .with_session_goal_manager(self.goal_manager.clone())
-        .with_agent_mode(agent_mode);
+        .with_agent_mode(agent_mode)
+        .with_lab_context(self.lab_context_enabled);
 
         if let (Some(ref store), Some(ref session_id)) = (&self.session_store, &self.session_id) {
             builder = builder.with_session_store(store.clone(), session_id.clone());

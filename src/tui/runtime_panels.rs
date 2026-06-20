@@ -14,6 +14,7 @@ pub enum RuntimePanelKind {
     Bridge,
     Trace,
     Skills,
+    Lab,
 }
 
 impl RuntimePanelKind {
@@ -31,12 +32,13 @@ impl RuntimePanelKind {
             "bridge" | "remote" | "remotes" => Some(Self::Bridge),
             "trace" | "traces" | "replay" => Some(Self::Trace),
             "skill" | "skills" => Some(Self::Skills),
+            "lab" | "labrun" | "lab-mode" => Some(Self::Lab),
             _ => None,
         }
     }
 
     pub const fn usage() -> &'static str {
-        "Usage: /panel [all|diff|approval|hooks|context|tasks|agents|mcp|bridge|trace|skills]"
+        "Usage: /panel [all|diff|approval|hooks|context|tasks|agents|mcp|bridge|trace|skills|lab]"
     }
 }
 
@@ -54,6 +56,7 @@ pub async fn render_runtime_panel(app: &TuiApp, kind: RuntimePanelKind) -> Strin
                 render_trace_panel(app),
                 render_diff_panel(app),
                 render_skills_panel(app),
+                render_lab_panel(app),
             ];
             sections.retain(|section| !section.trim().is_empty());
             sections.join("\n\n")
@@ -68,6 +71,7 @@ pub async fn render_runtime_panel(app: &TuiApp, kind: RuntimePanelKind) -> Strin
         RuntimePanelKind::Bridge => render_bridge_panel(app),
         RuntimePanelKind::Trace => render_trace_panel(app),
         RuntimePanelKind::Skills => render_skills_panel(app),
+        RuntimePanelKind::Lab => render_lab_panel(app),
     }
 }
 
@@ -452,14 +456,32 @@ async fn render_agent_panel(app: &TuiApp) -> String {
         Ok(states) => {
             lines.push(format!("Durable task states: {}", states.len()));
             for state in states.iter().take(8) {
+                let recovery = state
+                    .payload
+                    .get("recovery_status")
+                    .and_then(|value| value.as_str())
+                    .map(|status| format!(" recovery={status}"))
+                    .unwrap_or_default();
+                let child_session = state
+                    .payload
+                    .get("child_session_id")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or("none");
                 lines.push(format!(
-                    "- {} [{}] profile={} role={} tools={} permissions={} {}",
+                    "- task={} agent={} [{}] artifact={} child={} profile={} role={} tools={} permissions={}{} {}",
+                    state.task_id,
                     state.agent_id,
                     state.status,
+                    state
+                        .result_artifact_id
+                        .map(|id| id.to_string())
+                        .unwrap_or_else(|| "none".to_string()),
+                    child_session,
                     state.profile.as_deref().unwrap_or("none"),
                     state.role,
                     state.tool_ids_in_progress.len(),
                     state.permission_requests.len(),
+                    recovery,
                     compact_panel_line(&state.description, 100)
                 ));
             }
@@ -480,10 +502,23 @@ async fn render_agent_panel(app: &TuiApp) -> String {
                 } else {
                     preview
                 };
+                let task_id = artifact
+                    .payload
+                    .get("task_id")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or("none");
+                let sink = artifact
+                    .payload
+                    .get("completion_sink")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or("legacy");
                 lines.push(format!(
-                    "- {} [{}] profile={} role={} {}",
+                    "- artifact={} task={} agent={} [{}] sink={} profile={} role={} {}",
+                    artifact.id,
+                    task_id,
                     artifact.agent_id,
                     artifact.status,
+                    sink,
                     artifact.profile.as_deref().unwrap_or("none"),
                     artifact.role,
                     compact_panel_line(detail, 100)
@@ -860,6 +895,180 @@ fn render_skills_panel(app: &TuiApp) -> String {
     lines.join("\n")
 }
 
+fn render_lab_panel(app: &TuiApp) -> String {
+    let project_root = &app.workspace.root;
+    let store = crate::lab::store::LabStore::for_project(project_root);
+    let mut lines = vec![
+        "# Lab Panel".to_string(),
+        format!(
+            "Workspace: {}",
+            compact_panel_line(&project_root.display().to_string(), 140)
+        ),
+    ];
+
+    let run = match store.latest_run() {
+        Ok(Some(run)) => run,
+        Ok(None) => {
+            match store.latest_proposal() {
+                Ok(Some(proposal)) => {
+                    lines.push(format!(
+                        "Proposal: {} status={:?}",
+                        proposal.proposal_id, proposal.status
+                    ));
+                    lines.push(format!(
+                        "Goal: {}",
+                        compact_panel_line(&proposal.user_goal, 180)
+                    ));
+                    lines.push("Actions:".to_string());
+                    lines.push(format!("  /lab approve {}", proposal.proposal_id));
+                    lines.push("  /lab propose <goal>".to_string());
+                }
+                Ok(None) => {
+                    lines.push("No LabRun or proposal found.".to_string());
+                    lines.push("Actions:".to_string());
+                    lines.push("  /lab propose <goal>".to_string());
+                    lines.push("  /lab start <goal>".to_string());
+                }
+                Err(err) => {
+                    lines.push(format!("Failed to read Lab proposal: {err}"));
+                }
+            }
+            return lines.join("\n");
+        }
+        Err(err) => {
+            lines.push(format!("Failed to read LabRun: {err}"));
+            return lines.join("\n");
+        }
+    };
+
+    let tasks = match store.list_graduate_tasks(&run.lab_run_id) {
+        Ok(tasks) => tasks,
+        Err(err) => {
+            lines.push(format!("Failed to read Lab tasks: {err}"));
+            Vec::new()
+        }
+    };
+    let open_tasks = tasks.iter().filter(|task| task.status.is_open()).count();
+    let blocked_tasks = tasks
+        .iter()
+        .filter(|task| matches!(task.status, crate::lab::model::LabTaskStatus::Blocked))
+        .count();
+    let retries = match store.list_validation_retries(&run.lab_run_id) {
+        Ok(retries) => retries,
+        Err(err) => {
+            lines.push(format!("Failed to read validation retries: {err}"));
+            Vec::new()
+        }
+    };
+    let escalated_retries = retries.iter().filter(|retry| retry.escalated).count();
+    let cost = store.cost_summary(&run.lab_run_id).ok();
+    let meeting = crate::lab::orchestrator::LabOrchestrator::for_project(project_root)
+        .meeting_recommendation_for_latest()
+        .ok();
+    let recommended_meeting_topic = meeting
+        .as_ref()
+        .filter(|meeting| meeting.recommended)
+        .map(|meeting| meeting.topic.clone());
+    let latest_report = store
+        .list_stage_artifact_report_paths(&run.lab_run_id)
+        .ok()
+        .and_then(|reports| reports.last().map(|(_, path)| path.display().to_string()));
+
+    lines.push(format!("LabRun: {}", run.lab_run_id));
+    lines.push(format!(
+        "Run: status={:?} stage={} owner={:?} needs_user={}",
+        run.status, run.current_stage, run.internal_owner, run.needs_user
+    ));
+    lines.push(format!(
+        "Progress: cycles={} failures={} artifacts={} meetings={}",
+        run.cycle_count,
+        run.failure_count,
+        run.artifact_ids.len(),
+        run.meeting_ids.len()
+    ));
+    lines.push(format!(
+        "Tasks: total={} open={} blocked={}",
+        tasks.len(),
+        open_tasks,
+        blocked_tasks
+    ));
+    lines.push(format!(
+        "Validation retries: total={} escalated={}",
+        retries.len(),
+        escalated_retries
+    ));
+    if let Some(cost) = cost {
+        lines.push(format!(
+            "Cost: requests={} total_tokens={} cache_hit_rate={:.1}% estimated_cost_usd={:.6}",
+            cost.requests,
+            cost.total_tokens,
+            cost.cache_hit_rate_percent(),
+            cost.estimated_cost_usd
+        ));
+    }
+    if let Some(meeting) = meeting {
+        lines.push(format!(
+            "Meeting recommendation: recommended={} topic={} reason={}",
+            meeting.recommended,
+            compact_panel_line(&meeting.topic, 96),
+            compact_panel_line(&meeting.reason, 120)
+        ));
+    }
+    if let Some(report) = latest_report {
+        lines.push(format!(
+            "Latest report: {}",
+            compact_panel_line(&report, 140)
+        ));
+    }
+
+    let mut blockers = tasks
+        .iter()
+        .filter_map(|task| {
+            task.blocker.as_ref().map(|blocker| {
+                format!(
+                    "{}: {}",
+                    compact_panel_line(&task.title, 80),
+                    compact_panel_line(blocker, 120)
+                )
+            })
+        })
+        .collect::<Vec<_>>();
+    if let Some(reason) = run.blocked_reason.as_ref() {
+        blockers.push(format!("Run: {}", compact_panel_line(reason, 120)));
+    }
+    if blockers.is_empty() {
+        lines.push("Blockers: none".to_string());
+    } else {
+        lines.push("Blockers:".to_string());
+        for blocker in blockers.into_iter().take(5) {
+            lines.push(format!("  {blocker}"));
+        }
+    }
+    if let Some(retry) = retries.last() {
+        lines.push(format!(
+            "Latest retry: task={} attempt={} escalated={} summary={}",
+            retry.task_id,
+            retry.attempt,
+            retry.escalated,
+            compact_panel_line(&retry.validation_summary, 140)
+        ));
+    }
+
+    lines.push("Actions:".to_string());
+    lines.push("  /lab dashboard".to_string());
+    if let Some(topic) = recommended_meeting_topic {
+        lines.push(format!(
+            "  recommended: /lab meeting open {}",
+            compact_panel_line(&topic, 120)
+        ));
+    }
+    lines.push("  /lab meeting open [topic]".to_string());
+    lines.push("  /lab intervene <message>".to_string());
+    lines.push("  /lab continue <note>".to_string());
+    lines.push("  /lab closeout auto".to_string());
+    lines.join("\n")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -896,6 +1105,7 @@ mod tests {
             RuntimePanelKind::parse("trace"),
             Some(RuntimePanelKind::Trace)
         );
+        assert_eq!(RuntimePanelKind::parse("lab"), Some(RuntimePanelKind::Lab));
         assert_eq!(RuntimePanelKind::parse("unknown"), None);
     }
 
@@ -1049,6 +1259,70 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn renders_agent_panel_with_durable_subagent_task_and_artifact_details() {
+        let mut app = TuiApp::new();
+        let store = std::sync::Arc::new(crate::session_store::SessionStore::in_memory().unwrap());
+        app.session_manager = crate::tui::session_manager::TuiSessionManager::from_store(
+            store,
+            "panel-session",
+            "Panel Session",
+            "mock-model",
+            None,
+        )
+        .unwrap();
+        let store = app.session_manager.store();
+        let session_id = app
+            .session_manager
+            .current_session_id()
+            .expect("current session")
+            .to_string();
+        let artifact_id = store
+            .add_agent_artifact(
+                &session_id,
+                "agent_1",
+                Some("implementer"),
+                "Specialist",
+                "completed",
+                "edit code",
+                "completed result preview",
+                &serde_json::json!({
+                    "task_id": "task_1",
+                    "completion_sink": "agent_manager"
+                }),
+            )
+            .unwrap();
+        store
+            .upsert_agent_task_state(&crate::session_store::AgentTaskStateUpsert {
+                session_id,
+                task_id: "task_1".to_string(),
+                agent_id: "agent_1".to_string(),
+                profile: Some("implementer".to_string()),
+                role: "Specialist".to_string(),
+                status: "paused_restart".to_string(),
+                description: "edit code".to_string(),
+                transcript_path: Some("/tmp/a2a.jsonl".to_string()),
+                tool_ids_in_progress: Vec::new(),
+                permission_requests: vec!["file_write".to_string()],
+                result_artifact_id: Some(artifact_id),
+                cleanup_hooks: vec!["cleanup".to_string()],
+                payload: serde_json::json!({
+                    "child_session_id": "parent:subagent:task_1",
+                    "recovery_status": "paused_restart"
+                }),
+            })
+            .unwrap();
+
+        let panel = render_runtime_panel(&app, RuntimePanelKind::Agents).await;
+
+        assert!(panel.contains("task=task_1"));
+        assert!(panel.contains("artifact=1"));
+        assert!(panel.contains("child=parent:subagent:task_1"));
+        assert!(panel.contains("recovery=paused_restart"));
+        assert!(panel.contains("sink=agent_manager"));
+        assert!(panel.contains("completed result preview"));
+    }
+
+    #[tokio::test]
     async fn renders_skills_panel_without_engine() {
         let app = TuiApp::new();
 
@@ -1056,5 +1330,48 @@ mod tests {
 
         assert!(panel.contains("# Skills Panel"));
         assert!(panel.contains("No skills declare a panel"));
+    }
+
+    #[tokio::test]
+    async fn renders_lab_panel_from_workspace_labrun_state() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut app = TuiApp::new();
+        app.workspace = crate::workspace::Workspace::detect(temp.path());
+
+        let store = crate::lab::store::LabStore::for_project(temp.path());
+        let proposal = store
+            .create_proposal("Build the TUI Lab panel", Some("session".to_string()))
+            .unwrap();
+        let run = store.approve_proposal(&proposal.proposal_id).unwrap();
+        let task = store
+            .create_graduate_task(
+                &run.lab_run_id,
+                "Render Lab panel",
+                "Render a TUI Lab status panel from file-backed LabRun state.",
+                vec!["src/tui/runtime_panels.rs".to_string()],
+                vec!["cargo test -q runtime_panels".to_string()],
+            )
+            .unwrap();
+        store
+            .record_validation_retry_and_repair_task(
+                &run.lab_run_id,
+                &task.task_id,
+                "TUI Lab panel snapshot was missing retry state",
+            )
+            .unwrap();
+
+        let panel = render_runtime_panel(&app, RuntimePanelKind::Lab).await;
+
+        assert!(panel.contains("# Lab Panel"));
+        assert!(panel.contains("LabRun:"));
+        assert!(panel.contains("Run: status=Active"));
+        assert!(panel.contains("Tasks: total=2 open=2 blocked=1"));
+        assert!(panel.contains("Validation retries: total=1 escalated=0"));
+        assert!(panel.contains("Blockers:"));
+        assert!(panel.contains("TUI Lab panel snapshot was missing retry state"));
+        assert!(panel.contains("Latest retry:"));
+        assert!(panel.contains("recommended: /lab meeting open"));
+        assert!(panel.contains("/lab intervene <message>"));
+        assert!(panel.contains("/lab closeout auto"));
     }
 }

@@ -2,6 +2,36 @@ use super::*;
 use std::path::Path;
 use std::process::Command;
 
+static DESKTOP_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+struct DesktopEnvGuard {
+    saved: Vec<(&'static str, Option<String>)>,
+}
+
+impl DesktopEnvGuard {
+    fn new() -> Self {
+        Self { saved: Vec::new() }
+    }
+
+    fn set(&mut self, key: &'static str, value: &str) {
+        if !self.saved.iter().any(|(saved_key, _)| saved_key == &key) {
+            self.saved.push((key, std::env::var(key).ok()));
+        }
+        unsafe { std::env::set_var(key, value) };
+    }
+}
+
+impl Drop for DesktopEnvGuard {
+    fn drop(&mut self) {
+        for (key, value) in self.saved.drain(..) {
+            match value {
+                Some(value) => unsafe { std::env::set_var(key, value) },
+                None => unsafe { std::env::remove_var(key) },
+            }
+        }
+    }
+}
+
 #[test]
 fn desktop_smoke_health_reports_ready_and_cwd() {
     let cwd = std::env::current_dir().unwrap().canonicalize().unwrap();
@@ -45,7 +75,7 @@ fn desktop_smoke_project_path_validation_rejects_filesystem_root() {
 fn desktop_smoke_recent_sessions_include_message_counts() {
     let store = SessionStore::in_memory().unwrap();
     store
-        .create_session("desktop-session", "Desktop Session", "mock-model")
+        .create_session("desktop-session", "Desktop Session", "mock-model", None)
         .unwrap();
     store
         .add_message("desktop-session", "user", "hello", None, None)
@@ -68,10 +98,10 @@ fn desktop_smoke_recent_sessions_include_message_counts() {
 fn desktop_smoke_recent_sessions_skip_archived_ids() {
     let store = SessionStore::in_memory().unwrap();
     store
-        .create_session("visible-session", "Visible Session", "mock-model")
+        .create_session("visible-session", "Visible Session", "mock-model", None)
         .unwrap();
     store
-        .create_session("archived-session", "Archived Session", "mock-model")
+        .create_session("archived-session", "Archived Session", "mock-model", None)
         .unwrap();
 
     let sessions =
@@ -85,7 +115,7 @@ fn desktop_smoke_recent_sessions_skip_archived_ids() {
 fn desktop_smoke_search_sessions_uses_message_fts() {
     let store = SessionStore::in_memory().unwrap();
     store
-        .create_session("desktop-session", "Desktop Session", "mock-model")
+        .create_session("desktop-session", "Desktop Session", "mock-model", None)
         .unwrap();
     store
         .add_message(
@@ -107,7 +137,7 @@ fn desktop_smoke_search_sessions_uses_message_fts() {
 fn desktop_smoke_load_messages_preserves_order_and_roles() {
     let store = SessionStore::in_memory().unwrap();
     store
-        .create_session("desktop-session", "Desktop Session", "mock-model")
+        .create_session("desktop-session", "Desktop Session", "mock-model", None)
         .unwrap();
     store
         .add_message("desktop-session", "user", "first", None, None)
@@ -131,7 +161,7 @@ fn desktop_smoke_loads_persisted_long_session_parts_for_reload() {
     let store = SessionStore::in_memory().unwrap();
     let session_id = "desktop-long-reload";
     store
-        .create_session(session_id, "Desktop Long Reload", "mock-model")
+        .create_session(session_id, "Desktop Long Reload", "mock-model", None)
         .unwrap();
     let writer = priority_agent::session_store::SessionEventWriter::new(
         store.shared_conn(),
@@ -218,6 +248,9 @@ fn desktop_run_context_enriches_message_with_git_diff() {
             context_type: "current_diff".to_string(),
             label: Some("Current diff".to_string()),
             path: None,
+            line_start: None,
+            line_end: None,
+            selection_text: None,
         }],
         &project,
     )
@@ -240,6 +273,9 @@ fn desktop_run_context_rejects_unknown_context_type() {
             context_type: "unknown".to_string(),
             label: None,
             path: None,
+            line_start: None,
+            line_end: None,
+            selection_text: None,
         }],
         &std::env::current_dir().unwrap(),
     )
@@ -265,6 +301,9 @@ fn desktop_run_context_enriches_message_with_file_preview() {
             context_type: "file".to_string(),
             label: Some("app.rs".to_string()),
             path: Some(file.to_string_lossy().to_string()),
+            line_start: None,
+            line_end: None,
+            selection_text: None,
         }],
         &project,
     )
@@ -299,6 +338,9 @@ fn desktop_run_context_rejects_file_outside_project() {
             context_type: "file".to_string(),
             label: Some("outside.txt".to_string()),
             path: Some(outside.to_string_lossy().to_string()),
+            line_start: None,
+            line_end: None,
+            selection_text: None,
         }],
         &project,
     )
@@ -323,6 +365,7 @@ fn desktop_smoke_settings_round_trip() {
         active_session_id: Some("session-1".to_string()),
         permission_mode: Some("auto_low_risk".to_string()),
         detail_level: Some("daily".to_string()),
+        agent_mode: Some("standard".to_string()),
         provider_name: Some("kimi".to_string()),
         model: Some("kimi-k2.5".to_string()),
         recent_projects: Some(vec!["/tmp/project".to_string()]),
@@ -350,6 +393,259 @@ fn desktop_smoke_settings_round_trip() {
 }
 
 #[test]
+fn desktop_smoke_lab_status_reads_file_backed_labrun_state() {
+    let project = std::env::temp_dir().join(format!(
+        "priority-agent-desktop-lab-status-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&project);
+    std::fs::create_dir_all(&project).unwrap();
+
+    let empty = desktop_lab_status_for_project(&project);
+    assert_eq!(empty.state, "none");
+    assert!(!empty.available);
+
+    let store = priority_agent::lab::store::LabStore::for_project(&project);
+    let proposal = store.create_proposal("Build Lab status panel", None).unwrap();
+    let proposed = desktop_lab_status_for_project(&project);
+    assert_eq!(proposed.state, "proposal");
+    assert_eq!(proposed.proposal_id.as_deref(), Some(proposal.proposal_id.as_str()));
+    assert_eq!(proposed.proposal_status.as_deref(), Some("AwaitingApproval"));
+    assert!(proposed.needs_user);
+
+    let run = store.approve_proposal(&proposal.proposal_id).unwrap();
+    store
+        .enable_daemon_with_cycle_bound(
+            priority_agent::lab::model::LabDaemonMode::HybridCycles,
+            4,
+            6,
+            500,
+            "desktop policy",
+        )
+        .unwrap();
+    let active = desktop_lab_status_for_project(&project);
+    assert_eq!(active.state, "run");
+    assert_eq!(active.lab_run_id.as_deref(), Some(run.lab_run_id.as_str()));
+    assert_eq!(active.run_status.as_deref(), Some("Active"));
+    assert_eq!(active.stage.as_deref(), Some("professor_discussion"));
+    assert_eq!(active.owner.as_deref(), Some("Professor"));
+    assert_eq!(active.task_total, 0);
+    assert_eq!(active.meeting_count, 0);
+    assert!(active.blockers.is_empty());
+    let daemon_policy = active.daemon_policy.as_ref().unwrap();
+    assert!(daemon_policy.enabled);
+    assert_eq!(
+        daemon_policy.mode,
+        priority_agent::lab::model::LabDaemonMode::HybridCycles
+    );
+    assert_eq!(daemon_policy.max_steps, 4);
+    assert_eq!(daemon_policy.max_steps_per_cycle, 6);
+    assert_eq!(daemon_policy.interval_ms, 500);
+
+    let task = store
+        .create_graduate_task(
+            &run.lab_run_id,
+            "Wire status actions",
+            "Expose Lab status actions in the desktop panel.",
+            vec!["apps/desktop/src/app/components/WorkbenchPanel.tsx".to_string()],
+            vec!["pnpm --dir apps/desktop build".to_string()],
+        )
+        .unwrap();
+    store
+        .record_validation_retry_and_repair_task(
+            &run.lab_run_id,
+            &task.task_id,
+            "Playwright panel action check failed",
+        )
+        .unwrap();
+    let blocked = desktop_lab_status_for_project(&project);
+    assert_eq!(blocked.task_blocked, 1);
+    assert_eq!(blocked.validation_retry_count, 1);
+    assert_eq!(blocked.validation_retry_escalated_count, 0);
+    assert!(blocked
+        .latest_validation_retry
+        .as_deref()
+        .unwrap_or_default()
+        .contains("Playwright panel action check failed"));
+    assert!(blocked
+        .blockers
+        .iter()
+        .any(|blocker| blocker.contains("Wire status actions")));
+
+    let _ = std::fs::remove_dir_all(&project);
+}
+
+#[test]
+fn desktop_smoke_subagent_tasks_reads_active_session_artifacts_and_recovery() {
+    let store = SessionStore::in_memory().unwrap();
+    store
+        .create_session("desktop-session", "Desktop Session", "mock-model", None)
+        .unwrap();
+    let artifact_id = store
+        .add_agent_artifact(
+            "desktop-session",
+            "agent_1",
+            Some("implementer"),
+            "Specialist",
+            "completed",
+            "edit focused code",
+            "finished child result\nwith more detail",
+            &serde_json::json!({
+            "task_id": "task_1",
+                "completion_sink": "agent_manager",
+                "tools_used": ["file_write", "file_read"]
+            }),
+        )
+        .unwrap();
+    store
+        .upsert_agent_task_state(&priority_agent::session_store::AgentTaskStateUpsert {
+            session_id: "desktop-session".to_string(),
+            task_id: "task_1".to_string(),
+            agent_id: "agent_1".to_string(),
+            profile: Some("implementer".to_string()),
+            role: "Specialist".to_string(),
+            status: "paused_restart".to_string(),
+            description: "edit focused code".to_string(),
+            transcript_path: Some("/tmp/a2a.jsonl".to_string()),
+            tool_ids_in_progress: Vec::new(),
+            permission_requests: Vec::new(),
+            result_artifact_id: Some(artifact_id),
+            cleanup_hooks: Vec::new(),
+            payload: serde_json::json!({
+                "child_session_id": "desktop-session:subagent:task_1",
+                "recovery_status": "paused_restart",
+                "recovery_action": "read the task by task_id, then relaunch"
+            }),
+        })
+        .unwrap();
+
+    let tasks = desktop_subagent_tasks_for_session(&store, Some("desktop-session"));
+
+    assert_eq!(tasks.len(), 1);
+    assert_eq!(tasks[0].task_id, "task_1");
+    assert_eq!(tasks[0].result_artifact_id, Some(artifact_id));
+    assert_eq!(tasks[0].artifact_status.as_deref(), Some("completed"));
+    assert_eq!(tasks[0].result_preview.as_deref(), Some("finished child result"));
+    assert_eq!(
+        tasks[0].tools_used,
+        vec!["file_write".to_string(), "file_read".to_string()]
+    );
+    assert_eq!(tasks[0].completion_sink.as_deref(), Some("agent_manager"));
+    assert_eq!(tasks[0].recovery_status.as_deref(), Some("paused_restart"));
+    assert!(tasks[0]
+        .recovery_action
+        .as_deref()
+        .unwrap_or_default()
+        .contains("task_id"));
+}
+
+#[test]
+fn desktop_smoke_startup_state_prefers_recoverable_labrun() {
+    let project = std::env::temp_dir().join(format!(
+        "priority-agent-desktop-lab-recovery-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&project);
+    std::fs::create_dir_all(&project).unwrap();
+
+    let store = priority_agent::lab::store::LabStore::for_project(&project);
+    let proposal = store
+        .create_proposal("Recover interrupted LabRun", None)
+        .unwrap();
+    let run = store.approve_proposal(&proposal.proposal_id).unwrap();
+    store.pause_latest_run_for_shutdown().unwrap().unwrap();
+
+    let startup = desktop_startup_state(&project, Some("restored-session"));
+    assert_eq!(startup.status, "lab_recovery");
+    assert_eq!(startup.lab_run_id.as_deref(), Some(run.lab_run_id.as_str()));
+    assert_eq!(startup.lab_stage.as_deref(), Some("professor_discussion"));
+    assert_eq!(startup.lab_owner.as_deref(), Some("Professor"));
+    assert_eq!(startup.lab_pause_reason.as_deref(), Some("app_shutdown"));
+    assert!(startup.detail.contains("recoverable"));
+
+    let _ = std::fs::remove_dir_all(&project);
+}
+
+#[test]
+#[cfg(unix)]
+fn desktop_smoke_lab_daemon_supervise_repairs_missing_service() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let _env_lock = DESKTOP_ENV_LOCK.lock().unwrap();
+    let mut env = DesktopEnvGuard::new();
+    let project_root = std::env::temp_dir().join(format!(
+        "priority-agent-desktop-lab-daemon-supervise-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&project_root);
+    let project = project_root.join("daemon-project");
+    std::fs::create_dir_all(&project).unwrap();
+    let launch_agents = project_root.join("launch-agents");
+    let bin_dir = project_root.join("bin");
+    std::fs::create_dir_all(&launch_agents).unwrap();
+    std::fs::create_dir_all(&bin_dir).unwrap();
+    let fake_launchctl = bin_dir.join("launchctl");
+    let launchctl_log = bin_dir.join("launchctl.log");
+    std::fs::write(
+        &fake_launchctl,
+        r#"#!/bin/sh
+printf '%s' "$1" >> "$PRIORITY_AGENT_FAKE_LAUNCHCTL_LOG"
+shift
+for arg in "$@"; do
+  printf '|%s' "$arg" >> "$PRIORITY_AGENT_FAKE_LAUNCHCTL_LOG"
+done
+printf '\n' >> "$PRIORITY_AGENT_FAKE_LAUNCHCTL_LOG"
+if [ "$1" = "gui/desktop/com.priority-agent.lab.daemon-project" ]; then
+  printf 'missing service\n' >&2
+  exit 113
+fi
+"#,
+    )
+    .unwrap();
+    let mut permissions = std::fs::metadata(&fake_launchctl).unwrap().permissions();
+    permissions.set_mode(0o755);
+    std::fs::set_permissions(&fake_launchctl, permissions).unwrap();
+    env.set(
+        "PRIORITY_AGENT_LAUNCH_AGENTS_DIR",
+        launch_agents.to_str().unwrap(),
+    );
+    env.set(
+        "PRIORITY_AGENT_LAUNCHCTL_BIN",
+        fake_launchctl.to_str().unwrap(),
+    );
+    env.set("PRIORITY_AGENT_LAUNCHCTL_DOMAIN", "gui/desktop");
+    env.set(
+        "PRIORITY_AGENT_FAKE_LAUNCHCTL_LOG",
+        launchctl_log.to_str().unwrap(),
+    );
+
+    let store = priority_agent::lab::store::LabStore::for_project(&project);
+    store
+        .enable_daemon(
+            priority_agent::lab::model::LabDaemonMode::Strict,
+            3,
+            250,
+            "",
+        )
+        .unwrap();
+
+    let result = desktop_lab_daemon_supervise_for_project(&project);
+
+    assert_eq!(result.action, "supervise");
+    assert!(result
+        .output
+        .contains("supervision repaired missing service"));
+    assert_eq!(result.lab_status.state, "none");
+    let installed = launch_agents.join("com.priority-agent.lab.daemon-project.plist");
+    assert!(installed.exists());
+    let log = std::fs::read_to_string(launchctl_log).unwrap();
+    assert!(log.contains("print|gui/desktop/com.priority-agent.lab.daemon-project"));
+    assert!(log.contains(&format!("bootstrap|gui/desktop|{}", installed.display())));
+
+    let _ = std::fs::remove_dir_all(&project_root);
+}
+
+#[test]
 fn desktop_smoke_initial_project_falls_back_when_saved_path_is_missing() {
     let cwd = std::env::current_dir().unwrap().canonicalize().unwrap();
     let expected = default_desktop_project(cwd.clone());
@@ -363,6 +659,7 @@ fn desktop_smoke_initial_project_falls_back_when_saved_path_is_missing() {
         active_session_id: None,
         permission_mode: None,
         detail_level: None,
+        agent_mode: None,
         provider_name: None,
         model: None,
         recent_projects: None,
@@ -388,6 +685,7 @@ fn desktop_smoke_initial_project_falls_back_when_saved_path_is_filesystem_root()
         active_session_id: None,
         permission_mode: None,
         detail_level: None,
+        agent_mode: None,
         provider_name: None,
         model: None,
         recent_projects: None,
@@ -428,6 +726,7 @@ fn desktop_smoke_initial_project_migrates_old_tauri_subdir_default() {
         active_session_id: None,
         permission_mode: None,
         detail_level: None,
+        agent_mode: None,
         provider_name: None,
         model: None,
         recent_projects: None,
@@ -510,11 +809,19 @@ fn desktop_smoke_provider_setup_info_uses_shell_profile() {
         info.shell_profile_path.ends_with(".zshrc")
             || info.shell_profile_path.ends_with(".bash_profile")
     );
-    assert!(info.provider_env_vars.contains(&"MINIMAX_API_KEY"));
-    assert!(info.provider_env_vars.contains(&"KIMI_CODE_API_KEY"));
-    assert!(info.provider_env_vars.contains(&"DEEPSEEK_API_KEY"));
-    assert!(info.provider_env_vars.contains(&"GLM_API_KEY"));
-    assert!(info.provider_env_vars.contains(&"MOONSHOT_API_KEY"));
+    assert!(info
+        .provider_env_vars
+        .contains(&"MINIMAX_API_KEY".to_string()));
+    assert!(info
+        .provider_env_vars
+        .contains(&"KIMI_CODE_API_KEY".to_string()));
+    assert!(info
+        .provider_env_vars
+        .contains(&"DEEPSEEK_API_KEY".to_string()));
+    assert!(info.provider_env_vars.contains(&"GLM_API_KEY".to_string()));
+    assert!(info
+        .provider_env_vars
+        .contains(&"MOONSHOT_API_KEY".to_string()));
     assert!(info.example.contains("export "));
 }
 

@@ -546,6 +546,7 @@ pub fn default_command_registry() -> CommandRegistry {
     registry.register(&CMD_TOOLS);
     registry.register(&CMD_TOOL_OUTPUT);
     registry.register(&CMD_PANEL);
+    registry.register(&CMD_LAB);
     registry.register(&CMD_TASKS);
     registry.register(&CMD_AGENT);
     registry.register(&CMD_AGENTS);

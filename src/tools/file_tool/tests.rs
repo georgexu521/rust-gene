@@ -235,6 +235,42 @@ async fn file_write_allows_live_eval_worktree_under_target() {
 }
 
 #[tokio::test]
+async fn file_write_allows_agent_worktree_under_target_validation_workspace() {
+    let tool = FileWriteTool;
+    let dir = tempfile::tempdir().unwrap();
+    let session_id = format!(
+        "test-session-write-agent-worktree-{}",
+        uuid::Uuid::new_v4().simple()
+    );
+    let worktree = dir
+        .path()
+        .join("target/lab-live-validation/run/workspace/.claude/worktrees/agent-smoke");
+    tokio::fs::create_dir_all(&worktree).await.unwrap();
+
+    let result = tool
+        .execute(
+            json!({
+                "path": "lab-provider-compare-background.txt",
+                "content": "background subagent tool smoke\n"
+            }),
+            ToolContext::new(&worktree, &session_id),
+        )
+        .await;
+
+    assert!(
+        result.success,
+        "unexpected file_write failure: {:?}",
+        result
+    );
+    assert_eq!(
+        tokio::fs::read_to_string(worktree.join("lab-provider-compare-background.txt"))
+            .await
+            .unwrap(),
+        "background subagent tool smoke\n"
+    );
+}
+
+#[tokio::test]
 async fn file_patch_applies_multiple_files_and_records_history() {
     let dir = tempfile::tempdir().unwrap();
     tokio::fs::write(dir.path().join("a.txt"), "alpha\nold-a\n")

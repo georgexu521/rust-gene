@@ -26,6 +26,7 @@ pub(super) struct TurnCompletionContext<'a> {
     pub(super) final_tool_calls: &'a [ToolCall],
     pub(super) messages: &'a mut Vec<Message>,
     pub(super) claim_gate_repair_used: &'a mut bool,
+    pub(super) tools_used: &'a [String],
     pub(super) iterations_used: usize,
     pub(super) max_iterations: usize,
     pub(super) tool_calls_made: bool,
@@ -99,6 +100,7 @@ impl TurnCompletionController {
             content: std::mem::take(context.final_content),
             tool_calls: Vec::new(),
             tool_calls_made: context.tool_calls_made,
+            tools_used: context.tools_used.to_vec(),
             iterations: context.iterations_used,
             pre_executed_results: HashMap::new(),
         })
@@ -702,6 +704,7 @@ mod tests {
             final_tool_calls: &final_tool_calls,
             messages: &mut messages,
             claim_gate_repair_used: &mut claim_gate_repair_used,
+            tools_used: &["bash".to_string()],
             iterations_used: 2,
             max_iterations: 8,
             tool_calls_made: true,
@@ -718,6 +721,7 @@ mod tests {
         assert_eq!(result.content, "hello");
         assert!(result.tool_calls.is_empty());
         assert!(result.tool_calls_made);
+        assert_eq!(result.tools_used, vec!["bash"]);
         assert_eq!(result.iterations, 2);
         assert!(result.pre_executed_results.is_empty());
         assert!(final_content.is_empty());

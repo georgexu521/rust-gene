@@ -25,9 +25,10 @@ pub(super) fn collect_desktop_diagnostics(
 pub(super) fn provider_setup_info_value() -> ProviderSetupInfo {
     ProviderSetupInfo {
         shell_profile_path: shell_profile_path().display().to_string(),
-        provider_env_vars: priority_agent::services::api::provider::DEFAULT_PROVIDER_ENV_SPECS
+        provider_env_vars: priority_agent::services::api::provider_manifest::ProviderManifestLoader::load_merged()
+            .provider
             .iter()
-            .flat_map(|spec| spec.key_env_vars.iter().copied())
+            .flat_map(|spec| spec.env.iter().cloned())
             .collect(),
         example: "export MINIMAX_API_KEY=\"your-key-here\"",
     }
@@ -77,13 +78,14 @@ fn product_readiness_identity(name: &str) -> (&'static str, &'static str) {
 }
 
 pub(super) fn provider_key_diagnostic() -> DesktopDiagnostic {
-    let configured: Vec<&str> = priority_agent::services::api::provider::DEFAULT_PROVIDER_ENV_SPECS
+    let configured: Vec<String> = priority_agent::services::api::provider_manifest::ProviderManifestLoader::load_merged()
+        .provider
         .iter()
         .filter_map(|spec| {
-            spec.key_env_vars
+            spec.env
                 .iter()
                 .any(|env| env_is_set(env))
-                .then_some(spec.label)
+                .then_some(spec.name.clone())
         })
         .collect();
 

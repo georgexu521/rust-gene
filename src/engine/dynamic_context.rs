@@ -6,6 +6,7 @@ pub const TASK_STATE_TAG: &str = "task-state";
 pub const TASK_STATE_ALT_TAG: &str = "task_state";
 pub const TASK_CONTRACT_TAG: &str = "task-contract";
 pub const CONTEXT_PACK_TAG: &str = "context-pack";
+pub const LAB_CONTEXT_TAG: &str = "lab-context";
 pub const RELEVANT_MATERIAL_TAG: &str = "relevant_material";
 pub const RECENT_OBSERVATION_TAG: &str = "recent_observation";
 pub const SELF_EVOLUTION_GUIDANCE_TAG: &str = "self-evolution-guidance";
@@ -19,6 +20,7 @@ pub const DYNAMIC_CONTEXT_TAGS: &[&str] = &[
     TASK_STATE_ALT_TAG,
     TASK_CONTRACT_TAG,
     CONTEXT_PACK_TAG,
+    LAB_CONTEXT_TAG,
     RELEVANT_MATERIAL_TAG,
     RECENT_OBSERVATION_TAG,
     SELF_EVOLUTION_GUIDANCE_TAG,
@@ -30,6 +32,7 @@ pub const DYNAMIC_CONTEXT_MARKERS: &[&str] = &[
     "<task_state>",
     "<task-contract>",
     "<context-pack>",
+    "<lab-context>",
     "<relevant_material>",
     "<recent_observation>",
     "<self-evolution-guidance>",

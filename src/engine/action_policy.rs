@@ -257,7 +257,9 @@ impl WorkspaceBoundaryPolicy {
             .any(|root| normalized.starts_with(root));
         let class = if path.trim().is_empty() {
             WorkspacePathClass::Unknown
-        } else if inside_workspace && is_live_eval_worktree_path(&normalized) {
+        } else if inside_workspace
+            && (is_live_eval_worktree_path(&normalized) || is_agent_worktree_path(&normalized))
+        {
             WorkspacePathClass::Workspace
         } else if lower.contains("/.git/") || lower.ends_with("/.git") {
             WorkspacePathClass::RepoMetadata
@@ -775,6 +777,11 @@ fn is_live_eval_worktree_path(path: &Path) -> bool {
         && (lower.contains("/worktree/") || lower.ends_with("/worktree"))
 }
 
+fn is_agent_worktree_path(path: &Path) -> bool {
+    let lower = path.to_string_lossy().to_ascii_lowercase();
+    lower.contains("/.claude/worktrees/")
+}
+
 fn contains_credential_marker(path: &str) -> bool {
     [
         ".env",
@@ -889,6 +896,18 @@ mod tests {
         let working_dir = Path::new("/repo/target/live-evals/run-123/minimum-agent-loop/worktree");
         let verdict = WorkspaceBoundaryPolicy::classify_path(
             "/repo/target/live-evals/run-123/minimum-agent-loop/worktree",
+            working_dir,
+        );
+
+        assert_eq!(verdict.class, WorkspacePathClass::Workspace);
+        assert!(verdict.inside_workspace);
+    }
+
+    #[test]
+    fn agent_worktree_paths_are_workspace_not_dependency_paths() {
+        let working_dir = Path::new("/repo/.claude/worktrees/agent-provider-comparison");
+        let verdict = WorkspaceBoundaryPolicy::classify_path(
+            "lab-provider-compare-background.txt",
             working_dir,
         );
 

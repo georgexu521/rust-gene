@@ -1,8 +1,11 @@
 use super::*;
+use priority_agent::services::api::provider_manifest::{ProviderManifest, ProviderManifestLoader};
 use std::path::{Path, PathBuf};
 
 pub(super) fn open_session_store() -> Result<SessionStore, String> {
-    SessionStore::open(SessionStore::default_path()).map_err(|err| err.to_string())
+    let store = SessionStore::open(SessionStore::default_path()).map_err(|err| err.to_string())?;
+    let _ = store.recover_interrupted_agent_task_states(None);
+    Ok(store)
 }
 
 pub(super) async fn clear_active_session_if_matches(
@@ -169,6 +172,32 @@ pub(super) fn desktop_startup_state(
     project: &Path,
     active_session_id: Option<&str>,
 ) -> DesktopStartupState {
+    if let Ok(Some(run)) = priority_agent::lab::store::LabStore::for_project(project).latest_run()
+    {
+        if matches!(
+            run.status,
+            priority_agent::lab::model::LabRunStatus::Paused
+                | priority_agent::lab::model::LabRunStatus::PausedShutdown
+                | priority_agent::lab::model::LabRunStatus::NeedsUser
+        ) {
+            let pause_reason = run
+                .pause_reason
+                .clone()
+                .unwrap_or_else(|| format!("{:?}", run.status));
+            return DesktopStartupState {
+                status: "lab_recovery",
+                detail: format!(
+                    "LabRun {} is recoverable at {} with {:?}: {}",
+                    run.lab_run_id, run.current_stage, run.internal_owner, pause_reason
+                ),
+                lab_run_id: Some(run.lab_run_id),
+                lab_stage: Some(run.current_stage),
+                lab_owner: Some(format!("{:?}", run.internal_owner)),
+                lab_pause_reason: Some(pause_reason),
+            };
+        }
+    }
+
     if let Some(session_id) = active_session_id {
         DesktopStartupState {
             status: "restored_session",
@@ -180,6 +209,10 @@ pub(super) fn desktop_startup_state(
                     .and_then(|name| name.to_str())
                     .unwrap_or("selected project")
             ),
+            lab_run_id: None,
+            lab_stage: None,
+            lab_owner: None,
+            lab_pause_reason: None,
         }
     } else {
         DesktopStartupState {
@@ -191,6 +224,10 @@ pub(super) fn desktop_startup_state(
                     .and_then(|name| name.to_str())
                     .unwrap_or("selected project")
             ),
+            lab_run_id: None,
+            lab_stage: None,
+            lab_owner: None,
+            lab_pause_reason: None,
         }
     }
 }
@@ -370,19 +407,22 @@ pub(super) fn desktop_provider_options(
         })
         .collect::<Vec<_>>();
 
-    for spec in priority_agent::services::api::provider::DEFAULT_PROVIDER_ENV_SPECS {
+    for spec in ProviderManifestLoader::load_merged().provider {
         if providers.iter().any(|provider| provider.id == spec.id) {
             continue;
         }
         providers.push(DesktopProviderOption {
-            id: spec.id.to_string(),
-            label: spec.label.to_string(),
-            provider_type: format!("{:?}", spec.provider_type),
-            model: spec.default_model.to_string(),
+            id: spec.id.clone(),
+            label: spec.name.clone(),
+            provider_type: format!(
+                "{:?}",
+                priority_agent::services::api::provider::ProviderType::parse_lossy(&spec.id)
+            ),
+            model: spec.default_model.clone(),
             base_url: String::new(),
             configured: false,
             active: false,
-            note: format!("missing {}", spec.key_env_hint()),
+            note: format!("missing {}", spec.env.join(" or ")),
         });
     }
 
@@ -401,10 +441,7 @@ pub(super) fn desktop_model_options(
     provider_id: &str,
     active_model: &str,
 ) -> Vec<DesktopModelOption> {
-    let mut models = default_models_for_provider(provider_id)
-        .into_iter()
-        .map(ToString::to_string)
-        .collect::<Vec<_>>();
+    let mut models = default_models_for_provider(provider_id);
 
     if let Some(config) = registry.get_config(provider_id) {
         if !models.iter().any(|model| model == &config.default_model) {
@@ -447,34 +484,38 @@ pub(super) fn provider_id_for_base_url(
 pub(super) fn default_provider_id_from_env(
     registry: &priority_agent::services::api::provider::ProviderRegistry,
 ) -> Option<String> {
-    priority_agent::services::api::provider::DEFAULT_PROVIDER_ENV_SPECS
+    ProviderManifestLoader::load_merged()
+        .provider
         .iter()
-        .find(|spec| registry.get(spec.id).is_some())
-        .map(|spec| spec.id.to_string())
+        .find(|spec| registry.get(&spec.id).is_some())
+        .map(|spec| spec.id.clone())
 }
 
-pub(super) fn default_models_for_provider(provider_id: &str) -> Vec<&'static str> {
-    match provider_id {
-        "minimax" => vec![
-            "MiniMax-M3",
-            "MiniMax-M2.7",
-            "MiniMax-M2.7-highspeed",
-            "MiniMax-M2.5",
-            "MiniMax-M2",
-        ],
-        "kimi-code" => vec!["kimi-for-coding"],
-        "deepseek" => vec!["deepseek-v4-pro", "deepseek-v4-flash", "deepseek-chat"],
-        "glm" => vec!["glm-5.1", "glm-4.7", "glm-4.6"],
-        "openai" => vec!["gpt-4o", "gpt-4o-mini"],
-        "kimi" => vec!["kimi-k2.5", "kimi-k2.5-thinking"],
-        _ => Vec::new(),
-    }
+pub(super) fn default_models_for_provider(provider_id: &str) -> Vec<String> {
+    default_provider_manifest(provider_id)
+        .map(|manifest| {
+            let mut models = manifest.supported_models();
+            if !manifest.default_model.is_empty()
+                && !models.iter().any(|model| model == &manifest.default_model)
+            {
+                models.insert(0, manifest.default_model);
+            }
+            models
+        })
+        .unwrap_or_default()
 }
 
 pub(super) fn provider_label(provider_id: &str) -> String {
-    priority_agent::services::api::provider::default_provider_env_spec(provider_id)
-        .map(|spec| spec.label.to_string())
+    default_provider_manifest(provider_id)
+        .map(|spec| spec.name)
         .unwrap_or_else(|| provider_id.to_string())
+}
+
+fn default_provider_manifest(provider_id: &str) -> Option<ProviderManifest> {
+    ProviderManifestLoader::load_merged()
+        .provider
+        .into_iter()
+        .find(|spec| spec.id == provider_id)
 }
 
 pub(super) fn desktop_settings_path(app: &AppHandle) -> PathBuf {

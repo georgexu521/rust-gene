@@ -1,4 +1,5 @@
 use super::*;
+use crate::agent::manager::AgentCompletionSink;
 
 pub(super) fn tools_allow_file_mutation(tools: &[String]) -> bool {
     tools
@@ -28,6 +29,68 @@ pub(super) fn agent_wait_failure_status(error: &anyhow::Error) -> &'static str {
         "timed_out"
     } else {
         "failed"
+    }
+}
+
+pub(super) fn durable_subagent_task_id(requested: Option<&str>) -> String {
+    let raw = requested
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| format!("task-{}", uuid::Uuid::new_v4().simple()));
+    let mut sanitized = String::with_capacity(raw.len());
+    for ch in raw.chars() {
+        if ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.') {
+            sanitized.push(ch);
+        } else if !sanitized.ends_with('-') {
+            sanitized.push('-');
+        }
+    }
+    let sanitized = sanitized.trim_matches('-');
+    if sanitized.is_empty() {
+        format!("task-{}", uuid::Uuid::new_v4().simple())
+    } else {
+        sanitized.chars().take(96).collect()
+    }
+}
+
+fn child_session_id(parent_session_id: &str, task_id: &str) -> String {
+    format!("{}:subagent:{}", parent_session_id, task_id)
+}
+
+pub(super) fn ensure_child_session(
+    store: &crate::session_store::SessionStore,
+    child_session_id: &str,
+    description: &str,
+    parent_session_id: &str,
+    model: &str,
+    workspace_root: Option<&str>,
+) {
+    match store.get_session(child_session_id) {
+        Ok(Some(_)) => {}
+        Ok(None) => {
+            let title = format!("Sub-agent: {}", description);
+            if let Err(err) = store.create_child_session(
+                child_session_id,
+                &title,
+                model,
+                parent_session_id,
+                workspace_root,
+            ) {
+                tracing::warn!(
+                    "Failed to create durable sub-agent child session {}: {}",
+                    child_session_id,
+                    err
+                );
+            }
+        }
+        Err(err) => {
+            tracing::warn!(
+                "Failed to inspect durable sub-agent child session {}: {}",
+                child_session_id,
+                err
+            );
+        }
     }
 }
 
@@ -76,6 +139,7 @@ pub(super) fn attach_subagent_proof_metadata(
     data["proof_kind"] = json!(proof_kind);
     data["verification_proof_kind"] = json!(proof_kind);
     data["source_agent"] = json!(result.agent_id.to_string());
+    data["tools_used"] = json!(result.tools_used);
     data["parent_verified"] = json!(parent_verified);
     data["subagent_output_kind"] = json!(output_kind);
     data["claim_id"] = json!(claim_id);
@@ -96,6 +160,8 @@ pub(super) async fn spawn_single_agent(
     description: &str,
     prompt: &str,
     files: &[String],
+    requested_task_id: Option<&str>,
+    wait_for_completion: bool,
     timeout_secs: u64,
     max_turns: usize,
     max_cost_usd: Option<f64>,
@@ -108,8 +174,13 @@ pub(super) async fn spawn_single_agent(
     context: &ToolContext,
 ) -> anyhow::Result<ManagerAgentResult> {
     let started_at = std::time::Instant::now();
+    let task_id = durable_subagent_task_id(requested_task_id);
+    let child_session_id = child_session_id(&context.session_id, &task_id);
+    let subagent_session_policy =
+        derive_subagent_session_policy(&context.permission_context, definition, allowed_tools);
+    let exposed_tools = subagent_session_policy.exposed_tools.clone();
     let effective_context_mode =
-        effective_agent_context_mode(context_mode_override, definition, allowed_tools);
+        effective_agent_context_mode(context_mode_override, definition, &exposed_tools);
     let isolated_worktree = if effective_context_mode
         .map(|mode| mode.requires_isolated_worktree())
         .unwrap_or(false)
@@ -185,12 +256,17 @@ pub(super) async fn spawn_single_agent(
     } else {
         None
     };
+    system_prompt = append_subagent_tool_authorization_notice(
+        system_prompt,
+        &exposed_tools,
+        isolated_worktree.is_some(),
+    );
 
     let agent_config = AgentConfig::new(format!("sub-agent: {}", description))
         .with_description(description)
         .with_system_prompt(system_prompt)
         .with_max_turns(max_turns)
-        .with_allowed_tools(allowed_tools.to_vec())
+        .with_subagent_session_policy(subagent_session_policy.clone())
         .with_working_dir(execution_working_dir.to_path_buf())
         .with_mcp_servers(
             definition
@@ -203,6 +279,31 @@ pub(super) async fn spawn_single_agent(
                 .map(|context| context.messages.clone())
                 .unwrap_or_default(),
         );
+    let agent_config = if let Some(store) = context.session_store.as_ref() {
+        ensure_child_session(
+            store,
+            &child_session_id,
+            description,
+            &context.session_id,
+            if context.model.trim().is_empty() {
+                "unknown"
+            } else {
+                context.model.as_str()
+            },
+            Some(&context.working_dir.to_string_lossy()),
+        );
+        let agent_config = agent_config.with_child_session(store.clone(), child_session_id.clone());
+        agent_config.with_completion_sink(AgentCompletionSink {
+            store: store.clone(),
+            parent_session_id: context.session_id.clone(),
+            task_id: task_id.clone(),
+            profile: definition.map(|definition| definition.name.clone()),
+            role: role.display_name().to_string(),
+            description: description.to_string(),
+        })
+    } else {
+        agent_config
+    };
     let agent_config = if let Some(limit) = max_cost_usd {
         agent_config.with_max_cost_usd(limit)
     } else {
@@ -215,9 +316,14 @@ pub(super) async fn spawn_single_agent(
     let agent_id = agent_manager.spawn(agent_config, None).await?;
     info!("Sub-agent spawned: {}", agent_id);
     let task_payload = json!({
+        "task_id": task_id,
+        "parent_session_id": context.session_id,
+        "child_session_id": child_session_id,
         "timeout_secs": timeout_secs,
         "max_turns": max_turns,
-        "allowed_tools": allowed_tools,
+        "requested_allowed_tools": allowed_tools,
+        "allowed_tools": exposed_tools.clone(),
+        "subagent_session_policy": subagent_session_policy.payload(),
         "context_mode": effective_context_mode.map(|mode| mode.to_string()),
         "isolated_worktree": isolated_worktree.as_ref().map(|worktree| json!({
             "path": worktree.path.to_string_lossy().to_string(),
@@ -231,6 +337,7 @@ pub(super) async fn spawn_single_agent(
     });
     persist_agent_task_state(
         context,
+        &task_id,
         &agent_id,
         description,
         role,
@@ -246,7 +353,7 @@ pub(super) async fn spawn_single_agent(
             role: role.display_name().to_string(),
             description: description.to_string(),
             timeout_secs,
-            allowed_tools: allowed_tools.len(),
+            allowed_tools: exposed_tools.len(),
         });
     }
 
@@ -261,10 +368,12 @@ pub(super) async fn spawn_single_agent(
         envelope.add_context_ref(file.clone());
     }
     envelope.add_expected_artifact("task_result");
+    envelope.add_constraint(format!("task_id={}", task_id));
+    envelope.add_context_ref(format!("child_session_id={}", child_session_id));
     envelope.add_constraint(format!("timeout_secs={}", timeout_secs));
     envelope.add_constraint(format!("max_turns={}", max_turns));
-    if !allowed_tools.is_empty() {
-        envelope.add_constraint(format!("allowed_tools={}", allowed_tools.join(",")));
+    if !exposed_tools.is_empty() {
+        envelope.add_constraint(format!("allowed_tools={}", exposed_tools.join(",")));
     }
     if let Some(definition) = definition {
         envelope.add_constraint(format!("profile={}", definition.name));
@@ -293,12 +402,35 @@ pub(super) async fn spawn_single_agent(
         .await
         .map_err(|e| anyhow::anyhow!("Failed to send task: {}", e))?;
 
+    if !wait_for_completion {
+        return Ok(ManagerAgentResult {
+            agent_id,
+            status: AgentStatus::Running,
+            content: format!(
+                "Sub-agent launched in background for task_id {}. Completion will be persisted by the runtime sink.",
+                task_id
+            ),
+            completed_at: std::time::Instant::now(),
+            tools_used: Vec::new(),
+            confidence: 0.0,
+            has_conflict: false,
+        });
+    }
+
     info!(
         "Waiting for sub-agent {} to complete (timeout: {}s)...",
         agent_id, timeout_secs
     );
 
-    let result = agent_manager.wait_for_result(&agent_id, timeout_secs).await;
+    let result = match agent_manager.wait_for_result(&agent_id, timeout_secs).await {
+        Ok(result) => Ok(result),
+        Err(error) => {
+            match recover_agent_result_from_durable_sink(context, &task_id, &agent_id).await {
+                Some(result) => Ok(result),
+                None => Err(error),
+            }
+        }
+    };
     if let Some(trace) = context.trace_collector.as_ref() {
         match &result {
             Ok(result) => trace.record(crate::engine::trace::TraceEvent::SubagentCompleted {
@@ -322,6 +454,7 @@ pub(super) async fn spawn_single_agent(
         failure_payload["error"] = json!(error.to_string());
         persist_agent_task_state(
             context,
+            &task_id,
             &agent_id,
             description,
             role,
@@ -332,6 +465,104 @@ pub(super) async fn spawn_single_agent(
         );
     }
     result
+}
+
+async fn recover_agent_result_from_durable_sink(
+    context: &ToolContext,
+    task_id: &str,
+    agent_id: &AgentId,
+) -> Option<ManagerAgentResult> {
+    let store = context.session_store.as_ref()?;
+    for _ in 0..20 {
+        let state = store
+            .agent_task_state(&context.session_id, task_id)
+            .ok()
+            .flatten()
+            .or_else(|| {
+                store
+                    .agent_task_state(&context.session_id, &agent_id.to_string())
+                    .ok()
+                    .flatten()
+            })?;
+        let artifact_id = state.result_artifact_id;
+        if let Some(artifact_id) = artifact_id {
+            if let Ok(Some(artifact)) = store.agent_artifact(&context.session_id, artifact_id) {
+                let status = agent_status_from_durable(&state.status);
+                return Some(ManagerAgentResult {
+                    agent_id: AgentId(state.agent_id),
+                    status,
+                    content: artifact.output,
+                    completed_at: std::time::Instant::now(),
+                    tools_used: durable_tools_used(&artifact.payload)
+                        .or_else(|| durable_tools_used(&state.payload))
+                        .unwrap_or_default(),
+                    confidence: artifact
+                        .payload
+                        .get("confidence")
+                        .and_then(serde_json::Value::as_f64)
+                        .unwrap_or(1.0) as f32,
+                    has_conflict: artifact
+                        .payload
+                        .get("has_conflict")
+                        .and_then(serde_json::Value::as_bool)
+                        .unwrap_or(false),
+                });
+            }
+        }
+        if !matches!(state.status.as_str(), "running") {
+            return None;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+    }
+    None
+}
+
+fn agent_status_from_durable(status: &str) -> AgentStatus {
+    match status {
+        "completed" => AgentStatus::Completed,
+        "failed" => AgentStatus::Failed,
+        "cancelled" => AgentStatus::Cancelled,
+        "timed_out" => AgentStatus::Failed,
+        "paused_restart" => AgentStatus::Failed,
+        _ => AgentStatus::Running,
+    }
+}
+
+fn durable_tools_used(value: &serde_json::Value) -> Option<Vec<String>> {
+    let tools = value.get("tools_used")?;
+    let items = tools.as_array()?;
+    Some(
+        items
+            .iter()
+            .filter_map(serde_json::Value::as_str)
+            .map(str::to_string)
+            .collect(),
+    )
+}
+
+fn append_subagent_tool_authorization_notice(
+    system_prompt: String,
+    allowed_tools: &[String],
+    isolated_worktree: bool,
+) -> String {
+    if allowed_tools.is_empty() {
+        return system_prompt;
+    }
+
+    let scope = if isolated_worktree {
+        "inside this isolated worktree"
+    } else {
+        "inside this sub-agent task"
+    };
+    format!(
+        "{}\n\nSub-agent tool authorization:\n\
+- The parent runtime has explicitly exposed only these tools for this task: {}.\n\
+- When the directive requires one of these tools, call the tool directly {}; do not ask the user for confirmation solely because the tool is mutating.\n\
+- Runtime permission and scope gates still enforce safety. If an exposed tool is rejected, report that concrete blocker with the rejection evidence.",
+        system_prompt,
+        allowed_tools.join(","),
+        scope
+    )
 }
 
 /// 汇总多个子 Agent 结果
@@ -418,6 +649,7 @@ pub(super) fn synthesize_results(
 #[allow(clippy::too_many_arguments)]
 pub(super) fn persist_agent_task_state(
     context: &ToolContext,
+    task_id: &str,
     agent_id: &AgentId,
     description: &str,
     role: AgentRole,
@@ -454,7 +686,7 @@ pub(super) fn persist_agent_task_state(
     }
     let state = crate::session_store::AgentTaskStateUpsert {
         session_id: context.session_id.clone(),
-        task_id: agent_id.to_string(),
+        task_id: task_id.to_string(),
         agent_id: agent_id.to_string(),
         profile: definition.map(|definition| definition.name.clone()),
         role: role.display_name().to_string(),
@@ -479,49 +711,106 @@ pub(super) fn persist_agent_task_state(
     }
 }
 
-pub(super) fn persist_agent_artifact(
-    context: &ToolContext,
-    description: &str,
-    role: AgentRole,
-    definition: Option<&AgentDefinition>,
-    result: &ManagerAgentResult,
-) {
-    let Some(store) = context.session_store.as_ref() else {
-        return;
-    };
-    let status = format!("{:?}", result.status).to_ascii_lowercase();
-    let payload = json!({
-        "tools_used": result.tools_used,
-        "confidence": result.confidence,
-        "has_conflict": result.has_conflict,
-    });
-    let artifact_id = match store.add_agent_artifact(
-        &context.session_id,
-        &result.agent_id.to_string(),
-        definition.map(|definition| definition.name.as_str()),
-        role.display_name(),
-        &status,
-        description,
-        &result.content,
-        &payload,
-    ) {
-        Ok(id) => Some(id),
-        Err(err) => {
-            warn!(
-                "Failed to persist sub-agent artifact for {}: {}",
-                result.agent_id, err
-            );
-            None
-        }
-    };
-    persist_agent_task_state(
-        context,
-        &result.agent_id,
-        description,
-        role,
-        definition,
-        &status,
-        artifact_id,
-        payload,
-    );
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn subagent_tool_authorization_notice_tells_worker_to_call_allowed_tools() {
+        let prompt = append_subagent_tool_authorization_notice(
+            "base".to_string(),
+            &["file_write".to_string(), "bash".to_string()],
+            true,
+        );
+
+        assert!(prompt.contains("file_write,bash"));
+        assert!(prompt.contains("call the tool directly inside this isolated worktree"));
+        assert!(prompt
+            .contains("do not ask the user for confirmation solely because the tool is mutating"));
+        assert!(prompt.contains("Runtime permission and scope gates still enforce safety"));
+    }
+
+    #[test]
+    fn subagent_proof_metadata_exposes_runtime_tools_used() {
+        let result = ManagerAgentResult {
+            agent_id: AgentId("agent_1".to_string()),
+            status: AgentStatus::Completed,
+            content: "done".to_string(),
+            completed_at: std::time::Instant::now(),
+            tools_used: vec!["file_write".to_string(), "file_read".to_string()],
+            confidence: 1.0,
+            has_conflict: false,
+        };
+        let mut data = serde_json::json!({});
+
+        attach_subagent_proof_metadata(
+            &mut data,
+            &result,
+            AgentRole::Specialist,
+            None,
+            &["file_write".to_string()],
+            false,
+        );
+
+        assert_eq!(data["tools_used"][0], "file_write");
+        assert_eq!(data["tools_used"][1], "file_read");
+    }
+
+    #[tokio::test]
+    async fn durable_sink_result_recovers_after_foreground_wait_timeout() {
+        let store = std::sync::Arc::new(crate::session_store::SessionStore::in_memory().unwrap());
+        store
+            .create_session("parent", "Parent", "model", Some("/repo"))
+            .unwrap();
+        let artifact_id = store
+            .add_agent_artifact(
+                "parent",
+                "agent_1",
+                Some("implementer"),
+                "specialist",
+                "completed",
+                "edit code",
+                "done",
+                &serde_json::json!({
+                    "tools_used": ["file_write", "file_read"],
+                    "confidence": 0.7,
+                    "has_conflict": false,
+                    "completion_sink": "agent_manager",
+                }),
+            )
+            .unwrap();
+        store
+            .upsert_agent_task_state(&crate::session_store::AgentTaskStateUpsert {
+                session_id: "parent".to_string(),
+                task_id: "task_1".to_string(),
+                agent_id: "agent_1".to_string(),
+                profile: Some("implementer".to_string()),
+                role: "specialist".to_string(),
+                status: "completed".to_string(),
+                description: "edit code".to_string(),
+                transcript_path: None,
+                tool_ids_in_progress: Vec::new(),
+                permission_requests: Vec::new(),
+                result_artifact_id: Some(artifact_id),
+                cleanup_hooks: vec!["worktree_cleanup".to_string()],
+                payload: serde_json::json!({}),
+            })
+            .unwrap();
+
+        let result = recover_agent_result_from_durable_sink(
+            &ToolContext::new(".", "parent").with_session_store(store),
+            "task_1",
+            &AgentId("agent_1".to_string()),
+        )
+        .await
+        .expect("durable artifact should recover agent result");
+
+        assert_eq!(result.status, AgentStatus::Completed);
+        assert_eq!(result.content, "done");
+        assert_eq!(
+            result.tools_used,
+            vec!["file_write".to_string(), "file_read".to_string()]
+        );
+        assert_eq!(result.confidence, 0.7);
+    }
 }
