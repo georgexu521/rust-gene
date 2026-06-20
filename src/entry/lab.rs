@@ -127,7 +127,8 @@ pub async fn run_daemon_worker(components: crate::bootstrap::AppComponents) -> a
         anyhow::bail!("Lab daemon policy is disabled");
     }
     let run = store
-        .latest_run()?
+        .claim_latest_active_run_for_current_process()?
+        .or(store.latest_run()?)
         .ok_or_else(|| anyhow::anyhow!("no LabRun found for daemon worker"))?;
     store.record_daemon_start_result(Some(&run.lab_run_id), None)?;
 
@@ -190,6 +191,7 @@ pub async fn run_daemon_worker(components: crate::bootstrap::AppComponents) -> a
 
     match result {
         Ok(summary) => {
+            store.release_current_process_lease_without_pausing()?;
             println!(
                 "Lab daemon worker completed {} mode={:?} {}",
                 run.lab_run_id, policy.mode, summary
@@ -198,6 +200,7 @@ pub async fn run_daemon_worker(components: crate::bootstrap::AppComponents) -> a
         }
         Err(err) => {
             let _ = store.record_daemon_start_result(Some(&run.lab_run_id), Some(&err.to_string()));
+            let _ = store.release_current_process_lease_without_pausing();
             Err(err)
         }
     }

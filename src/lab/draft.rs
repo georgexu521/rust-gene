@@ -33,6 +33,8 @@ Return only a strict JSON object with:
 
 Accept only when the artifact is coherent for its role and does not claim unproven validation.
 Use revise when the artifact is incomplete, vague, unsafe, overclaims evidence, or misses required handoff details.
+Accept narrow or minimal artifacts when their required fields are concrete, scoped, and verifiable.
+Do not reject solely because a slice is intentionally small, uses an existing file, or has a single validation command.
 Do not include hidden reasoning, markdown fences, or surrounding commentary."#;
 
 const LAB_PROFESSOR_STRATEGIC_REVIEW_SYSTEM_PROMPT: &str = r#"You are the LabRun Professor agent.

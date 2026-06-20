@@ -261,6 +261,8 @@ cargo test -q workspace_change_delta_ignores_preexisting_dirty_files \
   >"$ARTIFACT_DIR/10as-runtime-internal-path-filter-test.txt" 2>&1
 cargo test -q unbound_graduate_success_can_bind_runtime_verified_result \
   >"$ARTIFACT_DIR/10at-unbound-runtime-verified-graduate-result-test.txt" 2>&1
+cargo test -q structured_postdoc_plan_accepts_object_list_items_from_provider \
+  >"$ARTIFACT_DIR/10au-provider-draft-parser-normalization-test.txt" 2>&1
 
 {
   echo "## Offline Checks"
@@ -316,6 +318,7 @@ cargo test -q unbound_graduate_success_can_bind_runtime_verified_result \
   echo "- command lease claim without pause test: passed"
   echo "- runtime internal path filter test: passed"
   echo "- unbound runtime-verified graduate result test: passed"
+  echo "- provider draft parser normalization test: passed"
   echo
 } >>"$report"
 
@@ -348,6 +351,22 @@ if [[ "$MODE" == "live_control_plane" || "$MODE" == "live_graduate" ]]; then
   grep -A12 "Background subagent:" "$ARTIFACT_DIR/13b-provider-compare.txt" | grep -q "hard_file_proof: true"
   grep -q "completion_sink:" "$ARTIFACT_DIR/13b-provider-compare.txt"
   grep -q "Lab graduate:" "$ARTIFACT_DIR/13b-provider-compare.txt"
+  run_lab "pause prepare live hybrid-cycle boundary validation" "$ARTIFACT_DIR/13c-hybrid-pause-current.txt"
+  grep -q "Paused LabRun" "$ARTIFACT_DIR/13c-hybrid-pause-current.txt"
+  run_lab "propose Validate live hybrid-cycle README boundary" "$ARTIFACT_DIR/13d-hybrid-propose.txt"
+  hybrid_proposal_id="$(sed -n 's/^Lab proposal created: //p' "$ARTIFACT_DIR/13d-hybrid-propose.txt" | head -n 1)"
+  if [[ -z "$hybrid_proposal_id" ]]; then
+    echo "failed to create live hybrid-cycle proposal" >&2
+    cat "$ARTIFACT_DIR/13d-hybrid-propose.txt" >&2
+    exit 1
+  fi
+  run_lab "approve $hybrid_proposal_id" "$ARTIFACT_DIR/13e-hybrid-approve.txt"
+  grep -q "LabRun created:" "$ARTIFACT_DIR/13e-hybrid-approve.txt"
+  run_lab_provider "run hybrid-cycles 1 3 Create exactly one README boundary validation slice. The PostdocPlan must use slices [Verify README exists], files_expected [README.md], validation_plan [test -f README.md], and graduate_handoff [Graduate only verifies README.md exists and reports validation]. Do not use placeholder, no-op, or empty file expectations." "$ARTIFACT_DIR/13f-hybrid-cycles.txt"
+  grep -q "Hybrid Lab cycle run:" "$ARTIFACT_DIR/13f-hybrid-cycles.txt"
+  grep -q "Final stage: graduate_work" "$ARTIFACT_DIR/13f-hybrid-cycles.txt"
+  grep -q "provider professor_discussion -> postdoc_plan" "$ARTIFACT_DIR/13f-hybrid-cycles.txt"
+  grep -q "provider postdoc_plan -> graduate_work" "$ARTIFACT_DIR/13f-hybrid-cycles.txt"
 
   if [[ "$MODE" == "live_graduate" ]]; then
     run_lab "task create Live graduate proof | lab-live-graduate-proof.md | test -f lab-live-graduate-proof.md | Create lab-live-graduate-proof.md with one line, run the required validation, and return the required graduate_result JSON." "$ARTIFACT_DIR/14-live-task-create.txt"
@@ -376,6 +395,8 @@ if [[ "$MODE" == "live_control_plane" || "$MODE" == "live_graduate" ]]; then
     grep -q "Lab graduate worktree cleanup succeeded" "$ARTIFACT_DIR/19-live-worktree-cleanup.txt"
   fi
 
+  run_lab "resume" "$ARTIFACT_DIR/19a-resume-before-daemon.txt"
+  grep -q "Resumed LabRun" "$ARTIFACT_DIR/19a-resume-before-daemon.txt"
   run_lab "daemon enable hybrid 2 100 Lab live validation provider smoke" "$ARTIFACT_DIR/20-daemon-enable.txt"
   grep -q "Enabled Lab daemon policy" "$ARTIFACT_DIR/20-daemon-enable.txt"
   set +e
@@ -391,6 +412,7 @@ if [[ "$MODE" == "live_control_plane" || "$MODE" == "live_graduate" ]]; then
     echo "- provider direct tool-call diagnostics: completed"
     echo "- provider Lab meeting summary: completed"
     echo "- provider generic/background-vs-Lab subagent comparison: completed"
+    echo "- provider hybrid-cycle boundary run: completed"
     if [[ "$MODE" == "live_graduate" ]]; then
       echo "- live graduate task run, runtime validation, and JSON binding: passed"
       echo "- live graduate worktree review/merge/cleanup: passed"

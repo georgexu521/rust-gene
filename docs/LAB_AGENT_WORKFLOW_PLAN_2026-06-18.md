@@ -2890,6 +2890,37 @@ optional lab meeting.
   `agent_manager` completion sink, runtime-observed tools, and isolated
   worktree file proof.
 
+### Completed in P0.166 Live hybrid-cycle boundary validation
+
+- Hardened structured Lab artifact parsing for real provider output that mixes
+  strings, arrays, and small objects in schema fields such as postdoc `slices`,
+  `files_expected`, `validation_plan`, and `graduate_handoff`.
+- Added deterministic parser coverage as
+  `10au-provider-draft-parser-normalization-test.txt`.
+- Extended `scripts/lab-live-validation.sh --live-control-plane` and
+  `--live-graduate` to create a fresh LabRun and execute
+  `/lab run hybrid-cycles 1 3 ...` with the live provider before any graduate
+  override path.
+- Re-ran DeepSeek v4 flash control-plane validation in
+  `target/lab-live-validation/p0-166-hybrid-boundary-live-control-4/report.md`.
+  The provider-backed Professor stage advanced to `postdoc_plan`, the
+  provider-backed Postdoc stage advanced to `graduate_work`, and the strict
+  scheduler stopped at the graduate boundary instead of silently inventing
+  graduate work.
+
+### Completed in P0.167 Lab daemon lease ownership repair
+
+- `lab-daemon` now claims the latest active LabRun lease for its own process
+  before running a persisted daemon policy, matching the command-mode lease
+  ownership contract.
+- The daemon worker releases its own lease after the one-pass worker exits,
+  preventing a finished daemon process from leaving a fresh-but-unowned lease
+  that blocks follow-up commands.
+- Added deterministic coverage for claiming an active LabRun when
+  `active_lease.json` is missing.
+- The live control-plane validation above now includes a successful daemon pass
+  after the provider-backed hybrid-cycle boundary check.
+
 ### Still pending
 
 - Full release-ready autonomous multi-cycle professor/postdoc/graduate LLM
@@ -2899,9 +2930,12 @@ optional lab meeting.
   runs exist, but LabRun is still not a hidden self-driving background project
   mode.
 - Full live-provider validation of multi-cycle professor/postdoc/graduate
-  orchestration. Local runtime control for next-cycle continuation, app
-  lifecycle checkpoints, professor revision tasks, postdoc revision resume, and
-  revision-task consumption now exists.
+  orchestration. DeepSeek v4 flash now proves the live
+  Professor-to-Postdoc-to-`graduate_work` hybrid-cycle boundary, and local
+  runtime control for next-cycle continuation, app lifecycle checkpoints,
+  professor revision tasks, postdoc revision resume, and revision-task
+  consumption exists. Release-ready multi-cycle operation across supported
+  providers is still pending.
 - Full live graduate subagent execution now requires runtime-observed file
   changes and validation, not only bindable JSON. DeepSeek v4 flash has passed
   this runtime path under the explicit uncertified-provider override, but it is

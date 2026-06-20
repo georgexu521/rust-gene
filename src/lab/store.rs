@@ -3216,6 +3216,37 @@ mod tests {
     }
 
     #[test]
+    fn command_claims_active_run_when_lease_file_is_missing() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = LabStore::for_project(temp.path());
+        let proposal = store.create_proposal("Build LabRun", None).unwrap();
+        let run = store.approve_proposal(&proposal.proposal_id).unwrap();
+        std::fs::remove_file(store.root().join("active_lease.json")).unwrap();
+
+        let claimed = store
+            .claim_latest_active_run_for_current_process()
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(claimed.lab_run_id, run.lab_run_id);
+        assert!(store.root().join("active_lease.json").exists());
+        let saved = store.load_run(&run.lab_run_id).unwrap();
+        assert_eq!(saved.status, LabRunStatus::Active);
+        assert!(saved.lease_id.is_some());
+        assert!(saved.lease_owner.is_some());
+
+        let released = store
+            .release_current_process_lease_without_pausing()
+            .unwrap();
+        assert!(released.is_some());
+        assert!(!store.root().join("active_lease.json").exists());
+        let saved = store.load_run(&run.lab_run_id).unwrap();
+        assert_eq!(saved.status, LabRunStatus::Active);
+        assert!(saved.lease_id.is_none());
+        assert!(saved.lease_owner.is_none());
+    }
+
+    #[test]
     fn shutdown_pause_releases_lease_and_preserves_resume_target() {
         let temp = tempfile::tempdir().unwrap();
         let store = LabStore::for_project(temp.path());
