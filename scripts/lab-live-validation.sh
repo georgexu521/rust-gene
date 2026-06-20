@@ -365,7 +365,7 @@ if [[ "$MODE" == "live_control_plane" || "$MODE" == "live_graduate" ]]; then
   fi
   run_lab "approve $hybrid_proposal_id" "$ARTIFACT_DIR/13e-hybrid-approve.txt"
   grep -q "LabRun created:" "$ARTIFACT_DIR/13e-hybrid-approve.txt"
-  run_lab_provider "run hybrid-cycles 1 3 Create exactly one README boundary validation slice. The PostdocPlan must use slices [Verify README exists], files_expected [README.md], validation_plan [test -f README.md], and graduate_handoff [Graduate only verifies README.md exists and reports validation]. Do not use placeholder, no-op, or empty file expectations." "$ARTIFACT_DIR/13f-hybrid-cycles.txt"
+  run_lab_provider "run hybrid-cycles 1 2 Create exactly one README boundary validation slice. The PostdocPlan must use slices [Verify README exists], files_expected [README.md], validation_plan [test -f README.md], and graduate_handoff [Graduate only verifies README.md exists and reports validation]. Do not use placeholder, no-op, or empty file expectations." "$ARTIFACT_DIR/13f-hybrid-cycles.txt"
   grep -q "Hybrid Lab cycle run:" "$ARTIFACT_DIR/13f-hybrid-cycles.txt"
   grep -q "Final stage: graduate_work" "$ARTIFACT_DIR/13f-hybrid-cycles.txt"
   grep -q "provider professor_discussion -> postdoc_plan" "$ARTIFACT_DIR/13f-hybrid-cycles.txt"

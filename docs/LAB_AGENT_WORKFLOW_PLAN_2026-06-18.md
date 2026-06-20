@@ -2899,14 +2899,14 @@ optional lab meeting.
   `10au-provider-draft-parser-normalization-test.txt`.
 - Extended `scripts/lab-live-validation.sh --live-control-plane` and
   `--live-graduate` to create a fresh LabRun and execute
-  `/lab run hybrid-cycles 1 3 ...` with the live provider before any graduate
+  `/lab run hybrid-cycles 1 2 ...` with the live provider before any graduate
   override path.
 - Re-ran DeepSeek v4 flash control-plane validation in
-  `target/lab-live-validation/p0-166-hybrid-boundary-live-control-4/report.md`.
+  `target/lab-live-validation/p0-168-hybrid-boundary-no-dispatch-live-control/report.md`.
   The provider-backed Professor stage advanced to `postdoc_plan`, the
   provider-backed Postdoc stage advanced to `graduate_work`, and the strict
-  scheduler stopped at the graduate boundary instead of silently inventing
-  graduate work.
+  run stopped at the `graduate_work` boundary before formal graduate dispatch
+  instead of silently inventing graduate work.
 
 ### Completed in P0.167 Lab daemon lease ownership repair
 
