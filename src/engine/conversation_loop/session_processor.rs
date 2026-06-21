@@ -220,45 +220,46 @@ impl ConversationLoop {
             .with_temperature(0.2)
             .with_output_cap(Some(8192));
         let default_timeout = llm_request_timeout();
-        let (response, cache_shape) = if let Some(tools) = fallback_tools.clone() {
-            let request_with_tools = base_request
-                .clone()
-                .with_tools(tools)
-                .with_tool_choice(ToolChoice::Auto);
-            match self
-                .provider_chat_with_timeout(
-                    request_with_tools.clone(),
-                    "non-streaming fallback with tools",
-                    default_timeout,
-                )
-                .await
-            {
-                Ok(r) => (r, cache_shape_for_request(&request_with_tools)),
-                Err(with_tools_err) => {
-                    warn!(
-                        "Non-streaming fallback with tools failed: {}. Retrying without tools.",
-                        with_tools_err
-                    );
-                    let response = self
-                        .provider_chat_with_timeout(
-                            base_request.clone(),
-                            "non-streaming fallback without tools",
-                            default_timeout,
-                        )
-                        .await?;
-                    (response, cache_shape_for_request(&base_request))
+        let (response, cache_shape) =
+            if let Some(tools) = fallback_tools.clone().filter(|tools| !tools.is_empty()) {
+                let request_with_tools = base_request
+                    .clone()
+                    .with_tools(tools)
+                    .with_tool_choice(ToolChoice::Auto);
+                match self
+                    .provider_chat_with_timeout(
+                        request_with_tools.clone(),
+                        "non-streaming fallback with tools",
+                        default_timeout,
+                    )
+                    .await
+                {
+                    Ok(r) => (r, cache_shape_for_request(&request_with_tools)),
+                    Err(with_tools_err) => {
+                        warn!(
+                            "Non-streaming fallback with tools failed: {}. Retrying without tools.",
+                            with_tools_err
+                        );
+                        let response = self
+                            .provider_chat_with_timeout(
+                                base_request.clone(),
+                                "non-streaming fallback without tools",
+                                default_timeout,
+                            )
+                            .await?;
+                        (response, cache_shape_for_request(&base_request))
+                    }
                 }
-            }
-        } else {
-            let response = self
-                .provider_chat_with_timeout(
-                    base_request.clone(),
-                    "non-streaming fallback",
-                    default_timeout,
-                )
-                .await?;
-            (response, cache_shape_for_request(&base_request))
-        };
+            } else {
+                let response = self
+                    .provider_chat_with_timeout(
+                        base_request.clone(),
+                        "non-streaming fallback",
+                        default_timeout,
+                    )
+                    .await?;
+                (response, cache_shape_for_request(&base_request))
+            };
         emit_usage_event(&response, tx).await;
 
         let content = strip_hidden_blocks(&response.content);

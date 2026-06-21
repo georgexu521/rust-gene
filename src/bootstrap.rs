@@ -50,6 +50,15 @@ pub fn init_tui_provider() -> Result<(Arc<dyn crate::services::api::LlmProvider>
     init_provider_with_default_preference(Some("deepseek"))
 }
 
+/// 初始化 Desktop 默认 Provider。
+///
+/// Desktop is the daily-use workbench surface; when the user has not selected
+/// a provider explicitly, prefer DeepSeek v4 flash if it is configured.
+/// Environment and saved config overrides still win.
+pub fn init_desktop_provider() -> Result<(Arc<dyn crate::services::api::LlmProvider>, String)> {
+    init_provider_with_default_preference(Some("deepseek"))
+}
+
 fn init_provider_with_default_preference(
     default_provider: Option<&str>,
 ) -> Result<(Arc<dyn crate::services::api::LlmProvider>, String)> {
@@ -461,6 +470,37 @@ mod tests {
             ],
             || {
                 let (_provider, model) = init_tui_provider().expect("provider should initialize");
+                assert_eq!(model, "MiniMax-M3");
+            },
+        );
+    }
+
+    #[test]
+    fn test_init_desktop_provider_prefers_deepseek_flash() {
+        with_env_vars(
+            &[
+                ("MINIMAX_API_KEY", Some("mini-key")),
+                ("DEEPSEEK_API_KEY", Some("deepseek-key")),
+            ],
+            || {
+                let (_provider, model) =
+                    init_desktop_provider().expect("provider should initialize");
+                assert_eq!(model, "deepseek-v4-flash");
+            },
+        );
+    }
+
+    #[test]
+    fn test_init_desktop_provider_env_override_beats_deepseek_default() {
+        with_env_vars(
+            &[
+                ("MINIMAX_API_KEY", Some("mini-key")),
+                ("DEEPSEEK_API_KEY", Some("deepseek-key")),
+                ("PRIORITY_AGENT_DEFAULT_PROVIDER", Some("minimax")),
+            ],
+            || {
+                let (_provider, model) =
+                    init_desktop_provider().expect("provider should initialize");
                 assert_eq!(model, "MiniMax-M3");
             },
         );

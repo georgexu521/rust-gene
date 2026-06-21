@@ -1,72 +1,46 @@
-import { FormEvent, useEffect, useRef, useState, type ReactNode } from "react";
+import { FormEvent, useCallback, useEffect, useState } from "react";
 import {
   Activity,
-  Download,
+  AlertCircle,
+  Database,
   Folder,
   Gauge,
-  GitBranch,
-  Globe,
-  Info,
   LayoutDashboard,
   FileText,
-  Moon,
-  MoreHorizontal,
+  ListChecks,
+  Map,
   PanelRight,
   Plus,
   RotateCcw,
   Settings,
-  Sun,
+  UsersRound,
 } from "lucide-react";
 import {
-  DesktopDiagnostic,
-  DesktopContextSnapshot,
-  DesktopWorkbenchSnapshot,
-  DiagnosticStatus,
   DetailLevelId,
   AgentModeId,
-  DesktopHealth,
   DesktopRunContext,
-  ProviderModelStatus,
-  DesktopRunEvent,
-  DesktopSettings,
   PermissionModeId,
-  PermissionModeOption,
-  AgentModeOption,
-  ProviderSetupInfo,
   RecentSession,
   DesktopGoalStatus,
-  answerPermission,
   archiveSession,
   compactContext,
   deleteSession,
-  desktopContextSnapshot,
-  desktopDiagnostics,
-  desktopHealth,
   desktopRunContextDetail,
   desktopSettings,
-  desktopWorkbenchSnapshot,
   exportSession,
   openFilePath,
-  listRecentSessions,
   newConversation,
-  onDesktopRunEvent,
   openDiagnosticsFolder,
   openSettingsFolder,
   openShellProfile,
-  permissionModeOptions,
   setAgentMode,
-  agentModeOptions,
   pickProjectDirectory,
   pickProjectFile,
-  providerModelStatus,
-  providerSetupInfo,
   renameSession,
   restoreArchivedSession,
   revertLastTurn,
   resumeSession,
-  searchSessions,
   selectProject,
-  sendMessage,
   setProviderModel,
   setDetailLevel,
   setPermissionMode,
@@ -82,10 +56,16 @@ import { Composer } from "./components/Composer";
 import { GoalProgressRow } from "./components/GoalProgressRow";
 import { CommandPalette, useCommandPalette, type Command } from "./components/CommandPalette";
 import { ContextDetailDrawer } from "./components/ContextDetailDrawer";
+import { DeleteSessionDialog } from "./components/DeleteSessionDialog";
 import { ErrorBoundary } from "./components/ErrorBoundary";
+import { ExportNoticeBanner } from "./components/ExportNoticeBanner";
+import { type InspectorTab } from "./components/InspectorPanel";
 import { JumpBar } from "./components/JumpBar";
+import { RuntimeInspectorSurfaces } from "./components/RuntimeInspectorSurfaces";
 import { Splash, shouldShowSplash } from "./components/Splash";
+import { SessionHeader, type WorkspaceMode } from "./components/SessionHeader";
 import { StatusBar } from "./components/StatusBar";
+import { StartupStateCard } from "./components/StartupStateCard";
 import { PermissionCard } from "./components/PermissionCard";
 import { SettingsDrawer } from "./components/SettingsDrawer";
 import { Sidebar } from "./components/Sidebar";
@@ -93,41 +73,63 @@ import { Transcript } from "./components/Transcript";
 import { TraceDrawer } from "./components/TraceDrawer";
 import { ToolOutputDrawer } from "./components/ToolOutputDrawer";
 import { WorkbenchDrawer } from "./components/WorkbenchDrawer";
-import { useTheme } from "./theme";
+import { WorkspaceTopbar } from "./components/WorkspaceTopbar";
 import {
-  applyRunEvent,
-  appendPermissionAnswer,
   initialRunViewState,
   loadSessionTranscript,
-  submitUserMessage,
   withError,
-  withRunIdleWarning,
 } from "./runEventState";
-
-const RUN_EVENT_IDLE_TIMEOUT_MS = 660_000;
+import { useDesktopBootstrap } from "./state/useDesktopBootstrap";
+import { useRunEvents } from "./state/useRunEvents";
+import { useWorkbenchSnapshots } from "./state/useWorkbenchSnapshots";
+import { useTheme } from "./theme";
 
 export function App() {
   const { theme, toggle: toggleTheme } = useTheme();
   const { open: paletteOpen, setOpen: setPaletteOpen } = useCommandPalette();
   const [showSplash, setShowSplash] = useState(() => shouldShowSplash());
-  const [health, setHealth] = useState<DesktopHealth | null>(null);
-  const [settings, setSettings] = useState<DesktopSettings | null>(null);
-  const [permissionOptions, setPermissionOptions] = useState<PermissionModeOption[]>([]);
-  const [agentModeOpts, setAgentModeOpts] = useState<AgentModeOption[]>([]);
-  const [providerSetup, setProviderSetup] = useState<ProviderSetupInfo | null>(null);
-  const [providerStatus, setProviderStatus] = useState<ProviderModelStatus | null>(null);
-  const [projectPath, setProjectPath] = useState("");
-  const [sessions, setSessions] = useState<RecentSession[]>([]);
-  const [selectedSessionSummary, setSelectedSessionSummary] = useState<RecentSession | null>(null);
-  const [sessionSearch, setSessionSearch] = useState("");
-  const [diagnostics, setDiagnostics] = useState<DesktopDiagnostic[]>([]);
-  const [contextSnapshot, setContextSnapshot] = useState<DesktopContextSnapshot | null>(null);
-  const [workbenchSnapshot, setWorkbenchSnapshot] = useState<DesktopWorkbenchSnapshot | null>(null);
+  const [runState, setRunState] = useState(initialRunViewState);
+  const reportRuntimeError = useCallback((error: unknown) => {
+    setRunState((current) => withError(current, error));
+  }, []);
+  const {
+    agentModeOpts,
+    diagnostics,
+    handleSearchChange,
+    health,
+    loadDesktopBootstrap,
+    permissionOptions,
+    projectPath,
+    providerSetup,
+    providerStatus,
+    refreshDiagnostics,
+    refreshSessions,
+    selectedSessionSummary,
+    sessionSearch,
+    sessions,
+    settings,
+    setProjectPath,
+    setProviderStatus,
+    setSelectedSessionSummary,
+    setSessions,
+    setSettings,
+  } = useDesktopBootstrap({ onError: reportRuntimeError });
+  const {
+    contextSnapshot,
+    refreshContextSnapshot,
+    refreshStartupSnapshots,
+    refreshWorkbenchSnapshot,
+    workbenchSnapshot,
+  } = useWorkbenchSnapshots({ onError: reportRuntimeError });
+  const [workspaceMode, setWorkspaceMode] = useState<WorkspaceMode>("direct");
+  const [activeInspectorTab, setActiveInspectorTab] = useState<InspectorTab>("context");
   const [composer, setComposer] = useState("");
+  const [composerFocusRequest, setComposerFocusRequest] = useState(0);
   const [runContexts, setRunContexts] = useState<DesktopRunContext[]>([]);
   const [activeContextDetail, setActiveContextDetail] = useState<DesktopRunContext | null>(null);
   const [isTraceOpen, setIsTraceOpen] = useState(false);
   const [isWorkbenchOpen, setIsWorkbenchOpen] = useState(false);
+  const [isInspectorDrawerOpen, setIsInspectorDrawerOpen] = useState(false);
   const [isToolOutputOpen, setIsToolOutputOpen] = useState(false);
   const [isRevertingTurn, setIsRevertingTurn] = useState(false);
   const [activeTraceId, setActiveTraceId] = useState<string | null>(null);
@@ -139,40 +141,26 @@ export function App() {
   const [pendingDeleteSession, setPendingDeleteSession] = useState<RecentSession | null>(null);
   const [currentGoal, setCurrentGoal] = useState<DesktopGoalStatus | null>(null);
   const [dismissedStartupLabRecoveryId, setDismissedStartupLabRecoveryId] = useState<string | null>(null);
-  const [runState, setRunState] = useState(initialRunViewState);
-  const permissionRecoveryRef = useRef<HTMLDivElement | null>(null);
-  const activeRunSessionIdRef = useRef<string | null>(null);
-  const runWatchdogRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const {
+    clearRunWatchdog,
+    handlePermission,
+    permissionRecoveryRef,
+    submitRuntimeMessage,
+  } = useRunEvents({
+    providerStatus,
+    refreshContextSnapshot,
+    refreshSessions,
+    refreshWorkbenchSnapshot,
+    runState,
+    setRunState,
+    setSelectedSessionSummary,
+    setSettings,
+    settings,
+  });
 
   useEffect(() => {
     void initialize();
-
-    let disposed = false;
-    let cleanup: (() => void) | null = null;
-    void onDesktopRunEvent(handleRunEvent).then((unlisten) => {
-      if (disposed) {
-        unlisten();
-        return;
-      }
-      cleanup = unlisten;
-    });
-
-    return () => {
-      disposed = true;
-      clearRunWatchdog();
-      cleanup?.();
-    };
   }, []);
-
-  useEffect(() => {
-    if (!runState.pendingPermission) {
-      return;
-    }
-    permissionRecoveryRef.current?.scrollIntoView({
-      block: "nearest",
-      behavior: "smooth",
-    });
-  }, [runState.pendingPermission]);
 
   useEffect(() => {
     const fetchGoal = () => { void goalStatus().then(setCurrentGoal).catch(() => {}); };
@@ -180,6 +168,30 @@ export function App() {
     const interval = setInterval(fetchGoal, 5000);
     return () => clearInterval(interval);
   }, []);
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (
+        event.key !== "/" ||
+        event.metaKey ||
+        event.ctrlKey ||
+        event.altKey ||
+        isEditableTarget(event.target) ||
+        paletteOpen ||
+        isSettingsOpen ||
+        pendingDeleteSession
+      ) {
+        return;
+      }
+      event.preventDefault();
+      if (!composer.trim()) {
+        setComposer("/");
+      }
+      setComposerFocusRequest((request) => request + 1);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [composer, isSettingsOpen, paletteOpen, pendingDeleteSession]);
 
   useEffect(() => {
     let busy = false;
@@ -202,80 +214,18 @@ export function App() {
   }, []);
 
   async function initialize() {
-    const [
-      healthResult,
-      settingsResult,
-      sessionsResult,
-      diagnosticsResult,
-      providerSetupResult,
-      permissionOptionsResult,
-      agentModeOptionsResult,
-      providerStatusResult,
-    ] = await Promise.allSettled([
-      desktopHealth(),
-      desktopSettings(),
-      listRecentSessions(),
-      desktopDiagnostics(),
-      providerSetupInfo(),
-      permissionModeOptions(),
-      agentModeOptions(),
-      providerModelStatus(),
-    ]);
-
-    const startupErrors = [
-      healthResult,
-      settingsResult,
-      sessionsResult,
-      diagnosticsResult,
-      providerSetupResult,
-      permissionOptionsResult,
-      agentModeOptionsResult,
-      providerStatusResult,
-    ]
-      .filter((result): result is PromiseRejectedResult => result.status === "rejected")
-      .map((result) => result.reason);
-
-    const nextHealth = healthResult.status === "fulfilled" ? healthResult.value : null;
-    const nextSettings = settingsResult.status === "fulfilled" ? settingsResult.value : null;
-    const nextSessions = sessionsResult.status === "fulfilled" ? sessionsResult.value : [];
-
-    if (nextHealth) {
-      setHealth(nextHealth);
-    }
-    if (nextSettings) {
-      setSettings(nextSettings);
-    }
-    if (permissionOptionsResult.status === "fulfilled") {
-      setPermissionOptions(permissionOptionsResult.value);
-    }
-    if (agentModeOptionsResult.status === "fulfilled") {
-      setAgentModeOpts(agentModeOptionsResult.value);
-    }
-    if (providerSetupResult.status === "fulfilled") {
-      setProviderSetup(providerSetupResult.value);
-    }
-    if (providerStatusResult.status === "fulfilled") {
-      setProviderStatus(providerStatusResult.value);
-    }
-    setSessions(nextSessions);
-    if (nextSettings || nextHealth) {
-      setProjectPath(nextSettings?.selected_project || nextHealth?.cwd || "");
-    }
-    if (nextSettings) {
-      setSelectedSessionSummary(
-        nextSessions.find((session) => session.id === nextSettings.active_session_id) || null,
-      );
-    }
-    if (diagnosticsResult.status === "fulfilled") {
-      setDiagnostics(diagnosticsResult.value.items);
-    }
-    if (startupErrors.length > 0) {
-      setRunState((current) => withError(current, startupErrors[0]));
-    }
-
+    const { settings: nextSettings, sessions: nextSessions } = await loadDesktopBootstrap();
     await refreshStartupSnapshots();
 
-    if (nextSettings?.active_session_id) {
+    const startupSessionExists = Boolean(
+      nextSettings?.active_session_id &&
+      nextSessions.some((session) => session.id === nextSettings.active_session_id),
+    );
+    if (nextSettings?.active_session_id && !startupSessionExists) {
+      setSettings((current) => current ? { ...current, active_session_id: null } : current);
+      setSelectedSessionSummary(null);
+    }
+    if (nextSettings?.active_session_id && startupSessionExists) {
       try {
         const resumed = await resumeSession(nextSettings.active_session_id);
         setRunState((current) =>
@@ -291,95 +241,6 @@ export function App() {
       } catch (err) {
         setRunState((current) => withError(current, err));
       }
-    }
-  }
-
-  async function refreshStartupSnapshots() {
-    const [contextResult, workbenchResult] = await Promise.allSettled([
-      desktopContextSnapshot(),
-      desktopWorkbenchSnapshot(),
-    ]);
-
-    if (contextResult.status === "fulfilled") {
-      setContextSnapshot(contextResult.value);
-    }
-    if (workbenchResult.status === "fulfilled") {
-      setWorkbenchSnapshot(workbenchResult.value);
-      if (workbenchResult.value.runtime_context) {
-        setContextSnapshot(workbenchResult.value.runtime_context);
-      }
-    }
-
-    const snapshotError =
-      contextResult.status === "rejected"
-        ? contextResult.reason
-        : workbenchResult.status === "rejected"
-          ? workbenchResult.reason
-          : null;
-    if (snapshotError) {
-      setRunState((current) => withError(current, snapshotError));
-    }
-  }
-
-  async function refreshSessions(options: { syncSelectedSessionId?: string | null } = {}) {
-    try {
-      const query = sessionSearch.trim();
-      const nextSessions = query ? await searchSessions(query) : await listRecentSessions();
-      setSessions(nextSessions);
-      if (options.syncSelectedSessionId) {
-        const selected = nextSessions.find((session) => session.id === options.syncSelectedSessionId);
-        if (selected) {
-          setSelectedSessionSummary(selected);
-        }
-      }
-    } catch (err) {
-      setRunState((current) => withError(current, err));
-    }
-  }
-
-  async function handleSearchChange(query: string) {
-    setSessionSearch(query);
-    try {
-      setSessions(query.trim() ? await searchSessions(query) : await listRecentSessions());
-    } catch (err) {
-      setRunState((current) => withError(current, err));
-    }
-  }
-
-  async function refreshDiagnostics() {
-    try {
-      const [nextSettings, nextDiagnostics, nextProviderSetup, nextProviderStatus] = await Promise.all([
-        desktopSettings(),
-        desktopDiagnostics(),
-        providerSetupInfo(),
-        providerModelStatus(),
-      ]);
-      setSettings(nextSettings);
-      setDiagnostics(nextDiagnostics.items);
-      setProviderSetup(nextProviderSetup);
-      setProviderStatus(nextProviderStatus);
-    } catch (err) {
-      setRunState((current) => withError(current, err));
-    }
-  }
-
-  async function refreshContextSnapshot() {
-    try {
-      setContextSnapshot(await desktopContextSnapshot());
-    } catch (err) {
-      setRunState((current) => withError(current, err));
-    }
-  }
-
-  async function refreshWorkbenchSnapshot() {
-    try {
-      const snapshot = await desktopWorkbenchSnapshot();
-      setWorkbenchSnapshot(snapshot);
-      if (snapshot.runtime_context) {
-        setContextSnapshot(snapshot.runtime_context);
-      }
-    } catch (err) {
-      setRunState((current) => withError(current, err));
     }
   }
 
@@ -631,23 +492,6 @@ export function App() {
     }
   }
 
-  async function submitRuntimeMessage(
-    message: string,
-    contexts: DesktopRunContext[],
-    watchdogReason: string,
-  ) {
-    setRunState((current) => submitUserMessage(current, message, contexts));
-    armRunWatchdog(watchdogReason);
-
-    try {
-      await sendMessage(message, contexts);
-    } catch (err) {
-      clearRunWatchdog();
-      setRunState((current) => withError(current, err));
-      void refreshSessions();
-    }
-  }
-
   async function handleGoalCommand(command: string) {
     const goalArgs = command.slice("/goal".length).trim();
     if (!goalArgs || goalArgs === "status" || goalArgs === "show") {
@@ -742,53 +586,6 @@ export function App() {
     setActiveContextDetail((current) => (current?.type === type ? null : current));
   }
 
-  async function handlePermission(approved: boolean) {
-    try {
-      const answered = await answerPermission(approved);
-      setRunState((current) => appendPermissionAnswer(current, approved, answered));
-    } catch (err) {
-      setRunState((current) => withError(current, err));
-    }
-  }
-
-  function handleRunEvent(event: DesktopRunEvent) {
-    if (event.type === "run_completed" || event.type === "run_error") {
-      clearRunWatchdog();
-    } else {
-      armRunWatchdog(`after ${event.type}`);
-    }
-
-    setRunState((current) => {
-      const result = applyRunEvent(current, event);
-      return result.state;
-    });
-
-    if (event.type === "run_completed" || event.type === "run_error") {
-      const completedSessionId = activeRunSessionIdRef.current;
-      activeRunSessionIdRef.current = null;
-      void refreshSessions({ syncSelectedSessionId: completedSessionId });
-      void refreshContextSnapshot();
-      void refreshWorkbenchSnapshot();
-    }
-    if (event.type === "run_started" && event.session_id) {
-      activeRunSessionIdRef.current = event.session_id;
-      setSelectedSessionSummary((current) =>
-        current?.id === event.session_id
-          ? current
-          : {
-              id: event.session_id || "",
-              title: "Current run",
-              updated_at: "now",
-              model: providerStatus?.active_model || settings?.model || "active model",
-              message_count: 0,
-            },
-      );
-      setSettings((current) =>
-        current ? { ...current, active_session_id: event.session_id || null } : current,
-      );
-    }
-  }
-
   function resetConversationView() {
     clearRunWatchdog();
     setRunState({ ...initialRunViewState, items: [], traceItems: [] });
@@ -798,36 +595,7 @@ export function App() {
     setIsTraceOpen(false);
   }
 
-  function armRunWatchdog(reason: string) {
-    clearRunWatchdog();
-    runWatchdogRef.current = setTimeout(() => {
-      runWatchdogRef.current = null;
-      setRunState((current) =>
-        current.isRunning
-          ? withRunIdleWarning(
-              current,
-              `Desktop runtime stopped sending events for ${Math.round(
-                RUN_EVENT_IDLE_TIMEOUT_MS / 1000,
-              )} seconds (${reason}). The provider request may still be active; check diagnostics or retry.`,
-            )
-          : current,
-      );
-      void refreshSessions();
-      void refreshContextSnapshot();
-      void refreshWorkbenchSnapshot();
-    }, RUN_EVENT_IDLE_TIMEOUT_MS);
-  }
-
-  function clearRunWatchdog() {
-    if (!runWatchdogRef.current) {
-      return;
-    }
-    clearTimeout(runWatchdogRef.current);
-    runWatchdogRef.current = null;
-  }
-
   const isEmptyConversation = runState.items.length === 0;
-  const workbenchBadge = workbenchStatusBadge(diagnostics, workbenchSnapshot);
   const conversationTitle =
     selectedSessionSummary?.title || (isEmptyConversation ? "New Chat" : "Priority Agent");
 
@@ -835,9 +603,161 @@ export function App() {
     setComposer(command);
   }
 
+  function closePrimaryDrawers(except?: "settings" | "workbench" | "trace" | "output" | "inspector") {
+    setIsEnvironmentOpen(false);
+    setActiveContextDetail(null);
+    if (except !== "settings") {
+      setIsSettingsOpen(false);
+    }
+    if (except !== "workbench") {
+      setIsWorkbenchOpen(false);
+    }
+    if (except !== "trace") {
+      setIsTraceOpen(false);
+    }
+    if (except !== "output") {
+      setIsToolOutputOpen(false);
+    }
+    if (except !== "inspector") {
+      setIsInspectorDrawerOpen(false);
+    }
+  }
+
+  function openSettingsDrawer() {
+    closePrimaryDrawers("settings");
+    setIsSettingsOpen(true);
+  }
+
+  function toggleWorkbenchDrawer() {
+    if (isWorkbenchOpen) {
+      setIsWorkbenchOpen(false);
+      return;
+    }
+    closePrimaryDrawers("workbench");
+    setIsWorkbenchOpen(true);
+  }
+
+  function openWorkbenchDrawer() {
+    closePrimaryDrawers("workbench");
+    setIsWorkbenchOpen(true);
+  }
+
+  function toggleTraceDrawer() {
+    if (isTraceOpen) {
+      setIsTraceOpen(false);
+      return;
+    }
+    closePrimaryDrawers("trace");
+    setIsTraceOpen(true);
+  }
+
+  function openTraceDrawer(traceId?: string | null) {
+    closePrimaryDrawers("trace");
+    if (traceId !== undefined) {
+      setActiveTraceId(traceId);
+    }
+    setIsTraceOpen(true);
+  }
+
+  function toggleToolOutputDrawer() {
+    if (isToolOutputOpen) {
+      setIsToolOutputOpen(false);
+      return;
+    }
+    closePrimaryDrawers("output");
+    setIsToolOutputOpen(true);
+  }
+
+  function openToolOutputDrawer() {
+    closePrimaryDrawers("output");
+    setIsToolOutputOpen(true);
+  }
+
+  function openInspectorTab(tab: InspectorTab) {
+    setActiveInspectorTab(tab);
+    if (usesDrawerInspectorFallback()) {
+      closePrimaryDrawers("inspector");
+      setIsInspectorDrawerOpen(true);
+    } else {
+      setIsInspectorDrawerOpen(false);
+    }
+  }
+
   const commands: Command[] = [
     { id: "new-chat", label: "New Chat", icon: <Plus size={14} />, group: "action", run: () => void handleNewChat() },
-    { id: "settings", label: "Open Settings", icon: <Settings size={14} />, group: "settings", run: () => setIsSettingsOpen(true) },
+    { id: "settings", label: "Open Settings", icon: <Settings size={14} />, group: "settings", run: () => openSettingsDrawer() },
+    {
+      id: "workbench",
+      label: "Open Workbench",
+      hint: "runtime overview",
+      icon: <LayoutDashboard size={14} />,
+      group: "nav",
+      run: () => openWorkbenchDrawer(),
+    },
+    {
+      id: "trace",
+      label: "Open Trace",
+      hint: "run events",
+      icon: <PanelRight size={14} />,
+      group: "nav",
+      run: () => openTraceDrawer(),
+    },
+    {
+      id: "output",
+      label: "Open Tool Output",
+      hint: "stored tool pages",
+      icon: <FileText size={14} />,
+      group: "nav",
+      run: () => openToolOutputDrawer(),
+    },
+    {
+      id: "context-inspector",
+      label: "Show Context",
+      hint: "tokens and cache",
+      icon: <Gauge size={14} />,
+      group: "nav",
+      run: () => openInspectorTab("context"),
+    },
+    {
+      id: "files-inspector",
+      label: "Show Files",
+      hint: "project map",
+      icon: <Map size={14} />,
+      group: "nav",
+      run: () => openInspectorTab("files"),
+    },
+    {
+      id: "execution-inspector",
+      label: "Show Execution",
+      hint: "timeline evidence",
+      icon: <ListChecks size={14} />,
+      group: "nav",
+      run: () => openInspectorTab("execution"),
+    },
+    {
+      id: "subagents-inspector",
+      label: "Show Subagents",
+      hint: "durable tasks",
+      icon: <UsersRound size={14} />,
+      group: "nav",
+      run: () => openInspectorTab("subagents"),
+    },
+    {
+      id: "labrun-inspector",
+      label: "Show LabRun",
+      hint: "project loop",
+      icon: <LayoutDashboard size={14} />,
+      group: "nav",
+      run: () => openInspectorTab("labrun"),
+    },
+    {
+      id: "diagnostics-inspector",
+      label: "Show Diagnostics",
+      hint: "environment checks",
+      icon: <Database size={14} />,
+      group: "nav",
+      run: () => openInspectorTab("diagnostics"),
+    },
     { id: "browse-project", label: "Switch Project", icon: <Folder size={14} />, group: "workspace", run: () => void handleBrowseProject() },
     {
       id: "lab-dashboard",
@@ -895,135 +815,66 @@ export function App() {
         onSearchChange={(query) => void handleSearchChange(query)}
         onSelectRecentProject={(path) => void handleSelectRecentProject(path)}
         onLoadSession={(session) => void handleLoadSession(session)}
-        onOpenSettings={() => setIsSettingsOpen(true)}
+        onOpenSettings={openSettingsDrawer}
       />
 
       <section className={`workspace${isEmptyConversation ? " empty-workspace" : ""}`}>
-        <header className="topbar">
-          <div className="title-cluster">
-            <div className="topbar-title-row">
-              <h1>{conversationTitle}</h1>
-              <button
-                aria-label="Export current session"
-                className="title-icon-button"
-                type="button"
-                disabled={!runState.selectedSessionId}
-                onClick={() => void handleExportSession()}
-              >
-                <Download aria-hidden="true" size={17} />
-              </button>
-              <button
-                aria-label="More conversation actions"
-                className="title-icon-button"
-                type="button"
-              >
-                <MoreHorizontal aria-hidden="true" size={18} />
-              </button>
-            </div>
-            <div className="eyebrow">Priority Agent</div>
-          </div>
-          <div className="health">
-            <ContextMeter snapshot={contextSnapshot} onCompact={() => void handleCompactContext()} />
-            <span className="health-status">
-              <Activity aria-hidden="true" size={14} />
-              {health ? `${health.status} · ${health.version}` : "Starting..."}
-            </span>
-            <button
-              aria-expanded={isEnvironmentOpen}
-              aria-label="Environment information"
-              className="topbar-icon-button"
-              type="button"
-              onClick={() => setIsEnvironmentOpen((open) => !open)}
-            >
-              <Info aria-hidden="true" size={16} />
-            </button>
-            {isEnvironmentOpen ? (
-              <EnvironmentPopover
-                diagnostics={diagnostics}
-                health={health}
-                contextSnapshot={contextSnapshot}
-                projectPath={projectPath}
-                providerStatus={providerStatus}
-                settings={settings}
-              />
-            ) : null}
-            <button
-              aria-expanded={isWorkbenchOpen}
-              className={`trace-toggle workbench-toggle${workbenchBadge.tone ? ` ${workbenchBadge.tone}` : ""}`}
-              type="button"
-              onClick={() => {
-                setIsEnvironmentOpen(false);
-                setIsWorkbenchOpen((open) => !open);
-              }}
-            >
-              <LayoutDashboard aria-hidden="true" size={15} />
-              <span>Workbench</span>
-              <small>{workbenchBadge.label}</small>
-            </button>
-            <button
-              className="trace-toggle"
-              type="button"
-              disabled={!runState.selectedSessionId || runState.isRunning || isRevertingTurn}
-              onClick={() => void handleRevertLastTurn()}
-            >
-              <RotateCcw aria-hidden="true" size={15} />
-              <span>{isRevertingTurn ? "Reverting" : "Revert"}</span>
-            </button>
-            <button
-              className="trace-toggle"
-              type="button"
-              aria-expanded={isToolOutputOpen}
-              onClick={() => setIsToolOutputOpen((open) => !open)}
-            >
-              <FileText aria-hidden="true" size={15} />
-              <span>Output</span>
-            </button>
-            <button
-              className="trace-toggle"
-              type="button"
-              onClick={() => setIsTraceOpen((open) => !open)}
-            >
-              <PanelRight aria-hidden="true" size={15} />
-              <span>Trace</span>
-            </button>
-          </div>
-        </header>
+        <WorkspaceTopbar
+          contextSnapshot={contextSnapshot}
+          conversationTitle={conversationTitle}
+          diagnostics={diagnostics}
+          health={health}
+          isEnvironmentOpen={isEnvironmentOpen}
+          isRevertingTurn={isRevertingTurn}
+          isRunning={runState.isRunning}
+          isToolOutputOpen={isToolOutputOpen}
+          isTraceOpen={isTraceOpen}
+          isWorkbenchOpen={isWorkbenchOpen}
+          paletteOpen={paletteOpen}
+          projectPath={projectPath}
+          providerStatus={providerStatus}
+          selectedSessionId={runState.selectedSessionId}
+          settings={settings}
+          workbenchSnapshot={workbenchSnapshot}
+          onCompactContext={() => void handleCompactContext()}
+          onCloseEnvironment={() => setIsEnvironmentOpen(false)}
+          onExportSession={() => void handleExportSession()}
+          onOpenPalette={() => setPaletteOpen(true)}
+          onOpenSettings={openSettingsDrawer}
+          onRevertLastTurn={() => void handleRevertLastTurn()}
+          onToggleEnvironment={() => setIsEnvironmentOpen((open) => !open)}
+          onToggleToolOutput={toggleToolOutputDrawer}
+          onToggleTrace={toggleTraceDrawer}
+          onToggleWorkbench={toggleWorkbenchDrawer}
+        />
 
-        {settings &&
-        settings.startup_state.status !== "new_conversation" &&
-        !(
-          settings.startup_state.status === "lab_recovery" &&
-          settings.startup_state.lab_run_id === dismissedStartupLabRecoveryId
-        ) ? (
-          <div className={`startup-state-card ${settings.startup_state.status}`} role="status">
-            <span>{startupStateLabel(settings.startup_state.status)}</span>
-            <strong>{startupStateDetail(settings, selectedSessionSummary, projectPath)}</strong>
-            {settings.startup_state.status === "lab_recovery" ? (
-              <div className="startup-state-actions" aria-label="Lab recovery actions">
-                <button type="button" onClick={() => stageSlashCommand("/lab resume")}>
-                  Resume
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    stageSlashCommand("/lab dashboard");
-                    setIsWorkbenchOpen(true);
-                  }}
-                >
-                  Dashboard
-                </button>
-                <button
-                  type="button"
-                  onClick={() =>
-                    setDismissedStartupLabRecoveryId(settings.startup_state.lab_run_id || "dismissed")
-                  }
-                >
-                  Keep paused
-                </button>
-              </div>
-            ) : null}
-          </div>
-        ) : null}
+        <SessionHeader
+          conversationTitle={conversationTitle}
+          isRunning={runState.isRunning}
+          mode={workspaceMode}
+          projectPath={projectPath}
+          providerStatus={providerStatus}
+          selectedSessionSummary={selectedSessionSummary}
+          settings={settings}
+          workbenchSnapshot={workbenchSnapshot}
+          onModeChange={setWorkspaceMode}
+          onOpenLabRun={() => {
+            openInspectorTab("labrun");
+          }}
+        />
+
+        <StartupStateCard
+          dismissedLabRecoveryId={dismissedStartupLabRecoveryId}
+          projectPath={projectPath}
+          selectedSession={selectedSessionSummary}
+          settings={settings}
+          onDismissLabRecovery={setDismissedStartupLabRecoveryId}
+          onOpenLabDashboard={() => {
+            stageSlashCommand("/lab dashboard");
+            openWorkbenchDrawer();
+          }}
+          onResumeLab={() => stageSlashCommand("/lab resume")}
+        />
 
         {lastArchivedSession ? (
           <div className="session-undo-banner" role="status">
@@ -1039,10 +890,7 @@ export function App() {
           isRunning={runState.isRunning}
           items={runState.items}
           onOpenContext={setActiveContextDetail}
-          onOpenTrace={(traceId) => {
-            setActiveTraceId(traceId);
-            setIsTraceOpen(true);
-          }}
+          onOpenTrace={(traceId) => openTraceDrawer(traceId)}
           onPermissionAnswer={(approved) => void handlePermission(approved)}
           projectPath={projectPath}
           providerStatus={providerStatus}
@@ -1134,6 +982,7 @@ export function App() {
           projectPath={projectPath}
           recentProjects={settings?.recent_projects || []}
           providerStatus={providerStatus}
+          providerSetup={providerSetup}
           detailLevel={settings?.detail_level}
           permissionMode={settings?.permission_mode}
           agentMode={settings?.agent_mode}
@@ -1141,6 +990,7 @@ export function App() {
           permissionOptions={permissionOptions}
           isEmptyState={isEmptyConversation}
           isRunning={runState.isRunning}
+          focusRequest={composerFocusRequest}
           onComposerChange={setComposer}
           onAddContext={(context) => void handleAddContext(context)}
           onAddFileContext={() => void handleAddFileContext()}
@@ -1155,62 +1005,83 @@ export function App() {
           onProviderModelChange={(providerId, model) =>
             void handleProviderModelChange(providerId, model)
           }
+          onProviderCredentialSaved={() => void refreshDiagnostics()}
           onSubmit={handleSubmit}
         />
 
-        {runState.error ? <div className="error-banner">{runState.error}</div> : null}
-        {exportNotice ? (
-          <div className="export-banner">
-            <span>{exportNotice}</span>
-            {exportPath ? (
-              <button
-                type="button"
-                onClick={() => {
-                  openFilePath(exportPath).catch(console.error);
-                }}
-                style={{ marginLeft: "0.75rem", fontSize: "0.8rem" }}
-              >
-                Open folder
+        {runState.error ? (
+          <div className="error-banner runtime-alert" role="alert" aria-label="Runtime issue">
+            <AlertCircle aria-hidden="true" size={17} />
+            <div className="runtime-alert-copy">
+              <strong>{runState.isRunning ? "Runtime warning" : "Runtime issue"}</strong>
+              <span>{runState.error}</span>
+            </div>
+            <div className="runtime-alert-actions">
+              {runState.traceItems.length > 0 ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    openTraceDrawer(runState.traceItems.at(-1)?.id || null);
+                  }}
+                >
+                  Open trace
+                </button>
+              ) : null}
+              <button type="button" onClick={() => openInspectorTab("diagnostics")}>
+                Diagnostics
               </button>
-            ) : null}
+              <button type="button" onClick={() => setRunState((current) => ({ ...current, error: null }))}>
+                Dismiss
+              </button>
+            </div>
           </div>
+        ) : null}
+        {exportNotice ? (
+          <ExportNoticeBanner
+            notice={exportNotice}
+            path={exportPath}
+            onDismiss={() => {
+              setExportNotice(null);
+              setExportPath(null);
+            }}
+            onOpen={(path) => {
+              openFilePath(path).catch(console.error);
+            }}
+          />
         ) : null}
       </section>
 
       {pendingDeleteSession ? (
-        <div className="confirm-backdrop" role="presentation">
-          <section
-            aria-labelledby="delete-session-title"
-            aria-modal="true"
-            className="confirm-dialog"
-            role="dialog"
-          >
-            <div>
-              <h2 id="delete-session-title">Delete session?</h2>
-              <p>
-                {pendingDeleteSession.title} will be removed from this desktop app. This
-                cannot be undone.
-              </p>
-            </div>
-            <div className="confirm-dialog-meta">
-              <span>{pendingDeleteSession.model}</span>
-              <span>{pendingDeleteSession.message_count} messages</span>
-            </div>
-            <div className="confirm-dialog-actions">
-              <button type="button" onClick={() => setPendingDeleteSession(null)}>
-                Cancel
-              </button>
-              <button
-                className="danger"
-                type="button"
-                onClick={() => void handleConfirmDeleteSession()}
-              >
-                Delete
-              </button>
-            </div>
-          </section>
-        </div>
+        <DeleteSessionDialog
+          session={pendingDeleteSession}
+          onCancel={() => setPendingDeleteSession(null)}
+          onConfirm={() => void handleConfirmDeleteSession()}
+        />
       ) : null}
+
+      <RuntimeInspectorSurfaces
+        activeTab={activeInspectorTab}
+        contextSnapshot={contextSnapshot}
+        diagnostics={diagnostics}
+        isDrawerOpen={isInspectorDrawerOpen}
+        isRunning={runState.isRunning}
+        latestUsage={runState.latestUsage}
+        pendingPermission={Boolean(runState.pendingPermission)}
+        sessionId={runState.selectedSessionId}
+        snapshot={workbenchSnapshot}
+        traceItems={runState.traceItems}
+        onCloseDrawer={() => setIsInspectorDrawerOpen(false)}
+        onOpenLabReport={(path) => {
+          openFilePath(path).catch(console.error);
+        }}
+        onOpenOutput={openToolOutputDrawer}
+        onOpenTrace={() => openTraceDrawer()}
+        onRefreshDiagnostics={() => void refreshDiagnostics()}
+        onRefreshWorkbench={() => void refreshWorkbenchSnapshot()}
+        onStageLabCommand={stageSlashCommand}
+        onSuperviseLabDaemon={() => void handleSuperviseLabDaemon()}
+        onTabChange={setActiveInspectorTab}
+      />
 
       <StatusBar
         health={health}
@@ -1218,6 +1089,9 @@ export function App() {
         contextSnapshot={contextSnapshot}
         projectPath={projectPath}
         isRunning={runState.isRunning}
+        onOpenContext={() => openInspectorTab("context")}
+        onOpenFiles={() => openInspectorTab("files")}
+        onOpenSettings={openSettingsDrawer}
       />
     </main>
       <CommandPalette
@@ -1229,202 +1103,19 @@ export function App() {
   );
 }
 
-function startupStateLabel(status: string) {
-  if (status === "lab_recovery") {
-    return "Lab recovery";
+function isEditableTarget(target: EventTarget | null) {
+  if (!(target instanceof HTMLElement)) {
+    return false;
   }
-  if (status === "restored_session") {
-    return "Restored session";
-  }
-  if (status === "new_conversation") {
-    return "New conversation";
-  }
-  return "Startup state";
-}
-
-function startupStateDetail(
-  settings: DesktopSettings,
-  selectedSession: RecentSession | null,
-  projectPath: string,
-) {
-  if (settings.startup_state.status === "lab_recovery") {
-    const lab = settings.startup_state;
-    return `Recover ${lab.lab_run_id || "LabRun"} at ${lab.lab_stage || "unknown stage"} with ${lab.lab_owner || "unknown owner"}: ${lab.lab_pause_reason || lab.detail}`;
-  }
-  if (settings.startup_state.status === "restored_session" && selectedSession) {
-    return `Continuing ${selectedSession.title} in ${basename(projectPath)}`;
-  }
-  return settings.startup_state.detail;
-}
-
-function workbenchStatusBadge(
-  diagnostics: DesktopDiagnostic[],
-  snapshot: DesktopWorkbenchSnapshot | null,
-) {
-  const blocking = diagnostics.filter((item) => item.status === "error").length;
-  if (blocking > 0) {
-    return {
-      label: `${blocking} issue${blocking === 1 ? "" : "s"}`,
-      tone: "error",
-    };
-  }
-
-  const symbols = snapshot?.symbol_index?.total_symbols;
-  if (symbols && symbols > 0) {
-    return {
-      label: `${symbols} symbols`,
-      tone: "",
-    };
-  }
-
-  return {
-    label: "Ready",
-    tone: "",
-  };
-}
-
-function basename(path: string) {
-  return path.split(/[\\/]/).filter(Boolean).at(-1) || path;
-}
-
-function formatTokenCount(tokens: number) {
-  if (tokens >= 1000) {
-    return `${Math.round(tokens / 100) / 10}k`;
-  }
-  return `${tokens}`;
-}
-
-function ContextMeter({
-  snapshot,
-  onCompact,
-}: {
-  snapshot: DesktopContextSnapshot | null;
-  onCompact: () => void;
-}) {
-  const percent = Math.min(100, Math.max(0, snapshot?.usage_percent || 0));
-  const decision = snapshot?.compact.latest_attempt_decision;
-  const label = snapshot ? `Context ${percent}%` : "Context";
-  const detail = snapshot
-    ? `${formatTokenCount(snapshot.total_estimated_tokens)} / ${formatTokenCount(snapshot.max_context_tokens)}`
-    : "Checking";
-
+  const tag = target.tagName.toLowerCase();
   return (
-    <button
-      aria-label="Compact conversation context"
-      className={`context-meter${snapshot?.compact.circuit_open ? " warning" : ""}`}
-      title={decision ? `Last compact: ${decision}` : "Compact conversation context"}
-      type="button"
-      onClick={onCompact}
-    >
-      <Gauge aria-hidden="true" size={14} />
-      <span>{label}</span>
-      <small>{detail}</small>
-    </button>
+    target.isContentEditable ||
+    tag === "input" ||
+    tag === "textarea" ||
+    tag === "select"
   );
 }
 
-function EnvironmentPopover({
-  contextSnapshot,
-  diagnostics,
-  health,
-  projectPath,
-  providerStatus,
-  settings,
-}: {
-  contextSnapshot: DesktopContextSnapshot | null;
-  diagnostics: DesktopDiagnostic[];
-  health: DesktopHealth | null;
-  projectPath: string;
-  providerStatus: ProviderModelStatus | null;
-  settings: DesktopSettings | null;
-}) {
-  const providerLabel = providerStatus?.active_provider || settings?.provider_name || "Not configured";
-  const modelLabel = providerStatus?.active_model || settings?.model || "Checking model";
-  const blockingDiagnostics = diagnostics.filter((item) => item.status === "error").length;
-
-  return (
-    <aside className="environment-popover" aria-label="Environment details">
-      <div className="environment-popover-header">
-        <span>Environment</span>
-        <Settings aria-hidden="true" size={15} />
-      </div>
-
-      <div className="environment-section">
-        <EnvironmentRow
-          detail={projectPath}
-          icon={<Folder aria-hidden="true" size={15} />}
-          label={basename(projectPath) || "Project"}
-        />
-        <EnvironmentRow
-          detail={modelLabel}
-          icon={<GitBranch aria-hidden="true" size={15} />}
-          label={providerLabel}
-        />
-        <EnvironmentRow
-          detail={health ? `${health.status} ${health.version}` : "Starting"}
-          icon={<Activity aria-hidden="true" size={15} />}
-          label="Runtime"
-        />
-        <EnvironmentRow
-          detail={
-            contextSnapshot
-              ? `${contextSnapshot.usage_percent}% · ${contextSnapshot.history_messages} messages`
-              : "Checking"
-          }
-          icon={<Gauge aria-hidden="true" size={15} />}
-          label="Context"
-        />
-      </div>
-
-      <div className="environment-section">
-        <EnvironmentRow
-          detail={settings?.permission_mode || "Not loaded"}
-          icon={<Info aria-hidden="true" size={15} />}
-          label="Permission mode"
-        />
-        <EnvironmentRow
-          detail={
-            blockingDiagnostics > 0
-              ? `${blockingDiagnostics} issue${blockingDiagnostics === 1 ? "" : "s"}`
-              : "Ready"
-          }
-          icon={<Globe aria-hidden="true" size={15} />}
-          label="Diagnostics"
-        />
-      </div>
-
-      <div className="environment-section">
-        <div className="environment-section-title">Sources</div>
-        {diagnostics.slice(0, 3).map((item) => (
-          <EnvironmentRow
-            detail={item.detail}
-            icon={<Info aria-hidden="true" size={15} />}
-            key={item.id}
-            label={item.label}
-            tone={item.status}
-          />
-        ))}
-      </div>
-    </aside>
-  );
-}
-
-function EnvironmentRow({
-  detail,
-  icon,
-  label,
-  tone,
-}: {
-  detail: string;
-  icon: ReactNode;
-  label: string;
-  tone?: DiagnosticStatus;
-}) {
-  return (
-    <div className={`environment-row${tone ? ` ${tone}` : ""}`}>
-      {icon}
-      <span>{label}</span>
-      <small title={detail}>{detail}</small>
-    </div>
-  );
+function usesDrawerInspectorFallback() {
+  return typeof window !== "undefined" && window.matchMedia("(max-width: 760px)").matches;
 }

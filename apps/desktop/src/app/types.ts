@@ -115,4 +115,13 @@ export type TraceItem = {
   summary?: TimelineSummary;
 };
 
+export type ProviderUsageSnapshot = {
+  promptTokens: number;
+  completionTokens: number;
+  totalTokens: number;
+  reasoningTokens?: number | null;
+  cachedTokens?: number | null;
+  cacheWriteTokens?: number | null;
+};
+
 export type PermissionRequest = Extract<DesktopRunEvent, { type: "permission_request" }>;

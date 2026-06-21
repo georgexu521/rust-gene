@@ -484,16 +484,18 @@ Desired direction:
 
 Current code:
 
-- `run_scheduler_step_latest_with_context()` automatically calls
-  `create_postdoc_integration_summary_for_latest()` in `postdoc_review`.
-- The same scheduler path automatically calls
-  `create_professor_review_for_latest()` in `professor_review`.
-- If the generated gate is satisfied, the scheduler advances the LabRun.
+- Fixed in current code: `run_scheduler_step_latest_with_context()` stops at
+  `postdoc_review` and `professor_review` unless a provider-backed role step or
+  explicit role artifact is supplied.
+- The scheduler message names the missing artifact type, for example
+  `PostdocIntegrationSummary` or `ProfessorReview`, so the next required handoff
+  is visible without pretending the runtime made a role judgment.
 
 Problem:
 
-This makes the scheduler act like the postdoc or professor. The scheduler should
-orchestrate steps, not decide implementation quality or strategic readiness.
+The old scheduler behavior made the runtime act like the postdoc or professor.
+The scheduler should orchestrate steps, not decide implementation quality or
+strategic readiness.
 
 Desired direction:
 
@@ -503,18 +505,21 @@ Desired direction:
 - Scheduler should not silently create accepted postdoc/professor artifacts from
   deterministic templates.
 
-### 4. Deterministic professor review auto-accepts based on fields
+### 4. Deterministic professor review auto-acceptance
 
 Current code:
 
-- `create_professor_review_for_latest()` sets `accepted = true` when the postdoc
-  integration summary is not `needs_revision` and has accepted results.
+- Fixed in current code: `create_professor_review_for_latest()` no longer
+  auto-accepts closeout from field presence. It writes a placeholder
+  `ProfessorReview` with `accepted = false`, `validation_status =
+  needs_revision`, and a blocker saying provider or explicit professor review is
+  required before closeout.
 
 Problem:
 
-That is a semantic professor decision encoded in framework logic. The runtime can
-verify that fields exist, but it cannot decide that the project is strategically
-ready for closeout.
+The old behavior encoded a semantic professor decision in framework logic. The
+runtime can verify that fields exist, but it cannot decide that the project is
+strategically ready for closeout.
 
 Desired direction:
 

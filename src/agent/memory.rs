@@ -551,10 +551,15 @@ mod tests {
 
     #[tokio::test]
     async fn test_role_memory_store() {
-        use crate::agent::roles::AgentRole;
-
         let store = RoleMemoryStore::new();
-        let role_name = AgentRole::Plan.display_name();
+        let role_name = format!(
+            "plan-test-role-memory-store-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        );
+        let role_name = role_name.as_str();
 
         // 获取角色记忆
         let mem = store.get_or_create(role_name).await;

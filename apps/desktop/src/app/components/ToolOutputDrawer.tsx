@@ -1,10 +1,11 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   DesktopToolOutputMeta,
   DesktopToolOutputPage,
   loadDesktopToolOutputIndex,
   loadDesktopToolOutputPage,
 } from "../../runtime/desktopApi";
+import { useDrawerKeyboard } from "./useDrawerKeyboard";
 
 const PAGE_LIMIT = 64 * 1024;
 
@@ -21,6 +22,12 @@ export function ToolOutputDrawer({ isOpen, sessionId, onClose }: ToolOutputDrawe
   const [offset, setOffset] = useState(0);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const closeButtonRef = useRef<HTMLButtonElement>(null);
+  const drawerRef = useDrawerKeyboard<HTMLElement>({
+    initialFocusRef: closeButtonRef,
+    isOpen,
+    onClose,
+  });
 
   useEffect(() => {
     if (!isOpen || !sessionId) {
@@ -95,13 +102,13 @@ export function ToolOutputDrawer({ isOpen, sessionId, onClose }: ToolOutputDrawe
   }
 
   return (
-    <aside className="trace-drawer tool-output-drawer" aria-label="Tool output">
+    <aside ref={drawerRef} className="trace-drawer tool-output-drawer" aria-label="Tool output">
       <div className="trace-header">
         <div>
           <div className="trace-eyebrow">Output</div>
           <h2>Tool output</h2>
         </div>
-        <button type="button" onClick={onClose}>
+        <button ref={closeButtonRef} type="button" onClick={onClose}>
           Close
         </button>
       </div>

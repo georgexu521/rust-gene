@@ -1,5 +1,7 @@
+import { useRef } from "react";
 import { X } from "lucide-react";
 import { DesktopRunContext } from "../../runtime/desktopApi";
+import { useDrawerKeyboard } from "./useDrawerKeyboard";
 
 type ContextDetailDrawerProps = {
   context: DesktopRunContext | null;
@@ -8,6 +10,13 @@ type ContextDetailDrawerProps = {
 };
 
 export function ContextDetailDrawer({ context, onClose, onRemove }: ContextDetailDrawerProps) {
+  const closeButtonRef = useRef<HTMLButtonElement>(null);
+  const drawerRef = useDrawerKeyboard<HTMLElement>({
+    initialFocusRef: closeButtonRef,
+    isOpen: Boolean(context),
+    onClose,
+  });
+
   if (!context) {
     return null;
   }
@@ -15,13 +24,13 @@ export function ContextDetailDrawer({ context, onClose, onRemove }: ContextDetai
   const detail = context.detail;
 
   return (
-    <aside className="context-detail-drawer" aria-label="Context details">
+    <aside ref={drawerRef} className="context-detail-drawer" aria-label="Context details">
       <div className="context-detail-header">
         <div>
           <div className="context-detail-eyebrow">Context</div>
           <h2>{context.label}</h2>
         </div>
-        <button aria-label="Close context details" type="button" onClick={onClose}>
+        <button ref={closeButtonRef} aria-label="Close context details" type="button" onClick={onClose}>
           <X aria-hidden="true" size={16} />
         </button>
       </div>

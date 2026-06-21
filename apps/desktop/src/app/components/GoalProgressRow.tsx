@@ -33,6 +33,11 @@ export function GoalProgressRow({ goal, onPause, onResume, onClear, onEdit }: Go
     setEditing(false);
   };
 
+  const cancelEdit = () => {
+    setEditText(goal.objective ?? "");
+    setEditing(false);
+  };
+
   return (
     <div className="goal-progress-row">
       <span className="goal-progress-seg" title={goal.objective ?? ""}>
@@ -72,10 +77,19 @@ export function GoalProgressRow({ goal, onPause, onResume, onClear, onEdit }: Go
       {editing ? (
         <span className="goal-progress-edit">
           <input
+            aria-label="Goal objective"
             className="goal-edit-input"
             value={editText}
             onChange={(e) => setEditText(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && handleEditSubmit()}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                handleEditSubmit();
+              }
+              if (e.key === "Escape") {
+                e.preventDefault();
+                cancelEdit();
+              }
+            }}
             onBlur={handleEditSubmit}
             autoFocus
             placeholder="New objective..."
@@ -84,6 +98,7 @@ export function GoalProgressRow({ goal, onPause, onResume, onClear, onEdit }: Go
       ) : (
         <span className="goal-progress-actions">
           <button
+            aria-label="Edit goal objective"
             className="goal-btn"
             title="Edit objective"
             onClick={() => { setEditText(goal.objective ?? ""); setEditing(true); }}
@@ -92,15 +107,15 @@ export function GoalProgressRow({ goal, onPause, onResume, onClear, onEdit }: Go
             <Edit3 size={12} />
           </button>
           {isActive ? (
-            <button className="goal-btn" title="Pause" onClick={onPause}>
+            <button aria-label="Pause goal" className="goal-btn" title="Pause" onClick={onPause}>
               <Pause size={12} />
             </button>
           ) : isPaused ? (
-            <button className="goal-btn" title="Resume" onClick={onResume}>
+            <button aria-label="Resume goal" className="goal-btn" title="Resume" onClick={onResume}>
               <Play size={12} />
             </button>
           ) : null}
-          <button className="goal-btn" title="Clear" onClick={onClear}>
+          <button aria-label="Clear goal" className="goal-btn" title="Clear" onClick={onClear}>
             <X size={12} />
           </button>
         </span>

@@ -1,6 +1,7 @@
 use priority_agent::desktop_runtime::DesktopContextSnapshot;
 use priority_agent::session_store::SessionStore;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -96,6 +97,9 @@ pub(crate) struct DesktopLabStatusSnapshot {
     pub(crate) meeting_topic: Option<String>,
     pub(crate) latest_report_path: Option<String>,
     pub(crate) daemon_policy: Option<DesktopLabDaemonPolicySnapshot>,
+    pub(crate) artifacts: Vec<DesktopLabArtifactSnapshot>,
+    pub(crate) reports: Vec<DesktopLabReportSnapshot>,
+    pub(crate) evidence_refs: Vec<DesktopLabEvidenceSnapshot>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -107,6 +111,44 @@ pub(crate) struct DesktopLabDaemonPolicySnapshot {
     pub(crate) interval_ms: u64,
     pub(crate) last_started_at: Option<String>,
     pub(crate) last_start_error: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub(crate) struct DesktopLabArtifactSnapshot {
+    pub(crate) artifact_id: String,
+    pub(crate) artifact_type: String,
+    pub(crate) stage: String,
+    pub(crate) owner: String,
+    pub(crate) status: String,
+    pub(crate) validation_status: Option<String>,
+    pub(crate) title: String,
+    pub(crate) created_at: String,
+    pub(crate) updated_at: String,
+    pub(crate) report_path: Option<String>,
+    pub(crate) report_preview: Option<String>,
+    pub(crate) report_preview_truncated: bool,
+    pub(crate) evidence_refs: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub(crate) struct DesktopLabReportSnapshot {
+    pub(crate) artifact_id: String,
+    pub(crate) path: String,
+    pub(crate) preview: Option<String>,
+    pub(crate) truncated: bool,
+}
+
+#[derive(Debug, Serialize)]
+pub(crate) struct DesktopLabEvidenceSnapshot {
+    pub(crate) evidence_id: String,
+    pub(crate) kind: String,
+    pub(crate) role: String,
+    pub(crate) reference: String,
+    pub(crate) summary: String,
+    pub(crate) artifact_id: Option<String>,
+    pub(crate) cycle_id: Option<String>,
+    pub(crate) created_at: String,
+    pub(crate) estimated_summary_tokens: u64,
 }
 
 #[derive(Debug, Serialize)]
@@ -276,6 +318,55 @@ pub(crate) fn desktop_lab_status_for_project(project: &Path) -> DesktopLabStatus
                 .list_stage_artifact_report_paths(&run.lab_run_id)
                 .ok()
                 .and_then(|reports| reports.last().map(|(_, path)| path.display().to_string()));
+            let reports = store
+                .list_stage_artifact_report_paths(&run.lab_run_id)
+                .unwrap_or_default();
+            let report_paths_by_artifact = reports
+                .iter()
+                .map(|(artifact_id, path)| (artifact_id.clone(), path.display().to_string()))
+                .collect::<HashMap<_, _>>();
+            let report_previews_by_artifact = reports
+                .iter()
+                .map(|(artifact_id, path)| (artifact_id.clone(), desktop_lab_report_preview(path)))
+                .collect::<HashMap<_, _>>();
+            let artifact_rows = store
+                .list_stage_artifacts(&run.lab_run_id)
+                .unwrap_or_default()
+                .into_iter()
+                .rev()
+                .take(8)
+                .map(|artifact| {
+                    desktop_lab_artifact_snapshot(
+                        &artifact,
+                        report_paths_by_artifact.get(artifact.artifact_id()).cloned(),
+                        report_previews_by_artifact
+                            .get(artifact.artifact_id())
+                            .cloned(),
+                    )
+                })
+                .collect::<Vec<_>>();
+            let report_rows = reports
+                .into_iter()
+                .rev()
+                .take(8)
+                .map(|(artifact_id, path)| {
+                    let (preview, truncated) = desktop_lab_report_preview(&path);
+                    DesktopLabReportSnapshot {
+                        artifact_id,
+                        path: path.display().to_string(),
+                        preview,
+                        truncated,
+                    }
+                })
+                .collect::<Vec<_>>();
+            let evidence_rows = store
+                .list_evidence_refs(&run.lab_run_id)
+                .unwrap_or_default()
+                .into_iter()
+                .rev()
+                .take(8)
+                .map(desktop_lab_evidence_snapshot)
+                .collect::<Vec<_>>();
             let recommendation =
                 priority_agent::lab::orchestrator::LabOrchestrator::for_project(project)
                     .meeting_recommendation_for_latest()
@@ -311,6 +402,9 @@ pub(crate) fn desktop_lab_status_for_project(project: &Path) -> DesktopLabStatus
                 meeting_topic: recommendation.map(|meeting| meeting.topic),
                 latest_report_path,
                 daemon_policy: daemon_policy.clone(),
+                artifacts: artifact_rows,
+                reports: report_rows,
+                evidence_refs: evidence_rows,
             }
         }
         Ok(None) => match store.latest_proposal() {
@@ -343,6 +437,9 @@ pub(crate) fn desktop_lab_status_for_project(project: &Path) -> DesktopLabStatus
                 meeting_topic: None,
                 latest_report_path: None,
                 daemon_policy: daemon_policy.clone(),
+                artifacts: Vec::new(),
+                reports: Vec::new(),
+                evidence_refs: Vec::new(),
             },
             Ok(None) => DesktopLabStatusSnapshot {
                 available: false,
@@ -369,6 +466,9 @@ pub(crate) fn desktop_lab_status_for_project(project: &Path) -> DesktopLabStatus
                 meeting_topic: None,
                 latest_report_path: None,
                 daemon_policy: daemon_policy.clone(),
+                artifacts: Vec::new(),
+                reports: Vec::new(),
+                evidence_refs: Vec::new(),
             },
             Err(err) => desktop_lab_status_error(err),
         },
@@ -402,6 +502,165 @@ fn desktop_lab_status_error(err: anyhow::Error) -> DesktopLabStatusSnapshot {
         meeting_topic: None,
         latest_report_path: None,
         daemon_policy: None,
+        artifacts: Vec::new(),
+        reports: Vec::new(),
+        evidence_refs: Vec::new(),
+    }
+}
+
+fn desktop_lab_artifact_snapshot(
+    artifact: &priority_agent::lab::model::StageArtifact,
+    report_path: Option<String>,
+    report_preview: Option<(Option<String>, bool)>,
+) -> DesktopLabArtifactSnapshot {
+    let (report_preview, report_preview_truncated) = report_preview.unwrap_or((None, false));
+    DesktopLabArtifactSnapshot {
+        artifact_id: artifact.artifact_id().to_string(),
+        artifact_type: artifact.artifact_type().as_str().to_string(),
+        stage: artifact.stage().to_string(),
+        owner: format!("{:?}", artifact.owner()),
+        status: format!("{:?}", artifact.status()),
+        validation_status: artifact.validation_status().map(str::to_string),
+        title: desktop_lab_artifact_title(artifact).to_string(),
+        created_at: desktop_lab_artifact_created_at(artifact),
+        updated_at: desktop_lab_artifact_updated_at(artifact),
+        report_path,
+        report_preview,
+        report_preview_truncated,
+        evidence_refs: artifact.evidence_refs().to_vec(),
+    }
+}
+
+fn desktop_lab_report_preview(path: &Path) -> (Option<String>, bool) {
+    let Ok(content) = std::fs::read_to_string(path) else {
+        return (None, false);
+    };
+    let compact = content.trim();
+    if compact.is_empty() {
+        return (None, false);
+    }
+    let max_chars = 900;
+    if compact.chars().count() <= max_chars {
+        return (Some(compact.to_string()), false);
+    }
+    (
+        Some(compact.chars().take(max_chars).collect::<String>()),
+        true,
+    )
+}
+
+fn desktop_lab_evidence_snapshot(
+    evidence: priority_agent::lab::model::LabEvidenceRef,
+) -> DesktopLabEvidenceSnapshot {
+    DesktopLabEvidenceSnapshot {
+        evidence_id: evidence.evidence_id,
+        kind: format!("{:?}", evidence.kind),
+        role: format!("{:?}", evidence.role),
+        reference: evidence.reference,
+        summary: compact_desktop_lab_text(&evidence.summary, 160),
+        artifact_id: evidence.artifact_id,
+        cycle_id: evidence.cycle_id,
+        created_at: evidence.created_at.to_rfc3339(),
+        estimated_summary_tokens: evidence.estimated_summary_tokens,
+    }
+}
+
+pub(crate) fn desktop_lab_artifact_title(
+    artifact: &priority_agent::lab::model::StageArtifact,
+) -> &str {
+    match artifact {
+        priority_agent::lab::model::StageArtifact::ProfessorPlan(envelope) => &envelope.title,
+        priority_agent::lab::model::StageArtifact::PostdocPlan(envelope) => &envelope.title,
+        priority_agent::lab::model::StageArtifact::GraduateResult(envelope) => &envelope.title,
+        priority_agent::lab::model::StageArtifact::PostdocIntegrationSummary(envelope) => {
+            &envelope.title
+        }
+        priority_agent::lab::model::StageArtifact::ProfessorReview(envelope) => &envelope.title,
+        priority_agent::lab::model::StageArtifact::CycleSummary(envelope) => &envelope.title,
+        priority_agent::lab::model::StageArtifact::CompressionSummary(envelope) => {
+            &envelope.title
+        }
+        priority_agent::lab::model::StageArtifact::LabMeetingRequest(envelope) => {
+            &envelope.title
+        }
+        priority_agent::lab::model::StageArtifact::LabMeetingSummary(envelope) => {
+            &envelope.title
+        }
+        priority_agent::lab::model::StageArtifact::LabBlockerReport(envelope) => &envelope.title,
+        priority_agent::lab::model::StageArtifact::LabRevisionTask(envelope) => &envelope.title,
+        priority_agent::lab::model::StageArtifact::ProfessorSteeringDecision(envelope) => {
+            &envelope.title
+        }
+    }
+}
+
+fn desktop_lab_artifact_created_at(
+    artifact: &priority_agent::lab::model::StageArtifact,
+) -> String {
+    match artifact {
+        priority_agent::lab::model::StageArtifact::ProfessorPlan(envelope) => envelope.created_at.to_rfc3339(),
+        priority_agent::lab::model::StageArtifact::PostdocPlan(envelope) => envelope.created_at.to_rfc3339(),
+        priority_agent::lab::model::StageArtifact::GraduateResult(envelope) => envelope.created_at.to_rfc3339(),
+        priority_agent::lab::model::StageArtifact::PostdocIntegrationSummary(envelope) => {
+            envelope.created_at.to_rfc3339()
+        }
+        priority_agent::lab::model::StageArtifact::ProfessorReview(envelope) => {
+            envelope.created_at.to_rfc3339()
+        }
+        priority_agent::lab::model::StageArtifact::CycleSummary(envelope) => envelope.created_at.to_rfc3339(),
+        priority_agent::lab::model::StageArtifact::CompressionSummary(envelope) => {
+            envelope.created_at.to_rfc3339()
+        }
+        priority_agent::lab::model::StageArtifact::LabMeetingRequest(envelope) => {
+            envelope.created_at.to_rfc3339()
+        }
+        priority_agent::lab::model::StageArtifact::LabMeetingSummary(envelope) => {
+            envelope.created_at.to_rfc3339()
+        }
+        priority_agent::lab::model::StageArtifact::LabBlockerReport(envelope) => {
+            envelope.created_at.to_rfc3339()
+        }
+        priority_agent::lab::model::StageArtifact::LabRevisionTask(envelope) => {
+            envelope.created_at.to_rfc3339()
+        }
+        priority_agent::lab::model::StageArtifact::ProfessorSteeringDecision(envelope) => {
+            envelope.created_at.to_rfc3339()
+        }
+    }
+}
+
+fn desktop_lab_artifact_updated_at(
+    artifact: &priority_agent::lab::model::StageArtifact,
+) -> String {
+    match artifact {
+        priority_agent::lab::model::StageArtifact::ProfessorPlan(envelope) => envelope.updated_at.to_rfc3339(),
+        priority_agent::lab::model::StageArtifact::PostdocPlan(envelope) => envelope.updated_at.to_rfc3339(),
+        priority_agent::lab::model::StageArtifact::GraduateResult(envelope) => envelope.updated_at.to_rfc3339(),
+        priority_agent::lab::model::StageArtifact::PostdocIntegrationSummary(envelope) => {
+            envelope.updated_at.to_rfc3339()
+        }
+        priority_agent::lab::model::StageArtifact::ProfessorReview(envelope) => {
+            envelope.updated_at.to_rfc3339()
+        }
+        priority_agent::lab::model::StageArtifact::CycleSummary(envelope) => envelope.updated_at.to_rfc3339(),
+        priority_agent::lab::model::StageArtifact::CompressionSummary(envelope) => {
+            envelope.updated_at.to_rfc3339()
+        }
+        priority_agent::lab::model::StageArtifact::LabMeetingRequest(envelope) => {
+            envelope.updated_at.to_rfc3339()
+        }
+        priority_agent::lab::model::StageArtifact::LabMeetingSummary(envelope) => {
+            envelope.updated_at.to_rfc3339()
+        }
+        priority_agent::lab::model::StageArtifact::LabBlockerReport(envelope) => {
+            envelope.updated_at.to_rfc3339()
+        }
+        priority_agent::lab::model::StageArtifact::LabRevisionTask(envelope) => {
+            envelope.updated_at.to_rfc3339()
+        }
+        priority_agent::lab::model::StageArtifact::ProfessorSteeringDecision(envelope) => {
+            envelope.updated_at.to_rfc3339()
+        }
     }
 }
 

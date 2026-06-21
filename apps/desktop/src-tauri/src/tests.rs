@@ -19,6 +19,13 @@ impl DesktopEnvGuard {
         }
         unsafe { std::env::set_var(key, value) };
     }
+
+    fn remove(&mut self, key: &'static str) {
+        if !self.saved.iter().any(|(saved_key, _)| saved_key == &key) {
+            self.saved.push((key, std::env::var(key).ok()));
+        }
+        unsafe { std::env::remove_var(key) };
+    }
 }
 
 impl Drop for DesktopEnvGuard {
@@ -353,6 +360,56 @@ fn desktop_run_context_rejects_file_outside_project() {
 }
 
 #[test]
+fn desktop_file_preview_reads_project_relative_file() {
+    let project = std::env::temp_dir().join(format!(
+        "priority-agent-desktop-file-preview-read-root-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&project);
+    std::fs::create_dir_all(project.join("src")).unwrap();
+    std::fs::write(
+        project.join("src/lib.rs"),
+        "pub fn preview() {\n    println!(\"ok\");\n}\n",
+    )
+    .unwrap();
+
+    let preview = desktop_file_preview_for_project(&project, "src/lib.rs", Some(1024)).unwrap();
+    assert_eq!(preview.path, "src/lib.rs");
+    assert!(preview.content.contains("pub fn preview"));
+    assert_eq!(preview.line_count, 3);
+    assert!(!preview.truncated);
+
+    let _ = std::fs::remove_dir_all(&project);
+}
+
+#[test]
+fn desktop_file_preview_rejects_path_outside_project() {
+    let project = std::env::temp_dir().join(format!(
+        "priority-agent-desktop-file-preview-reject-root-{}",
+        std::process::id()
+    ));
+    let outside = std::env::temp_dir().join(format!(
+        "priority-agent-desktop-file-preview-outside-{}.txt",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&project);
+    let _ = std::fs::remove_file(&outside);
+    std::fs::create_dir_all(&project).unwrap();
+    std::fs::write(&outside, "outside\n").unwrap();
+
+    let outside_relative = format!(
+        "../{}",
+        outside.file_name().unwrap().to_string_lossy()
+    );
+    let err = desktop_file_preview_for_project(&project, &outside_relative, Some(1024))
+        .unwrap_err();
+    assert!(err.contains("Failed to resolve") || err.contains("inside the selected project"));
+
+    let _ = std::fs::remove_dir_all(&project);
+    let _ = std::fs::remove_file(&outside);
+}
+
+#[test]
 fn desktop_smoke_settings_round_trip() {
     let path = std::env::temp_dir().join(format!(
         "priority-agent-desktop-settings-{}.json",
@@ -441,6 +498,93 @@ fn desktop_smoke_lab_status_reads_file_backed_labrun_state() {
     assert_eq!(daemon_policy.max_steps, 4);
     assert_eq!(daemon_policy.max_steps_per_cycle, 6);
     assert_eq!(daemon_policy.interval_ms, 500);
+
+    let created = priority_agent::lab::orchestrator::LabOrchestrator::for_project(&project)
+        .create_current_stage_artifact_for_latest("Desktop status surface proof")
+        .unwrap();
+    store
+        .record_evidence_ref(
+            &run.lab_run_id,
+            priority_agent::lab::model::LabEvidenceKind::File,
+            priority_agent::lab::model::LabRole::Professor,
+            created.report_path.to_string_lossy().as_ref(),
+            "Desktop report evidence is persisted",
+            Some(created.artifact.artifact_id()),
+            None,
+        )
+        .unwrap();
+    let with_rows = desktop_lab_status_for_project(&project);
+    assert_eq!(with_rows.artifact_count, 1);
+    assert_eq!(with_rows.artifacts.len(), 1);
+    assert_eq!(
+        with_rows.artifacts[0].artifact_id,
+        created.artifact.artifact_id()
+    );
+    assert_eq!(with_rows.artifacts[0].artifact_type, "ProfessorPlan");
+    assert_eq!(with_rows.artifacts[0].stage, "professor_discussion");
+    assert_eq!(with_rows.artifacts[0].owner, "Professor");
+    assert!(with_rows.artifacts[0]
+        .report_preview
+        .as_deref()
+        .unwrap_or_default()
+        .contains("Desktop status surface proof"));
+    assert!(!with_rows.artifacts[0].report_preview_truncated);
+    assert_eq!(
+        with_rows.artifacts[0].validation_status.as_deref(),
+        Some("not_verified")
+    );
+    assert_eq!(with_rows.reports.len(), 1);
+    assert_eq!(
+        with_rows.reports[0].artifact_id,
+        created.artifact.artifact_id()
+    );
+    assert!(with_rows.reports[0].path.ends_with(".md"));
+    assert!(with_rows.reports[0]
+        .preview
+        .as_deref()
+        .unwrap_or_default()
+        .contains("Desktop status surface proof"));
+    assert!(!with_rows.reports[0].truncated);
+    let report_page = desktop_lab_report_page_for_project(
+        &project,
+        &with_rows.reports[0].path,
+        0,
+        512,
+    )
+    .unwrap();
+    assert!(report_page
+        .content
+        .contains("Desktop status surface proof"));
+    assert_eq!(report_page.offset, 0);
+    assert!(report_page.total_bytes > 0);
+    let artifact_body =
+        desktop_lab_artifact_body_for_project(&project, created.artifact.artifact_id()).unwrap();
+    assert_eq!(artifact_body.artifact_id, created.artifact.artifact_id());
+    assert_eq!(artifact_body.artifact_type, "ProfessorPlan");
+    assert!(artifact_body
+        .content
+        .contains("Desktop status surface proof"));
+    assert!(artifact_body.content.contains("strategic_direction"));
+    let missing_artifact =
+        desktop_lab_artifact_body_for_project(&project, "artifact_not_registered").unwrap_err();
+    assert!(missing_artifact.contains("not registered"));
+    let outside = project.join("README.md");
+    std::fs::write(&outside, "outside").unwrap();
+    let rejected = desktop_lab_report_page_for_project(
+        &project,
+        outside.to_string_lossy().as_ref(),
+        0,
+        512,
+    )
+    .unwrap_err();
+    assert!(rejected.contains(".priority-agent/lab"));
+    assert_eq!(with_rows.evidence_refs.len(), 1);
+    assert_eq!(with_rows.evidence_refs[0].kind, "File");
+    assert_eq!(with_rows.evidence_refs[0].role, "Professor");
+    assert_eq!(
+        with_rows.evidence_refs[0].artifact_id.as_deref(),
+        Some(created.artifact.artifact_id())
+    );
 
     let task = store
         .create_graduate_task(
@@ -875,6 +1019,38 @@ fn desktop_smoke_provider_options_include_missing_defaults() {
     assert!(providers
         .iter()
         .any(|provider| provider.id == "kimi" && provider.model == "kimi-k2.5"));
+}
+
+#[test]
+fn desktop_default_provider_prefers_deepseek_when_configured() {
+    let _env_lock = DESKTOP_ENV_LOCK.lock().unwrap();
+    let mut env = DesktopEnvGuard::new();
+    env.set("MINIMAX_API_KEY", "mini-key");
+    env.set("DEEPSEEK_API_KEY", "deepseek-key");
+    env.remove("PRIORITY_AGENT_DEFAULT_PROVIDER");
+
+    let registry = priority_agent::services::api::provider::ProviderRegistry::from_env();
+
+    assert_eq!(
+        default_provider_id_from_env(&registry).as_deref(),
+        Some("deepseek")
+    );
+}
+
+#[test]
+fn desktop_default_provider_honors_env_override() {
+    let _env_lock = DESKTOP_ENV_LOCK.lock().unwrap();
+    let mut env = DesktopEnvGuard::new();
+    env.set("MINIMAX_API_KEY", "mini-key");
+    env.set("DEEPSEEK_API_KEY", "deepseek-key");
+    env.set("PRIORITY_AGENT_DEFAULT_PROVIDER", "minimax");
+
+    let registry = priority_agent::services::api::provider::ProviderRegistry::from_env();
+
+    assert_eq!(
+        default_provider_id_from_env(&registry).as_deref(),
+        Some("minimax")
+    );
 }
 
 #[test]

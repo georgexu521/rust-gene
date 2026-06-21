@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from "react";
+import { useRef, useState, type ReactNode } from "react";
 import {
   Activity,
   Code2,
@@ -20,6 +20,7 @@ import {
   ProviderSetupInfo,
 } from "../../runtime/desktopApi";
 import { saveProviderCredential as saveCred } from "../../runtime/desktopApi";
+import { useDrawerKeyboard } from "./useDrawerKeyboard";
 
 type SettingsDrawerProps = {
   isOpen: boolean;
@@ -63,6 +64,12 @@ export function SettingsDrawer({
   onOpenShellProfile,
 }: SettingsDrawerProps) {
   const [activeCategory, setActiveCategory] = useState<SettingsCategory>("general");
+  const backButtonRef = useRef<HTMLButtonElement>(null);
+  const drawerRef = useDrawerKeyboard<HTMLElement>({
+    initialFocusRef: backButtonRef,
+    isOpen,
+    onClose,
+  });
 
   if (!isOpen) {
     return null;
@@ -72,9 +79,9 @@ export function SettingsDrawer({
   const needsProviderSetup = providerDiagnostic?.status !== "ok";
 
   return (
-    <aside className="settings-drawer" aria-label="Settings">
+    <aside ref={drawerRef} className="settings-drawer" aria-label="Settings">
       <nav className="settings-nav" aria-label="Settings categories">
-        <button className="settings-back" type="button" onClick={onClose}>
+        <button ref={backButtonRef} className="settings-back" type="button" onClick={onClose}>
           <span aria-hidden="true">←</span>
           <span>Back to app</span>
         </button>
@@ -395,12 +402,12 @@ function ProviderSetupGuide({
         Paste your API key below to save it directly, or follow the shell
         profile steps.
       </p>
-      <div className="settings-actions" style={{ marginBottom: "0.75rem" }}>
+      <div className="provider-credential-row">
         <select
           aria-label="Provider"
+          className="provider-select"
           value={effectiveProviderId}
           onChange={(event) => setSelectedProviderId(event.target.value)}
-          style={{ padding: "0.4rem 0.5rem", fontSize: "0.85rem" }}
         >
           {providerOptions.map((provider) => (
             <option key={provider.id} value={provider.id}>
@@ -410,6 +417,7 @@ function ProviderSetupGuide({
           ))}
         </select>
         <input
+          className="provider-key-input"
           type="password"
           placeholder={
             selectedProvider
@@ -418,9 +426,9 @@ function ProviderSetupGuide({
           }
           value={apiKey}
           onChange={(e) => setApiKey(e.target.value)}
-          style={{ flex: 1, padding: "0.4rem 0.5rem", fontSize: "0.85rem" }}
         />
         <button
+          className="provider-save-button"
           type="button"
           onClick={handleSave}
           disabled={saving || !apiKey.trim() || !effectiveProviderId}
@@ -429,7 +437,7 @@ function ProviderSetupGuide({
         </button>
       </div>
       {saveMsg ? <p className="settings-copy">{saveMsg}</p> : null}
-      <p style={{ marginTop: "1rem" }}>
+      <p className="provider-shell-profile-copy">
         Alternatively, add one provider key to your shell profile, then restart
         the desktop app.
       </p>

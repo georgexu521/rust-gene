@@ -2419,6 +2419,9 @@ impl LabOrchestrator {
             "postdoc_review" | "professor_review"
         ) {
             let from_stage = run.current_stage.clone();
+            let required_artifact_type = transition_for_stage(&from_stage)
+                .map(|transition| transition.required_artifact_type)
+                .unwrap_or("role artifact");
             return Ok(LabSchedulerStepResult {
                 lab_run_id: run.lab_run_id,
                 action: LabSchedulerStepAction::Blocked,
@@ -2426,7 +2429,7 @@ impl LabOrchestrator {
                 task_id: None,
                 dispatch_id: None,
                 message: format!(
-                    "Scheduler stopped at {from_stage}; provider-backed or explicit role review artifact is required before advancement."
+                    "Scheduler stopped at {from_stage}; provider-backed or explicit {required_artifact_type} artifact is required before advancement."
                 ),
             });
         }
@@ -2559,7 +2562,20 @@ impl LabOrchestrator {
             stage: tick.to_stage,
             task_id: None,
             dispatch_id: None,
-            message: format!("Scheduler advanced LabRun from {}.", tick.from_stage),
+            message: match tick.status {
+                LabTickStatus::Advanced => {
+                    format!("Scheduler advanced LabRun from {}.", tick.from_stage)
+                }
+                LabTickStatus::Blocked => {
+                    format!("Scheduler blocked at {}.", tick.from_stage)
+                }
+                LabTickStatus::NeedsUser => {
+                    format!(
+                        "Scheduler stopped at {}; LabRun needs user review.",
+                        tick.from_stage
+                    )
+                }
+            },
         })
     }
 
@@ -3993,6 +4009,29 @@ mod tests {
         ToolContext::new(project_root, session_id).with_session_store(store)
     }
 
+    fn drive_to_user_report_with_explicit_artifacts(orchestrator: &LabOrchestrator) {
+        for stage in [
+            "professor_discussion",
+            "postdoc_plan",
+            "graduate_work",
+            "postdoc_review",
+            "professor_review",
+        ] {
+            let created = orchestrator
+                .create_current_stage_artifact_for_latest(&format!("explicit artifact for {stage}"))
+                .unwrap();
+            assert!(
+                created.gate.is_satisfied(),
+                "gate should be satisfied for explicit artifact at {stage}"
+            );
+            let advanced = orchestrator.advance_latest().unwrap();
+            if stage == "professor_review" {
+                assert_eq!(advanced.current_stage, "user_report");
+                assert!(advanced.needs_user);
+            }
+        }
+    }
+
     #[test]
     fn approve_creates_initial_professor_plan_gate() {
         let temp = tempfile::tempdir().unwrap();
@@ -4031,11 +4070,7 @@ mod tests {
             .unwrap();
 
         orchestrator
-            .write_satisfied_gate_for_latest(
-                "artifact_professor_plan_001",
-                Some("not_verified"),
-                None,
-            )
+            .create_current_stage_artifact_for_latest("Professor direction")
             .unwrap();
         let advanced = orchestrator.advance_latest().unwrap();
 
@@ -4895,7 +4930,7 @@ mod tests {
     }
 
     #[test]
-    fn professor_review_accepts_valid_postdoc_integration() {
+    fn professor_review_blocks_deterministic_closeout() {
         let temp = tempfile::tempdir().unwrap();
         let orchestrator = LabOrchestrator::for_project(temp.path());
         let proposal = orchestrator
@@ -4955,8 +4990,11 @@ mod tests {
             .create_professor_review_for_latest(Some("Professor accepts the evidence."))
             .unwrap();
 
-        assert!(review.gate.is_satisfied());
-        assert_eq!(review.gate.validation_status.as_deref(), Some("validated"));
+        assert!(!review.gate.is_satisfied());
+        assert_eq!(
+            review.gate.validation_status.as_deref(),
+            Some("needs_revision")
+        );
         assert!(review
             .gate
             .evidence_refs
@@ -4966,9 +5004,11 @@ mod tests {
         assert!(report.contains("event:event_"));
         match review.artifact {
             StageArtifact::ProfessorReview(envelope) => {
-                assert!(envelope.body.accepted);
-                assert!(envelope.body.required_revisions.is_empty());
-                assert!(envelope.body.user_report.contains("ready for user review"));
+                assert!(!envelope.body.accepted);
+                assert!(envelope.body.required_revisions.iter().any(|revision| {
+                    revision.contains("provider or explicit professor review is required")
+                }));
+                assert!(envelope.body.user_report.contains("not ready for closeout"));
                 assert!(envelope
                     .evidence_refs
                     .iter()
@@ -4976,9 +5016,8 @@ mod tests {
             }
             other => panic!("expected professor review, got {:?}", other.artifact_type()),
         }
-        let user_report = orchestrator.advance_latest().unwrap();
-        assert_eq!(user_report.current_stage, "user_report");
-        assert!(user_report.needs_user);
+        let err = orchestrator.advance_latest().unwrap_err().to_string();
+        assert!(err.contains("blocked"));
     }
 
     #[test]
@@ -6397,7 +6436,9 @@ Thanks."#,
             .unwrap();
         assert_eq!(postdoc.action, LabSchedulerStepAction::Blocked);
         assert_eq!(postdoc.stage, "postdoc_review");
-        assert!(postdoc.message.contains("role review artifact is required"));
+        assert!(postdoc
+            .message
+            .contains("PostdocIntegrationSummary artifact is required"));
         let saved = orchestrator.store().load_run(&run.lab_run_id).unwrap();
         assert_eq!(saved.current_stage, "postdoc_review");
         assert!(!saved.needs_user);
@@ -6456,7 +6497,9 @@ Thanks."#,
 
         assert_eq!(step.action, LabSchedulerStepAction::Blocked);
         assert_eq!(step.stage, "professor_review");
-        assert!(step.message.contains("role review artifact is required"));
+        assert!(step
+            .message
+            .contains("ProfessorReview artifact is required"));
         let resumed = orchestrator.store().load_run(&run.lab_run_id).unwrap();
         assert_eq!(resumed.current_stage, "professor_review");
         assert_eq!(resumed.internal_owner, LabRole::Professor);
@@ -6601,9 +6644,7 @@ Thanks."#,
             .approve_proposal(&proposal.proposal_id)
             .unwrap();
 
-        for _ in 0..5 {
-            orchestrator.tick_latest().unwrap();
-        }
+        drive_to_user_report_with_explicit_artifacts(&orchestrator);
 
         let continued = orchestrator
             .continue_latest_from_user_report("first cycle reviewed; continue")
@@ -6658,9 +6699,7 @@ Thanks."#,
             .approve_proposal(&proposal.proposal_id)
             .unwrap();
 
-        for _ in 0..5 {
-            orchestrator.tick_latest().unwrap();
-        }
+        drive_to_user_report_with_explicit_artifacts(&orchestrator);
 
         let closed = orchestrator
             .closeout_latest_from_user_report("final report shown to user")

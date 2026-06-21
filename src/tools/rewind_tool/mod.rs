@@ -319,7 +319,8 @@ mod tests {
         let file = temp.path().join("sample.txt");
         std::fs::write(&file, "before").unwrap();
 
-        let mut checkpoint_manager = CheckpointManager::new("rewind_tool_test").await;
+        let session_id = format!("rewind_tool_test_{}", uuid::Uuid::new_v4().simple());
+        let mut checkpoint_manager = CheckpointManager::new(&session_id).await;
         checkpoint_manager.clear_all().await.unwrap();
         let checkpoint = checkpoint_manager
             .create_checkpoint("file_write", None, None, std::slice::from_ref(&file))

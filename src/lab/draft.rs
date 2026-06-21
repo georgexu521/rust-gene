@@ -2966,7 +2966,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn hybrid_run_uses_deterministic_review_bridges_to_user_report() {
+    async fn hybrid_run_stops_at_deterministic_professor_review_gate() {
         let temp = tempfile::tempdir().unwrap();
         let store = LabStore::for_project(temp.path());
         let proposal = store.create_proposal("Build LabRun", None).unwrap();
@@ -3013,8 +3013,11 @@ mod tests {
         .unwrap();
 
         assert_eq!(outcome.steps.len(), 2);
-        assert_eq!(outcome.stop_reason, LabHybridRunStopReason::NeedsUser);
-        assert_eq!(outcome.final_stage, "user_report");
+        assert_eq!(
+            outcome.stop_reason,
+            LabHybridRunStopReason::DeterministicGateBlocked
+        );
+        assert_eq!(outcome.final_stage, "professor_review");
         assert!(matches!(
             &outcome.steps[0],
             LabHybridRunStep::Deterministic(step)
@@ -3026,12 +3029,12 @@ mod tests {
             &outcome.steps[1],
             LabHybridRunStep::Deterministic(step)
                 if step.from_stage == "professor_review"
-                    && step.to_stage == "user_report"
-                    && step.gate_satisfied
+                    && step.to_stage == "professor_review"
+                    && !step.gate_satisfied
         ));
         let saved = store.latest_run().unwrap().unwrap();
-        assert_eq!(saved.current_stage, "user_report");
-        assert!(saved.needs_user);
+        assert_eq!(saved.current_stage, "professor_review");
+        assert!(!saved.needs_user);
     }
 
     #[tokio::test]
@@ -3129,8 +3132,11 @@ mod tests {
         .await
         .unwrap();
 
-        assert_eq!(outcome.stop_reason, LabHybridRunStopReason::NeedsUser);
-        assert_eq!(outcome.final_stage, "user_report");
+        assert_eq!(
+            outcome.stop_reason,
+            LabHybridRunStopReason::DeterministicGateBlocked
+        );
+        assert_eq!(outcome.final_stage, "professor_review");
         assert_eq!(outcome.steps.len(), 3);
         assert!(matches!(
             &outcome.steps[0],
@@ -3150,8 +3156,8 @@ mod tests {
             &outcome.steps[2],
             LabHybridRunStep::Deterministic(step)
                 if step.from_stage == "professor_review"
-                    && step.to_stage == "user_report"
-                    && step.gate_satisfied
+                    && step.to_stage == "professor_review"
+                    && !step.gate_satisfied
         ));
         let saved_dispatch = store
             .load_graduate_dispatch(&run.lab_run_id, &record.dispatch_id)
@@ -3161,8 +3167,8 @@ mod tests {
             crate::lab::model::GraduateDispatchStatus::Succeeded
         );
         let saved = store.latest_run().unwrap().unwrap();
-        assert_eq!(saved.current_stage, "user_report");
-        assert!(saved.needs_user);
+        assert_eq!(saved.current_stage, "professor_review");
+        assert!(!saved.needs_user);
     }
 
     #[tokio::test]
@@ -3309,8 +3315,11 @@ mod tests {
         .await
         .unwrap();
 
-        assert_eq!(second.stop_reason, LabHybridRunStopReason::NeedsUser);
-        assert_eq!(second.final_stage, "user_report");
+        assert_eq!(
+            second.stop_reason,
+            LabHybridRunStopReason::DeterministicGateBlocked
+        );
+        assert_eq!(second.final_stage, "professor_review");
         assert_eq!(second.steps.len(), 3);
         assert!(matches!(
             &second.steps[0],
@@ -3330,12 +3339,12 @@ mod tests {
             &second.steps[2],
             LabHybridRunStep::Deterministic(step)
                 if step.from_stage == "professor_review"
-                    && step.to_stage == "user_report"
-                    && step.gate_satisfied
+                    && step.to_stage == "professor_review"
+                    && !step.gate_satisfied
         ));
         let saved = store.latest_run().unwrap().unwrap();
-        assert_eq!(saved.current_stage, "user_report");
-        assert!(saved.needs_user);
+        assert_eq!(saved.current_stage, "professor_review");
+        assert!(!saved.needs_user);
     }
 
     #[tokio::test]

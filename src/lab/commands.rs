@@ -1764,32 +1764,45 @@ async fn handle_task_worktree_command(
     let cleanup_status =
         graduate_cleanup_status_for_worktree_action(worktree_action, result.success);
     let cleanup_message = format_graduate_cleanup_message(action, result.success, &result);
+    let mut persistence_error = None;
     if let Some(cleanup_status) = cleanup_status {
-        let _ = store.update_graduate_dispatch_cleanup_status(
+        if let Err(err) = store.update_graduate_dispatch_cleanup_status(
             &run.lab_run_id,
             &dispatch.dispatch_id,
             cleanup_status,
             Some(cleanup_message.clone()),
+        ) {
+            persistence_error = Some(format!("cleanup status: {err}"));
+        }
+    }
+    if persistence_error.is_none() {
+        if let Err(err) = store.record_run_event(
+            &run.lab_run_id,
+            "lab_graduate_worktree_action",
+            serde_json::json!({
+                "task_id": task_id,
+                "dispatch_id": dispatch.dispatch_id,
+                "agent_id": dispatch.agent_id,
+                "agent_ref_kind": agent_ref_kind,
+                "agent_ref": agent_ref.clone(),
+                "action": worktree_action,
+                "success": result.success,
+                "error": result.error.clone(),
+                "cleanup_status": cleanup_status.map(GraduateCleanupStatus::as_str),
+                "cleanup_message": cleanup_message,
+                "result_data": result.data.clone(),
+                "result_content_preview": compact_message_line(&result.content, 600),
+            }),
+        ) {
+            persistence_error = Some(format!("worktree action event: {err}"));
+        }
+    }
+    if let Some(persistence_error) = persistence_error {
+        return format!(
+            "Lab graduate worktree {} failed for task {} via {} {}: failed to persist worktree action state: {}",
+            action, task_id, agent_ref_kind, agent_ref, persistence_error
         );
     }
-    let _ = store.record_run_event(
-        &run.lab_run_id,
-        "lab_graduate_worktree_action",
-        serde_json::json!({
-            "task_id": task_id,
-            "dispatch_id": dispatch.dispatch_id,
-            "agent_id": dispatch.agent_id,
-            "agent_ref_kind": agent_ref_kind,
-            "agent_ref": agent_ref.clone(),
-            "action": worktree_action,
-            "success": result.success,
-            "error": result.error.clone(),
-            "cleanup_status": cleanup_status.map(GraduateCleanupStatus::as_str),
-            "cleanup_message": cleanup_message,
-            "result_data": result.data.clone(),
-            "result_content_preview": compact_message_line(&result.content, 600),
-        }),
-    );
     if result.success {
         format!(
             "Lab graduate worktree {} succeeded for task {} via {} {}.\n{}",
@@ -3910,9 +3923,14 @@ fn open_recommended_meeting(orchestrator: &LabOrchestrator, args: &str) -> Strin
 
     match orchestrator.create_meeting_summary_for_latest(Some(&topic)) {
         Ok(created) => {
+            let source = if explicit_topic.is_empty() {
+                "runtime escalation signal"
+            } else {
+                "manual topic"
+            };
             let mut lines = vec![
                 format!(
-                    "Lab meeting opened from runtime escalation signal: {}",
+                    "Lab meeting opened from {source}: {}",
                     created.artifact.artifact_id()
                 ),
                 "This meeting is read-only and does not mutate code.".to_string(),
@@ -5623,6 +5641,31 @@ mod tests {
         lab_command_git(path, &["commit", "-q", "-m", "initial"]);
     }
 
+    fn drive_lab_command_to_user_report(path: &Path) {
+        for stage in [
+            "professor_discussion",
+            "postdoc_plan",
+            "graduate_work",
+            "postdoc_review",
+            "professor_review",
+        ] {
+            let planned = handle_lab_command(
+                path,
+                Some("session".to_string()),
+                &format!("plan explicit artifact for {stage}"),
+            );
+            assert!(
+                planned.contains("Gate satisfied"),
+                "plan failed at {stage}: {planned}"
+            );
+            let advanced = handle_lab_command(path, Some("session".to_string()), "advance");
+            assert!(
+                advanced.contains("Advanced LabRun") || advanced.contains("needs user review"),
+                "advance failed at {stage}: {advanced}"
+            );
+        }
+    }
+
     struct ProposalProvider {
         response: String,
     }
@@ -6435,7 +6478,7 @@ fi
     }
 
     #[tokio::test]
-    async fn run_hybrid_cycles_command_continues_after_user_report_with_bound() {
+    async fn run_hybrid_cycles_command_stops_at_professor_gate_without_explicit_review() {
         let temp = tempfile::tempdir().unwrap();
         let store = LabStore::for_project(temp.path());
         let proposal = store.create_proposal("Build LabRun", None).unwrap();
@@ -6502,18 +6545,13 @@ fi
         )
         .await;
 
-        assert!(output.contains("Hybrid Lab cycle run: 2 cycle(s)"));
-        assert!(output.contains("continued_to_next_cycle=true"));
-        assert!(output.contains("Cycle 2 started_at=1"));
-        assert!(output.contains("Stop reason: Stopped(MaxSteps)"));
+        assert!(output.contains("Hybrid Lab cycle run: 1 cycle(s)"));
+        assert!(output.contains("Final stage: professor_review"));
+        assert!(output.contains("Stop reason: Stopped(DeterministicGateBlocked)"));
+        assert!(output.contains("continued_to_next_cycle=false"));
         let saved = store.latest_run().unwrap().unwrap();
-        assert_eq!(saved.cycle_count, 1);
-        assert_eq!(saved.current_stage, "postdoc_plan");
-        assert!(store
-            .list_stage_artifacts(&saved.lab_run_id)
-            .unwrap()
-            .iter()
-            .any(|artifact| matches!(artifact, StageArtifact::CycleSummary(_))));
+        assert_eq!(saved.cycle_count, 0);
+        assert_eq!(saved.current_stage, "professor_review");
     }
 
     #[tokio::test]
@@ -6571,7 +6609,7 @@ fi
     }
 
     #[tokio::test]
-    async fn run_hybrid_cycles_command_records_compression_after_completed_cycle() {
+    async fn run_hybrid_cycles_command_does_not_compress_blocked_professor_gate() {
         let temp = tempfile::tempdir().unwrap();
         let store = LabStore::for_project(temp.path());
         let proposal = store.create_proposal("Build LabRun", None).unwrap();
@@ -6631,10 +6669,10 @@ fi
         .await;
 
         assert!(output.contains("Hybrid Lab cycle run: 1 cycle(s)"));
-        assert!(output.contains("Stop reason: MaxCycles"));
-        assert!(output.contains("compression_artifacts=artifact_compressionsummary_"));
+        assert!(output.contains("Stop reason: Stopped(DeterministicGateBlocked)"));
+        assert!(output.contains("compression_artifacts=none"));
         let saved = store.latest_run().unwrap().unwrap();
-        assert!(store
+        assert!(!store
             .list_stage_artifacts(&saved.lab_run_id)
             .unwrap()
             .iter()
@@ -7021,7 +7059,16 @@ fi
             Some("session".to_string()),
             "gate satisfy artifact_professor_plan_001 not_verified",
         );
-        assert!(gate.contains("Artifact gate satisfied"));
+        assert!(gate.contains("Failed to satisfy artifact gate"));
+        assert!(gate.contains("missing or malformed artifact"));
+
+        let planned = handle_lab_command(
+            temp.path(),
+            Some("session".to_string()),
+            "plan Professor direction",
+        );
+        assert!(planned.contains("Created ProfessorPlan artifact"));
+        assert!(planned.contains("Gate satisfied"));
 
         let advanced = handle_lab_command(temp.path(), Some("session".to_string()), "advance");
         assert!(advanced.contains("postdoc_plan"));
@@ -7265,10 +7312,7 @@ fi
             &format!("approve {proposal_id}"),
         );
         assert!(approved.contains("LabRun created"));
-        for _ in 0..5 {
-            let tick = handle_lab_command(temp.path(), Some("session".to_string()), "tick");
-            assert!(tick.contains("Lab tick"));
-        }
+        drive_lab_command_to_user_report(temp.path());
 
         let output = handle_lab_command(
             temp.path(),
@@ -7304,10 +7348,7 @@ fi
             &format!("approve {proposal_id}"),
         );
         assert!(approved.contains("LabRun created"));
-        for _ in 0..5 {
-            let tick = handle_lab_command(temp.path(), Some("session".to_string()), "tick");
-            assert!(tick.contains("Lab tick"));
-        }
+        drive_lab_command_to_user_report(temp.path());
 
         let output = handle_lab_command(
             temp.path(),
@@ -7810,7 +7851,7 @@ fi
         assert!(dashboard.contains("Tasks: total=0 open=0 blocked=0"));
         assert!(dashboard.contains("Validation retries: total=0 escalated=0"));
         assert!(dashboard.contains("Cost: requests=0"));
-        assert!(dashboard.contains("Meeting recommendation: recommended=false"));
+        assert!(dashboard.contains("Runtime escalation signals: suggested_meeting=false"));
         assert!(dashboard.contains("Scheduler:"));
         assert!(dashboard.contains("Indexed dashboard: missing"));
         assert!(dashboard.contains("Graduate worktree proof: none"));
@@ -8641,10 +8682,8 @@ fi
         )
         .await;
 
-        assert!(output.contains("Lab scheduler run:"));
-        assert!(output.contains("TickAdvanced"));
         assert!(output.contains("Blocked"));
-        assert!(output.contains("requires a queued GraduateTask"));
+        assert!(output.contains("Scheduler blocked at professor_discussion"));
     }
 
     #[tokio::test]
@@ -9284,7 +9323,7 @@ fi
         );
 
         assert!(output.contains("Created professor review"));
-        assert!(output.contains("Gate: professor_review (satisfied)"));
+        assert!(output.contains("Gate: professor_review (blocked)"));
         assert!(output.contains("Artifact: "));
         assert!(output.contains("Report: "));
     }
@@ -9414,9 +9453,7 @@ fi
 
         let output = handle_lab_command(temp.path(), Some("session".to_string()), "tick");
 
-        assert!(output.contains("Lab tick: Advanced"));
-        assert!(output.contains("Stage: professor_discussion -> postdoc_plan"));
-        assert!(output.contains("Artifact: "));
-        assert!(output.contains("Report: "));
+        assert!(output.contains("Lab tick: Blocked"));
+        assert!(output.contains("Stage: professor_discussion -> professor_discussion"));
     }
 }

@@ -79,7 +79,7 @@ export function Transcript({
           providerStatus={providerStatus}
         />
       ) : (
-        renderedItems.map(({ className, item }) =>
+        renderedItems.map(({ className, item, runGroup }) =>
           className?.includes("transcript-hidden") ? null : item.role === "reasoning" ? (
             <article className="message reasoning" key={item.id}>
               <ReasoningCard text={item.text} streaming={item.streaming ?? false} />
@@ -88,6 +88,7 @@ export function Transcript({
             <TimelineEvent
               className={className}
               item={item}
+              runGroup={runGroup}
               onOpenContext={onOpenContext}
               onPermissionAnswer={onPermissionAnswer}
               onOpenTrace={onOpenTrace}
@@ -123,16 +124,18 @@ export function Transcript({
 type AnnotatedTranscriptItem = {
   className?: string;
   item: TranscriptItem;
+  runGroup?: RunGroupPreview;
 };
 
 function annotateTranscriptItems(items: TranscriptItem[]): AnnotatedTranscriptItem[] {
   let inRunGroup = false;
-  return items.map((item) => {
+  return items.map((item, index) => {
     if (item.role === "timeline" && item.kind === "run") {
       inRunGroup = true;
       return {
         className: timelineItemClass(item, "run-boundary run-group-start"),
         item,
+        runGroup: buildRunGroupPreview(items, index),
       };
     }
     if (item.role === "assistant" && item.variant === "final") {
@@ -265,15 +268,34 @@ function isStreamingAssistant(
 
 type TimelineEventItem = Extract<TranscriptItem, { role: "timeline" }>;
 
+type RunGroupPreviewStep = {
+  id: string;
+  title: string;
+  detail?: string;
+  status?: TimelineStatus;
+  traceId?: string;
+};
+
+type RunGroupPreview = {
+  tools: RunGroupPreviewStep[];
+  validations: RunGroupPreviewStep[];
+  files: RunGroupPreviewStep[];
+  permissions: RunGroupPreviewStep[];
+  failures: RunGroupPreviewStep[];
+  finalText?: string;
+};
+
 function TimelineEvent({
   className,
   item,
+  runGroup,
   onPermissionAnswer,
   onOpenContext,
   onOpenTrace,
 }: {
   className?: string;
   item: TimelineEventItem;
+  runGroup?: RunGroupPreview;
   onOpenContext?: (context: DesktopRunContext) => void;
   onPermissionAnswer?: (approved: boolean) => void;
   onOpenTrace?: (traceId: string) => void;
@@ -317,6 +339,9 @@ function TimelineEvent({
           >
             Trace
           </button>
+        ) : null}
+        {runGroup && hasRunGroupPreview(runGroup) ? (
+          <RunGroupPanel runGroup={runGroup} onOpenTrace={onOpenTrace} />
         ) : null}
       </article>
     );
@@ -415,6 +440,189 @@ function runStatusText(item: TimelineEventItem) {
     return "Waiting for approval";
   }
   return "Working";
+}
+
+function RunGroupPanel({
+  runGroup,
+  onOpenTrace,
+}: {
+  runGroup: RunGroupPreview;
+  onOpenTrace?: (traceId: string) => void;
+}) {
+  const groups = [
+    { key: "validations", label: "Validation", items: runGroup.validations },
+    { key: "files", label: "Diff", items: runGroup.files },
+    { key: "permissions", label: "Permission", items: runGroup.permissions },
+    { key: "failures", label: "Needs attention", items: runGroup.failures },
+    { key: "tools", label: "Tools", items: runGroup.tools },
+  ].filter((group) => group.items.length > 0);
+
+  return (
+    <div className="run-group-panel" aria-label="Run summary panel">
+      <div className="run-group-panel-header">
+        <span>Run summary</span>
+        {runGroup.finalText ? <span>{runGroup.finalText}</span> : null}
+      </div>
+      <div className="run-group-panel-grid">
+        {groups.map((group) => (
+          <section className={`run-group-card ${group.key}`} key={group.key}>
+            <div className="run-group-card-title">{group.label}</div>
+            <div className="run-group-card-list">
+              {group.items.slice(0, 4).map((step) => (
+                <div className={`run-group-step ${step.status || "info"}`} key={step.id}>
+                  <span className="run-group-step-dot" aria-hidden="true" />
+                  <div>
+                    <strong>{step.title}</strong>
+                    {step.detail ? <span>{step.detail}</span> : null}
+                  </div>
+                  {step.traceId && onOpenTrace ? (
+                    <button
+                      aria-label={`Open trace for ${step.title}`}
+                      type="button"
+                      onClick={() => onOpenTrace(step.traceId!)}
+                    >
+                      Trace
+                    </button>
+                  ) : null}
+                </div>
+              ))}
+              {group.items.length > 4 ? (
+                <div className="run-group-more">+{group.items.length - 4} more</div>
+              ) : null}
+            </div>
+          </section>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function buildRunGroupPreview(items: TranscriptItem[], runIndex: number): RunGroupPreview | undefined {
+  const runGroup: RunGroupPreview = {
+    tools: [],
+    validations: [],
+    files: [],
+    permissions: [],
+    failures: [],
+  };
+
+  for (let index = runIndex + 1; index < items.length; index += 1) {
+    const item = items[index];
+    if (!item || item.role === "user") {
+      break;
+    }
+    if (item.role === "timeline" && item.kind === "run") {
+      break;
+    }
+    if (item.role === "assistant" && item.variant === "final") {
+      runGroup.finalText = summarizeFinalText(item.text);
+      continue;
+    }
+    if (item.role !== "timeline") {
+      continue;
+    }
+
+    addTimelineItemToRunGroup(runGroup, item);
+  }
+
+  return hasRunGroupPreview(runGroup) ? runGroup : undefined;
+}
+
+function addTimelineItemToRunGroup(runGroup: RunGroupPreview, item: TimelineEventItem) {
+  const failed = item.status === "failed" || item.kind === "error" || item.summary?.kind === "failure";
+  if (failed) {
+    runGroup.failures.push(runGroupStepFromTimeline(item));
+  }
+
+  if (item.kind === "permission") {
+    runGroup.permissions.push(runGroupStepFromTimeline(item));
+    return;
+  }
+
+  if (item.kind !== "tool") {
+    return;
+  }
+
+  if (item.summary?.kind === "shell" && item.summary.validation) {
+    runGroup.validations.push(runGroupStepFromTimeline(item, item.summary.validation));
+    return;
+  }
+
+  if (item.summary?.kind === "file" && item.summary.action !== "read") {
+    runGroup.files.push(runGroupStepFromTimeline(item, fileChangeDetail(item.summary)));
+    return;
+  }
+
+  if (failed) {
+    return;
+  }
+
+  runGroup.tools.push(runGroupStepFromTimeline(item));
+}
+
+function runGroupStepFromTimeline(item: TimelineEventItem, detailOverride?: string): RunGroupPreviewStep {
+  return {
+    id: item.id,
+    title: item.title,
+    detail: detailOverride || runGroupDetail(item),
+    status: item.status,
+    traceId: item.traceId,
+  };
+}
+
+function runGroupDetail(item: TimelineEventItem) {
+  if (item.summary?.kind === "shell") {
+    return compactSummaryMeta([
+      item.summary.command,
+      item.summary.exitCode !== undefined ? `exit ${item.summary.exitCode}` : null,
+      item.summary.duration,
+    ]).join(" · ");
+  }
+  if (item.summary?.kind === "file") {
+    return compactSummaryMeta([
+      item.summary.path,
+      fileChangeDetail(item.summary),
+    ]).join(" · ");
+  }
+  if (item.summary?.kind === "permission") {
+    return compactSummaryMeta([
+      item.summary.risk ? `risk ${item.summary.risk}` : null,
+      item.summary.actionDecision ? `review ${item.summary.actionDecision}` : null,
+      item.summary.reason,
+    ]).join(" · ");
+  }
+  if (item.summary?.kind === "failure") {
+    return item.summary.reason;
+  }
+  return item.detail;
+}
+
+function fileChangeDetail(summary: Extract<TimelineSummary, { kind: "file" }>) {
+  return compactSummaryMeta([
+    summary.additions !== undefined ? `+${summary.additions}` : null,
+    summary.deletions !== undefined ? `-${summary.deletions}` : null,
+    summary.replacements !== undefined ? `${summary.replacements} replacements` : null,
+    summary.operations !== undefined ? `${summary.operations} operations` : null,
+  ]).join(" · ");
+}
+
+function summarizeFinalText(text: string) {
+  const firstLine = text.trim().split(/\r?\n/).find(Boolean);
+  if (!firstLine) {
+    return undefined;
+  }
+  return firstLine.length > 88 ? `${firstLine.slice(0, 85)}...` : firstLine;
+}
+
+function hasRunGroupPreview(runGroup: RunGroupPreview) {
+  return Boolean(
+    runGroup.finalText ||
+      runGroup.tools.length ||
+      runGroup.validations.length ||
+      runGroup.files.length ||
+      runGroup.permissions.length ||
+      runGroup.failures.length,
+  );
 }
 
 function TimelineSummaryView({

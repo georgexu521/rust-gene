@@ -67,6 +67,35 @@ test.describe("run event state", () => {
     expect(completed.isRunning).toBe(false);
   });
 
+  test("stores latest provider usage for inspector display", () => {
+    const result = applyRunEvent(
+      initialRunViewState,
+      {
+        type: "usage",
+        prompt_tokens: 128,
+        completion_tokens: 42,
+        reasoning_tokens: 7,
+        cached_tokens: 16,
+        cache_write_tokens: 12,
+      },
+      ids("usage-1"),
+    );
+
+    expect(result.state.latestUsage).toEqual({
+      promptTokens: 128,
+      completionTokens: 42,
+      totalTokens: 170,
+      reasoningTokens: 7,
+      cachedTokens: 16,
+      cacheWriteTokens: 12,
+    });
+    expect(result.state.traceItems).toContainEqual(
+      expect.objectContaining({
+        detail: "prompt 128 · completion 42 · reasoning 7 · cached 16 · cache write 12",
+      }),
+    );
+  });
+
   test("keeps simple replies out of the tool timeline", () => {
     const submitted = submitUserMessage(initialRunViewState, "你好", [], ids("user-1"));
     const answered = applyRunEvent(

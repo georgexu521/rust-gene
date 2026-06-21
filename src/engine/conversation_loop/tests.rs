@@ -2871,7 +2871,7 @@ async fn quiet_direct_turn_stays_in_main_loop_without_tools_or_dynamic_context()
     {
         let requests = provider.requests.lock().unwrap();
         assert_eq!(requests.len(), 1);
-        assert_eq!(requests[0].tools.as_ref().map(Vec::len), Some(0));
+        assert_eq!(requests[0].tools.as_ref().map(Vec::len).unwrap_or(0), 0);
         assert!(requests[0].tool_choice.is_none());
         assert!(requests[0].messages.iter().all(|message| {
             !matches!(

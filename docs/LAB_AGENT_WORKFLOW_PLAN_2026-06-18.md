@@ -2179,12 +2179,12 @@ optional lab meeting.
 - The first hybrid step routes through the strict scheduler, syncs the durable
   graduate result, writes the verified `GraduateResult`, updates the graduate
   dispatch to `Succeeded`, and advances to `postdoc_review`.
-- The same hybrid run then executes deterministic postdoc integration and
-  professor review bridges, reaching `user_report` and `NeedsUser` in one
-  bounded run.
-- This is the first offline proof that the provider/hybrid LabRun loop can
-  cross the graduate durable-completion boundary and finish the
-  graduate -> postdoc -> professor handoff without user intervention.
+- The same hybrid run now executes deterministic postdoc integration, then stops
+  at `professor_review` with `DeterministicGateBlocked` unless a provider-backed
+  or explicit professor review artifact is supplied.
+- This is the offline proof that the provider/hybrid LabRun loop can cross the
+  graduate durable-completion boundary and reach the professor-review handoff
+  without pretending the runtime can make the professor closeout decision.
 
 ### Completed in P0.127 Provider planning queues graduate, durable resume closes out
 
@@ -2199,13 +2199,14 @@ optional lab meeting.
 - The second phase simulates a completed durable `lab-graduate-<task_id>`
   subagent with completion artifact and isolated worktree file proof, then runs
   the hybrid loop to sync the `GraduateResult`, advance through
-  `postdoc_review` and `professor_review`, and stop at `NeedsUser`.
+  `postdoc_review`, and stop at `professor_review` until provider-backed or
+  explicit professor review is available.
 - The test deliberately avoids pretending graduate execution can run without an
   `AgentManager`; provider planning and graduate execution/resume remain
   separate runtime responsibilities.
 - This provides an offline proof of the professor -> postdoc -> graduate ->
-  postdoc -> professor -> user_report control spine without relying on a live
-  provider's coding ability.
+  postdoc -> professor handoff without relying on a live provider's coding
+  ability or allowing deterministic professor auto-closeout.
 
 ### Completed in P0.128 Offline validation gates the LabRun spine
 
@@ -2390,7 +2391,8 @@ optional lab meeting.
   background autonomy.
 - Each cycle runs the existing hybrid path:
   provider-backed professor/postdoc stages, strict graduate scheduling, and
-  deterministic postdoc/professor review bridges.
+  deterministic postdoc integration. Professor review must be provider-backed or
+  explicit; otherwise the cycle stops at `DeterministicGateBlocked`.
 - When a cycle reaches `user_report` / `NeedsUser`, the command calls the
   existing `continue_latest_from_user_report()` path. That writes a
   `CycleSummary`, increments `cycle_count`, resets the stage to
@@ -5273,8 +5275,9 @@ Current status:
   execution and stops on blocked/needs-user/graduate-dispatch states.
 - Completed: `/lab background ...` provides a process-local background loop
   with persisted scheduler state and heartbeat refresh.
-- Completed: process-local background scheduling can now cross deterministic
-  postdoc/professor review bridges and stop at `user_report`.
+- Completed: process-local background scheduling can cross deterministic
+  postdoc integration, but stops at `professor_review` unless provider-backed or
+  explicit professor review is available.
 - Completed: interrupted `Running`/`Stopping` background scheduler state is
   recovered as `PausedRestart` on Lab CLI startup or `/lab background recover`.
 - Completed: graduate agent execution is checked against task `allowed_scope`

@@ -5,19 +5,30 @@ use priority_agent::engine::streaming::StreamEvent;
 use priority_agent::engine::turn_ingress::classify_turn_ingress;
 use priority_agent::permissions::PermissionMode;
 use priority_agent::session_store::SessionStore;
-use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter, Manager, State, WebviewWindow};
 use tokio::sync::Mutex;
 
-mod desktop_state;
-mod diagnostics;
 mod desktop_context;
+mod desktop_state;
+mod desktop_types;
+mod diagnostics;
+mod goal_commands;
+mod health_commands;
+mod preview_commands;
+mod revert_commands;
+mod session_commands;
 use desktop_state::*;
 pub(crate) use desktop_context::*;
+pub(crate) use desktop_types::*;
 use diagnostics::*;
+use goal_commands::*;
+use health_commands::*;
+use preview_commands::*;
+use revert_commands::*;
+use session_commands::*;
 
 struct DesktopAppState {
     runtime: Mutex<Option<DesktopRuntime>>,
@@ -36,250 +47,12 @@ struct DesktopAppState {
     diagnostic_logs_path: PathBuf,
 }
 
-#[derive(Debug, Serialize)]
-struct DesktopHealth {
-    status: &'static str,
-    version: &'static str,
-    cwd: String,
-}
-
-#[derive(Debug, Serialize)]
-struct SelectedProject {
-    path: String,
-}
-
-#[derive(Debug, Serialize)]
-struct RecentSession {
-    id: String,
-    title: String,
-    updated_at: String,
-    model: String,
-    message_count: i64,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-struct DesktopMessage {
-    id: i64,
-    role: String,
-    content: String,
-    created_at: String,
-}
-
-#[derive(Debug, Serialize)]
-struct ResumedSession {
-    session_id: String,
-    messages: Vec<DesktopMessage>,
-    compact_boundaries: Vec<DesktopCompactBoundary>,
-    session_parts: Vec<DesktopSessionPart>,
-}
-
-#[derive(Debug, Serialize)]
-struct DesktopCompactBoundary {
-    boundary_id: String,
-    strategy: String,
-    trigger: String,
-    before_tokens: i64,
-    after_tokens: i64,
-    messages_before: i64,
-    messages_after: i64,
-    summary: String,
-    created_at: String,
-}
-
-#[derive(Debug, Serialize)]
-struct DesktopSessionPart {
-    id: i64,
-    part_index: i64,
-    part_id: String,
-    kind: String,
-    tool_call_id: Option<String>,
-    tool_name: Option<String>,
-    status: Option<String>,
-    payload: serde_json::Value,
-    projected_to_seq: i64,
-    updated_at: String,
-}
-
-#[derive(Debug, Serialize)]
-struct DesktopToolOutputPage {
-    id: String,
-    uri: String,
-    tool_name: String,
-    mime: String,
-    content: String,
-    offset: u64,
-    limit: u64,
-    total_bytes: u64,
-    has_more: bool,
-}
-
-#[derive(Debug, Serialize)]
-struct DesktopToolOutputMeta {
-    id: String,
-    uri: String,
-    tool_call_id: String,
-    tool_name: String,
-    mime: String,
-    original_bytes: u64,
-    created_at_ms: u64,
-}
-
-#[derive(Debug, Serialize)]
-struct DesktopRevertResult {
-    session_id: String,
-    status: String,
-    message_id: Option<String>,
-    part_ids: Vec<String>,
-    tool_round_id: Option<String>,
-    file_change_ids: Vec<String>,
-    checkpoint_ids: Vec<String>,
-    paths: Vec<String>,
-    restored_files: Vec<String>,
-    removed_files: Vec<String>,
-    errors: Vec<String>,
-    change_count: usize,
-}
-
-#[derive(Debug, Default, Clone, Serialize, Deserialize)]
-struct DesktopSettings {
-    selected_project: Option<String>,
-    active_session_id: Option<String>,
-    permission_mode: Option<String>,
-    detail_level: Option<String>,
-    agent_mode: Option<String>,
-    provider_name: Option<String>,
-    model: Option<String>,
-    recent_projects: Option<Vec<String>>,
-    archived_session_ids: Option<Vec<String>>,
-}
-
-#[derive(Debug, Serialize)]
-struct DesktopSettingsResponse {
-    selected_project: String,
-    active_session_id: Option<String>,
-    permission_mode: String,
-    detail_level: String,
-    agent_mode: String,
-    provider_name: Option<String>,
-    model: Option<String>,
-    settings_path: String,
-    diagnostic_logs_path: String,
-    recent_projects: Vec<String>,
-    archived_session_ids: Vec<String>,
-    startup_state: DesktopStartupState,
-}
-
-#[derive(Debug, Serialize)]
-struct DesktopStartupState {
-    status: &'static str,
-    detail: String,
-    lab_run_id: Option<String>,
-    lab_stage: Option<String>,
-    lab_owner: Option<String>,
-    lab_pause_reason: Option<String>,
-}
-
-#[derive(Debug, Serialize)]
-struct PermissionModeOption {
-    id: &'static str,
-    label: &'static str,
-    description: &'static str,
-}
-
-#[derive(Debug, Clone, Serialize)]
-struct DesktopDiagnostic {
-    id: &'static str,
-    label: &'static str,
-    status: DiagnosticStatus,
-    detail: String,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "snake_case")]
-enum DiagnosticStatus {
-    Ok,
-    Warning,
-    Error,
-}
-
-#[derive(Debug, Serialize)]
-struct DesktopDiagnosticsResponse {
-    items: Vec<DesktopDiagnostic>,
-}
-
-#[derive(Debug, Serialize)]
-struct DesktopLabDaemonActionResult {
-    action: &'static str,
-    output: String,
-    lab_status: DesktopLabStatusSnapshot,
-}
-
-#[derive(Debug, Serialize)]
-struct DesktopExportResult {
-    session_id: String,
-    path: String,
-    format: String,
-    privacy: String,
-}
-
-#[derive(Debug, Serialize)]
-struct ProviderSetupInfo {
-    shell_profile_path: String,
-    provider_env_vars: Vec<String>,
-    example: &'static str,
-}
-
-#[derive(Debug, Serialize)]
-struct ProviderModelStatus {
-    active_provider: Option<String>,
-    active_provider_label: Option<String>,
-    active_model: String,
-    active_base_url: String,
-    runtime_model: Option<String>,
-    runtime_provider_ready: bool,
-    selection_source: String,
-    configured_count: usize,
-    providers: Vec<DesktopProviderOption>,
-    models: Vec<DesktopModelOption>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-struct DesktopProviderOption {
-    id: String,
-    label: String,
-    provider_type: String,
-    model: String,
-    base_url: String,
-    configured: bool,
-    active: bool,
-    note: String,
-}
-
-#[derive(Debug, Clone, Serialize)]
-struct DesktopModelOption {
-    id: String,
-    label: String,
-    provider_id: String,
-    active: bool,
-    note: String,
-}
-
-#[tauri::command]
-fn desktop_health() -> Result<DesktopHealth, String> {
-    let cwd = std::env::current_dir()
-        .map_err(|err| err.to_string())?
-        .canonicalize()
-        .map_err(|err| err.to_string())?;
-
-    Ok(desktop_health_value(default_desktop_project(cwd)))
-}
-
 #[tauri::command]
 async fn desktop_settings(
     state: State<'_, DesktopAppState>,
 ) -> Result<DesktopSettingsResponse, String> {
     let selected_project = state.selected_project.lock().await.clone();
-    let active_session_id = state.active_session_id.lock().await.clone();
+    let active_session_id = active_session_id_if_present(&state).await?;
     let recent_projects = state
         .recent_projects
         .lock()
@@ -399,13 +172,6 @@ fn agent_mode_options() -> Vec<AgentModeOption> {
             description: "Diff analysis and findings — no edits".to_string(),
         },
     ]
-}
-
-#[derive(Debug, Serialize)]
-struct AgentModeOption {
-    id: String,
-    label: String,
-    description: String,
 }
 
 #[tauri::command]
@@ -613,319 +379,31 @@ async fn record_native_smoke_result(
     state: State<'_, DesktopAppState>,
 ) -> Result<(), String> {
     let diagnostic_logs_path = state.diagnostic_logs_path.clone();
-    let ok = result.contains("native_interaction_smoke ok=true");
+    let smoke_name = if result.contains("native_live_provider_smoke") {
+        "native_live_provider_smoke"
+    } else if result.contains("native_multitool_smoke") {
+        "native_multitool_smoke"
+    } else if result.contains("native_soak_smoke") {
+        "native_soak_smoke"
+    } else if result.contains("native_extended_soak_smoke") {
+        "native_extended_soak_smoke"
+    } else if result.contains("native_soak_restart_smoke") {
+        "native_soak_restart_smoke"
+    } else if result.contains("native_extended_soak_restart_smoke") {
+        "native_extended_soak_restart_smoke"
+    } else if result.contains("native_lab_recovery_smoke") {
+        "native_lab_recovery_smoke"
+    } else if result.contains("native_restart_smoke") {
+        "native_restart_smoke"
+    } else {
+        "native_interaction_smoke"
+    };
+    let ok = result.contains(&format!("{smoke_name} ok=true"));
     let status = if ok { "ok=true" } else { "ok=false" };
     append_desktop_log(
         &diagnostic_logs_path,
-        &format!(
-            "native_interaction_smoke {status} result={}",
-            sanitize_log_value(&result)
-        ),
+        &format!("{smoke_name} {status} result={}", sanitize_log_value(&result)),
     )
-}
-
-#[tauri::command]
-async fn select_project(
-    path: String,
-    state: State<'_, DesktopAppState>,
-) -> Result<SelectedProject, String> {
-    let project = validate_project_path(path)?;
-    {
-        let mut selected_project = state.selected_project.lock().await;
-        *selected_project = project.clone();
-    }
-    {
-        let mut recent_projects = state.recent_projects.lock().await;
-        remember_recent_project(&mut recent_projects, project.clone());
-    }
-    {
-        let mut runtime = state.runtime.lock().await;
-        *runtime = None;
-    }
-    {
-        let mut active_session_id = state.active_session_id.lock().await;
-        *active_session_id = None;
-    }
-    persist_current_settings(&state).await?;
-
-    Ok(selected_project_response(project))
-}
-
-#[tauri::command]
-async fn new_conversation(
-    state: State<'_, DesktopAppState>,
-) -> Result<DesktopSettingsResponse, String> {
-    {
-        let mut runtime = state.runtime.lock().await;
-        *runtime = None;
-    }
-    {
-        let mut active_session_id = state.active_session_id.lock().await;
-        *active_session_id = None;
-    }
-    persist_current_settings(&state).await?;
-    desktop_settings(state).await
-}
-
-#[tauri::command]
-async fn list_recent_sessions(
-    limit: Option<i64>,
-    state: State<'_, DesktopAppState>,
-) -> Result<Vec<RecentSession>, String> {
-    let store = open_session_store()?;
-    let archived_session_ids = state.archived_session_ids.lock().await.clone();
-    list_recent_sessions_from_store(&store, limit.unwrap_or(20), &archived_session_ids)
-}
-
-#[tauri::command]
-async fn search_sessions(
-    query: String,
-    limit: Option<i64>,
-    state: State<'_, DesktopAppState>,
-) -> Result<Vec<RecentSession>, String> {
-    let store = open_session_store()?;
-    let archived_session_ids = state.archived_session_ids.lock().await.clone();
-    search_sessions_from_store(&store, &query, limit.unwrap_or(20), &archived_session_ids)
-}
-
-#[tauri::command]
-fn rename_session(session_id: String, title: String) -> Result<RecentSession, String> {
-    let title = title.trim();
-    if title.is_empty() {
-        return Err("session title cannot be empty".to_string());
-    }
-
-    let store = open_session_store()?;
-    store
-        .get_session(&session_id)
-        .map_err(|err| err.to_string())?
-        .ok_or_else(|| format!("session not found: {session_id}"))?;
-    store
-        .update_session_title(&session_id, title)
-        .map_err(|err| err.to_string())?;
-    recent_session_from_store(&store, &session_id)
-}
-
-#[tauri::command]
-async fn archive_session(
-    session_id: String,
-    state: State<'_, DesktopAppState>,
-) -> Result<DesktopSettingsResponse, String> {
-    {
-        let mut archived_session_ids = state.archived_session_ids.lock().await;
-        if !archived_session_ids.iter().any(|id| id == &session_id) {
-            archived_session_ids.push(session_id.clone());
-        }
-    }
-    clear_active_session_if_matches(&state, &session_id).await;
-    persist_current_settings(&state).await?;
-    desktop_settings(state).await
-}
-
-#[tauri::command]
-async fn restore_archived_session(
-    session_id: String,
-    state: State<'_, DesktopAppState>,
-) -> Result<DesktopSettingsResponse, String> {
-    {
-        let mut archived_session_ids = state.archived_session_ids.lock().await;
-        archived_session_ids.retain(|id| id != &session_id);
-    }
-    persist_current_settings(&state).await?;
-    desktop_settings(state).await
-}
-
-#[tauri::command]
-async fn delete_session(
-    session_id: String,
-    state: State<'_, DesktopAppState>,
-) -> Result<DesktopSettingsResponse, String> {
-    let store = open_session_store()?;
-    store
-        .delete_session(&session_id)
-        .map_err(|err| err.to_string())?;
-    {
-        let mut archived_session_ids = state.archived_session_ids.lock().await;
-        archived_session_ids.retain(|id| id != &session_id);
-    }
-    clear_active_session_if_matches(&state, &session_id).await;
-    persist_current_settings(&state).await?;
-    desktop_settings(state).await
-}
-
-#[tauri::command]
-fn load_session_messages(session_id: String) -> Result<Vec<DesktopMessage>, String> {
-    let store = open_session_store()?;
-    load_messages_from_store(&store, &session_id)
-}
-
-#[tauri::command]
-async fn resume_session(
-    session_id: String,
-    state: State<'_, DesktopAppState>,
-) -> Result<ResumedSession, String> {
-    let store = open_session_store()?;
-    store
-        .get_session(&session_id)
-        .map_err(|err| err.to_string())?
-        .ok_or_else(|| format!("session not found: {session_id}"))?;
-    let messages = load_messages_from_store(&store, &session_id)?;
-    let compact_boundaries = load_compact_boundaries_from_store(&store, &session_id)?;
-    let session_parts = load_session_parts_from_store(&store, &session_id)?;
-    let selected_project = state.selected_project.lock().await.clone();
-    let runtime = DesktopRuntime::initialize_for_session(&selected_project, &session_id)
-        .await
-        .map_err(|err| err.to_string())?;
-    let permission_mode_label =
-        normalized_permission_mode_label(state.permission_mode.lock().await.as_deref());
-    runtime
-        .streaming_engine()
-        .set_permission_mode(parse_desktop_permission_mode(permission_mode_label));
-    let provider_name = state.provider_name.lock().await.clone();
-    let model = state.model.lock().await.clone();
-    apply_desktop_provider_model(&runtime, provider_name.as_deref(), model.as_deref())?;
-
-    {
-        let mut stored_runtime = state.runtime.lock().await;
-        *stored_runtime = Some(runtime);
-    }
-    {
-        let mut active_session_id = state.active_session_id.lock().await;
-        *active_session_id = Some(session_id.clone());
-    }
-    persist_current_settings(&state).await?;
-
-    Ok(ResumedSession {
-        session_id,
-        messages,
-        compact_boundaries,
-        session_parts,
-    })
-}
-
-#[tauri::command]
-fn list_session_reverts(
-    session_id: String,
-    limit: Option<usize>,
-) -> Result<Vec<priority_agent::session_store::SessionRevertRecord>, String> {
-    let store = open_session_store()?;
-    store
-        .list_session_reverts(&session_id, limit.unwrap_or(20).clamp(1, 100))
-        .map_err(|err| err.to_string())
-}
-
-#[tauri::command]
-fn desktop_tool_output_index(session_id: String) -> Result<Vec<DesktopToolOutputMeta>, String> {
-    let store = priority_agent::tool_output_store::ToolOutputStore::new();
-    let metas = store
-        .list_for_session(&session_id)
-        .map_err(|err| err.to_string())?;
-    Ok(metas
-        .into_iter()
-        .map(|meta| DesktopToolOutputMeta {
-            id: meta.id.clone(),
-            uri: meta.uri(),
-            tool_call_id: meta.tool_call_id,
-            tool_name: meta.tool_name,
-            mime: meta.mime,
-            original_bytes: meta.original_bytes,
-            created_at_ms: meta.created_at_ms,
-        })
-        .collect())
-}
-
-#[tauri::command]
-fn desktop_tool_output_page(
-    session_id: String,
-    id_or_uri: String,
-    offset: Option<u64>,
-    limit: Option<u64>,
-) -> Result<DesktopToolOutputPage, String> {
-    let store = priority_agent::tool_output_store::ToolOutputStore::new();
-    let page = store
-        .read_page(
-            &session_id,
-            &id_or_uri,
-            offset.unwrap_or(0),
-            limit.unwrap_or(64 * 1024),
-        )
-        .map_err(|err| err.to_string())?;
-    let meta = store
-        .read_meta(&id_or_uri)
-        .map_err(|err| err.to_string())?;
-    Ok(DesktopToolOutputPage {
-        id: meta.id.clone(),
-        uri: meta.uri(),
-        tool_name: meta.tool_name,
-        mime: meta.mime,
-        content: page.content,
-        offset: page.offset,
-        limit: page.limit,
-        total_bytes: page.total_bytes,
-        has_more: page.has_more,
-    })
-}
-
-#[tauri::command]
-async fn revert_last_turn(session_id: String) -> Result<DesktopRevertResult, String> {
-    let store = open_session_store()?;
-    store
-        .get_session(&session_id)
-        .map_err(|err| err.to_string())?
-        .ok_or_else(|| format!("session not found: {session_id}"))?;
-
-    let manager = priority_agent::engine::checkpoint::get_checkpoint_manager(&session_id).await;
-    let checkpoint_guard = manager.lock().await;
-    let result = checkpoint_guard.revert_latest_assistant_turn().await?;
-    let payload = serde_json::to_value(&result).map_err(|err| err.to_string())?;
-    store
-        .record_session_revert(&priority_agent::session_store::SessionRevertInsert {
-            session_id: result.session_id.clone(),
-            operation: "revert".to_string(),
-            status: result.status.clone(),
-            message_id: result.message_id.clone(),
-            target_part_id: result.target_part_id.clone(),
-            part_ids: result.part_ids.clone(),
-            checkpoint_ids: result.checkpoint_ids.clone(),
-            snapshot_checkpoint_id: result.snapshot_checkpoint_id.clone(),
-            paths: result.paths.clone(),
-            restored_files: result.restored_files.clone(),
-            removed_files: result.removed_files.clone(),
-            errors: result.errors.clone(),
-            diff_summary: result.diff_summary.clone(),
-            unrevert_possible: result.unrevert_possible,
-            unreverted: false,
-            payload: payload.clone(),
-        })
-        .map_err(|err| err.to_string())?;
-    let writer =
-        priority_agent::session_store::SessionEventWriter::new(store.shared_conn(), &session_id);
-    writer
-        .write_event("revert", &payload.to_string())
-        .map_err(|err| err.to_string())?;
-
-    Ok(DesktopRevertResult {
-        session_id: result.session_id,
-        status: result.status,
-        message_id: result.message_id,
-        part_ids: result.part_ids,
-        tool_round_id: result.tool_round_id,
-        file_change_ids: result.file_change_ids,
-        checkpoint_ids: result.checkpoint_ids,
-        paths: result.paths,
-        restored_files: result.restored_files,
-        removed_files: result.removed_files,
-        errors: result.errors,
-        change_count: result.change_count,
-    })
-}
-
-fn desktop_health_value(cwd: PathBuf) -> DesktopHealth {
-    DesktopHealth {
-        status: "ready",
-        version: env!("CARGO_PKG_VERSION"),
-        cwd: cwd.display().to_string(),
-    }
 }
 
 fn validate_project_path(path: impl Into<PathBuf>) -> Result<PathBuf, String> {
@@ -1048,7 +526,14 @@ async fn send_message(
     contexts: Vec<DesktopRunContext>,
     state: State<'_, DesktopAppState>,
 ) -> Result<(), String> {
-    let _agent_mode = state.agent_mode.lock().await.clone();
+    let agent_mode_label = state
+        .agent_mode
+        .lock()
+        .await
+        .clone()
+        .unwrap_or_else(|| "auto".to_string());
+    let agent_mode = priority_agent::engine::agent_mode::AgentMode::parse(&agent_mode_label)
+        .unwrap_or_default();
     // ... rest of function
     let diagnostic_logs_path = state.diagnostic_logs_path.clone();
     let _ = append_desktop_log(
@@ -1065,7 +550,9 @@ async fn send_message(
 
     let runtime = runtime_for_state(&state).await?;
     let ingress_lane = classify_turn_ingress(&message, !contexts.is_empty());
-    if ingress_lane.is_lightweight() {
+    let force_full_agent_lane =
+        agent_mode != priority_agent::engine::agent_mode::AgentMode::Auto;
+    if ingress_lane.is_lightweight() && !force_full_agent_lane {
         let outcome = runtime
             .run_lightweight_turn(&message, ingress_lane)
             .await
@@ -1144,7 +631,9 @@ async fn send_message(
     .map_err(|err| err.to_string())?;
     let _ = append_desktop_log(&diagnostic_logs_path, "run_started");
 
-    let mut stream = runtime.run_full_turn(message).await;
+    let mut stream = runtime
+        .run_full_turn_with_agent_mode(message, agent_mode)
+        .await;
     let _ = append_desktop_log(&diagnostic_logs_path, "run_stream_opened");
 
     loop {
@@ -1756,7 +1245,7 @@ async fn runtime_for_state(state: &State<'_, DesktopAppState>) -> Result<Desktop
     }
 
     let selected_project = state.selected_project.lock().await.clone();
-    let active_session_id = state.active_session_id.lock().await.clone();
+    let active_session_id = active_session_id_if_present(state).await?;
     let permission_mode_label =
         normalized_permission_mode_label(state.permission_mode.lock().await.as_deref());
     let permission_mode = parse_desktop_permission_mode(permission_mode_label);
@@ -1781,218 +1270,6 @@ async fn runtime_for_state(state: &State<'_, DesktopAppState>) -> Result<Desktop
     Ok(runtime)
 }
 
-async fn lazy_goal_runner(state: &State<'_, DesktopAppState>) -> Option<GoalRunner> {
-    {
-        let runner = state.goal_runner.lock().await;
-        if let Some(ref runner) = *runner {
-            return Some(runner.clone());
-        }
-    }
-    let runtime = state.runtime.lock().await;
-    if let Some(ref rt) = *runtime {
-        if let Some((store, _session_id)) = rt.streaming_engine().session_binding() {
-            let goal_manager = rt.streaming_engine().goal_manager();
-            let runner = GoalRunner::new((*store).clone(), goal_manager);
-            let mut guard = state.goal_runner.lock().await;
-            *guard = Some(runner.clone());
-            return Some(runner);
-        }
-    }
-    None
-}
-
-#[derive(Debug, Serialize)]
-struct DesktopGoalStatus {
-    goal_id: Option<String>,
-    objective: Option<String>,
-    status: Option<String>,
-    turn_count: Option<u32>,
-    max_turns: Option<u32>,
-    last_decision: Option<String>,
-    last_closeout: Option<String>,
-    last_proof: Option<String>,
-    last_blocker: Option<String>,
-    step_count: usize,
-    steps: Vec<DesktopGoalStep>,
-}
-
-#[derive(Debug, Serialize)]
-struct DesktopGoalStep {
-    turn_index: u32,
-    decision: String,
-    closeout_status: Option<String>,
-    verification_status: Option<String>,
-    changed_files: usize,
-    validation_items: usize,
-    summary: String,
-}
-
-#[derive(Debug, Serialize)]
-struct DesktopGoalCommandResult {
-    status: DesktopGoalStatus,
-    next_prompt: Option<String>,
-}
-
-#[tauri::command]
-async fn goal_status(state: State<'_, DesktopAppState>) -> Result<DesktopGoalStatus, String> {
-    let Some(runner) = lazy_goal_runner(&state).await else {
-        return Ok(DesktopGoalStatus {
-            goal_id: None,
-            objective: None,
-            status: None,
-            turn_count: None,
-            max_turns: None,
-            last_decision: None,
-            last_closeout: None,
-            last_proof: None,
-            last_blocker: None,
-            step_count: 0,
-            steps: Vec::new(),
-        });
-    };
-    let session_id = state
-        .active_session_id
-        .lock()
-        .await
-        .clone()
-        .ok_or_else(|| "no active session".to_string())?;
-
-    let info = runner.status(&session_id).map_err(|e| e.to_string())?;
-    let steps: Vec<DesktopGoalStep> = info
-        .steps
-        .iter()
-        .map(|s| DesktopGoalStep {
-            turn_index: s.turn_index,
-            decision: format!("{:?}", s.decision),
-            closeout_status: s.closeout_status.clone(),
-            verification_status: s.verification_status.clone(),
-            changed_files: s.changed_files,
-            validation_items: s.validation_items,
-            summary: s.summary.clone(),
-        })
-        .collect();
-
-    let last_step = steps.last();
-    Ok(DesktopGoalStatus {
-        goal_id: info.goal.as_ref().map(|g| g.id.clone()),
-        objective: info.goal.as_ref().map(|g| g.objective.clone()),
-        status: info.goal.as_ref().map(|g| format!("{:?}", g.status)),
-        turn_count: info.goal.as_ref().map(|g| g.turn_count),
-        max_turns: info.goal.as_ref().map(|g| g.budget.max_turns),
-        last_decision: last_step.map(|s| s.decision.clone()),
-        last_closeout: last_step.and_then(|s| s.closeout_status.clone()),
-        last_proof: last_step.and_then(|s| s.verification_status.clone()),
-        last_blocker: info.goal.and_then(|g| g.last_blocker.clone()),
-        step_count: steps.len(),
-        steps,
-    })
-}
-
-#[tauri::command]
-async fn goal_start(
-    objective: String,
-    state: State<'_, DesktopAppState>,
-) -> Result<DesktopGoalCommandResult, String> {
-    let Some(runner) = lazy_goal_runner(&state).await else {
-        return Err("no engine available".to_string());
-    };
-    let session_id = state
-        .active_session_id
-        .lock()
-        .await
-        .clone()
-        .ok_or_else(|| "no active session".to_string())?;
-
-    let result = runner
-        .start(&session_id, &objective)
-        .map_err(|e| e.to_string())?;
-
-    Ok(DesktopGoalCommandResult {
-        status: goal_status(state).await?,
-        next_prompt: Some(result.first_prompt),
-    })
-}
-
-#[tauri::command]
-async fn goal_pause(state: State<'_, DesktopAppState>) -> Result<bool, String> {
-    let Some(runner) = lazy_goal_runner(&state).await else {
-        return Ok(false);
-    };
-    let session_id = state
-        .active_session_id
-        .lock()
-        .await
-        .clone()
-        .ok_or_else(|| "no active session".to_string())?;
-
-    runner.pause(&session_id).map_err(|e| e.to_string())
-}
-
-#[tauri::command]
-async fn goal_resume(state: State<'_, DesktopAppState>) -> Result<DesktopGoalCommandResult, String> {
-    let Some(runner) = lazy_goal_runner(&state).await else {
-        return Ok(DesktopGoalCommandResult {
-            status: goal_status(state).await?,
-            next_prompt: None,
-        });
-    };
-    let session_id = state
-        .active_session_id
-        .lock()
-        .await
-        .clone()
-        .ok_or_else(|| "no active session".to_string())?;
-
-    let resumed = runner.resume(&session_id).map_err(|e| e.to_string())?;
-    Ok(DesktopGoalCommandResult {
-        status: goal_status(state).await?,
-        next_prompt: resumed.then(|| "Continue working toward the active goal.".to_string()),
-    })
-}
-
-#[tauri::command]
-async fn goal_clear(state: State<'_, DesktopAppState>) -> Result<bool, String> {
-    let Some(runner) = lazy_goal_runner(&state).await else {
-        return Ok(false);
-    };
-    let session_id = state
-        .active_session_id
-        .lock()
-        .await
-        .clone()
-        .ok_or_else(|| "no active session".to_string())?;
-
-    runner.clear(&session_id).map_err(|e| e.to_string())
-}
-
-#[tauri::command]
-async fn goal_edit(
-    objective: String,
-    state: State<'_, DesktopAppState>,
-) -> Result<DesktopGoalStatus, String> {
-    let Some(runner) = lazy_goal_runner(&state).await else {
-        return Err("no engine available".to_string());
-    };
-    let session_id = state
-        .active_session_id
-        .lock()
-        .await
-        .clone()
-        .ok_or_else(|| "no active session".to_string())?;
-
-    runner
-        .edit_objective(&session_id, &objective)
-        .map_err(|e| e.to_string())?;
-
-    goal_status(state).await
-}
-
-#[tauri::command]
-async fn goal_log(state: State<'_, DesktopAppState>) -> Result<Vec<DesktopGoalStep>, String> {
-    let s = goal_status(state).await?;
-    Ok(s.steps)
-}
-
 pub fn run() {
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     tauri::Builder::default()
@@ -2001,7 +1278,50 @@ pub fn run() {
         .setup(move |app| {
             let settings_path = desktop_settings_path(app.handle());
             let diagnostic_logs_path = desktop_diagnostic_logs_path(app.handle());
-            let settings = load_desktop_settings(&settings_path).unwrap_or_default();
+            let mut settings = load_desktop_settings(&settings_path).unwrap_or_default();
+            let smoke_provider_override =
+                std::env::var("PRIORITY_AGENT_DESKTOP_SMOKE_PROVIDER")
+                    .ok()
+                    .map(|provider| provider.trim().to_ascii_lowercase())
+                    .filter(|provider| !provider.is_empty());
+            let smoke_model_override = std::env::var("PRIORITY_AGENT_DESKTOP_SMOKE_MODEL")
+                .ok()
+                .map(|model| model.trim().to_string())
+                .filter(|model| !model.is_empty());
+            let smoke_agent_mode_override =
+                std::env::var("PRIORITY_AGENT_DESKTOP_SMOKE_AGENT_MODE")
+                    .ok()
+                    .map(|mode| mode.trim().to_ascii_lowercase())
+                    .filter(|mode| {
+                        matches!(
+                            mode.as_str(),
+                            "auto" | "build" | "plan" | "explore" | "review"
+                        )
+                    });
+            let live_provider_smoke_requested =
+                std::env::var("PRIORITY_AGENT_DESKTOP_LIVE_PROVIDER_SMOKE").as_deref() == Ok("1")
+                    || std::env::var("PRIORITY_AGENT_DESKTOP_MULTI_TOOL_SMOKE").as_deref()
+                        == Ok("1")
+                    || std::env::var("PRIORITY_AGENT_DESKTOP_SOAK_SMOKE").as_deref()
+                        == Ok("1")
+                    || std::env::var("PRIORITY_AGENT_DESKTOP_EXTENDED_SOAK_SMOKE").as_deref()
+                        == Ok("1")
+                    || std::env::var("PRIORITY_AGENT_DESKTOP_SOAK_RESTART_SMOKE").as_deref()
+                        == Ok("1")
+                    || std::env::var("PRIORITY_AGENT_DESKTOP_EXTENDED_SOAK_RESTART_SMOKE")
+                        .as_deref()
+                        == Ok("1");
+            if live_provider_smoke_requested {
+                if smoke_provider_override.is_some() {
+                    settings.provider_name = smoke_provider_override.clone();
+                }
+                if smoke_model_override.is_some() {
+                    settings.model = smoke_model_override.clone();
+                }
+                if smoke_agent_mode_override.is_some() {
+                    settings.agent_mode = smoke_agent_mode_override.clone();
+                }
+            }
             let selected_project = initial_desktop_project(cwd.clone(), &settings);
             let recent_projects = initial_recent_projects(&selected_project, &settings);
             let _ = append_desktop_log(
@@ -2012,9 +1332,77 @@ pub fn run() {
                     settings_path.display()
                 ),
             );
+            let lab_recovery_smoke_requested =
+                std::env::var("PRIORITY_AGENT_DESKTOP_LAB_RECOVERY_SMOKE").as_deref() == Ok("1");
+            let lab_recovery_restart_smoke_requested =
+                std::env::var("PRIORITY_AGENT_DESKTOP_LAB_RECOVERY_RESTART_SMOKE").as_deref()
+                    == Ok("1");
+            if lab_recovery_smoke_requested {
+                prepare_native_lab_recovery_smoke_project(&selected_project, &diagnostic_logs_path);
+            }
+            if live_provider_smoke_requested {
+                let provider = settings
+                    .provider_name
+                    .as_deref()
+                    .unwrap_or("environment-default");
+                let model = settings.model.as_deref().unwrap_or("provider-default");
+                let mode = settings.agent_mode.as_deref().unwrap_or("auto");
+                let _ = append_desktop_log(
+                    &diagnostic_logs_path,
+                    &format!(
+                        "desktop_live_provider_smoke_config provider={provider} model={model} agent_mode={mode}"
+                    ),
+                );
+            }
             if std::env::var("PRIORITY_AGENT_DESKTOP_NATIVE_SMOKE").as_deref() == Ok("1") {
                 if let Some(window) = app.get_webview_window("main") {
                     schedule_native_interaction_smoke(window, diagnostic_logs_path.clone());
+                }
+            }
+            if std::env::var("PRIORITY_AGENT_DESKTOP_LIVE_PROVIDER_SMOKE").as_deref() == Ok("1") {
+                if let Some(window) = app.get_webview_window("main") {
+                    schedule_native_live_provider_smoke(window, diagnostic_logs_path.clone());
+                }
+            }
+            if std::env::var("PRIORITY_AGENT_DESKTOP_MULTI_TOOL_SMOKE").as_deref() == Ok("1") {
+                if let Some(window) = app.get_webview_window("main") {
+                    schedule_native_multitool_smoke(window, diagnostic_logs_path.clone());
+                }
+            }
+            if std::env::var("PRIORITY_AGENT_DESKTOP_SOAK_SMOKE").as_deref() == Ok("1") {
+                if let Some(window) = app.get_webview_window("main") {
+                    schedule_native_soak_smoke(window, diagnostic_logs_path.clone());
+                }
+            }
+            if std::env::var("PRIORITY_AGENT_DESKTOP_EXTENDED_SOAK_SMOKE").as_deref() == Ok("1")
+            {
+                if let Some(window) = app.get_webview_window("main") {
+                    schedule_native_extended_soak_smoke(window, diagnostic_logs_path.clone());
+                }
+            }
+            if std::env::var("PRIORITY_AGENT_DESKTOP_SOAK_RESTART_SMOKE").as_deref() == Ok("1") {
+                if let Some(window) = app.get_webview_window("main") {
+                    schedule_native_soak_restart_smoke(window, diagnostic_logs_path.clone());
+                }
+            }
+            if std::env::var("PRIORITY_AGENT_DESKTOP_EXTENDED_SOAK_RESTART_SMOKE").as_deref()
+                == Ok("1")
+            {
+                if let Some(window) = app.get_webview_window("main") {
+                    schedule_native_extended_soak_restart_smoke(
+                        window,
+                        diagnostic_logs_path.clone(),
+                    );
+                }
+            }
+            if lab_recovery_smoke_requested || lab_recovery_restart_smoke_requested {
+                if let Some(window) = app.get_webview_window("main") {
+                    schedule_native_lab_recovery_smoke(window, diagnostic_logs_path.clone());
+                }
+            }
+            if std::env::var("PRIORITY_AGENT_DESKTOP_RESTART_SMOKE").as_deref() == Ok("1") {
+                if let Some(window) = app.get_webview_window("main") {
+                    schedule_native_restart_smoke(window, diagnostic_logs_path.clone());
                 }
             }
             app.manage(DesktopAppState {
@@ -2072,6 +1460,9 @@ pub fn run() {
             list_session_reverts,
             desktop_tool_output_index,
             desktop_tool_output_page,
+            desktop_lab_report_page,
+            desktop_lab_artifact_body,
+            desktop_file_preview,
             revert_last_turn,
             send_message,
             compact_context,

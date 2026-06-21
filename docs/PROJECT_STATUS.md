@@ -1,7 +1,521 @@
 # Project Status
 Status: Current
 
-Last updated: 2026-06-21
+Last updated: 2026-06-22
+
+## Desktop Frontend Workbench — Native Real-Provider QA Passing (2026-06-21)
+
+Desktop frontend work is now tracked in
+`docs/DESKTOP_FRONTEND_PRODUCT_PLAN_2026-06-21.md`. The direction is to turn
+`apps/desktop` into a daily-use agent workbench modeled after Codex/OpenCode
+interaction patterns while preserving the existing Rust runtime boundary.
+The current broad dirty worktree is mapped in
+`docs/DESKTOP_FRONTEND_CHANGESET_CLOSEOUT_2026-06-22.md`, including suggested
+commit scopes, validation evidence, and the remaining gates before this work
+can be called release-ready.
+Requirement-level completion status is audited in
+`docs/DESKTOP_FRONTEND_COMPLETION_AUDIT_2026-06-22.md`; it concludes the
+implementation is ready for commit closeout, but the overall goal should remain
+open until a clean commit boundary exists.
+
+### Product target
+
+- Keep two parallel modes: Direct Agent Mode for normal Codex/OpenCode-style
+  coding tasks, and LabRun Mode for professor/postdoc/graduate project loops.
+- Use a three-pane desktop workbench: left project/session navigation, center
+  transcript/composer, right persistent inspector.
+- Make runtime truth visible: tool calls, permissions, validation, context,
+  cache, compression, LabRun status, reports, and subagent artifacts should come
+  from typed runtime APIs rather than frontend inference.
+- Keep Tauri + React; borrow OpenCode's product structure and component
+  patterns, not its Electron stack.
+
+### Current status
+
+- P0 audit and product plan are complete.
+- P1 workbench shell is complete: the desktop app now has a session header,
+  clear Direct Agent / LabRun mode entry, and a persistent right-side runtime
+  inspector with Context, Files, Execution, Subagents, LabRun, and Diagnostics
+  tabs. The Files inspector now includes a selected-file preview path backed by
+  a bounded Tauri API that only reads files inside the selected project.
+- Existing `apps/desktop` already has substantial runtime plumbing: health,
+  settings, provider/model status, sessions, diagnostics, context/workbench
+  snapshots, trace/tool output drawers, goal row, permission recovery, and Lab
+  daemon supervision.
+- Existing Workbench drawer remains available for narrow screens and legacy
+  action flows.
+- P2 Direct Agent polish is complete for this slice: composer slash commands now surface common Direct Agent,
+  goal, context, and LabRun commands from the input box without bypassing the
+  normal runtime send path. Composer prompt history now recalls same-session
+  submitted prompts with ↑ / ↓ while preserving slash-command navigation. A
+  global `/` shortcut now focuses the composer and opens slash commands when
+  the user is not already typing. Composer context attachments now show project
+  context, current-diff/file summaries, explicit open actions, and explicit
+  remove actions. The Execution inspector now shows trace evidence directly and
+  reads stored tool-output index/page data for the active session, while the
+  drawers remain available for larger views. The Context inspector now expands
+  the status-bar summary into token budget, runtime estimate, history/tool/
+  memory token split, stable-prefix fingerprint, prompt-cache read/miss/hit-rate
+  diagnostics, compression attempts, and the latest provider usage event. It
+  now shows real provider input/output/total/reasoning/cache-write tokens when
+  the runtime event exposes them, while missing provider fields remain
+  explicitly `unavailable`. Transcript run rows now include a grouped run summary panel for
+  validation, diff/file changes, permission requests, failures, generic tools,
+  final text, and trace links while preserving the raw timeline evidence below.
+- Provider/model selection is now a clearer popover with missing-provider setup
+  repair: users can see unconfigured providers, open the setup path for a
+  provider, paste an API key through the existing Rust credential command, and
+  refresh provider diagnostics without leaving the composer flow.
+- P3 LabRun desktop surface is complete for the current typed snapshot: the LabRun inspector now has
+  proposal/intake and approve/draft actions, project controls for resume,
+  pause, continue, and meeting open, plus a dedicated professor side-channel
+  that stages professor/intervention messages into the normal runtime command
+  path instead of letting the frontend command postdoc/graduate agents directly.
+- The LabRun inspector also now has a status board for stage, owner, cycle,
+  task progress, blockers, needs-user state, meeting recommendation, and topic;
+  report/artifact actions for latest report, report list, and review state; and
+  a cost/context/cache panel backed by the runtime context snapshot.
+- Desktop API now exposes structured LabRun artifacts, reports, and evidence
+  refs from `LabStore`; the LabRun inspector renders those rows directly, with
+  report-open and artifact-review actions still routed through existing runtime
+  commands.
+- LabRun artifact/report rows now include short report previews, and the LabRun
+  inspector supports local search across artifact metadata, report preview text,
+  and evidence refs without adding frontend judgment about task quality.
+- Desktop API now exposes guarded paged LabRun markdown report reads through
+  `desktop_lab_report_page`; it resolves paths under the selected project's
+  `.priority-agent/lab` tree and rejects non-markdown/out-of-tree reads. The
+  LabRun inspector can preview full report pages in place with previous/next
+  paging while keeping the existing runtime command/open-report actions.
+- Desktop API now exposes guarded LabRun artifact body reads through
+  `desktop_lab_artifact_body`; it resolves the latest LabRun from the selected
+  project and only reads artifact ids registered on that run. The LabRun
+  inspector can preview the structured body JSON in place next to report
+  previews, without letting the frontend read arbitrary artifact files.
+- Desktop frontend state cleanup has started: `useDesktopBootstrap` now owns
+  desktop health/settings/provider/session/diagnostics bootstrap plus refresh
+  helpers, `useWorkbenchSnapshots` now owns context/workbench snapshot loading,
+  and `useRunEvents` now owns run event subscription, idle watchdog, permission
+  answer handling, and submit-message event plumbing. The long-lived event
+  subscription now reads latest provider/settings/refresh callbacks through refs
+  instead of holding stale startup values. `App.tsx` stays responsible for shell
+  orchestration, conversation recovery, commands, drawers, and layout, but is
+  back under the project 1500-line source-file ceiling.
+- Desktop inspector state cleanup has also started: shared metric, key-value,
+  empty-state, token, and byte-format helpers now live in
+  `InspectorPrimitives.tsx`, leaving `InspectorPanel.tsx` under the project
+  1500-line source-file ceiling while preserving the Context, Files, Execution,
+  Subagents, LabRun, and Diagnostics inspector behavior.
+- Desktop runtime API source cleanup has started: shared desktop DTO/type
+  definitions now live in `desktopTypes.ts`, goal command helpers live in
+  `desktopGoalApi.ts`, and `desktopApi.ts` re-exports the same public
+  type/function surface for existing callers while dropping back under the
+  project 1500-line source-file ceiling. The browser-preview fixture path has
+  also moved into `desktopPreview.ts`: preview run events, permission answers,
+  manual compaction, LabRun report/artifact fixtures, file previews, and
+  listener fanout are now separated from the real Tauri API boundary, reducing
+  `desktopApi.ts` to 1065 lines and leaving room for later API additions.
+- Desktop run-event source cleanup has started: tool/permission presentation
+  helpers now live in `runEventPresentation.ts`, while `runEventState.ts`
+  retains the state-transition API used by `useRunEvents`, transcript loading,
+  permission answers, idle warnings, and error handling.
+- Desktop app shell cleanup continues: startup recovery/restored-session banner
+  rendering now lives in `StartupStateCard.tsx`, preserving Lab recovery
+  Resume/Dashboard/Keep paused behavior while keeping `App.tsx` below the
+  project 1500-line source-file ceiling.
+- Desktop app shell cleanup continues: topbar rendering, context meter,
+  environment popover, and workbench/trace/output header controls now live in
+  `WorkspaceTopbar.tsx`; `App.tsx` keeps the orchestration callbacks while the
+  topbar behavior remains covered by the desktop UI smoke suite.
+- Desktop composer polish continues: the Add context menu no longer presents
+  Screenshot as a disabled/dead action before native screenshot context support
+  exists. It is now rendered as a non-actionable unavailable note while Current
+  diff and File remain real context actions, with desktop layout smoke coverage.
+- Desktop destructive-action polish continues: deleting a session now uses a
+  focused `DeleteSessionDialog` with initial focus on Cancel, Tab/Shift+Tab
+  containment, and Escape-to-cancel behavior, while preserving the existing
+  delete API path.
+- Desktop export feedback now has an explicit `ExportNoticeBanner`: successful
+  exports render as a status message with Open export and Dismiss actions rather
+  than a persistent inline banner with embedded styling.
+- Desktop environment popover polish continues: the topbar environment summary
+  now closes with Escape and outside clicks, and the desktop smoke covers both
+  paths while preserving the existing runtime-sourced environment details.
+- Desktop Rust state cleanup has started: native smoke project preparation,
+  schedule helpers, and injected smoke scripts now live in
+  `desktop_state/native_smoke.rs`, while `desktop_state.rs` keeps
+  settings/provider/session state helpers and is back under the project
+  1500-line source-file ceiling. The split preserves the existing
+  `desktop_state::*` surface consumed by `lib.rs`.
+- Desktop Tauri DTO cleanup has started: shared command response/settings/
+  diagnostic/provider/session DTOs now live in `desktop_types.rs`, while
+  `lib.rs` keeps command handlers and runtime orchestration. The split keeps
+  existing command names and frontend API payload shapes unchanged.
+- Desktop Tauri command cleanup has also started: health, session/tool-output,
+  preview/read, goal, and revert commands now live in focused modules
+  (`health_commands.rs`, `session_commands.rs`, `preview_commands.rs`,
+  `goal_commands.rs`, and `revert_commands.rs`). `lib.rs` is back under the
+  project 1500-line source-file ceiling while retaining Tauri command
+  registration and app startup orchestration.
+- Desktop CSS source cleanup has started: `global.css` is now a small ordered
+  import entrypoint, and the existing style rules live in `styles/parts/*.css`
+  by UI domain. The split preserves selector order and keeps each desktop
+  source/style file in this slice under the project 1500-line ceiling.
+- Release-readiness QA found that frontend-only stale-session cleanup was too
+  late: native startup could still surface `session not found` from a stale
+  Rust-side `active_session_id`. The desktop backend now validates active
+  session ids before returning settings or initializing runtime state, clears
+  stale ids, and persists the corrected settings.
+- Native Tauri smoke now passes and produces
+  `apps/desktop/test-artifacts/native-smoke.png`; narrow viewport QA produces
+  `apps/desktop/test-artifacts/desktop-narrow-loaded.png`. The smoke fixture was
+  updated to accept the current run-state/context-usage UI wording. The
+  initialization path now ignores stale `active_session_id` values that no
+  longer exist in the recent session list, preventing a red `session not found`
+  banner on a fresh desktop launch.
+- Native workflow QA now covers Settings provider setup, LabRun inspector,
+  LabRun search, Execution inspector, context details, trace drawer, permission
+  approval, final answer, and usage surfaces in a real Tauri window. The native
+  smoke script now also stops pre-existing Priority Agent processes, activates
+  the smoke window by process id, rejects visible `session not found`, and then
+  captures the screenshot. The latest smoke log records
+  `native_interaction_smoke ok=true` with `no-stale-session-error` in
+  `apps/desktop/test-artifacts/native-app-desktop.log`, and the corresponding
+  screenshot shows the Execution inspector without the stale-session error.
+- Native real-provider smoke now supports explicit provider/model overrides and
+  passes against both MiniMax and DeepSeek:
+  `scripts/desktop-native-smoke.sh --live-provider --provider minimax --timeout 180 --no-screenshot`
+  and
+  `scripts/desktop-native-smoke.sh --live-provider --provider deepseek --timeout 180 --no-screenshot`.
+  The latest per-provider evidence is in
+  `apps/desktop/test-artifacts/native-live-provider-minimax-app-desktop.log`
+  and
+  `apps/desktop/test-artifacts/native-live-provider-deepseek-app-desktop.log`;
+  both logs record the selected provider, real provider request completion,
+  final answer, usage visibility, LabRun visibility, and Execution inspector
+  visibility.
+- Restart recovery smoke now passes on a real DeepSeek provider run via
+  `scripts/desktop-native-smoke.sh --live-provider --provider deepseek --restart-check --timeout 180 --no-screenshot`.
+  The latest evidence is in
+  `apps/desktop/test-artifacts/native-live-provider-deepseek-restart-app-desktop.log`;
+  it records the first real provider run, a second desktop startup using the
+  same app data directory, and restored user message, assistant answer, and
+  session metadata without `session not found`.
+- Native multi-tool edit smoke now passes on a real DeepSeek provider run via
+  `scripts/desktop-native-smoke.sh --live-provider --provider deepseek --multi-tool-check --timeout 240 --no-screenshot`.
+  The latest evidence is in
+  `apps/desktop/test-artifacts/native-multitool-deepseek-app-desktop.log`; it
+  records Build mode, real provider tool calls, file read/edit execution,
+  provider usage, verified closeout, and an isolated project file changed to
+  the expected content. This slice also fixed the desktop mode path so
+  non-Auto modes are passed into `RuntimeController` and bypass the lightweight
+  direct-answer lane.
+- Native two-turn soak smoke now passes on a real DeepSeek provider run via
+  `scripts/desktop-native-smoke.sh --live-provider --provider deepseek --soak-check --timeout 420 --no-screenshot`.
+  The latest evidence is in
+  `apps/desktop/test-artifacts/native-soak-deepseek-app-desktop.log`; it records
+  two consecutive Build-mode desktop turns through the packaged app's Tauri
+  `send_message` path, four real tool executions, two verified closeouts,
+  provider usage on both turns, and two isolated project files changed to the
+  expected contents.
+- Native two-turn soak restart smoke now passes on a real DeepSeek provider run
+  via
+  `scripts/desktop-native-smoke.sh --live-provider --provider deepseek --soak-check --restart-check --timeout 480 --no-screenshot`.
+  The latest evidence is in
+  `apps/desktop/test-artifacts/native-soak-deepseek-restart-app-desktop.log`;
+  it records the same two-turn Build-mode desktop tool flow, restarts the
+  packaged app against the same temporary home/project, and verifies restored
+  session messages, restored UI text, and `desktop_file_preview` reads for both
+  changed files.
+- Native two-turn soak restart smoke now also passes on a real MiniMax provider
+  run via
+  `scripts/desktop-native-smoke.sh --live-provider --provider minimax --soak-check --restart-check --timeout 480 --no-screenshot`.
+  The latest evidence is in
+  `apps/desktop/test-artifacts/native-soak-minimax-app-desktop.log` and
+  `apps/desktop/test-artifacts/native-soak-minimax-restart-app-desktop.log`;
+  it records `agent_mode=build`, five tool executions, two verified closeouts,
+  and restart recovery of session messages, restored UI text, and project file
+  previews.
+- Native three-turn extended soak restart smoke now passes on a real DeepSeek
+  provider run via
+  `scripts/desktop-native-smoke.sh --live-provider --provider deepseek --extended-soak-check --restart-check --timeout 720 --no-screenshot`.
+  The latest evidence is in
+  `apps/desktop/test-artifacts/native-extended-soak-deepseek-app-desktop.log`
+  and
+  `apps/desktop/test-artifacts/native-extended-soak-deepseek-restart-app-desktop.log`;
+  it records `agent_mode=build`, six real tool executions across three
+  consecutive Build-mode file-edit turns, three verified closeouts, per-turn
+  hard `desktop_file_preview` checks including unchanged future-target checks,
+  and restart recovery of session messages, restored UI text, and all three
+  project file previews. This slice fixed the desktop smoke config path so
+  extended soak applies `PRIORITY_AGENT_DESKTOP_SMOKE_AGENT_MODE=build`.
+  Failed native smoke runs now keep the isolated HOME/project by default for
+  post-failure DB/log/file inspection, and unattended live-provider smoke fails
+  early when a provider enters `ask_user`.
+- Native three-turn extended soak restart smoke now also passes on a real
+  MiniMax provider run via
+  `scripts/desktop-native-smoke.sh --live-provider --provider minimax --extended-soak-check --restart-check --timeout 720 --no-screenshot`.
+  The latest evidence is in
+  `apps/desktop/test-artifacts/native-extended-soak-minimax-app-desktop.log`
+  and
+  `apps/desktop/test-artifacts/native-extended-soak-minimax-restart-app-desktop.log`;
+  it records `agent_mode=build`, six real tool executions across three
+  consecutive Build-mode file-edit turns, three verified closeouts, all three
+  project files changed to expected content, and restart recovery. The native
+  smoke task contract was tightened so every QA turn explicitly requires
+  read/write/cat tool evidence rather than accepting text-only completion.
+- Native LabRun recovery/report smoke now passes without a live provider via
+  `scripts/desktop-native-smoke.sh --lab-recovery-check --timeout 120 --no-screenshot`.
+  The latest evidence is in
+  `apps/desktop/test-artifacts/native-lab-recovery-app-desktop.log`; it prepares
+  a real file-backed paused LabRun through the existing Lab command handler,
+  then verifies `desktop_workbench_snapshot`, `desktop_lab_report_page`, the
+  LabRun tab, artifact search, and the full report viewer in a packaged Tauri
+  window.
+- Native LabRun recovery restart smoke now passes without a live provider via
+  `scripts/desktop-native-smoke.sh --lab-recovery-check --restart-check --timeout 150 --no-screenshot`.
+  The latest evidence is in
+  `apps/desktop/test-artifacts/native-lab-recovery-restart-app-desktop.log`; it
+  starts the packaged app once to prepare and verify a paused LabRun, restarts
+  against the same temporary home/project, and verifies the same
+  `desktop_workbench_snapshot`, report page, LabRun tab, search, and full report
+  viewer path again without re-preparing the project.
+  After the `StartupStateCard.tsx` and `WorkspaceTopbar.tsx` shell split, the
+  same native gate was rerun with a fresh packaged app using
+  `scripts/desktop-native-smoke.sh --lab-recovery-check --restart-check --timeout 180 --no-screenshot`;
+  the latest log records `snapshot-verified`, `report-page-verified`,
+  `labrun-tab-open`, `report-preview-open`, and `full-report-visible` before and
+  after restart.
+  The native smoke wrapper now also writes those key diagnostic lines into the
+  summary smoke logs (`native-lab-recovery-smoke.log` and
+  `native-lab-recovery-restart-smoke.log`) instead of leaving them empty when
+  the Tauri process itself has no stdout/stderr output.
+- Desktop closeout validation was refreshed on 2026-06-22 against the current
+  broad dirty tree: `cargo check -q` passed,
+  `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -q` passed with
+  38 desktop Tauri Rust tests, and a freshly rebuilt packaged app passed
+  `scripts/desktop-native-smoke.sh --restart-check --lab-recovery-check --timeout 240 --no-screenshot`.
+  The latest native evidence is in
+  `apps/desktop/test-artifacts/native-lab-recovery-smoke.log` and
+  `apps/desktop/test-artifacts/native-lab-recovery-app-desktop.log`.
+- Desktop now defaults to DeepSeek v4 flash when no explicit desktop/user/env
+  provider selection is set and DeepSeek is configured. Explicit
+  `PRIORITY_AGENT_DEFAULT_PROVIDER`, saved desktop provider settings, and
+  user-selected provider/model still win.
+- Broad runtime regression now passes after the desktop API and native-smoke
+  changes: `cargo test -q` reports 3109 main-crate tests passed, 1 ignored, and
+  all follow-on integration/doc test batches passing. This closes the P4
+  runtime-regression verification item in the desktop workbench plan.
+- LabRun structured artifact body viewing now passes targeted backend and UI
+  validation: `desktop_smoke_lab_status_reads_file_backed_labrun_state` covers
+  `desktop_lab_artifact_body`, and `corepack pnpm --dir apps/desktop
+  test:ui-smoke` covers the LabRun artifact body viewer in the inspector.
+- A repeatable desktop release dogfood suite now passes from a freshly rebuilt
+  packaged app plus `scripts/desktop-release-dogfood.sh --skip-build --timeout
+  720 --repeat 2`. It runs the release-critical packaged-app checks in
+  sequence: DeepSeek three-turn extended soak + restart, MiniMax three-turn
+  extended soak + restart, and paused LabRun recovery/report/artifact UI +
+  restart. The latest summary is
+  `apps/desktop/test-artifacts/desktop-release-dogfood.log`; the current run
+  records `PASS desktop_release_dogfood repeat=2`, with DeepSeek, MiniMax, and
+  LabRun recovery PASS markers for both `iteration=1/2` and `iteration=2/2`.
+  The wrapper supports `--repeat count` for unattended repeated release gates;
+  the first iteration honors the build setting and later iterations reuse the
+  packaged app. MiniMax initially exposed a third-turn no-tool failure; the
+  native extended-soak harness now has a bounded third-turn repair task that
+  still requires real `desktop_file_preview` file evidence before success, and
+  the final MiniMax runs verified all three target files plus restart recovery.
+- The current closeout dirty tree was rerun through the packaged-app release
+  dogfood suite on 2026-06-22 local time with
+  `scripts/desktop-release-dogfood.sh --skip-build --timeout 720 --repeat 1`.
+  It passed DeepSeek extended soak + restart, MiniMax extended soak + restart,
+  and LabRun recovery + restart. The summary is
+  `apps/desktop/test-artifacts/desktop-release-dogfood.log`; current evidence
+  logs include
+  `apps/desktop/test-artifacts/native-extended-soak-deepseek-app-desktop.log`,
+  `apps/desktop/test-artifacts/native-extended-soak-minimax-app-desktop.log`,
+  and `apps/desktop/test-artifacts/native-lab-recovery-app-desktop.log`.
+- Daily-use UI polish now has a regression guard for narrow screens: the mobile
+  topbar and session header no longer overlap or clip the Output/Trace actions,
+  the mobile workspace explicitly uses the first grid column, the bottom
+  statusbar spans the viewport and scrolls horizontally so provider/cache/token/
+  context/model/workspace status remains reachable, the mobile session metadata
+  now shows the full provider/model value, and the inspector trace detail list
+  wraps long permission/tool evidence instead of truncating it into unreadable
+  one-line text. The mobile composer empty-context hint now wraps inside the
+  composer card instead of truncating the guidance text, and the restored-session
+  startup card now shows the full session/project detail on mobile. The bottom
+  statusbar is now actionable: provider/API and model open Settings,
+  cache/tokens/context open context details, and workspace opens file/project
+  context. On narrow viewports those inspector actions now open the real Runtime
+  inspector as a keyboard-managed drawer, reusing the same Context, Files,
+  Execution, Subagents, LabRun, and Diagnostics tabs with separate DOM ids from
+  the desktop inspector. Mobile command-palette inspector navigation uses the
+  same drawer path, so taps always produce visible tab-level feedback. The drawer
+  now has the same focus contract as the other desktop drawers: initial focus
+  lands on Close, Tab/Shift+Tab stay inside, Escape closes, and focus returns to
+  the trigger. The mobile session header mode switcher is also covered as a
+  product-mode entry: Direct Agent starts selected, LabRun opens the Runtime
+  inspector drawer directly on the LabRun tab with project controls, and Direct
+  Agent can be selected again without relying on the hidden desktop inspector.
+  The latest
+  validation is `corepack pnpm --dir apps/desktop build`, the targeted mobile
+  Playwright case, full
+  `corepack pnpm --dir apps/desktop test:ui-smoke`, and `git diff --check`.
+- Narrow viewport access is now less dependent on the hidden sidebar: the
+  topbar has an explicit settings button for provider setup, permissions, and
+  diagnostics, and the `More conversation actions` button now opens the command
+  palette instead of being an inert control. The command palette now fits narrow
+  viewports, clamps command labels and hint text inside the palette instead of
+  letting long content widen the panel, and mobile smoke verifies `More
+  conversation actions` -> `Command palette` -> `New Chat` as the sidebar-free
+  primary navigation path. The narrow topbar Trace and Output actions also now
+  expose expanded state and are covered as real drawer entries: mobile smoke
+  opens each drawer, verifies the shared focus trap, closes with Escape, and
+  checks focus returns to the triggering button. This path is covered by the
+  desktop and mobile Playwright smoke assertions.
+- Primary drawer routing is now mutually exclusive for daily-use panels:
+  Settings, Workbench, Run Trace, Tool Output, and the Runtime inspector drawer
+  use one opening path so main drawers do not stack over each other. Context
+  Details remains a nested detail drawer. Mobile smoke asserts that only one
+  primary drawer is mounted after opening Settings, Trace, Output, and Runtime
+  inspector paths.
+- Mobile Settings now has a stronger provider/permissions path: the provider key
+  setup row uses responsive class-backed controls instead of inline layout,
+  stacks provider select, API-key input, and save action on narrow screens, and
+  smoke verifies Provider plus Permissions settings content stays inside the
+  Settings drawer viewport.
+- Settings now has the expected baseline keyboard flow for a desktop workbench:
+  opening the drawer moves focus to `Back to app`, Tab/Shift+Tab stay inside
+  the drawer instead of leaking into the background app, Escape closes it, and
+  focus returns to the launcher button on both desktop sidebar and mobile topbar
+  paths.
+- The same drawer keyboard contract now applies to Workbench, Run Trace,
+  Context Details, and Tool Output through a shared frontend hook. Nested
+  drawers only handle keys while focus is inside the active drawer, so opening
+  Context Details from Trace does not let one Escape close both layers.
+- Runtime errors and watchdog warnings now render as an actionable alert near
+  the composer instead of a bare text banner. The alert keeps the runtime/event
+  as the source of truth, but gives the user direct actions to open the relevant
+  trace, switch to Diagnostics, or dismiss the alert after reading it. The
+  web-preview fixture includes a run-error path so this interaction is covered
+  by Playwright smoke. Narrow/mobile smoke now covers the same recovery path:
+  `Open trace` opens the visible Run Trace drawer, and `Diagnostics` opens the
+  Runtime inspector drawer on the Diagnostics tab while preserving primary
+  drawer exclusivity.
+- The command palette is now a keyboard-first desktop command surface: `Ctrl+K`
+  opens a focused combobox, result rows expose listbox/option semantics,
+  ArrowUp/ArrowDown wrap through commands, Home/End jump to result boundaries,
+  Enter runs the selected command, Escape closes the palette, Tab/Shift+Tab stay
+  inside the dialog, and focus returns to the launcher. This keeps LabRun and
+  Direct Agent commands on the normal composer/runtime route while making the
+  high-frequency command path usable without the mouse.
+- The Direct Agent goal progress row now has active-state preview coverage
+  instead of only absent-state layout coverage. `previewFixture=goal` renders an
+  active goal row, the icon controls expose explicit Edit/Pause/Clear accessible
+  names, the objective editor is labelled, Escape cancels an unsaved edit draft,
+  and smoke keeps the composer visible below the row.
+- Command palette navigation now covers the main workbench surfaces directly:
+  Workbench, Trace, Tool Output, Context, Files, Execution, Subagents, LabRun,
+  and Diagnostics. These commands do not invent new runtime behavior; they only
+  open existing drawers or switch existing inspector tabs, while LabRun commands
+  continue to stage through the composer/runtime route.
+- Shared drawer keyboard handling now covers a real nested-drawer edge case:
+  after closing Context Details from Trace, Escape can still close the parent
+  Trace drawer even if focus briefly falls back to the page; if focus is inside
+  a different active overlay, the parent drawer still ignores Escape so one key
+  press does not close multiple layers.
+- Remaining desktop release risk: run longer unattended/background sessions
+  beyond the current repeat-2 dogfood suite, repeat the same gate over time, and
+  add any additional coding providers used for daily work.
+
+### Validation gates for upcoming desktop work
+
+```bash
+corepack pnpm --dir apps/desktop build
+corepack pnpm --dir apps/desktop test:ui-smoke
+corepack pnpm --dir apps/desktop test:native-smoke
+scripts/desktop-native-smoke.sh --live-provider --timeout 180
+scripts/desktop-native-smoke.sh --live-provider --provider deepseek --timeout 180 --no-screenshot
+scripts/desktop-native-smoke.sh --live-provider --provider deepseek --restart-check --timeout 180 --no-screenshot
+scripts/desktop-native-smoke.sh --live-provider --provider deepseek --multi-tool-check --timeout 240 --no-screenshot
+scripts/desktop-native-smoke.sh --live-provider --provider deepseek --soak-check --timeout 420 --no-screenshot
+scripts/desktop-native-smoke.sh --live-provider --provider deepseek --soak-check --restart-check --timeout 480 --no-screenshot
+scripts/desktop-native-smoke.sh --live-provider --provider deepseek --extended-soak-check --restart-check --timeout 720 --no-screenshot
+scripts/desktop-native-smoke.sh --live-provider --provider minimax --extended-soak-check --restart-check --timeout 720 --no-screenshot
+scripts/desktop-native-smoke.sh --live-provider --provider minimax --soak-check --restart-check --timeout 480 --no-screenshot
+scripts/desktop-native-smoke.sh --lab-recovery-check --timeout 120 --no-screenshot
+scripts/desktop-native-smoke.sh --lab-recovery-check --restart-check --timeout 150 --no-screenshot
+scripts/desktop-release-dogfood.sh --skip-build
+cargo fmt --check
+cargo check --features experimental-api-server -q
+cargo test -q
+```
+
+P1 validation completed:
+
+```bash
+corepack pnpm --dir apps/desktop build
+corepack pnpm --dir apps/desktop test:ui-smoke
+```
+
+P2 slash-command, context-attachment, Execution inspector, Context inspector,
+grouped run-card, and provider setup-repair validation completed with the same
+desktop build and smoke gates.
+
+P3 LabRun proposal/control/status/report/context surface validation completed
+with:
+
+```bash
+corepack pnpm --dir apps/desktop build
+corepack pnpm --dir apps/desktop test:ui-smoke
+cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml -q
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -q desktop_smoke_lab_status_reads_file_backed_labrun_state
+corepack pnpm --dir apps/desktop test:native-smoke
+```
+
+P3 paged LabRun report viewer validation completed with:
+
+```bash
+corepack pnpm --dir apps/desktop build
+corepack pnpm --dir apps/desktop test:ui-smoke
+cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml -q
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -q desktop_smoke_lab_status_reads_file_backed_labrun_state
+```
+
+Desktop state hook and run-event hook refactor validation completed with:
+
+```bash
+corepack pnpm --dir apps/desktop build
+corepack pnpm --dir apps/desktop test:ui-smoke
+cargo fmt --check
+cargo check --features experimental-api-server -q
+cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml -q
+git diff --check
+```
+
+Inspector primitive split validation completed with:
+
+```bash
+corepack pnpm --dir apps/desktop build
+corepack pnpm --dir apps/desktop test:ui-smoke
+```
+
+Desktop runtime API type/goal split validation completed with:
+
+```bash
+corepack pnpm --dir apps/desktop build
+corepack pnpm --dir apps/desktop test:ui-smoke
+```
+
+Desktop Rust native-smoke split validation completed with:
+
+```bash
+cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml -q
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -q desktop_smoke_lab_status_reads_file_backed_labrun_state
+scripts/desktop-native-smoke.sh --lab-recovery-check --restart-check --timeout 180 --no-screenshot
+cargo fmt --check
+```
 
 ## LabRun Graduate Execution Policy Alignment (2026-06-21)
 

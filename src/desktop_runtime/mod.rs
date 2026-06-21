@@ -75,7 +75,7 @@ impl DesktopRuntime {
 
     pub async fn initialize(working_dir: impl AsRef<Path>) -> anyhow::Result<Self> {
         let working_dir = working_dir.as_ref().to_path_buf();
-        let (provider, model) = crate::bootstrap::init_provider()?;
+        let (provider, model) = crate::bootstrap::init_desktop_provider()?;
         let tool_registry = crate::bootstrap::init_tool_registry(&working_dir);
         let components =
             crate::bootstrap::init_components(provider, model, tool_registry, &working_dir).await?;
@@ -138,6 +138,16 @@ impl DesktopRuntime {
         user_message: impl Into<String>,
     ) -> Pin<Box<dyn Stream<Item = StreamEvent> + Send>> {
         self.controller.submit_stream_turn(user_message).await
+    }
+
+    pub async fn run_full_turn_with_agent_mode(
+        &self,
+        user_message: impl Into<String>,
+        agent_mode: crate::engine::agent_mode::AgentMode,
+    ) -> Pin<Box<dyn Stream<Item = StreamEvent> + Send>> {
+        self.controller
+            .submit_stream_turn_with_agent_mode(user_message, agent_mode)
+            .await
     }
 
     pub async fn run_lightweight_turn(

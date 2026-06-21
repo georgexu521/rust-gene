@@ -2,6 +2,9 @@ use super::*;
 use priority_agent::services::api::provider_manifest::{ProviderManifest, ProviderManifestLoader};
 use std::path::{Path, PathBuf};
 
+mod native_smoke;
+pub(super) use native_smoke::*;
+
 pub(super) fn open_session_store() -> Result<SessionStore, String> {
     let store = SessionStore::open(SessionStore::default_path()).map_err(|err| err.to_string())?;
     let _ = store.recover_interrupted_agent_task_states(None);
@@ -30,6 +33,30 @@ pub(super) async fn clear_active_session_if_matches(
         let mut active_session_id = state.active_session_id.lock().await;
         *active_session_id = None;
     }
+}
+
+pub(super) async fn active_session_id_if_present(
+    state: &State<'_, DesktopAppState>,
+) -> Result<Option<String>, String> {
+    let active_session_id = state.active_session_id.lock().await.clone();
+    let Some(session_id) = active_session_id else {
+        return Ok(None);
+    };
+    if active_session_exists(&session_id)? {
+        return Ok(Some(session_id));
+    }
+
+    clear_active_session_if_matches(state, &session_id).await;
+    persist_current_settings(state).await?;
+    Ok(None)
+}
+
+fn active_session_exists(session_id: &str) -> Result<bool, String> {
+    let store = open_session_store()?;
+    Ok(store
+        .get_session(session_id)
+        .map_err(|err| err.to_string())?
+        .is_some())
 }
 
 pub(super) async fn persist_current_settings(
@@ -484,6 +511,19 @@ pub(super) fn provider_id_for_base_url(
 pub(super) fn default_provider_id_from_env(
     registry: &priority_agent::services::api::provider::ProviderRegistry,
 ) -> Option<String> {
+    if std::env::var("PRIORITY_AGENT_DEFAULT_PROVIDER")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .is_some()
+    {
+        return registry.selected().map(str::to_string);
+    }
+    if registry.get("deepseek").is_some() {
+        return Some("deepseek".to_string());
+    }
+    if let Some(selected) = registry.selected() {
+        return Some(selected.to_string());
+    }
     ProviderManifestLoader::load_merged()
         .provider
         .iter()
@@ -570,115 +610,6 @@ pub(super) fn sanitize_log_value(value: &str) -> String {
         .split_whitespace()
         .collect::<Vec<_>>()
         .join(" ")
-}
-
-pub(super) fn schedule_native_interaction_smoke(window: WebviewWindow, log_path: PathBuf) {
-    std::thread::spawn(move || {
-        std::thread::sleep(std::time::Duration::from_secs(3));
-        let result = window.eval(native_interaction_smoke_script());
-        if let Err(err) = result {
-            let _ = append_desktop_log(
-                &log_path,
-                &format!(
-                    "native_interaction_smoke ok=false eval_error={}",
-                    sanitize_log_value(&err.to_string())
-                ),
-            );
-        }
-    });
-}
-
-pub(super) fn native_interaction_smoke_script() -> &'static str {
-    r#"
-(async () => {
-  const steps = [];
-  const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-  const text = () => document.body?.innerText || "";
-  const candidates = () => Array.from(document.querySelectorAll("button, [role='button'], [aria-label]"));
-  const buttonCandidates = () => Array.from(document.querySelectorAll("button, [role='button']"));
-  const visible = (element) => {
-    const rect = element.getBoundingClientRect();
-    return rect.width > 0 && rect.height > 0;
-  };
-  const byLabel = (label) => candidates().find((element) => element.getAttribute("aria-label") === label && visible(element));
-  const byEnabledLabel = (label) => candidates().find((element) => element.getAttribute("aria-label") === label && !element.disabled && visible(element));
-  const byText = (label) => buttonCandidates().find((element) => element.textContent?.trim() === label && visible(element));
-  const byTextIncludes = (label) => buttonCandidates().find((element) => element.textContent?.trim().includes(label) && visible(element));
-  const setTextareaValue = (label, value) => {
-    const element = document.querySelector(`textarea[aria-label="${label}"]`);
-    if (!element) {
-      throw new Error(`missing textarea ${label}`);
-    }
-    const setter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, "value")?.set;
-    setter?.call(element, value);
-    element.dispatchEvent(new Event("input", { bubbles: true }));
-    element.dispatchEvent(new Event("change", { bubbles: true }));
-    steps.push(`typed-${label}`);
-  };
-  const click = async (name, findElement) => {
-    const element = findElement();
-    if (!element) {
-      throw new Error(`missing ${name}`);
-    }
-    element.click();
-    steps.push(name);
-    await sleep(350);
-    };
-    const waitFor = async (name, predicate) => {
-    for (let index = 0; index < 30; index += 1) {
-      if (predicate()) {
-        steps.push(name);
-        return;
-      }
-      await sleep(200);
-    }
-    throw new Error(`timeout ${name}`);
-  };
-  const record = async (result) => {
-    if (!window.__TAURI_INTERNALS__?.invoke) {
-      return result;
-    }
-    await window.__TAURI_INTERNALS__.invoke("record_native_smoke_result", { result });
-    return result;
-  };
-
-  try {
-    await waitFor("app-ready", () => text().includes("What should we build in rust-agent?"));
-    await click("settings-open", () => byText("Settings"));
-    await waitFor("settings-visible", () => document.querySelector("[aria-label='Settings']"));
-    await click("settings-close", () => byTextIncludes("Back to app"));
-    await waitFor("settings-closed", () => !document.querySelector("[aria-label='Settings']"));
-    await click("context-menu-open", () => byLabel("Add context"));
-    await waitFor("context-menu-visible", () => text().includes("Add context") && text().includes("Current diff"));
-    await click("current-diff-add", () => byLabel("Reference current diff"));
-    await waitFor("context-chip-visible", () => Boolean(byLabel("Open context Current diff")));
-    await click("context-detail-open", () => byLabel("Open context Current diff"));
-    await waitFor("context-detail-visible", () => document.querySelector("[aria-label='Context details']"));
-    await click("context-detail-close", () => byLabel("Close context details"));
-    await waitFor("context-detail-closed", () => !document.querySelector("[aria-label='Context details']"));
-    await click("trace-open", () => byText("Trace"));
-    await waitFor("trace-visible", () => document.querySelector("[aria-label='Run trace']"));
-    await click("trace-close", () => byText("Close"));
-    await waitFor("trace-closed", () => !document.querySelector("[aria-label='Run trace']"));
-    setTextareaValue("Message", "Native smoke real run");
-    await waitFor("send-enabled", () => Boolean(byEnabledLabel("Send message")));
-    await click("run-submit", () => byEnabledLabel("Send message"));
-    await waitFor("run-started", () => text().includes("Runtime connected"));
-    await waitFor("shell-card-visible", () => text().includes("scripts/desktop-native-smoke.sh --fixture-run"));
-    await waitFor("file-card-visible", () => text().includes("Edited file") && text().includes("Composer.tsx"));
-    await waitFor("permission-waiting", () => text().includes("Permission needed: bash") && Boolean(byText("Approve")));
-    await click("permission-approve", () => byText("Approve"));
-    await waitFor("permission-approved", () => text().includes("Permission approved"));
-    await waitFor("assistant-answer-visible", () => text().includes("Native smoke fixture completed"));
-    await waitFor("assistant-final", () => Boolean(document.querySelector(".message.assistant.final")));
-    await waitFor("run-completed", () => text().includes("Run completed"));
-    await waitFor("usage-visible", () => text().includes("Token usage"));
-    return await record(`native_interaction_smoke ok=true steps=${steps.join(",")}`);
-  } catch (error) {
-    return await record(`native_interaction_smoke ok=false error=${error?.message || error} steps=${steps.join(",")} text=${text().slice(0, 500)}`);
-  }
-})()
-"#
 }
 
 pub(super) fn load_messages_from_store(

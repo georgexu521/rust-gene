@@ -7,6 +7,9 @@ export type StatusBarProps = {
   contextSnapshot: DesktopContextSnapshot | null;
   projectPath: string;
   isRunning: boolean;
+  onOpenContext: () => void;
+  onOpenFiles: () => void;
+  onOpenSettings: () => void;
 };
 
 function formatTokens(n: number): string {
@@ -45,6 +48,9 @@ export function StatusBar({
   contextSnapshot,
   projectPath,
   isRunning,
+  onOpenContext,
+  onOpenFiles,
+  onOpenSettings,
 }: StatusBarProps) {
   const online = health?.status === "ok";
   const model = providerStatus?.active_model || "--";
@@ -57,8 +63,11 @@ export function StatusBar({
   return (
     <footer className="statusbar">
       {/* API connection status */}
-      <span
+      <button
+        type="button"
         className="statusbar-seg"
+        onClick={onOpenSettings}
+        aria-label={`Open Settings for ${providerLabel} provider at ${providerHost}`}
         title={
           providerStatus
             ? `${providerLabel} · ${providerHost} · ${providerStatus.selection_source}`
@@ -72,46 +81,73 @@ export function StatusBar({
         <span className={`statusbar-val ${online ? "" : "warn"}`}>
           {online ? (isRunning ? "running" : providerLabel) : "offline"}
         </span>
-      </span>
+      </button>
 
       {/* Cache hit rate */}
-      <span className="statusbar-seg" title={cacheHitTitle(contextSnapshot)}>
+      <button
+        type="button"
+        className="statusbar-seg"
+        onClick={onOpenContext}
+        aria-label={`Open Context inspector for prompt cache, ${formatCacheHitRate(contextSnapshot)}`}
+        title={cacheHitTitle(contextSnapshot)}
+      >
         <Zap size={11} style={{ color: "var(--accent, #7c3aed)" }} />
         <span className="statusbar-label">Cache</span>
         <span className="statusbar-val acc">{formatCacheHitRate(contextSnapshot)}</span>
-      </span>
+      </button>
 
       {/* Token count */}
-      <span className="statusbar-seg">
+      <button
+        type="button"
+        className="statusbar-seg"
+        onClick={onOpenContext}
+        aria-label={`Open Context inspector for token usage, ${formatTokens(totalTokens)} tokens`}
+        title="Open context token details"
+      >
         <Cpu size={11} />
         <span className="statusbar-label">Tokens</span>
         <span className="statusbar-val">{formatTokens(totalTokens)}</span>
-      </span>
+      </button>
 
       {/* Context usage */}
       {contextSnapshot ? (
-        <span className="statusbar-seg" title={`${contextSnapshot.total_estimated_tokens} / ${contextSnapshot.max_context_tokens} tokens`}>
+        <button
+          type="button"
+          className="statusbar-seg"
+          onClick={onOpenContext}
+          aria-label={`Open Context inspector, ${contextSnapshot.usage_percent}% used`}
+          title={`${contextSnapshot.total_estimated_tokens} / ${contextSnapshot.max_context_tokens} tokens`}
+        >
           <span className="statusbar-label">Context</span>
           <span className="statusbar-val">{contextSnapshot.usage_percent}%</span>
-        </span>
+        </button>
       ) : null}
 
       <span className="statusbar-grow" />
 
       {/* Model name */}
-      <span
+      <button
+        type="button"
         className="statusbar-seg"
+        onClick={onOpenSettings}
+        aria-label={`Open Settings for model ${model}`}
         title={`model · ${model}${providerStatus?.runtime_provider_ready ? " · runtime ready" : ""}`}
       >
         <Brain size={11} style={{ color: "var(--violet, #8b5cf6)" }} />
         <span className="statusbar-val vio">{model}</span>
-      </span>
+      </button>
 
       {/* Workspace */}
-      <span className="statusbar-seg" title={`workspace: ${projectPath}`}>
+      <button
+        type="button"
+        className="statusbar-seg"
+        onClick={onOpenFiles}
+        aria-label={`Open Files inspector for workspace ${workspaceName}`}
+        title={`workspace: ${projectPath}`}
+      >
         <Folder size={11} />
         <span className="statusbar-val">{workspaceName}</span>
-      </span>
+      </button>
     </footer>
   );
 }

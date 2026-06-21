@@ -1,7 +1,9 @@
+import { useRef } from "react";
 import { X } from "lucide-react";
 import { DesktopDiagnostic, DesktopWorkbenchSnapshot } from "../../runtime/desktopApi";
 import { DiagnosticsPanel } from "./DiagnosticsPanel";
 import { WorkbenchPanel } from "./WorkbenchPanel";
+import { useDrawerKeyboard } from "./useDrawerKeyboard";
 
 type WorkbenchDrawerProps = {
   diagnostics: DesktopDiagnostic[];
@@ -26,18 +28,25 @@ export function WorkbenchDrawer({
   onStageLabCommand,
   onSuperviseLabDaemon,
 }: WorkbenchDrawerProps) {
+  const closeButtonRef = useRef<HTMLButtonElement>(null);
+  const drawerRef = useDrawerKeyboard<HTMLElement>({
+    initialFocusRef: closeButtonRef,
+    isOpen,
+    onClose,
+  });
+
   if (!isOpen) {
     return null;
   }
 
   return (
-    <aside className="workbench-drawer" aria-label="Workbench">
+    <aside ref={drawerRef} className="workbench-drawer" aria-label="Workbench">
       <div className="workbench-drawer-header">
         <div>
           <div className="trace-eyebrow">Workbench</div>
           <h2>Project intelligence</h2>
         </div>
-        <button aria-label="Close workbench" type="button" onClick={onClose}>
+        <button ref={closeButtonRef} aria-label="Close workbench" type="button" onClick={onClose}>
           <X aria-hidden="true" size={16} />
         </button>
       </div>

@@ -1,6 +1,57 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
+import type {
+  AgentModeId,
+  AgentModeOption,
+  DesktopCompactionAttempt,
+  DesktopContextSnapshot,
+  DesktopDiagnostic,
+  DesktopDiagnosticsResponse,
+  DesktopExportResult,
+  DesktopFilePreview,
+  DesktopHealth,
+  DesktopLabArtifactBody,
+  DesktopLabDaemonActionResult,
+  DesktopLabReportPage,
+  DesktopMessage,
+  DesktopRevertResult,
+  DesktopRunContext,
+  DesktopRunContextDetail,
+  DesktopRunEvent,
+  DesktopSessionRevertRecord,
+  DesktopSettings,
+  DesktopToolOutputMeta,
+  DesktopToolOutputPage,
+  DesktopWorkbenchSnapshot,
+  DetailLevelId,
+  PermissionModeId,
+  PermissionModeOption,
+  ProviderModelStatus,
+  ProviderSetupInfo,
+  RecentSession,
+  ResumedSession,
+  SelectedProject,
+} from "./desktopTypes";
+import {
+  answerWebPreviewPermission,
+  compactWebPreviewContext,
+  loadWebPreviewFilePreview,
+  loadWebPreviewLabArtifactBody,
+  loadWebPreviewLabReportPage,
+  onWebPreviewRunEvent,
+  sendWebPreviewMessage,
+} from "./desktopPreview";
+export {
+  goalClear,
+  goalEdit,
+  goalLog,
+  goalPause,
+  goalResume,
+  goalStart,
+  goalStatus,
+} from "./desktopGoalApi";
+export type * from "./desktopTypes";
 
 declare global {
   interface Window {
@@ -8,461 +59,14 @@ declare global {
   }
 }
 
-export type DesktopHealth = {
-  status: string;
-  version: string;
-  cwd: string;
-};
-
-export type DesktopContextSnapshot = {
-  history_messages: number;
-  history_tokens: number;
-  tool_schema_tokens: number;
-  memory_snapshot_tokens: number;
-  total_estimated_tokens: number;
-  max_context_tokens: number;
-  usage_percent: number;
-  stable_prefix_fingerprint: string;
-  prompt_cache_cached_tokens: number;
-  prompt_cache_miss_tokens: number;
-  prompt_cache_hit_rate_percent: number;
-  prompt_cache_diagnostic_count: number;
-  prompt_cache_last_reason?: string | null;
-  compact: DesktopCompactState;
-};
-
-export type DesktopWorkbenchSnapshot = {
-  selected_project: string;
-  project_map: DesktopProjectMapSnapshot;
-  symbol_index: DesktopSymbolIndexSnapshot;
-  runtime_context?: DesktopContextSnapshot | null;
-  lab_status: DesktopLabStatusSnapshot;
-  subagent_tasks: DesktopSubagentTaskSnapshot[];
-};
-
-export type DesktopLabStatusSnapshot = {
-  available: boolean;
-  state: string;
-  detail: string;
-  lab_run_id?: string | null;
-  proposal_id?: string | null;
-  proposal_status?: string | null;
-  run_status?: string | null;
-  stage?: string | null;
-  owner?: string | null;
-  needs_user: boolean;
-  cycle_count: number;
-  artifact_count: number;
-  meeting_count: number;
-  task_total: number;
-  task_open: number;
-  task_blocked: number;
-  blockers: string[];
-  validation_retry_count: number;
-  validation_retry_escalated_count: number;
-  latest_validation_retry?: string | null;
-  meeting_recommended: boolean;
-  meeting_topic?: string | null;
-  latest_report_path?: string | null;
-  daemon_policy?: DesktopLabDaemonPolicySnapshot | null;
-};
-
-export type DesktopLabDaemonPolicySnapshot = {
-  enabled: boolean;
-  mode: string;
-  max_steps: number;
-  max_steps_per_cycle: number;
-  interval_ms: number;
-  last_started_at?: string | null;
-  last_start_error?: string | null;
-};
-
-export type DesktopLabDaemonActionResult = {
-  action: string;
-  output: string;
-  lab_status: DesktopLabStatusSnapshot;
-};
-
-export type DesktopSubagentTaskSnapshot = {
-  task_id: string;
-  agent_id: string;
-  profile?: string | null;
-  role: string;
-  status: string;
-  description: string;
-  child_session_id?: string | null;
-  result_artifact_id?: number | null;
-  artifact_status?: string | null;
-  result_preview?: string | null;
-  tools_used: string[];
-  proof_kind?: string | null;
-  completion_sink?: string | null;
-  recovery_status?: string | null;
-  recovery_action?: string | null;
-  updated_at: string;
-};
-
-export type DesktopProjectMapSnapshot = {
-  available: boolean;
-  source?: string | null;
-  freshness: string;
-  chars: number;
-  truncated: boolean;
-  content_preview: string;
-};
-
-export type DesktopSymbolIndexSnapshot = {
-  schema_version: number;
-  total_symbols: number;
-  files: DesktopIndexedFile[];
-  truncated: boolean;
-};
-
-export type DesktopIndexedFile = {
-  path: string;
-  hash: string;
-  lines: number;
-  summary: string;
-  symbols: DesktopIndexedSymbol[];
-};
-
-export type DesktopIndexedSymbol = {
-  name: string;
-  kind: string;
-  line: number;
-  signature: string;
-};
-
-export type DesktopCompactState = {
-  compression_count: number;
-  circuit_open: boolean;
-  latest_strategy?: string | null;
-  latest_boundary_id?: string | null;
-  latest_attempt_decision?: string | null;
-  latest_attempt_reason?: string | null;
-  latest_attempt_trigger?: string | null;
-  latest_attempt_tokens_before?: number | null;
-  latest_attempt_tokens_after?: number | null;
-};
-
-export type DesktopCompactionAttempt = {
-  trigger: string;
-  strategy: string;
-  decision: string;
-  before_tokens: number;
-  after_tokens?: number | null;
-  messages_before: number;
-  messages_after?: number | null;
-  reason: string;
-  attempt_index: number;
-  consecutive_no_gain: number;
-  consecutive_failures: number;
-  circuit_open: boolean;
-  boundary_id?: string | null;
-};
-
-export type SelectedProject = {
-  path: string;
-};
-
-export type RecentSession = {
-  id: string;
-  title: string;
-  updated_at: string;
-  model: string;
-  message_count: number;
-};
-
-export type DesktopMessage = {
-  id: number;
-  role: string;
-  content: string;
-  created_at: string;
-};
-
-export type DesktopCompactBoundary = {
-  boundary_id: string;
-  strategy: string;
-  trigger: string;
-  before_tokens: number;
-  after_tokens: number;
-  messages_before: number;
-  messages_after: number;
-  summary: string;
-  created_at: string;
-};
-
-export type ResumedSession = {
-  session_id: string;
-  messages: DesktopMessage[];
-  compact_boundaries: DesktopCompactBoundary[];
-  session_parts: DesktopSessionPart[];
-};
-
-export type DesktopSessionPart = {
-  id: number;
-  part_index: number;
-  part_id: string;
-  kind: string;
-  tool_call_id?: string | null;
-  tool_name?: string | null;
-  status?: string | null;
-  payload: Record<string, unknown>;
-  projected_to_seq: number;
-  updated_at: string;
-};
-
-export type DesktopSessionRevertRecord = {
-  id: number;
-  session_id: string;
-  operation: string;
-  status: string;
-  message_id?: string | null;
-  target_part_id?: string | null;
-  part_ids: string[];
-  checkpoint_ids: string[];
-  snapshot_checkpoint_id?: string | null;
-  paths: string[];
-  restored_files: string[];
-  removed_files: string[];
-  errors: string[];
-  diff_summary?: string | null;
-  unrevert_possible: boolean;
-  unreverted: boolean;
-  payload: Record<string, unknown>;
-  created_at: string;
-};
-
-export type DesktopToolOutputPage = {
-  id: string;
-  uri: string;
-  tool_name: string;
-  mime: string;
-  content: string;
-  offset: number;
-  limit: number;
-  total_bytes: number;
-  has_more: boolean;
-};
-
-export type DesktopToolOutputMeta = {
-  id: string;
-  uri: string;
-  tool_call_id: string;
-  tool_name: string;
-  mime: string;
-  original_bytes: number;
-  created_at_ms: number;
-};
-
-export type DesktopRevertResult = {
-  session_id: string;
-  status: string;
-  message_id?: string | null;
-  part_ids: string[];
-  tool_round_id?: string | null;
-  file_change_ids: string[];
-  checkpoint_ids: string[];
-  paths: string[];
-  restored_files: string[];
-  removed_files: string[];
-  errors: string[];
-  change_count: number;
-};
-
-export type DesktopSettings = {
-  selected_project: string;
-  active_session_id?: string | null;
-  permission_mode: PermissionModeId;
-  detail_level: DetailLevelId;
-  agent_mode: AgentModeId;
-  provider_name?: string | null;
-  model?: string | null;
-  settings_path: string;
-  diagnostic_logs_path: string;
-  recent_projects: string[];
-  archived_session_ids: string[];
-  startup_state: DesktopStartupState;
-};
-
-export type DesktopStartupState = {
-  status: string;
-  detail: string;
-  lab_run_id?: string | null;
-  lab_stage?: string | null;
-  lab_owner?: string | null;
-  lab_pause_reason?: string | null;
-};
-
-export type DetailLevelId = "coding" | "daily";
-
-export type AgentModeId = "auto" | "build" | "plan" | "explore" | "review";
-
-export type AgentModeOption = {
-  id: AgentModeId;
-  label: string;
-  description: string;
-};
-
-export type PermissionModeId = "default" | "auto_low_risk" | "auto" | "read_only";
-
-export type PermissionModeOption = {
-  id: PermissionModeId;
-  label: string;
-  description: string;
-};
-
-export type DiagnosticStatus = "ok" | "warning" | "error";
-
-export type DesktopDiagnostic = {
-  id: string;
-  label: string;
-  status: DiagnosticStatus;
-  detail: string;
-};
-
-export type DesktopDiagnosticsResponse = {
-  items: DesktopDiagnostic[];
-};
-
-export type DesktopExportResult = {
-  session_id: string;
-  path: string;
-  format: string;
-  privacy: string;
-};
-
-export type ProviderSetupInfo = {
-  shell_profile_path: string;
-  provider_env_vars: string[];
-  example: string;
-};
-
-export type ProviderModelStatus = {
-  active_provider?: string | null;
-  active_provider_label?: string | null;
-  active_model: string;
-  active_base_url: string;
-  runtime_model?: string | null;
-  runtime_provider_ready: boolean;
-  selection_source: string;
-  configured_count: number;
-  providers: DesktopProviderOption[];
-  models: DesktopModelOption[];
-};
-
-export type DesktopCurrentDiffContextDetail = {
-  type: "current_diff";
-  label: string;
-  shortstat: string;
-  files: string[];
-  stat: string;
-  patch_preview: string;
-  truncated: boolean;
-};
-
-export type DesktopFileContextDetail = {
-  type: "file";
-  label: string;
-  path: string;
-  relative_path: string;
-  size_bytes: number;
-  line_count: number;
-  line_start?: number | null;
-  line_end?: number | null;
-  preview: string;
-  truncated: boolean;
-};
-
-export type DesktopRunContextDetail =
-  | DesktopCurrentDiffContextDetail
-  | DesktopFileContextDetail;
-
-export type DesktopRunContext =
-  | {
-      type: "current_diff";
-      label: string;
-      detail?: DesktopRunContextDetail | null;
-    }
-  | {
-      type: "file";
-      label: string;
-      path: string;
-      line_start?: number | null;
-      line_end?: number | null;
-      selection_text?: string | null;
-      detail?: DesktopRunContextDetail | null;
-    };
-
-export type DesktopProviderOption = {
-  id: string;
-  label: string;
-  provider_type: string;
-  model: string;
-  base_url: string;
-  configured: boolean;
-  active: boolean;
-  note: string;
-};
-
-export type DesktopModelOption = {
-  id: string;
-  label: string;
-  provider_id: string;
-  active: boolean;
-  note: string;
-};
-
-export type DesktopRuntimeDiagnostic = {
-  schema?: string;
-  task_state?: Record<string, unknown>;
-  verification_proof?: Record<string, unknown>;
-  control_loop?: Record<string, unknown>;
-  [key: string]: unknown;
-};
-
-export type DesktopRunEvent =
-  | { type: "run_started"; run_id: string; session_id?: string | null }
-  | { type: "assistant_delta"; text: string }
-  | { type: "thinking_started" }
-  | { type: "thinking_delta"; text: string }
-  | { type: "thinking_completed" }
-  | { type: "tool_started"; id: string; name: string }
-  | { type: "tool_args_delta"; id: string; delta: string }
-  | { type: "tool_call_completed"; id: string }
-  | { type: "tool_execution_progress"; id: string; progress: string }
-  | { type: "tool_completed"; id: string; result_preview: string; metadata?: unknown }
-  | {
-      type: "permission_request";
-      id: string;
-      tool_name: string;
-      arguments: unknown;
-      prompt: string;
-      metadata?: unknown;
-      review?: unknown;
-    }
-  | {
-      type: "usage";
-      prompt_tokens: number;
-      completion_tokens: number;
-      reasoning_tokens?: number | null;
-      cached_tokens?: number | null;
-    }
-  | { type: "runtime_diagnostic"; diagnostic: DesktopRuntimeDiagnostic }
-  | { type: "closeout"; status: string; evidence_summary?: string | null }
-  | { type: "run_completed" }
-  | { type: "output_truncated" }
-  | { type: "run_error"; message: string };
-
-const webPreviewListeners = new Set<(event: DesktopRunEvent) => void>();
 let webPreviewSettings: DesktopSettings = {
   selected_project: "/Users/georgexu/Desktop/rust-agent",
   active_session_id: "web-preview",
   permission_mode: "auto",
   detail_level: "coding",
   agent_mode: "auto",
-  provider_name: "minimax",
-  model: "MiniMax-M3",
+  provider_name: "deepseek",
+  model: "deepseek-v4-flash",
   settings_path: "web-preview",
   diagnostic_logs_path: "web-preview/logs/desktop.log",
   recent_projects: ["/Users/georgexu/Desktop/rust-agent", "/Users/georgexu/Desktop/bioclaw"],
@@ -493,81 +97,6 @@ let webPreviewSessions: RecentSession[] = [
   },
 ];
 let webPreviewArchivedSessions: RecentSession[] = [];
-
-// ══ DTO types aligned with src/api/dto/* ──────────────────────
-
-export type ProviderCatalogEntry = {
-  provider_id: string;
-  label: string;
-  enabled: boolean;
-  source: string;
-  base_url_host: string;
-  default_model: string;
-  available_model_ids: string[];
-  context_limit: number | null;
-  output_limit: number | null;
-  protocol_family: string;
-  supports_streaming: boolean;
-  requires_nonstreaming: boolean;
-  last_health_status: string | null;
-  last_latency_ms: number | null;
-  recent_timeout_category: string | null;
-};
-
-export type FileMutationResult = {
-  operation: string;
-  changed_paths: string[];
-  checkpoint_id: string | null;
-  diff_preview: string | null;
-  additions: number;
-  deletions: number;
-  stale_state: string | null;
-  diagnostics_delta: unknown;
-  rollback_status: string | null;
-  error_hint: string | null;
-};
-
-export type SessionJobItem = {
-  job_id: string;
-  session_id: string;
-  command: string;
-  cwd: string | null;
-  status: string;
-  started_at: string;
-  completed_at: string | null;
-  exit_code: number | null;
-  timed_out: boolean;
-  tool_output_uri: string | null;
-  cancelled: boolean;
-};
-
-export type SessionContext = {
-  session_id: string;
-  compact_boundary_id: string | null;
-  estimated_history_tokens: number;
-  tool_schema_tokens: number;
-  memory_snapshot_tokens: number;
-  stable_prefix_hash: string | null;
-  dynamic_tail_hash: string | null;
-  latest_compaction: CompactionSummary | null;
-  message_count_after_compaction: number;
-};
-
-export type CompactionSummary = {
-  boundary_id: string;
-  strategy: string;
-  trigger: string;
-  before_tokens: number;
-  after_tokens: number;
-  messages_before: number;
-  messages_after: number;
-  preserved_tail_count: number;
-};
-
-export type SessionRunStatus = {
-  session_id: string;
-  status: string;
-};
 
 export function desktopHealth(): Promise<DesktopHealth> {
   if (!isTauriRuntime()) {
@@ -719,6 +248,65 @@ export function desktopWorkbenchSnapshot(): Promise<DesktopWorkbenchSnapshot> {
           last_started_at: null,
           last_start_error: null,
         },
+        artifacts: [
+          {
+            artifact_id: "artifact_professor_review",
+            artifact_type: "ProfessorReview",
+            stage: "professor_review",
+            owner: "Professor",
+            status: "ReadyForHandoff",
+            validation_status: "not_verified",
+            title: "Professor review",
+            created_at: "2026-06-21T10:00:00Z",
+            updated_at: "2026-06-21T10:00:00Z",
+            report_path: `${webPreviewSettings.selected_project}/.priority-agent/lab/runs/labrun_preview/reports/artifact_professor_review.md`,
+            report_preview: "# Professor Review\n\nDecision: revise graduate implementation.\n\nEvidence: Playwright panel action check failed during LabRun desktop validation.\n\nNext action: ask the postdoc to narrow the blocker and assign a targeted graduate repair.",
+            report_preview_truncated: false,
+            evidence_refs: ["labevidence_preview"],
+          },
+          {
+            artifact_id: "artifact_graduate_result",
+            artifact_type: "GraduateResult",
+            stage: "graduate_work",
+            owner: "Graduate",
+            status: "NeedsRevision",
+            validation_status: "needs_revision",
+            title: "Graduate implementation result",
+            created_at: "2026-06-21T09:30:00Z",
+            updated_at: "2026-06-21T09:45:00Z",
+            report_path: `${webPreviewSettings.selected_project}/.priority-agent/lab/runs/labrun_preview/reports/artifact_graduate_result.md`,
+            report_preview: "# Graduate Result\n\nChanged files: apps/desktop/src/app/components/InspectorPanel.tsx.\n\nValidation: needs revision because the LabRun panel action check failed.",
+            report_preview_truncated: false,
+            evidence_refs: ["labevidence_preview"],
+          },
+        ],
+        reports: [
+          {
+            artifact_id: "artifact_professor_review",
+            path: `${webPreviewSettings.selected_project}/.priority-agent/lab/runs/labrun_preview/reports/artifact_professor_review.md`,
+            preview: "# Professor Review\n\nDecision: revise graduate implementation.\n\nEvidence: Playwright panel action check failed during LabRun desktop validation.",
+            truncated: false,
+          },
+          {
+            artifact_id: "artifact_graduate_result",
+            path: `${webPreviewSettings.selected_project}/.priority-agent/lab/runs/labrun_preview/reports/artifact_graduate_result.md`,
+            preview: "# Graduate Result\n\nValidation: needs revision because the LabRun panel action check failed.",
+            truncated: false,
+          },
+        ],
+        evidence_refs: [
+          {
+            evidence_id: "labevidence_preview",
+            kind: "File",
+            role: "Postdoc",
+            reference: "apps/desktop/tests/desktop-ui-smoke.spec.ts",
+            summary: "Playwright panel action check failed during LabRun desktop validation.",
+            artifact_id: "artifact_graduate_result",
+            cycle_id: "cycle_preview",
+            created_at: "2026-06-21T09:40:00Z",
+            estimated_summary_tokens: 18,
+          },
+        ],
       },
       subagent_tasks: [
         {
@@ -981,9 +569,9 @@ export function providerSetupInfo(): Promise<ProviderSetupInfo> {
     return Promise.resolve({
       shell_profile_path: "~/.zshrc",
       provider_env_vars: [
+        "DEEPSEEK_API_KEY",
         "MINIMAX_API_KEY",
         "KIMI_CODE_API_KEY",
-        "DEEPSEEK_API_KEY",
         "GLM_API_KEY",
         "ZAI_API_KEY",
         "ZHIPUAI_API_KEY",
@@ -991,7 +579,7 @@ export function providerSetupInfo(): Promise<ProviderSetupInfo> {
         "MOONSHOT_API_KEY",
         "OPENAI_API_KEY",
       ],
-      example: 'export MINIMAX_API_KEY="your-key-here"',
+      example: 'export DEEPSEEK_API_KEY="your-key-here"',
     });
   }
 
@@ -1001,24 +589,34 @@ export function providerSetupInfo(): Promise<ProviderSetupInfo> {
 export function providerModelStatus(): Promise<ProviderModelStatus> {
   if (!isTauriRuntime()) {
     return Promise.resolve({
-      active_provider: "minimax",
-      active_provider_label: "MiniMax",
-      active_model: "MiniMax-M3",
-      active_base_url: "https://api.minimax.io/v1",
-      runtime_model: "MiniMax-M3",
+      active_provider: "deepseek",
+      active_provider_label: "DeepSeek",
+      active_model: "deepseek-v4-flash",
+      active_base_url: "https://api.deepseek.com",
+      runtime_model: "deepseek-v4-flash",
       runtime_provider_ready: true,
       selection_source: "preview",
       configured_count: 1,
       providers: [
         {
+          id: "deepseek",
+          label: "DeepSeek",
+          provider_type: "DeepSeek",
+          model: "deepseek-v4-flash",
+          base_url: "https://api.deepseek.com",
+          configured: true,
+          active: true,
+          note: "current",
+        },
+        {
           id: "minimax",
           label: "MiniMax",
           provider_type: "Minimax",
           model: "MiniMax-M3",
-          base_url: "https://api.minimax.io/v1",
-          configured: true,
-          active: true,
-          note: "current",
+          base_url: "",
+          configured: false,
+          active: false,
+          note: "missing MINIMAX_API_KEY",
         },
         {
           id: "kimi-code",
@@ -1029,16 +627,6 @@ export function providerModelStatus(): Promise<ProviderModelStatus> {
           configured: false,
           active: false,
           note: "missing KIMI_CODE_API_KEY",
-        },
-        {
-          id: "deepseek",
-          label: "DeepSeek",
-          provider_type: "DeepSeek",
-          model: "deepseek-v4-pro",
-          base_url: "",
-          configured: false,
-          active: false,
-          note: "missing DEEPSEEK_API_KEY",
         },
         {
           id: "glm",
@@ -1073,23 +661,23 @@ export function providerModelStatus(): Promise<ProviderModelStatus> {
       ],
       models: [
         {
-          id: "MiniMax-M3",
-          label: "MiniMax-M3",
-          provider_id: "minimax",
-          active: false,
-          note: "latest generation",
-        },
-        {
-          id: "MiniMax-M2.7",
-          label: "MiniMax-M2.7",
-          provider_id: "minimax",
+          id: "deepseek-v4-flash",
+          label: "deepseek-v4-flash",
+          provider_id: "deepseek",
           active: true,
           note: "current",
         },
         {
-          id: "MiniMax-M2.7-highspeed",
-          label: "MiniMax-M2.7-highspeed",
-          provider_id: "minimax",
+          id: "deepseek-chat",
+          label: "deepseek-chat",
+          provider_id: "deepseek",
+          active: false,
+          note: "takes effect next request",
+        },
+        {
+          id: "deepseek-reasoner",
+          label: "deepseek-reasoner",
+          provider_id: "deepseek",
           active: false,
           note: "takes effect next request",
         },
@@ -1152,6 +740,11 @@ export function openShellProfile(): Promise<void> {
 }
 
 export function saveProviderCredential(providerId: string, key: string): Promise<string> {
+  if (!isTauriRuntime()) {
+    const redacted = key.length > 8 ? `${key.slice(0, 4)}...${key.slice(-4)}` : "redacted";
+    return Promise.resolve(`Saved preview credential for ${providerId} (${redacted}).`);
+  }
+
   return invoke("save_provider_credential", { providerId, key });
 }
 
@@ -1328,6 +921,37 @@ export function loadDesktopToolOutputPage(
   return invoke("desktop_tool_output_page", { sessionId, idOrUri, offset, limit });
 }
 
+export function loadDesktopLabReportPage(
+  path: string,
+  offset = 0,
+  limit = 32 * 1024,
+): Promise<DesktopLabReportPage> {
+  if (!isTauriRuntime()) {
+    return Promise.resolve(loadWebPreviewLabReportPage(path, offset, limit));
+  }
+
+  return invoke("desktop_lab_report_page", { path, offset, limit });
+}
+
+export function loadDesktopLabArtifactBody(artifactId: string): Promise<DesktopLabArtifactBody> {
+  if (!isTauriRuntime()) {
+    return Promise.resolve(loadWebPreviewLabArtifactBody(artifactId));
+  }
+
+  return invoke("desktop_lab_artifact_body", { artifactId });
+}
+
+export function loadDesktopFilePreview(
+  path: string,
+  limit = 32 * 1024,
+): Promise<DesktopFilePreview> {
+  if (!isTauriRuntime()) {
+    return Promise.resolve(loadWebPreviewFilePreview(path, limit));
+  }
+
+  return invoke("desktop_file_preview", { path, limit });
+}
+
 export function loadDesktopToolOutputIndex(sessionId: string): Promise<DesktopToolOutputMeta[]> {
   if (!isTauriRuntime()) {
     return Promise.resolve([]);
@@ -1385,280 +1009,10 @@ export async function pickProjectFile(): Promise<string | null> {
 
 export function sendMessage(message: string, contexts: DesktopRunContext[] = []): Promise<void> {
   if (!isTauriRuntime()) {
-    if (!shouldUseWebPreviewFixtureRun(message, contexts)) {
-      emitWebPreviewUnavailableResponse(message, contexts);
-      return Promise.resolve();
-    }
-
-    const runId = crypto.randomUUID();
-    const toolId = crypto.randomUUID();
-    const fileToolId = crypto.randomUUID();
-    const failedToolId = crypto.randomUUID();
-    const permissionId = crypto.randomUUID();
-    emitWebPreview({ type: "run_started", run_id: runId });
-    emitWebPreview({ type: "thinking_started" });
-    emitWebPreview({ type: "thinking_completed" });
-    emitWebPreview({ type: "tool_started", id: toolId, name: "bash" });
-    emitWebPreview({
-      type: "tool_execution_progress",
-      id: toolId,
-      progress: "Scanning project context",
-    });
-    emitWebPreview({
-      type: "tool_completed",
-      id: toolId,
-      result_preview: "Found desktop app workspace and active web preview fixtures.",
-      metadata: {
-        tool: "bash",
-        call_id: toolId,
-        success: true,
-        command: "corepack pnpm --dir apps/desktop test:ui-smoke",
-        command_category: "validation",
-        validation_family: "pnpm_test",
-        command_kind: "package_script",
-        duration_ms: 1240,
-        output_chars: 63,
-        terminal_task: {
-          status: "completed",
-          exit_code: 0,
-          duration_ms: 1240,
-        },
-      },
-    });
-    emitWebPreview({ type: "tool_started", id: fileToolId, name: "file_edit" });
-    emitWebPreview({
-      type: "tool_completed",
-      id: fileToolId,
-      result_preview: "Edited apps/desktop/src/app/runEventState.ts",
-      metadata: {
-        tool: "file_edit",
-        call_id: fileToolId,
-        success: true,
-        path: "apps/desktop/src/app/runEventState.ts",
-        replacements: 2,
-        additions: 8,
-        deletions: 3,
-        diff_preview:
-          "@@ -18,6 +18,9 @@\n type ToolSummary = {\n   replacements?: number;\n+  additions?: number;\n+  deletions?: number;\n+  diff_preview?: string;\n };\n",
-        diff_preview_truncated: false,
-        duration_ms: 48,
-        output_chars: 44,
-      },
-    });
-    emitWebPreview({ type: "tool_started", id: failedToolId, name: "bash" });
-    emitWebPreview({
-      type: "tool_completed",
-      id: failedToolId,
-      result_preview:
-        "cargo test failed with exit code 101\n\nfailures:\n  desktop_smoke::timeline_cards_show_diff_preview\n\nthread 'desktop_smoke::timeline_cards_show_diff_preview' panicked at assertion failed\n\nexpected diff preview to be visible\nreceived empty preview block\n\nstack backtrace:\n  0: rust_begin_unwind\n  1: core::panicking::panic_fmt\n  2: desktop_smoke::timeline_cards_show_diff_preview\n\nrerun with RUST_BACKTRACE=1 for a backtrace",
-      metadata: {
-        tool: "bash",
-        call_id: failedToolId,
-        success: false,
-        command: "cargo test -q desktop_smoke",
-        command_category: "validation",
-        validation_family: "cargo_test",
-        command_kind: "cargo",
-        duration_ms: 820,
-        output_chars: 91,
-        error_preview: "cargo test failed with exit code 101",
-        user_note: "Inspect the failing test output, fix the regression, then rerun the same command.",
-        terminal_task: {
-          status: "failed",
-          exit_code: 101,
-          duration_ms: 820,
-        },
-      },
-    });
-    emitWebPreview({
-      type: "assistant_delta",
-      text: `Web preview received: ${message}\n\n${
-        contexts.length
-          ? `Structured context attached: ${contexts.map((context) => context.label).join(", ")}\n\n`
-          : ""
-      }Run this inside Tauri to stream the Rust agent runtime.`,
-    });
-    emitWebPreview({
-      type: "runtime_diagnostic",
-      diagnostic: {
-        schema: "desktop_runtime_diagnostic.v1",
-        task_state: {
-          goal: message,
-          mode: "full",
-          stage: "closeout",
-          mode_score: {
-            confidence: 82,
-            complexity: 7,
-            risk: 5,
-            uncertainty: 3,
-            tool_need: 8,
-            user_impact: 7,
-          },
-          lightweight_plan: null,
-          verification: {
-            status: "verified",
-            required_checks: ["corepack pnpm --dir apps/desktop test:ui-smoke"],
-          },
-          done: {
-            satisfied: true,
-            summary: "preview run completed",
-          },
-          active_files: [
-            "apps/desktop/src/app/runEventState.ts",
-            "apps/desktop/src/app/components/TraceDrawer.tsx",
-          ],
-          recent_steps: [
-            { stage: "validate", summary: "desktop smoke passed" },
-            { stage: "edit", summary: "runtime diagnostic event rendered" },
-          ],
-          stop_check: {
-            status: "stop",
-            reason: "verification_ready",
-            summary: "ready for closeout",
-          },
-        },
-        verification_proof: {
-          status: "verified",
-          summary: "validation passed 1/1 current checks",
-          closeout_status: "passed",
-          changed_files: 2,
-          validation_items: 1,
-          acceptance_items: 1,
-          residual_risks: 0,
-        },
-        control_loop: {
-          coverage: "7/7",
-          summary:
-            "context=2 latest=runtime.diet -> decision=1 latest=action.decision -> verification=1 latest=verify.done -> closeout=2 latest=assistant",
-          phases: [
-            { phase: "context", events: 2, latest_label: "runtime.diet" },
-            { phase: "decision", events: 1, latest_label: "action.decision" },
-            { phase: "permission", events: 1, latest_label: "permission.resolve" },
-            { phase: "tool_execution", events: 3, latest_label: "tool.done" },
-            { phase: "state_update", events: 1, latest_label: "stop.check" },
-            { phase: "verification", events: 1, latest_label: "verify.done" },
-            { phase: "closeout", events: 2, latest_label: "assistant" },
-          ],
-        },
-      },
-    });
-    emitWebPreview({
-      type: "usage",
-      prompt_tokens: 128,
-      completion_tokens: 42,
-      cached_tokens: 16,
-    });
-    emitWebPreview({
-      type: "permission_request",
-      id: permissionId,
-      tool_name: "bash",
-      arguments: {
-        command: "git push origin claude",
-      },
-      prompt: "Allow git push to update the remote branch?",
-      metadata: {
-        permission_evidence: {
-          schema: "permission_decision_evidence.v1",
-          request_kind: "runtime_rule",
-          permission_family: "shell",
-          decision: "ask",
-          risk_level: "medium",
-          reasons: ["command matched git remote mutation policy"],
-          matched_patterns: ["git push"],
-          recovery: {
-            recommended_action: "Approve once if this push is expected, otherwise reject and inspect the command.",
-          },
-          command_classification: {
-            parser_status: "simple",
-            category: "git_remote_mutation",
-            mutation: true,
-          },
-        },
-        action_review: {
-          schema: "action_review.v1",
-          tool: "bash",
-          call_id: permissionId,
-          decision: "ask_user",
-          primary_reason: "network_requires_confirmation",
-          permission: {
-            allowed_by_context: true,
-            requires_confirmation: true,
-            decision: "Ask",
-            risk_level: "Medium",
-            confidence: 0.86,
-            warnings: ["REMOTE_SIDE_EFFECT"],
-          },
-          scope: {
-            allowed: true,
-            reason: "command stays within the active repository task",
-          },
-          budget: {
-            allowed: true,
-            scheduled_count: 1,
-            max_tool_calls: 4,
-            reason: "tool-call budget still has room",
-          },
-          checkpoint: {
-            required: true,
-            status: "unavailable",
-            enforcement: "user_approval",
-            rollback_scope: "remote",
-            requires_user_approval: true,
-            reason: "git push mutates remote state and cannot be rolled back locally",
-          },
-          side_effects: {
-            schema: "action_side_effect_profile.v1",
-            external_side_effect: "git_remote_publication",
-            network: {
-              class: "remote_service",
-              target: "git push origin claude",
-              trusted: false,
-              reason: "git push publishes to a remote service",
-            },
-            mutates_local_workspace: true,
-            mutates_local_machine: false,
-            remote_side_effect: true,
-            paths: [],
-            summary: "external_effect=GitRemotePublication network=RemoteService paths=0",
-          },
-          user_reason:
-            "Action requires user confirmation before execution: network_requires_confirmation.",
-          model_recovery:
-            "Wait for the permission result and do not claim the tool ran until it succeeds.",
-        },
-      },
-    });
-    emitWebPreview({ type: "run_completed" });
-    return Promise.resolve();
+    return sendWebPreviewMessage(message, contexts);
   }
 
   return invoke("send_message", { contexts, message });
-}
-
-function shouldUseWebPreviewFixtureRun(message: string, contexts: DesktopRunContext[]) {
-  if (!webPreviewFixtureMode()) {
-    return false;
-  }
-
-  const normalized = message.trim().toLowerCase();
-  return (
-    contexts.length > 0 ||
-    normalized.includes("timeline") ||
-    normalized.includes("fixture") ||
-    normalized.includes("trace")
-  );
-}
-
-function webPreviewFixtureMode() {
-  if (typeof window === "undefined") {
-    return false;
-  }
-
-  const params = new URLSearchParams(window.location.search);
-  return (
-    params.has("previewFixture") ||
-    window.localStorage.getItem("priority-agent.previewFixture") === "1"
-  );
 }
 
 function webPreviewFixtureName() {
@@ -1668,35 +1022,9 @@ function webPreviewFixtureName() {
   return new URLSearchParams(window.location.search).get("previewFixture") || "";
 }
 
-function emitWebPreviewUnavailableResponse(message: string, contexts: DesktopRunContext[]) {
-  const contextLine = contexts.length
-    ? `\n\n已附加上下文：${contexts.map((context) => context.label).join(", ")}。`
-    : "";
-  const promptLine = message.trim() ? `\n\n你的消息还在输入框历史里：${message.trim()}` : "";
-  emitWebPreview({
-    type: "assistant_delta",
-    text: `当前打开的是浏览器预览（web-preview），这条消息没有发送给 LLM，也不能访问桌面或运行工具。请在 Tauri 桌面应用窗口里使用真实 agent。${contextLine}${promptLine}`,
-  });
-  emitWebPreview({ type: "run_completed" });
-}
-
 export function compactContext(): Promise<DesktopCompactionAttempt | null> {
   if (!isTauriRuntime()) {
-    return Promise.resolve({
-      trigger: "manual compact",
-      strategy: "session_memory_compact",
-      decision: "compacted",
-      before_tokens: 3400,
-      after_tokens: 2100,
-      messages_before: 5,
-      messages_after: 4,
-      reason: "web preview manual compact",
-      attempt_index: 1,
-      consecutive_no_gain: 0,
-      consecutive_failures: 0,
-      circuit_open: false,
-      boundary_id: "web-preview-boundary",
-    });
+    return Promise.resolve(compactWebPreviewContext());
   }
 
   return invoke("compact_context");
@@ -1704,12 +1032,7 @@ export function compactContext(): Promise<DesktopCompactionAttempt | null> {
 
 export function answerPermission(approved: boolean): Promise<boolean> {
   if (!isTauriRuntime()) {
-    emitWebPreview({
-      type: "tool_completed",
-      id: `preview-permission-${approved ? "approved" : "rejected"}`,
-      result_preview: approved ? "Permission approved" : "Permission rejected",
-    });
-    return Promise.resolve(true);
+    return Promise.resolve(answerWebPreviewPermission(approved));
   }
 
   return invoke("answer_permission", { approved });
@@ -1717,19 +1040,12 @@ export function answerPermission(approved: boolean): Promise<boolean> {
 
 export function onDesktopRunEvent(callback: (event: DesktopRunEvent) => void) {
   if (!isTauriRuntime()) {
-    webPreviewListeners.add(callback);
-    return Promise.resolve(() => webPreviewListeners.delete(callback));
+    return onWebPreviewRunEvent(callback);
   }
 
   return listen<DesktopRunEvent>("desktop-run-event", (event) => {
     callback(event.payload);
   });
-}
-
-function emitWebPreview(event: DesktopRunEvent) {
-  for (const listener of webPreviewListeners) {
-    listener(event);
-  }
 }
 
 function isTauriRuntime() {
@@ -1746,128 +1062,4 @@ function isTauriRuntime() {
 
 function basename(path: string) {
   return path.split(/[\\/]/).filter(Boolean).at(-1) || path;
-}
-
-export type DesktopGoalStatus = {
-  goal_id: string | null;
-  objective: string | null;
-  status: string | null;
-  turn_count: number | null;
-  max_turns: number | null;
-  last_decision: string | null;
-  last_closeout: string | null;
-  last_proof: string | null;
-  last_blocker: string | null;
-  step_count: number;
-  steps: DesktopGoalStep[];
-};
-
-export type DesktopGoalStep = {
-  turn_index: number;
-  decision: string;
-  closeout_status: string | null;
-  verification_status: string | null;
-  changed_files: number;
-  validation_items: number;
-  summary: string;
-};
-
-export type DesktopGoalCommandResult = {
-  status: DesktopGoalStatus;
-  next_prompt: string | null;
-};
-
-export function goalStatus(): Promise<DesktopGoalStatus> {
-  if (!isTauriRuntime()) {
-    return Promise.resolve({
-      goal_id: null,
-      objective: null,
-      status: null,
-      turn_count: null,
-      max_turns: null,
-      last_decision: null,
-      last_closeout: null,
-      last_proof: null,
-      last_blocker: null,
-      step_count: 0,
-      steps: [],
-    });
-  }
-  return invoke("goal_status");
-}
-
-export function goalStart(objective: string): Promise<DesktopGoalCommandResult> {
-  if (!isTauriRuntime()) {
-    return Promise.resolve({
-      status: {
-        goal_id: "preview-goal",
-        objective,
-        status: "Active",
-        turn_count: 0,
-        max_turns: 10,
-        last_decision: null,
-        last_closeout: null,
-        last_proof: null,
-        last_blocker: null,
-        step_count: 0,
-        steps: [],
-      },
-      next_prompt: `Goal: ${objective}\n\nWork toward this objective. Take the smallest useful step first.`,
-    });
-  }
-  return invoke("goal_start", { objective });
-}
-
-export function goalPause(): Promise<boolean> {
-  if (!isTauriRuntime()) return Promise.resolve(false);
-  return invoke("goal_pause");
-}
-
-export function goalResume(): Promise<DesktopGoalCommandResult> {
-  if (!isTauriRuntime()) {
-    return Promise.resolve({
-      status: {
-        goal_id: "preview-goal",
-        objective: "Preview goal",
-        status: "Active",
-        turn_count: 0,
-        max_turns: 10,
-        last_decision: null,
-        last_closeout: null,
-        last_proof: null,
-        last_blocker: null,
-        step_count: 0,
-        steps: [],
-      },
-      next_prompt: "Continue working toward the active goal.",
-    });
-  }
-  return invoke("goal_resume");
-}
-
-export function goalClear(): Promise<boolean> {
-  if (!isTauriRuntime()) return Promise.resolve(false);
-  return invoke("goal_clear");
-}
-
-export function goalEdit(objective: string): Promise<DesktopGoalStatus> {
-  if (!isTauriRuntime()) return Promise.resolve({
-    goal_id: "preview-goal",
-    objective,
-    status: "Active",
-    turn_count: 0,
-    max_turns: 10,
-    last_decision: null,
-    last_closeout: null,
-    last_proof: null,
-    last_blocker: null,
-    step_count: 0,
-    steps: [],
-  });
-  return invoke("goal_edit", { objective });
-}
-
-export function goalLog(): Promise<DesktopGoalStep[]> {
-  if (!isTauriRuntime()) return Promise.resolve([]);
-  return invoke("goal_log");
 }

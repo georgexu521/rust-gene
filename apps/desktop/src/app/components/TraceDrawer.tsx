@@ -1,10 +1,11 @@
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import {
   DesktopContextSnapshot,
   DesktopRunContext,
   DesktopRuntimeDiagnostic,
 } from "../../runtime/desktopApi";
 import { TimelineSummary, TraceItem } from "../types";
+import { useDrawerKeyboard } from "./useDrawerKeyboard";
 
 type TraceDrawerProps = {
   activeItemId: string | null;
@@ -23,6 +24,13 @@ export function TraceDrawer({
   onClose,
   onOpenContext,
 }: TraceDrawerProps) {
+  const closeButtonRef = useRef<HTMLButtonElement>(null);
+  const drawerRef = useDrawerKeyboard<HTMLElement>({
+    initialFocusRef: closeButtonRef,
+    isOpen,
+    onClose,
+  });
+
   useEffect(() => {
     if (!isOpen || !activeItemId) {
       return;
@@ -40,13 +48,13 @@ export function TraceDrawer({
   }
 
   return (
-    <aside className="trace-drawer" aria-label="Run trace">
+    <aside ref={drawerRef} className="trace-drawer" aria-label="Run trace">
       <div className="trace-header">
         <div>
           <div className="trace-eyebrow">Trace</div>
           <h2>Run events</h2>
         </div>
-        <button type="button" onClick={onClose}>
+        <button ref={closeButtonRef} type="button" onClick={onClose}>
           Close
         </button>
       </div>
