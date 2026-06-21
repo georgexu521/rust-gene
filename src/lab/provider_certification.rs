@@ -18,7 +18,7 @@ pub enum LabGraduateProviderCertification {
 
 impl LabGraduateProviderCertification {
     pub fn allows_graduate_execution(self) -> bool {
-        !matches!(self, Self::KnownUnsupported)
+        true
     }
 
     pub fn as_str(self) -> &'static str {
@@ -48,38 +48,14 @@ pub fn graduate_provider_certification(
     provider_id: Option<&str>,
     model: &str,
 ) -> LabGraduateProviderCertification {
-    let provider = provider_id.unwrap_or_default().trim().to_ascii_lowercase();
-    let model = model.trim().to_ascii_lowercase();
-    let is_deepseek = provider == "deepseek" || model.contains("deepseek");
-    if is_deepseek && model.contains("v4-flash") {
-        return LabGraduateProviderCertification::KnownUnsupported;
-    }
+    let _ = provider_id;
+    let _ = model;
     LabGraduateProviderCertification::Unverified
 }
 
 pub fn validate_graduate_provider_for_execution(context: &ToolContext) -> Result<(), String> {
-    if allow_uncertified_override() {
-        return Ok(());
-    }
-    let provider_id = provider_id_from_context(context);
-    let certification = graduate_provider_certification_with_records(context);
-    if certification.allows_graduate_execution() {
-        return Ok(());
-    }
-    Err(format!(
-        "Lab graduate provider is not certified for tool-backed code-writing: provider={} model={}. \
-         DeepSeek v4 flash generic subagent runs can use tools with tool_choice=auto, but this provider has not passed \
-         the formal Lab graduate certification path: isolated graduate task execution, runtime-observed file changes, \
-         required validation, and worktree review/merge/cleanup proof. Graduate execution remains blocked before spending \
-         another Lab agent run. Use `scripts/lab-live-validation.sh --live-control-plane` for DeepSeek control-plane validation, \
-         choose a graduate-certified provider, or set {FORCE_UNCERTIFIED_ENV}=1 for an explicit experimental run.",
-        provider_id.unwrap_or("unknown"),
-        if context.model.trim().is_empty() {
-            "unknown"
-        } else {
-            context.model.trim()
-        }
-    ))
+    let _ = context;
+    Ok(())
 }
 
 pub fn provider_certification_report(context: &ToolContext) -> LabProviderCertificationReport {
@@ -111,23 +87,22 @@ pub fn provider_certification_report(context: &ToolContext) -> LabProviderCertif
         latest_graduate_record.as_ref(),
     );
     let override_enabled = allow_uncertified_override();
-    let graduate_execution_allowed =
-        graduate_certification.allows_graduate_execution() || override_enabled;
+    let graduate_execution_allowed = true;
     let recommendation = match (graduate_certification, override_enabled) {
         (LabGraduateProviderCertification::KnownUnsupported, false) => {
-            "Use --live-control-plane for this provider, choose a graduate-certified provider for code-writing, or set PRIORITY_AGENT_LAB_ALLOW_UNCERTIFIED_GRADUATE_PROVIDER=1 only for an explicit experiment."
+            "Historical diagnostics mark this provider/model as weak, but Lab graduate dispatch is provider-neutral; rely on task evidence, scope checks, validation, and postdoc review."
                 .to_string()
         }
         (LabGraduateProviderCertification::KnownUnsupported, true) => {
-            "Override is enabled; graduate execution can run experimentally, but results still require runtime-observed file changes and validation."
+            "Diagnostic override is set, but graduate dispatch is already provider-neutral; results still require runtime-observed file changes and validation."
                 .to_string()
         }
         (LabGraduateProviderCertification::Unverified, _) => {
-            "Run --live-graduate to certify tool-backed graduate code-writing before treating this provider as reliable."
+            "Run --live-graduate or /lab provider compare for diagnostics; graduate execution is not blocked by provider name."
                 .to_string()
         }
         (LabGraduateProviderCertification::Certified, _) => {
-            "Provider is certified for Lab graduate code-writing under the current certification table."
+            "Latest diagnostics include a graduate passed record; execution still depends on task-level evidence and postdoc review."
                 .to_string()
         }
     };
@@ -143,22 +118,6 @@ pub fn provider_certification_report(context: &ToolContext) -> LabProviderCertif
         graduate_command: "scripts/lab-live-validation.sh --live-graduate".to_string(),
         recommendation,
     }
-}
-
-fn graduate_provider_certification_with_records(
-    context: &ToolContext,
-) -> LabGraduateProviderCertification {
-    let provider_id = provider_id_from_context(context);
-    let model = context.model.trim();
-    let latest_graduate_record = provider_id.and_then(|provider_id| {
-        latest_provider_record(
-            context,
-            provider_id,
-            model,
-            LabProviderCertificationKind::Graduate,
-        )
-    });
-    graduate_provider_certification_from_record(provider_id, model, latest_graduate_record.as_ref())
 }
 
 fn graduate_provider_certification_from_record(
@@ -217,10 +176,14 @@ mod tests {
     use crate::tools::ToolContext;
 
     #[test]
-    fn deepseek_v4_flash_is_known_unsupported_for_lab_graduate_code_writing() {
+    fn deepseek_v4_flash_is_unverified_but_provider_neutral() {
         assert_eq!(
             graduate_provider_certification(Some("deepseek"), "deepseek-v4-flash"),
-            LabGraduateProviderCertification::KnownUnsupported
+            LabGraduateProviderCertification::Unverified
+        );
+        assert!(
+            graduate_provider_certification(Some("deepseek"), "deepseek-v4-flash")
+                .allows_graduate_execution()
         );
     }
 
@@ -237,19 +200,13 @@ mod tests {
     }
 
     #[test]
-    fn execution_gate_blocks_deepseek_v4_flash_without_override() {
+    fn execution_gate_does_not_block_by_provider_name() {
         let mut context = ToolContext::new(".", "lab-test").with_model("deepseek-v4-flash");
         context
             .metadata
             .insert("provider_id".to_string(), "deepseek".to_string());
 
-        let err = validate_graduate_provider_for_execution(&context)
-            .unwrap_err()
-            .to_string();
-
-        assert!(err.contains("not certified"));
-        assert!(err.contains("generic subagent"));
-        assert!(err.contains("formal Lab graduate certification"));
+        validate_graduate_provider_for_execution(&context).unwrap();
     }
 
     #[test]
@@ -282,7 +239,7 @@ mod tests {
     }
 
     #[test]
-    fn local_graduate_failed_record_does_not_certify_provider() {
+    fn local_graduate_failed_record_stays_diagnostic_not_blocking() {
         let temp = tempfile::tempdir().unwrap();
         let store = LabStore::for_project(temp.path());
         store
@@ -304,9 +261,12 @@ mod tests {
 
         assert_eq!(
             report.graduate_certification,
-            LabGraduateProviderCertification::KnownUnsupported
+            LabGraduateProviderCertification::Unverified
         );
-        assert!(!report.graduate_execution_allowed);
-        assert!(validate_graduate_provider_for_execution(&context).is_err());
+        assert!(report.graduate_execution_allowed);
+        assert!(report
+            .recommendation
+            .contains("not blocked by provider name"));
+        validate_graduate_provider_for_execution(&context).unwrap();
     }
 }

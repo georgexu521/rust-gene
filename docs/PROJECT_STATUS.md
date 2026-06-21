@@ -1,7 +1,48 @@
 # Project Status
 Status: Current
 
-Last updated: 2026-06-18
+Last updated: 2026-06-21
+
+## LabRun Graduate Execution Policy Alignment (2026-06-21)
+
+LabRun graduate execution is being aligned with the policy discussion in
+`docs/LAB_GRADUATE_EXECUTION_POLICY_DISCUSSION_2026-06-21.md`: provider identity
+is diagnostic context, while task evidence and postdoc/professor artifacts remain
+the workflow authority.
+
+### What changed
+
+- Lab graduate dispatch is provider-neutral: historical provider records now
+  inform diagnostics, but provider/model names do not hard-block graduate task
+  execution before evidence is produced.
+- `/lab provider`, `/lab provider compare`, and tool diagnostics use
+  diagnostic/evidence language instead of certification/unsupported execution
+  language.
+- Runtime tick and scheduler paths no longer silently create professor/postdoc
+  placeholder artifacts to satisfy strategic or review gates.
+- Deterministic professor review output is non-closeout-capable and creates
+  revision work instead of auto-accepting based on fields.
+- Runtime meeting recommendation surfaces are now runtime escalation signals,
+  not professor intent.
+- Mandatory professor-checkpoint signals now cover closeout, cycle boundaries,
+  graduate-task/postdoc-acceptance intervals, high cost/context growth, and
+  failure-budget exhaustion.
+- Graduate dispatch records persist explicit cleanup state
+  (`cleanup_pending`, `cleanup_done`, `cleanup_blocked`), and `/lab review`,
+  `/lab dashboard`, and `/lab recovery` expose stale worktree cleanup state.
+- Postdoc/professor prompts and handoff text now require escalation and steering
+  to stay anchored to current blockers, evidence, changed files, validation
+  results, cost/context signals, and the exact tradeoff under review.
+
+### Validation gates used
+
+```bash
+cargo fmt --check
+cargo check -q
+cargo test -q provider_certification
+cargo test -q graduate_dispatch_records_are_persisted_and_listable
+cargo test -q task_worktree_command_merges_and_cleans_durable_task_id_worktree
+```
 
 ## CLI Default Interface — Phases 0–6 Complete + P2 Cleanup (2026-06-16)
 

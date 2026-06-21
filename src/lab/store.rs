@@ -1,10 +1,10 @@
 use crate::lab::delegation::GraduateTaskDispatch;
 use crate::lab::model::{
-    default_daemon_max_steps_per_cycle, ArtifactGate, GraduateDispatchRecord,
-    GraduateDispatchStatus, GraduateTask, LabAppLifecycleState, LabArtifactStatus,
-    LabCloseoutStatus, LabCompressionDecision, LabCostSummary, LabCostUsage, LabDaemonMode,
-    LabDaemonState, LabEvent, LabEvidenceKind, LabEvidenceRef, LabLease, LabProposal,
-    LabProposalIntakeDraft, LabProposalStatus, LabProviderCertificationKind,
+    default_daemon_max_steps_per_cycle, ArtifactGate, GraduateCleanupStatus,
+    GraduateDispatchRecord, GraduateDispatchStatus, GraduateTask, LabAppLifecycleState,
+    LabArtifactStatus, LabCloseoutStatus, LabCompressionDecision, LabCostSummary, LabCostUsage,
+    LabDaemonMode, LabDaemonState, LabEvent, LabEvidenceKind, LabEvidenceRef, LabLease,
+    LabProposal, LabProposalIntakeDraft, LabProposalStatus, LabProviderCertificationKind,
     LabProviderCertificationOutcome, LabProviderCertificationRecord, LabRole, LabRun, LabRunIndex,
     LabRunIndexEntry, LabRunStatus, LabSchedulerState, LabSchedulerStatus, LabTaskStatus,
     LabValidationRetry, SponsorMessage, SponsorMessageStatus, SponsorMessageType, StageArtifact,
@@ -1066,6 +1066,9 @@ impl LabStore {
             agent_id: None,
             result_artifact_id: None,
             error: None,
+            cleanup_status: GraduateCleanupStatus::CleanupPending,
+            cleanup_message: Some("graduate dispatch prepared; cleanup pending until worktree review/cleanup completes".to_string()),
+            cleanup_updated_at: Some(now),
         };
         atomic_write_json(
             &self.dispatch_path(lab_run_id, &record.dispatch_id),
@@ -1079,6 +1082,7 @@ impl LabStore {
                 "task_id": task_id,
                 "status": format!("{:?}", record.status),
                 "envelope_id": &record.envelope.envelope_id,
+                "cleanup_status": record.cleanup_status.as_str(),
             }),
         )?;
         Ok(record)
@@ -1143,6 +1147,32 @@ impl LabStore {
                 "agent_id": &record.agent_id,
                 "result_artifact_id": &record.result_artifact_id,
                 "error": &record.error,
+            }),
+        )?;
+        Ok(record)
+    }
+
+    pub fn update_graduate_dispatch_cleanup_status(
+        &self,
+        lab_run_id: &str,
+        dispatch_id: &str,
+        cleanup_status: GraduateCleanupStatus,
+        cleanup_message: Option<String>,
+    ) -> anyhow::Result<GraduateDispatchRecord> {
+        let mut record = self.load_graduate_dispatch(lab_run_id, dispatch_id)?;
+        record.cleanup_status = cleanup_status;
+        record.cleanup_message = cleanup_message;
+        record.cleanup_updated_at = Some(Utc::now());
+        record.updated_at = Utc::now();
+        atomic_write_json(&self.dispatch_path(lab_run_id, dispatch_id), &record)?;
+        self.append_run_event(
+            lab_run_id,
+            "graduate_dispatch_cleanup_updated",
+            serde_json::json!({
+                "dispatch_id": &record.dispatch_id,
+                "task_id": &record.task_id,
+                "cleanup_status": record.cleanup_status.as_str(),
+                "cleanup_message": &record.cleanup_message,
             }),
         )?;
         Ok(record)
@@ -3830,6 +3860,13 @@ mod tests {
             .unwrap();
 
         assert_eq!(record.status, GraduateDispatchStatus::Prepared);
+        assert_eq!(record.cleanup_status, GraduateCleanupStatus::CleanupPending);
+        assert!(record
+            .cleanup_message
+            .as_deref()
+            .unwrap_or_default()
+            .contains("cleanup pending"));
+        assert!(record.cleanup_updated_at.is_some());
         assert_eq!(record.task_id, task.task_id);
         assert_eq!(
             record.agent_tool_params["profile"].as_str(),
@@ -3838,6 +3875,10 @@ mod tests {
         let listed = store.list_graduate_dispatches(&run.lab_run_id).unwrap();
         assert_eq!(listed.len(), 1);
         assert_eq!(listed[0].dispatch_id, record.dispatch_id);
+        assert_eq!(
+            listed[0].cleanup_status,
+            GraduateCleanupStatus::CleanupPending
+        );
         assert!(store
             .root()
             .join("runs")

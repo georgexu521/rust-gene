@@ -102,6 +102,7 @@ pub struct LabMeetingRecommendation {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LabTickStatus {
     Advanced,
+    Blocked,
     NeedsUser,
 }
 
@@ -238,12 +239,32 @@ impl LabOrchestrator {
         }
 
         let from_stage = run.current_stage.clone();
-        let created = self.create_current_stage_artifact_for_latest(&format!(
-            "Runtime tick artifact for {}",
-            from_stage
-        ))?;
-        let artifact_id = Some(created.artifact.artifact_id().to_string());
-        let report_path = Some(created.report_path.clone());
+        let transition = transition_for_stage(&from_stage).expect("transition checked above");
+        if let Err(err) = self
+            .store
+            .validate_artifact_gate(&run.lab_run_id, transition.from_stage)
+        {
+            self.store.record_run_event(
+                &run.lab_run_id,
+                "lab_tick_blocked_missing_role_artifact",
+                serde_json::json!({
+                    "stage": from_stage,
+                    "required_artifact_type": transition.required_artifact_type,
+                    "required_owner": format!("{:?}", transition.required_owner),
+                    "reason": err.to_string(),
+                }),
+            )?;
+            return Ok(LabTickResult {
+                lab_run_id: run.lab_run_id,
+                status: LabTickStatus::Blocked,
+                from_stage: from_stage.clone(),
+                to_stage: from_stage,
+                owner: run.internal_owner,
+                artifact_id: None,
+                report_path: None,
+                compression_artifact_id: None,
+            });
+        }
         let advanced = self.advance_latest()?;
         let compression_artifact_id = if advanced.cost_policy.auto_compress_after_cycle {
             self.create_compression_summary_for_latest(advanced.internal_owner)?
@@ -257,7 +278,6 @@ impl LabOrchestrator {
             serde_json::json!({
                 "from_stage": from_stage,
                 "to_stage": advanced.current_stage,
-                "artifact_id": artifact_id,
                 "compression_artifact_id": compression_artifact_id,
                 "needs_user": advanced.needs_user,
             }),
@@ -273,8 +293,8 @@ impl LabOrchestrator {
             from_stage,
             to_stage: advanced.current_stage,
             owner: advanced.internal_owner,
-            artifact_id,
-            report_path,
+            artifact_id: None,
+            report_path: None,
             compression_artifact_id,
         })
     }
@@ -1343,7 +1363,7 @@ impl LabOrchestrator {
                 validation_status: validation_status.to_string(),
                 remaining_risks: remaining_risks.clone(),
                 handoff_to_professor:
-                    "Review strategic fit, completeness, validation evidence, and remaining risks before user-facing closeout."
+                    "Review strategic fit, completeness, validation evidence, remaining risks, and whether repeated failures, stalled progress, blocker reports, sponsor feedback, or poor progress-to-cost ratio require professor steering before user-facing closeout."
                         .to_string(),
             },
         ));
@@ -1438,42 +1458,30 @@ impl LabOrchestrator {
                 )
             })?;
 
-        let accepted = integration.body.validation_status != "needs_revision"
-            && !integration.body.accepted_results.is_empty();
+        let accepted = false;
         let mut required_revisions = Vec::new();
-        if !accepted {
-            required_revisions.extend(integration.body.remaining_risks.clone());
-            if integration.body.accepted_results.is_empty() {
-                required_revisions
-                    .push("Postdoc integration has no accepted graduate results.".to_string());
-            }
-            if integration.body.validation_status == "needs_revision" {
-                required_revisions
-                    .push("Postdoc integration is marked needs_revision.".to_string());
-            }
-            required_revisions.sort();
-            required_revisions.dedup();
+        required_revisions.extend(integration.body.remaining_risks.clone());
+        required_revisions.push(
+            "Deterministic professor review is a runtime placeholder; provider or explicit professor review is required before closeout."
+                .to_string(),
+        );
+        if integration.body.accepted_results.is_empty() {
+            required_revisions
+                .push("Postdoc integration has no accepted graduate results.".to_string());
         }
+        if integration.body.validation_status == "needs_revision" {
+            required_revisions.push("Postdoc integration is marked needs_revision.".to_string());
+        }
+        required_revisions.sort();
+        required_revisions.dedup();
 
         let note = note.unwrap_or("").trim();
         let artifact_id = format!("artifact_professorreview_{}", Uuid::new_v4().simple());
-        let user_report = if accepted {
-            format!(
-                "LabRun {} is ready for user review. Postdoc accepted {} graduate result(s); professor review requires final user-facing closeout.",
-                run.lab_run_id,
-                integration.body.accepted_results.len()
-            )
-        } else {
-            format!(
-                "LabRun {} is not ready for closeout. Required revisions: {}",
-                run.lab_run_id,
-                if required_revisions.is_empty() {
-                    "postdoc must provide accepted, validated results".to_string()
-                } else {
-                    required_revisions.join("; ")
-                }
-            )
-        };
+        let user_report = format!(
+            "LabRun {} is not ready for closeout from deterministic professor review. Required revisions: {}",
+            run.lab_run_id,
+            required_revisions.join("; ")
+        );
         let mut professor_evidence_refs = vec![
             format!("artifact:{}", integration.artifact_id),
             format!("stage:{}", integration.stage),
@@ -1656,6 +1664,9 @@ impl LabOrchestrator {
             .ok_or_else(|| anyhow!("no LabRun found for meeting recommendation"))?;
         let tasks = self.store.list_graduate_tasks(&run.lab_run_id)?;
         let dispatches = self.store.list_graduate_dispatches(&run.lab_run_id)?;
+        let artifacts = self.store.list_stage_artifacts(&run.lab_run_id)?;
+        let cost = self.store.cost_summary(&run.lab_run_id)?;
+        let compression_decisions = self.store.list_compression_decisions(&run.lab_run_id)?;
         let blocked_tasks = tasks
             .iter()
             .filter(|task| matches!(task.status, LabTaskStatus::Blocked))
@@ -1698,9 +1709,69 @@ impl LabOrchestrator {
                 run.failure_count, cycle_failure_limit
             ));
         }
+        let completed_or_rejected_tasks = tasks
+            .iter()
+            .filter(|task| {
+                matches!(
+                    task.status,
+                    LabTaskStatus::Completed | LabTaskStatus::Blocked
+                )
+            })
+            .count();
+        if completed_or_rejected_tasks > 0 && completed_or_rejected_tasks % 3 == 0 {
+            signals.push(format!(
+                "mandatory_checkpoint:graduate_task_interval={completed_or_rejected_tasks}/3"
+            ));
+        }
+        let accepted_integrations = artifacts
+            .iter()
+            .filter_map(|artifact| match artifact {
+                StageArtifact::PostdocIntegrationSummary(summary)
+                    if summary.body.validation_status != "needs_revision"
+                        && !summary.body.accepted_results.is_empty() =>
+                {
+                    Some(())
+                }
+                _ => None,
+            })
+            .count();
+        if accepted_integrations > 0 && accepted_integrations % 2 == 0 {
+            signals.push(format!(
+                "mandatory_checkpoint:postdoc_acceptance_interval={accepted_integrations}/2"
+            ));
+        }
+        if run.current_stage == "user_report" {
+            signals.push("mandatory_checkpoint:before_user_closeout".to_string());
+        }
+        if run.cycle_count > 0 && run.current_stage == "professor_discussion" {
+            signals.push(format!(
+                "mandatory_checkpoint:cycle_boundary={}",
+                run.cycle_count
+            ));
+        }
+        if cost.total_tokens >= run.cost_policy.max_cycle_tokens {
+            signals.push(format!(
+                "mandatory_checkpoint:cost_budget_reached={}/{}",
+                cost.total_tokens, run.cost_policy.max_cycle_tokens
+            ));
+        }
+        if compression_decisions.len() >= 2 {
+            signals.push(format!(
+                "mandatory_checkpoint:compression_count={}",
+                compression_decisions.len()
+            ));
+        }
 
         let recommended = !signals.is_empty();
-        let topic = if !blocked_tasks.is_empty() {
+        let topic = if signals
+            .iter()
+            .any(|signal| signal.starts_with("mandatory_checkpoint:"))
+        {
+            format!(
+                "run mandatory professor checkpoint at stage {}",
+                run.current_stage
+            )
+        } else if !blocked_tasks.is_empty() {
             format!(
                 "resolve {} blocked graduate task(s) at stage {}",
                 blocked_tasks.len(),
@@ -1720,7 +1791,7 @@ impl LabOrchestrator {
             format!("no meeting recommended for stage {}", run.current_stage)
         };
         let reason = if recommended {
-            "professor_trigger_policy_matched".to_string()
+            "runtime_escalation_signals_present".to_string()
         } else {
             "no blocker or repeated failure signals".to_string()
         };
@@ -1762,7 +1833,7 @@ impl LabOrchestrator {
             run.lab_run_id.clone(),
             LabArtifactType::LabMeetingRequest,
             format!(
-                "Professor-triggered meeting request for {}",
+                "Runtime escalation signal meeting request for {}",
                 run.current_stage
             ),
             Utc::now(),
@@ -1772,12 +1843,12 @@ impl LabOrchestrator {
                 current_stage: run.current_stage.clone(),
                 reason: recommendation.reason.clone(),
                 signals: recommendation.signals.clone(),
-                requested_by: LabRole::Professor,
+                requested_by: LabRole::Runtime,
                 next_action: "open_read_only_lab_meeting".to_string(),
             },
         ));
         if let StageArtifact::LabMeetingRequest(envelope) = &mut artifact {
-            envelope.validation_status = Some("professor_trigger_request".to_string());
+            envelope.validation_status = Some("runtime_escalation_signal".to_string());
         }
         let path = self.store.write_stage_artifact(&artifact)?;
         let report_path = self.store.write_stage_artifact_report(&artifact)?;
@@ -2348,63 +2419,14 @@ impl LabOrchestrator {
             "postdoc_review" | "professor_review"
         ) {
             let from_stage = run.current_stage.clone();
-            let created = match from_stage.as_str() {
-                "postdoc_review" => self.create_postdoc_integration_summary_for_latest(None)?,
-                "professor_review" => self.create_professor_review_for_latest(None)?,
-                _ => unreachable!(),
-            };
-            if !created.gate.is_satisfied() {
-                if from_stage == "professor_review" {
-                    if let Ok(resumed) = self.resume_postdoc_revision_latest(
-                        "scheduler resumed postdoc repair from professor revision task",
-                    ) {
-                        return Ok(LabSchedulerStepResult {
-                            lab_run_id: resumed.lab_run_id.clone(),
-                            action: LabSchedulerStepAction::TickAdvanced,
-                            stage: resumed.current_stage.clone(),
-                            task_id: None,
-                            dispatch_id: None,
-                            message: format!(
-                                "Scheduler wrote {} artifact {} with revision required, then resumed LabRun from {} to {}.",
-                                created.artifact.artifact_type().as_str(),
-                                created.artifact.artifact_id(),
-                                from_stage,
-                                resumed.current_stage
-                            ),
-                        });
-                    }
-                }
-                return Ok(LabSchedulerStepResult {
-                    lab_run_id: run.lab_run_id,
-                    action: LabSchedulerStepAction::Blocked,
-                    stage: from_stage.clone(),
-                    task_id: None,
-                    dispatch_id: None,
-                    message: format!(
-                        "Scheduler wrote {} artifact {} but {} gate is blocked.",
-                        created.artifact.artifact_type().as_str(),
-                        created.artifact.artifact_id(),
-                        created.gate.stage
-                    ),
-                });
-            }
-            let advanced = self.advance_latest()?;
             return Ok(LabSchedulerStepResult {
-                lab_run_id: advanced.lab_run_id.clone(),
-                action: if advanced.needs_user {
-                    LabSchedulerStepAction::NeedsUser
-                } else {
-                    LabSchedulerStepAction::TickAdvanced
-                },
-                stage: advanced.current_stage.clone(),
+                lab_run_id: run.lab_run_id,
+                action: LabSchedulerStepAction::Blocked,
+                stage: from_stage.clone(),
                 task_id: None,
                 dispatch_id: None,
                 message: format!(
-                    "Scheduler wrote {} artifact {} and advanced LabRun from {} to {}.",
-                    created.artifact.artifact_type().as_str(),
-                    created.artifact.artifact_id(),
-                    from_stage,
-                    advanced.current_stage
+                    "Scheduler stopped at {from_stage}; provider-backed or explicit role review artifact is required before advancement."
                 ),
             });
         }
@@ -2531,6 +2553,7 @@ impl LabOrchestrator {
             lab_run_id: tick.lab_run_id,
             action: match tick.status {
                 LabTickStatus::Advanced => LabSchedulerStepAction::TickAdvanced,
+                LabTickStatus::Blocked => LabSchedulerStepAction::Blocked,
                 LabTickStatus::NeedsUser => LabSchedulerStepAction::NeedsUser,
             },
             stage: tick.to_stage,
@@ -3349,7 +3372,7 @@ fn build_stage_artifact(run: &LabRun, artifact_type: LabArtifactType, note: &str
                 run.lab_run_id.clone(),
                 artifact_type,
                 format!(
-                    "Professor-triggered meeting request for {}",
+                    "Runtime escalation signal meeting request for {}",
                     run.current_stage
                 ),
                 now,
@@ -3359,7 +3382,7 @@ fn build_stage_artifact(run: &LabRun, artifact_type: LabArtifactType, note: &str
                     current_stage: run.current_stage.clone(),
                     reason: "runtime_placeholder".to_string(),
                     signals: Vec::new(),
-                    requested_by: LabRole::Professor,
+                    requested_by: LabRole::Runtime,
                     next_action: "open_read_only_lab_meeting".to_string(),
                 },
             ))
@@ -4336,7 +4359,7 @@ mod tests {
     }
 
     #[test]
-    fn meeting_request_persists_professor_trigger_artifact() {
+    fn meeting_request_persists_runtime_escalation_signal_artifact() {
         let temp = tempfile::tempdir().unwrap();
         let orchestrator = LabOrchestrator::for_project(temp.path());
         let proposal = orchestrator
@@ -4380,12 +4403,12 @@ mod tests {
         let StageArtifact::LabMeetingRequest(request) = &created.artifact else {
             panic!("expected LabMeetingRequest artifact");
         };
-        assert_eq!(request.owner, LabRole::Professor);
+        assert_eq!(request.owner, LabRole::Runtime);
         assert_eq!(
             request.validation_status.as_deref(),
-            Some("professor_trigger_request")
+            Some("runtime_escalation_signal")
         );
-        assert_eq!(request.body.reason, "professor_trigger_policy_matched");
+        assert_eq!(request.body.reason, "runtime_escalation_signals_present");
         let saved = orchestrator.store().load_run(&run.lab_run_id).unwrap();
         assert!(saved
             .artifact_ids
@@ -5779,7 +5802,7 @@ Thanks."#,
     }
 
     #[tokio::test]
-    async fn graduate_dispatch_blocks_known_unsupported_provider_before_agent_run() {
+    async fn graduate_dispatch_is_not_blocked_by_provider_name_before_agent_run() {
         let temp = tempfile::tempdir().unwrap();
         let orchestrator = LabOrchestrator::for_project(temp.path());
         let proposal = orchestrator
@@ -5810,22 +5833,15 @@ Thanks."#,
             .unwrap();
 
         assert_eq!(dispatch.status, GraduateDispatchStatus::Failed);
-        assert!(dispatch.agent_id.is_none());
-        assert!(dispatch
-            .error
-            .as_deref()
-            .unwrap_or_default()
-            .contains("not certified"));
+        let error = dispatch.error.as_deref().unwrap_or_default().to_string();
+        assert!(!error.contains("not certified"));
+        assert!(!error.contains("formal Lab graduate certification"));
+        assert!(!error.contains("graduate provider"));
         let saved_task = orchestrator
             .store()
             .load_graduate_task(&run.lab_run_id, &task.task_id)
             .unwrap();
         assert_eq!(saved_task.status, LabTaskStatus::Blocked);
-        assert!(saved_task
-            .blocker
-            .as_deref()
-            .unwrap_or_default()
-            .contains("graduate provider"));
         let saved_run = orchestrator.store().load_run(&run.lab_run_id).unwrap();
         assert_eq!(saved_run.failure_count, 1);
     }
@@ -6340,7 +6356,7 @@ Thanks."#,
     }
 
     #[tokio::test]
-    async fn scheduler_runs_postdoc_and_professor_review_bridges() {
+    async fn scheduler_stops_at_role_review_boundaries() {
         let temp = tempfile::tempdir().unwrap();
         let orchestrator = LabOrchestrator::for_project(temp.path());
         let proposal = orchestrator
@@ -6379,24 +6395,16 @@ Thanks."#,
             .run_scheduler_step_latest_with_context(ToolContext::new(temp.path(), "lab-test"))
             .await
             .unwrap();
-        assert_eq!(postdoc.action, LabSchedulerStepAction::TickAdvanced);
-        assert_eq!(postdoc.stage, "professor_review");
-        assert!(postdoc.message.contains("PostdocIntegrationSummary"));
-
-        let professor = orchestrator
-            .run_scheduler_step_latest_with_context(ToolContext::new(temp.path(), "lab-test"))
-            .await
-            .unwrap();
-        assert_eq!(professor.action, LabSchedulerStepAction::NeedsUser);
-        assert_eq!(professor.stage, "user_report");
-        assert!(professor.message.contains("ProfessorReview"));
-        let final_run = orchestrator.store().load_run(&run.lab_run_id).unwrap();
-        assert_eq!(final_run.current_stage, "user_report");
-        assert!(final_run.needs_user);
+        assert_eq!(postdoc.action, LabSchedulerStepAction::Blocked);
+        assert_eq!(postdoc.stage, "postdoc_review");
+        assert!(postdoc.message.contains("role review artifact is required"));
+        let saved = orchestrator.store().load_run(&run.lab_run_id).unwrap();
+        assert_eq!(saved.current_stage, "postdoc_review");
+        assert!(!saved.needs_user);
     }
 
     #[tokio::test]
-    async fn scheduler_resumes_postdoc_revision_after_professor_rejects() {
+    async fn explicit_professor_review_writes_revision_task_without_scheduler_auto_repair() {
         let temp = tempfile::tempdir().unwrap();
         let orchestrator = LabOrchestrator::for_project(temp.path());
         let proposal = orchestrator
@@ -6437,18 +6445,21 @@ Thanks."#,
         saved.current_stage = "professor_review".to_string();
         saved.internal_owner = LabRole::Professor;
         orchestrator.store().save_run(&saved).unwrap();
+        let professor_review = orchestrator
+            .create_professor_review_for_latest(Some("Explicit professor revision request."))
+            .unwrap();
 
         let step = orchestrator
             .run_scheduler_step_latest_with_context(ToolContext::new(temp.path(), "lab-test"))
             .await
             .unwrap();
 
-        assert_eq!(step.action, LabSchedulerStepAction::TickAdvanced);
-        assert_eq!(step.stage, "postdoc_plan");
-        assert!(step.message.contains("revision required"));
+        assert_eq!(step.action, LabSchedulerStepAction::Blocked);
+        assert_eq!(step.stage, "professor_review");
+        assert!(step.message.contains("role review artifact is required"));
         let resumed = orchestrator.store().load_run(&run.lab_run_id).unwrap();
-        assert_eq!(resumed.current_stage, "postdoc_plan");
-        assert_eq!(resumed.internal_owner, LabRole::Postdoc);
+        assert_eq!(resumed.current_stage, "professor_review");
+        assert_eq!(resumed.internal_owner, LabRole::Professor);
         assert!(!resumed.needs_user);
         let revision_artifact_id = orchestrator
             .store()
@@ -6460,21 +6471,25 @@ Thanks."#,
                 _ => None,
             })
             .expect("revision task artifact");
+        assert!(professor_review
+            .gate
+            .blockers
+            .iter()
+            .any(|blocker| blocker.contains("runtime placeholder")));
         let gate = orchestrator
             .store()
-            .load_artifact_gate(&run.lab_run_id, "postdoc_plan")
+            .load_artifact_gate(&run.lab_run_id, "postdoc_revision")
             .unwrap();
-        assert_eq!(gate.required_artifact_type, "PostdocPlan");
-        assert!(gate.artifact_id.is_none());
-
-        orchestrator
-            .create_current_stage_artifact_for_latest("Repair professor rejection.")
-            .unwrap();
-        let consumed = orchestrator
+        assert_eq!(gate.required_artifact_type, "LabRevisionTask");
+        assert_eq!(
+            gate.artifact_id.as_deref(),
+            Some(revision_artifact_id.as_str())
+        );
+        let revision = orchestrator
             .store()
             .load_stage_artifact(&run.lab_run_id, &revision_artifact_id)
             .unwrap();
-        assert_eq!(consumed.validation_status(), Some("consumed"));
+        assert_eq!(revision.validation_status(), Some("not_started"));
     }
 
     #[tokio::test]
@@ -6526,7 +6541,7 @@ Thanks."#,
     }
 
     #[test]
-    fn tick_creates_stage_artifact_and_advances_once() {
+    fn tick_blocks_without_current_stage_artifact_gate() {
         let temp = tempfile::tempdir().unwrap();
         let orchestrator = LabOrchestrator::for_project(temp.path());
         let proposal = orchestrator
@@ -6539,18 +6554,18 @@ Thanks."#,
 
         let tick = orchestrator.tick_latest().unwrap();
 
-        assert_eq!(tick.status, LabTickStatus::Advanced);
+        assert_eq!(tick.status, LabTickStatus::Blocked);
         assert_eq!(tick.from_stage, "professor_discussion");
-        assert_eq!(tick.to_stage, "postdoc_plan");
-        assert!(tick.artifact_id.is_some());
-        assert!(tick.report_path.as_ref().unwrap().exists());
+        assert_eq!(tick.to_stage, "professor_discussion");
+        assert!(tick.artifact_id.is_none());
+        assert!(tick.report_path.is_none());
         let saved = orchestrator.store().load_run(&run.lab_run_id).unwrap();
-        assert_eq!(saved.current_stage, "postdoc_plan");
-        assert_eq!(saved.internal_owner, LabRole::Postdoc);
+        assert_eq!(saved.current_stage, "professor_discussion");
+        assert_eq!(saved.internal_owner, LabRole::Professor);
     }
 
     #[test]
-    fn tick_stops_when_user_report_is_reached() {
+    fn tick_remains_blocked_until_role_artifact_exists() {
         let temp = tempfile::tempdir().unwrap();
         let orchestrator = LabOrchestrator::for_project(temp.path());
         let proposal = orchestrator
@@ -6561,20 +6576,17 @@ Thanks."#,
             .approve_proposal(&proposal.proposal_id)
             .unwrap();
 
-        let mut last = None;
-        for _ in 0..5 {
-            last = Some(orchestrator.tick_latest().unwrap());
-        }
-        let last = last.unwrap();
-        assert_eq!(last.status, LabTickStatus::NeedsUser);
-        assert_eq!(last.to_stage, "user_report");
-        let saved = orchestrator.store().load_run(&run.lab_run_id).unwrap();
-        assert_eq!(saved.status, LabRunStatus::NeedsUser);
-        assert!(saved.needs_user);
+        let first = orchestrator.tick_latest().unwrap();
+        assert_eq!(first.status, LabTickStatus::Blocked);
+        assert_eq!(first.to_stage, "professor_discussion");
 
-        let blocked = orchestrator.tick_latest().unwrap();
-        assert_eq!(blocked.status, LabTickStatus::NeedsUser);
-        assert!(blocked.artifact_id.is_none());
+        let second = orchestrator.tick_latest().unwrap();
+        assert_eq!(second.status, LabTickStatus::Blocked);
+        assert_eq!(second.to_stage, "professor_discussion");
+        let saved = orchestrator.store().load_run(&run.lab_run_id).unwrap();
+        assert_eq!(saved.status, LabRunStatus::Active);
+        assert!(!saved.needs_user);
+        assert_eq!(saved.current_stage, "professor_discussion");
     }
 
     #[test]

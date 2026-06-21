@@ -5,10 +5,10 @@ use crate::lab::context::{
 };
 use crate::lab::delegation::{build_graduate_task_dispatch, graduate_agent_task_id};
 use crate::lab::model::{
-    LabArtifactEnvelope, LabArtifactStatus, LabArtifactType, LabCloseoutStatus, LabCostSummary,
-    LabDaemonMode, LabEvidenceKind, LabProviderCertificationKind, LabProviderCertificationOutcome,
-    LabProviderCertificationRecord, LabRole, LabRunStatus, ProfessorSteeringDecision,
-    SponsorMessageStatus, StageArtifact,
+    GraduateCleanupStatus, GraduateDispatchRecord, LabArtifactEnvelope, LabArtifactStatus,
+    LabArtifactType, LabCloseoutStatus, LabCostSummary, LabDaemonMode, LabEvidenceKind,
+    LabProviderCertificationKind, LabProviderCertificationOutcome, LabProviderCertificationRecord,
+    LabRole, LabRunStatus, ProfessorSteeringDecision, SponsorMessageStatus, StageArtifact,
 };
 use crate::lab::orchestrator::LabOrchestrator;
 use crate::lab::provider_certification::provider_certification_report;
@@ -394,20 +394,25 @@ pub async fn handle_lab_command_with_context(
 fn handle_provider_command(project_root: &Path, tool_context: ToolContext) -> String {
     let report = provider_certification_report(&tool_context);
     let mut lines = vec![
-        "Lab provider certification:".to_string(),
+        "Lab provider diagnostics:".to_string(),
         format!("Provider: {}", report.provider_id),
         format!("Model: {}", report.model),
         format!(
-            "Graduate certification: {}",
+            "Graduate diagnostic status: {}",
             report.graduate_certification.as_str()
         ),
         format!(
-            "Graduate execution allowed: {}",
-            report.graduate_execution_allowed
+            "Graduate dispatch policy: {}",
+            if report.graduate_execution_allowed {
+                "provider_neutral_task_evidence"
+            } else {
+                "blocked"
+            }
         ),
-        format!("Override enabled: {}", report.override_enabled),
-        format!("Control-plane validation: {}", report.control_plane_command),
-        format!("Graduate validation: {}", report.graduate_command),
+        format!("Diagnostic override enabled: {}", report.override_enabled),
+        format!("Legacy override env enabled: {}", report.override_enabled),
+        format!("Control-plane diagnostic: {}", report.control_plane_command),
+        format!("Graduate diagnostic: {}", report.graduate_command),
         format!("Recommendation: {}", report.recommendation),
     ];
     lines.push(provider_record_line(
@@ -419,7 +424,7 @@ fn handle_provider_command(project_root: &Path, tool_context: ToolContext) -> St
         report.latest_graduate_record.as_ref(),
     ));
     lines.push(format!(
-        "Certification store: {}",
+        "Diagnostics store: {}",
         LabStore::for_project(project_root)
             .root()
             .join("provider_certifications.jsonl")
@@ -467,7 +472,7 @@ fn handle_provider_record_command(
     };
     let report = provider_certification_report(&tool_context);
     if report.provider_id == "unknown" || report.model == "unknown" {
-        return "Failed to record provider certification: active provider/model is unknown"
+        return "Failed to record provider diagnostic: active provider/model is unknown"
             .to_string();
     }
     let summary = if summary.trim().is_empty() {
@@ -490,7 +495,7 @@ fn handle_provider_record_command(
         &summary,
     ) {
         Ok(record) => format!(
-            "Recorded provider certification: {}\nProvider: {}\nModel: {}\nKind: {}\nOutcome: {}\nEvidence: {}\nStore: {}",
+            "Recorded provider diagnostic: {}\nProvider: {}\nModel: {}\nKind: {}\nOutcome: {}\nEvidence: {}\nStore: {}",
             record.record_id,
             record.provider_id,
             record.model,
@@ -499,7 +504,7 @@ fn handle_provider_record_command(
             record.evidence_path,
             store.root().join("provider_certifications.jsonl").display()
         ),
-        Err(err) => format!("Failed to record provider certification: {err}"),
+        Err(err) => format!("Failed to record provider diagnostic: {err}"),
     }
 }
 
@@ -509,9 +514,9 @@ fn parse_provider_certification_kind(value: &str) -> Result<LabProviderCertifica
             Ok(LabProviderCertificationKind::ControlPlane)
         }
         "graduate" | "lab-graduate" | "worker" => Ok(LabProviderCertificationKind::Graduate),
-        _ => Err(
-            "Invalid provider certification kind. Expected control-plane or graduate.".to_string(),
-        ),
+        _ => {
+            Err("Invalid provider diagnostic kind. Expected control-plane or graduate.".to_string())
+        }
     }
 }
 
@@ -523,7 +528,7 @@ fn parse_provider_certification_outcome(
             Ok(LabProviderCertificationOutcome::Passed)
         }
         "failed" | "fail" | "error" | "blocked" => Ok(LabProviderCertificationOutcome::Failed),
-        _ => Err("Invalid provider certification outcome. Expected passed or failed.".to_string()),
+        _ => Err("Invalid provider diagnostic outcome. Expected passed or failed.".to_string()),
     }
 }
 
@@ -540,12 +545,16 @@ async fn handle_provider_compare_command(project_root: &Path, tool_context: Tool
         format!("Provider: {}", report.provider_id),
         format!("Model: {}", report.model),
         format!(
-            "Graduate certification: {}",
+            "Graduate diagnostic status: {}",
             report.graduate_certification.as_str()
         ),
         format!(
-            "Graduate execution allowed: {}",
-            report.graduate_execution_allowed
+            "Graduate dispatch policy: {}",
+            if report.graduate_execution_allowed {
+                "provider_neutral_task_evidence"
+            } else {
+                "blocked"
+            }
         ),
         String::new(),
         generic_result.summary.clone(),
@@ -554,11 +563,7 @@ async fn handle_provider_compare_command(project_root: &Path, tool_context: Tool
         String::new(),
         lab_result.summary.clone(),
         String::new(),
-        provider_compare_conclusion(
-            &generic_result,
-            &lab_result,
-            report.graduate_execution_allowed,
-        ),
+        provider_compare_conclusion(&generic_result, &lab_result),
     ]
     .join("\n")
 }
@@ -622,12 +627,16 @@ async fn handle_provider_tool_diagnostics_command(tool_context: ToolContext) -> 
         format!("Provider: {}", report.provider_id),
         format!("Model: {}", report.model),
         format!(
-            "Graduate certification: {}",
+            "Graduate diagnostic status: {}",
             report.graduate_certification.as_str()
         ),
         format!(
-            "Graduate execution allowed: {}",
-            report.graduate_execution_allowed
+            "Graduate dispatch policy: {}",
+            if report.graduate_execution_allowed {
+                "provider_neutral_task_evidence"
+            } else {
+                "blocked"
+            }
         ),
     ];
 
@@ -1364,24 +1373,23 @@ fn lab_graduate_durable_smoke_details(
 fn provider_compare_conclusion(
     generic: &ProviderComparePathResult,
     lab: &ProviderComparePathResult,
-    lab_execution_allowed: bool,
 ) -> String {
-    let conclusion = if lab.blocked_by_certification || !lab_execution_allowed {
+    let conclusion = if lab.blocked_by_certification {
         if generic.used_mutating_tool {
-            "Generic subagent demonstrated tool use; the formal Lab graduate path is blocked by provider certification before the subagent executor."
+            "Generic subagent demonstrated tool use; Lab graduate reported a legacy certification block, which should now be treated as a diagnostics bug rather than provider policy."
         } else if generic.success {
-            "Generic subagent completed but produced no hard mutating-tool proof through tools_used or isolated-worktree file evidence; keep investigating provider tool-call proof before relaxing the Lab graduate gate."
+            "Generic subagent completed but produced no hard mutating-tool proof through tools_used or isolated-worktree file evidence; inspect task-level evidence before trusting graduate output."
         } else {
             "Generic subagent also failed; this points first at provider/subagent tool-call capability or runtime provider wiring, not only Lab graduate prompting."
         }
     } else if generic.used_mutating_tool && !lab.success {
-        "Generic subagent demonstrated tool use but Lab graduate failed after certification; inspect Lab graduate envelope, prompt contract, scope validation, and JSON binding."
+        "Generic subagent demonstrated tool use but Lab graduate failed; inspect Lab graduate envelope, prompt contract, scope validation, JSON binding, and task evidence."
     } else if generic.success && lab.success {
         "Both paths completed; provider tool use is available through generic and Lab graduate routing."
     } else if !generic.success && lab.success {
         "Lab graduate completed while generic failed; compare profile/tool exposure differences before changing provider policy."
     } else {
-        "Both paths failed or lacked tool-use proof; treat this provider as uncertified for graduate coding until live evidence improves."
+        "Both paths failed or lacked tool-use proof; treat this run as weak task evidence and rely on postdoc review, not provider allowlists."
     };
     format!("Conclusion: {conclusion}")
 }
@@ -1753,6 +1761,17 @@ async fn handle_task_worktree_command(
     });
     worktree_params[agent_ref_kind] = serde_json::json!(agent_ref);
     let result = WorktreeTool.execute(worktree_params, tool_context).await;
+    let cleanup_status =
+        graduate_cleanup_status_for_worktree_action(worktree_action, result.success);
+    let cleanup_message = format_graduate_cleanup_message(action, result.success, &result);
+    if let Some(cleanup_status) = cleanup_status {
+        let _ = store.update_graduate_dispatch_cleanup_status(
+            &run.lab_run_id,
+            &dispatch.dispatch_id,
+            cleanup_status,
+            Some(cleanup_message.clone()),
+        );
+    }
     let _ = store.record_run_event(
         &run.lab_run_id,
         "lab_graduate_worktree_action",
@@ -1765,6 +1784,8 @@ async fn handle_task_worktree_command(
             "action": worktree_action,
             "success": result.success,
             "error": result.error.clone(),
+            "cleanup_status": cleanup_status.map(GraduateCleanupStatus::as_str),
+            "cleanup_message": cleanup_message,
             "result_data": result.data.clone(),
             "result_content_preview": compact_message_line(&result.content, 600),
         }),
@@ -1788,6 +1809,37 @@ async fn handle_task_worktree_command(
                 .unwrap_or(result.content.as_str())
         )
     }
+}
+
+fn graduate_cleanup_status_for_worktree_action(
+    worktree_action: &str,
+    success: bool,
+) -> Option<GraduateCleanupStatus> {
+    match (worktree_action, success) {
+        ("agent_cleanup", true) => Some(GraduateCleanupStatus::CleanupDone),
+        ("agent_cleanup", false) => Some(GraduateCleanupStatus::CleanupBlocked),
+        ("agent_review" | "agent_merge", _) => Some(GraduateCleanupStatus::CleanupPending),
+        _ => None,
+    }
+}
+
+fn format_graduate_cleanup_message(
+    action: &str,
+    success: bool,
+    result: &crate::tools::ToolResult,
+) -> String {
+    if success {
+        return format!("worktree {action} succeeded");
+    }
+    let detail = result
+        .error
+        .as_deref()
+        .filter(|value| !value.is_empty())
+        .unwrap_or(result.content.as_str());
+    format!(
+        "worktree {action} failed: {}",
+        compact_message_line(detail, 400)
+    )
 }
 
 async fn handle_scheduler_step_command(project_root: &Path, tool_context: ToolContext) -> String {
@@ -2391,6 +2443,10 @@ fn handle_recovery_command(project_root: &Path, store: &LabStore) -> String {
         Ok(tasks) => tasks,
         Err(err) => return format!("Failed to read LabRun recovery tasks: {err}"),
     };
+    let dispatches = match store.list_graduate_dispatches(&run.lab_run_id) {
+        Ok(dispatches) => dispatches,
+        Err(err) => return format!("Failed to read LabRun recovery dispatches: {err}"),
+    };
     let open_tasks = tasks
         .iter()
         .filter(|task| task.status.is_open())
@@ -2472,8 +2528,9 @@ fn handle_recovery_command(project_root: &Path, store: &LabStore) -> String {
         ),
         scheduler_line,
         lifecycle_line,
-        "Options:".to_string(),
     ];
+    lines.extend(graduate_cleanup_state_lines(&dispatches, 5));
+    lines.push("Options:".to_string());
     if matches!(
         run.status,
         LabRunStatus::Paused | LabRunStatus::PausedShutdown | LabRunStatus::NeedsUser
@@ -3388,6 +3445,10 @@ fn handle_review_command(orchestrator: &LabOrchestrator, store: &LabStore, args:
         Ok(tasks) => tasks,
         Err(err) => return format!("Failed to read LabRun review tasks: {err}"),
     };
+    let dispatches = match store.list_graduate_dispatches(&run.lab_run_id) {
+        Ok(dispatches) => dispatches,
+        Err(err) => return format!("Failed to read LabRun review dispatches: {err}"),
+    };
     let events = match store.list_run_events(&run.lab_run_id) {
         Ok(events) => events,
         Err(err) => {
@@ -3448,6 +3509,7 @@ fn handle_review_command(orchestrator: &LabOrchestrator, store: &LabStore, args:
     } else {
         lines.push("Current gate: none for this stage".to_string());
     }
+    lines.extend(graduate_cleanup_state_lines(&dispatches, 5));
     lines.extend(worktree_proofs);
     lines.extend(workspace_snapshots);
     lines.push("Next review actions:".to_string());
@@ -3490,6 +3552,50 @@ fn graduate_worktree_proof_lines(
         lines.extend(proofs.into_iter().map(|line| format!("  {line}")));
         lines
     }
+}
+
+fn graduate_cleanup_state_lines(
+    dispatches: &[GraduateDispatchRecord],
+    limit: usize,
+) -> Vec<String> {
+    if dispatches.is_empty() {
+        return vec!["Graduate cleanup states: none".to_string()];
+    }
+    let pending = dispatches
+        .iter()
+        .filter(|dispatch| dispatch.cleanup_status == GraduateCleanupStatus::CleanupPending)
+        .count();
+    let done = dispatches
+        .iter()
+        .filter(|dispatch| dispatch.cleanup_status == GraduateCleanupStatus::CleanupDone)
+        .count();
+    let blocked = dispatches
+        .iter()
+        .filter(|dispatch| dispatch.cleanup_status == GraduateCleanupStatus::CleanupBlocked)
+        .count();
+    let mut recent = dispatches.iter().rev().take(limit).collect::<Vec<_>>();
+    recent.reverse();
+
+    let mut lines = vec![format!(
+        "Graduate cleanup states: pending={} done={} blocked={}",
+        pending, done, blocked
+    )];
+    for dispatch in recent {
+        lines.push(format!(
+            "  task={} dispatch={} status={} agent={} result={} updated={} message={}",
+            dispatch.task_id,
+            dispatch.dispatch_id,
+            dispatch.cleanup_status.as_str(),
+            dispatch.agent_id.as_deref().unwrap_or("none"),
+            dispatch.result_artifact_id.as_deref().unwrap_or("none"),
+            dispatch
+                .cleanup_updated_at
+                .map(|time| time.to_rfc3339())
+                .unwrap_or_else(|| "none".to_string()),
+            dispatch.cleanup_message.as_deref().unwrap_or("none")
+        ));
+    }
+    lines
 }
 
 fn format_graduate_worktree_proof_event(event: &crate::lab::model::LabEvent) -> String {
@@ -3748,8 +3854,11 @@ fn render_meeting_recommendation(orchestrator: &LabOrchestrator) -> String {
     match orchestrator.meeting_recommendation_for_latest() {
         Ok(recommendation) => {
             let mut lines = vec![
-                format!("Lab meeting recommendation: {}", recommendation.lab_run_id),
-                format!("Recommended: {}", recommendation.recommended),
+                format!(
+                    "Lab runtime escalation signals: {}",
+                    recommendation.lab_run_id
+                ),
+                format!("Suggested meeting: {}", recommendation.recommended),
                 format!("Reason: {}", recommendation.reason),
                 format!("Topic: {}", recommendation.topic),
             ];
@@ -3766,7 +3875,7 @@ fn render_meeting_recommendation(orchestrator: &LabOrchestrator) -> String {
             }
             lines.join("\n")
         }
-        Err(err) => format!("Failed to evaluate Lab meeting recommendation: {err}"),
+        Err(err) => format!("Failed to evaluate Lab runtime escalation signals: {err}"),
     }
 }
 
@@ -3776,11 +3885,11 @@ fn open_recommended_meeting(orchestrator: &LabOrchestrator, args: &str) -> Strin
     let topic = if explicit_topic.is_empty() {
         let recommendation = match orchestrator.meeting_recommendation_for_latest() {
             Ok(recommendation) => recommendation,
-            Err(err) => return format!("Failed to evaluate Lab meeting recommendation: {err}"),
+            Err(err) => return format!("Failed to evaluate Lab runtime escalation signals: {err}"),
         };
         if !recommendation.recommended {
             return format!(
-                "No Lab meeting recommendation is open for {}.\nReason: {}\nUse /lab meeting <topic> to create a manual read-only meeting.",
+                "No runtime escalation signal is open for {}.\nReason: {}\nUse /lab meeting <topic> to create a manual read-only meeting.",
                 recommendation.lab_run_id, recommendation.reason
             );
         }
@@ -3803,7 +3912,7 @@ fn open_recommended_meeting(orchestrator: &LabOrchestrator, args: &str) -> Strin
         Ok(created) => {
             let mut lines = vec![
                 format!(
-                    "Lab meeting opened from recommendation: {}",
+                    "Lab meeting opened from runtime escalation signal: {}",
                     created.artifact.artifact_id()
                 ),
                 "This meeting is read-only and does not mutate code.".to_string(),
@@ -3935,11 +4044,15 @@ fn handle_dashboard_command(
         Ok(events) => events,
         Err(err) => return format!("Failed to read Lab dashboard events: {err}"),
     };
+    let dispatches = match store.list_graduate_dispatches(&run.lab_run_id) {
+        Ok(dispatches) => dispatches,
+        Err(err) => return format!("Failed to read Lab dashboard dispatches: {err}"),
+    };
     let worktree_proofs = graduate_worktree_proof_lines(&events, 2);
     let workspace_snapshots = graduate_workspace_snapshot_lines(&events, 2);
     let meeting = match orchestrator.meeting_recommendation_for_latest() {
         Ok(meeting) => meeting,
-        Err(err) => return format!("Failed to evaluate Lab meeting recommendation: {err}"),
+        Err(err) => return format!("Failed to evaluate Lab runtime escalation signals: {err}"),
     };
     let scheduler_line = match background_scheduler_status(project_root) {
         Ok(status) => {
@@ -4004,7 +4117,7 @@ fn handle_dashboard_command(
             cost.estimated_cost_usd
         ),
         format!(
-            "Meeting recommendation: recommended={} topic={} reason={}",
+            "Runtime escalation signals: suggested_meeting={} topic={} reason={}",
             meeting.recommended, meeting.topic, meeting.reason
         ),
         scheduler_line,
@@ -4014,6 +4127,7 @@ fn handle_dashboard_command(
             run.blocked_reason.as_deref().unwrap_or("none")
         ),
     ];
+    lines.extend(graduate_cleanup_state_lines(&dispatches, 5));
     lines.extend(worktree_proofs);
     lines.extend(workspace_snapshots);
     lines.join("\n")
@@ -4045,7 +4159,7 @@ fn lab_help() -> String {
         "  /lab start <goal>            Shortcut: draft proposal, still requires approval",
         "  /lab status                  Show latest proposal or LabRun",
         "  /lab runs                    List recent LabRuns",
-        "  /lab provider                Show active provider Lab certification status",
+        "  /lab provider                Show active provider Lab diagnostics",
         "  /lab provider compare        Compare generic subagent vs Lab graduate on the same provider",
         "  /lab provider diagnose-tools Run direct provider function-call probes",
         "  /lab recovery                Show paused/recoverable LabRun options",
@@ -4116,7 +4230,7 @@ fn lab_help() -> String {
         "  /lab messages <classify|decision|review|meeting|task|reject|apply> <message_id> [note]",
         "  /lab meeting [topic]         Write read-only lab meeting summary",
         "  /lab meeting llm [topic]     Ask provider to draft read-only professor/postdoc meeting summary",
-        "  /lab meeting recommend       Show professor-trigger meeting signal",
+        "  /lab meeting recommend       Show runtime escalation signals",
         "  /lab meeting open [topic]    Open recommended or explicit read-only meeting",
         "  /lab pause [reason]          Pause latest LabRun",
         "  /lab resume                  Resume latest LabRun state",
@@ -6528,7 +6642,7 @@ fi
     }
 
     #[tokio::test]
-    async fn provider_command_reports_deepseek_graduate_certification_gate() {
+    async fn provider_command_reports_provider_neutral_graduate_diagnostics() {
         let temp = tempfile::tempdir().unwrap();
         let mut context =
             ToolContext::new(temp.path(), "lab-provider-test").with_model("deepseek-v4-flash");
@@ -6544,11 +6658,11 @@ fi
         )
         .await;
 
-        assert!(output.contains("Lab provider certification:"));
+        assert!(output.contains("Lab provider diagnostics:"));
         assert!(output.contains("Provider: deepseek"));
         assert!(output.contains("Model: deepseek-v4-flash"));
-        assert!(output.contains("Graduate certification: known_unsupported"));
-        assert!(output.contains("Graduate execution allowed: false"));
+        assert!(output.contains("Graduate diagnostic status: unverified"));
+        assert!(output.contains("Graduate dispatch policy: provider_neutral_task_evidence"));
         assert!(output.contains("scripts/lab-live-validation.sh --live-control-plane"));
         assert!(output.contains("scripts/lab-live-validation.sh --live-graduate"));
         assert!(output.contains("Latest graduate record: none"));
@@ -6571,7 +6685,7 @@ fi
         )
         .await;
 
-        assert!(recorded.contains("Recorded provider certification:"));
+        assert!(recorded.contains("Recorded provider diagnostic:"));
         assert!(recorded.contains("Kind: graduate"));
         assert!(recorded.contains("Outcome: passed"));
 
@@ -6583,8 +6697,8 @@ fi
         )
         .await;
 
-        assert!(output.contains("Graduate certification: certified"));
-        assert!(output.contains("Graduate execution allowed: true"));
+        assert!(output.contains("Graduate diagnostic status: certified"));
+        assert!(output.contains("Graduate dispatch policy: provider_neutral_task_evidence"));
         assert!(output.contains("Latest graduate record: graduate passed"));
         assert!(output.contains("target/lab-live-validation/pass/report.md"));
         let store = LabStore::for_project(temp.path());
@@ -6697,7 +6811,7 @@ fi
         )
         .await;
 
-        assert!(recorded.contains("Recorded provider certification:"));
+        assert!(recorded.contains("Recorded provider diagnostic:"));
         assert!(recorded.contains("Kind: graduate"));
         assert!(recorded.contains("Outcome: failed"));
 
@@ -6709,8 +6823,8 @@ fi
         )
         .await;
 
-        assert!(output.contains("Graduate certification: known_unsupported"));
-        assert!(output.contains("Graduate execution allowed: false"));
+        assert!(output.contains("Graduate diagnostic status: unverified"));
+        assert!(output.contains("Graduate dispatch policy: provider_neutral_task_evidence"));
         assert!(output.contains("Latest graduate record: graduate failed"));
         assert!(output.contains("target/lab-live-validation/fail/report.md"));
     }
@@ -8415,6 +8529,18 @@ fi
 
         assert!(cleanup.contains("Lab graduate worktree cleanup succeeded"));
         assert!(cleanup.contains("via task_id"));
+        let cleaned_dispatch = lab_store
+            .load_graduate_dispatch(&run.lab_run_id, &dispatch.dispatch_id)
+            .unwrap();
+        assert_eq!(
+            cleaned_dispatch.cleanup_status,
+            GraduateCleanupStatus::CleanupDone
+        );
+        assert!(cleaned_dispatch
+            .cleanup_message
+            .as_deref()
+            .unwrap_or_default()
+            .contains("cleanup succeeded"));
         assert!(
             !worktree_path.exists(),
             "force cleanup should remove the graduate worktree"
@@ -8436,6 +8562,8 @@ fi
         assert!(events.contains("\"result_content_preview\""));
 
         let review = handle_lab_command(temp.path(), Some("session".to_string()), "review");
+        assert!(review.contains("Graduate cleanup states:"));
+        assert!(review.contains("cleanup_done"));
         assert!(review.contains("Graduate worktree proof:"));
         assert!(review.contains("agent_merge"));
         assert!(review.contains("agent_cleanup"));
@@ -8443,10 +8571,15 @@ fi
         assert!(review.contains("merge_kind=tracked_diff"));
 
         let dashboard = handle_lab_command(temp.path(), Some("session".to_string()), "dashboard");
+        assert!(dashboard.contains("Graduate cleanup states:"));
+        assert!(dashboard.contains("cleanup_done"));
         assert!(dashboard.contains("Graduate worktree proof:"));
         assert!(dashboard.contains("agent_merge"));
         assert!(dashboard.contains("ref=task_id:lab-graduate-"));
         assert!(dashboard.contains("merge_kind=tracked_diff"));
+        let recovery = handle_lab_command(temp.path(), Some("session".to_string()), "recovery");
+        assert!(recovery.contains("Graduate cleanup states:"));
+        assert!(recovery.contains("cleanup_done"));
     }
 
     #[tokio::test]
@@ -8857,7 +8990,7 @@ fi
             "meeting recommend",
         );
 
-        assert!(output.contains("Recommended: false"));
+        assert!(output.contains("Suggested meeting: false"));
         assert!(output.contains("Signals: none"));
     }
 
@@ -8880,7 +9013,7 @@ fi
 
         let output = handle_lab_command(temp.path(), Some("session".to_string()), "meeting open");
 
-        assert!(output.contains("No Lab meeting recommendation is open"));
+        assert!(output.contains("No runtime escalation signal is open"));
         assert!(output.contains("Use /lab meeting <topic>"));
         let store = LabStore::for_project(temp.path());
         let run = store.latest_run().unwrap().unwrap();
@@ -8930,12 +9063,12 @@ fi
             Some("session".to_string()),
             "meeting recommend",
         );
-        assert!(recommendation.contains("Recommended: true"));
+        assert!(recommendation.contains("Suggested meeting: true"));
         assert!(recommendation.contains("Open meeting with /lab meeting open"));
 
         let opened = handle_lab_command(temp.path(), Some("session".to_string()), "meeting open");
 
-        assert!(opened.contains("Lab meeting opened from recommendation"));
+        assert!(opened.contains("Lab meeting opened from runtime escalation signal"));
         assert!(opened.contains("This meeting is read-only and does not mutate code."));
         assert!(opened.contains("Topic: resolve 1 blocked graduate task(s)"));
         assert!(opened.contains("Request: "));
@@ -8949,7 +9082,7 @@ fi
         assert!(artifacts.iter().any(|artifact| matches!(
             artifact,
             StageArtifact::LabMeetingRequest(request)
-                if request.body.reason == "professor_trigger_policy_matched"
+                if request.body.reason == "runtime_escalation_signals_present"
                     && request.body.topic.starts_with("resolve 1 blocked graduate task")
         )));
         assert!(artifacts

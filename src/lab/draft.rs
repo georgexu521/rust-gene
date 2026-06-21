@@ -24,6 +24,7 @@ Write only the artifact body for the current LabRun stage.
 Prefer a strict JSON object that matches the required artifact type schema.
 Do not claim code was changed or validation passed unless the supplied context says so.
 Keep the output concise, concrete, and ready to persist as a project artifact.
+For PostdocIntegrationSummary, explicitly consider whether repeated graduate failures, stalled stages, blocker reports, sponsor feedback, or poor progress-to-cost ratio suggest strategic drift that should be escalated to the professor. If escalation is needed, put concrete evidence and the requested professor decision in remaining_risks and handoff_to_professor.
 Do not include hidden reasoning, markdown fences, or surrounding commentary."#;
 
 const LAB_ARTIFACT_REVIEW_SYSTEM_PROMPT: &str = r#"You are reviewing a LabRun artifact.
@@ -44,6 +45,8 @@ Return only a strict JSON object for ProfessorReview with:
 review_summary, strategic_assessment, accepted, required_revisions, user_report.
 Do not inspect raw code details beyond the supplied evidence summary.
 Do not accept closeout unless validation evidence and postdoc handoff are sufficient.
+Anchor guidance to the current stage, postdoc blocker/integration evidence, changed files, validation results, remaining risks, and the specific tradeoff under review.
+Do not give broad, generic, or orthogonal advice. If the blocker is backend architecture, do not answer with unrelated frontend guidance.
 Do not include hidden reasoning, markdown fences, or surrounding commentary."#;
 
 const LAB_SPONSOR_MESSAGE_CLASSIFICATION_SYSTEM_PROMPT: &str = r#"You are the LabRun Professor agent classifying a sponsor side-channel message.
@@ -80,6 +83,7 @@ const LAB_MEETING_SYSTEM_PROMPT: &str = r#"You are running a read-only LabRun me
 
 The Professor owns strategy, scope, risk, and sponsor-facing direction.
 The Postdoc owns concrete implementation state, validation evidence, blockers, and next technical steps.
+Professor guidance must be specific to the current blocker, evidence, stage, and tradeoff. Do not give generic advice or switch to an unrelated domain.
 Return only a strict JSON object with:
 {
   "professor_view": "...",

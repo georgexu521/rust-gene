@@ -425,14 +425,16 @@ optional lab meeting.
 - Each generated meeting summary is tracked in `LabRun.meeting_ids` and
   `LabRun.artifact_ids`.
 
-### Completed in P0.34 professor-trigger meeting recommendation signals
+### Completed in P0.34 runtime escalation signal recommendations
 
 - Added deterministic meeting recommendation evaluation on top of persisted
   LabRun state.
-- `/lab meeting recommend` now reports whether a professor-triggered meeting is
-  recommended, the proposed topic, the reason, and concrete signals.
+- `/lab meeting recommend` now reports runtime escalation signals, the proposed
+  topic, the reason, and concrete factual signals. These are advisory runtime
+  signals, not professor intent.
 - Current signals include blocked graduate tasks, repeated failed graduate
-  dispatches for the same task, and LabRun failure budget exhaustion.
+  dispatches for the same task, mandatory professor checkpoints, high
+  cost/context growth, and LabRun failure budget exhaustion.
 - The recommendation command is read-only. It does not automatically start a
   meeting or mutate project code; the user or scheduler can explicitly create a
   meeting report with `/lab meeting <topic>`.
@@ -511,12 +513,17 @@ optional lab meeting.
   `agent_merge`, or `agent_cleanup` implementation.
 - LabRun does not reimplement git merge logic. It records a
   `lab_graduate_worktree_action` event with task ID, dispatch ID, agent ID,
-  action, success, and error.
+  action, success, error, and the resulting cleanup state.
 - The command refuses to run if no graduate dispatch has an `agent_id`, which
   prevents accidental merge attempts before real subagent execution exists.
 - This creates the explicit review/merge/reject control surface needed for
   isolated graduate worktrees while preserving existing permission and
   worktree-manager gates.
+- Graduate dispatch records now persist explicit cleanup state:
+  `cleanup_pending`, `cleanup_done`, or `cleanup_blocked`.
+- `/lab review`, `/lab dashboard`, and `/lab recovery` show graduate cleanup
+  state so stale isolated branches/worktrees are visible instead of hidden as
+  background best effort.
 
 ### Completed in P0.41 blocker-to-professor review transition
 
@@ -1447,7 +1454,7 @@ optional lab meeting.
 ### Completed in P0.99 TUI recommended meeting action text
 
 - Updated `/panel lab` to surface a concrete recommended action when the
-  professor-triggered meeting signal is active:
+  runtime escalation signal is active:
   `recommended: /lab meeting open <topic>`.
 - This keeps TUI behavior non-mutating while making the open-meeting action
   visually prominent in the Lab panel.
@@ -1569,10 +1576,9 @@ optional lab meeting.
   - `/lab task worktree cleanup <task_id> force`.
 - Split live validation modes:
   - `--live-control-plane` is the provider-backed Professor/daemon smoke for
-    models such as DeepSeek v4 flash that are useful for control-plane work but
-    not yet certified for graduate tool use;
-  - `--live-graduate` is the full certification gate for providers that should
-    autonomously edit files through tools;
+    models such as DeepSeek v4 flash that are useful for control-plane work;
+  - `--live-graduate` is the full graduate task-evidence diagnostic for
+    providers that should autonomously edit files through tools;
   - `--live` aliases `--live-graduate` so old callers keep the strict behavior.
 - Updated `agent_merge` so new files created by a graduate isolated worktree are
   prepared with `git add -N` and merged as tracked diffs instead of being
@@ -1597,26 +1603,24 @@ optional lab meeting.
   - no real file changes were observed in the isolated worktree;
   - runtime correctly failed the dispatch with
     `graduate runtime verification found no actual file changes`.
-- Current certification conclusion: DeepSeek v4 flash is usable for Professor
-  control-plane classification/drafting paths, but is not yet certified for
-  autonomous Lab graduate code-writing under the tool-backed runtime contract.
+- Current diagnostic conclusion: DeepSeek v4 flash is usable for Professor
+  control-plane classification/drafting paths, but earlier live evidence did not
+  prove autonomous Lab graduate code-writing under the tool-backed runtime
+  contract.
 - Recorded this product-level distinction in `docs/PROVIDER_CERTIFICATION_MATRIX.md`
   under `LabRun Live Certification`.
 
-### Completed in P0.104 graduate provider certification gate
+### Superseded in P0.104 graduate provider certification gate
 
-- Added a runtime Lab graduate provider certification gate.
-- Known-unsupported graduate providers are blocked before launching a costly
-  subagent run, while unverified providers can still be attempted for future
-  certification.
-- DeepSeek `deepseek-v4-flash` is currently marked known-unsupported for
-  autonomous graduate code-writing because the live certification evidence
-  showed structured completion claims with `tools_used=[]` and no real worktree
-  diff.
-- The gate records a failed graduate dispatch, blocks the graduate task, and
-  records a LabRun failure with a clear certification message.
-- `PRIORITY_AGENT_LAB_ALLOW_UNCERTIFIED_GRADUATE_PROVIDER=1` can override the
-  gate for explicit experimental runs.
+- This slice originally added a runtime Lab graduate provider certification gate.
+- As of the 2026-06-21 graduate execution policy alignment, provider/model names
+  no longer hard-block graduate dispatch before a subagent run.
+- Historical provider records remain as diagnostics only. Weak providers should
+  produce weak or missing task evidence, which is then handled by runtime
+  evidence checks and postdoc review.
+- `PRIORITY_AGENT_LAB_ALLOW_UNCERTIFIED_GRADUATE_PROVIDER=1` is retained only as
+  a legacy diagnostic override indicator; graduate dispatch itself is now
+  provider-neutral.
 - `pa lab --command ... --with-provider` now includes `provider_id` metadata
   from `PRIORITY_AGENT_DEFAULT_PROVIDER`, while the gate can also infer DeepSeek
   from the model name.
@@ -1756,29 +1760,28 @@ optional lab meeting.
   the message to a meeting decision.
 - `lab-daemon` completed with exit status `0` in hybrid daemon smoke mode.
 - Graduate tool-backed code execution remains intentionally skipped in
-  `--live-control-plane`; `deepseek-v4-flash` remains blocked for autonomous
-  graduate code-writing by the provider certification gate.
-- Re-ran `scripts/lab-live-validation.sh --live` with the same DeepSeek model
-  and confirmed the graduate path fails before launching another subagent run,
-  with the certification message in
-  `target/lab-live-validation/20260620-000318/15-live-task-run.txt`.
+  `--live-control-plane`; graduate code-writing capability is evaluated through
+  task-level evidence diagnostics rather than provider-name blocking.
+- Older DeepSeek `--live` evidence in
+  `target/lab-live-validation/20260620-000318/15-live-task-run.txt` reflected
+  the now-superseded certification-gate behavior.
 
-### Completed in P0.113 provider certification status surface
+### Updated in P0.113 provider diagnostics status surface
 
 - Added `/lab provider` for provider-backed Lab command contexts.
-- The command reports active provider ID, model, graduate certification state,
-  whether graduate execution is allowed, whether the experimental override is
-  enabled, and the exact live validation commands to run.
+- The command reports active provider ID, model, graduate diagnostic state,
+  provider-neutral graduate dispatch policy, legacy diagnostic override state,
+  and the exact live validation commands to run.
 - The offline `/lab provider` entrypoint now gives a clear provider-shell hint
   instead of silently guessing from environment state.
 - Extended `scripts/lab-live-validation.sh --offline` to verify the no-context
   provider guard.
-- Extended live validation modes to write and verify a provider certification
+- Extended live validation modes to write and verify a provider diagnostics
   report after provider-backed sponsor classification.
 - Verified with DeepSeek v4 flash live control-plane at
   `target/lab-live-validation/20260620-001212/report.md`; the provider report
-  shows `Graduate certification: known_unsupported` and
-  `Graduate execution allowed: false`.
+  predated the provider-neutral dispatch policy and used the old certification
+  labels.
 
 ### Completed in P0.114 same-provider subagent comparison diagnostic
 
@@ -1802,8 +1805,8 @@ optional lab meeting.
     and the expected smoke file did not exist in the isolated worktree;
   - the generic result text claimed `file_write`, but runtime file proof did
     not confirm the claim;
-  - formal Lab graduate dispatch was correctly blocked before agent launch by
-    the provider certification gate.
+  - formal Lab graduate dispatch was blocked before agent launch by the
+    now-superseded provider certification gate.
 - Current conclusion: this is not just a `lab-graduate` prompt/envelope issue.
   DeepSeek v4 flash still lacks hard evidence for autonomous tool-backed
   coding even through the generic subagent path, and the generic subagent
@@ -1837,12 +1840,12 @@ optional lab meeting.
   recovery, top-level `tools_used` propagation, and refreshed live provider
   evidence.
 - Re-ran `scripts/lab-live-validation.sh --live` with DeepSeek v4 flash and
-  confirmed the full graduate certification gate still fails before launching a
+  confirmed the old full graduate certification gate failed before launching a
   graduate subagent:
   `target/lab-live-validation/20260620-121300/15-live-task-run.txt`.
-- Cross-provider graduate certification with a stronger coding provider remains
-  pending because the current local provider configuration only exposes
-  DeepSeek v4 flash.
+- This provider-gate behavior was later superseded by the provider-neutral
+  task-evidence policy; cross-provider live task-evidence validation still
+  remains useful.
 
 ### Completed in P0.117 generic subagent product closeout
 
@@ -1862,8 +1865,9 @@ optional lab meeting.
   `target/lab-live-validation/20260620-generic-subagent-product-closeout/evidence/provider-compare.txt`.
   Current result: generic foreground subagent succeeds with
   `tools_used: bash,file_write,file_read` and isolated-worktree file proof;
-  background subagent also succeeds with hard file proof. Formal Lab graduate
-  remains blocked by the provider certification gate and is still not certified.
+  background subagent also succeeds with hard file proof. The formal Lab graduate
+  provider gate mentioned in this evidence was later superseded by the
+  provider-neutral task-evidence policy.
 
 ### Completed in P0.118 Lab graduate durable subagent alignment
 
@@ -2419,15 +2423,15 @@ optional lab meeting.
   - `10o-run-hybrid-cycles-budget-gate-test.txt`;
   - `10p-run-hybrid-cycles-compression-test.txt`.
 
-### Completed in P0.139 Professor-triggered meeting request artifact
+### Updated in P0.139 runtime escalation meeting request artifact
 
-- Added a Professor-owned `LabMeetingRequest` stage artifact for
-  professor-triggered meeting recommendations.
+- Added a Runtime-owned `LabMeetingRequest` stage artifact for runtime
+  escalation signals.
 - `/lab meeting open` now writes that durable request artifact and Markdown
   report before creating the read-only `LabMeetingSummary` when it is opened
   from an actual recommendation signal.
 - Manual `/lab meeting open <topic>` remains a user-triggered read-only
-  meeting and does not fabricate a professor-triggered request.
+  meeting and does not fabricate a runtime escalation request.
 - The request artifact records topic, current stage, trigger reason, matched
   signals, requesting role, and next action.
 - Added orchestrator and command coverage proving the request artifact is
@@ -2456,10 +2460,11 @@ optional lab meeting.
   foreground generic subagent used `bash,file_write,file_read`, background
   generic subagent used `file_write,file_read,bash`, and both produced
   file-proof artifacts in isolated worktrees.
-- Lab graduate execution remains blocked before spending a graduate run because
-  DeepSeek v4 flash is still `known_unsupported` for the formal graduate
-  certification path: isolated graduate execution, runtime-observed file
-  changes, required validation, and worktree review/merge/cleanup proof.
+- Older Lab graduate execution policy blocked DeepSeek v4 flash before spending
+  a graduate run. The current policy no longer blocks by provider name; DeepSeek
+  evidence should be evaluated through the same isolated execution,
+  runtime-observed file changes, required validation, and worktree
+  review/merge/cleanup proof path as every other provider.
 
 ### Completed in P0.141 Active lease scheduling gate
 
@@ -2858,9 +2863,10 @@ optional lab meeting.
   succeeded, runtime validation passed, and worktree review/merge/cleanup
   passed in
   `target/lab-live-validation/p0-162-live-graduate-cert-skip/report.md`.
-- Because the run used the uncertified-provider override, the validation script
-  now records it as experimental runtime-path evidence and intentionally skips
-  formal `graduate passed` provider certification.
+- Because the run used the legacy uncertified-provider override flag, the
+  validation script recorded it as experimental runtime-path evidence. Under the
+  current policy this is diagnostic task evidence, not a provider allowlist
+  decision.
 
 ### Completed in P0.164 Live provider Lab meeting validation
 
@@ -2873,9 +2879,9 @@ optional lab meeting.
 - Re-ran DeepSeek v4 flash control-plane validation in
   `target/lab-live-validation/p0-164-provider-meeting-live-control/report.md`.
   Sponsor classification, provider diagnostics, provider Lab meeting summary,
-  provider compare, daemon validation, and control-plane certification recording
-  passed. The Lab graduate path remained correctly blocked by the graduate
-  provider certification gate in control-plane mode.
+  provider compare, daemon validation, and control-plane diagnostics recording
+  passed. This control-plane lane intentionally does not prove graduate
+  code-writing capability.
 
 ### Completed in P0.165 Live background completion-sink validation
 
@@ -2937,9 +2943,9 @@ optional lab meeting.
   consumption exists. Release-ready multi-cycle operation across supported
   providers is still pending.
 - Full live graduate subagent execution now requires runtime-observed file
-  changes and validation, not only bindable JSON. DeepSeek v4 flash has passed
-  this runtime path under the explicit uncertified-provider override, but it is
-  still not formally certified as a supported graduate provider.
+  changes and validation, not only bindable JSON. Provider records are diagnostic
+  evidence only; release readiness still needs repeated task-evidence validation
+  across the providers users are expected to run.
 - Desktop-managed persistent background ownership is implemented at the
   control-plane level: provider calls restart from persisted policy when
   `pa lab` opens, can run via the non-interactive `lab-daemon` worker, have a
@@ -3373,11 +3379,12 @@ Graduate agent responsibilities:
 - Produce a structured result plus a short Markdown report.
 - Never change professor-level goals or postdoc architecture decisions.
 
-### 5. Lab meetings can be user-triggered or professor-triggered
+### 5. Lab meetings can be user-triggered or professor-checkpoint-triggered
 
 Do not start with automatic meetings on every app launch. That risks becoming
 annoying and expensive. But the architecture should support both explicit user
-meetings and professor-triggered meetings.
+meetings and professor-checkpoint meetings initiated from runtime signals or
+postdoc escalation requests.
 
 MVP should expose:
 
@@ -4589,7 +4596,7 @@ ProfessorPlan
      if technical blocker:
        postdoc blocker report -> professor decision
      if strategic concern:
-       professor-triggered lab meeting
+       professor checkpoint or lab meeting
      if user decision required:
        user_report with explicit question
   -> ProfessorReview at stage boundary
@@ -4744,9 +4751,9 @@ Meeting panel should show:
 - next recommended action.
 
 The UI should not interrupt startup by default. It can show a quiet indicator
-when a meeting is recommended. In Lab Mode, a professor-triggered meeting can
-surface as a pending meeting request with a short reason, not as a surprise
-modal that blocks the user.
+when a runtime escalation signal or professor checkpoint recommends a meeting.
+In Lab Mode, that meeting can surface as a pending meeting request with a short
+reason, not as a surprise modal that blocks the user.
 
 ## Implementation Plan
 
@@ -5122,7 +5129,7 @@ Current status:
   preserving strict stop boundaries.
 - Completed: explicit `/lab continue [note]` writes a cycle summary and starts
   the next cycle from `professor_discussion` after `user_report`.
-- Completed: retry budget accounting, professor-triggered meeting signals, and
+- Completed: retry budget accounting, runtime escalation signals, and
   blocker artifacts exist in the LabRun loop.
 - Completed: `pa lab` startup/shutdown records app lifecycle state, startup
   recovery, and shutdown pause through the Lab store.
@@ -5155,7 +5162,7 @@ Current status:
   artifact/report for queued/classified/applied sponsor messages without
   applying meetings or tasks.
 - Completed: `/lab meeting open [topic]` provides the read-only open-meeting
-  backend for professor-triggered meeting recommendations.
+  backend for runtime escalation signals and explicit meeting topics.
 - Completed: Lab professor/postdoc/graduate prompt versions are explicit in the
   runnable profile registry and dispatch constraints.
 - Completed: `/lab recovery` exposes the recovery choice surface required
@@ -5183,7 +5190,7 @@ Build:
   - `completed`;
 - cycle counter and max-cycle safety budget;
 - per-cycle token budget enforcement for explicit foreground hybrid cycle runs;
-- Completed: professor-triggered meeting request artifact.
+- Completed: runtime escalation meeting request artifact.
 - Completed: postdoc blocker report artifact.
 - Completed: read-only meeting summary artifact with recorded decision field.
 - Completed: pause/resume hooks that stop scheduling and persist a resumable
@@ -5277,9 +5284,9 @@ Current status:
 - Completed: if a graduate agent succeeds but misses the structured JSON
   contract, the runtime can still bind a `GraduateResult` only after
   parent-side verification proves scoped file changes and required validation.
-- Completed: live graduate validation can run with the uncertified-provider
-  override for runtime-path evidence without writing a formal
-  `graduate passed` provider certification record.
+- Completed: live graduate validation and provider compare remain diagnostic,
+  but Lab graduate dispatch is provider-neutral and no longer hard-blocks by
+  provider/model name before task evidence exists.
 - Completed: the `lab-graduate` profile and generated graduate task prompt now
   require the JSON shape consumed by automatic result binding.
 - Completed: `/lab integrate [note]` turns bound `GraduateResult` artifacts
@@ -5289,9 +5296,10 @@ Current status:
   into professor-owned final review artifacts and the `user_report` gate.
 - Completed: `/lab meeting [topic]` writes a read-only `LabMeetingSummary`
   artifact and Markdown report.
-- Completed: `/lab meeting recommend` reports professor-triggered meeting
-  recommendations from blocked tasks, repeated dispatch failures, and failure
-  budget exhaustion.
+- Completed: `/lab meeting recommend` reports runtime escalation signals from
+  blocked tasks, repeated dispatch failures, mandatory checkpoints, high
+  cost/context growth, and failure budget exhaustion. These signals are advisory
+  context, not professor intent.
 - Completed: graduate execution failures increment LabRun failure accounting and
   escalate to `NeedsUser` when retry budget is exhausted.
 - Completed: `/lab blocker report [note]` writes a postdoc-owned
@@ -5310,6 +5318,8 @@ Current status:
 - Completed: `/lab task worktree <review|merge|cleanup> <task_id> [force]`
   delegates isolated graduate worktree review/merge/cleanup to the existing
   WorktreeTool using the dispatch `agent_id`.
+- Completed: graduate worktree cleanup status is persisted per dispatch and
+  exposed in `/lab review`, `/lab dashboard`, and `/lab recovery`.
 - Completed: Lab graduate dispatch now uses the same stable durable subagent
   task ID scheme as generic subagents, and runtime verification can recover the
   graduate isolated worktree by that task ID if `agent_id` lookup is
@@ -5346,9 +5356,8 @@ Current status:
 - Completed: `/lab messages decision` provides a durable Professor steering
   decision artifact/report for sponsor side-channel messages without applying
   the decision.
-- Completed: `/lab meeting open` turns a real professor-triggered meeting
-  recommendation into a read-only meeting report without acquiring the mutating
-  lease.
+- Completed: `/lab meeting open` turns a runtime escalation signal into a
+  read-only meeting report without acquiring the mutating lease.
 - Completed: role profile prompt versions are explicit and tied to persisted
   LabRun role defaults by coverage.
 - Completed: `/lab recovery` shows paused LabRun recovery options without
@@ -5365,7 +5374,7 @@ Current status:
   requiring the Workbench drawer to be open.
 - Completed experimentally: live end-to-end validation of real graduate agent
   execution, runtime verification, worktree review, merge, cleanup, and daemon
-  validation has passed under the explicit uncertified-provider override.
+  validation has passed under the explicit diagnostic path.
 - Completed for DeepSeek v4 flash control-plane: live sponsor-message
   classification and provider-backed read-only Lab meeting summaries are now
   covered by `scripts/lab-live-validation.sh --live-control-plane`.
@@ -5409,7 +5418,7 @@ Build:
 - command palette entry or TUI action for "Lab Meeting";
 - desktop/TUI status panel for current lab run;
 - quiet "meeting recommended" indicator;
-- professor-triggered meeting request display;
+- runtime escalation meeting request display;
 - open report action.
 
 Current status:
@@ -5440,7 +5449,7 @@ Current status:
   covers provider-backed read-only Lab meeting summaries; cross-provider UI
   live validation remains outside Phase 7's UI slice.
 
-Meeting recommendation and professor-trigger triggers:
+Runtime escalation signals and professor-checkpoint triggers:
 
 - more than N commits since last lab meeting;
 - failed production gate;
@@ -5449,12 +5458,13 @@ Meeting recommendation and professor-trigger triggers:
 - postdoc reports repeated failed graduate task;
 - postdoc reports a hard implementation blocker;
 - validation fails repeatedly on the same slice;
-- professor detects strategic drift from the original plan;
+- mandatory professor checkpoint before closeout or cycle continuation;
+- repeated context compression or high cost/context growth relative to progress;
 - user-configured interval.
 
 Do not auto-run a meeting on every startup in MVP. In later versions, allow
-professor-triggered meetings inside an active Lab Mode run, but record why the
-meeting was triggered.
+professor-checkpoint meetings inside an active Lab Mode run, but record the
+runtime signal or postdoc escalation request that led to the meeting.
 
 Meetings should not acquire the mutating lease unless the user chooses a
 follow-up action that starts or resumes implementation. Read-only meeting
@@ -5657,7 +5667,7 @@ Current MVP caveat:
 
 Post-MVP but required for full Lab Mode:
 
-- professor-triggered meeting requests;
+- runtime escalation meeting requests;
 - repeated professor/postdoc/graduate cycles;
 - graduate task delegation through subagent infrastructure;
 - `/lab intervene` controls wired to active lab runs;
@@ -5711,8 +5721,8 @@ cargo check -q
    only when risk is medium/high?
 5. Should professor review be mandatory after every lab implementation run, or
    only for architecture/product slices?
-6. What threshold should allow professor-triggered meetings without explicit
-   user click?
+6. What threshold should allow runtime escalation or professor-checkpoint
+   meetings without explicit user click?
 7. Should Lab Mode continue cycles in the background, or only while the user has
    an active session open?
 8. Should professor/postdoc meeting discussion be exposed as a transcript, or
@@ -5744,8 +5754,8 @@ cargo check -q
    narrow module; allow direct scoped edits for very small tasks.
 5. Require professor review for architecture/product lab runs; make it optional
    for simple implementation-only runs.
-6. Allow professor-triggered meetings after repeated validation failure,
-   postdoc blocker report, or strategic drift signal, but surface them as
+6. Allow runtime escalation meetings after repeated validation failure, postdoc
+   blocker report, mandatory checkpoint, or strategic drift signal, but surface them as
    pending meeting requests before making disruptive changes.
 7. Keep MVP foreground/session-bound; add background continuation only after
    pause/resume, budget, and notification behavior are reliable.

@@ -260,6 +260,28 @@ pub enum GraduateDispatchStatus {
     Cancelled,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GraduateCleanupStatus {
+    CleanupPending,
+    CleanupDone,
+    CleanupBlocked,
+}
+
+impl GraduateCleanupStatus {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::CleanupPending => "cleanup_pending",
+            Self::CleanupDone => "cleanup_done",
+            Self::CleanupBlocked => "cleanup_blocked",
+        }
+    }
+}
+
+fn default_graduate_cleanup_status() -> GraduateCleanupStatus {
+    GraduateCleanupStatus::CleanupPending
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GraduateDispatchRecord {
     pub schema_version: u32,
@@ -274,6 +296,12 @@ pub struct GraduateDispatchRecord {
     pub agent_id: Option<String>,
     pub result_artifact_id: Option<String>,
     pub error: Option<String>,
+    #[serde(default = "default_graduate_cleanup_status")]
+    pub cleanup_status: GraduateCleanupStatus,
+    #[serde(default)]
+    pub cleanup_message: Option<String>,
+    #[serde(default)]
+    pub cleanup_updated_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -946,15 +974,14 @@ impl LabArtifactType {
 
     pub fn owner(self) -> LabRole {
         match self {
-            Self::ProfessorPlan
-            | Self::ProfessorReview
-            | Self::ProfessorSteeringDecision
-            | Self::LabMeetingRequest => LabRole::Professor,
+            Self::ProfessorPlan | Self::ProfessorReview | Self::ProfessorSteeringDecision => {
+                LabRole::Professor
+            }
             Self::PostdocPlan | Self::PostdocIntegrationSummary => LabRole::Postdoc,
             Self::GraduateResult => LabRole::Graduate,
             Self::CycleSummary => LabRole::Runtime,
             Self::CompressionSummary => LabRole::Runtime,
-            Self::LabMeetingSummary => LabRole::Runtime,
+            Self::LabMeetingRequest | Self::LabMeetingSummary => LabRole::Runtime,
             Self::LabBlockerReport => LabRole::Postdoc,
             Self::LabRevisionTask => LabRole::Professor,
         }
