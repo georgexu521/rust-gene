@@ -1,6 +1,10 @@
-//! Worktree 工具 - 管理 Git worktree
+//! Git worktree management tool.
 //!
-//! 支持列出、创建、删除、清理、切换 worktree
+//! This tool owns the agent-facing worktree boundary: listing worktrees,
+//! creating isolated task branches, switching branches, and cleaning up
+//! worktrees that were created for isolated agent tasks. Destructive cleanup is
+//! intentionally conservative and checks branch ownership and dirty state before
+//! removing anything.
 
 use crate::tools::{Tool, ToolContext, ToolOperationKind, ToolResult, ToolSearchOrReadSemantics};
 use async_trait::async_trait;
@@ -10,7 +14,7 @@ use std::process::Stdio;
 use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
 
-/// Worktree 工具
+/// Tool implementation for managing Git worktrees used by isolated agents.
 pub struct WorktreeTool;
 
 #[derive(Debug, Clone)]

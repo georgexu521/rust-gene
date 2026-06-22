@@ -1,3 +1,7 @@
+//! Plugin discovery and installation tool boundary.
+//!
+//! Surfaces available plugin actions to the model while leaving install approval and execution policy to the runtime.
+
 use crate::plugins;
 use crate::tools::{Tool, ToolContext, ToolRegistry, ToolResult};
 use async_trait::async_trait;

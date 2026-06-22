@@ -1,3 +1,7 @@
+//! File tool support module.
+//!
+//! Separates read, write, edit matching, path policy, and mutation history from the file tool entrypoint.
+
 const MAX_MATCH_CONTEXT_OCCURRENCES: usize = 12;
 
 /// 查找所有精确匹配位置

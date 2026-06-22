@@ -1,3 +1,8 @@
+//! Validation output parsers for auto-verify.
+//!
+//! Parsers normalize common test/check/lint outputs into structured validation
+//! issues. They should preserve evidence rather than hiding failing commands.
+
 use super::{command_output_with_timeout, VerificationIssue, VerificationResult};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};

@@ -1,3 +1,9 @@
+//! Runtime helpers for LabRun drafting.
+//!
+//! These helpers build deterministic fallback artifacts, parse provider JSON,
+//! and aggregate cycle usage. They must not claim validation or code changes
+//! unless that evidence exists in the supplied LabRun context.
+
 use super::*;
 
 pub(super) fn lab_cycle_total_tokens(

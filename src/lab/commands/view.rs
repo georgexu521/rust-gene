@@ -1,3 +1,8 @@
+//! Read-only LabRun view and report command handlers.
+//!
+//! View commands render gates, dashboards, reports, artifacts, recovery state,
+//! and certification status without mutating LabRun execution state.
+
 use super::*;
 
 pub(super) fn handle_gate_command(orchestrator: &LabOrchestrator, args: &str) -> String {

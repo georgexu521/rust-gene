@@ -1,3 +1,7 @@
+//! Evidence ledger support.
+//!
+//! Stores structured proof records that closeout and diagnostics can inspect later.
+
 use super::*;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

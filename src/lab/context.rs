@@ -1,3 +1,7 @@
+//! LabRun support module.
+//!
+//! Keeps LabRun scheduling, delegation, reporting, and certification helpers separate from normal agent turns.
+
 use crate::engine::context_compressor::estimate_tokens;
 use crate::engine::prompt_context::stable_fingerprint;
 use crate::lab::model::{

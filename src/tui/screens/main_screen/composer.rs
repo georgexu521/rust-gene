@@ -1,3 +1,7 @@
+//! Main TUI screen support.
+//!
+//! Splits composer, approvals, popups, and status bar rendering into focused modules.
+
 use crate::components::attachment_token::AttachmentToken;
 use crate::tui::{
     app::{AppMode, TuiApp},

@@ -1,7 +1,8 @@
-//! TUI 命令注册表
+//! TUI slash-command registry.
 //!
-//! 统一管理所有 slash 命令，支持别名、分类、帮助信息。
-//! 借鉴 Hermes 的 CommandDef 设计。
+//! The registry owns command metadata, aliases, palette behavior, and maturity
+//! labels. Placeholder and unavailable commands stay hidden from default
+//! surfaces so help text does not overpromise production capability.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 
@@ -48,6 +49,7 @@ impl CommandMaturity {
         }
     }
 
+    /// Whether commands at this maturity should be hidden until explicitly queried.
     pub const fn hidden_by_default(self) -> bool {
         matches!(
             self,
@@ -69,9 +71,9 @@ pub struct CommandDef {
     pub usage: &'static str,
     /// 详细描述
     pub description: &'static str,
-    /// 是否为实验性命令
+    /// Whether the command is experimental.
     pub experimental: bool,
-    /// 是否为占位命令（功能尚未完全实现）
+    /// Whether the command is hidden because it is placeholder or unavailable.
     pub placeholder: bool,
     /// 用户可见成熟度分类
     pub maturity: CommandMaturity,

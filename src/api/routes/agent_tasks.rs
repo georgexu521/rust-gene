@@ -1,3 +1,8 @@
+//! API route handlers for persisted agent task state.
+//!
+//! These handlers expose read-only task lists and task detail snapshots backed
+//! by `SessionStore` projection data.
+
 use axum::{extract::Path, extract::State, response::IntoResponse, Json};
 use serde::Serialize;
 use serde_json::Value;

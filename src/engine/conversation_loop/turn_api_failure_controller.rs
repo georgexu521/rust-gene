@@ -1,3 +1,7 @@
+//! Conversation-loop controller module.
+//!
+//! Owns one focused stage of turn execution so permissions, validation, repair, and closeout stay explicit in the runtime.
+
 use super::runtime_diet::{trace_runtime_diet_report, RuntimeDietSnapshot};
 use super::turn_recording::record_recovery_plan;
 use super::ConversationLoop;

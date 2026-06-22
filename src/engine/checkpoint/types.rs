@@ -1,3 +1,8 @@
+//! Checkpoint data types and limits.
+//!
+//! These types describe file snapshots, diffs, and checkpoint metadata used by
+//! mutation tools and revert flows.
+
 use chrono::{DateTime, Local};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;

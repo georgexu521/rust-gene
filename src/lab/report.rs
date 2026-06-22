@@ -1,3 +1,7 @@
+//! LabRun support module.
+//!
+//! Keeps LabRun scheduling, delegation, reporting, and certification helpers separate from normal agent turns.
+
 use crate::lab::model::{
     GraduateResult, LabArtifactEnvelope, LabBlockerReport, LabCompressionSummary, LabCycleSummary,
     LabMeetingRequest, LabMeetingSummary, LabRevisionTask, PostdocIntegrationSummary, PostdocPlan,

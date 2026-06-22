@@ -1,3 +1,7 @@
+//! Bash tool support module.
+//!
+//! Separates process execution, background handling, PTY behavior, and command classification from the tool entrypoint.
+
 use portable_pty::{native_pty_system, CommandBuilder, PtySize};
 use std::io::Read;
 use std::path::PathBuf;

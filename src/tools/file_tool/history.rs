@@ -1,3 +1,7 @@
+//! File tool support module.
+//!
+//! Separates read, write, edit matching, path policy, and mutation history from the file tool entrypoint.
+
 use super::EditDiffSummary;
 use crate::engine::checkpoint::{Checkpoint, FileChangeInput, FileChangeRecord};
 use crate::tools::ToolContext;

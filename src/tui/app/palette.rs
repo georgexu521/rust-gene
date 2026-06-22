@@ -1,3 +1,9 @@
+//! TUI command-palette state helpers.
+//!
+//! The palette uses command metadata and maturity labels from `tui::commands`
+//! so unavailable commands stay hidden unless the user explicitly searches for
+//! them.
+
 use super::*;
 
 impl TuiApp {

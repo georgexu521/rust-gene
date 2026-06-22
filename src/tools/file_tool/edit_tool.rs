@@ -1,3 +1,7 @@
+//! File tool support module.
+//!
+//! Separates read, write, edit matching, path policy, and mutation history from the file tool entrypoint.
+
 use super::*;
 use crate::tools::{Tool, ToolContext, ToolOperationKind, ToolResult};
 use async_trait::async_trait;

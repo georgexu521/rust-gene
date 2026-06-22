@@ -1,3 +1,9 @@
+//! Provider health probes and health ledger.
+//!
+//! Health checks validate chat, tool-call, and tool-result continuation
+//! behavior. Results are persisted as diagnostics, not as runtime permission or
+//! closeout proof.
+
 use crate::services::api::{ChatRequest, LlmProvider, Message, Tool, ToolCall, ToolChoice};
 use serde::{Deserialize, Serialize};
 use serde_json::json;

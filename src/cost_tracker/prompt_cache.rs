@@ -1,3 +1,9 @@
+//! Prompt-cache diagnostic records.
+//!
+//! This module stores compact cache-hit/cache-miss facts so runtime and
+//! frontend surfaces can explain prompt-cache behavior without parsing provider
+//! responses repeatedly.
+
 use serde::{Deserialize, Serialize};
 use std::time::SystemTime;
 

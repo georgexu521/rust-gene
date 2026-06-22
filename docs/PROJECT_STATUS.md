@@ -43,6 +43,38 @@ Remaining before a broad repository release-ready claim:
   `docs/RELEASE_STRUCTURE_CLEANUP_RECOMMENDATIONS_2026-06-22.md`; continue
   with the normal release publication checklist for packaging/distribution.
 
+## Code Documentation Rollout — Initial Boundary Pass Implemented (2026-06-22)
+
+The code comment and rustdoc standard is tracked in
+`docs/CODE_DOCUMENTATION_PLAN_2026-06-22.md`.
+
+Implemented in this slice:
+
+- `docs/README.md` links the documentation standard as a canonical release
+  reference.
+- `scripts/audit_rust_docs.py` provides an advisory scan for missing module
+  docs and missing docs on `pub` / `pub(crate)` Rust items.
+- `scripts/validate_docs.sh` now checks that the documentation plan exists and
+  runs the advisory audit without failing the normal docs gate.
+- Boundary-focused module docs were added across LabRun, runtime streaming,
+  permissions, high-risk tools, API routes, desktop runtime, TUI command
+  surfaces, session store, provider diagnostics, memory reports/provider
+  registry, and TUI app state/action/palette modules.
+
+Current advisory audit baseline after the rollout:
+
+```text
+files scanned: 639
+findings: 4366
+missing-item-doc: 4366
+missing-module-doc: 0
+```
+
+This count is intentionally not a release blocker yet. The documented standard
+keeps future work focused on public contracts and high-risk logic rather than
+mechanical comments on obvious private helpers. Module-level rustdoc gaps are
+currently cleared by the advisory audit.
+
 ## Remaining Structure Refinement — Implemented (2026-06-22)
 
 The follow-up refinement plan is tracked in

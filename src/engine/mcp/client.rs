@@ -1,3 +1,7 @@
+//! MCP runtime adapter support.
+//!
+//! Bridges configured MCP servers into the tool surface while preserving server-scoped boundaries.
+
 use super::*;
 
 fn oauth_store_path() -> std::path::PathBuf {

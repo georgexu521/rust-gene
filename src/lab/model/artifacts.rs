@@ -1,3 +1,9 @@
+//! LabRun stage artifact model types.
+//!
+//! Stage artifacts are the handoff objects between Professor, Postdoc, and
+//! Graduate roles. They are persisted by `LabStore`, rendered into reports, and
+//! used by `LabOrchestrator` to decide whether a stage can advance.
+
 use super::*;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

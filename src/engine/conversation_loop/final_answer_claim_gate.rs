@@ -1,3 +1,7 @@
+//! Conversation-loop controller module.
+//!
+//! Owns one focused stage of turn execution so permissions, validation, repair, and closeout stay explicit in the runtime.
+
 use crate::engine::evidence_ledger::{EvidenceLedger, ToolExecutionRecord, ToolExecutionStatus};
 use crate::engine::intent_router::{IntentKind, IntentRoute, WorkflowKind};
 use crate::engine::verification_proof::{VerificationProof, VerificationProofStatus};

@@ -1,3 +1,7 @@
+//! Bash tool support module.
+//!
+//! Separates process execution, background handling, PTY behavior, and command classification from the tool entrypoint.
+
 use tokio::process::Command;
 use tracing::warn;
 

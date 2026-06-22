@@ -1,3 +1,7 @@
+//! TUI application state support.
+//!
+//! Keeps runtime state, memory panels, slash commands, and status tools separate from rendering.
+
 use super::*;
 
 impl TuiApp {

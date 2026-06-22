@@ -1,3 +1,7 @@
+//! TUI view-model support.
+//!
+//! Projects runtime and session state into render-ready rows, footer state, activity, reasoning, and tool views.
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AssistantReasoningView {
     pub visible_answer: String,

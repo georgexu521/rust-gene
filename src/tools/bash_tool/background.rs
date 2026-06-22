@@ -1,3 +1,7 @@
+//! Bash tool support module.
+//!
+//! Separates process execution, background handling, PTY behavior, and command classification from the tool entrypoint.
+
 use super::{
     bash_permission_review_data, classification_data, command_classifier::classify_command,
     kill_process_tree, preview_text, sanitize_agent_runtime_env, shell_output_artifact_path,

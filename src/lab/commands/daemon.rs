@@ -1,3 +1,9 @@
+//! LabRun daemon command handlers.
+//!
+//! These commands configure and inspect background LabRun scheduler behavior.
+//! They report policy and lifecycle state but should not hide blocked cleanup or
+//! recovery conditions.
+
 use super::*;
 
 pub(super) fn handle_daemon_command(project_root: &Path, store: &LabStore, args: &str) -> String {

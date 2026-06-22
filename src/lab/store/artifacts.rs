@@ -1,3 +1,9 @@
+//! Artifact persistence operations for `LabStore`.
+//!
+//! This module records artifact bodies, validation gates, markdown reports, and
+//! evidence links. It is the artifact source of truth used by LabRun closeout
+//! and desktop previews.
+
 use super::*;
 
 impl LabStore {

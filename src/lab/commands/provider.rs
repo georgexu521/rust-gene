@@ -1,3 +1,9 @@
+//! LabRun provider diagnostics and durable smoke commands.
+//!
+//! Provider commands certify whether the current model/tool configuration can
+//! support LabRun flows. They should report evidence and failure ownership
+//! rather than weakening LabRun gates.
+
 use super::*;
 
 pub(super) fn handle_provider_command(project_root: &Path, tool_context: ToolContext) -> String {

@@ -1,3 +1,9 @@
+//! Sponsor side-channel command handlers.
+//!
+//! Sponsor messages are classified and persisted for LabRun review. They should
+//! not directly execute work; the runtime records the decision for later
+//! professor/postdoc handling.
+
 use super::*;
 
 pub(super) async fn handle_sponsor_message_classify_command(

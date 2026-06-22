@@ -1,3 +1,7 @@
+//! TUI support module.
+//!
+//! Keeps terminal rendering and interaction helpers separate from runtime execution.
+
 use crate::state::{RuntimeTerminalTask, TaskItem, TaskStatus};
 use crate::tui::app::TuiApp;
 

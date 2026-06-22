@@ -1,3 +1,7 @@
+//! Main TUI screen support.
+//!
+//! Splits composer, approvals, popups, and status bar rendering into focused modules.
+
 use super::{centered_rect, TuiApp};
 use crate::tui::app::AppMode;
 use ratatui::{

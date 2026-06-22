@@ -1,3 +1,9 @@
+//! Provider-backed and deterministic LabRun drafting boundary.
+//!
+//! Drafting creates proposal, artifact, meeting, review, and hybrid-cycle
+//! outputs. Provider output is parsed and sanitized here, while persistence and
+//! stage advancement remain owned by `LabStore` and `LabOrchestrator`.
+
 use crate::lab::context::build_lab_context_packet_with_evidence_retries_and_artifact_refs;
 use crate::lab::model::{
     ArtifactGate, GraduateResult, LabArtifactEnvelope, LabArtifactType, LabMeetingSummary,

@@ -1,3 +1,8 @@
+//! Persistent usage ledger for cost tracking.
+//!
+//! The ledger stores normalized token/cost records and supports aggregated
+//! reporting across providers, models, sessions, and time windows.
+
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs::{File, OpenOptions};

@@ -1,3 +1,7 @@
+//! Engine support module.
+//!
+//! Holds focused runtime support code used by the query engine and conversation loop.
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TurnIngressLane {
     SideQuestion,

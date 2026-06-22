@@ -1,3 +1,10 @@
+//! Collaboration artifacts and meeting flows for LabRun.
+//!
+//! These methods create Professor/Postdoc coordination artifacts, blocker
+//! reports, revision tasks, and steering decisions. They must stay read-only
+//! with respect to code execution unless delegated through explicit runtime
+//! paths.
+
 use super::*;
 
 impl LabOrchestrator {

@@ -1,3 +1,7 @@
+//! Evaluation dataset support.
+//!
+//! Defines replay and external-baseline helpers used to compare runtime behavior without changing production turn execution.
+
 use super::{EvalExpect, EvalReplay};
 use crate::engine::trace::{TraceEvent, TurnTrace};
 

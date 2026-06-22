@@ -1,3 +1,7 @@
+//! Conversation-loop controller module.
+//!
+//! Owns one focused stage of turn execution so permissions, validation, repair, and closeout stay explicit in the runtime.
+
 use super::{safe_prefix_by_bytes, ConversationLoop};
 use crate::engine::streaming::StreamEvent;
 use crate::services::api::Message;

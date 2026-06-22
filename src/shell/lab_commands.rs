@@ -1,3 +1,7 @@
+//! Shell-facing LabRun command handlers.
+//!
+//! Adapts LabRun command execution to the shell entrypoint while keeping orchestration logic in the lab modules.
+
 use super::*;
 
 pub(super) async fn handle_lab_provider_professor_review_command(

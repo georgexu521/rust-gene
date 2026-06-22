@@ -1,3 +1,7 @@
+//! Streaming runtime helper module.
+//!
+//! Keeps stream fallback and turn-message shaping separate from the core query engine.
+
 use crate::services::api::Message;
 use crate::tools::ToolRegistry;
 use std::path::Path;

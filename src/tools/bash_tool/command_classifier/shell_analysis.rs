@@ -1,3 +1,7 @@
+//! Shell command classification support.
+//!
+//! Keeps deterministic command-risk analysis separate from shell execution.
+
 use super::*;
 
 pub(super) fn extract_path_patterns(command: &str) -> Vec<String> {

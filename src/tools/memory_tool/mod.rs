@@ -1,3 +1,9 @@
+//! Memory inspection and diagnostics tool.
+//!
+//! This tool is a read-oriented boundary over the memory store. It renders the
+//! current product memory contract, pinned snapshot, proposal queue, retrieval
+//! trace, and maintenance diagnostics without performing memory writes.
+
 use crate::tools::{Tool, ToolContext, ToolOperationKind, ToolResult};
 use async_trait::async_trait;
 use serde::Deserialize;

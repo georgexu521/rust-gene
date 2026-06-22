@@ -1,3 +1,8 @@
+//! API route handlers for session job records.
+//!
+//! Session jobs are read-only API projections of background or long-running
+//! work associated with a session.
+
 use axum::{extract::Path, extract::State, response::IntoResponse, Json};
 use std::sync::Arc;
 

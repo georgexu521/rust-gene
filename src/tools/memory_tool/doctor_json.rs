@@ -1,3 +1,8 @@
+//! JSON rendering helpers for memory diagnostics.
+//!
+//! The JSON form is used by tooling and tests that need stable fields instead
+//! of the compact human-readable report.
+
 use super::doctor_types::{
     MemoryCalibrationReportJson, MemoryDecisionCountsJson, MemoryDoctorDiagnostics,
     MemoryDoctorDocumentsJson, MemoryDoctorJson, MemoryFlushCountsJson, MemoryMaintenanceJson,

@@ -1,3 +1,7 @@
+//! LabRun CLI entrypoint wiring.
+//!
+//! Connects LabRun subcommands to the shared command handlers without mixing them into normal interactive startup.
+
 use crate::engine::streaming::StreamingQueryEngine;
 use crate::lab::store::LabStore;
 use crate::shell::{self, ShellOptions};

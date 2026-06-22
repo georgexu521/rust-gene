@@ -1,3 +1,9 @@
+//! Scheduler-driven LabRun orchestration.
+//!
+//! Scheduler steps advance LabRun only through persisted state, explicit
+//! artifacts, and validation gates. This keeps background automation auditable
+//! and recoverable after interruption.
+
 use super::*;
 
 impl LabOrchestrator {

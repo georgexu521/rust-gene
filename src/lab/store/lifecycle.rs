@@ -1,3 +1,9 @@
+//! LabRun lifecycle persistence operations.
+//!
+//! This module updates run status, sponsor messages, provider certification,
+//! daemon policy, and recovery-oriented lifecycle state. These writes are part
+//! of the persisted runtime contract and should remain evidence-friendly.
+
 use super::*;
 
 impl LabStore {

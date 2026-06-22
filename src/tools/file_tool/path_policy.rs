@@ -1,3 +1,7 @@
+//! File tool support module.
+//!
+//! Separates read, write, edit matching, path policy, and mutation history from the file tool entrypoint.
+
 use std::path::{Path, PathBuf};
 
 pub(crate) fn is_unc_or_network_path(path: &str) -> bool {

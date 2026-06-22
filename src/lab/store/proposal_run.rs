@@ -1,3 +1,9 @@
+//! LabRun proposal and run persistence operations.
+//!
+//! This module creates proposals, approves them into runs, updates active run
+//! state, and maintains the project-level run index. Stage transitions should
+//! still flow through `LabOrchestrator`.
+
 use super::*;
 
 impl LabStore {

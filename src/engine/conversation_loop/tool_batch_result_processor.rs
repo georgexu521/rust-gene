@@ -1,3 +1,7 @@
+//! Conversation-loop controller module.
+//!
+//! Owns one focused stage of turn execution so permissions, validation, repair, and closeout stay explicit in the runtime.
+
 use super::companion_context;
 use super::tool_context_helpers::{tool_call_fingerprint, tool_result_dialog_content};
 use super::tool_execution::is_read_only;

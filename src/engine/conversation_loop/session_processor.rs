@@ -1,3 +1,7 @@
+//! Conversation-loop controller module.
+//!
+//! Owns one focused stage of turn execution so permissions, validation, repair, and closeout stay explicit in the runtime.
+
 use super::request_timeouts::{llm_request_timeout, stream_chunk_idle_timeout};
 use super::text_sanitizer::{strip_hidden_blocks, VisibleTextSanitizer};
 use super::tool_execution::read_only_tool_concurrency;

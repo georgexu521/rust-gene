@@ -1,7 +1,8 @@
-//! Git 工具 - 执行常见的 git 操作
+//! Git command tool for common repository operations.
 //!
-//! 支持只读操作（status/diff/log/show）和写操作（add/commit/push/checkout/branch）。
-//! 写操作需要用户确认，并有过滤危险参数的安全校验。
+//! Read-only operations report repository state back to the model. Mutating
+//! operations such as add, commit, push, checkout, and branch creation stay
+//! behind the tool permission boundary and reject dangerous argument shapes.
 
 use crate::tools::{
     Tool, ToolContext, ToolOperationKind, ToolResult, ToolSearchOrReadSemantics, ToolUiRenderKind,
@@ -10,7 +11,7 @@ use async_trait::async_trait;
 use serde_json::json;
 use tokio::process::Command;
 
-/// Git 工具
+/// Tool implementation for read-only and explicitly approved Git operations.
 pub struct GitTool;
 
 #[async_trait]

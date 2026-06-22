@@ -1,3 +1,7 @@
+//! Shell command classification support.
+//!
+//! Keeps deterministic command-risk analysis separate from shell execution.
+
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 

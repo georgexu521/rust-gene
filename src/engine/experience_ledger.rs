@@ -1,3 +1,7 @@
+//! Engine support module.
+//!
+//! Holds focused runtime support code used by the query engine and conversation loop.
+
 use crate::engine::trace::{TraceEvent, TurnStatus, TurnTrace};
 use crate::services::api::ToolCall;
 use crate::tools::ToolResult;

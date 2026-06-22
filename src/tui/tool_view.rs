@@ -1,3 +1,7 @@
+//! TUI support module.
+//!
+//! Keeps terminal rendering and interaction helpers separate from runtime execution.
+
 use serde_json::Value;
 use std::time::{Duration, Instant};
 

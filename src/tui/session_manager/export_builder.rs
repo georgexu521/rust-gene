@@ -1,3 +1,7 @@
+//! TUI session export support.
+//!
+//! Builds export views from session records without mutating stored conversations.
+
 use crate::session_store::SessionEventRow;
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};

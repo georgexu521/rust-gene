@@ -1,3 +1,9 @@
+//! Runtime helpers for LabRun stage orchestration.
+//!
+//! These helpers encode stage transition lookup, artifact creation support, and
+//! closeout-related runtime checks used by the public `LabOrchestrator`
+//! methods.
+
 use super::*;
 
 pub(super) fn transition_for_stage(stage: &str) -> Option<StageTransition> {

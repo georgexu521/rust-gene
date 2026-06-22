@@ -1,3 +1,7 @@
+//! Memory provider support module.
+//!
+//! Defines provider contracts and no-network behavior for controlled memory lifecycle tests.
+
 use serde::{Deserialize, Serialize};
 
 use super::traits::MemoryProvider;

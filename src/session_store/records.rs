@@ -1,3 +1,7 @@
+//! Session-store support module.
+//!
+//! Owns one slice of durable session persistence so message, trace, learning, revert, and compact state stay separated.
+
 use serde::{Deserialize, Serialize};
 
 /// 消息记录

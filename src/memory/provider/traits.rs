@@ -1,3 +1,7 @@
+//! Memory provider support module.
+//!
+//! Defines provider contracts and no-network behavior for controlled memory lifecycle tests.
+
 use crate::memory::types::{MemoryRecord, MemoryScope};
 use crate::services::api::Message;
 use async_trait::async_trait;

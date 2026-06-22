@@ -1,3 +1,7 @@
+//! TUI support module.
+//!
+//! Keeps terminal rendering and interaction helpers separate from runtime execution.
+
 use super::*;
 
 async fn handle_leader_sequence(key: KeyEvent, app: &mut TuiApp) -> Option<bool> {

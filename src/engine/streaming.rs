@@ -1,6 +1,10 @@
-//! 流式查询引擎
+//! Streaming query engine.
 //!
-//! 提供与 Claude Code 类似的流式响应体验
+//! This module owns the provider-facing full-agent stream. It assembles turn
+//! messages, feeds the conversation loop, emits tool/progress/runtime events,
+//! and mirrors final usage/closeout information for frontends. UI code should
+//! normally enter through `RuntimeController`; direct calls are reserved for
+//! legacy and test paths.
 
 use crate::engine::context_collapse::{CompactionDecision, ContextCompactionStrategy};
 use crate::engine::context_compressor::CompactionAttemptInput;

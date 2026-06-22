@@ -1,18 +1,27 @@
+//! In-session task checklist tool.
+//!
+//! The todo tool records ephemeral turn-level progress in the session store. It
+//! is not an approval gate, checkpoint, or durable project plan; callers replace
+//! the entire list on each write and may keep only one item in progress.
+
 use crate::tools::{Tool, ToolContext, ToolOperationKind, ToolResult};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
-/// 待办事项
+/// One item in the in-session task checklist.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TodoItem {
+    /// User-visible task description.
     pub content: String,
-    pub status: String, // pending, in_progress, completed
+    /// Current item state: `pending`, `in_progress`, or `completed`.
+    pub status: String,
     #[serde(default)]
-    pub priority: String, // high, medium, low
+    /// Optional priority label: `high`, `medium`, or `low`.
+    pub priority: String,
 }
 
-/// TodoWrite 工具 - 创建和管理待办清单
+/// Tool implementation for replacing the in-session task checklist.
 pub struct TodoWriteTool;
 
 #[async_trait]

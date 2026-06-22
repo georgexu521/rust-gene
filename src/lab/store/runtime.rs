@@ -1,3 +1,9 @@
+//! Runtime support helpers for LabRun persistence.
+//!
+//! These helpers aggregate usage/cost and load runtime-adjacent data needed by
+//! scheduler, closeout, and reporting paths. They intentionally avoid owning
+//! stage transitions.
+
 use super::*;
 
 #[derive(Debug, Clone, Default)]

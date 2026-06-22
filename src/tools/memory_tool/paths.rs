@@ -1,3 +1,8 @@
+//! Path resolution helpers for the memory diagnostics tool.
+//!
+//! The tool honors `PRIORITY_AGENT_MEMORY_ROOT` for test isolation and then
+//! falls back to the user's `~/.priority-agent` memory store.
+
 use std::path::PathBuf;
 
 pub(super) fn memory_root() -> PathBuf {
@@ -9,7 +14,7 @@ pub(super) fn memory_root() -> PathBuf {
         .join(".priority-agent")
 }
 
-/// MEMORY.md 文件路径
+/// Path to the project-level pinned memory file.
 pub(super) fn memory_path() -> PathBuf {
     memory_root().join("MEMORY.md")
 }

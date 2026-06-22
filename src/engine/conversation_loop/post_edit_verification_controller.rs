@@ -1,3 +1,7 @@
+//! Conversation-loop controller module.
+//!
+//! Owns one focused stage of turn execution so permissions, validation, repair, and closeout stay explicit in the runtime.
+
 use super::validation_runner::{verification_source_context, RequiredValidationController};
 use crate::engine::auto_verify::VerificationResult;
 use crate::engine::evidence_ledger::{changed_files_diff_evidence, EvidenceLedger};

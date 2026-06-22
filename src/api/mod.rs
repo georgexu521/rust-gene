@@ -1,7 +1,8 @@
-//! HTTP API 服务器
+//! Optional HTTP API server.
 //!
-//! REST + WebSocket API，让外部程序调用 Priority Agent。
-//! 类似 Claude Code 的 Node SDK 和 Hermes 的 HTTP API。
+//! The API exposes session, provider-chat, tool, audit, and compatibility
+//! routes. Full-agent session prompts must use the injected runtime boundary;
+//! provider-chat routes are explicitly lightweight non-agent calls.
 //!
 //! ## API 端点
 //!

@@ -1,3 +1,7 @@
+//! Memory evaluation workflow support.
+//!
+//! Runs memory review scenarios without mutating the production memory store directly.
+
 use super::{fail, pass, temp_eval_dir, MemoryEvalFailureOwner, MemoryEvalResult};
 use crate::engine::task_contract::{
     BackgroundMemoryReviewWorker, BackgroundReviewPacket, ExecutionReport, ExecutionReportStatus,

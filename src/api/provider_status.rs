@@ -1,3 +1,8 @@
+//! Provider status aggregation for API and desktop diagnostics.
+//!
+//! This module combines configured provider facts, builtin catalog metadata,
+//! and health ledger state into DTO-friendly status summaries.
+
 use super::dto;
 use super::ApiState;
 use crate::diagnostics::provider_health::{ProviderHealthLedgerEntry, ProviderHealthStatus};

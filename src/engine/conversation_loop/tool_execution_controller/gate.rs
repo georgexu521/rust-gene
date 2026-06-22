@@ -1,3 +1,7 @@
+//! Tool execution controller support.
+//!
+//! Separates execution gates, runtime context, and batch state from the conversation-loop control flow.
+
 use super::super::tool_context_helpers::{tool_allowed_by_context, tool_not_allowed_result};
 use super::super::tool_metadata::{attach_tool_contract_metadata, attach_tool_execution_metadata};
 use super::super::tool_result_controller::invalid_tool_params_result;

@@ -1,3 +1,9 @@
+//! Human-readable rendering helpers for memory diagnostics.
+//!
+//! The rendered text is shown to the model and CLI users, so this module keeps
+//! summaries compact while preserving the evidence needed to debug retrieval,
+//! proposal, and flush behavior.
+
 use super::doctor_types::{
     MemoryDoctorDiagnostics, MemoryLastBackgroundReviewJson, MemoryLastRetrievalTraceJson,
     MemoryProviderLifecyclePanelJson,

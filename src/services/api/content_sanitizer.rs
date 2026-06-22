@@ -1,3 +1,7 @@
+//! API content sanitization helpers.
+//!
+//! Normalizes runtime text before it crosses service boundaries or is shown in API responses.
+
 use regex::Regex;
 
 #[derive(Debug, Clone, Copy)]

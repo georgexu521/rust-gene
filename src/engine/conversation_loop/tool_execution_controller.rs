@@ -1,3 +1,7 @@
+//! Tool execution controller support.
+//!
+//! Separates execution gates, runtime context, and batch state from the conversation-loop control flow.
+
 use super::permission_controller::{PermissionController, PermissionRequestRuntime};
 use super::tool_call_lifecycle::ToolCallLifecycle;
 use super::tool_context_helpers::{tool_allowed_by_context, tool_not_allowed_result};

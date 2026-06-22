@@ -1,3 +1,9 @@
+//! Internal JSON DTOs for memory doctor diagnostics.
+//!
+//! These structs keep the tool-facing JSON shape separate from the memory
+//! subsystem's storage records so diagnostics can evolve without changing the
+//! persistence contract.
+
 use super::paths::MemoryStorePathsJson;
 
 #[derive(Debug, Default, Clone, PartialEq, Eq)]

@@ -1,3 +1,7 @@
+//! Context-window usage accounting.
+//!
+//! Tracks how much prompt, tool, and retrieved context a turn consumes so runtime budget decisions are based on measured inputs.
+
 use crate::engine::context_compressor::{
     estimate_messages_tokens, estimate_tokens, estimate_tool_schemas_tokens,
 };

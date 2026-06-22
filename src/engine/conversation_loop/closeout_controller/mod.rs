@@ -1,3 +1,7 @@
+//! Final closeout controller for conversation turns.
+//!
+//! Evaluates whether the assistant can claim verified, partial, failed, or not-verified completion from recorded evidence.
+
 use super::final_answer_claim_gate::{
     FinalAnswerClaimGate, FinalAnswerClaimGateDecision, FinalAnswerClaimGateInput,
 };

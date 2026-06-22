@@ -1,3 +1,7 @@
+//! Memory subsystem support module.
+//!
+//! Owns memory file access, ranking, and supporting diagnostics behind the runtime memory boundary.
+
 use crate::memory::reports::MemoryFileSnapshot;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};

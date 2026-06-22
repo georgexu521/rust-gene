@@ -18,6 +18,11 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 #[derive(Clone)]
+/// Runtime handle consumed by the Tauri desktop workbench.
+///
+/// Full-agent turns go through `RuntimeController`; lightweight turns are
+/// intentionally direct-provider calls and do not get tools, permissions, or
+/// closeout.
 pub struct DesktopRuntime {
     controller: RuntimeController,
     streaming_engine: Arc<StreamingQueryEngine>,
@@ -25,6 +30,7 @@ pub struct DesktopRuntime {
 }
 
 #[derive(Debug, Clone, Serialize)]
+/// Frontend-safe snapshot of runtime context and compaction state.
 pub struct DesktopContextSnapshot {
     pub history_messages: usize,
     pub history_tokens: u64,
@@ -43,6 +49,7 @@ pub struct DesktopContextSnapshot {
 }
 
 #[derive(Debug, Clone, Serialize)]
+/// Compaction counters and latest attempt metadata for desktop rendering.
 pub struct DesktopCompactState {
     pub compression_count: u32,
     pub circuit_open: bool,
@@ -56,6 +63,7 @@ pub struct DesktopCompactState {
 }
 
 impl DesktopRuntime {
+    /// Build a desktop runtime around an already configured streaming engine.
     pub fn from_streaming_engine(
         streaming_engine: Arc<StreamingQueryEngine>,
         working_dir: impl Into<PathBuf>,
@@ -73,6 +81,7 @@ impl DesktopRuntime {
         &self.controller
     }
 
+    /// Initialize providers, tools, memory, and runtime components for a workdir.
     pub async fn initialize(working_dir: impl AsRef<Path>) -> anyhow::Result<Self> {
         let working_dir = working_dir.as_ref().to_path_buf();
         let (provider, model) = crate::bootstrap::init_desktop_provider()?;
@@ -86,6 +95,7 @@ impl DesktopRuntime {
         ))
     }
 
+    /// Initialize runtime components and bind them to an existing session id.
     pub async fn initialize_for_session(
         working_dir: impl AsRef<Path>,
         session_id: impl AsRef<str>,

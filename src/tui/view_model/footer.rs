@@ -1,3 +1,7 @@
+//! TUI view-model support.
+//!
+//! Projects runtime and session state into render-ready rows, footer state, activity, reasoning, and tool views.
+
 use crate::tui::{
     app::{StatusBarDensity, TuiApp},
     tool_view::ToolRunStatus,

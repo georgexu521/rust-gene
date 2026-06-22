@@ -1,3 +1,8 @@
+//! Graduate task command handlers.
+//!
+//! These commands create, run, and inspect scoped graduate tasks. Execution must
+//! preserve dispatch state, cleanup status, and durable evidence.
+
 use super::*;
 
 pub(super) async fn handle_task_run_command(

@@ -1,3 +1,7 @@
+//! Web tool adapter definitions.
+//!
+//! Groups web-search-facing tool metadata separately from local filesystem and shell tools.
+
 use crate::tools::{Tool, ToolContext, ToolResult};
 use async_trait::async_trait;
 use serde_json::json;

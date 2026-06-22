@@ -1,3 +1,7 @@
+//! Engine support module.
+//!
+//! Holds focused runtime support code used by the query engine and conversation loop.
+
 use crate::services::api::provider_protocol::{ProviderCapabilities, ProviderProtocolFamily};
 
 #[derive(Debug, Clone, PartialEq, Eq)]

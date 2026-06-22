@@ -1,3 +1,7 @@
+//! Session slash-command handler support.
+//!
+//! Handles session actions and rewinds while leaving persistence mechanics in the session store.
+
 use super::*;
 
 pub async fn handle_rewind(app: &mut TuiApp, args: &str) -> String {

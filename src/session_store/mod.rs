@@ -1,10 +1,8 @@
-//! SQLite 会话存储
+//! SQLite-backed session persistence.
 //!
-//! 参考 hermes-agent 的 SessionDB 设计：
-//! - WAL 模式支持并发读写
-//! - FTS5 全文搜索
-//! - 会话链（parent_session_id 用于上下文压缩）
-//! - Token 统计
+//! SessionStore owns durable messages, session events, tool-output projections,
+//! todos, jobs, and revert metadata. Frontends should use this typed boundary
+//! rather than reading sqlite rows or projection payloads directly.
 
 use rusqlite::{Connection, Result as SqlResult, Row};
 use std::path::Path;

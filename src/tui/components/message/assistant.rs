@@ -1,3 +1,7 @@
+//! TUI message component renderer.
+//!
+//! Renders one message kind into timeline rows without owning session or runtime state.
+
 use crate::{
     state::MessageItem,
     tui::{

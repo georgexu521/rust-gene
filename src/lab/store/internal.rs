@@ -1,3 +1,9 @@
+//! Internal file/jsonl helpers for `LabStore`.
+//!
+//! These helpers centralize low-level filesystem and JSON persistence details.
+//! Public LabRun code should prefer typed `LabStore` methods from sibling
+//! modules rather than calling these helpers directly.
+
 use super::*;
 
 impl LabStore {

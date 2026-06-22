@@ -1,3 +1,7 @@
+//! Conversation-loop controller module.
+//!
+//! Owns one focused stage of turn execution so permissions, validation, repair, and closeout stay explicit in the runtime.
+
 use super::runtime_diet::RuntimeDietSnapshot;
 use crate::engine::intent_router::RetrievalPolicy;
 #[cfg(test)]

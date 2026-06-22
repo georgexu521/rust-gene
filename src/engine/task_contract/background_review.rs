@@ -1,3 +1,7 @@
+//! Task contract support.
+//!
+//! Models memory proposals, background review, conflicts, and gates as runtime records instead of prompt-only instructions.
+
 use super::{
     compact_text, ExecutionReport, MemoryProposal, MemoryProposalCandidate, MemoryProposalStatus,
 };

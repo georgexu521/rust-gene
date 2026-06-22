@@ -1,3 +1,7 @@
+//! Conversation-loop controller module.
+//!
+//! Owns one focused stage of turn execution so permissions, validation, repair, and closeout stay explicit in the runtime.
+
 use crate::engine::intent_router::{IntentRoute, RiskLevel, WorkflowKind};
 use crate::engine::task_context::TaskContextBundle;
 use std::collections::BTreeSet;

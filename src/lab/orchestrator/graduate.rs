@@ -1,3 +1,9 @@
+//! Graduate task execution bridge for LabRun.
+//!
+//! This module delegates scoped graduate work through the agent tool boundary
+//! and records durable dispatch state. It must preserve evidence, cleanup, and
+//! failure ownership for later recovery.
+
 use super::*;
 
 impl LabOrchestrator {

@@ -1,3 +1,7 @@
+//! LabRun support module.
+//!
+//! Keeps LabRun scheduling, delegation, reporting, and certification helpers separate from normal agent turns.
+
 use crate::lab::model::{LabDaemonMode, LabSchedulerState, LabSchedulerStatus, LAB_SCHEMA_VERSION};
 use crate::lab::orchestrator::{LabOrchestrator, LabSchedulerStepAction};
 use crate::services::api::LlmProvider;

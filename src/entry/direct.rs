@@ -1,3 +1,7 @@
+//! Direct CLI entrypoint wiring.
+//!
+//! Keeps direct command execution separate from LabRun and interactive startup paths.
+
 use crate::engine::streaming::StreamingQueryEngine;
 use crate::shell::{self, ShellOptions};
 use std::sync::Arc;

@@ -1,3 +1,7 @@
+//! Conversation-loop controller module.
+//!
+//! Owns one focused stage of turn execution so permissions, validation, repair, and closeout stay explicit in the runtime.
+
 use super::tool_context_helpers::tool_allowed_by_context;
 use super::ConversationLoop;
 use crate::engine::intent_router::{IntentKind, IntentRoute, WorkflowKind};

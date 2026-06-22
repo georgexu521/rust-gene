@@ -1,3 +1,7 @@
+//! Scenario matrix reporting support.
+//!
+//! Builds diagnostic summaries for scenario coverage without changing runtime policy.
+
 use super::*;
 
 pub fn format_runtime_spine_p0a_matrix() -> String {

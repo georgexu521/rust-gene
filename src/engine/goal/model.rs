@@ -1,3 +1,7 @@
+//! Goal tracking support.
+//!
+//! Keeps durable goal state separate from the live turn loop and user-facing final answers.
+
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

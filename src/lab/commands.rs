@@ -1,3 +1,9 @@
+//! LabRun slash-command surface.
+//!
+//! Commands translate user/TUI shell input into `LabStore`, `LabOrchestrator`,
+//! scheduler, and provider-drafting operations. This module should present
+//! honest status and recovery information without bypassing LabRun gates.
+
 use crate::agent::types::AgentId;
 use crate::lab::context::{
     build_lab_context_packet_with_evidence_retries_and_artifact_refs,

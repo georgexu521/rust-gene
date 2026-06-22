@@ -1,3 +1,7 @@
+//! Evaluation dataset support.
+//!
+//! Defines replay and external-baseline helpers used to compare runtime behavior without changing production turn execution.
+
 use crate::engine::intent_router::{
     IntentKind, ReasoningPolicy, RetrievalPolicy, RiskLevel, WorkflowKind,
 };

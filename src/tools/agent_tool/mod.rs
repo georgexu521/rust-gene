@@ -1,6 +1,8 @@
-//! Agent 工具 - 创建子 Agent
+//! Subagent delegation tool.
 //!
-//! 用于创建并委派任务给子 Agent
+//! This tool creates scoped child-agent tasks, optional isolated worktrees, and
+//! parent-visible result metadata. It must preserve fork context, permissions,
+//! cleanup evidence, and parent closeout requirements.
 
 use crate::agent::agent::AgentConfig;
 use crate::agent::envelope::{AgentTaskEnvelope, AgentTaskPriority};

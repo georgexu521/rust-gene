@@ -1,3 +1,8 @@
+//! API route handlers for captured tool output.
+//!
+//! These endpoints expose bounded tool-output bodies and metadata without
+//! requiring clients to inspect the on-disk output store directly.
+
 use axum::{
     extract::{Path, Query, State},
     response::IntoResponse,

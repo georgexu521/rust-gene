@@ -1,3 +1,7 @@
+//! Learning slash-command handler support.
+//!
+//! Renders learning goals, memory proposals, improvements, and skills without changing memory policy directly.
+
 use super::*;
 
 /// /memory-proposals - Review closeout-generated memory candidates

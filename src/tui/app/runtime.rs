@@ -1,3 +1,7 @@
+//! TUI application state support.
+//!
+//! Keeps runtime state, memory panels, slash commands, and status tools separate from rendering.
+
 use crate::engine::human_review::PermissionReviewDecision;
 use crate::permissions::{PermissionMode, PermissionRules, RuleSource, SourcedRule};
 use crate::state::{RuntimeTerminalTask, RuntimeToolStatus, RuntimeToolUse};

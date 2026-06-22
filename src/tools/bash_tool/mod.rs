@@ -1,6 +1,8 @@
-//! Bash 工具 - 执行 shell 命令
+//! Shell command execution tools.
 //!
-//! 对应 Claude Code 中的 BashTool
+//! Bash tools classify command risk, support foreground/background execution,
+//! and return structured output metadata. Mutating or long-running commands
+//! must stay visible to permission, checkpoint, timeout, and validation logic.
 
 pub mod arity;
 mod background;

@@ -1,6 +1,8 @@
-//! MCP 深度集成工具
+//! MCP integration tools.
 //!
-//! 提供直接调用 MCP 工具、资源发现和读取、以及认证功能。
+//! These tools bridge the runtime to configured MCP servers for direct tool
+//! calls, resource discovery, resource reads, and authentication. Agent-scoped
+//! metadata can restrict which MCP servers are visible to a delegated agent.
 
 use crate::tools::{
     Tool, ToolContext, ToolOperationKind, ToolResult, ToolSearchOrReadSemantics, ToolUiRenderKind,
@@ -39,7 +41,7 @@ fn ensure_mcp_server_allowed(context: &ToolContext, server_name: &str) -> Result
     }
 }
 
-/// 直接调用 MCP 工具
+/// Tool implementation for directly invoking a named MCP server tool.
 pub struct MCPTool;
 
 #[async_trait]

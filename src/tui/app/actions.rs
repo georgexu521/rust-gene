@@ -1,3 +1,9 @@
+//! TUI action helpers.
+//!
+//! Actions here mutate app state in response to user commands, approvals,
+//! interrupts, and runtime events. They should keep full-agent work routed
+//! through `RuntimeController`.
+
 use super::*;
 
 impl TuiApp {

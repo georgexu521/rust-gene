@@ -1,3 +1,7 @@
+//! Conversation-loop controller module.
+//!
+//! Owns one focused stage of turn execution so permissions, validation, repair, and closeout stay explicit in the runtime.
+
 use super::{is_drift_interruption_signal, text_sanitizer::strip_hidden_blocks};
 use crate::engine::intent_router::IntentRoute;
 use crate::engine::streaming::StreamEvent;

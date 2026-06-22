@@ -1,3 +1,8 @@
+//! Tool-observation records for the evidence ledger.
+//!
+//! Records here normalize tool arguments, outcomes, and validation hints so the
+//! runtime can reason about proof without scraping raw transcript text.
+
 use super::*;
 
 pub(super) fn tool_arguments_hash(arguments: &serde_json::Value) -> String {

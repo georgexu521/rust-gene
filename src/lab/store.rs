@@ -1,3 +1,10 @@
+//! LabRun persistence boundary.
+//!
+//! `LabStore` owns file-backed and sqlite-backed LabRun state for a project.
+//! Runtime code should use this boundary for proposals, runs, artifacts,
+//! evidence refs, cost summaries, daemon policy, and recovery data instead of
+//! reaching into `.priority-agent/lab` files directly.
+
 use crate::lab::delegation::GraduateTaskDispatch;
 use crate::lab::model::{
     default_daemon_max_steps_per_cycle, ArtifactGate, GraduateCleanupStatus,

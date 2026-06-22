@@ -1,3 +1,7 @@
+//! Agent slash-command handler support.
+//!
+//! Keeps agent listing, launch, auth, and environment checks behind the slash-command boundary.
+
 pub fn format_prompt_cache_doctor_line(tracker: &crate::cost_tracker::CostTracker) -> String {
     let hit_rate = if tracker.total_tokens.prompt == 0 {
         0.0

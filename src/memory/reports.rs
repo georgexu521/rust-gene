@@ -1,3 +1,8 @@
+//! Memory reporting DTOs and summaries.
+//!
+//! Reports convert memory records, migrations, conflicts, and tiered matches
+//! into human-readable and API-friendly views.
+
 use crate::memory::provider::LocalMemoryMigrationFileReport;
 use crate::memory::types::{MemoryRecord, MemoryStatus};
 use serde::{Deserialize, Serialize};

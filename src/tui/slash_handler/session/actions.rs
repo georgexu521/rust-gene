@@ -1,3 +1,7 @@
+//! Session slash-command handler support.
+//!
+//! Handles session actions and rewinds while leaving persistence mechanics in the session store.
+
 use super::*;
 
 /// /revert last-turn — 一键回退最近一个 assistant turn 的所有文件变更

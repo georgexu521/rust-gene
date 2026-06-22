@@ -1,3 +1,7 @@
+//! Conversation-loop controller module.
+//!
+//! Owns one focused stage of turn execution so permissions, validation, repair, and closeout stay explicit in the runtime.
+
 use super::turn_state::TurnRuntimeState;
 use crate::memory::MemoryManager;
 use crate::services::api::{Message, Tool};

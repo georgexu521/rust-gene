@@ -1,3 +1,7 @@
+//! MCP runtime adapter support.
+//!
+//! Bridges configured MCP servers into the tool surface while preserving server-scoped boundaries.
+
 use super::*;
 
 /// MCP 工具适配器 - 将 MCP 工具包装为本地 Tool

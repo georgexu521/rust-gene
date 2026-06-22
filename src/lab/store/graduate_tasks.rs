@@ -1,3 +1,9 @@
+//! Graduate task persistence for LabRun.
+//!
+//! Graduate task records bridge orchestrator decisions, delegated agent work,
+//! cleanup state, and recovery dashboards. Keep task status and cleanup fields
+//! explicit so stale worktree cleanup can be audited after interrupted runs.
+
 use super::*;
 
 impl LabStore {

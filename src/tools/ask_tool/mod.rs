@@ -1,3 +1,7 @@
+//! User-question tool boundary.
+//!
+//! Represents explicit user input requests while keeping approval gates and task planning as separate tools.
+
 use crate::tools::{Tool, ToolContext, ToolOperationKind, ToolResult};
 use async_trait::async_trait;
 use serde_json::{json, Value};

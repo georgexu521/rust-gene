@@ -1,3 +1,7 @@
+//! Conversation-loop controller module.
+//!
+//! Owns one focused stage of turn execution so permissions, validation, repair, and closeout stay explicit in the runtime.
+
 use super::approval::{diff_preview_for_tool_call, ToolApprovalChannel, ToolApprovalRequest};
 use super::permission_recovery::{
     permission_denial_state_json, permission_denied_message, record_permission_denial,

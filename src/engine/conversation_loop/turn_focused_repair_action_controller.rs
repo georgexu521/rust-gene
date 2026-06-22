@@ -1,3 +1,7 @@
+//! Conversation-loop controller module.
+//!
+//! Owns one focused stage of turn execution so permissions, validation, repair, and closeout stay explicit in the runtime.
+
 use super::action_checkpoint::{FocusedRepairActionProposal, FocusedRepairActionRequest};
 use super::focused_repair_state_controller::FocusedRepairStateOutcome;
 use super::patch_synthesis_flow_controller::{

@@ -20,6 +20,7 @@ required_files=(
     "docs/PERSONAL_AGENT_PRODUCT_PRINCIPLES_2026-05-18.md"
     "docs/RELEASE_STRUCTURE_CLEANUP_RECOMMENDATIONS_2026-06-22.md"
     "docs/REMAINING_STRUCTURE_REFINEMENT_PLAN_2026-06-22.md"
+    "docs/CODE_DOCUMENTATION_PLAN_2026-06-22.md"
 )
 
 for file in "${required_files[@]}"; do
@@ -51,6 +52,9 @@ echo "  Registered commands in commands.rs: $cmd_count"
 
 echo "  Verifying source file line ceiling..."
 bash scripts/check_source_file_sizes.sh
+
+echo "  Running advisory rustdoc audit..."
+python3 scripts/audit_rust_docs.py --limit 0
 
 echo ""
 

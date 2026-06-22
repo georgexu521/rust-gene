@@ -1,6 +1,8 @@
-//! 文件操作工具
+//! File operation tools.
 //!
-//! 提供文件读取、写入、编辑功能
+//! File tools own read-before-write evidence, bounded previews, patch/edit
+//! application, and mutation metadata. Any write-like operation must preserve
+//! checkpoint and permission expectations before closeout can be verified.
 
 use crate::engine::context_ledger::{record_file_read, FileReadLedgerInput};
 use crate::tools::{Tool, ToolContext, ToolOperationKind, ToolResult, ToolSearchOrReadSemantics};

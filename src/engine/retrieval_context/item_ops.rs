@@ -1,3 +1,7 @@
+//! Retrieval context item support.
+//!
+//! Shapes retrieved context before it is injected into model messages.
+
 use super::{RetrievalItem, RetrievalSource, TrustLevel};
 use std::cmp::Ordering;
 use std::hash::{Hash, Hasher};

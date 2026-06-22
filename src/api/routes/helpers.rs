@@ -1,3 +1,8 @@
+//! Shared API route helpers.
+//!
+//! Helpers here enforce route-local allowlists, tenant prefixes, pagination,
+//! and compact text rendering for HTTP compatibility surfaces.
+
 use axum::http::HeaderMap;
 use serde_json::Value;
 

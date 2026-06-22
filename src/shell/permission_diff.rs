@@ -1,3 +1,7 @@
+//! Permission diff rendering for shell prompts.
+//!
+//! Builds compact previews for approval requests without making permission decisions itself.
+
 use crate::engine::conversation_loop::ToolApprovalRequest;
 use crate::tools::bash_tool::command_classifier::{classify_command, ShellCommandCategory};
 

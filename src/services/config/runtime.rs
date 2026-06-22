@@ -1,3 +1,7 @@
+//! Runtime configuration service helpers.
+//!
+//! Collects configuration values used by service startup without owning provider or session behavior.
+
 use super::{AppConfig, ConfigError};
 
 impl AppConfig {

@@ -1,3 +1,11 @@
+//! LabRun persisted model and runtime contract types.
+//!
+//! This module is the source of truth for LabRun state serialized into
+//! `LabStore`, desktop snapshots, command output, and provider-backed draft
+//! flows. Keep model changes backward-aware: persisted schema versioning,
+//! artifact gates, evidence refs, role ownership, and closeout status all feed
+//! runtime recovery and release validation.
+
 mod artifacts;
 
 pub use artifacts::*;

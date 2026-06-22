@@ -1,3 +1,9 @@
+//! TUI runtime and session-state helpers.
+//!
+//! These methods keep paste handling, attachment previews, stream recovery,
+//! pinned sessions, and persisted completion recovery out of the main app
+//! module while preserving renderer-facing state invariants.
+
 use super::*;
 
 impl TuiApp {

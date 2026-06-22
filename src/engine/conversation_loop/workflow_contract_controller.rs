@@ -1,3 +1,7 @@
+//! Conversation-loop controller module.
+//!
+//! Owns one focused stage of turn execution so permissions, validation, repair, and closeout stay explicit in the runtime.
+
 use super::risk_signal_controller::{RiskSignalController, RiskSignalInput};
 use super::workflow_runtime::{
     persist_workflow_learning_event, turn_entry_workflow_contract_activation,

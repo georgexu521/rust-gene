@@ -1,3 +1,7 @@
+//! Conversation-loop controller module.
+//!
+//! Owns one focused stage of turn execution so permissions, validation, repair, and closeout stay explicit in the runtime.
+
 use super::tool_metadata::attach_tool_execution_metadata;
 use crate::services::api::ToolCall;
 use crate::tools::ToolResult;

@@ -1,3 +1,9 @@
+//! Memory provider registry and routing.
+//!
+//! The registry owns local/project/user memory providers and search-index
+//! wiring. Runtime callers should use this layer instead of coupling to a
+//! concrete provider implementation.
+
 use crate::memory::search_index::{MemorySearchDocument, MemorySearchHit, MemorySearchIndexReport};
 use crate::memory::types::{MemoryProjection, MemoryRecord, MemoryScope};
 use crate::services::api::Message;

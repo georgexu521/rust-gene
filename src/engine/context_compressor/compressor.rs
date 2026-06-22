@@ -1,3 +1,8 @@
+//! `ContextCompressor` implementation methods.
+//!
+//! The compressor applies token budgeting, summarization, cache-awareness, and
+//! circuit-breaker state while preserving enough evidence for later repair.
+
 use super::*;
 
 impl ContextCompressor {

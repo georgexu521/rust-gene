@@ -1,7 +1,9 @@
-//! 权限系统
+//! Tool permission policy and approval contracts.
 //!
-//! 细粒度的工具权限控制
-//! 支持通配符匹配、规则源分类
+//! The permission layer classifies tool calls, applies session/user rules, and
+//! records why an action is allowed, denied, or needs approval. It is a hard
+//! runtime gate and should not be weakened to make a provider path look more
+//! capable.
 
 pub mod llm_classifier;
 

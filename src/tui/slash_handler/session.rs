@@ -1,3 +1,7 @@
+//! TUI slash-command handler support.
+//!
+//! Routes slash commands into focused handlers without mixing command parsing with app state updates.
+
 // Session, skills, batch, and extended command handlers
 //
 // Extracted from mod.rs to reduce the main slash_handler file size.

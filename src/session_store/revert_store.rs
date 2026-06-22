@@ -1,3 +1,7 @@
+//! Session-store support module.
+//!
+//! Owns one slice of durable session persistence so message, trace, learning, revert, and compact state stay separated.
+
 use super::{SessionRevertInsert, SessionRevertRecord};
 use rusqlite::{Connection, Result as SqlResult};
 

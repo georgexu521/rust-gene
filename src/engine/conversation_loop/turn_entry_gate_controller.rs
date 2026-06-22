@@ -1,3 +1,7 @@
+//! Conversation-loop controller module.
+//!
+//! Owns one focused stage of turn execution so permissions, validation, repair, and closeout stay explicit in the runtime.
+
 use super::legacy_workflow_gate_controller::{
     LegacyWorkflowGateContext, LegacyWorkflowGateController, LegacyWorkflowGateFlow,
 };

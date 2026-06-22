@@ -1,3 +1,7 @@
+//! Memory subsystem support module.
+//!
+//! Owns memory file access, ranking, and supporting diagnostics behind the runtime memory boundary.
+
 use crate::engine::project_progress::{ProjectProgressKind, ProjectProgressRecord};
 use crate::memory::manager::{kind_label, record_needs_revalidation};
 use crate::memory::reports::{MemoryFileSnapshot, MemoryMatch};

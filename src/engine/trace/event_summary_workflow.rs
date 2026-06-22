@@ -1,3 +1,7 @@
+//! Trace summarization support.
+//!
+//! Converts runtime event traces into compact summaries for diagnostics and learning loops.
+
 use super::{preview, short_id, TraceEvent};
 
 pub(super) fn workflow_summary(event: &TraceEvent) -> String {

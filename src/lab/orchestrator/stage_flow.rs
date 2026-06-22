@@ -1,3 +1,9 @@
+//! User-visible LabRun stage transition operations.
+//!
+//! This module approves proposals, satisfies artifact gates, advances stages,
+//! and computes required gates. All stage changes should pass through these
+//! typed transitions rather than direct state mutation.
+
 use super::*;
 
 impl LabOrchestrator {

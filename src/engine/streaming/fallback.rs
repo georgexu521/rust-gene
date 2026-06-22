@@ -1,3 +1,7 @@
+//! Streaming runtime helper module.
+//!
+//! Keeps stream fallback and turn-message shaping separate from the core query engine.
+
 /// Fallback 状态追踪
 #[derive(Debug, Clone)]
 pub(super) struct FallbackState {

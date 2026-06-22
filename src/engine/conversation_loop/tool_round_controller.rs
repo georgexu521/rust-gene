@@ -1,3 +1,7 @@
+//! Conversation-loop controller module.
+//!
+//! Owns one focused stage of turn execution so permissions, validation, repair, and closeout stay explicit in the runtime.
+
 use super::tool_batch_result_processor::{
     ToolBatchProcessingContext, ToolBatchProcessingOutcome, ToolBatchResultProcessor,
 };

@@ -1,3 +1,7 @@
+//! Conversation-loop controller module.
+//!
+//! Owns one focused stage of turn execution so permissions, validation, repair, and closeout stay explicit in the runtime.
+
 use crate::services::api::provider_protocol::ProviderLatencyProfile;
 use crate::services::config::runtime_config;
 

@@ -1,3 +1,7 @@
+//! Tool result normalization support.
+//!
+//! Turns raw tool results into model-visible observations and evidence without changing tool execution policy.
+
 use super::tool_execution::truncate_tool_result;
 use super::tool_metadata::{
     build_tool_execution_summary, merge_tool_result_metadata, provider_tool_result_content,

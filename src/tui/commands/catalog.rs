@@ -1,3 +1,7 @@
+//! TUI command catalog support.
+//!
+//! Defines command metadata and maturity labels used by help, palette, and slash surfaces.
+
 use super::CommandDef;
 
 pub const SUGGESTED_COMMANDS: &[&str] = &[

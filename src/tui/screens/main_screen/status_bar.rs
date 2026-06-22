@@ -1,3 +1,7 @@
+//! Main TUI screen support.
+//!
+//! Splits composer, approvals, popups, and status bar rendering into focused modules.
+
 use crate::tui::{
     app::TuiApp,
     view_model::footer::{footer_items, FooterItem, FooterTone},

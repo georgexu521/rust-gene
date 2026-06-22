@@ -1,3 +1,7 @@
+//! Agent tool support module.
+//!
+//! Holds result-state and support helpers for delegated agent execution without widening the public tool contract.
+
 use super::*;
 use crate::agent::manager::AgentCompletionSink;
 

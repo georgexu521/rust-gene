@@ -1,3 +1,9 @@
+//! Prompt-cache stability accounting.
+//!
+//! This module fingerprints stable-prefix inputs and estimates cacheable token
+//! regions so runtime diagnostics can explain cache misses and compaction
+//! decisions.
+
 use crate::engine::context_compressor::{
     estimate_tokens, estimate_tokens_for_profile, TokenEstimateProfile,
 };

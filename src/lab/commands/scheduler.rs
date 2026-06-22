@@ -1,3 +1,8 @@
+//! LabRun scheduler command handlers.
+//!
+//! Scheduler commands run foreground or background stage steps through
+//! `LabOrchestrator`, preserving persisted state and explicit validation gates.
+
 use super::*;
 
 pub(super) async fn handle_scheduler_step_command(

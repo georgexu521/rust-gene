@@ -1,6 +1,8 @@
-//! Interactive terminal CLI 模块
+//! Compatibility full-screen terminal UI.
 //!
-//! 使用 ratatui 实现类似 Claude Code 的终端交互体验
+//! The default product surface is the shell CLI, while this ratatui-based UI
+//! remains a compatibility mode. TUI sends full-agent turns through
+//! `RuntimeController` and renders typed runtime/session projections.
 
 pub mod app;
 pub mod commands;

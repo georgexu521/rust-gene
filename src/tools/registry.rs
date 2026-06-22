@@ -1,6 +1,9 @@
-//! 工具注册表与缓存执行器
+//! Tool registry and cached executor.
 //!
-//! 从 `tools/mod.rs` 拆分出来的 ToolRegistry、ToolRegistryProfile、CachedToolExecutor。
+//! The registry is the allowlist exposed to the model. Core profile keeps the
+//! default surface narrow; full profile adds experimental or lower-frequency
+//! tools. Cached execution wraps tool calls without bypassing the tool's own
+//! permission and metadata contracts.
 
 use super::tool_trait::Tool;
 use super::ToolResult;
@@ -19,6 +22,7 @@ pub struct ToolRegistry {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Tool-surface profile used to decide which tools are registered.
 pub enum ToolRegistryProfile {
     Core,
     Full,
@@ -96,6 +100,7 @@ impl ToolRegistry {
         Self::with_profile(ToolRegistryProfile::Full)
     }
 
+    /// Build a registry for the requested tool-surface profile.
     pub fn with_profile(profile: ToolRegistryProfile) -> Self {
         use super::agent_tool::AgentTool;
         use super::ask_tool::AskUserQuestionTool;
@@ -322,6 +327,7 @@ pub struct CachedToolExecutor {
 
 impl CachedToolExecutor {
     /// 创建新的带缓存执行器
+    /// Create a cached executor with a default in-memory result cache.
     pub fn new(registry: ToolRegistry) -> Self {
         Self {
             registry,
@@ -330,11 +336,16 @@ impl CachedToolExecutor {
     }
 
     /// 使用指定缓存创建
+    /// Create a cached executor with a caller-provided cache.
     pub fn with_cache(registry: ToolRegistry, cache: super::cache::ToolResultCache) -> Self {
         Self { registry, cache }
     }
 
     /// 执行工具（带缓存）
+    /// Execute a tool call through the registry and result cache.
+    ///
+    /// Cache hits only apply where the tool/result contract permits reuse; this
+    /// wrapper must not bypass permissions for mutation-capable tools.
     pub async fn execute(
         &self,
         tool_name: &str,

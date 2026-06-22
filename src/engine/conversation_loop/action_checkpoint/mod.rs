@@ -1,3 +1,7 @@
+//! Action-checkpoint controller for conversation turns.
+//!
+//! Keeps progress checkpoints and focused-repair action proposals behind deterministic runtime decisions.
+
 use super::workflow_trace::trace_adaptive_workflow_trigger;
 use super::ConversationLoop;
 use crate::engine::code_change_workflow::{AdaptiveWorkflowTrigger, CodeChangeWorkflowRunner};

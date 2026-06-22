@@ -1,3 +1,7 @@
+//! Agent slash-command handler support.
+//!
+//! Keeps agent listing, launch, auth, and environment checks behind the slash-command boundary.
+
 use super::*;
 
 /// /teammate - 启动协作队友 Agent

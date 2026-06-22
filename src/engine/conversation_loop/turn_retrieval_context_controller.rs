@@ -1,3 +1,7 @@
+//! Conversation-loop controller module.
+//!
+//! Owns one focused stage of turn execution so permissions, validation, repair, and closeout stay explicit in the runtime.
+
 use crate::engine::intent_router::RetrievalPolicy;
 use crate::engine::retrieval_context::RetrievalContext;
 use crate::engine::trace::{TraceCollector, TraceEvent};

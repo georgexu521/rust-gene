@@ -1,3 +1,7 @@
+//! Conversation-loop controller module.
+//!
+//! Owns one focused stage of turn execution so permissions, validation, repair, and closeout stay explicit in the runtime.
+
 use super::validation_runner::RequiredValidationController;
 use super::workflow_prompt_policy::WorkflowPromptPolicy;
 use super::ConversationLoop;

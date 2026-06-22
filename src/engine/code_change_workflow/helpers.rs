@@ -1,3 +1,8 @@
+//! Helper predicates and renderers for code-change workflow state.
+//!
+//! These helpers keep workflow state formatting and route checks separate from
+//! the controller that owns runtime transitions.
+
 use super::{PlanStepRuntimeState, PlanStepRuntimeStatus, StageValidationRecord};
 use crate::engine::intent_router::WorkflowKind;
 use crate::engine::task_context::TaskContextBundle;

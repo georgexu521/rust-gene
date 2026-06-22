@@ -1,3 +1,7 @@
+//! Tool execution controller support.
+//!
+//! Separates execution gates, runtime context, and batch state from the conversation-loop control flow.
+
 use super::super::tool_call_lifecycle::{ToolCallLifecycleRecord, ToolCallStatus};
 use super::super::tool_metadata::merge_tool_result_metadata;
 use crate::services::api::ToolCall;

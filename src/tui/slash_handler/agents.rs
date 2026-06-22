@@ -1,3 +1,7 @@
+//! TUI slash-command handler support.
+//!
+//! Routes slash commands into focused handlers without mixing command parsing with app state updates.
+
 // Agent, system, and integration slash command handlers
 
 use super::utils::*;

@@ -1,13 +1,9 @@
-//! 工具系统模块
+//! Model-facing tool system.
 //!
-//! 模仿 Claude Code 的 Tool 系统架构
-//! 每个工具实现 Tool trait，可以被执行、有输入输出、支持权限检查
-//!
-//! 核心类型已拆分为独立子模块：
-//! - `result` — ToolErrorCode, ToolPermissionLevel, ToolResult
-//! - `schema` — ToolOperationKind, ToolInterruptBehavior, ToolSchema 等
-//! - `tool_trait` — Tool trait, ToolContext, JSON 参数校验
-//! - `registry` — ToolRegistry, ToolRegistryProfile, CachedToolExecutor
+//! Each tool implements `Tool`, declares its schema and permission behavior,
+//! and returns structured `ToolResult` metadata for the conversation loop.
+//! Mutation-capable tools must preserve permission, checkpoint, and validation
+//! contracts; read-only tools should still return enough evidence for closeout.
 
 pub mod agent_tool;
 pub mod ask_tool;

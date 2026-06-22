@@ -1,3 +1,7 @@
+//! Session-store support module.
+//!
+//! Owns one slice of durable session persistence so message, trace, learning, revert, and compact state stay separated.
+
 use super::{fts_phrase_terms, session_from_row, MessageRecord, SessionRecord, SessionStore};
 use rusqlite::{params, Result as SqlResult};
 

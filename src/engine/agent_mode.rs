@@ -1,3 +1,8 @@
+//! Product-level agent mode routing.
+//!
+//! Agent modes translate user-facing build/plan/explore/review choices into
+//! runtime routing, retrieval, workflow, and risk policies.
+
 use crate::engine::intent_router::{
     IntentKind, IntentRoute, ReasoningPolicy, RetrievalPolicy, RiskLevel, WorkflowKind,
 };

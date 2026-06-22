@@ -1,3 +1,7 @@
+//! Learning slash-command handler support.
+//!
+//! Renders learning goals, memory proposals, improvements, and skills without changing memory policy directly.
+
 use super::*;
 
 /// /goal - Show or pin the current session goal

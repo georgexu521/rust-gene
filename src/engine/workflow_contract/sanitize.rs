@@ -1,3 +1,7 @@
+//! Workflow contract sanitation support.
+//!
+//! Keeps workflow feedback safe to render and feed back into the model.
+
 pub(super) fn sanitize_workflow_judgment_value(value: &mut serde_json::Value) {
     let Some(triggers) = value
         .get_mut("guided_reasoning_triggers")

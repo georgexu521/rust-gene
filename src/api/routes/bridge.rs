@@ -1,3 +1,9 @@
+//! Bridge v1 compatibility routes.
+//!
+//! These handlers provide token-protected remote session and trigger endpoints.
+//! They are compatibility shims over the normal API/session state and must not
+//! bypass tenant prefix checks or bridge authentication.
+
 use super::{helpers, ApiError, ApiState, ChatRequest, MessageInfo, SessionInfo};
 use axum::{
     body::Body,

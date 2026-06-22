@@ -1,3 +1,10 @@
+//! LabRun orchestration boundary.
+//!
+//! `LabOrchestrator` owns stage transitions, artifact gates, meeting/blocker
+//! flows, graduate delegation, scheduler stepping, and closeout checks. It
+//! coordinates `LabStore` and tool execution but should not bypass persisted
+//! evidence or validation requirements.
+
 use crate::lab::context::{
     build_lab_context_packet_with_evidence_retries_and_artifact_refs,
     evaluate_lab_context_compression, LabContextEvidenceRefGroup,

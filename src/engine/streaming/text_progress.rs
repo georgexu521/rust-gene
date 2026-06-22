@@ -1,3 +1,9 @@
+//! Text-progress and session-end memory flush helpers for streaming turns.
+//!
+//! Text output is scrubbed before frontend emission so memory-context markers
+//! do not leak into user-visible streams. Session-end memory flush is best
+//! effort and bounded so persistence work cannot block stream closeout forever.
+
 use super::{config, context_scrubber::ContextScrubber, StreamEvent};
 use crate::services::api::Message;
 use std::sync::Arc;

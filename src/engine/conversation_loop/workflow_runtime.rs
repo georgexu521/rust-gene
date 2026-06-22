@@ -1,3 +1,7 @@
+//! Conversation-loop controller module.
+//!
+//! Owns one focused stage of turn execution so permissions, validation, repair, and closeout stay explicit in the runtime.
+
 use super::risk_signal_controller::RiskSignalAssessment;
 use crate::engine::intent_router::{IntentRoute, RiskLevel};
 use crate::engine::workflow_contract::ProgrammingWorkflowJudgment;

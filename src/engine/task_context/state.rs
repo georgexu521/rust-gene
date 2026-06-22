@@ -1,3 +1,7 @@
+//! Task-context state support.
+//!
+//! Tracks task state that informs the next turn without becoming prompt-only policy.
+
 use super::*;
 
 impl AgentTaskState {

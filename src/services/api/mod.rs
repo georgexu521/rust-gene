@@ -1,6 +1,8 @@
-//! API 客户端模块
+//! LLM provider API layer.
 //!
-//! 支持多个 LLM 提供商：Kimi、OpenAI
+//! Provider adapters normalize chat requests, tool calls, usage, credentials,
+//! model metadata, and content sanitization. Runtime code should depend on
+//! these traits and DTOs rather than provider-specific response shapes.
 
 pub mod adapter;
 pub mod auth_store;

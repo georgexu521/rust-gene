@@ -1,3 +1,7 @@
+//! Conversation-loop controller module.
+//!
+//! Owns one focused stage of turn execution so permissions, validation, repair, and closeout stay explicit in the runtime.
+
 use super::memory_snapshot_controller::{MemorySnapshotController, MemorySnapshotInjectionContext};
 use super::preflight_compression_controller::{
     PreflightCompressionContext, PreflightCompressionController,

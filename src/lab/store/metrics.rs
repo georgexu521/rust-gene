@@ -1,3 +1,9 @@
+//! LabRun metrics, meetings, cost, and dashboard summaries.
+//!
+//! The methods here produce operator-facing summaries without changing stage
+//! ownership. They are read-heavy support paths for `/lab dashboard`, meeting
+//! diagnostics, and desktop LabRun inspectors.
+
 use super::*;
 
 impl LabStore {

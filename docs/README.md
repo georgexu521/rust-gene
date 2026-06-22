@@ -14,6 +14,7 @@ code/tests for the exact surface you plan to change.
 | [PERSONAL_AGENT_PRODUCT_PRINCIPLES_2026-05-18.md](PERSONAL_AGENT_PRODUCT_PRINCIPLES_2026-05-18.md) | Product principles: narrow, deep, personal, local, and verifiable. |
 | [RELEASE_STRUCTURE_CLEANUP_RECOMMENDATIONS_2026-06-22.md](RELEASE_STRUCTURE_CLEANUP_RECOMMENDATIONS_2026-06-22.md) | Current release-structure cleanup plan and release-ready definition. |
 | [REMAINING_STRUCTURE_REFINEMENT_PLAN_2026-06-22.md](REMAINING_STRUCTURE_REFINEMENT_PLAN_2026-06-22.md) | Follow-up structure refinement record: public API surface, maturity labels, source grouping, wording, and file-size guard. |
+| [CODE_DOCUMENTATION_PLAN_2026-06-22.md](CODE_DOCUMENTATION_PLAN_2026-06-22.md) | Code documentation standard and rollout plan for module docs, public API rustdoc, and boundary comments. |
 | [QUALITY_GATES.md](../QUALITY_GATES.md) | Root release and phase gate definitions. |
 | [TESTING.md](../TESTING.md) | Root testing command guide. |
 

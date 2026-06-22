@@ -1,3 +1,7 @@
+//! Intent-routing heuristic support.
+//!
+//! Keeps deterministic route hints separate from the model-owned engineering judgment.
+
 use super::RiskLevel;
 use std::collections::HashMap;
 

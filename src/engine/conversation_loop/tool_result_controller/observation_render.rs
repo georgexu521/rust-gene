@@ -1,3 +1,7 @@
+//! Tool result normalization support.
+//!
+//! Turns raw tool results into model-visible observations and evidence without changing tool execution policy.
+
 use super::{ObservationEvidence, ToolObservation};
 use crate::services::api::ToolCall;
 use crate::tools::ToolResult;

@@ -1,3 +1,7 @@
+//! Conversation-loop controller module.
+//!
+//! Owns one focused stage of turn execution so permissions, validation, repair, and closeout stay explicit in the runtime.
+
 use crate::services::api::content_sanitizer::{find_hidden_block_open, max_hidden_open_prefix_len};
 
 #[derive(Default)]

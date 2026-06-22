@@ -1,3 +1,7 @@
+//! TUI view-model support.
+//!
+//! Projects runtime and session state into render-ready rows, footer state, activity, reasoning, and tool views.
+
 use crate::{
     engine::runtime_facade::{ToolTurnPhase, ToolTurnSnapshot},
     tui::tool_view::{ToolRunStatus, ToolRunView},
