@@ -6,7 +6,7 @@ Last Updated: 2026-06-10
 Status: **All phases (0–15) and the 2026-06-02 addendum are implemented and validated.**
 The current active line of work is **opencode core alignment** (session-store
 source-of-truth, settlement recovery, export payload, compaction events), which is
-described in `docs/OPENCODE_CORE_ALIGNMENT_IMPLEMENTATION_PLAN_2026-06-09.md`.
+described in `docs/archive/OPENCODE_CORE_ALIGNMENT_IMPLEMENTATION_PLAN_2026-06-09.md`.
 
 ## Goal
 
@@ -1291,7 +1291,7 @@ semantics, route/sample measurement gates, core tool contracts, role-scoped
 subagent surfaces, gated auxiliary context, and concise default closeout.
 
 **Active work (2026-06-09 → 2026-06-10):** opencode core alignment
-(`docs/OPENCODE_CORE_ALIGNMENT_IMPLEMENTATION_PLAN_2026-06-09.md`).
+(`docs/archive/OPENCODE_CORE_ALIGNMENT_IMPLEMENTATION_PLAN_2026-06-09.md`).
 This is a separate but related effort focused on session-store correctness:
 source-of-truth event stream, tool settlement recovery, enhanced export payload,
 compaction events, and wake/drain coordination. It is **not** part of the

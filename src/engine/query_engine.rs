@@ -23,7 +23,7 @@ pub struct QueryEngine {
     /// Agent 管理器（可选，用于子 Agent 创建）
     agent_manager: Option<Arc<crate::agent::AgentManager>>,
     /// 任务管理器（可选，用于 task_tool 等）
-    task_manager: Option<Arc<crate::task_manager::TaskManager>>,
+    task_manager: Option<Arc<crate::internal::task_manager::TaskManager>>,
     /// LSP 管理器（可选，用于 lsp_tool 等）
     lsp_manager: Option<Arc<crate::engine::lsp::LspManager>>,
     /// Worktree 管理器（可选，用于 worktree_tool 等）
@@ -91,7 +91,10 @@ impl QueryEngine {
     }
 
     /// 设置任务管理器
-    pub fn with_task_manager(mut self, manager: Arc<crate::task_manager::TaskManager>) -> Self {
+    pub fn with_task_manager(
+        mut self,
+        manager: Arc<crate::internal::task_manager::TaskManager>,
+    ) -> Self {
         self.task_manager = Some(manager);
         self
     }

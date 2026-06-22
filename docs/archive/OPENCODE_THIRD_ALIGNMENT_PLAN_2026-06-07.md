@@ -11,8 +11,8 @@ opencode source under `/Users/georgexu/Downloads/opencode-dev`.
 
 The previous opencode alignment plans have mostly been implemented:
 
-- `docs/OPENCODE_PROGRAMMING_CHAIN_GAP_PLAN_2026-06-05.md`
-- `docs/OPENCODE_AGENT_ENGINE_ALIGNMENT_PLAN_2026-06-06.md`
+- `docs/archive/OPENCODE_PROGRAMMING_CHAIN_GAP_PLAN_2026-06-05.md`
+- `docs/archive/OPENCODE_AGENT_ENGINE_ALIGNMENT_PLAN_2026-06-06.md`
 - `docs/NEXT_PHASE_OPENCODE_CORE_ALIGNMENT_PLAN_2026-06-06.md`
 
 Priority Agent now has the core pieces needed for real programming tasks:

@@ -141,7 +141,10 @@ impl StreamingQueryEngine {
     }
 
     /// 设置任务管理器
-    pub fn with_task_manager(mut self, manager: Arc<crate::task_manager::TaskManager>) -> Self {
+    pub fn with_task_manager(
+        mut self,
+        manager: Arc<crate::internal::task_manager::TaskManager>,
+    ) -> Self {
         self.config.task_manager = Some(manager);
         self
     }
@@ -700,7 +703,7 @@ impl StreamingQueryEngine {
     }
 
     /// 获取任务管理器
-    pub fn task_manager(&self) -> Option<Arc<crate::task_manager::TaskManager>> {
+    pub fn task_manager(&self) -> Option<Arc<crate::internal::task_manager::TaskManager>> {
         self.config.task_manager.clone()
     }
 
@@ -1360,7 +1363,7 @@ struct StreamingEngineInner {
     system_prompt: String,
     max_iterations: usize,
     agent_manager: Option<Arc<crate::agent::AgentManager>>,
-    task_manager: Option<Arc<crate::task_manager::TaskManager>>,
+    task_manager: Option<Arc<crate::internal::task_manager::TaskManager>>,
     mcp_manager: Option<Arc<crate::engine::mcp::McpManager>>,
     lsp_manager: Option<Arc<crate::engine::lsp::LspManager>>,
     worktree_manager: Option<Arc<crate::engine::worktree::WorktreeManager>>,

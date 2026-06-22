@@ -2,7 +2,7 @@
 
 Date: 2026-06-10
 Status: Completed
-Parent: `docs/NEXT_PHASE_PRODUCT_ECOSYSTEM_GAP_PLAN_2026-06-09.md`
+Parent: `docs/archive/NEXT_PHASE_PRODUCT_ECOSYSTEM_GAP_PLAN_2026-06-09.md`
 
 ## Goal
 

@@ -2,8 +2,8 @@
 
 Date: 2026-06-10
 Status: Active
-Parents: `docs/AGENT_SKILLS_OPTIMIZATION_PLAN_2026-06-01.md`,
-`docs/LLM_COMPACTION_PLAN_2026-06-08.md`
+Parents: `docs/archive/AGENT_SKILLS_OPTIMIZATION_PLAN_2026-06-01.md`,
+`docs/archive/LLM_COMPACTION_PLAN_2026-06-08.md`
 
 ## Goal
 

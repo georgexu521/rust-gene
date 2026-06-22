@@ -5,6 +5,10 @@ Priority Agent keeps a lot of historical planning and audit notes. For current
 implementation truth, start with the canonical docs below and then read the
 code/tests for the exact surface you plan to change.
 
+The root of this directory is reserved for current status, active workstreams,
+and high-value reference docs. Older plans and completed audits live under
+`archive/`.
+
 ## Canonical
 
 | Doc | Use |

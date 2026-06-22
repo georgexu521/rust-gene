@@ -148,7 +148,7 @@ pub struct ToolContext {
     /// Worktree 管理器（worktree_tool 管理 git worktree）
     pub worktree_manager: Option<std::sync::Arc<crate::engine::worktree::WorktreeManager>>,
     /// Task 管理器（task_tool 创建和管理任务）
-    pub task_manager: Option<std::sync::Arc<crate::task_manager::TaskManager>>,
+    pub task_manager: Option<std::sync::Arc<crate::internal::task_manager::TaskManager>>,
     /// 成本追踪器（cost_tool 查询 token 和费用统计）
     pub cost_tracker: Option<std::sync::Arc<tokio::sync::Mutex<crate::cost_tracker::CostTracker>>>,
     /// 文件状态缓存（file_read/file_edit 优化与变更检测）
@@ -331,7 +331,7 @@ impl ToolContext {
     /// 设置 Task 管理器
     pub fn with_task_manager(
         mut self,
-        manager: std::sync::Arc<crate::task_manager::TaskManager>,
+        manager: std::sync::Arc<crate::internal::task_manager::TaskManager>,
     ) -> Self {
         self.task_manager = Some(manager);
         self

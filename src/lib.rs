@@ -52,15 +52,4 @@ pub mod voice;
 pub mod workspace;
 
 // Internal and historical support modules used by the runtime implementation.
-#[allow(dead_code)]
-pub(crate) mod ai_analyzer;
-#[allow(dead_code)]
-pub(crate) mod context_manager;
-#[allow(dead_code)]
-pub(crate) mod priority;
-#[allow(dead_code)]
-pub(crate) mod task_analyzer;
-#[allow(dead_code)]
-pub(crate) mod task_manager;
-#[allow(dead_code)]
-pub(crate) mod team;
+pub(crate) mod internal;

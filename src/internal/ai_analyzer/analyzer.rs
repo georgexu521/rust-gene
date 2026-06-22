@@ -4,8 +4,8 @@
 //! - LLM 模式：调用 QueryEngine 让 LLM 根据项目上下文分析优先级（推荐）
 //! - 启发式模式：使用关键词规则匹配（LLM 不可用时的 fallback）
 
-use crate::ai_analyzer::heuristics::{HeuristicResult, WeightHeuristics};
 use crate::engine::QueryEngine;
+use crate::internal::ai_analyzer::heuristics::{HeuristicResult, WeightHeuristics};
 use priority_core::weight_engine::types::{Project, Task, TaskId, Weight};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;

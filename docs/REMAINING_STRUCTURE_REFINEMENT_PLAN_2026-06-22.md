@@ -25,12 +25,12 @@ Completed in this refinement slice:
   command-palette views unless explicitly queried.
 - `src/lib.rs` now documents the public API intent and keeps clear
   internal/historical modules crate-private:
-  - `ai_analyzer`
-  - `context_manager`
-  - `priority`
-  - `task_analyzer`
-  - `task_manager`
-  - `team`
+  - `src/internal/ai_analyzer`
+  - `src/internal/context_manager`
+  - `src/internal/priority`
+  - `src/internal/task_analyzer`
+  - `src/internal/task_manager`
+  - `src/internal/team`
 - `docs/PROJECT_MAP.md` now includes a source-tree grouping map.
 - `scripts/check_source_file_sizes.sh` enforces the 1500-line ceiling for
   non-test production Rust files and is called by `scripts/validate_docs.sh`.
@@ -101,11 +101,11 @@ Scope:
 
 High-confidence candidates to review first:
 
-- `ai_analyzer`
-- `context_manager`
-- `task_analyzer`
-- `task_manager`
-- `team`
+- `src/internal/ai_analyzer`
+- `src/internal/context_manager`
+- `src/internal/task_analyzer`
+- `src/internal/task_manager`
+- `src/internal/team`
 - `priority`
 - `components`
 - `tool_output_store`
@@ -113,8 +113,9 @@ High-confidence candidates to review first:
 
 Implemented boundary:
 
-- Converted `ai_analyzer`, `context_manager`, `priority`, `task_analyzer`,
-  `task_manager`, and `team` to crate-private internal/historical support.
+- Moved `ai_analyzer`, `context_manager`, `priority`, `task_analyzer`,
+  `task_manager`, and `team` under `src/internal/` as crate-private
+  internal/historical support.
 - Kept externally consumed modules public, including `desktop_runtime`,
   `tool_output_store`, `engine`, `lab`, `services`, `session_store`, `tools`,
   and `tui`.
@@ -182,12 +183,12 @@ Possible grouping direction:
   - `slo`
   - `security`
 - Experimental or historical candidates to review:
-  - `ai_analyzer`
-  - `context_manager`
-  - `priority`
-  - `task_analyzer`
-  - `task_manager`
-  - `team`
+  - `src/internal/ai_analyzer`
+  - `src/internal/context_manager`
+  - `src/internal/priority`
+  - `src/internal/task_analyzer`
+  - `src/internal/task_manager`
+  - `src/internal/team`
 
 Recommended first step:
 

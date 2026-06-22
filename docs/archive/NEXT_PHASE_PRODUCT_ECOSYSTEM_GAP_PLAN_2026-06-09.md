@@ -200,7 +200,7 @@ Current code:
 
 - `/doctor`, `/diagnostic`, provider health, config doctor, product-readiness
   formatting, desktop diagnostics, and run reports all exist.
-- `docs/REAL_TASK_SOAK_TEST_PLAN_2026-06-07.md` covers larger real-task soak
+- `docs/archive/REAL_TASK_SOAK_TEST_PLAN_2026-06-07.md` covers larger real-task soak
   testing, but the user explicitly wants to wait on tests and continue product
   development first.
 

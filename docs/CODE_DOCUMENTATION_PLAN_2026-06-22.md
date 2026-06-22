@@ -30,7 +30,7 @@ Implemented in the initial rollout:
 Initial advisory audit baseline after this rollout:
 
 ```text
-files scanned: 639
+files scanned: 640
 findings: 4366
 missing-item-doc: 4366
 missing-module-doc: 0
@@ -392,12 +392,12 @@ Scope:
 - `src/diagnostics/`
 - `src/telemetry/`
 - internal/historical modules:
-  - `ai_analyzer`
-  - `context_manager`
-  - `priority`
-  - `task_analyzer`
-  - `task_manager`
-  - `team`
+  - `src/internal/ai_analyzer`
+  - `src/internal/context_manager`
+  - `src/internal/priority`
+  - `src/internal/task_analyzer`
+  - `src/internal/task_manager`
+  - `src/internal/team`
 
 Focus:
 

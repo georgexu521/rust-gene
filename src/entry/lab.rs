@@ -93,7 +93,7 @@ fn build_lab_tool_context(
         .with_model(components.model.clone())
         .with_lsp_manager(components.lsp_manager.clone())
         .with_worktree_manager(components.worktree_manager.clone())
-        .with_task_manager(crate::task_manager::GLOBAL_TASK_MANAGER.clone());
+        .with_task_manager(crate::internal::task_manager::GLOBAL_TASK_MANAGER.clone());
     if let Ok(provider_id) = std::env::var("PRIORITY_AGENT_DEFAULT_PROVIDER") {
         if !provider_id.trim().is_empty() {
             context

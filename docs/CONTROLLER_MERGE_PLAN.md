@@ -130,7 +130,7 @@ python3 -m py_compile scripts/live_eval_report_parser.py
    这些硬边界里拿文件数。
 2. 对 `tool_result_controller.rs`、`request_preparation_controller.rs`、
    `permission_controller.rs` 的下一步应该是拆分责任，而不是合并。
-3. 保持 `docs/CONTROLLER_INDEX.md` 和 `docs/PROJECT_MAP.md` 与实际模块名同步；这两个
+3. 保持 `docs/archive/CONTROLLER_INDEX.md` 和 `docs/PROJECT_MAP.md` 与实际模块名同步；这两个
    文档会进入运行时项目上下文，过期路径会直接误导后续 agent。
 
 ## 不做清单

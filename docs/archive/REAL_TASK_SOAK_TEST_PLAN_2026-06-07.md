@@ -74,14 +74,14 @@ changing agent logic.
 
 Existing docs already proposed useful real tasks:
 
-- `docs/LIVE_CODING_TEST_PLAN_2026-06-01.md`: analysis, bug fix, adding tests,
+- `docs/archive/LIVE_CODING_TEST_PLAN_2026-06-01.md`: analysis, bug fix, adding tests,
   multi-file edit, validation repair loop, force-summary pressure.
-- `docs/REAL_WORLD_TEST_PLAN_2026-06-01.md`: refactor, bug repair, cross-module
+- `docs/archive/REAL_WORLD_TEST_PLAN_2026-06-01.md`: refactor, bug repair, cross-module
   API change, new feature, CLI flag, larger memory-module audit.
 - `docs/RELEASE_CANDIDATE_STABILITY_TEST_PLAN_2026-06-05.md`: clean checkout,
   deterministic daily baseline, CLI/TUI/desktop real paths, provider/cost
   review, recovery behavior.
-- `docs/OPENCODE_PROGRAMMING_PARITY_NEXT_PLAN_2026-06-07.md`: remaining gap is
+- `docs/archive/OPENCODE_PROGRAMMING_PARITY_NEXT_PLAN_2026-06-07.md`: remaining gap is
   product maturity under long real programming tasks, not missing basic agent
   functions.
 

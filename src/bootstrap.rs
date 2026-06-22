@@ -331,7 +331,7 @@ pub async fn init_components(
     };
 
     // QueryEngine
-    let task_manager = crate::task_manager::GLOBAL_TASK_MANAGER.clone();
+    let task_manager = crate::internal::task_manager::GLOBAL_TASK_MANAGER.clone();
     let mut query_engine_builder =
         QueryEngine::new(provider.clone(), tool_registry.clone(), &model)
             .with_max_iterations(engine_config.max_iterations)

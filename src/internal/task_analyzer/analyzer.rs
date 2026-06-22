@@ -1,6 +1,6 @@
 //! 任务分析器 - 分析任务结构和关键路径
 
-use crate::task_analyzer::dependency_graph::DependencyGraph;
+use crate::internal::task_analyzer::dependency_graph::DependencyGraph;
 use priority_core::weight_engine::types::{Project, Task, TaskId, Weight};
 
 /// 关键路径

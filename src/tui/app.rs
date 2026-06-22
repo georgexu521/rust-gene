@@ -819,7 +819,7 @@ impl TuiApp {
         let working_dir = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
         let app_config = crate::services::config::AppConfig::load().unwrap_or_default();
         let engine_config = app_config.engine.clone();
-        let task_manager = crate::task_manager::GLOBAL_TASK_MANAGER.clone();
+        let task_manager = crate::internal::task_manager::GLOBAL_TASK_MANAGER.clone();
         let tool_registry = Arc::new(crate::tools::ToolRegistry::default_registry());
 
         let mut query_engine_builder =

@@ -29,7 +29,7 @@ pub struct StreamingConfig {
     /// QueryEngine dependency used to lazily construct AgentManager.
     pub agent_manager_query_engine: Option<Arc<QueryEngine>>,
     /// 任务管理器（可选，用于 task_tool 等）
-    pub task_manager: Option<Arc<crate::task_manager::TaskManager>>,
+    pub task_manager: Option<Arc<crate::internal::task_manager::TaskManager>>,
     /// MCP 管理器（可选，用于调用外部 MCP 工具）
     pub mcp_manager: Option<Arc<crate::engine::mcp::McpManager>>,
     /// LSP 管理器（可选，用于 lsp_tool 等）

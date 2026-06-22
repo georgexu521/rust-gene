@@ -64,7 +64,7 @@ Implemented in this slice:
 Current advisory audit baseline after the rollout:
 
 ```text
-files scanned: 639
+files scanned: 640
 findings: 4366
 missing-item-doc: 4366
 missing-module-doc: 0
@@ -92,10 +92,14 @@ Implemented in this slice:
   Rust file line ceiling, and `scripts/validate_docs.sh` runs it.
 - `docs/PROJECT_MAP.md` now classifies the top-level source tree by runtime
   role: runtime core, product surfaces, integrations/adapters, diagnostics, and
-  internal/historical support.
-- `src/lib.rs` now documents the intended public surface and keeps
+  internal support.
+- Internal/historical modules now live under `src/internal/`, so
   `ai_analyzer`, `context_manager`, `priority`, `task_analyzer`,
-  `task_manager`, and `team` crate-private as internal/historical support.
+  `task_manager`, and `team` no longer appear as product-level top-level
+  source directories.
+- `docs/` root now keeps current status, active workstreams, and high-value
+  references only; completed plans and older audits were moved under
+  `docs/archive/`.
 
 Validation so far:
 
@@ -666,7 +670,7 @@ cargo test -q task_worktree_command_merges_and_cleans_durable_task_id_worktree
 
 ## CLI Default Interface — Phases 0–6 Complete + P2 Cleanup (2026-06-16)
 
-The scrollback-first CLI documented in `docs/CLI_COMPLETION_PLAN.md` is now the
+The scrollback-first CLI documented in `docs/archive/CLI_COMPLETION_PLAN.md` is now the
 default interactive interface. A follow-up P2 code-review cleanup pass shared
 `/provider switch`, `/doctor`, and `/audit` between CLI and TUI, removed dead
 code, hardened permission diff fallback, and added integration tests for local
@@ -729,7 +733,7 @@ bash scripts/workflow-production-gates.sh
 ## TUI Projection And Polish — Phases 1–6 Complete (2026-06-14)
 
 The TUI projection-and-polish pass documented in
-`docs/TUI_PROJECTION_AND_POLISH_NEXT_PLAN_2026-06-14.md` is complete.
+`docs/archive/TUI_PROJECTION_AND_POLISH_NEXT_PLAN_2026-06-14.md` is complete.
 
 ### Completed phases
 
@@ -778,7 +782,7 @@ TUI_TOOL_TURN_SPINE_NIGHTLY_ROUNDS=1 bash scripts/tui_tool_turn_spine_nightly.sh
 
 ## TUI Next Steps — Priorities 1–7 In Progress (2026-06-14)
 
-See `docs/TUI_NEXT_STEPS_PLAN_2026-06-14.md` for the full gap analysis.
+See `docs/archive/TUI_NEXT_STEPS_PLAN_2026-06-14.md` for the full gap analysis.
 
 ### Completed
 
@@ -826,7 +830,7 @@ src/tui/app/slash_commands.rs          — /plugins dispatch
 ## Codex Goal Mode — Implemented (2026-06-11)
 
 Codex-style durable goal mode landed in 8 commits across 7 phases. See
-`docs/CODEX_GOAL_MODE_ALIGNMENT_PLAN_2026-06-11.md` for the full plan.
+`docs/archive/CODEX_GOAL_MODE_ALIGNMENT_PLAN_2026-06-11.md` for the full plan.
 
 ### What was built
 
@@ -931,7 +935,7 @@ Docs/structure audit result:
 
 ## Opencode Alignment — Implemented, Hardening In Progress
 
-The implementation from `docs/OPENCODE_AGENT_ENGINE_ALIGNMENT_PLAN_2026-06-06.md`
+The implementation from `docs/archive/OPENCODE_AGENT_ENGINE_ALIGNMENT_PLAN_2026-06-06.md`
 has landed. Follow-up hardening on 2026-06-06 fixed usage-ledger rebuild
 idempotency, checkpoint test isolation, `/diagnostic` session snapshots, and
 dynamic-zone counting for user-message injected context. Provider runtime
@@ -974,7 +978,7 @@ successful requests with usage.
 - TUI tool cards with [Edit]/[Shell]/[Read]/[Search]/[Task] labels
 - Permission approval panel: 4-zone display
 - Turn-level additions/deletions from stored diffs
-- `fixtures/TASK_MATRIX.md` + `docs/CONTROLLER_INDEX.md` (52 controllers)
+- `fixtures/TASK_MATRIX.md` + `docs/archive/CONTROLLER_INDEX.md` (52 controllers)
 - Desktop + TUI share same RuntimeFacade
 
 ### Gates
@@ -1077,8 +1081,8 @@ Documents:
 - `docs/MEMORY_SYSTEM_AUDIT_2026-06-17.md`
 - `docs/CONTEXT_INJECTION_AUDIT_2026-06-17.md`
 - `docs/CACHE_COMPRESSION_AUDIT_2026-06-17.md`
-- `docs/AUTOMATION_AUDIT_2026-06-17.md`
-- `docs/OPENCODE_COMPARISON_2026-06-17.md`
+- `docs/archive/AUTOMATION_AUDIT_2026-06-17.md`
+- `docs/archive/OPENCODE_COMPARISON_2026-06-17.md`
 
 Current stage:
 
@@ -1100,7 +1104,7 @@ Current stage:
   persona/user/tool context only and cannot override runtime, sandbox,
   permission, validation, checkpoint, or tool-safety rules. Prompt-context
   reports now surface these root context layers, and
-  `docs/SOUL_USER_TOOLS_CONTEXT.md` documents their intended use. Phase 2 has
+  `docs/archive/SOUL_USER_TOOLS_CONTEXT.md` documents their intended use. Phase 2 has
   also started: turn-level retrieval context is now injected as an explicit
   `<relevant_material>` zone before the current user request, and
   context-zone tracing excludes dynamic zone system messages from the stable
@@ -1131,12 +1135,12 @@ Current stage:
   user-configured roots load after workspace roots, bundled skills remain the
   fallback, third-party and URL-loaded skills pass through a scanner and
   optional `PRIORITY_AGENT_SKILL_ALLOWLIST`, loaded skills carry source/trust
-  metadata, and `docs/SKILL_ROOTS_AND_TRUST.md` documents the trust model. Phase
+  metadata, and `docs/archive/SKILL_ROOTS_AND_TRUST.md` documents the trust model. Phase
   8 now has an opt-in active-memory prototype: `PRIORITY_AGENT_ACTIVE_MEMORY=1`
   enables a gated, read-only local FTS worker only for user-facing persistent
   sessions, skips eval/headless/automation/internal paths, fences output as
   untrusted retrieval context, records `memory.active` trace events, and is
-  documented in `docs/ACTIVE_MEMORY_PROTOTYPE.md`. Closeout-time and lifecycle
+  documented in `docs/archive/ACTIVE_MEMORY_PROTOTYPE.md`. Closeout-time and lifecycle
   memory writes now default to review-only: the runtime surfaces
   `MemoryProposal`, skipped-review-only flush records, and execution/progress
   evidence, while legacy automatic persistence requires
@@ -1161,7 +1165,7 @@ Current stage:
   for the Reasonix-style simplification pass. Future runtime-diet work should
   remove or downgrade pseudo-intelligent runtime branches before adding new
   ones.
-- `docs/AGENT_LEARNING_NOTES_PROJECT_ALIGNMENT_2026-05-24.md` is the current
+- `docs/archive/AGENT_LEARNING_NOTES_PROJECT_ALIGNMENT_2026-05-24.md` is the current
   implementation record for the agent-design notes review. The active slice has
   landed five-zone context assembly, `AgentTaskState`, phase-aware tool
   exposure, action scoring, verification proof semantics, stop checks, expanded
@@ -1905,29 +1909,29 @@ Secondary interfaces:
 - `docs/UNIFIED_RUNTIME_ENTRYPOINTS_2026-06-01.md`
 - `docs/NEXT_DEVELOPMENT_PLAN_2026-05-09.md`
 - `docs/PERSONAL_AGENT_PRODUCT_PRINCIPLES_2026-05-18.md`
-- `docs/AGENT_LEARNING_NOTES_PROJECT_ALIGNMENT_2026-05-24.md`
+- `docs/archive/AGENT_LEARNING_NOTES_PROJECT_ALIGNMENT_2026-05-24.md`
 - `docs/AGENT_TESTING_MATRIX_2026-05-08.md`
 
 ### Active plans (recent, may still be in progress)
 
 - `docs/MEMORY_SYSTEM_SIMPLIFICATION_PLAN_2026-06-02.md`
-- `docs/AGENT_SKILLS_OPTIMIZATION_PLAN_2026-06-01.md`
-- `docs/LIVE_CODING_TEST_PLAN_2026-06-01.md`
-- `docs/NEW_FEATURE_EVAL_PLAN_2026-06-01.md`
-- `docs/REAL_WORLD_TEST_PLAN_2026-06-01.md`
+- `docs/archive/AGENT_SKILLS_OPTIMIZATION_PLAN_2026-06-01.md`
+- `docs/archive/LIVE_CODING_TEST_PLAN_2026-06-01.md`
+- `docs/archive/NEW_FEATURE_EVAL_PLAN_2026-06-01.md`
+- `docs/archive/REAL_WORLD_TEST_PLAN_2026-06-01.md`
 - `docs/TEST_LANES_2026-05-29.md`
 - `docs/DEVELOPMENT_REFACTORING_PLAN_2026-05-28.md`
-- `docs/SELF_EVOLUTION_EVAL_LOOP_PLAN_2026-05-28.md`
-- `docs/CODING_FLOW_POLISH_OBSERVABILITY_PLAN_2026-05-28.md`
-- `docs/BEHAVIOR_ASSERTION_NO_EFFECTIVE_DIFF_REPAIR_PLAN_2026-05-28.md`
+- `docs/archive/SELF_EVOLUTION_EVAL_LOOP_PLAN_2026-05-28.md`
+- `docs/archive/CODING_FLOW_POLISH_OBSERVABILITY_PLAN_2026-05-28.md`
+- `docs/archive/BEHAVIOR_ASSERTION_NO_EFFECTIVE_DIFF_REPAIR_PLAN_2026-05-28.md`
 - `docs/FLOW_STABILIZATION_TEST_PLAN_2026-05-27.md`
 - `docs/FLOW_STABILIZATION_TEST_RUN_2026-05-27.md`
-- `docs/HERMES_MEMORY_FEATURE_FOLLOWUP_PLAN_2026-05-27.md`
+- `docs/archive/HERMES_MEMORY_FEATURE_FOLLOWUP_PLAN_2026-05-27.md`
 - `docs/RUNTIME_SPINE_STABILITY_REVIEW_PLAN_2026-05-26.md`
 
 ### Reference docs (design notes, architecture, principles)
 
-- `docs/AGENTIC_DESIGN_PATTERNS_REVIEW.md`
+- `docs/archive/AGENTIC_DESIGN_PATTERNS_REVIEW.md`
 - `docs/AGENT_RUNTIME_CONTRACT_PLAN.md`
 - `docs/CODING_AGENT_WORKFLOW_DISCUSSION.md`
 - `docs/CONVERSATION_LOOP_RESPONSIBILITY_MAP_2026-05-11.md`
@@ -1935,9 +1939,9 @@ Secondary interfaces:
 - `docs/MEMORY_CONTROLLED_SELF_EVOLUTION_DESIGN.md`
 - `docs/PROJECT_FLOW_AND_RUNTIME_ARCHITECTURE_2026-05-26.md`
 - `docs/HERMES_MEMORY_SELF_EVOLUTION_REVIEW.md`
-- `docs/ACTIVE_MEMORY_PROTOTYPE.md`
-- `docs/SKILL_ROOTS_AND_TRUST.md`
-- `docs/SOUL_USER_TOOLS_CONTEXT.md`
+- `docs/archive/ACTIVE_MEMORY_PROTOTYPE.md`
+- `docs/archive/SKILL_ROOTS_AND_TRUST.md`
+- `docs/archive/SOUL_USER_TOOLS_CONTEXT.md`
 
 ### Historical docs (archived)
 

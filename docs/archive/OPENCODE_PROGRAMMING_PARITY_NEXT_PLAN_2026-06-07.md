@@ -11,7 +11,7 @@ Reference sources:
 - Local project: `/Users/georgexu/Desktop/rust-agent`
 - opencode source: `/Users/georgexu/Downloads/opencode-dev`
 - Prior local plans:
-  - `docs/OPENCODE_PROGRAMMING_CHAIN_GAP_PLAN_2026-06-05.md`
+  - `docs/archive/OPENCODE_PROGRAMMING_CHAIN_GAP_PLAN_2026-06-05.md`
   - `docs/OPENCODE_THIRD_ALIGNMENT_PLAN_2026-06-07.md`
   - `docs/AGENT_PROMPT_ENTRYPOINT_ALIGNMENT_PLAN_2026-06-07.md`
 

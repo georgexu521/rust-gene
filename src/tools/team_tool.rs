@@ -2,7 +2,7 @@
 //!
 //! 让 agent 可以通过 TeammateMailbox 与其他 agent 发送/接收消息。
 
-use crate::team::{MessageKind, MessagePriority, TeammateMailbox};
+use crate::internal::team::{MessageKind, MessagePriority, TeammateMailbox};
 use crate::tools::{Tool, ToolContext, ToolOperationKind, ToolResult};
 use async_trait::async_trait;
 use serde_json::{json, Value};

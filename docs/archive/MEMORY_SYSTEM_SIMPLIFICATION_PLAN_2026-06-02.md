@@ -39,7 +39,7 @@ Reference sources:
 - Priority Agent memory code under `src/memory/` and retrieval injection under
   `src/engine/conversation_loop/`.
 - Existing project plans:
-  `docs/HERMES_MEMORY_FEATURE_FOLLOWUP_PLAN_2026-05-27.md`,
+  `docs/archive/HERMES_MEMORY_FEATURE_FOLLOWUP_PLAN_2026-05-27.md`,
   `docs/HERMES_MEMORY_SELF_EVOLUTION_REVIEW.md`, and
   `docs/RUNTIME_SIMPLIFICATION_PLAN_2026-06-02.md`.
 - Reasonix local source:

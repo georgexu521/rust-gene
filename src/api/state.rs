@@ -858,7 +858,7 @@ impl ApiState {
             .ok_or_else(|| anyhow::anyhow!("Tool '{}' not found", tool_name))?;
 
         let mut context = ToolContext::new(".", session_id)
-            .with_task_manager(crate::task_manager::GLOBAL_TASK_MANAGER.clone())
+            .with_task_manager(crate::internal::task_manager::GLOBAL_TASK_MANAGER.clone())
             .with_cost_tracker(Arc::new(tokio::sync::Mutex::new(
                 self.audit_tracker.read().await.clone(),
             )))

@@ -56,8 +56,8 @@ The main slices have landed in code:
 This plan follows the completed opencode programming-chain and agent-engine
 alignment work:
 
-- `docs/OPENCODE_PROGRAMMING_CHAIN_GAP_PLAN_2026-06-05.md`
-- `docs/OPENCODE_AGENT_ENGINE_ALIGNMENT_PLAN_2026-06-06.md`
+- `docs/archive/OPENCODE_PROGRAMMING_CHAIN_GAP_PLAN_2026-06-05.md`
+- `docs/archive/OPENCODE_AGENT_ENGINE_ALIGNMENT_PLAN_2026-06-06.md`
 
 The prior phases made Priority Agent much closer to opencode on tool semantics,
 file mutation safety, permissions, TUI diagnostics, usage accounting, cache

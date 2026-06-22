@@ -847,7 +847,7 @@ Update docs only when behavior changes, not for every internal refactor.
 Expected doc updates by phase:
 
 - Phase 1: update `docs/PROJECT_STATUS.md` and possibly add a short
-  `docs/SOUL_USER_TOOLS_CONTEXT.md` if the feature needs user-facing guidance.
+  `docs/archive/SOUL_USER_TOOLS_CONTEXT.md` if the feature needs user-facing guidance.
 - Phase 2: update context/prompt status in `docs/PROJECT_STATUS.md`.
 - Phase 3 and Phase 4: update
   `docs/AGENT_MEMORY_SYSTEM_ALIGNMENT_PLAN_2026-05-25.md` or add a successor

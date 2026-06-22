@@ -1396,9 +1396,9 @@ finalizing and `/status details` remain future work.
 Existing docs:
 
 ```text
-docs/NEXT_DEV_PLAN_2026-06-09.md
-docs/TUI_OPTIMIZATION_PLANS_2026-06-09.md
-docs/TUI_GAP_ANALYSIS_2026-06-02.md
+docs/archive/NEXT_DEV_PLAN_2026-06-09.md
+docs/archive/TUI_OPTIMIZATION_PLANS_2026-06-09.md
+docs/archive/TUI_GAP_ANALYSIS_2026-06-02.md
 ```
 
 Recommendation:

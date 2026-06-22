@@ -74,12 +74,13 @@ Support, diagnostics, and release gates:
 - `src/diagnostics/`, `src/telemetry/`, `src/quality_gates.rs`, `src/slo.rs`,
   `src/security/`, `src/workspace.rs`, `src/version.rs`, `src/changelog.rs`.
 
-Internal or historical support:
+Internal support:
 
-- `src/ai_analyzer/`, `src/context_manager/`, `src/priority/`,
-  `src/task_analyzer/`, `src/task_manager/`, `src/team/`.
-- These modules are crate-private in `src/lib.rs` unless a current product
-  surface needs them as an explicit public API.
+- `src/internal/`: crate-private compatibility and historical support modules,
+  including analyzer, context-manager, priority, task-manager, and teammate
+  support code that should not appear as top-level product surfaces.
+- These modules remain crate-private in `src/lib.rs` unless a current product
+  surface needs a deliberate public API.
 
 ## Runtime Boundary: Frontend-to-Engine Command/Event Map
 

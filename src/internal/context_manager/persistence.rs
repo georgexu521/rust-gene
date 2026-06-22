@@ -1,6 +1,6 @@
 //! 持久化管理
 
-use crate::context_manager::state::{ContextSnapshot, SessionState};
+use crate::internal::context_manager::state::{ContextSnapshot, SessionState};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 

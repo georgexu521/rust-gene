@@ -724,7 +724,7 @@ Likely locations:
 
 - `evalsets/live_tasks/`
 - `scripts/live_eval_report_parser.py`
-- `docs/REAL_TASK_SOAK_TEST_PLAN_2026-06-07.md`
+- `docs/archive/REAL_TASK_SOAK_TEST_PLAN_2026-06-07.md`
 
 Validation:
 

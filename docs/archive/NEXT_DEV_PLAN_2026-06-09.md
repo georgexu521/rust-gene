@@ -2,7 +2,7 @@
 Status: Active
 
 > 2026-06-09 — 综合 opencode 源码对比、产品生态差距分析、TUI 体验对比后的统一路线图
-> 已完成的 23 个任务见 `docs/OPENCODE_GAP_ANALYSIS_AND_DESIGN_2026-06-09.md` 和 `docs/NEXT_PHASE_PRODUCT_ECOSYSTEM_GAP_PLAN_2026-06-09.md`
+> 已完成的 23 个任务见 `docs/archive/OPENCODE_GAP_ANALYSIS_AND_DESIGN_2026-06-09.md` 和 `docs/archive/NEXT_PHASE_PRODUCT_ECOSYSTEM_GAP_PLAN_2026-06-09.md`
 
 ---
 
