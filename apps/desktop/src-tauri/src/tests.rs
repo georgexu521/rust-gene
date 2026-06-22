@@ -503,15 +503,15 @@ fn desktop_smoke_lab_status_reads_file_backed_labrun_state() {
         .create_current_stage_artifact_for_latest("Desktop status surface proof")
         .unwrap();
     store
-        .record_evidence_ref(
-            &run.lab_run_id,
-            priority_agent::lab::model::LabEvidenceKind::File,
-            priority_agent::lab::model::LabRole::Professor,
-            created.report_path.to_string_lossy().as_ref(),
-            "Desktop report evidence is persisted",
-            Some(created.artifact.artifact_id()),
-            None,
-        )
+        .record_evidence_ref(priority_agent::lab::store::LabEvidenceRefInput {
+            lab_run_id: &run.lab_run_id,
+            kind: priority_agent::lab::model::LabEvidenceKind::File,
+            role: priority_agent::lab::model::LabRole::Professor,
+            reference: created.report_path.to_string_lossy().as_ref(),
+            summary: "Desktop report evidence is persisted",
+            artifact_id: Some(created.artifact.artifact_id()),
+            cycle_id: None,
+        })
         .unwrap();
     let with_rows = desktop_lab_status_for_project(&project);
     assert_eq!(with_rows.artifact_count, 1);

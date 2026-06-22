@@ -321,7 +321,7 @@ pub fn handle_version(_app: &TuiApp) -> String {
 /// /about - About this agent
 pub fn handle_about(_app: &TuiApp) -> String {
     format!(
-        "Priority Agent v{}\nWeighted priority desktop Agent.\nType /help for available commands.",
+        "Priority Agent v{}\nRust programming-agent terminal CLI with local runtime, tools, memory, and desktop workbench support.\nType /help for available commands.",
         env!("CARGO_PKG_VERSION")
     )
 }

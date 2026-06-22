@@ -100,10 +100,10 @@ rustyline = "14"
 name = "priority-agent"
 version = "0.1.0"
 edition = "2021"
-authors = ["George Xu <your.email@example.com>"]
-description = "Weighted priority desktop Agent"
+authors = ["George Xu"]
+description = "Rust programming-agent terminal CLI with local runtime, tools, memory, and desktop workbench support"
 license = "MIT"
-repository = "https://github.com/yourusername/priority-agent"
+repository = "https://github.com/georgexu521/rust-agent"
 keywords = ["cli", "productivity", "task-management", "ai", "priority"]
 categories = ["command-line-utilities", "development-tools"]
 
@@ -114,6 +114,7 @@ path = "src/main.rs"
 [features]
 default = []
 experimental-api-server = []
+legacy-cli = ["priority-core/legacy-cli"]
 voice = []
 
 [dependencies]

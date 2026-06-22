@@ -3,6 +3,80 @@ Status: Current
 
 Last updated: 2026-06-22
 
+## Release Structure Cleanup — Structure Baseline Complete (2026-06-22)
+
+Current release-structure cleanup is tracked in
+`docs/RELEASE_STRUCTURE_CLEANUP_RECOMMENDATIONS_2026-06-22.md`.
+
+The release cleanup repaired the root `legacy-cli` feature mismatch, refreshed
+the docs index away from missing historical links, updated release metadata,
+removed the LabRun clippy failures, split the oversized LabRun
+command/orchestrator/draft/model/store modules by responsibility, and added
+baseline rustdoc comments to the LabRun public model and entry APIs.
+
+The secondary structure pass also split the remaining non-LabRun production
+files that exceeded the 1500-line project ceiling: TUI input/app runtime state,
+shell LabRun commands/tests, learning goal slash commands, agent-tool support,
+API bridge routes, streaming text-progress helpers, and session-action tests.
+Current scan result: no non-test production Rust file exceeds 1500 lines; the
+largest direct production file is `src/tools/agent_tool/mod.rs` at 1496 lines.
+
+Validated in this slice:
+
+```bash
+cargo fmt --check
+cargo check -q
+cargo check --features legacy-cli -q
+cargo check --features experimental-api-server -q
+cargo doc --no-deps -q
+cargo clippy --lib --all-features -- -D warnings
+cargo clippy --all-targets --all-features -- -D warnings
+cargo test -q lab --lib
+cargo test -q
+bash scripts/validate_docs.sh
+git diff --check
+```
+
+Remaining before a broad repository release-ready claim:
+
+- no repository-structure cleanup items remain from
+  `docs/RELEASE_STRUCTURE_CLEANUP_RECOMMENDATIONS_2026-06-22.md`; continue
+  with the normal release publication checklist for packaging/distribution.
+
+## Remaining Structure Refinement — Implemented (2026-06-22)
+
+The follow-up refinement plan is tracked in
+`docs/REMAINING_STRUCTURE_REFINEMENT_PLAN_2026-06-22.md`.
+
+Implemented in this slice:
+
+- Current product wording is aligned around the Rust programming-agent terminal
+  CLI direction in source comments, README, and `/about` output.
+- TUI command maturity now has explicit `production`, `usable`,
+  `experimental`, `diagnostics`, `placeholder`, and `unavailable` labels.
+  Placeholder and unavailable commands stay hidden from default help/palette
+  surfaces unless explicitly queried.
+- `scripts/check_source_file_sizes.sh` now enforces the non-test production
+  Rust file line ceiling, and `scripts/validate_docs.sh` runs it.
+- `docs/PROJECT_MAP.md` now classifies the top-level source tree by runtime
+  role: runtime core, product surfaces, integrations/adapters, diagnostics, and
+  internal/historical support.
+- `src/lib.rs` now documents the intended public surface and keeps
+  `ai_analyzer`, `context_manager`, `priority`, `task_analyzer`,
+  `task_manager`, and `team` crate-private as internal/historical support.
+
+Validation so far:
+
+```bash
+cargo fmt --check
+cargo check -q
+bash scripts/check_source_file_sizes.sh
+current product wording search excluding archived docs and the refinement-plan self-reference
+cargo test -q tui::commands --lib
+cargo test -q --features experimental-api-server api::routes --lib
+cargo test -q lab --lib
+```
+
 ## Desktop Frontend Workbench — Native Real-Provider QA Passing (2026-06-21)
 
 Desktop frontend work is now tracked in

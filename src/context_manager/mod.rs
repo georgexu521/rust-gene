@@ -6,6 +6,9 @@ pub mod history;
 pub mod persistence;
 pub mod state;
 
+#[allow(unused_imports)]
 pub use history::{HistoryEntry, HistoryManager};
+#[allow(unused_imports)]
 pub use persistence::{PersistenceManager, StorageBackend};
+#[allow(unused_imports)]
 pub use state::{ContextSnapshot, SessionState};

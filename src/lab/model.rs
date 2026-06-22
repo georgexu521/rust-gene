@@ -1,13 +1,20 @@
+mod artifacts;
+
+pub use artifacts::*;
+
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use crate::agent::envelope::AgentTaskEnvelope;
 
+/// Current schema version for persisted LabRun records.
 pub const LAB_SCHEMA_VERSION: u32 = 1;
+/// Default active-run lease lifetime used to recover interrupted LabRun work.
 pub const DEFAULT_LEASE_TTL_SECONDS: u64 = 90;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+/// State set for lab proposal status in the LabRun workflow.
 pub enum LabProposalStatus {
     Draft,
     AwaitingApproval,
@@ -18,30 +25,23 @@ pub enum LabProposalStatus {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+/// State set for recommended mode in the LabRun workflow.
 pub enum RecommendedMode {
     Direct,
     Goal,
     Labrun,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+/// Data model for lab proposal approval in LabRun persistence or orchestration.
 pub struct LabProposalApproval {
     pub approved_by_user: bool,
     pub approved_at: Option<DateTime<Utc>>,
     pub created_lab_run_id: Option<String>,
 }
 
-impl Default for LabProposalApproval {
-    fn default() -> Self {
-        Self {
-            approved_by_user: false,
-            approved_at: None,
-            created_lab_run_id: None,
-        }
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// Data model for lab proposal in LabRun persistence or orchestration.
 pub struct LabProposal {
     pub schema_version: u32,
     pub proposal_id: String,
@@ -64,6 +64,7 @@ pub struct LabProposal {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// Data model for lab proposal intake draft in LabRun persistence or orchestration.
 pub struct LabProposalIntakeDraft {
     pub problem_statement: String,
     pub desired_outcome: String,
@@ -77,6 +78,7 @@ pub struct LabProposalIntakeDraft {
 }
 
 impl LabProposalIntakeDraft {
+    /// Entry point for from goal.
     pub fn from_goal(user_goal: &str) -> Self {
         Self {
             problem_statement: user_goal.trim().to_string(),
@@ -94,6 +96,7 @@ impl LabProposalIntakeDraft {
 }
 
 impl LabProposal {
+    /// Entry point for new.
     pub fn new(
         proposal_id: String,
         project_root: String,
@@ -124,6 +127,7 @@ impl LabProposal {
         }
     }
 
+    /// Entry point for apply intake draft.
     pub fn apply_intake_draft(&mut self, draft: LabProposalIntakeDraft) {
         self.problem_statement = draft.problem_statement;
         self.desired_outcome = draft.desired_outcome;
@@ -139,6 +143,7 @@ impl LabProposal {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+/// State set for lab run kind in the LabRun workflow.
 pub enum LabRunKind {
     ArchitecturePlan,
     Implementation,
@@ -148,6 +153,7 @@ pub enum LabRunKind {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+/// State set for lab run status in the LabRun workflow.
 pub enum LabRunStatus {
     Created,
     Active,
@@ -162,6 +168,7 @@ pub enum LabRunStatus {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+/// State set for lab role in the LabRun workflow.
 pub enum LabRole {
     Professor,
     Postdoc,
@@ -171,6 +178,7 @@ pub enum LabRole {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+/// State set for lab task status in the LabRun workflow.
 pub enum LabTaskStatus {
     Queued,
     InProgress,
@@ -180,6 +188,7 @@ pub enum LabTaskStatus {
 }
 
 impl LabTaskStatus {
+    /// Entry point for is open.
     pub fn is_open(self) -> bool {
         matches!(self, Self::Queued | Self::InProgress | Self::Blocked)
     }
@@ -187,12 +196,14 @@ impl LabTaskStatus {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+/// State set for lab provider certification kind in the LabRun workflow.
 pub enum LabProviderCertificationKind {
     ControlPlane,
     Graduate,
 }
 
 impl LabProviderCertificationKind {
+    /// Entry point for as str.
     pub fn as_str(self) -> &'static str {
         match self {
             Self::ControlPlane => "control_plane",
@@ -203,12 +214,14 @@ impl LabProviderCertificationKind {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+/// State set for lab provider certification outcome in the LabRun workflow.
 pub enum LabProviderCertificationOutcome {
     Passed,
     Failed,
 }
 
 impl LabProviderCertificationOutcome {
+    /// Entry point for as str.
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Passed => "passed",
@@ -218,6 +231,7 @@ impl LabProviderCertificationOutcome {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// Data model for lab provider certification record in LabRun persistence or orchestration.
 pub struct LabProviderCertificationRecord {
     pub schema_version: u32,
     pub record_id: String,
@@ -231,6 +245,7 @@ pub struct LabProviderCertificationRecord {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// Data model for graduate task in LabRun persistence or orchestration.
 pub struct GraduateTask {
     pub schema_version: u32,
     pub task_id: String,
@@ -252,6 +267,7 @@ pub struct GraduateTask {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+/// State set for graduate dispatch status in the LabRun workflow.
 pub enum GraduateDispatchStatus {
     Prepared,
     Running,
@@ -262,6 +278,7 @@ pub enum GraduateDispatchStatus {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+/// State set for graduate cleanup status in the LabRun workflow.
 pub enum GraduateCleanupStatus {
     CleanupPending,
     CleanupDone,
@@ -269,6 +286,7 @@ pub enum GraduateCleanupStatus {
 }
 
 impl GraduateCleanupStatus {
+    /// Entry point for as str.
     pub fn as_str(self) -> &'static str {
         match self {
             Self::CleanupPending => "cleanup_pending",
@@ -283,6 +301,7 @@ fn default_graduate_cleanup_status() -> GraduateCleanupStatus {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Data model for graduate dispatch record in LabRun persistence or orchestration.
 pub struct GraduateDispatchRecord {
     pub schema_version: u32,
     pub dispatch_id: String,
@@ -305,6 +324,7 @@ pub struct GraduateDispatchRecord {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// Data model for lab validation retry in LabRun persistence or orchestration.
 pub struct LabValidationRetry {
     pub schema_version: u32,
     pub retry_id: String,
@@ -319,6 +339,7 @@ pub struct LabValidationRetry {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+/// State set for lab scheduler status in the LabRun workflow.
 pub enum LabSchedulerStatus {
     Idle,
     Running,
@@ -332,6 +353,7 @@ pub enum LabSchedulerStatus {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// Data model for lab scheduler state in LabRun persistence or orchestration.
 pub struct LabSchedulerState {
     pub schema_version: u32,
     pub lab_run_id: String,
@@ -348,6 +370,7 @@ pub struct LabSchedulerState {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// Data model for lab app lifecycle state in LabRun persistence or orchestration.
 pub struct LabAppLifecycleState {
     pub schema_version: u32,
     pub project_root: String,
@@ -364,6 +387,7 @@ pub struct LabAppLifecycleState {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+/// State set for lab daemon mode in the LabRun workflow.
 pub enum LabDaemonMode {
     Strict,
     Hybrid,
@@ -371,6 +395,7 @@ pub enum LabDaemonMode {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// Data model for lab daemon state in LabRun persistence or orchestration.
 pub struct LabDaemonState {
     pub schema_version: u32,
     pub project_root: String,
@@ -393,11 +418,13 @@ pub struct LabDaemonState {
     pub last_message: Option<String>,
 }
 
+/// Entry point for default daemon max steps per cycle.
 pub fn default_daemon_max_steps_per_cycle() -> usize {
     5
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// Data model for resume cursor in LabRun persistence or orchestration.
 pub struct ResumeCursor {
     pub last_event_seq: u64,
     pub current_stage: String,
@@ -419,6 +446,7 @@ impl Default for ResumeCursor {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// Data model for role profile in LabRun persistence or orchestration.
 pub struct RoleProfile {
     pub profile: String,
     pub model_policy: String,
@@ -426,6 +454,7 @@ pub struct RoleProfile {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// Data model for lab roles in LabRun persistence or orchestration.
 pub struct LabRoles {
     pub professor: RoleProfile,
     pub postdoc: RoleProfile,
@@ -455,6 +484,7 @@ impl Default for LabRoles {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// Data model for lab cost policy in LabRun persistence or orchestration.
 pub struct LabCostPolicy {
     pub mode: String,
     pub max_cycle_tokens: u64,
@@ -484,6 +514,7 @@ impl Default for LabCostPolicy {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+/// Data model for lab cost usage in LabRun persistence or orchestration.
 pub struct LabCostUsage {
     pub schema_version: u32,
     pub usage_id: String,
@@ -505,6 +536,7 @@ pub struct LabCostUsage {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+/// Data model for lab role cost summary in LabRun persistence or orchestration.
 pub struct LabRoleCostSummary {
     pub role: LabRole,
     pub requests: u64,
@@ -519,6 +551,7 @@ pub struct LabRoleCostSummary {
 }
 
 impl LabRoleCostSummary {
+    /// Entry point for new.
     pub fn new(role: LabRole) -> Self {
         Self {
             role,
@@ -534,6 +567,7 @@ impl LabRoleCostSummary {
         }
     }
 
+    /// Entry point for add usage.
     pub fn add_usage(&mut self, usage: &LabCostUsage) {
         self.requests = self.requests.saturating_add(1);
         self.prompt_tokens = self.prompt_tokens.saturating_add(usage.prompt_tokens);
@@ -554,6 +588,7 @@ impl LabRoleCostSummary {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+/// Data model for lab cost summary in LabRun persistence or orchestration.
 pub struct LabCostSummary {
     pub schema_version: u32,
     pub lab_run_id: String,
@@ -570,6 +605,7 @@ pub struct LabCostSummary {
 }
 
 impl LabCostSummary {
+    /// Entry point for empty.
     pub fn empty(lab_run_id: impl Into<String>) -> Self {
         Self {
             schema_version: LAB_SCHEMA_VERSION,
@@ -587,6 +623,7 @@ impl LabCostSummary {
         }
     }
 
+    /// Entry point for add usage.
     pub fn add_usage(&mut self, usage: &LabCostUsage) {
         self.requests = self.requests.saturating_add(1);
         self.prompt_tokens = self.prompt_tokens.saturating_add(usage.prompt_tokens);
@@ -617,6 +654,7 @@ impl LabCostSummary {
         }
     }
 
+    /// Entry point for cache hit rate percent.
     pub fn cache_hit_rate_percent(&self) -> f64 {
         if self.prompt_tokens == 0 {
             return 0.0;
@@ -627,6 +665,7 @@ impl LabCostSummary {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+/// State set for lab evidence kind in the LabRun workflow.
 pub enum LabEvidenceKind {
     File,
     Diff,
@@ -638,6 +677,7 @@ pub enum LabEvidenceKind {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// Data model for lab evidence ref in LabRun persistence or orchestration.
 pub struct LabEvidenceRef {
     pub schema_version: u32,
     pub evidence_id: String,
@@ -655,6 +695,7 @@ pub struct LabEvidenceRef {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+/// State set for lab compression action in the LabRun workflow.
 pub enum LabCompressionAction {
     None,
     Recommend,
@@ -662,6 +703,7 @@ pub enum LabCompressionAction {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+/// Data model for lab compression decision in LabRun persistence or orchestration.
 pub struct LabCompressionDecision {
     pub schema_version: u32,
     pub decision_id: String,
@@ -679,6 +721,7 @@ pub struct LabCompressionDecision {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// Data model for retry budget in LabRun persistence or orchestration.
 pub struct RetryBudget {
     pub max_cycle_retries: u32,
     pub max_graduate_retries_per_task: u32,
@@ -697,6 +740,7 @@ impl Default for RetryBudget {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+/// State set for lab closeout status in the LabRun workflow.
 pub enum LabCloseoutStatus {
     CompletedVerified,
     CompletedNotVerified,
@@ -707,6 +751,7 @@ pub enum LabCloseoutStatus {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// Data model for lab run in LabRun persistence or orchestration.
 pub struct LabRun {
     pub schema_version: u32,
     pub lab_run_id: String,
@@ -743,6 +788,7 @@ pub struct LabRun {
 }
 
 impl LabRun {
+    /// Entry point for from proposal.
     pub fn from_proposal(lab_run_id: String, proposal: &LabProposal, now: DateTime<Utc>) -> Self {
         Self {
             schema_version: LAB_SCHEMA_VERSION,
@@ -785,6 +831,7 @@ impl LabRun {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// Data model for lab run index in LabRun persistence or orchestration.
 pub struct LabRunIndex {
     pub schema_version: u32,
     pub project_root: String,
@@ -793,6 +840,7 @@ pub struct LabRunIndex {
 }
 
 impl LabRunIndex {
+    /// Entry point for new.
     pub fn new(project_root: String, generated_at: DateTime<Utc>) -> Self {
         Self {
             schema_version: LAB_SCHEMA_VERSION,
@@ -804,6 +852,7 @@ impl LabRunIndex {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// Data model for lab run index entry in LabRun persistence or orchestration.
 pub struct LabRunIndexEntry {
     pub schema_version: u32,
     pub lab_run_id: String,
@@ -825,6 +874,7 @@ pub struct LabRunIndexEntry {
 }
 
 impl LabRunIndexEntry {
+    /// Entry point for from run.
     pub fn from_run(run: &LabRun) -> Self {
         Self {
             schema_version: LAB_SCHEMA_VERSION,
@@ -849,6 +899,7 @@ impl LabRunIndexEntry {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// Data model for lab lease in LabRun persistence or orchestration.
 pub struct LabLease {
     pub schema_version: u32,
     pub lease_id: String,
@@ -860,6 +911,7 @@ pub struct LabLease {
 }
 
 impl LabLease {
+    /// Entry point for is stale at.
     pub fn is_stale_at(&self, now: DateTime<Utc>) -> bool {
         let elapsed = now.signed_duration_since(self.heartbeat_at);
         elapsed.num_seconds() > self.lease_ttl_seconds as i64
@@ -868,6 +920,7 @@ impl LabLease {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+/// State set for sponsor message type in the LabRun workflow.
 pub enum SponsorMessageType {
     Question,
     Concern,
@@ -878,6 +931,7 @@ pub enum SponsorMessageType {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+/// State set for sponsor message status in the LabRun workflow.
 pub enum SponsorMessageStatus {
     Queued,
     Reviewed,
@@ -889,6 +943,7 @@ pub enum SponsorMessageStatus {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// Data model for sponsor message in LabRun persistence or orchestration.
 pub struct SponsorMessage {
     pub schema_version: u32,
     pub message_id: String,
@@ -901,6 +956,7 @@ pub struct SponsorMessage {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// Data model for lab event in LabRun persistence or orchestration.
 pub struct LabEvent {
     pub schema_version: u32,
     pub event_id: String,
@@ -909,526 +965,6 @@ pub struct LabEvent {
     pub event_type: String,
     pub created_at: DateTime<Utc>,
     pub payload: serde_json::Value,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum LabArtifactStatus {
-    Draft,
-    ReadyForHandoff,
-    Accepted,
-    NeedsRevision,
-    Superseded,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum LabArtifactType {
-    ProfessorPlan,
-    PostdocPlan,
-    GraduateResult,
-    PostdocIntegrationSummary,
-    ProfessorReview,
-    CycleSummary,
-    CompressionSummary,
-    LabMeetingRequest,
-    LabMeetingSummary,
-    LabBlockerReport,
-    LabRevisionTask,
-    ProfessorSteeringDecision,
-}
-
-impl LabArtifactType {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::ProfessorPlan => "ProfessorPlan",
-            Self::PostdocPlan => "PostdocPlan",
-            Self::GraduateResult => "GraduateResult",
-            Self::PostdocIntegrationSummary => "PostdocIntegrationSummary",
-            Self::ProfessorReview => "ProfessorReview",
-            Self::CycleSummary => "CycleSummary",
-            Self::CompressionSummary => "CompressionSummary",
-            Self::LabMeetingRequest => "LabMeetingRequest",
-            Self::LabMeetingSummary => "LabMeetingSummary",
-            Self::LabBlockerReport => "LabBlockerReport",
-            Self::LabRevisionTask => "LabRevisionTask",
-            Self::ProfessorSteeringDecision => "ProfessorSteeringDecision",
-        }
-    }
-
-    pub fn stage(self) -> &'static str {
-        match self {
-            Self::ProfessorPlan => "professor_discussion",
-            Self::PostdocPlan => "postdoc_plan",
-            Self::GraduateResult => "graduate_work",
-            Self::PostdocIntegrationSummary => "postdoc_review",
-            Self::ProfessorReview => "professor_review",
-            Self::CycleSummary => "cycle_summary",
-            Self::CompressionSummary => "compression_summary",
-            Self::LabMeetingRequest => "lab_meeting_request",
-            Self::LabMeetingSummary => "lab_meeting",
-            Self::LabBlockerReport => "blocker_report",
-            Self::LabRevisionTask => "postdoc_revision",
-            Self::ProfessorSteeringDecision => "professor_steering",
-        }
-    }
-
-    pub fn owner(self) -> LabRole {
-        match self {
-            Self::ProfessorPlan | Self::ProfessorReview | Self::ProfessorSteeringDecision => {
-                LabRole::Professor
-            }
-            Self::PostdocPlan | Self::PostdocIntegrationSummary => LabRole::Postdoc,
-            Self::GraduateResult => LabRole::Graduate,
-            Self::CycleSummary => LabRole::Runtime,
-            Self::CompressionSummary => LabRole::Runtime,
-            Self::LabMeetingRequest | Self::LabMeetingSummary => LabRole::Runtime,
-            Self::LabBlockerReport => LabRole::Postdoc,
-            Self::LabRevisionTask => LabRole::Professor,
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct LabArtifactEnvelope<T> {
-    pub schema_version: u32,
-    pub artifact_id: String,
-    pub lab_run_id: String,
-    pub artifact_type: LabArtifactType,
-    pub stage: String,
-    pub owner: LabRole,
-    pub status: LabArtifactStatus,
-    pub title: String,
-    pub created_at: DateTime<Utc>,
-    pub updated_at: DateTime<Utc>,
-    pub evidence_refs: Vec<String>,
-    pub validation_status: Option<String>,
-    pub body: T,
-}
-
-impl<T> LabArtifactEnvelope<T> {
-    pub fn new(
-        artifact_id: String,
-        lab_run_id: String,
-        artifact_type: LabArtifactType,
-        title: String,
-        now: DateTime<Utc>,
-        body: T,
-    ) -> Self {
-        Self {
-            schema_version: LAB_SCHEMA_VERSION,
-            artifact_id,
-            lab_run_id,
-            artifact_type,
-            stage: artifact_type.stage().to_string(),
-            owner: artifact_type.owner(),
-            status: LabArtifactStatus::ReadyForHandoff,
-            title,
-            created_at: now,
-            updated_at: now,
-            evidence_refs: Vec::new(),
-            validation_status: Some("not_verified".to_string()),
-            body,
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ProfessorPlan {
-    pub problem_statement: String,
-    pub strategic_direction: String,
-    pub success_criteria: Vec<String>,
-    pub constraints: Vec<String>,
-    pub risks: Vec<String>,
-    pub handoff_to_postdoc: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct PostdocPlan {
-    pub implementation_summary: String,
-    pub slices: Vec<String>,
-    pub files_expected: Vec<String>,
-    pub validation_plan: Vec<String>,
-    pub graduate_handoff: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct GraduateResult {
-    pub task_summary: String,
-    pub changed_files: Vec<String>,
-    pub validation_attempts: Vec<String>,
-    pub blockers: Vec<String>,
-    pub handoff_to_postdoc: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct PostdocIntegrationSummary {
-    pub integration_summary: String,
-    pub accepted_results: Vec<String>,
-    pub validation_status: String,
-    pub remaining_risks: Vec<String>,
-    pub handoff_to_professor: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ProfessorReview {
-    pub review_summary: String,
-    pub strategic_assessment: String,
-    pub accepted: bool,
-    pub required_revisions: Vec<String>,
-    pub user_report: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ProfessorSteeringDecision {
-    pub decision_id: String,
-    pub source_message_id: String,
-    pub decision: String,
-    pub status: SponsorMessageStatus,
-    pub message_type: SponsorMessageType,
-    pub urgency: String,
-    pub rationale: String,
-    pub next_action: String,
-    pub message_summary: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct LabCycleSummary {
-    pub cycle_id: String,
-    pub current_stage: String,
-    pub owner: LabRole,
-    pub summary: String,
-    pub completed_items: Vec<String>,
-    pub evidence_ids: Vec<String>,
-    pub total_tokens: u64,
-    pub cache_hit_rate_percent: f64,
-    pub estimated_cost_usd: f64,
-    pub next_action: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct LabCompressionSummary {
-    pub decision_id: String,
-    pub role: LabRole,
-    pub action: LabCompressionAction,
-    pub reason: String,
-    pub before_tokens: u64,
-    pub target_budget_tokens: u64,
-    pub usage_ratio_percent: f64,
-    pub stable_prefix_fingerprint: String,
-    pub dynamic_tail_fingerprint: String,
-    pub retained_layers: Vec<String>,
-    pub evidence_ids: Vec<String>,
-    pub compressed_summary: String,
-    pub next_action: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct LabMeetingSummary {
-    pub meeting_id: String,
-    pub topic: String,
-    pub current_stage: String,
-    pub professor_view: String,
-    pub postdoc_view: String,
-    pub decision: String,
-    pub next_actions: Vec<String>,
-    pub evidence_ids: Vec<String>,
-    pub total_tokens: u64,
-    pub cache_hit_rate_percent: f64,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct LabMeetingRequest {
-    pub request_id: String,
-    pub topic: String,
-    pub current_stage: String,
-    pub reason: String,
-    pub signals: Vec<String>,
-    pub requested_by: LabRole,
-    pub next_action: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct LabBlockerReport {
-    pub blocker_id: String,
-    pub current_stage: String,
-    pub summary: String,
-    pub blocked_tasks: Vec<String>,
-    pub failed_dispatches: Vec<String>,
-    pub failure_count: u64,
-    pub recommendation: String,
-    pub handoff_to_professor: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct LabRevisionTask {
-    pub revision_id: String,
-    pub source_review_artifact_id: String,
-    pub assigned_role: LabRole,
-    pub summary: String,
-    pub required_revisions: Vec<String>,
-    pub evidence_ids: Vec<String>,
-    pub next_action: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "artifact_type", content = "artifact")]
-pub enum StageArtifact {
-    ProfessorPlan(LabArtifactEnvelope<ProfessorPlan>),
-    PostdocPlan(LabArtifactEnvelope<PostdocPlan>),
-    GraduateResult(LabArtifactEnvelope<GraduateResult>),
-    PostdocIntegrationSummary(LabArtifactEnvelope<PostdocIntegrationSummary>),
-    ProfessorReview(LabArtifactEnvelope<ProfessorReview>),
-    CycleSummary(LabArtifactEnvelope<LabCycleSummary>),
-    CompressionSummary(LabArtifactEnvelope<LabCompressionSummary>),
-    LabMeetingRequest(LabArtifactEnvelope<LabMeetingRequest>),
-    LabMeetingSummary(LabArtifactEnvelope<LabMeetingSummary>),
-    LabBlockerReport(LabArtifactEnvelope<LabBlockerReport>),
-    LabRevisionTask(LabArtifactEnvelope<LabRevisionTask>),
-    ProfessorSteeringDecision(LabArtifactEnvelope<ProfessorSteeringDecision>),
-}
-
-impl StageArtifact {
-    pub fn artifact_id(&self) -> &str {
-        match self {
-            Self::ProfessorPlan(artifact) => &artifact.artifact_id,
-            Self::PostdocPlan(artifact) => &artifact.artifact_id,
-            Self::GraduateResult(artifact) => &artifact.artifact_id,
-            Self::PostdocIntegrationSummary(artifact) => &artifact.artifact_id,
-            Self::ProfessorReview(artifact) => &artifact.artifact_id,
-            Self::CycleSummary(artifact) => &artifact.artifact_id,
-            Self::CompressionSummary(artifact) => &artifact.artifact_id,
-            Self::LabMeetingRequest(artifact) => &artifact.artifact_id,
-            Self::LabMeetingSummary(artifact) => &artifact.artifact_id,
-            Self::LabBlockerReport(artifact) => &artifact.artifact_id,
-            Self::LabRevisionTask(artifact) => &artifact.artifact_id,
-            Self::ProfessorSteeringDecision(artifact) => &artifact.artifact_id,
-        }
-    }
-
-    pub fn lab_run_id(&self) -> &str {
-        match self {
-            Self::ProfessorPlan(artifact) => &artifact.lab_run_id,
-            Self::PostdocPlan(artifact) => &artifact.lab_run_id,
-            Self::GraduateResult(artifact) => &artifact.lab_run_id,
-            Self::PostdocIntegrationSummary(artifact) => &artifact.lab_run_id,
-            Self::ProfessorReview(artifact) => &artifact.lab_run_id,
-            Self::CycleSummary(artifact) => &artifact.lab_run_id,
-            Self::CompressionSummary(artifact) => &artifact.lab_run_id,
-            Self::LabMeetingRequest(artifact) => &artifact.lab_run_id,
-            Self::LabMeetingSummary(artifact) => &artifact.lab_run_id,
-            Self::LabBlockerReport(artifact) => &artifact.lab_run_id,
-            Self::LabRevisionTask(artifact) => &artifact.lab_run_id,
-            Self::ProfessorSteeringDecision(artifact) => &artifact.lab_run_id,
-        }
-    }
-
-    pub fn stage(&self) -> &str {
-        match self {
-            Self::ProfessorPlan(artifact) => &artifact.stage,
-            Self::PostdocPlan(artifact) => &artifact.stage,
-            Self::GraduateResult(artifact) => &artifact.stage,
-            Self::PostdocIntegrationSummary(artifact) => &artifact.stage,
-            Self::ProfessorReview(artifact) => &artifact.stage,
-            Self::CycleSummary(artifact) => &artifact.stage,
-            Self::CompressionSummary(artifact) => &artifact.stage,
-            Self::LabMeetingRequest(artifact) => &artifact.stage,
-            Self::LabMeetingSummary(artifact) => &artifact.stage,
-            Self::LabBlockerReport(artifact) => &artifact.stage,
-            Self::LabRevisionTask(artifact) => &artifact.stage,
-            Self::ProfessorSteeringDecision(artifact) => &artifact.stage,
-        }
-    }
-
-    pub fn artifact_type(&self) -> LabArtifactType {
-        match self {
-            Self::ProfessorPlan(_) => LabArtifactType::ProfessorPlan,
-            Self::PostdocPlan(_) => LabArtifactType::PostdocPlan,
-            Self::GraduateResult(_) => LabArtifactType::GraduateResult,
-            Self::PostdocIntegrationSummary(_) => LabArtifactType::PostdocIntegrationSummary,
-            Self::ProfessorReview(_) => LabArtifactType::ProfessorReview,
-            Self::CycleSummary(_) => LabArtifactType::CycleSummary,
-            Self::CompressionSummary(_) => LabArtifactType::CompressionSummary,
-            Self::LabMeetingRequest(_) => LabArtifactType::LabMeetingRequest,
-            Self::LabMeetingSummary(_) => LabArtifactType::LabMeetingSummary,
-            Self::LabBlockerReport(_) => LabArtifactType::LabBlockerReport,
-            Self::LabRevisionTask(_) => LabArtifactType::LabRevisionTask,
-            Self::ProfessorSteeringDecision(_) => LabArtifactType::ProfessorSteeringDecision,
-        }
-    }
-
-    pub fn validation_status(&self) -> Option<&str> {
-        match self {
-            Self::ProfessorPlan(artifact) => artifact.validation_status.as_deref(),
-            Self::PostdocPlan(artifact) => artifact.validation_status.as_deref(),
-            Self::GraduateResult(artifact) => artifact.validation_status.as_deref(),
-            Self::PostdocIntegrationSummary(artifact) => artifact.validation_status.as_deref(),
-            Self::ProfessorReview(artifact) => artifact.validation_status.as_deref(),
-            Self::CycleSummary(artifact) => artifact.validation_status.as_deref(),
-            Self::CompressionSummary(artifact) => artifact.validation_status.as_deref(),
-            Self::LabMeetingRequest(artifact) => artifact.validation_status.as_deref(),
-            Self::LabMeetingSummary(artifact) => artifact.validation_status.as_deref(),
-            Self::LabBlockerReport(artifact) => artifact.validation_status.as_deref(),
-            Self::LabRevisionTask(artifact) => artifact.validation_status.as_deref(),
-            Self::ProfessorSteeringDecision(artifact) => artifact.validation_status.as_deref(),
-        }
-    }
-
-    pub fn evidence_refs(&self) -> &[String] {
-        match self {
-            Self::ProfessorPlan(artifact) => &artifact.evidence_refs,
-            Self::PostdocPlan(artifact) => &artifact.evidence_refs,
-            Self::GraduateResult(artifact) => &artifact.evidence_refs,
-            Self::PostdocIntegrationSummary(artifact) => &artifact.evidence_refs,
-            Self::ProfessorReview(artifact) => &artifact.evidence_refs,
-            Self::CycleSummary(artifact) => &artifact.evidence_refs,
-            Self::CompressionSummary(artifact) => &artifact.evidence_refs,
-            Self::LabMeetingRequest(artifact) => &artifact.evidence_refs,
-            Self::LabMeetingSummary(artifact) => &artifact.evidence_refs,
-            Self::LabBlockerReport(artifact) => &artifact.evidence_refs,
-            Self::LabRevisionTask(artifact) => &artifact.evidence_refs,
-            Self::ProfessorSteeringDecision(artifact) => &artifact.evidence_refs,
-        }
-    }
-
-    pub fn status(&self) -> LabArtifactStatus {
-        match self {
-            Self::ProfessorPlan(artifact) => artifact.status,
-            Self::PostdocPlan(artifact) => artifact.status,
-            Self::GraduateResult(artifact) => artifact.status,
-            Self::PostdocIntegrationSummary(artifact) => artifact.status,
-            Self::ProfessorReview(artifact) => artifact.status,
-            Self::CycleSummary(artifact) => artifact.status,
-            Self::CompressionSummary(artifact) => artifact.status,
-            Self::LabMeetingRequest(artifact) => artifact.status,
-            Self::LabMeetingSummary(artifact) => artifact.status,
-            Self::LabBlockerReport(artifact) => artifact.status,
-            Self::LabRevisionTask(artifact) => artifact.status,
-            Self::ProfessorSteeringDecision(artifact) => artifact.status,
-        }
-    }
-
-    pub fn owner(&self) -> LabRole {
-        match self {
-            Self::ProfessorPlan(artifact) => artifact.owner,
-            Self::PostdocPlan(artifact) => artifact.owner,
-            Self::GraduateResult(artifact) => artifact.owner,
-            Self::PostdocIntegrationSummary(artifact) => artifact.owner,
-            Self::ProfessorReview(artifact) => artifact.owner,
-            Self::CycleSummary(artifact) => artifact.owner,
-            Self::CompressionSummary(artifact) => artifact.owner,
-            Self::LabMeetingRequest(artifact) => artifact.owner,
-            Self::LabMeetingSummary(artifact) => artifact.owner,
-            Self::LabBlockerReport(artifact) => artifact.owner,
-            Self::LabRevisionTask(artifact) => artifact.owner,
-            Self::ProfessorSteeringDecision(artifact) => artifact.owner,
-        }
-    }
-
-    pub fn set_review_state(
-        &mut self,
-        status: LabArtifactStatus,
-        validation_status: Option<String>,
-    ) {
-        match self {
-            Self::ProfessorPlan(artifact) => {
-                artifact.status = status;
-                artifact.validation_status = validation_status;
-            }
-            Self::PostdocPlan(artifact) => {
-                artifact.status = status;
-                artifact.validation_status = validation_status;
-            }
-            Self::GraduateResult(artifact) => {
-                artifact.status = status;
-                artifact.validation_status = validation_status;
-            }
-            Self::PostdocIntegrationSummary(artifact) => {
-                artifact.status = status;
-                artifact.validation_status = validation_status;
-            }
-            Self::ProfessorReview(artifact) => {
-                artifact.status = status;
-                artifact.validation_status = validation_status;
-            }
-            Self::CycleSummary(artifact) => {
-                artifact.status = status;
-                artifact.validation_status = validation_status;
-            }
-            Self::CompressionSummary(artifact) => {
-                artifact.status = status;
-                artifact.validation_status = validation_status;
-            }
-            Self::LabMeetingRequest(artifact) => {
-                artifact.status = status;
-                artifact.validation_status = validation_status;
-            }
-            Self::LabMeetingSummary(artifact) => {
-                artifact.status = status;
-                artifact.validation_status = validation_status;
-            }
-            Self::LabBlockerReport(artifact) => {
-                artifact.status = status;
-                artifact.validation_status = validation_status;
-            }
-            Self::LabRevisionTask(artifact) => {
-                artifact.status = status;
-                artifact.validation_status = validation_status;
-            }
-            Self::ProfessorSteeringDecision(artifact) => {
-                artifact.status = status;
-                artifact.validation_status = validation_status;
-            }
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ArtifactGate {
-    pub schema_version: u32,
-    pub stage: String,
-    pub required_artifact_type: String,
-    pub owner: LabRole,
-    pub artifact_id: Option<String>,
-    pub evidence_refs: Vec<String>,
-    pub validation_status: Option<String>,
-    pub blockers: Vec<String>,
-    pub next_action: Option<String>,
-}
-
-impl ArtifactGate {
-    pub fn new(stage: impl Into<String>, artifact_type: impl Into<String>, owner: LabRole) -> Self {
-        Self {
-            schema_version: LAB_SCHEMA_VERSION,
-            stage: stage.into(),
-            required_artifact_type: artifact_type.into(),
-            owner,
-            artifact_id: None,
-            evidence_refs: Vec::new(),
-            validation_status: None,
-            blockers: Vec::new(),
-            next_action: None,
-        }
-    }
-
-    pub fn missing_fields(&self) -> Vec<&'static str> {
-        let mut missing = Vec::new();
-        if self.artifact_id.as_deref().unwrap_or("").trim().is_empty() {
-            missing.push("artifact_id");
-        }
-        if self.next_action.as_deref().unwrap_or("").trim().is_empty() {
-            missing.push("next_action");
-        }
-        if self.evidence_refs.is_empty() && self.validation_status.is_none() {
-            missing.push("evidence_refs_or_validation_status");
-        }
-        missing
-    }
-
-    pub fn is_satisfied(&self) -> bool {
-        self.missing_fields().is_empty()
-            && self.blockers.is_empty()
-            && self.validation_status.as_deref() != Some("needs_revision")
-    }
 }
 
 #[cfg(test)]

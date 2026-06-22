@@ -10,15 +10,30 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 pub enum CommandMaturity {
     Production,
     Usable,
+    Experimental,
+    Diagnostics,
     Placeholder,
+    Unavailable,
 }
 
 impl CommandMaturity {
+    pub const ALL: [CommandMaturity; 6] = [
+        CommandMaturity::Production,
+        CommandMaturity::Usable,
+        CommandMaturity::Experimental,
+        CommandMaturity::Diagnostics,
+        CommandMaturity::Placeholder,
+        CommandMaturity::Unavailable,
+    ];
+
     pub const fn label(self) -> &'static str {
         match self {
             CommandMaturity::Production => "production",
             CommandMaturity::Usable => "usable",
+            CommandMaturity::Experimental => "experimental",
+            CommandMaturity::Diagnostics => "diagnostics",
             CommandMaturity::Placeholder => "placeholder",
+            CommandMaturity::Unavailable => "unavailable",
         }
     }
 
@@ -26,8 +41,18 @@ impl CommandMaturity {
         match self {
             CommandMaturity::Production => "[production]",
             CommandMaturity::Usable => "[usable]",
+            CommandMaturity::Experimental => "[experimental]",
+            CommandMaturity::Diagnostics => "[diagnostics]",
             CommandMaturity::Placeholder => "[placeholder]",
+            CommandMaturity::Unavailable => "[unavailable]",
         }
+    }
+
+    pub const fn hidden_by_default(self) -> bool {
+        matches!(
+            self,
+            CommandMaturity::Placeholder | CommandMaturity::Unavailable
+        )
     }
 }
 
@@ -93,7 +118,7 @@ impl CommandDef {
             maturity: if placeholder {
                 CommandMaturity::Placeholder
             } else if experimental {
-                CommandMaturity::Usable
+                CommandMaturity::Experimental
             } else {
                 CommandMaturity::Production
             },
@@ -158,7 +183,7 @@ impl CommandRegistry {
             if let Some(cmd_names) = self.categories.get(cat) {
                 for cmd_name in cmd_names {
                     if let Some(cmd) = self.commands.get(cmd_name) {
-                        if cmd.placeholder {
+                        if cmd.maturity.hidden_by_default() {
                             continue;
                         }
                         let alias_str = if cmd.aliases.is_empty() {
@@ -213,38 +238,30 @@ impl CommandRegistry {
 
     /// 标记命令为占位符
     pub fn mark_placeholder(&mut self, name: &str) {
-        let Some(canonical_name) = self.commands.get(name).map(|cmd| cmd.name) else {
-            return;
-        };
-        for cmd in self
-            .commands
-            .values_mut()
-            .filter(|cmd| cmd.name == canonical_name)
-        {
-            cmd.placeholder = true;
-            cmd.maturity = CommandMaturity::Placeholder;
-        }
+        self.mark_maturity(name, CommandMaturity::Placeholder);
+    }
+
+    /// 标记命令为暂不可用
+    pub fn mark_unavailable(&mut self, name: &str) {
+        self.mark_maturity(name, CommandMaturity::Unavailable);
+    }
+
+    /// 标记命令为诊断工具
+    pub fn mark_diagnostics(&mut self, name: &str) {
+        self.mark_maturity(name, CommandMaturity::Diagnostics);
     }
 
     /// 标记命令为实验性
     pub fn mark_experimental(&mut self, name: &str) {
-        let Some(canonical_name) = self.commands.get(name).map(|cmd| cmd.name) else {
-            return;
-        };
-        for cmd in self
-            .commands
-            .values_mut()
-            .filter(|cmd| cmd.name == canonical_name)
-        {
-            cmd.experimental = true;
-            if cmd.maturity != CommandMaturity::Placeholder {
-                cmd.maturity = CommandMaturity::Usable;
-            }
-        }
+        self.mark_maturity(name, CommandMaturity::Experimental);
     }
 
     /// 标记命令为可用但尚未达到日常生产成熟度
     pub fn mark_usable(&mut self, name: &str) {
+        self.mark_maturity(name, CommandMaturity::Usable);
+    }
+
+    fn mark_maturity(&mut self, name: &str, maturity: CommandMaturity) {
         let Some(canonical_name) = self.commands.get(name).map(|cmd| cmd.name) else {
             return;
         };
@@ -253,9 +270,12 @@ impl CommandRegistry {
             .values_mut()
             .filter(|cmd| cmd.name == canonical_name)
         {
-            if cmd.maturity != CommandMaturity::Placeholder {
-                cmd.maturity = CommandMaturity::Usable;
-            }
+            cmd.placeholder = matches!(
+                maturity,
+                CommandMaturity::Placeholder | CommandMaturity::Unavailable
+            );
+            cmd.experimental = matches!(maturity, CommandMaturity::Experimental);
+            cmd.maturity = maturity;
         }
     }
 
@@ -301,11 +321,7 @@ impl CommandRegistry {
 
     pub fn maturity_summary(&self) -> BTreeMap<&'static str, usize> {
         let mut summary = BTreeMap::new();
-        for maturity in [
-            CommandMaturity::Production,
-            CommandMaturity::Usable,
-            CommandMaturity::Placeholder,
-        ] {
+        for maturity in CommandMaturity::ALL {
             summary.insert(maturity.label(), self.maturity_commands(maturity).len());
         }
         summary
@@ -313,11 +329,7 @@ impl CommandRegistry {
 
     pub fn maturity_report(&self) -> String {
         let mut lines = vec!["Command maturity:".to_string()];
-        for maturity in [
-            CommandMaturity::Production,
-            CommandMaturity::Usable,
-            CommandMaturity::Placeholder,
-        ] {
+        for maturity in CommandMaturity::ALL {
             let mut names = self
                 .maturity_commands(maturity)
                 .into_iter()
@@ -359,7 +371,7 @@ impl CommandRegistry {
             if !seen.insert(cmd.name) {
                 continue;
             }
-            if query.is_empty() && cmd.placeholder {
+            if query.is_empty() && cmd.maturity.hidden_by_default() {
                 continue;
             }
             let haystack = format!(
@@ -430,7 +442,7 @@ impl CommandRegistry {
 }
 
 pub fn command_accept_behavior(cmd: &CommandDef) -> CommandAcceptBehavior {
-    if cmd.placeholder {
+    if cmd.maturity.hidden_by_default() {
         return CommandAcceptBehavior::Insert;
     }
     if command_requires_arguments(cmd) {
@@ -701,8 +713,17 @@ fn apply_command_maturity(registry: &mut CommandRegistry) {
     for name in USABLE_COMMANDS {
         registry.mark_usable(name);
     }
+    for name in EXPERIMENTAL_COMMANDS {
+        registry.mark_experimental(name);
+    }
+    for name in DIAGNOSTIC_COMMANDS {
+        registry.mark_diagnostics(name);
+    }
     for name in PLACEHOLDER_COMMANDS {
         registry.mark_placeholder(name);
+    }
+    for name in UNAVAILABLE_COMMANDS {
+        registry.mark_unavailable(name);
     }
 }
 

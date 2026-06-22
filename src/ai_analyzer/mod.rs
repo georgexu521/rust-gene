@@ -5,4 +5,5 @@
 pub mod analyzer;
 pub mod heuristics;
 
+#[allow(unused_imports)]
 pub use analyzer::{AiWeightAnalyzer, ProjectContext};

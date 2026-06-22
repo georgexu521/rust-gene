@@ -1853,7 +1853,7 @@ fn test_scroll_to_message_index_maps_through_timeline_tool_groups() {
 }
 
 #[test]
-fn test_command_palette_render_marks_placeholder_commands() {
+fn test_command_palette_render_marks_unavailable_commands() {
     let mut app = TuiApp::new();
     app.open_command_palette();
     for ch in "desktop".chars() {
@@ -1864,9 +1864,9 @@ fn test_command_palette_render_marks_placeholder_commands() {
 
     assert!(rendered.contains("Command Palette"));
     assert!(rendered.contains("/desktop"));
-    assert!(rendered.contains("[placeholder]"));
+    assert!(rendered.contains("[unavailable]"));
     assert!(rendered.contains("Maturity:"));
-    assert!(rendered.contains("placeholder"));
+    assert!(rendered.contains("unavailable"));
 }
 
 #[test]
@@ -2853,4 +2853,74 @@ fn command_palette_from_vim_normal_returns_to_vim_normal() {
 
     app.close_command_palette();
     assert_eq!(app.mode, AppMode::VimNormal);
+}
+
+#[test]
+fn assistant_completion_metadata_includes_model_and_usage() {
+    let metadata = assistant_completion_metadata(
+        "deepseek-v4-flash".to_string(),
+        Some(StreamUsageSnapshot {
+            prompt_tokens: 100,
+            completion_tokens: 25,
+            reasoning_tokens: Some(5),
+            cached_tokens: Some(90),
+            cache_write_tokens: Some(10),
+        }),
+        Some(2_730),
+        crate::engine::runtime_facade::ProviderPhase::Completed,
+        &[],
+    );
+
+    assert_eq!(metadata.get("status").map(String::as_str), Some("complete"));
+    assert_eq!(
+        metadata.get("model_label").map(String::as_str),
+        Some("deepseek-v4-flash")
+    );
+    assert_eq!(
+        metadata.get("completion_tokens").map(String::as_str),
+        Some("25")
+    );
+    assert_eq!(
+        metadata.get("total_tokens").map(String::as_str),
+        Some("125")
+    );
+    assert_eq!(
+        metadata.get("reasoning_tokens").map(String::as_str),
+        Some("5")
+    );
+    assert_eq!(
+        metadata.get("cached_tokens").map(String::as_str),
+        Some("90")
+    );
+    assert_eq!(metadata.get("elapsed_ms").map(String::as_str), Some("2730"));
+    assert_eq!(
+        metadata.get("provider_phase").map(String::as_str),
+        Some("provider done")
+    );
+}
+
+#[test]
+fn assistant_completion_metadata_includes_tool_and_validation_status() {
+    let mut validation = ToolRunView::new("tool_1".to_string(), "run_tests".to_string());
+    validation.mark_complete("Result: OK\npassed".to_string());
+    let mut failed = ToolRunView::new("tool_2".to_string(), "bash".to_string());
+    failed.status = ToolRunStatus::Failed;
+
+    let metadata = assistant_completion_metadata(
+        "deepseek-v4-flash".to_string(),
+        None,
+        None,
+        crate::engine::runtime_facade::ProviderPhase::Completed,
+        &[validation, failed],
+    );
+
+    assert_eq!(metadata.get("tool_count").map(String::as_str), Some("2"));
+    assert_eq!(
+        metadata.get("failed_tool_count").map(String::as_str),
+        Some("1")
+    );
+    assert_eq!(
+        metadata.get("validation_status").map(String::as_str),
+        Some("passed")
+    );
 }

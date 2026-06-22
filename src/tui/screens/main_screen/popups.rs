@@ -225,7 +225,12 @@ pub fn render_command_palette(f: &mut Frame, app: &TuiApp, area: Rect) {
                 Style::default().fg(match selected.maturity {
                     crate::tui::commands::CommandMaturity::Production => app.theme.tokens.tone.ok,
                     crate::tui::commands::CommandMaturity::Usable => app.theme.tokens.tone.warn,
+                    crate::tui::commands::CommandMaturity::Experimental => {
+                        app.theme.tokens.tone.info
+                    }
+                    crate::tui::commands::CommandMaturity::Diagnostics => app.theme.tokens.fg.meta,
                     crate::tui::commands::CommandMaturity::Placeholder => app.theme.tokens.tone.err,
+                    crate::tui::commands::CommandMaturity::Unavailable => app.theme.tokens.tone.err,
                 }),
             ),
         ]));

@@ -16,8 +16,10 @@ required_files=(
     "CAPABILITY_MATRIX.md"
     "QUALITY_GATES.md"
     "docs/PROJECT_STATUS.md"
-    "docs/CLAUDE_CODE_ALIGNMENT_PLAN.md"
-    "docs/REMAINING_CLOSURE_PLAN.md"
+    "docs/PROJECT_MAP.md"
+    "docs/PERSONAL_AGENT_PRODUCT_PRINCIPLES_2026-05-18.md"
+    "docs/RELEASE_STRUCTURE_CLEANUP_RECOMMENDATIONS_2026-06-22.md"
+    "docs/REMAINING_STRUCTURE_REFINEMENT_PLAN_2026-06-22.md"
 )
 
 for file in "${required_files[@]}"; do
@@ -39,22 +41,25 @@ echo "Checking for doc/implementation conflicts..."
 
 # Get registered tools from source
 echo "  Verifying tool registry..."
-tool_count=$(grep -c "registry.register" src/tools/mod.rs || echo "0")
-echo "  Registered tools in mod.rs: $tool_count"
+tool_count=$(grep -c "registry.register" src/tools/registry.rs || true)
+echo "  Registered tools in registry.rs: $tool_count"
 
 # Get command count
 echo "  Verifying command registry..."
-cmd_count=$(grep -c "pub const CMD_" src/tui/commands.rs || echo "0")
+cmd_count=$(grep -c "CommandDef::new" src/tui/commands/catalog.rs || true)
 echo "  Registered commands in commands.rs: $cmd_count"
+
+echo "  Verifying source file line ceiling..."
+bash scripts/check_source_file_sizes.sh
 
 echo ""
 
-# Run cargo build check
-echo "Running cargo build check..."
-if cargo build --all-features > /dev/null 2>&1; then
-    echo "  [OK] Build passes"
+# Run cargo check using all feature wiring without paying the binary link cost.
+echo "Running cargo check..."
+if cargo check --all-features > /dev/null 2>&1; then
+    echo "  [OK] Check passes"
 else
-    echo "  [FAIL] Build failed"
+    echo "  [FAIL] Check failed"
     exit 1
 fi
 
@@ -79,7 +84,7 @@ echo "Summary:"
 echo "  - Required docs: All present"
 echo "  - Tool registrations: $tool_count"
 echo "  - Command registrations: $cmd_count"
-echo "  - Build: PASS"
+echo "  - Check: PASS"
 echo "  - Tests: PASS"
 echo ""
 echo "Note: For full validation, also run:"

@@ -41,7 +41,7 @@ impl LabContextLayer {
             layer: layer.into(),
             label: label.into(),
             stability,
-            estimated_tokens: estimate_tokens(&content) as u64,
+            estimated_tokens: estimate_tokens(&content),
             content,
         }
     }

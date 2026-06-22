@@ -6,6 +6,9 @@ pub mod analyzer;
 pub mod dependency_graph;
 pub mod parser;
 
+#[allow(unused_imports)]
 pub use analyzer::{AnalysisResult, CriticalPath, TaskAnalyzer};
+#[allow(unused_imports)]
 pub use dependency_graph::{CycleError, DependencyGraph};
+#[allow(unused_imports)]
 pub use parser::{ParseError, TaskParser};

@@ -48,6 +48,27 @@ pub struct LabDaemonStart {
     pub interval_ms: u64,
 }
 
+pub struct LabHybridCycleBackgroundRequest {
+    pub context: ToolContext,
+    pub provider: Arc<dyn LlmProvider>,
+    pub model: String,
+    pub max_cycles: usize,
+    pub max_steps_per_cycle: usize,
+    pub interval_ms: u64,
+    pub instructions: String,
+}
+
+struct HybridLoopConfig {
+    project_root: PathBuf,
+    lab_run_id: String,
+    context: ToolContext,
+    provider: Arc<dyn LlmProvider>,
+    model: String,
+    instructions: String,
+    cancel: Arc<AtomicBool>,
+    interval_ms: u64,
+}
+
 pub fn default_background_max_steps() -> usize {
     DEFAULT_BACKGROUND_MAX_STEPS
 }
@@ -168,15 +189,17 @@ pub fn start_background_hybrid_scheduler(
 
     let cancel = Arc::new(AtomicBool::new(false));
     let handle = tokio::spawn(run_background_hybrid_loop(
-        project_root.clone(),
-        lab_run_id.clone(),
-        context.clone(),
-        provider,
-        model,
-        instructions,
-        cancel.clone(),
+        HybridLoopConfig {
+            project_root: project_root.clone(),
+            lab_run_id: lab_run_id.clone(),
+            context: context.clone(),
+            provider,
+            model,
+            instructions,
+            cancel: cancel.clone(),
+            interval_ms,
+        },
         max_steps,
-        interval_ms,
     ));
     handles.insert(
         lab_run_id.clone(),
@@ -213,13 +236,7 @@ pub fn start_background_hybrid_scheduler(
 
 pub fn start_background_hybrid_cycle_scheduler(
     project_root: impl AsRef<Path>,
-    context: ToolContext,
-    provider: Arc<dyn LlmProvider>,
-    model: String,
-    max_cycles: usize,
-    max_steps_per_cycle: usize,
-    interval_ms: u64,
-    instructions: String,
+    request: LabHybridCycleBackgroundRequest,
 ) -> anyhow::Result<LabBackgroundStart> {
     let project_root = project_root.as_ref().to_path_buf();
     let orchestrator = LabOrchestrator::for_project(&project_root);
@@ -231,9 +248,9 @@ pub fn start_background_hybrid_cycle_scheduler(
         .store()
         .ensure_current_process_holds_fresh_lease(&run)?;
     let lab_run_id = run.lab_run_id.clone();
-    let max_cycles = max_cycles.clamp(1, 20);
-    let max_steps_per_cycle = max_steps_per_cycle.clamp(1, 100);
-    let interval_ms = interval_ms.clamp(100, 60_000);
+    let max_cycles = request.max_cycles.clamp(1, 20);
+    let max_steps_per_cycle = request.max_steps_per_cycle.clamp(1, 100);
+    let interval_ms = request.interval_ms.clamp(100, 60_000);
 
     let mut handles = handles()
         .lock()
@@ -247,16 +264,18 @@ pub fn start_background_hybrid_cycle_scheduler(
 
     let cancel = Arc::new(AtomicBool::new(false));
     let handle = tokio::spawn(run_background_hybrid_cycle_loop(
-        project_root.clone(),
-        lab_run_id.clone(),
-        context.clone(),
-        provider,
-        model,
-        instructions,
-        cancel.clone(),
+        HybridLoopConfig {
+            project_root: project_root.clone(),
+            lab_run_id: lab_run_id.clone(),
+            context: request.context.clone(),
+            provider: request.provider,
+            model: request.model,
+            instructions: request.instructions,
+            cancel: cancel.clone(),
+            interval_ms,
+        },
         max_cycles,
         max_steps_per_cycle,
-        interval_ms,
     ));
     handles.insert(
         lab_run_id.clone(),
@@ -324,13 +343,15 @@ pub fn start_daemon_scheduler_from_policy(
         )?,
         LabDaemonMode::HybridCycles => start_background_hybrid_cycle_scheduler(
             project_root,
-            context,
-            provider,
-            model,
-            policy.max_steps,
-            policy.max_steps_per_cycle,
-            policy.interval_ms,
-            policy.instructions.clone(),
+            LabHybridCycleBackgroundRequest {
+                context,
+                provider,
+                model,
+                max_cycles: policy.max_steps,
+                max_steps_per_cycle: policy.max_steps_per_cycle,
+                interval_ms: policy.interval_ms,
+                instructions: policy.instructions.clone(),
+            },
         )?,
     };
     let _ = store.record_daemon_start_result(Some(&started.lab_run_id), None);
@@ -481,17 +502,17 @@ async fn run_background_loop(
     }
 }
 
-async fn run_background_hybrid_loop(
-    project_root: PathBuf,
-    lab_run_id: String,
-    context: ToolContext,
-    provider: Arc<dyn LlmProvider>,
-    model: String,
-    instructions: String,
-    cancel: Arc<AtomicBool>,
-    max_steps: usize,
-    interval_ms: u64,
-) {
+async fn run_background_hybrid_loop(config: HybridLoopConfig, max_steps: usize) {
+    let HybridLoopConfig {
+        project_root,
+        lab_run_id,
+        context,
+        provider,
+        model,
+        instructions,
+        cancel,
+        interval_ms,
+    } = config;
     let orchestrator = LabOrchestrator::for_project(&project_root);
     let mut steps_completed = 0usize;
     let mut final_status = LabSchedulerStatus::Completed;
@@ -597,17 +618,20 @@ async fn run_background_hybrid_loop(
 }
 
 async fn run_background_hybrid_cycle_loop(
-    project_root: PathBuf,
-    lab_run_id: String,
-    context: ToolContext,
-    provider: Arc<dyn LlmProvider>,
-    model: String,
-    instructions: String,
-    cancel: Arc<AtomicBool>,
+    config: HybridLoopConfig,
     max_cycles: usize,
     max_steps_per_cycle: usize,
-    interval_ms: u64,
 ) {
+    let HybridLoopConfig {
+        project_root,
+        lab_run_id,
+        context,
+        provider,
+        model,
+        instructions,
+        cancel,
+        interval_ms,
+    } = config;
     let orchestrator = LabOrchestrator::for_project(&project_root);
     let mut cycles_completed = 0usize;
     let mut final_status = LabSchedulerStatus::Completed;

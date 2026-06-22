@@ -38,6 +38,49 @@ not proof of current code. Read exact files before editing.
 - `docs/`: current status, design notes, archived plans, eval reports, and project map.
 - `tests/`: integration and behavior tests outside module-local unit tests.
 
+## Source Tree Grouping
+
+The top-level `src/` namespace is intentionally grouped by runtime role rather
+than by file size. Use this map before moving modules.
+
+Runtime core:
+
+- `src/engine/`: full agent loop, routing, context assembly, goal runner,
+  validation, repair, tracing, and runtime policy.
+- `src/tools/`: model-facing tool contracts and implementations.
+- `src/memory/`: memory storage, retrieval, extraction, ranking, and reports.
+- `src/permissions/`: permission decisions and approval contracts.
+- `src/session_store/`: SQLite session, event, todo, revert, and projection
+  persistence.
+- `src/instructions/`: runtime instruction assembly.
+
+Product surfaces:
+
+- `src/shell/`: default terminal CLI surface.
+- `src/tui/`: compatibility full-screen terminal UI.
+- `src/api/`: optional experimental HTTP API server.
+- `src/entry/`: mode-specific entry helpers such as LabRun CLI.
+- `src/desktop_runtime/`: runtime facade consumed by the Tauri workbench.
+- `src/lab/`: LabRun professor/postdoc/graduate workflow surface and storage.
+
+Integrations and adapters:
+
+- `src/services/`: provider APIs, credentials, and runtime config services.
+- `src/github/`, `src/ide/`, `src/plugins/`, `src/remote/`, `src/bridge/`,
+  `src/ports/`: external integration, handoff, and adapter layers.
+
+Support, diagnostics, and release gates:
+
+- `src/diagnostics/`, `src/telemetry/`, `src/quality_gates.rs`, `src/slo.rs`,
+  `src/security/`, `src/workspace.rs`, `src/version.rs`, `src/changelog.rs`.
+
+Internal or historical support:
+
+- `src/ai_analyzer/`, `src/context_manager/`, `src/priority/`,
+  `src/task_analyzer/`, `src/task_manager/`, `src/team/`.
+- These modules are crate-private in `src/lib.rs` unless a current product
+  surface needs them as an explicit public API.
+
 ## Runtime Boundary: Frontend-to-Engine Command/Event Map
 
 This section records every path by which user input reaches the runtime engine,

@@ -28,11 +28,15 @@ fn test_help_text() {
     assert!(help.contains("Memory:"));
     assert!(help.contains("[production]"));
     assert!(help.contains("[usable]"));
+    assert!(help.contains("[diagnostics]"));
+    assert!(help.contains("[experimental]"));
     assert!(!help.contains("[placeholder]"));
+    assert!(!help.contains("[unavailable]"));
     assert!(!help.contains("/desktop"));
 
     let all_help = registry.help_text_all();
     assert!(all_help.contains("[placeholder]"));
+    assert!(all_help.contains("[unavailable]"));
     assert!(all_help.contains("/desktop"));
 }
 
@@ -70,14 +74,26 @@ fn test_command_maturity_labels_are_explicit() {
     assert_eq!(registry.get("/lab").map(|cmd| cmd.placeholder), Some(false));
     assert_eq!(
         registry.get("/desktop").map(|cmd| cmd.maturity),
-        Some(CommandMaturity::Placeholder)
+        Some(CommandMaturity::Unavailable)
     );
     assert_eq!(
         registry.get("/desktop").map(|cmd| cmd.placeholder),
         Some(true)
     );
+    assert_eq!(
+        registry.get("/reset").map(|cmd| cmd.maturity),
+        Some(CommandMaturity::Placeholder)
+    );
+    assert_eq!(
+        registry.get("/doctor").map(|cmd| cmd.maturity),
+        Some(CommandMaturity::Diagnostics)
+    );
+    assert_eq!(
+        registry.get("/remote").map(|cmd| cmd.maturity),
+        Some(CommandMaturity::Experimental)
+    );
     assert!(!registry
-        .maturity_commands(CommandMaturity::Placeholder)
+        .maturity_commands(CommandMaturity::Unavailable)
         .is_empty());
 }
 
@@ -96,10 +112,40 @@ fn test_command_maturity_lists_are_registered_and_disjoint() {
             "duplicate command maturity entry {name}"
         );
     }
+    for name in EXPERIMENTAL_COMMANDS {
+        assert!(
+            registry.get(name).is_some(),
+            "experimental command {name} is registered"
+        );
+        assert!(
+            listed.insert(*name),
+            "duplicate command maturity entry {name}"
+        );
+    }
+    for name in DIAGNOSTIC_COMMANDS {
+        assert!(
+            registry.get(name).is_some(),
+            "diagnostics command {name} is registered"
+        );
+        assert!(
+            listed.insert(*name),
+            "duplicate command maturity entry {name}"
+        );
+    }
     for name in PLACEHOLDER_COMMANDS {
         assert!(
             registry.get(name).is_some(),
             "placeholder command {name} is registered"
+        );
+        assert!(
+            listed.insert(*name),
+            "duplicate command maturity entry {name}"
+        );
+    }
+    for name in UNAVAILABLE_COMMANDS {
+        assert!(
+            registry.get(name).is_some(),
+            "unavailable command {name} is registered"
         );
         assert!(
             listed.insert(*name),
@@ -113,8 +159,20 @@ fn test_command_maturity_lists_are_registered_and_disjoint() {
         Some(USABLE_COMMANDS.len())
     );
     assert_eq!(
+        summary.get(CommandMaturity::Experimental.label()).copied(),
+        Some(EXPERIMENTAL_COMMANDS.len())
+    );
+    assert_eq!(
+        summary.get(CommandMaturity::Diagnostics.label()).copied(),
+        Some(DIAGNOSTIC_COMMANDS.len())
+    );
+    assert_eq!(
         summary.get(CommandMaturity::Placeholder.label()).copied(),
         Some(PLACEHOLDER_COMMANDS.len())
+    );
+    assert_eq!(
+        summary.get(CommandMaturity::Unavailable.label()).copied(),
+        Some(UNAVAILABLE_COMMANDS.len())
     );
     assert!(
         summary
@@ -134,7 +192,13 @@ fn test_maturity_report_lists_runtime_surfaces() {
     assert!(report.contains("- usable"));
     assert!(report.contains("/panel"));
     assert!(report.contains("/tool-output"));
+    assert!(report.contains("- experimental"));
+    assert!(report.contains("/remote"));
+    assert!(report.contains("- diagnostics"));
+    assert!(report.contains("/doctor"));
     assert!(report.contains("- placeholder"));
+    assert!(report.contains("/reset"));
+    assert!(report.contains("- unavailable"));
     assert!(report.contains("/desktop"));
 }
 

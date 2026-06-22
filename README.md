@@ -4,22 +4,31 @@ Priority Agent is a Rust-based agentic coding CLI inspired by Claude Code and
 Codex, with an explicit priority/goal layer, observable runtime traces, tool
 recovery, memory, MCP, and multi-provider LLM support.
 
-The project started as a weighted-priority desktop agent. It has since evolved
-into a programming-agent terminal CLI. The default command is `priority-agent`
-or the `pa` shortcut; `--tui` remains as a compatibility entry for the
-full-screen terminal interface.
+The project is now focused on the programming-agent terminal CLI. The default
+command is `priority-agent` or the `pa` shortcut; `--tui` remains as a
+compatibility entry for the full-screen terminal interface.
 
 ## Current Status
 
 Current project status is tracked in [docs/PROJECT_STATUS.md](docs/PROJECT_STATUS.md).
 
-Latest local baseline recorded on 2026-06-09:
+Latest release-cleanup baseline recorded on 2026-06-22:
 
 - `cargo fmt --check`
 - `cargo check -q`
+- `cargo check --features legacy-cli -q`
+- `cargo check --features experimental-api-server -q`
+- `cargo doc --no-deps -q`
+- `cargo clippy --lib --all-features -- -D warnings`
 - `cargo clippy --all-targets --all-features -- -D warnings`
-- `git diff --check`
 - `cargo test -q`
+- `bash scripts/validate_docs.sh`
+- `git diff --check`
+
+Full release readiness is tracked in
+[docs/RELEASE_STRUCTURE_CLEANUP_RECOMMENDATIONS_2026-06-22.md](docs/RELEASE_STRUCTURE_CLEANUP_RECOMMENDATIONS_2026-06-22.md).
+Before publishing a formal release, rerun the full gate set from
+`QUALITY_GATES.md` on the exact release commit.
 
 ## Quick Start
 

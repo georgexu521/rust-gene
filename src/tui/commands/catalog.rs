@@ -26,6 +26,9 @@ pub(crate) const USABLE_COMMANDS: &[&str] = &[
     "/dream",
     "/custom",
     "/orchestrate",
+];
+
+pub(crate) const EXPERIMENTAL_COMMANDS: &[&str] = &[
     "/remote",
     "/lsp",
     "/npm",
@@ -41,13 +44,27 @@ pub(crate) const USABLE_COMMANDS: &[&str] = &[
     "/shadow",
     "/subscribe",
     "/ticker",
-    "/eval",
     "/resource",
     "/evolution",
     "/skill-proposals",
 ];
 
-pub(crate) const PLACEHOLDER_COMMANDS: &[&str] = &["/desktop", "/reset", "/slack", "/chrome"];
+pub(crate) const DIAGNOSTIC_COMMANDS: &[&str] = &[
+    "/doctor",
+    "/audit",
+    "/trace",
+    "/eval",
+    "/product-ready",
+    "/health",
+    "/ping",
+    "/uptime",
+    "/version",
+    "/about",
+];
+
+pub(crate) const PLACEHOLDER_COMMANDS: &[&str] = &["/reset"];
+
+pub(crate) const UNAVAILABLE_COMMANDS: &[&str] = &["/desktop", "/slack", "/chrome"];
 
 // ═══════════════════════════════════════
 // 命令定义（编译期常量）

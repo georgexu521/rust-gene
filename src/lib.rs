@@ -3,15 +3,16 @@
 //! This crate exposes the reusable agent runtime for CLI, TUI, API, eval, and
 //! desktop application entrypoints.
 
+// Public product and integration surfaces. Keep this list deliberate: modules
+// that are only implementation detail should stay crate-private so release
+// builds do not imply a broad stable library API.
 pub mod agent;
-pub mod ai_analyzer;
 #[cfg(feature = "experimental-api-server")]
 pub mod api;
 pub mod bootstrap;
 pub mod bridge;
 pub mod changelog;
 pub mod components;
-pub mod context_manager;
 pub mod cost_tracker;
 pub mod desktop_runtime;
 pub mod diagnostics;
@@ -30,7 +31,6 @@ pub mod permissions;
 pub mod platform;
 pub mod plugins;
 pub mod ports;
-pub mod priority;
 pub mod quality_gates;
 pub mod remote;
 pub mod security;
@@ -40,9 +40,6 @@ pub mod shell;
 pub mod skills;
 pub mod slo;
 pub mod state;
-pub mod task_analyzer;
-pub mod task_manager;
-pub mod team;
 pub mod telemetry;
 #[cfg(test)]
 pub mod test_utils;
@@ -53,3 +50,17 @@ pub mod version;
 #[cfg(feature = "voice")]
 pub mod voice;
 pub mod workspace;
+
+// Internal and historical support modules used by the runtime implementation.
+#[allow(dead_code)]
+pub(crate) mod ai_analyzer;
+#[allow(dead_code)]
+pub(crate) mod context_manager;
+#[allow(dead_code)]
+pub(crate) mod priority;
+#[allow(dead_code)]
+pub(crate) mod task_analyzer;
+#[allow(dead_code)]
+pub(crate) mod task_manager;
+#[allow(dead_code)]
+pub(crate) mod team;
