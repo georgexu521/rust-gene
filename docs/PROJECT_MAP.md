@@ -110,15 +110,16 @@ full-agent command/event boundary; lightweight turns are explicitly non-agent.
 
 | Frontend | Entry File | Call Chain | Classification |
 |----------|-----------|-----------|----------------|
-| Desktop side question | `src/desktop_runtime/mod.rs:125` | `DesktopRuntime::run_lightweight_turn()` → direct provider `chat()` | Non-agent: no tools, 512 max_tokens, dedicated system prompt |
+| Desktop side question | `src/desktop_runtime/mod.rs` | `DesktopRuntime::run_lightweight_turn()` → `run_direct_provider_chat()` | Non-agent: no tools, 512 max_tokens, dedicated system prompt |
 | Tauri side question | `apps/desktop/src-tauri/src/lib.rs:706` | `classify_turn_ingress()` → `runtime.run_lightweight_turn()` | Non-agent (via DesktopRuntime) |
-| HTTP provider chat | `src/api/routes.rs` | `POST /api/provider-chat` → `ApiState::chat()` → direct provider `chat()` | Non-agent: explicit provider-chat route |
-| HTTP legacy chat | `src/api/routes.rs` | `POST /api/chat` → `ApiState::chat()` → direct provider `chat()` | Non-agent legacy alias; response points to `/api/provider-chat` |
+| HTTP provider chat | `src/api/routes.rs` | `POST /api/provider-chat` → `ApiState::chat()` → `run_direct_provider_chat()` | Non-agent: explicit provider-chat route |
+| HTTP legacy chat | `src/api/routes.rs` | `POST /api/chat` → `ApiState::chat()` → `run_direct_provider_chat()` | Non-agent legacy alias; response points to `/api/provider-chat` |
 
 > `classify_turn_ingress()` lives in `src/engine/turn_ingress.rs` (runtime-owned).
 > Lightweight turns bypass agent history, tool execution, permission, validation,
 > and closeout entirely. The dedicated system prompt instructs the model not to
-> claim tool usage.
+> claim tool usage. Request construction and visible-output sanitization are
+> shared in `src/services/api/direct_chat.rs`.
 
 ### Diagnostics-Only Lanes
 
@@ -148,7 +149,8 @@ context snapshots, and closeout events.
   `StreamingQueryEngine::query_stream()` execution path. No frontend re-implements
   the agent turn lifecycle.
 - Desktop's lightweight lane is explicitly labelled non-agent and bypasses all
-  agent machinery.
+  agent machinery; desktop/API direct-provider calls share
+  `src/services/api/direct_chat.rs`.
 - `classify_turn_ingress()` is runtime-owned (in `src/engine/`), not a frontend
   policy decision.
 - `RuntimeFacade` provides shared state; `RuntimeController` exposes the
