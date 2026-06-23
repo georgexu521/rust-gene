@@ -488,6 +488,7 @@ impl ConversationLoop {
     pub(super) fn bash_allowed_at_action_checkpoint(
         arguments: &serde_json::Value,
         has_changes_before_tools: bool,
+        allow_validation_without_changes: bool,
         _exposed_tool_names: &std::collections::HashSet<String>,
     ) -> bool {
         let command = arguments["command"]
@@ -506,18 +507,24 @@ impl ConversationLoop {
             "npm test",
             "npm run test",
             "pnpm test",
+            "pnpm --dir apps/desktop build",
+            "pnpm --dir apps/desktop exec playwright test",
+            "pnpm --dir apps/desktop test:ui-smoke",
+            "playwright test",
             "pytest",
             "make test",
             "scripts/run_live_eval.sh",
         ];
-        if has_changes_before_tools
+        if (has_changes_before_tools || allow_validation_without_changes)
             && validation_markers
                 .iter()
                 .any(|marker| command.contains(marker))
         {
             return true;
         }
-        if has_changes_before_tools && Self::is_safe_post_change_search_validation(&command) {
+        if (has_changes_before_tools || allow_validation_without_changes)
+            && Self::is_safe_post_change_search_validation(&command)
+        {
             return true;
         }
 
@@ -532,7 +539,9 @@ impl ConversationLoop {
 
     fn is_safe_post_change_search_validation(command: &str) -> bool {
         let trimmed = command.trim();
-        let starts_with_search = trimmed.starts_with("rg ") || trimmed.starts_with("grep ");
+        let search_command = trimmed.strip_prefix("! ").unwrap_or(trimmed);
+        let starts_with_search =
+            search_command.starts_with("rg ") || search_command.starts_with("grep ");
         starts_with_search
             && !trimmed.contains('\n')
             && !trimmed.contains(';')
@@ -556,13 +565,17 @@ impl ConversationLoop {
         }
         let raw_path = std::path::Path::new(path);
         for component in raw_path.components() {
+            if component == std::path::Component::ParentDir {
+                return Some(format!(
+                    "file_edit path contains parent traversal: {}",
+                    path
+                ));
+            }
+        }
+
+        let component_check_path = Self::action_checkpoint_component_check_path(raw_path, cwd);
+        for component in component_check_path.components() {
             match component {
-                std::path::Component::ParentDir => {
-                    return Some(format!(
-                        "file_edit path contains parent traversal: {}",
-                        path
-                    ));
-                }
                 std::path::Component::Normal(part)
                     if part == ".git" || part == "target" || part == "node_modules" =>
                 {
@@ -663,6 +676,46 @@ impl ConversationLoop {
         }
 
         None
+    }
+
+    fn action_checkpoint_component_check_path(
+        raw_path: &std::path::Path,
+        cwd: &std::path::Path,
+    ) -> std::path::PathBuf {
+        let resolved = if raw_path.is_absolute() {
+            raw_path.to_path_buf()
+        } else {
+            cwd.join(raw_path)
+        };
+        let normalized_resolved = Self::normalize_logical_path(&resolved);
+        let normalized_cwd = Self::normalize_logical_path(cwd);
+        let cwd_lower = normalized_cwd.to_string_lossy().to_ascii_lowercase();
+
+        if cwd_lower.contains("/target/live-evals/")
+            && cwd_lower.ends_with("/worktree")
+            && normalized_resolved.starts_with(&normalized_cwd)
+        {
+            return normalized_resolved
+                .strip_prefix(&normalized_cwd)
+                .unwrap_or(raw_path)
+                .to_path_buf();
+        }
+
+        raw_path.to_path_buf()
+    }
+
+    fn normalize_logical_path(path: &std::path::Path) -> std::path::PathBuf {
+        let mut normalized = std::path::PathBuf::new();
+        for component in path.components() {
+            match component {
+                std::path::Component::CurDir => {}
+                std::path::Component::ParentDir => {
+                    normalized.pop();
+                }
+                other => normalized.push(other.as_os_str()),
+            }
+        }
+        normalized
     }
 }
 

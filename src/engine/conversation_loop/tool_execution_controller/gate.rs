@@ -48,6 +48,7 @@ pub(super) struct ToolExecutionGate<'a> {
     pub(super) action_checkpoint_active: bool,
     pub(super) action_checkpoint_lookup_count: usize,
     pub(super) has_changes_before_tools: bool,
+    pub(super) allow_validation_without_changes: bool,
     pub(super) destructive_scope: &'a DestructiveScopeContract,
     pub(super) working_dir: &'a Path,
     pub(super) trace: &'a Option<TraceCollector>,
@@ -177,6 +178,7 @@ impl<'a> ToolExecutionGate<'a> {
             && !ConversationLoop::bash_allowed_at_action_checkpoint(
                 &tool_call.arguments,
                 self.has_changes_before_tools,
+                self.allow_validation_without_changes,
                 self.exposed_tool_names,
             )
         {
@@ -189,7 +191,7 @@ impl<'a> ToolExecutionGate<'a> {
         if tool_call.name == "file_edit" {
             return ConversationLoop::action_checkpoint_file_edit_rejection(
                 &tool_call.arguments,
-                &std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")),
+                self.working_dir,
             );
         }
 

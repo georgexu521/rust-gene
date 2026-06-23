@@ -247,63 +247,146 @@ fn action_checkpoint_blocks_patch_bash_and_allows_validation_after_changes() {
     assert!(!ConversationLoop::bash_allowed_at_action_checkpoint(
         &serde_json::json!({"command": "python3 - <<'PY'\nfrom pathlib import Path\nPath('x').write_text('y')\nPY"}),
         false,
+        false,
         &HashSet::new(),
     ));
     assert!(!ConversationLoop::bash_allowed_at_action_checkpoint(
         &serde_json::json!({"command": "apply_patch <<'PATCH'\n*** Begin Patch\n*** End Patch\nPATCH"}),
+        false,
         false,
         &HashSet::new(),
     ));
     assert!(!ConversationLoop::bash_allowed_at_action_checkpoint(
         &serde_json::json!({"command": "cat > src/main.rs <<'EOF'\nfn main() {}\nEOF"}),
         false,
+        false,
         &HashSet::new(),
     ));
     assert!(!ConversationLoop::bash_allowed_at_action_checkpoint(
         &serde_json::json!({"command": "sed -n '1,20p' src/main.rs"}),
         false,
+        false,
         &HashSet::new(),
     ));
     assert!(!ConversationLoop::bash_allowed_at_action_checkpoint(
         &serde_json::json!({"command": "cargo test -q"}),
         false,
+        false,
+        &HashSet::new(),
+    ));
+    assert!(ConversationLoop::bash_allowed_at_action_checkpoint(
+        &serde_json::json!({"command": "pnpm --dir apps/desktop build"}),
+        false,
+        true,
+        &HashSet::new(),
+    ));
+    assert!(ConversationLoop::bash_allowed_at_action_checkpoint(
+        &serde_json::json!({"command": "pnpm --dir apps/desktop test:ui-smoke"}),
+        false,
+        true,
         &HashSet::new(),
     ));
     assert!(ConversationLoop::bash_allowed_at_action_checkpoint(
         &serde_json::json!({"command": "cargo test -q"}),
         true,
+        false,
         &HashSet::new(),
     ));
     assert!(ConversationLoop::bash_allowed_at_action_checkpoint(
         &serde_json::json!({"command": "scripts/run_live_eval.sh --mode summary --run-id live-summary-smoke"}),
         true,
+        false,
         &HashSet::new(),
     ));
     assert!(ConversationLoop::bash_allowed_at_action_checkpoint(
         &serde_json::json!({"command": "bash -n scripts/run_live_eval.sh"}),
         true,
+        false,
         &HashSet::new(),
     ));
     assert!(ConversationLoop::bash_allowed_at_action_checkpoint(
         &serde_json::json!({"command": "rg 'avg=' fixtures/core_quality/rust_refactor/src/report.rs"}),
         true,
+        false,
         &HashSet::new(),
     ));
     assert!(ConversationLoop::bash_allowed_at_action_checkpoint(
         &serde_json::json!({"command": "grep 'avg=' fixtures/core_quality/rust_refactor/src/report.rs"}),
         true,
+        false,
+        &HashSet::new(),
+    ));
+    assert!(ConversationLoop::bash_allowed_at_action_checkpoint(
+        &serde_json::json!({"command": "! rg '&format!' src/engine/conversation_loop/repair_controller.rs"}),
+        true,
+        false,
         &HashSet::new(),
     ));
     assert!(!ConversationLoop::bash_allowed_at_action_checkpoint(
         &serde_json::json!({"command": "rg 'avg=' fixtures/core_quality/rust_refactor/src/report.rs > /tmp/out"}),
         true,
+        false,
         &HashSet::new(),
     ));
     assert!(!ConversationLoop::bash_allowed_at_action_checkpoint(
         &serde_json::json!({"command": "rg 'avg=' fixtures/core_quality/rust_refactor/src/report.rs && rm -rf target/tmp"}),
         true,
+        false,
         &HashSet::new(),
     ));
+    assert!(!ConversationLoop::bash_allowed_at_action_checkpoint(
+        &serde_json::json!({"command": "rm -rf target/tmp"}),
+        false,
+        true,
+        &HashSet::new(),
+    ));
+}
+
+#[test]
+fn action_checkpoint_allows_file_edit_inside_live_eval_worktree_under_target() {
+    let dir = tempdir().unwrap();
+    let worktree = dir
+        .path()
+        .join("target/live-evals/run-123/code-change/worktree");
+    let src = worktree.join("src");
+    std::fs::create_dir_all(&src).unwrap();
+    let file = src.join("lib.rs");
+    std::fs::write(&file, "fn main() {}\n").unwrap();
+
+    let rejection = ConversationLoop::action_checkpoint_file_edit_rejection(
+        &serde_json::json!({
+            "path": file,
+            "old_string": "fn main() {}",
+            "new_string": "pub fn main() {}"
+        }),
+        &worktree,
+    );
+
+    assert_eq!(rejection, None);
+}
+
+#[test]
+fn action_checkpoint_still_blocks_generated_dirs_inside_live_eval_worktree() {
+    let dir = tempdir().unwrap();
+    let worktree = dir
+        .path()
+        .join("target/live-evals/run-123/code-change/worktree");
+    let target = worktree.join("target");
+    std::fs::create_dir_all(&target).unwrap();
+    let file = target.join("generated.rs");
+    std::fs::write(&file, "fn generated() {}\n").unwrap();
+
+    let rejection = ConversationLoop::action_checkpoint_file_edit_rejection(
+        &serde_json::json!({
+            "path": file,
+            "old_string": "fn generated() {}",
+            "new_string": "pub fn generated() {}"
+        }),
+        &worktree,
+    )
+    .unwrap();
+
+    assert!(rejection.contains("ignored/generated directory"));
 }
 
 #[test]
@@ -319,6 +402,7 @@ fn focused_repair_blocks_bash_patch_bypass() {
             !ConversationLoop::bash_allowed_at_action_checkpoint(
                 &serde_json::json!({ "command": command }),
                 true,
+                false,
                 &HashSet::new(),
             ),
             "mutating bash command should not bypass file tools: {command}"
@@ -328,6 +412,7 @@ fn focused_repair_blocks_bash_patch_bypass() {
     assert!(ConversationLoop::bash_allowed_at_action_checkpoint(
         &serde_json::json!({"command": "cargo test -q"}),
         true,
+        false,
         &HashSet::new(),
     ));
 }
@@ -337,15 +422,18 @@ fn action_checkpoint_allows_bounded_artifact_prep_without_file_edit_tools() {
     assert!(ConversationLoop::bash_allowed_at_action_checkpoint(
         &serde_json::json!({"command": "python3 -m venv .venv"}),
         false,
+        false,
         &HashSet::from(["bash".to_string(), "file_read".to_string()]),
     ));
     assert!(ConversationLoop::bash_allowed_at_action_checkpoint(
         &serde_json::json!({"command": "python3 fixtures/core_quality/long_output/generate_log.py > fixtures/core_quality/long_output/output.log"}),
         false,
+        false,
         &HashSet::from(["bash".to_string(), "file_read".to_string()]),
     ));
     assert!(ConversationLoop::bash_allowed_at_action_checkpoint(
         &serde_json::json!({"command": "python3 -m venv .venv"}),
+        false,
         false,
         &HashSet::from([
             "bash".to_string(),

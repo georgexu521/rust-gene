@@ -284,7 +284,19 @@ fn eval_safe_validation_tool_call(
             command,
             working_dir,
         );
-    if !classification.is_safe_validation() || classification.network_access {
+    let desktop_validation_like = eval_allowed_desktop_validation_command(command)
+        || classification
+            .subcommands
+            .iter()
+            .any(|subcommand| eval_allowed_desktop_validation_command(&subcommand.command));
+    let search_assertion_like = eval_allowed_search_assertion_command(command)
+        || classification
+            .subcommands
+            .iter()
+            .any(|subcommand| eval_allowed_search_assertion_command(&subcommand.command));
+    let validation_like =
+        classification.is_safe_validation() || desktop_validation_like || search_assertion_like;
+    if !validation_like || (classification.network_access && !desktop_validation_like) {
         return false;
     }
     if classification.command_plan.has_command_substitution
@@ -293,11 +305,7 @@ fn eval_safe_validation_tool_call(
     {
         return false;
     }
-    if !classification
-        .shell_control_operators
-        .iter()
-        .all(|operator| matches!(operator.as_str(), "and" | "redirect"))
-    {
+    if !eval_safe_validation_shell_controls(&classification) {
         return false;
     }
     if !classification
@@ -319,6 +327,82 @@ fn eval_safe_validation_tool_call(
         .cd_targets
         .iter()
         .all(|target| path_is_within(target, working_dir))
+}
+
+fn eval_safe_validation_shell_controls(
+    classification: &priority_agent::tools::bash_tool::command_classifier::CommandClassification,
+) -> bool {
+    if !classification
+        .shell_control_operators
+        .iter()
+        .all(|operator| matches!(operator.as_str(), "and" | "redirect" | "pipe"))
+    {
+        return false;
+    }
+
+    if !classification
+        .shell_control_operators
+        .iter()
+        .any(|operator| operator == "pipe")
+    {
+        return true;
+    }
+
+    classification
+        .subcommands
+        .iter()
+        .filter(|subcommand| subcommand.index > 0)
+        .all(|subcommand| eval_safe_validation_subcommand_or_pipe_filter(&subcommand.command))
+}
+
+fn eval_safe_validation_subcommand_or_pipe_filter(command: &str) -> bool {
+    eval_safe_validation_pipe_filter(command) || eval_allowed_validation_subcommand(command)
+}
+
+fn eval_safe_validation_pipe_filter(command: &str) -> bool {
+    let normalized =
+        priority_agent::tools::bash_tool::command_classifier::normalize_command_for_match(command);
+    matches!(normalized.as_str(), "head" | "tail" | "rg" | "grep")
+        || normalized.starts_with("head ")
+        || normalized.starts_with("tail ")
+        || normalized.starts_with("rg ")
+        || normalized.starts_with("grep ")
+}
+
+fn eval_allowed_validation_subcommand(command: &str) -> bool {
+    let normalized =
+        priority_agent::tools::bash_tool::command_classifier::normalize_command_for_match(command);
+    normalized.contains("cargo test")
+        || normalized.contains("cargo check")
+        || normalized.contains("cargo fmt")
+        || normalized.contains("cargo clippy")
+        || normalized.contains("npm test")
+        || normalized.contains("npm run test")
+        || normalized.contains("pnpm test")
+        || normalized.contains("pytest")
+        || eval_allowed_search_assertion_command(command)
+        || eval_allowed_desktop_validation_command(command)
+}
+
+fn eval_allowed_search_assertion_command(command: &str) -> bool {
+    let normalized =
+        priority_agent::tools::bash_tool::command_classifier::normalize_command_for_match(command);
+    (normalized.starts_with("! rg ") || normalized.starts_with("! grep "))
+        && !normalized.contains('|')
+        && !normalized.contains("&&")
+        && !normalized.contains(';')
+        && !normalized.contains('>')
+        && !normalized.contains('<')
+}
+
+fn eval_allowed_desktop_validation_command(command: &str) -> bool {
+    let normalized =
+        priority_agent::tools::bash_tool::command_classifier::normalize_command_for_match(command);
+    normalized == "pnpm --dir apps/desktop build"
+        || normalized.starts_with("pnpm --dir apps/desktop build ")
+        || normalized == "pnpm --dir apps/desktop test:ui-smoke"
+        || normalized.starts_with("pnpm --dir apps/desktop test:ui-smoke ")
+        || normalized.starts_with("pnpm --dir apps/desktop exec playwright test")
 }
 
 fn path_is_within(path: &str, root: &std::path::Path) -> bool {
@@ -1140,6 +1224,81 @@ mod tests {
     }
 
     #[test]
+    fn eval_safe_validation_allows_bounded_validation_pipe() {
+        let dir = tempfile::tempdir().unwrap();
+        let command = format!(
+            "cd {} && cargo check -q 2>&1 | head -60",
+            dir.path().display()
+        );
+        let call = priority_agent::services::api::ToolCall {
+            id: "call_validation_pipe".to_string(),
+            name: "bash".to_string(),
+            arguments: serde_json::json!({ "command": command }),
+        };
+
+        assert!(eval_safe_validation_tool_call(&call, dir.path()));
+    }
+
+    #[test]
+    fn eval_safe_validation_allows_desktop_validation_scripts() {
+        let dir = tempfile::tempdir().unwrap();
+        for command in [
+            "pnpm --dir apps/desktop build",
+            "pnpm --dir apps/desktop exec playwright test tests/run-event-state.spec.ts",
+            "pnpm --dir apps/desktop test:ui-smoke",
+        ] {
+            let call = priority_agent::services::api::ToolCall {
+                id: format!("call_desktop_{}", command.replace(' ', "_")),
+                name: "bash".to_string(),
+                arguments: serde_json::json!({ "command": command }),
+            };
+
+            assert!(
+                eval_safe_validation_tool_call(&call, dir.path()),
+                "desktop validation command should be auto-approved: {command}"
+            );
+        }
+    }
+
+    #[test]
+    fn eval_safe_validation_allows_desktop_validation_after_cd() {
+        let dir = tempfile::tempdir().unwrap();
+        let command = format!(
+            "cd {} && pnpm --dir apps/desktop build 2>&1",
+            dir.path().display()
+        );
+        let call = priority_agent::services::api::ToolCall {
+            id: "call_desktop_cd".to_string(),
+            name: "bash".to_string(),
+            arguments: serde_json::json!({ "command": command }),
+        };
+        let classification =
+            priority_agent::tools::bash_tool::command_classifier::classify_command_with_working_dir(
+                call.arguments["command"].as_str().unwrap(),
+                dir.path(),
+            );
+
+        assert!(
+            eval_safe_validation_tool_call(&call, dir.path()),
+            "{classification:#?}"
+        );
+    }
+
+    #[test]
+    fn eval_safe_validation_allows_negative_search_assertion() {
+        let dir = tempfile::tempdir().unwrap();
+        let call = priority_agent::services::api::ToolCall {
+            id: "call_negative_search".to_string(),
+            name: "bash".to_string(),
+            arguments: serde_json::json!({
+                "command": "! rg '&format!' src/engine/conversation_loop/repair_controller.rs"
+            }),
+        };
+
+        assert!(eval_safe_validation_tool_call(&call, dir.path()));
+    }
+
+    #[test]
     fn eval_safe_validation_rejects_external_cd_or_file_redirection() {
         let dir = tempfile::tempdir().unwrap();
         let external = priority_agent::services::api::ToolCall {
@@ -1156,8 +1315,27 @@ mod tests {
                 "command": "cargo test -q --manifest-path fixtures/core_quality/rust_refactor/Cargo.toml > /tmp/out"
             }),
         };
+        let unsafe_pipe = priority_agent::services::api::ToolCall {
+            id: "call_unsafe_pipe".to_string(),
+            name: "bash".to_string(),
+            arguments: serde_json::json!({
+                "command": "cargo check -q 2>&1 | sh"
+            }),
+        };
+        let unsafe_negative_search = priority_agent::services::api::ToolCall {
+            id: "call_unsafe_negative_search".to_string(),
+            name: "bash".to_string(),
+            arguments: serde_json::json!({
+                "command": "! rg '&format!' src/engine/conversation_loop/repair_controller.rs > /tmp/out"
+            }),
+        };
 
         assert!(!eval_safe_validation_tool_call(&external, dir.path()));
         assert!(!eval_safe_validation_tool_call(&file_redirect, dir.path()));
+        assert!(!eval_safe_validation_tool_call(&unsafe_pipe, dir.path()));
+        assert!(!eval_safe_validation_tool_call(
+            &unsafe_negative_search,
+            dir.path()
+        ));
     }
 }

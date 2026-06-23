@@ -20,7 +20,8 @@ prompt: |
 
   要求：
   - 先检查现有 `apps/desktop` 测试和 runtime state 测试。
-  - 如果已有覆盖，补最小断言或整理测试命令即可，不要为了制造 diff 大改 UI。
+  - 如果已有覆盖且验证命令通过，不要为了制造 diff 修改代码；直接用验证证据 closeout。
+  - 不要修改 Playwright/Vite/build 配置来绕过验证；`pnpm --dir apps/desktop build` 生成 `dist/` 是预期的验证步骤。
   - 如果缺覆盖，添加一个聚焦的 smoke/unit 测试，覆盖 runtime evidence 可见性。
   - 最后运行桌面 build 和 smoke 测试。
 

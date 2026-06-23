@@ -107,6 +107,7 @@ impl ToolRoundController {
                     action_checkpoint_lookup_count,
                     no_progress_rounds: turn_state.focused_repair.no_code_progress_rounds,
                     has_changes_before_tools,
+                    allow_validation_without_changes: runtime.allow_validation_without_changes,
                     destructive_scope: runtime.destructive_scope,
                     storm_state: &mut turn_state.storm_state,
                     lifecycle: &mut turn_state.tool_lifecycle,

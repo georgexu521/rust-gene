@@ -256,6 +256,7 @@ impl TurnIterationController {
                 working_dir: context.working_dir,
                 last_user_preview: context.last_user_preview,
                 required_validation_commands: context.required_validation_commands,
+                allow_validation_without_changes: context.no_diff_audit_closeout_allowed,
                 destructive_scope: context.destructive_scope,
                 baseline_git_status_files: context.baseline_git_status_files,
                 retained_context: context.retained_context,

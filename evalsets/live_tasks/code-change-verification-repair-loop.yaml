@@ -48,6 +48,7 @@ prompt: |
   要求：
   - 如果代码修改后的 required command 失败，agent 不应直接 closeout。
   - ReflectionPass / verification trace 要记录失败命令、失败摘要和下一步 repair action。
+  - 修复 `record_repair_action` 时不要保留 `&format!("retry: {}", verification_command)` 这个临时 action 文本；应恢复为稳定的 repair action 描述，并单独传入 verification command。
   - repair 后要重新运行相关命令，并在最终 closeout 中列出验证状态。
   - 增加一个失败验证触发 repair 的回归测试或 eval replay。
 

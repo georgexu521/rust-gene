@@ -188,6 +188,7 @@ mod tests {
                 working_dir: Path::new("."),
                 last_user_preview: "hello",
                 required_validation_commands: &[],
+                allow_validation_without_changes: false,
                 destructive_scope: &destructive_scope,
                 baseline_git_status_files: &baseline_git_status_files,
                 retained_context: &retained_context,
