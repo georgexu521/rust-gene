@@ -22,6 +22,8 @@ AGENT_NO_EFFECTIVE_PROGRESS_SECS="${PRIORITY_AGENT_LIVE_EVAL_NO_EFFECTIVE_PROGRE
 MIN_FREE_GB="${PRIORITY_AGENT_LIVE_EVAL_MIN_FREE_GB:-8}"
 OVERLAY_WORKTREE="${PRIORITY_AGENT_LIVE_EVAL_OVERLAY_WORKTREE:-0}"
 SKIP_PROVIDER_HEALTH="${PRIORITY_AGENT_LIVE_EVAL_SKIP_PROVIDER_HEALTH:-0}"
+LIVE_EVAL_PROVIDER="${PRIORITY_AGENT_LIVE_EVAL_PROVIDER:-${PRIORITY_AGENT_DEFAULT_PROVIDER:-minimax}}"
+export PRIORITY_AGENT_DEFAULT_PROVIDER="$LIVE_EVAL_PROVIDER"
 
 RECOMMENDED_CASES=(
   code-change-verification-repair-loop
@@ -136,6 +138,9 @@ Options:
   --skip-build       Reuse target/release/priority-agent for api-plan.
   --skip-provider-health
                      Skip provider health preflight before agent-run.
+  PRIORITY_AGENT_LIVE_EVAL_PROVIDER
+                     Provider id for agent-run/provider-health. Defaults to
+                     PRIORITY_AGENT_DEFAULT_PROVIDER or minimax.
   --overlay-working-tree
                      Apply tracked local working-tree changes to the isolated
                      worktree and commit them as the task baseline.
@@ -848,6 +853,10 @@ provider_health_preflight() {
       MINIMAX_API_KEY="${MINIMAX_API_KEY:-}" \
       MINIMAX_BASE_URL="${MINIMAX_BASE_URL:-}" \
       MINIMAX_MODEL="${MINIMAX_MODEL:-MiniMax-M3}" \
+      DEEPSEEK_API_KEY="${DEEPSEEK_API_KEY:-}" \
+      DEEPSEEK_BASE_URL="${DEEPSEEK_BASE_URL:-}" \
+      DEEPSEEK_MODEL="${DEEPSEEK_MODEL:-deepseek-v4-pro}" \
+      PRIORITY_AGENT_DEFAULT_PROVIDER="$LIVE_EVAL_PROVIDER" \
       OPENAI_API_KEY="" \
       MOONSHOT_API_KEY="" \
       "$ROOT_DIR/target/release/priority-agent" \
@@ -942,10 +951,26 @@ agent_run_task() {
   env_base="$(task_env_base "$id")"
   cargo_target_dir="$(task_cargo_target_dir "$id")"
 
-  if [[ -z "${MINIMAX_API_KEY:-}" ]]; then
-    echo "MINIMAX_API_KEY is required for agent-run mode." >&2
-    return 1
-  fi
+  case "$LIVE_EVAL_PROVIDER" in
+    minimax)
+      if [[ -z "${MINIMAX_API_KEY:-}" ]]; then
+        echo "MINIMAX_API_KEY is required for agent-run mode with provider minimax." >&2
+        return 1
+      fi
+      ;;
+    deepseek)
+      if [[ -z "${DEEPSEEK_API_KEY:-}" ]]; then
+        echo "DEEPSEEK_API_KEY is required for agent-run mode with provider deepseek." >&2
+        return 1
+      fi
+      ;;
+    *)
+      if [[ -z "${MINIMAX_API_KEY:-}" && -z "${DEEPSEEK_API_KEY:-}" ]]; then
+        echo "A configured provider API key is required for agent-run mode." >&2
+        return 1
+      fi
+      ;;
+  esac
 
   build_binary
   ensure_task_env "$id"
@@ -1126,8 +1151,11 @@ def write_metrics(status):
         "no_effective_progress_for_secs": round(max(0, now - last_effective_action_at), 3),
         "first_activity_after_start_secs": first_activity_after_start_secs,
         "first_effective_action_after_start_secs": first_effective_action_after_start_secs,
-        "provider_family": "minimax",
-        "provider_model": env.get("MINIMAX_MODEL", ""),
+        "provider_family": env.get("PRIORITY_AGENT_DEFAULT_PROVIDER", "minimax"),
+        "provider_model": env.get(
+            f"{env.get('PRIORITY_AGENT_DEFAULT_PROVIDER', 'minimax').upper()}_MODEL",
+            "",
+        ),
         "streaming_tool_mode": "non_streaming",
         "wall_timeout_secs": timeout,
         "idle_timeout_secs": idle_timeout,
