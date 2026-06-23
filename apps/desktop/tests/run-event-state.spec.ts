@@ -393,7 +393,7 @@ test.describe("run event state", () => {
       metadata: {
         tool: "bash",
         success: true,
-        command: "corepack pnpm --dir apps/desktop test:ui-smoke",
+        command: "pnpm --dir apps/desktop test:ui-smoke",
         validation_family: "pnpm_test",
         terminal_task: { status: "completed", exit_code: 0 },
       },
@@ -558,7 +558,7 @@ test.describe("run event state", () => {
       metadata: {
         tool: "bash",
         success: true,
-        command: "corepack pnpm --dir apps/desktop test:ui-smoke",
+        command: "pnpm --dir apps/desktop test:ui-smoke",
         validation_family: "pnpm_test",
         command_category: "validation",
         command_kind: "package_script",
@@ -575,7 +575,7 @@ test.describe("run event state", () => {
         status: "completed",
         summary: expect.objectContaining({
           kind: "shell",
-          command: "corepack pnpm --dir apps/desktop test:ui-smoke",
+          command: "pnpm --dir apps/desktop test:ui-smoke",
           validation: "Pnpm Test",
           exitCode: 0,
           duration: "1.2s",

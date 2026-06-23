@@ -40,16 +40,16 @@ USAGE
   esac
 done
 
-if ! command -v corepack >/dev/null 2>&1; then
-  echo "corepack is required to run the desktop frontend checks" >&2
+if ! command -v pnpm >/dev/null 2>&1; then
+  echo "pnpm is required to run the desktop frontend checks" >&2
   exit 1
 fi
 
 echo "==> Installing desktop frontend dependencies"
-corepack pnpm --dir "$DESKTOP_DIR" install --frozen-lockfile
+pnpm --dir "$DESKTOP_DIR" install --frozen-lockfile
 
 echo "==> Building desktop frontend"
-corepack pnpm --dir "$DESKTOP_DIR" build
+pnpm --dir "$DESKTOP_DIR" build
 
 echo "==> Checking Rust formatting"
 cargo fmt --check
@@ -65,7 +65,7 @@ cargo test --manifest-path "$TAURI_MANIFEST" -q desktop_smoke
 
 if [[ "$BUILD_APP" == true ]]; then
   echo "==> Building macOS .app bundle"
-  corepack pnpm --dir "$DESKTOP_DIR" tauri build --bundles app
+  pnpm --dir "$DESKTOP_DIR" tauri build --bundles app
   test -d "$DESKTOP_DIR/src-tauri/target/release/bundle/macos/Priority Agent.app"
 fi
 

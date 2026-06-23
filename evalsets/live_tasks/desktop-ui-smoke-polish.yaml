@@ -9,7 +9,7 @@ repo:
   fixture: priority-agent
   base_ref: "HEAD"
   setup:
-    - corepack pnpm --dir apps/desktop build
+    - pnpm --dir apps/desktop build
 
 prompt: |
   审计桌面端 runtime evidence 的 smoke 覆盖。
@@ -41,9 +41,9 @@ expected_behavior:
 
 acceptance:
   required_commands:
-    - corepack pnpm --dir apps/desktop build
-    - corepack pnpm --dir apps/desktop exec playwright test tests/run-event-state.spec.ts
-    - corepack pnpm --dir apps/desktop test:ui-smoke
+    - pnpm --dir apps/desktop build
+    - pnpm --dir apps/desktop exec playwright test tests/run-event-state.spec.ts
+    - pnpm --dir apps/desktop test:ui-smoke
   diff_constraints:
     max_files_changed: 8
     forbidden_paths:

@@ -63,8 +63,8 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-if ! command -v corepack >/dev/null 2>&1; then
-  echo "corepack is required to build the desktop frontend" >&2
+if ! command -v pnpm >/dev/null 2>&1; then
+  echo "pnpm is required to build the desktop frontend" >&2
   exit 1
 fi
 
@@ -73,10 +73,10 @@ echo "==> Generating desktop icons"
 
 if [[ "$RUN_CHECKS" == true ]]; then
   echo "==> Installing frontend dependencies"
-  corepack pnpm --dir "$DESKTOP_DIR" install --frozen-lockfile
+  pnpm --dir "$DESKTOP_DIR" install --frozen-lockfile
 
   echo "==> Building frontend"
-  corepack pnpm --dir "$DESKTOP_DIR" build
+  pnpm --dir "$DESKTOP_DIR" build
 
   echo "==> Checking Tauri command bridge"
   cargo check --manifest-path "$DESKTOP_DIR/src-tauri/Cargo.toml" -q
@@ -84,7 +84,7 @@ if [[ "$RUN_CHECKS" == true ]]; then
 fi
 
 echo "==> Building macOS bundle: $BUNDLES"
-corepack pnpm --dir "$DESKTOP_DIR" tauri build --bundles "$BUNDLES"
+pnpm --dir "$DESKTOP_DIR" tauri build --bundles "$BUNDLES"
 
 if [[ ! -d "$APP_BUNDLE" ]]; then
   echo "expected app bundle was not created: $APP_BUNDLE" >&2

@@ -50,7 +50,7 @@ export function sendWebPreviewMessage(
       tool: "bash",
       call_id: toolId,
       success: true,
-      command: "corepack pnpm --dir apps/desktop test:ui-smoke",
+      command: "pnpm --dir apps/desktop test:ui-smoke",
       command_category: "validation",
       validation_family: "pnpm_test",
       command_kind: "package_script",
@@ -135,7 +135,7 @@ export function sendWebPreviewMessage(
         lightweight_plan: null,
         verification: {
           status: "verified",
-          required_checks: ["corepack pnpm --dir apps/desktop test:ui-smoke"],
+          required_checks: ["pnpm --dir apps/desktop test:ui-smoke"],
         },
         done: {
           satisfied: true,

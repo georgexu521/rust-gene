@@ -51,8 +51,8 @@ standard_gate() {
   run_step "cargo fmt" cargo fmt --check
   run_step "cargo check" cargo check -q
   run_step "desktop run event state" \
-    corepack pnpm --dir apps/desktop exec playwright test tests/run-event-state.spec.ts
-  run_step "desktop build" corepack pnpm --dir apps/desktop build
+    pnpm --dir apps/desktop exec playwright test tests/run-event-state.spec.ts
+  run_step "desktop build" pnpm --dir apps/desktop build
   run_step "diff whitespace" git diff --check
 }
 
@@ -60,7 +60,7 @@ full_gate() {
   standard_gate
   run_step "experimental API check" cargo check --features experimental-api-server -q
   run_step "clippy" cargo clippy --all-features -- -D warnings
-  run_step "desktop UI smoke" corepack pnpm --dir apps/desktop test:ui-smoke
+  run_step "desktop UI smoke" pnpm --dir apps/desktop test:ui-smoke
 }
 
 case "$MODE" in

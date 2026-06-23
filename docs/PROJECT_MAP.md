@@ -287,8 +287,8 @@ context snapshots, and closeout events.
 - `cargo test -q project_tool`: project-list/map/index tool tests.
 - `cargo test -q request_preparation_controller`: request context-zone behavior.
 - `cargo test -q prompt_context`: prompt/context reporting.
-- `corepack pnpm --dir apps/desktop build`: desktop frontend typecheck and production build.
-- `corepack pnpm --dir apps/desktop test:ui-smoke`: desktop web-preview Playwright smoke tests.
+- `pnpm --dir apps/desktop build`: desktop frontend typecheck and production build.
+- `pnpm --dir apps/desktop test:ui-smoke`: desktop web-preview Playwright smoke tests.
 - `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml -q`: Tauri shell compile gate.
 - `scripts/runtime-entrypoint-smoke.sh --dry-run --all`: list headless, CLI, TUI, and desktop entrypoint smoke gates.
 - `cargo test -q`: broad Rust tests when shared runtime contracts moved.

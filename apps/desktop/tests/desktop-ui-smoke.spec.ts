@@ -361,7 +361,7 @@ test.describe("desktop UI smoke", () => {
     await expect(page.locator(".trace-item.active", { hasText: "Run started" })).toContainText("Current diff");
     await expect(page.locator(".trace-item.active", { hasText: "Run started" })).toContainText("App.tsx");
     await expect(page.locator(".trace-item.tool", { hasText: "Pnpm Test" })).toContainText(
-      "corepack pnpm --dir apps/desktop test:ui-smoke",
+      "pnpm --dir apps/desktop test:ui-smoke",
     );
     await expect(page.locator(".trace-item.tool", { hasText: "Edited file" })).toContainText(
       "+  diff_preview?: string;",

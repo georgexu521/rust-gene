@@ -202,7 +202,7 @@ fi
 
 if [[ "$BUILD_APP" == true ]]; then
   echo "==> Building macOS .app bundle"
-  corepack pnpm --dir "$DESKTOP_DIR" tauri build --bundles app
+  pnpm --dir "$DESKTOP_DIR" tauri build --bundles app
 fi
 
 if [[ ! -d "$APP_BUNDLE" ]]; then
