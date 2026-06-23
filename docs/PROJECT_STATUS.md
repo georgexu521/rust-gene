@@ -1,7 +1,43 @@
 # Project Status
 Status: Current
 
-Last updated: 2026-06-22
+Last updated: 2026-06-23
+
+## Public API Surface — Narrowed (2026-06-23)
+
+The library crate now keeps historical/support modules and provider
+implementation details crate-private unless a current product surface needs a
+deliberate external contract.
+
+Implemented in this slice:
+
+- Top-level compatibility, historical, integration-helper, and release-gate
+  modules such as `bridge`, `changelog`, `components`, `github`,
+  `instructions`, `migrations`, `onboarding`, `plugins`, `remote`, `security`,
+  `telemetry`, `version`, and `workspace` no longer appear as public library
+  modules.
+- `services::api` keeps root provider DTOs/traits plus `provider`,
+  `credentials`, and `provider_manifest` as the stable facade.
+- Provider adapters, retry policy, direct-provider chat, provider-manager
+  plumbing, provider protocol transforms, test-provider fixtures, and
+  weak-model tool-call repair helpers are now crate-private implementation
+  modules.
+- `docs/PROJECT_MAP.md` now documents the intended public library surface so new
+  code does not widen `pub mod` exports by default.
+
+Validation in this slice:
+
+```bash
+cargo fmt --check
+cargo check -q
+cargo check --features legacy-cli -q
+cargo check --features experimental-api-server -q
+cargo test -q --no-run
+cargo test -q
+cargo doc --no-deps -q
+cargo clippy --all-targets --all-features -- -D warnings
+git diff --check
+```
 
 ## Release Structure Cleanup — Structure Baseline Complete (2026-06-22)
 

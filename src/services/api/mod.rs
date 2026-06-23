@@ -4,33 +4,49 @@
 //! model metadata, and content sanitization. Runtime code should depend on
 //! these traits and DTOs rather than provider-specific response shapes.
 
-pub mod adapter;
-pub mod auth_store;
+#[allow(dead_code)]
+pub(crate) mod adapter;
+#[allow(dead_code)]
+pub(crate) mod auth_store;
 pub(crate) mod content_sanitizer;
 pub mod credentials;
-pub mod direct_chat;
-pub mod kimi;
-pub mod minimax;
-pub mod model_discovery;
-pub mod openai;
-pub mod openai_compat;
+#[allow(dead_code)]
+pub(crate) mod direct_chat;
+#[allow(dead_code)]
+pub(crate) mod kimi;
+#[allow(dead_code)]
+pub(crate) mod minimax;
+#[allow(dead_code)]
+pub(crate) mod model_discovery;
+#[allow(dead_code)]
+pub(crate) mod openai;
+#[allow(dead_code)]
+pub(crate) mod openai_compat;
 pub mod provider;
-pub mod provider_catalog;
-pub mod provider_manager;
+#[allow(dead_code)]
+pub(crate) mod provider_catalog;
+#[allow(dead_code)]
+pub(crate) mod provider_manager;
 pub mod provider_manifest;
-pub mod provider_protocol;
-pub mod retry;
-pub mod test_provider;
-pub mod tool_call_repair;
+#[allow(dead_code)]
+pub(crate) mod provider_protocol;
+#[allow(dead_code)]
+pub(crate) mod retry;
+pub(crate) mod test_provider;
+pub(crate) mod tool_call_repair;
 
 use async_openai::types::ChatCompletionResponseStream;
 use async_trait::async_trait;
 use std::sync::Arc;
 
+pub use provider_protocol::{ProviderCapabilities, ProviderProtocolFamily};
+pub use retry::ProviderRetryNotice;
+pub use tool_call_repair::ToolCallRepairReport;
+
 type PreHookFn = dyn Fn(ChatRequest) -> ChatRequest + Send + Sync;
 type PostHookFn = dyn Fn(&ChatRequest, &ChatResponse) + Send + Sync;
 type ErrorHookFn = dyn Fn(&str) + Send + Sync;
-pub type ProviderRetryObserver = Arc<dyn Fn(retry::ProviderRetryNotice) + Send + Sync>;
+pub type ProviderRetryObserver = Arc<dyn Fn(ProviderRetryNotice) + Send + Sync>;
 
 /// LLM Provider trait - 抽象不同的 API 提供商
 #[async_trait]
@@ -306,7 +322,7 @@ pub struct ChatResponse {
     pub content: String,
     pub tool_calls: Option<Vec<ToolCall>>,
     pub usage: Option<Usage>,
-    pub tool_call_repair: Option<tool_call_repair::ToolCallRepairReport>,
+    pub tool_call_repair: Option<ToolCallRepairReport>,
     pub finish_reason: Option<String>,
 }
 

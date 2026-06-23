@@ -82,6 +82,31 @@ Internal support:
 - These modules remain crate-private in `src/lib.rs` unless a current product
   surface needs a deliberate public API.
 
+## Public Library Surface
+
+The library crate intentionally exposes only current product and integration
+surfaces. Compatibility, historical, and provider-implementation modules should
+stay crate-private unless a binary, desktop crate, integration test, or external
+embedding path needs a deliberate contract.
+
+Stable top-level surfaces:
+
+- CLI and startup: `bootstrap`, `entry`, `shell`.
+- Product runtime: `engine`, `tools`, `permissions`, `session_store`,
+  `tool_output_store`, `memory`, `cost_tracker`.
+- Product frontends and diagnostics: `desktop_runtime`, `tui`, `diagnostics`,
+  `lab`.
+- Provider and service facade: `services::api` root DTOs/traits plus
+  `services::api::provider`, `services::api::credentials`, and
+  `services::api::provider_manifest`.
+- Optional server: `api` only behind `experimental-api-server`.
+
+Provider adapters, retry policy, direct provider chat implementation,
+provider-manager plumbing, weak-model repair helpers, historical analyzer/task
+modules, and miscellaneous integration helpers are internal implementation
+details. New callers should go through the stable facades above rather than
+depending on file-level module paths.
+
 ## Runtime Boundary: Frontend-to-Engine Command/Event Map
 
 This section records every path by which user input reaches the runtime engine,
