@@ -5,7 +5,6 @@
 use crate::services::api::{ChatRequest, LlmProvider, Message};
 use crate::tools::ToolRegistry;
 use anyhow::{Context, Result};
-use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tracing::info;
@@ -275,22 +274,18 @@ impl QueryEngine {
         .with_max_iterations(self.max_iterations)
         .with_model_context_profile();
 
-        if let Some(ref manager) = self.agent_manager {
-            builder = builder.with_agent_manager(manager.clone());
+        builder = crate::engine::loop_builder_deps::LoopBuilderDeps {
+            agent_manager: self.agent_manager.clone(),
+            mcp_manager: self.mcp_manager.clone(),
+            lsp_manager: self.lsp_manager.clone(),
+            worktree_manager: self.worktree_manager.clone(),
+            working_dir_override: None,
+            memory_manager: None,
+            approval_channel: None,
+            allowed_tools: allowed_tools.map(|tools| tools.into_iter().collect()),
+            session_binding: None,
         }
-        if let Some(ref lsp_manager) = self.lsp_manager {
-            builder = builder.with_lsp_manager(lsp_manager.clone());
-        }
-        if let Some(ref worktree_manager) = self.worktree_manager {
-            builder = builder.with_worktree_manager(worktree_manager.clone());
-        }
-        if let Some(ref mcp_manager) = self.mcp_manager {
-            builder = builder.with_mcp_manager(mcp_manager.clone());
-        }
-        if let Some(allowed) = allowed_tools {
-            let set: HashSet<String> = allowed.into_iter().collect();
-            builder = builder.with_allowed_tools(set);
-        }
+        .apply_to(builder);
 
         builder.build()
     }

@@ -25,6 +25,7 @@
 use crate::engine::agent_mode::AgentMode;
 use crate::engine::runtime_facade::RuntimeFacadeState;
 use crate::engine::streaming::{StreamEvent, StreamingQueryEngine};
+use crate::text_utils::truncate_preview;
 use futures::Stream;
 use serde::{Deserialize, Serialize};
 use std::pin::Pin;
@@ -552,15 +553,6 @@ impl Stream for MirroredStream {
             other => other,
         }
     }
-}
-
-fn truncate_preview(text: &str, max_chars: usize) -> String {
-    if text.chars().count() <= max_chars {
-        return text.to_string();
-    }
-    let mut preview: String = text.chars().take(max_chars.saturating_sub(1)).collect();
-    preview.push('…');
-    preview
 }
 
 #[cfg(test)]

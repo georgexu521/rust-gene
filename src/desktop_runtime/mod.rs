@@ -9,8 +9,13 @@
 use crate::engine::runtime_controller::RuntimeController;
 use crate::engine::streaming::{StreamEvent, StreamingQueryEngine};
 use crate::engine::turn_ingress::{lightweight_user_text, TurnIngressLane};
-use crate::services::api::{sanitize_assistant_content, ChatRequest, Message, Usage};
+use crate::services::api::direct_chat::{
+    run_direct_provider_chat, DirectChatSanitizePolicy, DirectProviderChatRequest,
+    LIGHTWEIGHT_CHAT_SYSTEM_PROMPT,
+};
+use crate::services::api::{Message, Usage};
 use crate::session_store::{MessageRecord, SessionStore};
+use crate::text_utils::truncate_preview;
 use futures::Stream;
 use serde::Serialize;
 use std::path::{Path, PathBuf};
@@ -166,18 +171,25 @@ impl DesktopRuntime {
         lane: TurnIngressLane,
     ) -> anyhow::Result<DesktopLightweightTurnOutcome> {
         let prompt = lightweight_user_text(user_message, lane);
-        let request = ChatRequest {
-            max_tokens: Some(512),
-            ..ChatRequest::new(self.streaming_engine.model_name()).with_messages(vec![
-                Message::system(LIGHTWEIGHT_CHAT_SYSTEM_PROMPT),
-                Message::user(prompt.clone()),
-            ])
-        };
-        let response = self.streaming_engine.provider().chat(request).await?;
-        let answer = sanitize_lightweight_answer(&response.content);
+        let response = run_direct_provider_chat(
+            self.streaming_engine.provider(),
+            DirectProviderChatRequest {
+                model: self.streaming_engine.model_name(),
+                system_prompt: LIGHTWEIGHT_CHAT_SYSTEM_PROMPT.to_string(),
+                user_message: prompt,
+                temperature: None,
+                max_tokens: Some(512),
+                sanitize_policy: DirectChatSanitizePolicy::LightweightPlainText,
+                empty_response_fallback: Some(
+                    "I could not produce a plain-text answer from the lightweight lane."
+                        .to_string(),
+                ),
+            },
+        )
+        .await?;
         Ok(DesktopLightweightTurnOutcome {
             lane,
-            answer,
+            answer: response.content,
             usage: response.usage,
         })
     }
@@ -221,55 +233,11 @@ impl DesktopRuntime {
     }
 }
 
-const LIGHTWEIGHT_CHAT_SYSTEM_PROMPT: &str = "You are Liz, gex's concise AI coding partner. Answer this one user message directly in plain prose. Reply in the user's language. You have no tools in this lightweight lane: do not claim to inspect files, run commands, edit files, or verify anything. If the request requires project inspection or code changes, say it needs the full agent lane.";
-
 #[derive(Debug, Clone)]
 pub struct DesktopLightweightTurnOutcome {
     pub lane: TurnIngressLane,
     pub answer: String,
     pub usage: Option<Usage>,
-}
-
-fn sanitize_lightweight_answer(content: &str) -> String {
-    let sanitized = sanitize_assistant_content(content);
-    let sanitized = strip_hallucinated_tool_envelopes(&sanitized);
-    if sanitized.trim().is_empty() {
-        "I could not produce a plain-text answer from the lightweight lane.".to_string()
-    } else {
-        sanitized.trim().to_string()
-    }
-}
-
-fn strip_hallucinated_tool_envelopes(content: &str) -> String {
-    let mut out = content.to_string();
-    for (open, close) in [
-        ("<function_calls>", "</function_calls>"),
-        ("<|DSML|function_calls>", "</|DSML|function_calls>"),
-        ("<｜DSML｜function_calls>", "</｜DSML｜function_calls>"),
-    ] {
-        out = strip_literal_block(&out, open, close);
-    }
-    for open in ["<｜DSML｜", "<|DSML|"] {
-        if let Some(index) = out.find(open) {
-            out.truncate(index);
-        }
-    }
-    out
-}
-
-fn strip_literal_block(input: &str, open: &str, close: &str) -> String {
-    let mut output = String::with_capacity(input.len());
-    let mut rest = input;
-    while let Some(start) = rest.find(open) {
-        output.push_str(&rest[..start]);
-        let after_open = &rest[start + open.len()..];
-        let Some(end) = after_open.find(close) else {
-            return output;
-        };
-        rest = &after_open[end + close.len()..];
-    }
-    output.push_str(rest);
-    output
 }
 
 fn message_record_to_history_message(record: MessageRecord) -> Option<Message> {
@@ -423,16 +391,6 @@ impl DesktopRunEvent {
             },
         }
     }
-}
-
-fn truncate_preview(text: &str, max_chars: usize) -> String {
-    if text.chars().count() <= max_chars {
-        return text.to_string();
-    }
-
-    let mut preview: String = text.chars().take(max_chars.saturating_sub(1)).collect();
-    preview.push('…');
-    preview
 }
 
 #[cfg(test)]
@@ -723,12 +681,20 @@ mod tests {
 
     #[test]
     fn lightweight_sanitizer_strips_hallucinated_tool_markup() {
+        use crate::services::api::direct_chat::sanitize_direct_chat_content;
+
         assert_eq!(
-            sanitize_lightweight_answer("Answer\n<function_calls>{}</function_calls>"),
+            sanitize_direct_chat_content(
+                DirectChatSanitizePolicy::LightweightPlainText,
+                "Answer\n<function_calls>{}</function_calls>"
+            ),
             "Answer"
         );
         assert_eq!(
-            sanitize_lightweight_answer("Visible\n<｜DSML｜function_calls>{}"),
+            sanitize_direct_chat_content(
+                DirectChatSanitizePolicy::LightweightPlainText,
+                "Visible\n<｜DSML｜function_calls>{}"
+            ),
             "Visible"
         );
     }

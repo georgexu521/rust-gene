@@ -43,6 +43,7 @@ pub mod state;
 pub mod telemetry;
 #[cfg(test)]
 pub mod test_utils;
+pub(crate) mod text_utils;
 pub mod tool_output_store;
 pub mod tools;
 pub mod tui;

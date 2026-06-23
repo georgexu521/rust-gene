@@ -46,6 +46,7 @@ pub mod improvement;
 pub mod intent_router;
 pub mod learning_planning;
 pub mod lightweight_planner;
+pub(crate) mod loop_builder_deps;
 pub mod lsp;
 pub mod mcp;
 pub mod mcp_server;

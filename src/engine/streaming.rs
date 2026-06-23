@@ -1415,31 +1415,18 @@ impl StreamingEngineInner {
         .with_agent_mode(agent_mode)
         .with_lab_context(self.lab_context_enabled);
 
-        if let (Some(ref store), Some(ref session_id)) = (&self.session_store, &self.session_id) {
-            builder = builder.with_session_store(store.clone(), session_id.clone());
+        builder = crate::engine::loop_builder_deps::LoopBuilderDeps {
+            agent_manager: self.agent_manager.clone(),
+            mcp_manager: self.mcp_manager.clone(),
+            lsp_manager: self.lsp_manager.clone(),
+            worktree_manager: self.worktree_manager.clone(),
+            working_dir_override: self.working_dir_override.clone(),
+            memory_manager: self.memory_manager.clone(),
+            approval_channel: self.approval_channel.clone(),
+            allowed_tools: None,
+            session_binding: self.session_store.clone().zip(self.session_id.clone()),
         }
-
-        if let Some(ref manager) = self.agent_manager {
-            builder = builder.with_agent_manager(manager.clone());
-        }
-        if let Some(ref mcp) = self.mcp_manager {
-            builder = builder.with_mcp_manager(mcp.clone());
-        }
-        if let Some(ref lsp) = self.lsp_manager {
-            builder = builder.with_lsp_manager(lsp.clone());
-        }
-        if let Some(ref wt) = self.worktree_manager {
-            builder = builder.with_worktree_manager(wt.clone());
-        }
-        if let Some(ref working_dir) = self.working_dir_override {
-            builder = builder.with_working_dir(working_dir.clone());
-        }
-        if let Some(ref mem) = self.memory_manager {
-            builder = builder.with_memory_manager(mem.clone());
-        }
-        if let Some(ref channel) = self.approval_channel {
-            builder = builder.with_approval_channel(channel.clone());
-        }
+        .apply_to(builder);
 
         let result = builder.build().run_streaming(messages, tx).await?;
         Ok((result.content, result.tool_calls_made))

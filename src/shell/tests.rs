@@ -1,6 +1,24 @@
 use super::*;
 use crate::shell::surface::TestSurface;
 use crate::shell::test_support::{test_cli_host, test_engine};
+use std::collections::HashSet;
+
+#[test]
+fn local_command_help_is_covered_by_tui_command_registry() {
+    let registry = crate::tui::commands::default_command_registry();
+    let cli_only = HashSet::from(["/tui"]);
+
+    for command in local_command_specs() {
+        if cli_only.contains(command.name) {
+            continue;
+        }
+        assert!(
+            registry.get(command.name).is_some(),
+            "{} is listed in CLI help but missing from TUI command registry",
+            command.name
+        );
+    }
+}
 
 #[test]
 fn parse_lab_background_hybrid_args_supports_numeric_prefixes_and_instructions() {

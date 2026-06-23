@@ -638,7 +638,9 @@ impl ApiState {
 
     /// 执行聊天请求
     pub async fn chat(&self, req: ChatRequest) -> anyhow::Result<ChatResponse> {
-        use crate::services::api::{ChatRequest as LlmChatRequest, Message};
+        use crate::services::api::direct_chat::{
+            run_direct_provider_chat, DirectChatSanitizePolicy, DirectProviderChatRequest,
+        };
 
         let model = req.model.as_deref().unwrap_or(&self.model);
         let system = req
@@ -648,11 +650,19 @@ impl ApiState {
 
         debug!("Chat request: model={}, message={}", model, req.message);
 
-        let llm_req = LlmChatRequest::new(model)
-            .with_messages(vec![Message::system(system), Message::user(&req.message)])
-            .with_temperature(req.temperature.unwrap_or(0.6));
-
-        let response = self.provider.chat(llm_req).await?;
+        let response = run_direct_provider_chat(
+            self.provider.clone(),
+            DirectProviderChatRequest {
+                model: model.to_string(),
+                system_prompt: system.to_string(),
+                user_message: req.message.clone(),
+                temperature: Some(req.temperature.unwrap_or(0.6)),
+                max_tokens: None,
+                sanitize_policy: DirectChatSanitizePolicy::AssistantVisible,
+                empty_response_fallback: None,
+            },
+        )
+        .await?;
         if let Some(usage) = &response.usage {
             let mut tracker = self.audit_tracker.write().await;
             tracker.record_api_call_with_cache_write(

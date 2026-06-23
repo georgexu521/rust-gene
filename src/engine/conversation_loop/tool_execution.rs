@@ -203,15 +203,19 @@ pub(crate) fn tool_call_is_storm_exempt(registry: &ToolRegistry, tool_name: &str
         .get(tool_name)
         .map(|tool| tool.requires_user_interaction())
         .unwrap_or(false)
-        || matches!(
-            tool_name,
-            "project_list"
-                | "memory_load"
-                | "skills_list"
-                | "skill_view"
-                | "list_mcp_resources"
-                | "read_mcp_resource"
-        )
+        || is_legacy_storm_exempt_tool(tool_name)
+}
+
+fn is_legacy_storm_exempt_tool(tool_name: &str) -> bool {
+    matches!(
+        tool_name,
+        "project_list"
+            | "memory_load"
+            | "skills_list"
+            | "skill_view"
+            | "list_mcp_resources"
+            | "read_mcp_resource"
+    )
 }
 
 #[cfg(test)]
@@ -293,6 +297,30 @@ mod tests {
             "file_write",
             &json!({ "path": "tmp.txt", "content": "hello" })
         ));
+    }
+
+    #[test]
+    fn legacy_read_only_names_match_registered_tool_contracts() {
+        let registry = ToolRegistry::with_profile(ToolRegistryProfile::Full);
+
+        for name in READ_ONLY_TOOLS {
+            if let Some(tool) = registry.get(name) {
+                assert!(
+                    tool.is_read_only(&Value::Null),
+                    "{name} is in READ_ONLY_TOOLS but its Tool contract is not read-only"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn storm_exempt_keeps_duplicate_read_only_guard() {
+        let registry = ToolRegistry::with_profile(ToolRegistryProfile::Core);
+
+        assert!(!tool_call_is_storm_exempt(&registry, "grep"));
+        assert!(!tool_call_is_storm_exempt(&registry, "file_read"));
+        assert!(!tool_call_is_storm_exempt(&registry, "file_write"));
+        assert!(tool_call_is_storm_exempt(&registry, "skill_view"));
     }
 
     #[tokio::test]

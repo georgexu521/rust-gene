@@ -571,6 +571,7 @@ pub fn default_command_registry() -> CommandRegistry {
     registry.register(&CMD_AUDIT);
     registry.register(&CMD_PERMISSIONS);
     registry.register(&CMD_DIFF);
+    registry.register(&CMD_CHANGES);
     registry.register(&CMD_RESUME);
     registry.register(&CMD_REWIND);
     registry.register(&CMD_COMMIT);

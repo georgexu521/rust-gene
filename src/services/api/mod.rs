@@ -8,6 +8,7 @@ pub mod adapter;
 pub mod auth_store;
 pub(crate) mod content_sanitizer;
 pub mod credentials;
+pub mod direct_chat;
 pub mod kimi;
 pub mod minimax;
 pub mod model_discovery;

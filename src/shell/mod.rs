@@ -95,6 +95,11 @@ const LOCAL_COMMANDS: &[ShellCommand] = &[
     ShellCommand::new("/exit", "quit"),
 ];
 
+#[cfg(test)]
+fn local_command_specs() -> &'static [ShellCommand] {
+    LOCAL_COMMANDS
+}
+
 /// Options that control how the CLI shell behaves.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct ShellOptions {

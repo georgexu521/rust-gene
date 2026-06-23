@@ -76,7 +76,7 @@ pub(crate) const UNAVAILABLE_COMMANDS: &[&str] = &["/desktop", "/slack", "/chrom
 
 pub const CMD_HELP: CommandDef = CommandDef::new(
     "/help",
-    &["/h"],
+    &["/h", "/commands", "/?"],
     "General",
     "/help [maturity]",
     "Show help or command maturity report",
@@ -415,7 +415,7 @@ pub const CMD_PASTE: CommandDef = CommandDef::new(
 
 pub const CMD_ATTACH: CommandDef = CommandDef::new(
     "/attach",
-    &[],
+    &["/attachments", "/detach"],
     "Composer",
     "/attach <path>|browse [root]|preview [n]|list|remove <n>|clear",
     "Attach file context to the next prompt",
@@ -505,7 +505,7 @@ pub const CMD_ORCHESTRATE: CommandDef = CommandDef::new(
 // Phase 10 Batch 1: Session & Control Commands
 pub const CMD_SESSION: CommandDef = CommandDef::new(
     "/session",
-    &["/sessions"],
+    &["/sessions", "/new"],
     "Session",
     "/session [list|new|delete <id>|pending|cancel <id>]",
     "Manage sessions and queued inputs",
