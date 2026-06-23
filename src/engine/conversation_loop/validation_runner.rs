@@ -45,11 +45,39 @@ fn push_required_validation_command(commands: &mut Vec<String>, command: &str) {
     if command.is_empty() || command == "(none)" {
         return;
     }
-    if RequiredValidationController::is_safe_required_validation_command(command)
-        && !commands.iter().any(|existing| existing == command)
-    {
+    if !RequiredValidationController::is_safe_required_validation_command(command) {
+        return;
+    }
+    if generic_validation_prefix(command).is_some_and(|prefix| {
+        commands
+            .iter()
+            .any(|existing| extends_command(existing, prefix))
+    }) {
+        return;
+    }
+    commands.retain(|existing| {
+        !generic_validation_prefix(existing).is_some_and(|prefix| extends_command(command, prefix))
+    });
+    if !commands.iter().any(|existing| existing == command) {
         commands.push(command.to_string());
     }
+}
+
+fn generic_validation_prefix(command: &str) -> Option<&'static str> {
+    match command.trim() {
+        "cargo test" => Some("cargo test"),
+        "cargo check" => Some("cargo check"),
+        "npm test" => Some("npm test"),
+        "pnpm test" => Some("pnpm test"),
+        "pytest" => Some("pytest"),
+        "make test" => Some("make test"),
+        _ => None,
+    }
+}
+
+fn extends_command(command: &str, prefix: &str) -> bool {
+    let command = command.trim();
+    command != prefix && command.starts_with(prefix) && command[prefix.len()..].starts_with(' ')
 }
 
 fn extract_backtick_commands(line: &str) -> Vec<String> {

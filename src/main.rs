@@ -3,6 +3,7 @@
 //! The runtime keeps local tools, memory, validation, permissions, and closeout
 //! evidence explicit while the model owns semantic engineering judgment.
 
+use std::collections::HashSet;
 use tracing::{debug, error, info};
 use tracing_subscriber::fmt::writer::BoxMakeWriter;
 use tracing_subscriber::EnvFilter;
@@ -69,7 +70,7 @@ fn print_help() {
     );
     println!("  lab-daemon  Run one non-interactive Lab daemon worker pass from persisted policy");
     println!("  --tui    Start the legacy full-screen terminal interface (alternative)");
-    println!("  --eval-run --prompt-file <PATH> [--output <PATH>] [--events <PATH>]");
+    println!("  --eval-run --prompt-file <PATH> [--output <PATH>] [--events <PATH>] [--allowed-tools <CSV>]");
     println!("           Run one non-interactive evaluation task");
     println!("  --provider-health [--output <PATH>] [--timeout <SECS>]");
     println!("           Probe provider chat, tool-call, and tool-result continuation");
@@ -94,6 +95,15 @@ fn arg_value(args: &[String], flag: &str) -> Option<String> {
         .position(|arg| arg == flag)
         .and_then(|idx| args.get(idx + 1))
         .cloned()
+}
+
+fn comma_separated_values(value: &str) -> Vec<String> {
+    value
+        .split(',')
+        .map(str::trim)
+        .filter(|item| !item.is_empty())
+        .map(ToString::to_string)
+        .collect()
 }
 
 fn run_context_attach(args: &[String]) -> Result<(), String> {
@@ -222,29 +232,117 @@ async fn answer_pending_approval(
     engine: &std::sync::Arc<priority_agent::engine::streaming::StreamingQueryEngine>,
     approved: bool,
     session_scoped: bool,
-) -> bool {
+    working_dir: &std::path::Path,
+) -> Option<&'static str> {
+    use priority_agent::engine::conversation_loop::ToolApprovalResponse;
+
     let Some(channel) = engine.approval_channel() else {
-        return false;
+        return None;
     };
 
     for _ in 0..20 {
-        if let Some((_request, tx)) = channel.take_pending().await {
-            let response = if approved {
+        if let Some((request, tx)) = channel.take_pending().await {
+            let (response, label) = if approved {
                 if session_scoped {
-                    priority_agent::engine::conversation_loop::ToolApprovalResponse::approved_session()
+                    (ToolApprovalResponse::approved_session(), "approve_session")
                 } else {
-                    priority_agent::engine::conversation_loop::ToolApprovalResponse::approved_once()
+                    (ToolApprovalResponse::approved_once(), "approve_once")
                 }
+            } else if eval_safe_validation_tool_call(&request.tool_call, working_dir) {
+                (
+                    ToolApprovalResponse::approved_once(),
+                    "approve_safe_validation",
+                )
             } else {
-                priority_agent::engine::conversation_loop::ToolApprovalResponse::rejected_once()
+                (ToolApprovalResponse::rejected_once(), "deny")
             };
             let _ = tx.send(response);
-            return true;
+            return Some(label);
         }
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     }
 
-    false
+    None
+}
+
+fn eval_safe_validation_tool_call(
+    tool_call: &priority_agent::services::api::ToolCall,
+    working_dir: &std::path::Path,
+) -> bool {
+    if tool_call.name != "bash" {
+        return false;
+    }
+    let Some(command) = tool_call
+        .arguments
+        .get("command")
+        .and_then(|value| value.as_str())
+    else {
+        return false;
+    };
+    let classification =
+        priority_agent::tools::bash_tool::command_classifier::classify_command_with_working_dir(
+            command,
+            working_dir,
+        );
+    if !classification.is_safe_validation() || classification.network_access {
+        return false;
+    }
+    if classification.command_plan.has_command_substitution
+        || classification.command_plan.has_process_substitution
+        || classification.command_plan.has_heredoc
+    {
+        return false;
+    }
+    if !classification
+        .shell_control_operators
+        .iter()
+        .all(|operator| matches!(operator.as_str(), "and" | "redirect"))
+    {
+        return false;
+    }
+    if !classification
+        .redirections
+        .iter()
+        .all(|redir| !redir.writes || (redir.operator == "2>" && redir.target.is_none()))
+    {
+        return false;
+    }
+    if !classification
+        .absolute_path_patterns
+        .iter()
+        .all(|path| path_is_within(path, working_dir))
+    {
+        return false;
+    }
+    classification
+        .command_plan
+        .cd_targets
+        .iter()
+        .all(|target| path_is_within(target, working_dir))
+}
+
+fn path_is_within(path: &str, root: &std::path::Path) -> bool {
+    let candidate = std::path::Path::new(path);
+    let path = if candidate.is_absolute() {
+        candidate.to_path_buf()
+    } else {
+        root.join(candidate)
+    };
+    lexical_normalize(&path).starts_with(&lexical_normalize(root))
+}
+
+fn lexical_normalize(path: &std::path::Path) -> std::path::PathBuf {
+    let mut out = std::path::PathBuf::new();
+    for component in path.components() {
+        match component {
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                out.pop();
+            }
+            other => out.push(other.as_os_str()),
+        }
+    }
+    out
 }
 
 async fn run_eval_task(
@@ -260,6 +358,14 @@ async fn run_eval_task(
     let output_file = arg_value(args, "--output");
     let events_file =
         arg_value(args, "--events").or_else(|| std::env::var("PRIORITY_AGENT_EVAL_EVENTS").ok());
+    let allowed_tools = arg_value(args, "--allowed-tools")
+        .or_else(|| std::env::var("PRIORITY_AGENT_EVAL_ALLOWED_TOOLS").ok())
+        .map(|raw| {
+            comma_separated_values(&raw)
+                .into_iter()
+                .collect::<HashSet<_>>()
+        })
+        .filter(|tools| !tools.is_empty());
 
     let mut prompt = std::fs::read_to_string(&prompt_file)
         .map_err(|e| anyhow::anyhow!("failed to read prompt file '{}': {}", prompt_file, e))?;
@@ -282,6 +388,7 @@ async fn run_eval_task(
     components
         .streaming_engine
         .set_memory_generate(eval_memory_generate);
+    components.streaming_engine.set_allowed_tools(allowed_tools);
 
     // Eval-run optimizations: auto-approve ask_user, disable file cache
     // short-circuit so the model always sees full file content, and skip
@@ -449,6 +556,7 @@ async fn run_eval_task(
                     &components.streaming_engine,
                     allow_mutations,
                     allow_mutations,
+                    &working_dir,
                 )
                 .await;
                 write_eval_event(
@@ -459,8 +567,8 @@ async fn run_eval_task(
                         "tool_name": tool_name,
                         "arguments": arguments,
                         "prompt": prompt,
-                        "auto_response": if allow_mutations { "approve" } else { "deny" },
-                        "answered": answered,
+                        "auto_response": answered.unwrap_or(if allow_mutations { "approve" } else { "deny" }),
+                        "answered": answered.is_some(),
                     }),
                 )?;
             }
@@ -832,7 +940,7 @@ async fn main() {
 mod tests {
     use super::{
         configure_eval_memory_isolation, default_log_level, detect_startup_mode, env_flag,
-        suppress_terminal_logs, StartupMode,
+        eval_safe_validation_tool_call, suppress_terminal_logs, StartupMode,
     };
     use std::collections::HashMap;
     use std::sync::{LazyLock, Mutex, MutexGuard};
@@ -1013,5 +1121,43 @@ mod tests {
         assert_eq!(env_flag("PRIORITY_AGENT_EVAL_MEMORY_GENERATE"), None);
         env.set("PRIORITY_AGENT_EVAL_MEMORY_GENERATE", "1");
         assert_eq!(env_flag("PRIORITY_AGENT_EVAL_MEMORY_GENERATE"), Some(true));
+    }
+
+    #[test]
+    fn eval_safe_validation_allows_current_worktree_cargo_test() {
+        let dir = tempfile::tempdir().unwrap();
+        let command = format!(
+            "cd {} && cargo test -q --manifest-path fixtures/core_quality/rust_refactor/Cargo.toml 2>&1",
+            dir.path().display()
+        );
+        let call = priority_agent::services::api::ToolCall {
+            id: "call_validation".to_string(),
+            name: "bash".to_string(),
+            arguments: serde_json::json!({ "command": command }),
+        };
+
+        assert!(eval_safe_validation_tool_call(&call, dir.path()));
+    }
+
+    #[test]
+    fn eval_safe_validation_rejects_external_cd_or_file_redirection() {
+        let dir = tempfile::tempdir().unwrap();
+        let external = priority_agent::services::api::ToolCall {
+            id: "call_external".to_string(),
+            name: "bash".to_string(),
+            arguments: serde_json::json!({
+                "command": "cd /tmp && cargo test -q --manifest-path fixtures/core_quality/rust_refactor/Cargo.toml"
+            }),
+        };
+        let file_redirect = priority_agent::services::api::ToolCall {
+            id: "call_redirect".to_string(),
+            name: "bash".to_string(),
+            arguments: serde_json::json!({
+                "command": "cargo test -q --manifest-path fixtures/core_quality/rust_refactor/Cargo.toml > /tmp/out"
+            }),
+        };
+
+        assert!(!eval_safe_validation_tool_call(&external, dir.path()));
+        assert!(!eval_safe_validation_tool_call(&file_redirect, dir.path()));
     }
 }

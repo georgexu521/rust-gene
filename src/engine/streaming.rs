@@ -13,6 +13,7 @@ use crate::tools::ToolRegistry;
 use anyhow::Result;
 use futures::Stream;
 use parking_lot::RwLock;
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -636,6 +637,11 @@ impl StreamingQueryEngine {
         *self.config.permission_mode.write() = mode;
     }
 
+    /// Set a hard tool allow-list for streaming turns.
+    pub fn set_allowed_tools(&self, tools: Option<HashSet<String>>) {
+        *self.config.allowed_tools.write() = tools;
+    }
+
     pub fn permission_mode(&self) -> crate::permissions::PermissionMode {
         *self.config.permission_mode.read()
     }
@@ -881,6 +887,7 @@ impl StreamingQueryEngine {
             approval_channel: self.config.approval_channel.clone(),
             fallback_model: self.config.fallback_model.clone(),
             lab_context_enabled: self.lab_context_enabled(),
+            allowed_tools: self.config.allowed_tools.read().clone(),
             fallback_state: None,
         };
 
@@ -1251,6 +1258,7 @@ impl StreamingQueryEngine {
                                 approval_channel: engine.approval_channel.clone(),
                                 fallback_model: None, // 防止无限 fallback
                                 lab_context_enabled: engine.lab_context_enabled,
+                                allowed_tools: engine.allowed_tools.clone(),
                                 fallback_state: Some(fb_state),
                             };
                             let turn_timeout = config::turn_execution_timeout();
@@ -1384,6 +1392,7 @@ struct StreamingEngineInner {
     approval_channel: Option<Arc<crate::engine::conversation_loop::ToolApprovalChannel>>,
     fallback_model: Option<String>,
     lab_context_enabled: bool,
+    allowed_tools: Option<HashSet<String>>,
     /// Fallback 状态追踪（连续错误计数）
     fallback_state: Option<FallbackState>,
 }
@@ -1423,7 +1432,7 @@ impl StreamingEngineInner {
             working_dir_override: self.working_dir_override.clone(),
             memory_manager: self.memory_manager.clone(),
             approval_channel: self.approval_channel.clone(),
-            allowed_tools: None,
+            allowed_tools: self.allowed_tools.clone(),
             session_binding: self.session_store.clone().zip(self.session_id.clone()),
         }
         .apply_to(builder);

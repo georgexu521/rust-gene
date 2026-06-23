@@ -17,6 +17,8 @@ repo:
       name = "core-quality-rust-refactor"
       version = "0.1.0"
       edition = "2021"
+
+      [workspace]
       TOML
       cat > fixtures/core_quality/rust_refactor/src/lib.rs <<'RS'
       pub mod report;

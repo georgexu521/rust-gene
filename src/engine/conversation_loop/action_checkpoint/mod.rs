@@ -517,6 +517,9 @@ impl ConversationLoop {
         {
             return true;
         }
+        if has_changes_before_tools && Self::is_safe_post_change_search_validation(&command) {
+            return true;
+        }
 
         command.starts_with("python -m venv .venv")
             || command.starts_with("python3 -m venv .venv")
@@ -525,6 +528,22 @@ impl ConversationLoop {
             || command.contains(
                 "fixtures/core_quality/long_output/generate_log.py > fixtures/core_quality/long_output/output.log",
             )
+    }
+
+    fn is_safe_post_change_search_validation(command: &str) -> bool {
+        let trimmed = command.trim();
+        let starts_with_search = trimmed.starts_with("rg ") || trimmed.starts_with("grep ");
+        starts_with_search
+            && !trimmed.contains('\n')
+            && !trimmed.contains(';')
+            && !trimmed.contains('|')
+            && !trimmed.contains("&&")
+            && !trimmed.ends_with('&')
+            && !trimmed.contains(" & ")
+            && !trimmed.contains('`')
+            && !trimmed.contains("$(")
+            && !trimmed.contains('>')
+            && !trimmed.contains('<')
     }
 
     pub(super) fn action_checkpoint_file_edit_rejection(

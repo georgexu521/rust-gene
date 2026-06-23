@@ -229,6 +229,17 @@ yaml_list() {
   ' "$file" "$path"
 }
 
+yaml_allowed_tools_csv() {
+  local file="$1"
+  ruby -ryaml -e '
+    sample = YAML.load_file(ARGV[0]) || {}
+    allowed = Array(sample["allowed_tools"]).map { |item| item.to_s.strip }.reject(&:empty?)
+    forbidden = Array(sample["forbidden_tools"]).map { |item| item.to_s.strip }.reject(&:empty?)
+    allowed = allowed.reject { |item| forbidden.include?(item) }
+    puts allowed.uniq.join(",")
+  ' "$file"
+}
+
 validation_commands() {
   local file="$1"
   yaml_list "$file" acceptance.required_commands
@@ -935,9 +946,10 @@ PY
 
 agent_run_task() {
   local file="$1" task_workdir="$2"
-  local id report_dir agent_stdout agent_stderr agent_monitor agent_metrics agent_output agent_events exit_file prompt_file env_base cargo_target_dir runtime_profile
+  local id report_dir agent_stdout agent_stderr agent_monitor agent_metrics agent_output agent_events exit_file prompt_file env_base cargo_target_dir runtime_profile allowed_tools_csv
   id="$(yaml_get "$file" id)"
   runtime_profile="$(yaml_get "$file" runtime_profile "")"
+  allowed_tools_csv="$(yaml_allowed_tools_csv "$file")"
   report_dir="$REPORT_DIR/live-$RUN_ID/$id"
   mkdir -p "$report_dir"
   agent_stdout="$report_dir/agent-stdout.log"
@@ -1004,7 +1016,8 @@ agent_run_task() {
     "$agent_events" \
     "$env_base" \
     "$cargo_target_dir" \
-    "$runtime_profile" <<'PY' >"$exit_file"
+    "$runtime_profile" \
+    "$allowed_tools_csv" <<'PY' >"$exit_file"
 import os
 import json
 import subprocess
@@ -1027,6 +1040,7 @@ events_file = sys.argv[13]
 env_base = sys.argv[14]
 cargo_target_dir = sys.argv[15]
 runtime_profile = sys.argv[16]
+allowed_tools_csv = sys.argv[17]
 
 env = os.environ.copy()
 real_home = env.get("HOME", "")
@@ -1095,6 +1109,8 @@ cmd = [
     "--events",
     events_file,
 ]
+if allowed_tools_csv:
+    cmd.extend(["--allowed-tools", allowed_tools_csv])
 
 def file_signature(path):
     try:

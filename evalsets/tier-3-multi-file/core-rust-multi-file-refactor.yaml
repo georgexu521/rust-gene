@@ -11,7 +11,7 @@ repo:
   prepare_commands:
   - "mkdir -p fixtures/core_quality/rust_refactor/src\ncat > fixtures/core_quality/rust_refactor/Cargo.toml\
     \ <<'TOML'\n[package]\nname = \"core-quality-rust-refactor\"\nversion = \"0.1.0\"\
-    \nedition = \"2021\"\nTOML\ncat > fixtures/core_quality/rust_refactor/src/lib.rs\
+    \nedition = \"2021\"\n\n[workspace]\nTOML\ncat > fixtures/core_quality/rust_refactor/src/lib.rs\
     \ <<'RS'\npub mod report;\npub mod stats;\n\npub fn format_total(label: &str,\
     \ values: &[u32]) -> String {\n    report::format_report(label, values)\n}\n\n\
     #[cfg(test)]\nmod tests {\n    use super::*;\n\n    #[test]\n    fn formats_total_with_average()\

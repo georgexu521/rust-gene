@@ -7,6 +7,7 @@ use crate::engine::QueryEngine;
 use crate::services::api::LlmProvider;
 use crate::tools::ToolRegistry;
 use parking_lot::RwLock;
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -61,6 +62,8 @@ pub struct StreamingConfig {
     pub permission_mode: Arc<RwLock<crate::permissions::PermissionMode>>,
     /// 当前 CLI 会话内临时权限规则
     pub session_permission_rules: Arc<RwLock<crate::permissions::PermissionRules>>,
+    /// Optional hard tool allow-list for scoped/eval streaming runs.
+    pub allowed_tools: Arc<RwLock<Option<HashSet<String>>>>,
     /// Whether existing memory may be used for request context in this session.
     pub memory_use: std::sync::atomic::AtomicBool,
     /// Whether this session may generate future memory proposals/sync output.
@@ -124,6 +127,7 @@ impl StreamingConfig {
             session_permission_rules: Arc::new(RwLock::new(
                 crate::permissions::PermissionRules::new(),
             )),
+            allowed_tools: Arc::new(RwLock::new(None)),
             memory_use: std::sync::atomic::AtomicBool::new(true),
             memory_generate: std::sync::atomic::AtomicBool::new(true),
             memory_recall_mode: Arc::new(RwLock::new("balanced".to_string())),

@@ -284,6 +284,26 @@ fn action_checkpoint_blocks_patch_bash_and_allows_validation_after_changes() {
         true,
         &HashSet::new(),
     ));
+    assert!(ConversationLoop::bash_allowed_at_action_checkpoint(
+        &serde_json::json!({"command": "rg 'avg=' fixtures/core_quality/rust_refactor/src/report.rs"}),
+        true,
+        &HashSet::new(),
+    ));
+    assert!(ConversationLoop::bash_allowed_at_action_checkpoint(
+        &serde_json::json!({"command": "grep 'avg=' fixtures/core_quality/rust_refactor/src/report.rs"}),
+        true,
+        &HashSet::new(),
+    ));
+    assert!(!ConversationLoop::bash_allowed_at_action_checkpoint(
+        &serde_json::json!({"command": "rg 'avg=' fixtures/core_quality/rust_refactor/src/report.rs > /tmp/out"}),
+        true,
+        &HashSet::new(),
+    ));
+    assert!(!ConversationLoop::bash_allowed_at_action_checkpoint(
+        &serde_json::json!({"command": "rg 'avg=' fixtures/core_quality/rust_refactor/src/report.rs && rm -rf target/tmp"}),
+        true,
+        &HashSet::new(),
+    ));
 }
 
 #[test]

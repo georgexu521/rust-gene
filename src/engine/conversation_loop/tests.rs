@@ -182,6 +182,28 @@ fn test_extract_required_validation_commands_from_inline_backticks() {
 }
 
 #[test]
+fn test_extract_required_validation_replaces_generic_cargo_test_with_specific_command() {
+    let prompt = r#"
+要求：
+- 运行对应 cargo test。
+
+## Acceptance checks
+- `cargo test -q --manifest-path fixtures/core_quality/rust_refactor/Cargo.toml`
+- `rg 'avg=' fixtures/core_quality/rust_refactor/src/report.rs`
+"#;
+
+    let commands = RequiredValidationController::extract_commands(prompt);
+
+    assert_eq!(
+        commands,
+        vec![
+            "cargo test -q --manifest-path fixtures/core_quality/rust_refactor/Cargo.toml",
+            "rg 'avg=' fixtures/core_quality/rust_refactor/src/report.rs",
+        ]
+    );
+}
+
+#[test]
 fn test_not_allowed_tool_result_has_recovery_metadata() {
     let tool_call = ToolCall {
         id: "call_denied".to_string(),
