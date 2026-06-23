@@ -34,7 +34,8 @@ use crate::engine::retrieval_context::RetrievalContext;
 use crate::engine::stop_checker::{StopCheckInput, StopChecker};
 use crate::engine::streaming::StreamEvent;
 use crate::engine::task_context::{
-    mva_stage_transition_policy, AgentToolRoundObservation, TaskContextBundle,
+    mva_stage_transition_policy, AgentToolRoundObservation, StopAction, StopCheckStatus,
+    TaskContextBundle,
 };
 use crate::engine::trace::{TraceCollector, TraceEvent};
 use crate::services::api::{Message, Tool};
@@ -281,7 +282,7 @@ impl TurnIterationController {
                     .has_successful_validation_commands(),
                 failed_tool_evidence_present: tool_round_state.failed_tool_evidence_present(),
             });
-        record_stop_check(
+        let should_stop = record_stop_check(
             context.trace,
             context.task_bundle,
             context.turn_state,
@@ -290,6 +291,9 @@ impl TurnIterationController {
             tool_calls.len(),
             false,
         );
+        if should_stop {
+            return Ok(TurnIterationFlow::Break);
+        }
 
         let focused_repair_flow =
             TurnFocusedRepairFlowController::run(TurnFocusedRepairFlowContext {
@@ -303,7 +307,7 @@ impl TurnIterationController {
                 messages: &mut *context.messages,
             })
             .await;
-        record_stop_check(
+        let should_stop = record_stop_check(
             context.trace,
             context.task_bundle,
             context.turn_state,
@@ -312,6 +316,9 @@ impl TurnIterationController {
             tool_calls.len(),
             matches!(focused_repair_flow, TurnFocusedRepairFlow::Continue),
         );
+        if should_stop {
+            return Ok(TurnIterationFlow::Break);
+        }
         // ── Advisory-only post-tool checks ──
         // Reasonix alignment: only 4 hard-stop conditions exist:
         // 1. Budget exhausted → force summary
@@ -373,7 +380,7 @@ fn record_stop_check(
     exposed_tool_count: usize,
     selected_tool_calls: usize,
     force_patch_synthesis_after_no_change: bool,
-) {
+) -> bool {
     let stage_before = task_bundle.agent_state.stage;
     let observations_before = task_bundle.agent_state.observations.len();
     let key_findings_before = task_bundle.agent_state.key_findings.len();
@@ -423,6 +430,7 @@ fn record_stop_check(
         failure_type: task_bundle.agent_state.last_failure_family.clone(),
         recovery_plan_id: None,
     });
+    let should_stop = terminal_stop_check(&decision);
     StopChecker::apply_to_task_state(&mut task_bundle.agent_state, &decision);
     let stage_after = task_bundle.agent_state.stage;
     let observations_delta = task_bundle
@@ -490,6 +498,15 @@ fn record_stop_check(
                 .unwrap_or("none")
         ),
     });
+    should_stop
+}
+
+fn terminal_stop_check(decision: &crate::engine::stop_checker::StopCheckDecision) -> bool {
+    decision.status == StopCheckStatus::Stop
+        && matches!(
+            decision.action,
+            StopAction::AskUser | StopAction::Closeout | StopAction::Recover | StopAction::Stop
+        )
 }
 
 fn serde_label<T>(value: &T) -> String
@@ -747,6 +764,60 @@ mod tests {
                 ..
             } if stage_before == "Understand" && stage_after == "Understand"
         )));
+    }
+
+    #[test]
+    fn stop_check_terminal_permission_block_breaks_iteration() {
+        let route = IntentRouter::new().route("inspect the project");
+        let mut task_bundle = TaskContextBundle::new("inspect the project", ".", route, None);
+        task_bundle.agent_state.consecutive_permission_blocks = 2;
+        let turn_state = TurnRuntimeState::new(true);
+        let round_state = super::super::turn_tool_round_step_controller::TurnToolRoundState {
+            tool_results_text: String::new(),
+            changed_files: Vec::new(),
+            batch_has_unsuccessful_tools: true,
+            used_write_tool: false,
+            successful_write_tool: false,
+            used_action_checkpoint_lookup: false,
+            any_tool_success: false,
+            repeated_failed_tools: Vec::new(),
+            failed_tool_names_this_round: vec!["bash".to_string()],
+            failed_tool_evidence: Vec::new(),
+            file_edit_failure_correction_added: false,
+            successful_validation_commands: Vec::new(),
+            duplicate_successful_read_only_tools: Vec::new(),
+            should_closeout_after_verified_change: false,
+        };
+        let trace = TraceCollector::new(TurnTrace::new("session", 1, "inspect the project"));
+
+        let should_stop = record_stop_check(
+            &trace,
+            &mut task_bundle,
+            &turn_state,
+            &round_state,
+            4,
+            1,
+            false,
+        );
+
+        assert!(should_stop);
+        let stop_check = task_bundle
+            .agent_state
+            .stop_checks
+            .last()
+            .expect("stop check");
+        assert_eq!(
+            stop_check.status,
+            crate::engine::task_context::StopCheckStatus::Stop
+        );
+        assert_eq!(
+            stop_check.reason,
+            crate::engine::task_context::StopCheckReason::ConsecutivePermissionBlocks
+        );
+        assert_eq!(
+            stop_check.action,
+            crate::engine::task_context::StopAction::AskUser
+        );
     }
 
     fn round_state(
