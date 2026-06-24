@@ -8,6 +8,13 @@ The project is now focused on the programming-agent terminal CLI. The default
 command is `priority-agent` or the `pa` shortcut; `--tui` remains as a
 compatibility entry for the full-screen terminal interface.
 
+## Naming And Repository
+
+The public repository is `georgexu521/rust-gene`. The product name is Priority
+Agent, and the released command/crate name remains `priority-agent` with the
+`pa` shortcut. Older local paths or archived notes may still mention
+`rust-agent`; treat those as historical workspace names, not the product name.
+
 ## Current Status
 
 Current project status is tracked in [docs/PROJECT_STATUS.md](docs/PROJECT_STATUS.md).
@@ -33,7 +40,8 @@ Before publishing a formal release, rerun the full gate set from
 ## Quick Start
 
 ```bash
-cd ~/Desktop/rust-agent
+git clone https://github.com/georgexu521/rust-gene.git
+cd rust-gene
 
 # Development run
 cargo run -- --cli
@@ -50,7 +58,7 @@ If `make install` fails with `No rule to make target 'install'`, run it from the
 repository root:
 
 ```bash
-cd ~/Desktop/rust-agent
+cd rust-gene
 make install
 ```
 
@@ -82,6 +90,18 @@ export PRIORITY_AGENT_DEFAULT_PROVIDER="minimax" # optional override
 ```
 
 Default order: MiniMax, Kimi Code, DeepSeek, GLM/Z.AI, Moonshot/Kimi, OpenAI.
+
+Keys saved through `/connect` are written to `~/.priority-agent/.env` as a
+plaintext dotenv file. On Unix-like systems Priority Agent sets file permissions
+to `0600`, but it does not currently use macOS Keychain, Secret Service, or
+Windows Credential Manager. Do not save production or shared-machine secrets
+with `/connect`.
+
+## Platform Support
+
+The current release target is macOS and Linux. Windows support is best-effort
+until the installer, shell execution defaults, and credential-storage paths are
+implemented and validated on Windows.
 
 ## Usage
 

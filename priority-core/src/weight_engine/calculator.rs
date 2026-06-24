@@ -1,7 +1,8 @@
 //! 权重计算器 - 计算任务的绝对权重和优先级
 
 use crate::weight_engine::types::{Project, Task, TaskId, TaskStatus, Weight};
-use std::collections::{BinaryHeap, HashMap};
+use std::cmp::Ordering;
+use std::collections::{BinaryHeap, HashMap, HashSet};
 
 /// 可执行的任务项（按优先级排序）
 #[derive(Debug, Clone)]
@@ -33,7 +34,7 @@ impl ExecutableTask {
 
 impl PartialEq for ExecutableTask {
     fn eq(&self, other: &Self) -> bool {
-        self.absolute_weight == other.absolute_weight
+        self.cmp(other) == Ordering::Equal
     }
 }
 
@@ -47,7 +48,25 @@ impl PartialOrd for ExecutableTask {
 
 impl Ord for ExecutableTask {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        self.partial_cmp(other).unwrap_or(std::cmp::Ordering::Equal)
+        compare_priority_float(self.priority_score, other.priority_score)
+            .then_with(|| {
+                compare_priority_float(self.absolute_weight.value(), other.absolute_weight.value())
+            })
+            .then_with(|| self.blocking_count.cmp(&other.blocking_count))
+            .then_with(|| self.dependency_depth.cmp(&other.dependency_depth))
+            .then_with(|| self.task_id.0.cmp(&other.task_id.0))
+    }
+}
+
+fn compare_priority_float(left: f64, right: f64) -> Ordering {
+    comparable_priority_float(left).total_cmp(&comparable_priority_float(right))
+}
+
+fn comparable_priority_float(value: f64) -> f64 {
+    if value.is_finite() {
+        value
+    } else {
+        f64::NEG_INFINITY
     }
 }
 
@@ -144,11 +163,7 @@ impl WeightCalculator {
         }
 
         // 按优先级排序
-        executable.sort_by(|a, b| {
-            b.priority_score
-                .partial_cmp(&a.priority_score)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
+        executable.sort_by(|a, b| b.cmp(a));
 
         executable
     }
@@ -187,21 +202,45 @@ impl WeightCalculator {
     /// 计算任务的依赖链深度
     fn calculate_dependency_depth(&self, project: &Project, task_id: &TaskId) -> usize {
         let tasks = project.all_tasks();
-        let task = match tasks.iter().find(|t| t.id == *task_id) {
-            Some(t) => t,
-            None => return 0,
-        };
+        let task_map: HashMap<TaskId, &Task> = tasks
+            .into_iter()
+            .map(|task| (task.id.clone(), task))
+            .collect();
+        let mut visiting = HashSet::new();
+        let mut memo = HashMap::new();
+        Self::calculate_dependency_depth_inner(&task_map, task_id, &mut visiting, &mut memo)
+    }
 
+    fn calculate_dependency_depth_inner(
+        task_map: &HashMap<TaskId, &Task>,
+        task_id: &TaskId,
+        visiting: &mut HashSet<TaskId>,
+        memo: &mut HashMap<TaskId, usize>,
+    ) -> usize {
+        if let Some(depth) = memo.get(task_id) {
+            return *depth;
+        }
+        if !visiting.insert(task_id.clone()) {
+            return 0;
+        }
+        let Some(task) = task_map.get(task_id) else {
+            visiting.remove(task_id);
+            return 0;
+        };
         if task.dependencies.is_empty() {
+            visiting.remove(task_id);
+            memo.insert(task_id.clone(), 0);
             return 0;
         }
 
         let mut max_depth = 0;
         for dep_id in &task.dependencies {
-            let depth = self.calculate_dependency_depth(project, dep_id);
+            let depth = Self::calculate_dependency_depth_inner(task_map, dep_id, visiting, memo);
             max_depth = max_depth.max(depth + 1);
         }
 
+        visiting.remove(task_id);
+        memo.insert(task_id.clone(), max_depth);
         max_depth
     }
 
@@ -342,5 +381,59 @@ mod tests {
 
         let top_task = queue.pop().unwrap();
         assert_eq!(top_task.task_id.0, "b");
+    }
+
+    #[test]
+    fn priority_queue_uses_deterministic_tie_breakers() {
+        let mut low_id =
+            ExecutableTask::new(TaskId::new("a"), "Task A".to_string(), Weight::new(0.5));
+        let mut high_id =
+            ExecutableTask::new(TaskId::new("b"), "Task B".to_string(), Weight::new(0.5));
+        low_id.priority_score = 1.0;
+        high_id.priority_score = 1.0;
+
+        let mut queue = BinaryHeap::new();
+        queue.push(low_id);
+        queue.push(high_id);
+
+        assert_eq!(queue.pop().unwrap().task_id.0, "b");
+        assert_eq!(queue.pop().unwrap().task_id.0, "a");
+    }
+
+    #[test]
+    fn nan_priority_is_bounded_and_does_not_win_heap_order() {
+        let mut normal = ExecutableTask::new(
+            TaskId::new("normal"),
+            "Normal".to_string(),
+            Weight::new(0.5),
+        );
+        let mut nan = ExecutableTask::new(TaskId::new("nan"), "NaN".to_string(), Weight::new(1.0));
+        normal.priority_score = 0.1;
+        nan.priority_score = f64::NAN;
+
+        let mut queue = BinaryHeap::new();
+        queue.push(nan);
+        queue.push(normal);
+
+        assert_eq!(queue.pop().unwrap().task_id.0, "normal");
+    }
+
+    #[test]
+    fn dependency_depth_handles_cycles_without_recursing_forever() {
+        let mut project = Project::new("cycles", "Cycles");
+        let mut task_a = Task::new("a", "Task A").with_weight(0.5);
+        let mut task_b = Task::new("b", "Task B").with_weight(0.5);
+        task_a.add_dependency(TaskId::new("b"));
+        task_b.add_dependency(TaskId::new("a"));
+        project.add_task(task_a);
+        project.add_task(task_b);
+
+        let mut calculator = WeightCalculator::new();
+        calculator.mark_completed(TaskId::new("b"));
+        let executable = calculator.get_executable_tasks(&project);
+
+        assert_eq!(executable.len(), 1);
+        assert_eq!(executable[0].task_id.0, "a");
+        assert!(executable[0].dependency_depth > 0);
     }
 }

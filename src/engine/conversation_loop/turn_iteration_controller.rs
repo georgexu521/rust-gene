@@ -22,7 +22,7 @@ use super::turn_model_step_controller::{
 };
 use super::turn_state::{TurnLoopState, TurnRuntimeContext, TurnRuntimeState};
 use super::turn_tool_round_step_controller::{
-    TurnToolRoundStepContext, TurnToolRoundStepController,
+    TurnToolRoundState, TurnToolRoundStepContext, TurnToolRoundStepController,
 };
 use super::ConversationLoop;
 use crate::engine::code_change_workflow::CodeChangeWorkflowRunner;
@@ -326,17 +326,19 @@ impl TurnIterationController {
                     .has_successful_validation_commands(),
                 failed_tool_evidence_present: tool_round_state.failed_tool_evidence_present(),
             });
-        let should_stop = record_stop_check(
-            context.trace,
-            context.task_bundle,
-            context.turn_state,
-            &tool_round_state,
-            context.required_validation_commands,
-            &context.loop_state.successful_required_validation_commands,
-            exposed_tool_names.len(),
-            tool_calls.len(),
-            false,
-        );
+        let should_stop = record_stop_check(StopCheckRuntimeInput {
+            trace: context.trace,
+            task_bundle: &mut *context.task_bundle,
+            turn_state: &*context.turn_state,
+            tool_round_state: &tool_round_state,
+            required_validation_commands: context.required_validation_commands,
+            successful_required_validation_commands: &context
+                .loop_state
+                .successful_required_validation_commands,
+            exposed_tool_count: exposed_tool_names.len(),
+            selected_tool_calls: tool_calls.len(),
+            force_patch_synthesis_after_no_change: false,
+        });
         if should_stop {
             return Ok(TurnIterationFlow::Break);
         }
@@ -353,17 +355,22 @@ impl TurnIterationController {
                 messages: &mut *context.messages,
             })
             .await;
-        let should_stop = record_stop_check(
-            context.trace,
-            context.task_bundle,
-            context.turn_state,
-            &tool_round_state,
-            context.required_validation_commands,
-            &context.loop_state.successful_required_validation_commands,
-            exposed_tool_names.len(),
-            tool_calls.len(),
-            matches!(focused_repair_flow, TurnFocusedRepairFlow::Continue),
-        );
+        let should_stop = record_stop_check(StopCheckRuntimeInput {
+            trace: context.trace,
+            task_bundle: &mut *context.task_bundle,
+            turn_state: &*context.turn_state,
+            tool_round_state: &tool_round_state,
+            required_validation_commands: context.required_validation_commands,
+            successful_required_validation_commands: &context
+                .loop_state
+                .successful_required_validation_commands,
+            exposed_tool_count: exposed_tool_names.len(),
+            selected_tool_calls: tool_calls.len(),
+            force_patch_synthesis_after_no_change: matches!(
+                focused_repair_flow,
+                TurnFocusedRepairFlow::Continue
+            ),
+        });
         if should_stop {
             return Ok(TurnIterationFlow::Break);
         }
@@ -421,17 +428,30 @@ impl TurnIterationController {
     }
 }
 
-fn record_stop_check(
-    trace: &TraceCollector,
-    task_bundle: &mut TaskContextBundle,
-    turn_state: &TurnRuntimeState,
-    tool_round_state: &super::turn_tool_round_step_controller::TurnToolRoundState,
-    required_validation_commands: &[String],
-    successful_required_validation_commands: &HashSet<String>,
+struct StopCheckRuntimeInput<'a> {
+    trace: &'a TraceCollector,
+    task_bundle: &'a mut TaskContextBundle,
+    turn_state: &'a TurnRuntimeState,
+    tool_round_state: &'a TurnToolRoundState,
+    required_validation_commands: &'a [String],
+    successful_required_validation_commands: &'a HashSet<String>,
     exposed_tool_count: usize,
     selected_tool_calls: usize,
     force_patch_synthesis_after_no_change: bool,
-) -> bool {
+}
+
+fn record_stop_check(input: StopCheckRuntimeInput<'_>) -> bool {
+    let StopCheckRuntimeInput {
+        trace,
+        task_bundle,
+        turn_state,
+        tool_round_state,
+        required_validation_commands,
+        successful_required_validation_commands,
+        exposed_tool_count,
+        selected_tool_calls,
+        force_patch_synthesis_after_no_change,
+    } = input;
     let stage_before = task_bundle.agent_state.stage;
     let observations_before = task_bundle.agent_state.observations.len();
     let key_findings_before = task_bundle.agent_state.key_findings.len();
@@ -650,6 +670,27 @@ mod tests {
         )
     }
 
+    fn record_stop_check_for_test(
+        trace: &TraceCollector,
+        task_bundle: &mut TaskContextBundle,
+        turn_state: &TurnRuntimeState,
+        round_state: &TurnToolRoundState,
+        required_validation_commands: &[String],
+        successful_required_validation_commands: &HashSet<String>,
+    ) -> bool {
+        record_stop_check(StopCheckRuntimeInput {
+            trace,
+            task_bundle,
+            turn_state,
+            tool_round_state: round_state,
+            required_validation_commands,
+            successful_required_validation_commands,
+            exposed_tool_count: 4,
+            selected_tool_calls: 1,
+            force_patch_synthesis_after_no_change: false,
+        })
+    }
+
     #[tokio::test]
     async fn plain_model_response_breaks_iteration() {
         let conversation = conversation(ChatResponse {
@@ -742,16 +783,13 @@ mod tests {
         };
         let trace = TraceCollector::new(TurnTrace::new("session", 1, "fix slugify"));
 
-        record_stop_check(
+        record_stop_check_for_test(
             &trace,
             &mut task_bundle,
             &turn_state,
             &round_state,
             &[],
             &HashSet::new(),
-            4,
-            1,
-            false,
         );
 
         let stop_check = task_bundle
@@ -790,16 +828,13 @@ mod tests {
         };
         let trace = TraceCollector::new(TurnTrace::new("session", 1, "fix src/main.rs"));
 
-        record_stop_check(
+        record_stop_check_for_test(
             &trace,
             &mut task_bundle,
             &turn_state,
             &round_state,
             &[],
             &HashSet::new(),
-            4,
-            1,
-            false,
         );
 
         let stop_check = task_bundle
@@ -856,16 +891,13 @@ mod tests {
             vec!["cargo test -q memory -- --test-threads=1".to_string()];
         let trace = TraceCollector::new(TurnTrace::new("session", 1, "audit required validation"));
 
-        let should_stop = record_stop_check(
+        let should_stop = record_stop_check_for_test(
             &trace,
             &mut task_bundle,
             &turn_state,
             &round_state,
             &required_validation_commands,
             &HashSet::new(),
-            4,
-            1,
-            false,
         );
 
         assert!(!should_stop);
@@ -897,16 +929,13 @@ mod tests {
             HashSet::from(["cargo test -q memory -- --test-threads=1".to_string()]);
         let trace = TraceCollector::new(TurnTrace::new("session", 1, "audit required validation"));
 
-        let should_stop = record_stop_check(
+        let should_stop = record_stop_check_for_test(
             &trace,
             &mut task_bundle,
             &turn_state,
             &round_state,
             &required_validation_commands,
             &successful_required_validation_commands,
-            4,
-            1,
-            false,
         );
 
         assert!(should_stop);
@@ -949,16 +978,13 @@ mod tests {
         };
         let trace = TraceCollector::new(TurnTrace::new("session", 1, "inspect the project"));
 
-        let should_stop = record_stop_check(
+        let should_stop = record_stop_check_for_test(
             &trace,
             &mut task_bundle,
             &turn_state,
             &round_state,
             &[],
             &HashSet::new(),
-            4,
-            1,
-            false,
         );
 
         assert!(should_stop);

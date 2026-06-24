@@ -2,7 +2,7 @@
 name = "priority-core"
 version = "0.1.0"
 edition = "2021"
-description = "Core library for Priority Agent - Engine, Tools, Agent, Memory"
+description = "Experimental priority weighting models for Priority Agent"
 
 [dependencies]
 thiserror = "1.0"

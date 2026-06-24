@@ -1,6 +1,6 @@
 # Quickstart
 
-Last updated: 2026-06-09
+Last updated: 2026-06-24
 
 ## Prerequisites
 
@@ -18,7 +18,8 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 ## Build
 
 ```bash
-cd ~/Desktop/rust-agent
+git clone https://github.com/georgexu521/rust-gene.git
+cd rust-gene
 cargo build
 cargo build --release
 ```
@@ -57,6 +58,12 @@ Provider order is MiniMax, Kimi Code, DeepSeek, GLM/Z.AI, Moonshot/Kimi, then
 OpenAI. Override with `PRIORITY_AGENT_DEFAULT_PROVIDER` when multiple keys are
 configured.
 
+Keys saved through `/connect` are stored in `~/.priority-agent/.env` as a
+plaintext dotenv file. On Unix-like systems Priority Agent sets file permissions
+to `0600`, but it does not currently use macOS Keychain, Secret Service, or
+Windows Credential Manager. Prefer environment variables for shared machines or
+production credentials.
+
 ## Run
 
 ```bash
@@ -88,7 +95,7 @@ Inside the interactive CLI:
 ## Install
 
 ```bash
-cd ~/Desktop/rust-agent
+cd rust-gene
 make install
 ```
 
@@ -119,6 +126,12 @@ cargo test --quiet
 Use `--test-threads=1` for workflow-enabled or older broad suites when a slice
 mutates process environment variables.
 
+## Platform Support
+
+Priority Agent currently targets macOS and Linux. Windows is best-effort until
+installer behavior, shell execution defaults, and credential storage are tested
+and documented for Windows.
+
 ## Troubleshooting
 
 ### `make: *** No rule to make target 'install'. Stop.`
@@ -126,7 +139,7 @@ mutates process environment variables.
 You are not in the repository root.
 
 ```bash
-cd ~/Desktop/rust-agent
+cd /path/to/rust-gene
 make install
 ```
 

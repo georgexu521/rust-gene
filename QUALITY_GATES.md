@@ -1,184 +1,116 @@
 # Quality Gates
 
-> Last updated: 2026-06-09
-> Purpose: Define acceptance criteria for Phase transitions and releases
+> Last updated: 2026-06-24
+> Purpose: Define the validation gates required before merging, release
+> candidates, and production-style dogfood runs.
 
----
+## Gate Overview
 
-## Quality Gate Overview
+| Gate | Scope | Required command or proof |
+|------|-------|---------------------------|
+| **G0 Format** | Rust formatting and whitespace hygiene | `cargo fmt --check` and `git diff --check` |
+| **G1 Build** | Workspace builds across supported feature sets | `cargo check --workspace --all-targets --all-features` plus focused feature checks when touched |
+| **G2 Tests** | Unit and integration tests | `cargo test --workspace --all-features -- --test-threads=1` |
+| **G3 Lints** | Clippy warnings treated as errors | `cargo clippy --workspace --all-targets --all-features -- -D warnings` |
+| **G4 Docs** | Public docs and repo docs stay coherent | `cargo doc --workspace --all-features --no-deps` and `bash scripts/validate_docs.sh` |
+| **G5 Runtime Proof** | Agent/tool/closeout behavior is evidence-backed | focused runtime tests or dogfood transcript with commands, diff, and proof status |
 
-| Gate | Description | Threshold |
-|------|-------------|-----------|
-| **G0** | Build passes | `cargo build` succeeds |
-| **G1** | Tests pass | `cargo test` all green |
-| **G2** | Clippy clean | No new high-severity warnings |
-| **G3** | Documentation valid | No doc/implementation conflicts |
-| **G4** | Capability matrix current | Exports reflect implementation |
-| **G5** | Regression suite stable | Failure rate not increasing |
+## Pull Request Gate
 
----
+Run this before merging ordinary code changes:
 
-## Gate Definitions
+```bash
+cargo fmt --check
+cargo check --workspace --all-targets --all-features
+cargo test --workspace --all-features -- --test-threads=1
+cargo clippy --workspace --all-targets --all-features -- -D warnings
+cargo doc --workspace --all-features --no-deps
+bash scripts/validate_docs.sh
+git diff --check
+```
 
-### G0: Build Gate
+For narrow changes, run the smallest matching test first, then run the full gate
+before closeout if the change touches shared runtime contracts, tools,
+permissions, provider behavior, CI, packaging, or public docs. The full
+workspace test gate runs with `--test-threads=1` because multiple existing tests
+mutate process environment variables through `EnvVarGuard`.
 
-**Command**: `cargo build --all-features`
+## Release Candidate Gate
 
-**Criteria**:
-- Compilation succeeds with exit code 0
-- No `error[E0xxx]` compiler errors
-- Warnings allowed but must not indicate broken links
+Run the pull request gate, then add:
 
-**Failure**:
-- Do not proceed to next phase
-- Fix compilation errors before continuing
+```bash
+cargo build --release --workspace --all-features
+./target/release/priority-agent --help
+cargo check --features experimental-api-server -q
+cargo check --features legacy-cli -q
+bash scripts/workflow-production-gates.sh
+```
 
----
+Release artifacts must include the built `priority-agent` binary, public setup
+docs, and a checksum generated from the packaged archive.
 
-### G1: Test Gate
+## Runtime And Agent Dogfood Gate
 
-**Command**: `cargo test`
+Use this gate when changing routing, tool scope, permission review, validation
+proof, closeout, memory, subagents, or recovery:
 
-**Criteria**:
-- All tests pass (exit code 0)
-- Test count must not decrease (unless explicitly documented removal)
-- No test timeout failures
+```bash
+cargo test -q route_scoped_tools
+cargo test -q closeout
+cargo test -q prompt_context
+cargo test -q instructions
+bash -n scripts/run_live_eval.sh
+python3 -m py_compile scripts/live_eval_report_parser.py
+```
 
-**Failure**:
-- Do not proceed to next phase
-- Fix failing tests or document expected failures
+For release dogfood, keep a record of:
 
----
+- exact binary or command used;
+- model/provider and tool scope;
+- requested task;
+- commands executed by the agent;
+- files changed;
+- validation proof;
+- final closeout status: `verified`, `partial`, `failed`, or `not_verified`.
 
-### G2: Clippy Gate
+Do not mark a runtime run as verified unless proof exists in commands,
+artifacts, or trace data. A weak-provider failure should be classified honestly
+instead of hidden by weaker gates.
 
-**Command**: `cargo clippy --all-targets --all-features -- -D warnings`
+## Desktop And TUI Gate
 
-**Criteria**:
-- No new `error` level clippy warnings
-- New `warning` level warnings require justification
-- Existing warnings may be suppressed with documented reason
+Desktop packaged validation is an RC-level gate, not the main dogfood surface.
+Run it after CLI agent/tool/verification gates are green.
 
-**Failure**:
-- Warnings must be fixed or explicitly allowed
-- Use `#[allow(clippy::warning_name)]` with documentation
+```bash
+cargo run -- --tui --help
+```
 
----
+For desktop packaging changes, also run the relevant desktop build or dev-mode
+command from `apps/desktop` and capture whether the app can launch, open a
+conversation, submit a prompt, display tool progress, and show final proof.
 
-### G3: Documentation Gate
+## CI Requirements
 
-**Command**: `cargo doc --no-deps`
+CI must not contain placeholder gate reports. A green report line is only valid
+when the matching command ran in the same job and exited successfully.
 
-**Criteria**:
-- All public API documentation renders
-- No broken links in documentation
-- Rustdoc warnings addressed
+The default CI gate must cover:
 
-**Failure**:
-- Fix doc comments or remove stale documentation
+- workspace all-features check;
+- workspace all-features tests;
+- workspace all-targets/all-features clippy with warnings denied;
+- docs generation;
+- repo docs validation;
+- whitespace diff validation;
+- release artifact packaging on `main` and `v*` tags.
 
----
+## Failure Policy
 
-### G4: Capability Matrix Gate
-
-**Command**: `cargo run --bin capability_check` (or manual verification)
-
-**Criteria**:
-- All commands in `CAPABILITY_MATRIX.md` have corresponding handler
-- All tools in matrix have corresponding implementation
-- Maturity levels match implementation status
-
-**Failure**:
-- Update matrix to reflect reality
-- Or implement missing components
-
----
-
-### G5: Regression Gate
-
-**Command**: `cargo test --test regression -- --test-threads=1`
-
-**Criteria**:
-- Baseline regression tests pass
-- New features have accompanying regression tests
-- Failure rate does not increase vs. previous baseline
-
-**Failure**:
-- Do not proceed if regression rate increases
-- Document acceptable regression
-
----
-
-## Phase Transition Gates
-
-| Phase | Required Gates |
-|-------|----------------|
-| Phase 0 → Phase 1 | G0, G1, G3, G4 |
-| Phase 1 → Phase 2 | G0, G1, G2, G3, G4 |
-| Phase 2 → Phase 3 | G0, G1, G2, G5 |
-| Phase 3 → Phase 4 | G0, G1, G2, G5 |
-| Phase 4 → Phase 5 | G0, G1, G2 |
-| Phase 5 → Phase 6 | G0, G1, G2 |
-| Phase 6 → Phase 7 | G0, G1, G2, G5 |
-
----
-
-## Release Gates
-
-Before any release (alpha/beta/stable), the following must pass:
-
-1. **G0**: Build succeeds
-2. **G1**: All tests pass (100%)
-3. **G2**: Clippy clean (warnings as errors)
-4. **G5**: Regression suite at baseline or better
-5. **Documentation**: CHANGELOG.md updated
-6. **Version**: Cargo.toml version updated
-
----
-
-## Continuous Integration Gates
-
-All CI runs must pass:
-
-| Check | Command | Critical |
-|--------|---------|----------|
-| Build | `cargo build --all-features` | Yes |
-| Test | `cargo test` | Yes |
-| Clippy | `cargo clippy --all-targets --all-features -- -D warnings` | Yes |
-| Format | `cargo fmt --check` | No |
-| Docs | `cargo doc --no-deps` | No |
-
----
-
-## Acceptance Criteria Summary
-
-For Phase 0 completion:
-
-- [ ] `PLAN.md` in place
-- [ ] `CAPABILITY_MATRIX.md` in place
-- [ ] `QUALITY_GATES.md` in place
-- [ ] Documentation validation script runnable in CI
-- [ ] Command/tool maturity statistics exportable
-
----
-
-## Rollback Criteria
-
-If quality gates fail repeatedly:
-
-1. **Immediate**: Stop merge of affected code
-2. **Investigation**: Identify root cause within 24 hours
-3. **Resolution**: Fix or revert within 72 hours
-4. **Documentation**: Log failure in issue tracker
-
----
-
-## Appendix: Quality Metrics
-
-| Metric | Target | Current |
-|--------|--------|---------|
-| Test coverage | >80% | varies |
-| Compilation time | <60s | ~20s |
-| Test suite time | <120s | varies by selected gate |
-| Clippy warnings | 0 | clean as of 2026-06-09 with all targets/all features |
-| Doc warnings | 0 | varies |
+- Stop release or merge closeout when a required gate fails.
+- Fix the failure, narrow it to an owner, or explicitly document why a skipped
+  gate does not apply.
+- Do not weaken permissions, validation, checkpoint, or high-risk gates to make
+  an eval look green.
+- If a gate is flaky, rerun once with the same command and record both results.

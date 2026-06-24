@@ -260,6 +260,18 @@ fn is_dangerous_rm(cmd_lower: &str) -> bool {
 }
 
 fn is_dangerous_target(target: &str) -> bool {
+    let target = target.trim_matches(['\'', '"']);
+
+    if target == "~"
+        || target.starts_with("~/")
+        || target == "$home"
+        || target.starts_with("$home/")
+        || target == "${home}"
+        || target.starts_with("${home}/")
+    {
+        return true;
+    }
+
     // 根目录或根目录下的直接删除
     if target == "/"
         || target == "/*"
@@ -404,6 +416,10 @@ mod tests {
         assert!(is_dangerous_command("rm -r -f /"));
         assert!(is_dangerous_command("/bin/rm -rf /"));
         assert!(is_dangerous_command("sudo rm -rf /"));
+        assert!(is_dangerous_command("rm -rf ~"));
+        assert!(is_dangerous_command("rm -rf ~/"));
+        assert!(is_dangerous_command("rm -rf $HOME"));
+        assert!(is_dangerous_command("rm -rf \"${HOME}\""));
 
         // 管道中的危险命令
         assert!(is_dangerous_command("echo test | rm -rf /"));

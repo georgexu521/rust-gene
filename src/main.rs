@@ -236,9 +236,7 @@ async fn answer_pending_approval(
 ) -> Option<&'static str> {
     use priority_agent::engine::conversation_loop::ToolApprovalResponse;
 
-    let Some(channel) = engine.approval_channel() else {
-        return None;
-    };
+    let channel = engine.approval_channel()?;
 
     for _ in 0..20 {
         if let Some((request, tx)) = channel.take_pending().await {
@@ -412,7 +410,7 @@ fn path_is_within(path: &str, root: &std::path::Path) -> bool {
     } else {
         root.join(candidate)
     };
-    lexical_normalize(&path).starts_with(&lexical_normalize(root))
+    lexical_normalize(&path).starts_with(lexical_normalize(root))
 }
 
 fn lexical_normalize(path: &std::path::Path) -> std::path::PathBuf {
@@ -819,13 +817,15 @@ async fn main() {
             .map(|d| d.join("priority-agent"))
             .unwrap_or_else(|| std::path::PathBuf::from("."));
         let _ = std::fs::create_dir_all(&log_dir);
-        let log_file = std::fs::OpenOptions::new()
+        match std::fs::OpenOptions::new()
             .create(true)
             .write(true)
             .truncate(true)
             .open(log_dir.join("cli.log"))
-            .unwrap_or_else(|_| std::fs::File::create("/dev/null").expect("create /dev/null"));
-        BoxMakeWriter::new(std::sync::Mutex::new(log_file))
+        {
+            Ok(log_file) => BoxMakeWriter::new(std::sync::Mutex::new(log_file)),
+            Err(_) => BoxMakeWriter::new(std::io::sink),
+        }
     } else {
         BoxMakeWriter::new(std::io::stderr)
     };

@@ -222,6 +222,27 @@ fn test_is_dangerous_command() {
     assert!(!is_dangerous_command("echo hello | base64 -d"));
 }
 
+#[test]
+fn validate_command_safety_uses_structured_detection() {
+    assert_eq!(
+        validate_command_safety("rm -rf /tmp/priority-agent-test"),
+        None
+    );
+    assert_eq!(validate_command_safety("rm -rf ./target"), None);
+    assert_eq!(
+        validate_command_safety("rm -rf /"),
+        Some("command matches dangerous pattern")
+    );
+    assert_eq!(
+        validate_command_safety("rm -rf ~"),
+        Some("command matches dangerous pattern")
+    );
+    assert_eq!(
+        validate_command_safety("rm -rf \"$HOME\""),
+        Some("command matches dangerous pattern")
+    );
+}
+
 #[tokio::test]
 async fn test_bash_tool_simple() {
     let tool = BashTool;

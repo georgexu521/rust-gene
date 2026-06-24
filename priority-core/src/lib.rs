@@ -1,28 +1,9 @@
-//! Priority Core Library
+//! Experimental priority model crate.
 //!
-//! This crate holds core components (Engine, Tools, Agent, etc.)
-//! for sharing across multiple frontends.
+//! This crate currently contains task weighting and priority-model types shared
+//! by the main Priority Agent crate. Runtime engine, tools, providers, and
+//! agent orchestration still live in the root crate until those contracts
+//! stabilize.
 
 pub mod errors;
 pub mod weight_engine;
-
-/// Core engine components
-pub mod engine {
-    // TODO: Extract from src/engine
-    // use crate::engine::*;
-}
-
-/// Tool implementations
-pub mod tools {
-    // TODO: Extract from src/tools
-}
-
-/// Agent system
-pub mod agent {
-    // TODO: Extract from src/agent
-}
-
-/// LLM Provider abstractions
-pub mod services {
-    // TODO: Extract from src/services
-}

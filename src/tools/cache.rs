@@ -1,6 +1,9 @@
 //! 工具结果缓存
 //!
-//! 缓存工具执行结果，避免重复执行相同的工具调用
+//! 缓存工具执行结果，避免重复执行相同的只读工具调用。
+//!
+//! The cache is intentionally fail-closed: a tool is cacheable only when it is
+//! explicitly listed in `ToolCacheConfig::tool_ttls` with a positive TTL.
 
 use serde_json::Value;
 use std::collections::HashMap;
@@ -75,15 +78,12 @@ pub struct ToolCacheConfig {
 impl Default for ToolCacheConfig {
     fn default() -> Self {
         let mut tool_ttls = HashMap::new();
-        // file_read 工具缓存较长时间
+        // Only side-effect-free/read-only tools are allowlisted by default.
         tool_ttls.insert("file_read".to_string(), 300); // 5分钟
-                                                        // glob 工具缓存中等时间
         tool_ttls.insert("glob".to_string(), 60); // 1分钟
-                                                  // project_list 缓存较长时间
+        tool_ttls.insert("grep".to_string(), 60); // 1分钟
         tool_ttls.insert("project_list".to_string(), 30); // 30秒
-                                                          // calculate 工具永久缓存（数学结果不变）
         tool_ttls.insert("calculate".to_string(), 3600); // 1小时
-                                                         // datetime 不缓存（时间会变）
         tool_ttls.insert("datetime".to_string(), 0); // 不缓存
 
         Self {
@@ -151,11 +151,9 @@ impl ToolResultCache {
             return None;
         }
 
-        // 检查此工具是否可缓存
-        if let Some(&ttl) = self.config.tool_ttls.get(tool_name) {
-            if ttl == 0 {
-                return None; // 此工具不缓存
-            }
+        let ttl = self.get_ttl(tool_name)?;
+        if ttl == 0 {
+            return None;
         }
 
         let key = CacheKey {
@@ -167,7 +165,6 @@ impl ToolResultCache {
         let mut cache = self.cache.write().expect("Cache lock poisoned");
 
         if let Some(entry) = cache.get_mut(&key) {
-            let ttl = self.get_ttl(tool_name);
             let age = entry.created_at.elapsed();
 
             if age < Duration::from_secs(ttl) {
@@ -194,11 +191,11 @@ impl ToolResultCache {
             return;
         }
 
-        // 检查此工具是否可缓存
-        if let Some(&ttl) = self.config.tool_ttls.get(tool_name) {
-            if ttl == 0 {
-                return; // 此工具不缓存
-            }
+        let Some(ttl) = self.get_ttl(tool_name) else {
+            return;
+        };
+        if ttl == 0 {
+            return;
         }
 
         let key = CacheKey {
@@ -279,12 +276,8 @@ impl ToolResultCache {
     }
 
     /// 获取工具特定的 TTL
-    fn get_ttl(&self, tool_name: &str) -> u64 {
-        self.config
-            .tool_ttls
-            .get(tool_name)
-            .copied()
-            .unwrap_or(self.config.default_ttl_secs)
+    fn get_ttl(&self, tool_name: &str) -> Option<u64> {
+        self.config.tool_ttls.get(tool_name).copied()
     }
 
     /// 淘汰最旧的条目
@@ -308,8 +301,8 @@ impl ToolResultCache {
         let before_count = cache.len();
 
         cache.retain(|key, entry| {
-            let ttl = self.get_ttl(&key.tool_name);
-            entry.created_at.elapsed() < Duration::from_secs(ttl)
+            self.get_ttl(&key.tool_name)
+                .is_some_and(|ttl| ttl > 0 && entry.created_at.elapsed() < Duration::from_secs(ttl))
         });
 
         before_count - cache.len()
@@ -357,15 +350,15 @@ mod tests {
     #[test]
     fn test_cache_different_working_dirs() {
         let cache = ToolResultCache::new();
-        let params = serde_json::json!({"command": "ls"});
+        let params = serde_json::json!({"pattern": "fn main"});
         let result1 = serde_json::json!({"files": ["a.txt"]});
         let result2 = serde_json::json!({"files": ["b.txt"]});
 
-        cache.set("bash", params.clone(), "/dir1", result1.clone());
-        cache.set("bash", params.clone(), "/dir2", result2.clone());
+        cache.set("grep", params.clone(), "/dir1", result1.clone());
+        cache.set("grep", params.clone(), "/dir2", result2.clone());
 
-        assert_eq!(cache.get("bash", &params, "/dir1"), Some(result1));
-        assert_eq!(cache.get("bash", &params, "/dir2"), Some(result2));
+        assert_eq!(cache.get("grep", &params, "/dir1"), Some(result1));
+        assert_eq!(cache.get("grep", &params, "/dir2"), Some(result2));
     }
 
     #[test]
@@ -412,6 +405,42 @@ mod tests {
         // datetime 工具不应被缓存 (TTL = 0)
         cache.set("datetime", params.clone(), "/tmp", result.clone());
         assert!(cache.get("datetime", &params, "/tmp").is_none());
+    }
+
+    #[test]
+    fn bash_is_not_cached_by_default() {
+        let cache = ToolResultCache::new();
+        let params = serde_json::json!({"command": "echo hello"});
+        let result = serde_json::json!({"stdout": "hello\n"});
+
+        cache.set("bash", params.clone(), "/tmp", result);
+
+        assert!(cache.get("bash", &params, "/tmp").is_none());
+        assert_eq!(cache.stats().total_entries, 0);
+    }
+
+    #[test]
+    fn file_edit_is_not_cached_by_default() {
+        let cache = ToolResultCache::new();
+        let params = serde_json::json!({"path": "src/lib.rs", "old": "a", "new": "b"});
+        let result = serde_json::json!({"success": true});
+
+        cache.set("file_edit", params.clone(), "/tmp", result);
+
+        assert!(cache.get("file_edit", &params, "/tmp").is_none());
+        assert_eq!(cache.stats().total_entries, 0);
+    }
+
+    #[test]
+    fn unlisted_tools_are_not_cached_by_default() {
+        let cache = ToolResultCache::new();
+        let params = serde_json::json!({"action": "save"});
+        let result = serde_json::json!({"success": true});
+
+        cache.set("memory_save", params.clone(), "/tmp", result);
+
+        assert!(cache.get("memory_save", &params, "/tmp").is_none());
+        assert_eq!(cache.stats().total_entries, 0);
     }
 
     #[test]

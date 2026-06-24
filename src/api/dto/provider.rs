@@ -128,12 +128,18 @@ mod tests {
         let mut guard = EnvVarGuard::acquire_blocking();
         guard.remove("PRIORITY_AGENT_LLM_REQUEST_TIMEOUT_SECS");
         guard.remove("PRIORITY_AGENT_STREAM_IDLE_TIMEOUT_SECS");
+
+        let default_effective = ProviderTimeoutEffectiveDto::from_env();
+
         guard.set("PRIORITY_AGENT_REQUEST_TIMEOUT_SECS", "222");
 
         let effective = ProviderTimeoutEffectiveDto::from_env();
 
-        assert_eq!(effective.request_secs, 180);
-        assert_eq!(effective.stream_idle_secs, 120);
+        assert_eq!(effective.request_secs, default_effective.request_secs);
+        assert_eq!(
+            effective.stream_idle_secs,
+            default_effective.stream_idle_secs
+        );
         assert_eq!(effective.source, "default");
     }
 }

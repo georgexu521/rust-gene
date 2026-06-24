@@ -19,6 +19,7 @@ and high-value reference docs. Older plans and completed audits live under
 | [RELEASE_STRUCTURE_CLEANUP_RECOMMENDATIONS_2026-06-22.md](RELEASE_STRUCTURE_CLEANUP_RECOMMENDATIONS_2026-06-22.md) | Current release-structure cleanup plan and release-ready definition. |
 | [REMAINING_STRUCTURE_REFINEMENT_PLAN_2026-06-22.md](REMAINING_STRUCTURE_REFINEMENT_PLAN_2026-06-22.md) | Follow-up structure refinement record: public API surface, maturity labels, source grouping, wording, and file-size guard. |
 | [CODE_DOCUMENTATION_PLAN_2026-06-22.md](CODE_DOCUMENTATION_PLAN_2026-06-22.md) | Code documentation standard and rollout plan for module docs, public API rustdoc, and boundary comments. |
+| [FRIEND_REVIEW_CODE_QUALITY_IMPROVEMENT_PLAN_2026-06-24.md](FRIEND_REVIEW_CODE_QUALITY_IMPROVEMENT_PLAN_2026-06-24.md) | External review triage and next quality-hardening plan for release trust, CI, cache safety, `priority-core`, credentials, and platform boundaries. |
 | [QUALITY_GATES.md](../QUALITY_GATES.md) | Root release and phase gate definitions. |
 | [TESTING.md](../TESTING.md) | Root testing command guide. |
 
