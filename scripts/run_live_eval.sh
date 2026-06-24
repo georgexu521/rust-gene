@@ -240,6 +240,33 @@ yaml_allowed_tools_csv() {
   ' "$file"
 }
 
+live_eval_allow_mutations_default() {
+  local file="$1" eval_intent eval_permissions
+  if [[ -n "${PRIORITY_AGENT_EVAL_ALLOW_MUTATIONS:-}" ]]; then
+    echo "$PRIORITY_AGENT_EVAL_ALLOW_MUTATIONS"
+    return
+  fi
+
+  eval_intent="$(yaml_get "$file" eval_intent "")"
+  eval_permissions="$(yaml_get "$file" eval_permissions "")"
+  case "$eval_permissions" in
+    allow_mutations|mutations_allowed|write_artifacts)
+      echo "1"
+      return
+      ;;
+    deny_mutations|read_only)
+      echo "0"
+      return
+      ;;
+  esac
+
+  if [[ "$eval_intent" == "seeded_code_change" ]]; then
+    echo "1"
+  else
+    echo "0"
+  fi
+}
+
 validation_commands() {
   local file="$1"
   yaml_list "$file" acceptance.required_commands
@@ -483,6 +510,18 @@ ensure_task_env() {
     "$(task_cargo_target_dir "$id")"
 }
 
+live_eval_playwright_browsers_path() {
+  if [[ -n "${PRIORITY_AGENT_LIVE_EVAL_PLAYWRIGHT_BROWSERS_PATH:-}" ]]; then
+    echo "$PRIORITY_AGENT_LIVE_EVAL_PLAYWRIGHT_BROWSERS_PATH"
+    return 0
+  fi
+
+  local host_cache="$HOME/Library/Caches/ms-playwright"
+  if [[ -d "$host_cache" ]]; then
+    echo "$host_cache"
+  fi
+}
+
 find_free_port() {
   python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1]); s.close()'
 }
@@ -526,7 +565,7 @@ overlay_working_tree_changes() {
 
 prepare_task() {
   local file="$1"
-  local id title base_ref resolved_ref task_workdir prompt_file runbook metadata env_base prepare_log overlay_patch runtime_profile
+  local id title base_ref resolved_ref task_workdir prompt_file runbook metadata env_base prepare_log overlay_patch runtime_profile playwright_browsers_path
   id="$(yaml_get "$file" id)"
   title="$(yaml_get "$file" title)"
   runtime_profile="$(yaml_get "$file" runtime_profile "")"
@@ -539,6 +578,7 @@ prepare_task() {
   prepare_log="$WORK_ROOT/$RUN_ID/$id/prepare-commands.log"
   overlay_patch="$ROOT_DIR/$WORK_ROOT/$RUN_ID/$id/working-tree-overlay.patch"
   env_base="$(task_env_base "$id")"
+  playwright_browsers_path="$(live_eval_playwright_browsers_path)"
 
   mkdir -p "$(dirname "$task_workdir")"
   ensure_task_env "$id"
@@ -646,6 +686,10 @@ File.write(metadata_path, JSON.pretty_generate(sample) + "\n")
     echo "XDG_CONFIG_HOME=\"$env_base/xdg-config\" \\"
     echo "XDG_DATA_HOME=\"$env_base/xdg-data\" \\"
     echo "XDG_STATE_HOME=\"$env_base/xdg-state\" \\"
+    if [[ -n "$playwright_browsers_path" ]]; then
+      echo "PLAYWRIGHT_BROWSERS_PATH=\"$playwright_browsers_path\" \\"
+    fi
+    echo "PRIORITY_AGENT_EVAL_ALLOW_MUTATIONS=\"$(live_eval_allow_mutations_default "$file")\" \\"
     echo "PRIORITY_AGENT_A2A_TRANSCRIPT_PATH=\"$env_base/a2a-transcript.jsonl\" \\"
     if [[ "$runtime_profile" == "minimum_viable_agent" || "$runtime_profile" == "mva" ]]; then
       echo "PRIORITY_AGENT_RUNTIME_PROFILE=\"$runtime_profile\" \\"
@@ -946,10 +990,11 @@ PY
 
 agent_run_task() {
   local file="$1" task_workdir="$2"
-  local id report_dir agent_stdout agent_stderr agent_monitor agent_metrics agent_output agent_events exit_file prompt_file env_base cargo_target_dir runtime_profile allowed_tools_csv
+  local id report_dir agent_stdout agent_stderr agent_monitor agent_metrics agent_output agent_events exit_file prompt_file env_base cargo_target_dir runtime_profile allowed_tools_csv playwright_browsers_path eval_allow_mutations
   id="$(yaml_get "$file" id)"
   runtime_profile="$(yaml_get "$file" runtime_profile "")"
   allowed_tools_csv="$(yaml_allowed_tools_csv "$file")"
+  eval_allow_mutations="$(live_eval_allow_mutations_default "$file")"
   report_dir="$REPORT_DIR/live-$RUN_ID/$id"
   mkdir -p "$report_dir"
   agent_stdout="$report_dir/agent-stdout.log"
@@ -962,6 +1007,7 @@ agent_run_task() {
   prompt_file="$ROOT_DIR/$WORK_ROOT/$RUN_ID/$id/prompt.txt"
   env_base="$(task_env_base "$id")"
   cargo_target_dir="$(task_cargo_target_dir "$id")"
+  playwright_browsers_path="$(live_eval_playwright_browsers_path)"
 
   case "$LIVE_EVAL_PROVIDER" in
     minimax)
@@ -1017,7 +1063,9 @@ agent_run_task() {
     "$env_base" \
     "$cargo_target_dir" \
     "$runtime_profile" \
-    "$allowed_tools_csv" <<'PY' >"$exit_file"
+    "$allowed_tools_csv" \
+    "$playwright_browsers_path" \
+    "$eval_allow_mutations" <<'PY' >"$exit_file"
 import os
 import json
 import subprocess
@@ -1041,6 +1089,8 @@ env_base = sys.argv[14]
 cargo_target_dir = sys.argv[15]
 runtime_profile = sys.argv[16]
 allowed_tools_csv = sys.argv[17]
+playwright_browsers_path = sys.argv[18]
+eval_allow_mutations = sys.argv[19]
 
 env = os.environ.copy()
 real_home = env.get("HOME", "")
@@ -1069,7 +1119,10 @@ env.update({
     "DEEPSEEK_MODEL": os.environ.get("DEEPSEEK_MODEL", "deepseek-v4-pro"),
     "PRIORITY_AGENT_DEFAULT_PROVIDER": os.environ.get("PRIORITY_AGENT_DEFAULT_PROVIDER", ""),
     "PRIORITY_AGENT_ENGINE_MAX_ITERATIONS": os.environ.get("PRIORITY_AGENT_ENGINE_MAX_ITERATIONS", ""),
+    "PRIORITY_AGENT_EVAL_ALLOW_MUTATIONS": eval_allow_mutations,
 })
+if playwright_browsers_path:
+    env["PLAYWRIGHT_BROWSERS_PATH"] = playwright_browsers_path
 if runtime_profile:
     env["PRIORITY_AGENT_RUNTIME_PROFILE"] = runtime_profile
 if runtime_profile in {"minimum_viable_agent", "mva"}:
@@ -1520,6 +1573,7 @@ verification_events = trace_events_of("verification_completed")
 stage_validation_events = trace_events_of("stage_validation_completed")
 acceptance_events = trace_events_of("acceptance_review_completed")
 closeout_events = trace_events_of("final_closeout_prepared")
+direct_closeout_events = [event for event in events if event.get("event") == "closeout"]
 adaptive_trigger_events = trace_events_of("adaptive_workflow_triggered")
 runtime_diet_events = trace_events_of("runtime_diet_report")
 workflow_contract_events = trace_events_of("workflow_contract_activation")
@@ -1609,6 +1663,7 @@ active_count = sum(1 for value in signals.values() if value)
 
 latest_plan = weighted_plan_events[-1] if weighted_plan_events else {}
 latest_closeout = closeout_events[-1] if closeout_events else {}
+latest_direct_closeout = direct_closeout_events[-1] if direct_closeout_events else {}
 latest_acceptance = acceptance_events[-1] if acceptance_events else {}
 latest_runtime_diet = runtime_diet_events[-1] if runtime_diet_events else {}
 entry_risk_signal = next((event for event in reversed(risk_signal_events) if event.get("phase") == "turn_entry"), {})
@@ -1640,6 +1695,8 @@ if (
 ):
     acceptance_accepted = True
 specialty_closeout_status = str(latest_closeout.get("status", "missing")).lower()
+if specialty_closeout_status == "missing" and latest_direct_closeout:
+    specialty_closeout_status = str(latest_direct_closeout.get("status", "missing")).lower()
 eval_intent = str(sample.get("eval_intent", "seeded_code_change")).strip() or "seeded_code_change"
 if (
     eval_intent in {"direct_answer", "read_only_audit"}

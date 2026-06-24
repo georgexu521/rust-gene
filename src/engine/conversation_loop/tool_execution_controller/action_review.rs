@@ -14,9 +14,6 @@ pub(super) fn record_action_decision_if_needed(
     tool_call: &ToolCall,
     decision: &ActionDecision,
 ) {
-    if !decision.trace_recommended && !mva_runtime_profile_enabled() {
-        return;
-    }
     if let Some(trace) = trace {
         trace.record(TraceEvent::ActionDecisionEvaluated {
             tool: tool_call.name.clone(),
@@ -48,10 +45,6 @@ pub(super) fn record_action_decision_if_needed(
             reason: decision.reason_summary.clone(),
         });
     }
-}
-
-fn mva_runtime_profile_enabled() -> bool {
-    crate::services::config::runtime_config().is_mva_profile()
 }
 
 pub(super) fn attach_action_review_metadata(result: &mut ToolResult, review: &ActionReview) {

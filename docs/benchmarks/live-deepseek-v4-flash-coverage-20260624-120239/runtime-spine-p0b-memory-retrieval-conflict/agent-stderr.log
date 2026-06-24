@@ -1,0 +1,5 @@
+2026-06-24T04:12:16.698089Z  WARN priority_agent::services::config::runtime: Failed to load AppConfig, using defaults: missing field `temperature`
+2026-06-24T04:13:13.016275Z  WARN priority_agent::engine::conversation_loop::validation_runner: required validation still running after 30s command_preview=cargo check elapsed_secs=30
+2026-06-24T04:13:43.015710Z  WARN priority_agent::engine::conversation_loop::validation_runner: required validation still running after 60s command_preview=cargo check elapsed_secs=60
+2026-06-24T04:14:13.015823Z  WARN priority_agent::engine::conversation_loop::validation_runner: required validation still running after 90s command_preview=cargo check elapsed_secs=90
+2026-06-24T04:14:47.073977Z  WARN priority_agent::engine::streaming::text_progress: session end memory flush join failed: task 28 was cancelled

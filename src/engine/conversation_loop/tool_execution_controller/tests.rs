@@ -479,6 +479,14 @@ async fn tool_execution_records_action_review_trace() {
 
     assert!(snapshot.events.iter().any(|event| matches!(
         event,
+        TraceEvent::ActionDecisionEvaluated {
+            tool,
+            mutates_workspace,
+            ..
+        } if tool == "probe_read" && !mutates_workspace
+    )));
+    assert!(snapshot.events.iter().any(|event| matches!(
+        event,
         TraceEvent::ActionReviewed {
             tool,
             decision,

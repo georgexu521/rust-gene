@@ -413,17 +413,14 @@ impl ConversationLoop {
                             "Acceptance review did not pass. If verification or compile errors are present, fix those first using the latest verification source context; only then address the unresolved acceptance items. Continue repair if possible; otherwise report the unresolved items clearly.",
                         ),
                     );
-                    if high_risk
-                        && (*context.acceptance_repair_attempts
-                            > context.code_workflow.max_repair_attempts()
-                            || matches!(
-                                review_next_action,
-                                crate::engine::workflow_contract::AcceptanceNextAction::Stop
-                            ))
-                    {
+                    if should_stop_after_acceptance_repair(
+                        *context.acceptance_repair_attempts,
+                        context.code_workflow.max_repair_attempts(),
+                        review_next_action,
+                    ) {
                         outcome.final_content = Some(format!(
-                            "Stopped before final closeout because high-risk acceptance review did not pass ({} unresolved item(s)).",
-                            review_unresolved
+                            "Repair budget exhausted after {} attempt(s); final closeout must report the unresolved validation or acceptance blocker ({} unresolved item(s)).",
+                            *context.acceptance_repair_attempts, review_unresolved
                         ));
                         outcome.break_loop = true;
                         return outcome;
@@ -539,6 +536,17 @@ impl ConversationLoop {
     }
 }
 
+fn should_stop_after_acceptance_repair(
+    attempts: usize,
+    max_attempts: usize,
+    next_action: crate::engine::workflow_contract::AcceptanceNextAction,
+) -> bool {
+    matches!(
+        next_action,
+        crate::engine::workflow_contract::AcceptanceNextAction::Stop
+    ) || (max_attempts > 0 && attempts >= max_attempts)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -565,6 +573,30 @@ mod tests {
             },
             None,
         )
+    }
+
+    #[test]
+    fn acceptance_repair_stops_at_budget_or_explicit_stop() {
+        assert!(!should_stop_after_acceptance_repair(
+            1,
+            3,
+            AcceptanceNextAction::ContinueRepair
+        ));
+        assert!(should_stop_after_acceptance_repair(
+            3,
+            3,
+            AcceptanceNextAction::ContinueRepair
+        ));
+        assert!(should_stop_after_acceptance_repair(
+            1,
+            3,
+            AcceptanceNextAction::Stop
+        ));
+        assert!(!should_stop_after_acceptance_repair(
+            5,
+            0,
+            AcceptanceNextAction::ContinueRepair
+        ));
     }
 
     #[test]

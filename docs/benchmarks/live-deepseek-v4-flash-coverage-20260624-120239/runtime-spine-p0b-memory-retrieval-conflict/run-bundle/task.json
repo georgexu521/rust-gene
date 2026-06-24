@@ -1,0 +1,29 @@
+{
+  "schema": "agent_run_bundle.v1",
+  "task_id": "runtime-spine-p0b-memory-retrieval-conflict",
+  "run_id": "deepseek-v4-flash-coverage-20260624-120239",
+  "generated_at": "2026-06-24T04:14:49.199795+00:00",
+  "goal_summary": "read_only_audit",
+  "mode": "agent-run",
+  "final_status": "passed",
+  "terminal_status": "completed",
+  "stop_reason": "no_issue",
+  "modified_files": "0",
+  "validation_status": "ok",
+  "verification_status": "passed",
+  "closeout_status": "passed",
+  "scores": {
+    "outcome": "100",
+    "process": "75",
+    "efficiency": "100",
+    "agent": "92",
+    "penalties": "scope_drift,invalid_action"
+  },
+  "artifacts": {
+    "source_report": "docs/benchmarks/live-deepseek-v4-flash-coverage-20260624-120239/runtime-spine-p0b-memory-retrieval-conflict/report.md",
+    "source_events": "docs/benchmarks/live-deepseek-v4-flash-coverage-20260624-120239/runtime-spine-p0b-memory-retrieval-conflict/agent-events.jsonl",
+    "steps": "docs/benchmarks/live-deepseek-v4-flash-coverage-20260624-120239/runtime-spine-p0b-memory-retrieval-conflict/run-bundle/steps.jsonl",
+    "events": "docs/benchmarks/live-deepseek-v4-flash-coverage-20260624-120239/runtime-spine-p0b-memory-retrieval-conflict/run-bundle/events.jsonl",
+    "final_report": "docs/benchmarks/live-deepseek-v4-flash-coverage-20260624-120239/runtime-spine-p0b-memory-retrieval-conflict/run-bundle/final_report.md"
+  }
+}

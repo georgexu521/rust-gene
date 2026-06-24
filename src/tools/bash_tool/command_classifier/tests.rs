@@ -87,6 +87,26 @@ fn classifies_test_families() {
         Some(ValidationFamily::PnpmTest)
     );
     assert_eq!(
+        classify_command("pnpm --dir apps/desktop test:ui-smoke 2>&1").validation_family,
+        Some(ValidationFamily::PnpmTest)
+    );
+    assert_eq!(
+        classify_command("npm run test:ui-smoke").validation_family,
+        Some(ValidationFamily::NpmTest)
+    );
+    let pnpm_build = classify_command("pnpm --dir apps/desktop build 2>&1");
+    assert_eq!(
+        pnpm_build.validation_family,
+        Some(ValidationFamily::PnpmBuild)
+    );
+    assert_eq!(pnpm_build.command_kind, CommandKind::Validation);
+    assert_eq!(pnpm_build.category, ShellCommandCategory::Validation);
+    assert!(pnpm_build.safe_for_closeout);
+    assert_eq!(
+        classify_command("npm run build").validation_family,
+        Some(ValidationFamily::NpmBuild)
+    );
+    assert_eq!(
         classify_command("python -m pytest tests").validation_family,
         Some(ValidationFamily::Pytest)
     );
@@ -298,6 +318,16 @@ fn classifies_shell_file_mutation_escape_paths() {
 }
 
 #[test]
+fn classifies_playwright_browser_install_as_package_install() {
+    let class = classify_command("pnpm --dir apps/desktop exec playwright install chromium 2>&1");
+
+    assert_eq!(class.category, ShellCommandCategory::PackageInstall);
+    assert_eq!(class.command_kind, CommandKind::Mutation);
+    assert!(class.network_access);
+    assert!(!class.safe_for_closeout);
+}
+
+#[test]
 fn records_compound_subcommand_facts() {
     let class = classify_command("rg TODO src && sed -i '' 's/a/b/' src/lib.rs");
 
@@ -350,6 +380,34 @@ fn stderr_null_redirection_does_not_make_readonly_search_mutating() {
         .command_plan
         .fail_closed_reasons
         .contains(&"write_redirection".to_string()));
+}
+
+#[test]
+fn stderr_fd_merge_does_not_make_validation_mutating() {
+    for command in [
+        "cargo check -q 2>&1",
+        "pnpm --dir apps/desktop exec playwright test tests/run-event-state.spec.ts 2>&1",
+    ] {
+        let class = classify_command(command);
+
+        assert!(
+            !class
+                .mutation_indicators
+                .contains(&"redirection_write".to_string()),
+            "stderr fd merge should not be a write indicator: {command}"
+        );
+        assert!(
+            !class.command_plan.has_write_redirection,
+            "stderr fd merge should not be a write redirection: {command}"
+        );
+        assert!(
+            !class
+                .command_plan
+                .fail_closed_reasons
+                .contains(&"write_redirection".to_string()),
+            "stderr fd merge should not fail closed as file write: {command}"
+        );
+    }
 }
 
 #[test]

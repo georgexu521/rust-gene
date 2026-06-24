@@ -2,6 +2,7 @@ id: core-long-output-artifact
 title: preserve and inspect long command output
 type: runtime
 eval_intent: audit_or_regression_check
+eval_permissions: allow_mutations
 complexity: medium
 risk: medium
 

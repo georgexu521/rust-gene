@@ -1,0 +1,2 @@
+2026-06-24T04:52:15.967407Z  WARN priority_agent::services::config::runtime: Failed to load AppConfig, using defaults: missing field `temperature`
+2026-06-24T04:52:37.387049Z  WARN priority_agent::engine::streaming::text_progress: session end memory flush join failed: task 45 was cancelled

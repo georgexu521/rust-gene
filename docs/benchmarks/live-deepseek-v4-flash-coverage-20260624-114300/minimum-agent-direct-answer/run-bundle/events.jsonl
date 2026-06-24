@@ -1,0 +1,21 @@
+{"event": "eval_started", "id": "missing", "index": 1, "metadata": {}, "name": "missing", "schema": "agent_run_event.v1", "summary": ""}
+{"event": "runtime_diagnostic", "id": "missing", "index": 2, "metadata": {}, "name": "missing", "schema": "agent_run_event.v1", "summary": ""}
+{"event": "runtime_diagnostic", "id": "missing", "index": 3, "metadata": {}, "name": "missing", "schema": "agent_run_event.v1", "summary": ""}
+{"event": "runtime_diagnostic", "id": "missing", "index": 4, "metadata": {}, "name": "missing", "schema": "agent_run_event.v1", "summary": ""}
+{"event": "runtime_diagnostic", "id": "missing", "index": 5, "metadata": {}, "name": "missing", "schema": "agent_run_event.v1", "summary": ""}
+{"event": "start", "id": "missing", "index": 6, "metadata": {}, "name": "missing", "schema": "agent_run_event.v1", "summary": ""}
+{"event": "runtime_diagnostic", "id": "missing", "index": 7, "metadata": {}, "name": "missing", "schema": "agent_run_event.v1", "summary": ""}
+{"event": "thinking_start", "id": "missing", "index": 8, "metadata": {}, "name": "missing", "schema": "agent_run_event.v1", "summary": ""}
+{"event": "thinking_complete", "id": "missing", "index": 9, "metadata": {}, "name": "missing", "schema": "agent_run_event.v1", "summary": ""}
+{"event": "runtime_diagnostic", "id": "missing", "index": 10, "metadata": {}, "name": "missing", "schema": "agent_run_event.v1", "summary": ""}
+{"event": "text_chunk", "id": "missing", "index": 11, "metadata": {}, "name": "missing", "schema": "agent_run_event.v1", "summary": ""}
+{"event": "text_chunk", "id": "missing", "index": 12, "metadata": {}, "name": "missing", "schema": "agent_run_event.v1", "summary": ""}
+{"event": "text_chunk", "id": "missing", "index": 13, "metadata": {}, "name": "missing", "schema": "agent_run_event.v1", "summary": ""}
+{"event": "text_chunk", "id": "missing", "index": 14, "metadata": {}, "name": "missing", "schema": "agent_run_event.v1", "summary": ""}
+{"event": "text_chunk", "id": "missing", "index": 15, "metadata": {}, "name": "missing", "schema": "agent_run_event.v1", "summary": ""}
+{"event": "text_chunk", "id": "missing", "index": 16, "metadata": {}, "name": "missing", "schema": "agent_run_event.v1", "summary": ""}
+{"event": "text_chunk", "id": "missing", "index": 17, "metadata": {}, "name": "missing", "schema": "agent_run_event.v1", "summary": ""}
+{"event": "thinking_complete", "id": "missing", "index": 18, "metadata": {}, "name": "missing", "schema": "agent_run_event.v1", "summary": ""}
+{"event": "runtime_diagnostic", "id": "missing", "index": 19, "metadata": {}, "name": "missing", "schema": "agent_run_event.v1", "summary": ""}
+{"event": "complete", "id": "missing", "index": 20, "metadata": {}, "name": "missing", "schema": "agent_run_event.v1", "summary": ""}
+{"duration_ms": 1905, "event": "trace_summary", "event_count": 26, "event_types": ["prompt", "intent", "resource.policy", "risk.signal", "workflow.contract", "task.context", "task.contract", "context.pack", "reflection.pass", "goal", "workflow.route", "retrieval.context", "context.zones", "context.tokens", "cache.stability", "api.start", "provider.protocol", "provider.request.start", "workflow.fallback", "provider.request.done", "cache.usage", "api.done", "runtime.diet", "completion.contract", "memory.boundary", "assistant"], "index": 21, "schema": "agent_run_event.v1", "status": "Completed", "trace_id": "c9e99e26-7a5f-434a-b8c3-5e2e98ed7938", "turn_index": 1}

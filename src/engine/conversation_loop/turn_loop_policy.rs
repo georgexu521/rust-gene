@@ -156,6 +156,12 @@ pub(super) async fn force_summary_after_iter_limit(
     });
 
     let mut messages = context.messages.clone();
+    let tool_result_count = count_tool_result_messages(&messages);
+    if tool_result_count > 0 {
+        messages.push(Message::system(force_summary_evidence_header(
+            tool_result_count,
+        )));
+    }
     messages.push(Message::user(FORCE_SUMMARY_INSTRUCTION));
     tracing::debug!(message_count = messages.len(), "forcing no-tools summary");
 
@@ -197,7 +203,10 @@ pub(super) async fn force_summary_after_iter_limit(
                 }
             }
 
-            let cleaned = strip_hallucinated_tool_markup(&response.content);
+            let cleaned = correct_force_summary_tool_denial(
+                &strip_hallucinated_tool_markup(&response.content),
+                tool_result_count,
+            );
             tracing::debug!(
                 cleaned_len = cleaned.len(),
                 "force summary response received"
@@ -226,6 +235,54 @@ pub(super) async fn force_summary_after_iter_limit(
             fallback
         }
     }
+}
+
+fn count_tool_result_messages(messages: &[Message]) -> usize {
+    messages
+        .iter()
+        .filter(|message| matches!(message, Message::Tool { .. }))
+        .count()
+}
+
+fn force_summary_evidence_header(tool_result_count: usize) -> String {
+    format!(
+        "<runtime-evidence>\nRecorded tool results in this turn: {tool_result_count}.\nDo not claim that no tools were executed. If the exact details are unclear, say that tool results were recorded and rely on the deterministic closeout evidence.\n</runtime-evidence>"
+    )
+}
+
+fn correct_force_summary_tool_denial(content: &str, tool_result_count: usize) -> String {
+    if tool_result_count == 0 || !contains_tool_denial(content) {
+        return content.to_string();
+    }
+
+    let replacement = format!(
+        "Runtime evidence recorded {tool_result_count} tool result(s) before this forced summary; use the Closeout evidence for the exact verification state."
+    );
+    let mut lines = content
+        .lines()
+        .filter(|line| !contains_tool_denial(line))
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    let insert_at = lines
+        .iter()
+        .position(|line| !line.trim().is_empty())
+        .map(|index| index + 1)
+        .unwrap_or(0);
+    lines.insert(insert_at, replacement);
+    lines.join("\n").trim().to_string()
+}
+
+fn contains_tool_denial(content: &str) -> bool {
+    let lower = content.to_lowercase();
+    lower.contains("no tool calls")
+        || lower.contains("no tools were")
+        || lower.contains("no tool was")
+        || lower.contains("haven't executed any tool")
+        || lower.contains("have not executed any tool")
+        || lower.contains("did not execute any tool")
+        || lower.contains("没有执行任何工具")
+        || lower.contains("没有任何工具调用")
+        || lower.contains("还没有执行任何工具调用")
 }
 
 fn strip_hallucinated_tool_markup(content: &str) -> String {
@@ -319,6 +376,42 @@ mod tests {
             "Done\n〈DSML｜function_calls〉call〈/DSML｜function_calls〉\n<tool_call>{}</tool_call>",
         );
         assert_eq!(cleaned, "Done");
+    }
+
+    #[test]
+    fn force_summary_counts_tool_result_messages() {
+        let messages = vec![
+            Message::user("inspect"),
+            Message::assistant_with_tools(
+                "searching",
+                vec![crate::services::api::ToolCall {
+                    id: "call_1".to_string(),
+                    name: "grep".to_string(),
+                    arguments: serde_json::json!({"pattern": "needle"}),
+                }],
+            ),
+            Message::tool("call_1", "Result: OK"),
+        ];
+
+        assert_eq!(count_tool_result_messages(&messages), 1);
+    }
+
+    #[test]
+    fn force_summary_removes_false_tool_denial_when_tool_results_exist() {
+        let content = "The iteration limit was reached.\n\n我还没有执行任何工具调用，因此没有实际发现。\n\nCloseout:\n- Status: passed";
+
+        let corrected = correct_force_summary_tool_denial(content, 3);
+
+        assert!(!corrected.contains("我还没有执行任何工具调用"));
+        assert!(corrected.contains("Runtime evidence recorded 3 tool result(s)"));
+        assert!(corrected.contains("Closeout:"));
+    }
+
+    #[test]
+    fn force_summary_keeps_tool_denial_when_no_tool_results_exist() {
+        let content = "No tool calls were executed.";
+
+        assert_eq!(correct_force_summary_tool_denial(content, 0), content);
     }
 
     #[test]

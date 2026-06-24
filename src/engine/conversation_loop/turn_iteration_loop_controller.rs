@@ -9,7 +9,7 @@ use super::turn_state::TurnLoopState;
 use super::turn_state::TurnRuntimeState;
 use super::workflow_change_tracker::WorkflowChangeTracker;
 use super::ConversationLoop;
-use crate::engine::code_change_workflow::CodeChangeWorkflowRunner;
+use crate::engine::code_change_workflow::{CodeChangeWorkflowRunner, StageValidationStatus};
 use crate::engine::conversation_loop::turn_loop_policy::MainLoopProfile;
 use crate::engine::destructive_scope::DestructiveScopeContract;
 use crate::engine::intent_router::IntentRoute;
@@ -97,11 +97,11 @@ impl TurnIterationLoopController {
             }
         }
 
-        let needs_forced_closeout_summary = context.loop_state.tool_calls_made
-            && (context.loop_state.final_content.trim().is_empty()
-                || super::assistant_response_retry_controller::is_continuation_only_response(
-                    &context.loop_state.final_content,
-                ));
+        let needs_forced_closeout_summary = needs_forced_closeout_summary(
+            context.loop_state,
+            context.code_workflow,
+            context.task_bundle,
+        );
 
         tracing::debug!(
             tool_calls_made = context.loop_state.tool_calls_made,
@@ -142,6 +142,28 @@ impl TurnIterationLoopController {
     }
 }
 
+fn workflow_has_verified_closeout(
+    code_workflow: &CodeChangeWorkflowRunner,
+    task_bundle: &TaskContextBundle,
+) -> bool {
+    code_workflow
+        .build_closeout(task_bundle)
+        .is_some_and(|closeout| matches!(closeout.status, StageValidationStatus::Passed))
+}
+
+fn needs_forced_closeout_summary(
+    loop_state: &TurnLoopState,
+    code_workflow: &CodeChangeWorkflowRunner,
+    task_bundle: &TaskContextBundle,
+) -> bool {
+    loop_state.tool_calls_made
+        && !workflow_has_verified_closeout(code_workflow, task_bundle)
+        && (loop_state.final_content.trim().is_empty()
+            || super::assistant_response_retry_controller::is_continuation_only_response(
+                &loop_state.final_content,
+            ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::turn_state::TurnLoopStateController;
@@ -149,10 +171,14 @@ mod tests {
     use crate::engine::destructive_scope::DestructiveScopeContract;
     use crate::engine::intent_router::IntentRouter;
     use crate::engine::trace::TurnTrace;
+    use crate::engine::workflow_contract::{
+        AcceptanceConfidence, AcceptanceNextAction, AcceptanceReview,
+    };
     use crate::services::api::{ChatRequest, ChatResponse, LlmProvider};
     use crate::tools::ToolRegistry;
     use async_openai::types::ChatCompletionResponseStream;
     use std::collections::VecDeque;
+    use std::path::PathBuf;
     use std::sync::Arc;
     use std::sync::Mutex as StdMutex;
     use tokio::sync::Mutex;
@@ -250,5 +276,60 @@ mod tests {
         assert_eq!(loop_state.final_content, "done");
         assert_eq!(turn_state.iterations_used, 1);
         assert!(!loop_state.tool_calls_made);
+    }
+
+    #[test]
+    fn verified_workflow_closeout_skips_forced_summary() {
+        let route = IntentRouter::new().route("fix the bug in src/lib.rs");
+        let working_dir = std::env::current_dir().expect("current dir");
+        let mut task_bundle = TaskContextBundle::new(
+            "fix the bug in src/lib.rs",
+            &working_dir,
+            route.clone(),
+            None,
+        );
+        task_bundle.add_acceptance_check("required validation passed");
+        let mut code_workflow = CodeChangeWorkflowRunner::new(&task_bundle);
+        code_workflow.record_stage_validation(
+            &task_bundle,
+            &[PathBuf::from("src/lib.rs")],
+            true,
+            &["cargo test -q passed".to_string()],
+        );
+        code_workflow.record_acceptance_review(AcceptanceReview {
+            accepted: true,
+            confidence: AcceptanceConfidence::High,
+            criteria: Vec::new(),
+            unresolved_items: Vec::new(),
+            residual_risks: Vec::new(),
+            next_action: AcceptanceNextAction::Finish,
+        });
+        let mut loop_state = TurnLoopStateController::initial_state();
+        loop_state.tool_calls_made = true;
+        loop_state.final_content = "Let me run the validation.".to_string();
+
+        assert!(!needs_forced_closeout_summary(
+            &loop_state,
+            &code_workflow,
+            &task_bundle
+        ));
+    }
+
+    #[test]
+    fn unverified_continuation_still_needs_forced_summary() {
+        let route = IntentRouter::new().route("fix the bug in src/lib.rs");
+        let working_dir = std::env::current_dir().expect("current dir");
+        let task_bundle =
+            TaskContextBundle::new("fix the bug in src/lib.rs", &working_dir, route, None);
+        let code_workflow = CodeChangeWorkflowRunner::new(&task_bundle);
+        let mut loop_state = TurnLoopStateController::initial_state();
+        loop_state.tool_calls_made = true;
+        loop_state.final_content = "Let me run the validation.".to_string();
+
+        assert!(needs_forced_closeout_summary(
+            &loop_state,
+            &code_workflow,
+            &task_bundle
+        ));
     }
 }

@@ -212,11 +212,15 @@ pub(super) fn shell_redirection_facts(command: &str) -> Vec<ShellRedirectionFact
     while index < tokens.len() {
         let token = tokens[index].as_str();
         if let Some((operator, inline_target, writes)) = redirection_operator(token) {
-            let target = inline_target
+            let raw_target = inline_target
                 .map(str::to_string)
-                .or_else(|| tokens.get(index + 1).cloned())
-                .filter(|target| !target.starts_with('&'));
+                .or_else(|| tokens.get(index + 1).cloned());
+            let duplicates_fd = raw_target
+                .as_deref()
+                .is_some_and(|target| target.starts_with('&'));
+            let target = raw_target.filter(|target| !target.starts_with('&'));
             let writes = writes
+                && !duplicates_fd
                 && target
                     .as_deref()
                     .map(|target| target != "/dev/null")

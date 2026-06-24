@@ -1,0 +1,29 @@
+{
+  "schema": "agent_run_bundle.v1",
+  "task_id": "runtime-spine-p0b-permission-required",
+  "run_id": "deepseek-v4-flash-coverage-20260624-125840",
+  "generated_at": "2026-06-24T04:59:42.335183+00:00",
+  "goal_summary": "seeded_code_change",
+  "mode": "agent-run",
+  "final_status": "passed",
+  "terminal_status": "completed",
+  "stop_reason": "no_issue",
+  "modified_files": "1",
+  "validation_status": "ok",
+  "verification_status": "passed",
+  "closeout_status": "passed",
+  "scores": {
+    "outcome": "100",
+    "process": "57",
+    "efficiency": "93",
+    "agent": "86",
+    "penalties": "scope_drift,repeated_action,invalid_action,repeated_actions"
+  },
+  "artifacts": {
+    "source_report": "docs/benchmarks/live-deepseek-v4-flash-coverage-20260624-125840/runtime-spine-p0b-permission-required/report.md",
+    "source_events": "docs/benchmarks/live-deepseek-v4-flash-coverage-20260624-125840/runtime-spine-p0b-permission-required/agent-events.jsonl",
+    "steps": "docs/benchmarks/live-deepseek-v4-flash-coverage-20260624-125840/runtime-spine-p0b-permission-required/run-bundle/steps.jsonl",
+    "events": "docs/benchmarks/live-deepseek-v4-flash-coverage-20260624-125840/runtime-spine-p0b-permission-required/run-bundle/events.jsonl",
+    "final_report": "docs/benchmarks/live-deepseek-v4-flash-coverage-20260624-125840/runtime-spine-p0b-permission-required/run-bundle/final_report.md"
+  }
+}

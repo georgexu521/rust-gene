@@ -51,6 +51,9 @@ pub enum ValidationFamily {
     NpmTest,
     PnpmTest,
     YarnTest,
+    NpmBuild,
+    PnpmBuild,
+    YarnBuild,
     Pytest,
     PythonCompile,
     PythonUnittest,
@@ -499,7 +502,7 @@ fn validation_family(command: &str) -> Option<ValidationFamily> {
         Some(ValidationFamily::CargoClippy)
     } else if lower.contains("cargo fmt") && lower.contains("--check") {
         Some(ValidationFamily::CargoFmtCheck)
-    } else if let Some(family) = package_manager_test_family(command) {
+    } else if let Some(family) = package_manager_validation_family(command) {
         Some(family)
     } else if lower == "npm test"
         || lower.starts_with("npm test ")
@@ -533,7 +536,7 @@ fn validation_family(command: &str) -> Option<ValidationFamily> {
     }
 }
 
-fn package_manager_test_family(command: &str) -> Option<ValidationFamily> {
+fn package_manager_validation_family(command: &str) -> Option<ValidationFamily> {
     let tokens = shell_tokens(command);
     let manager_index = tokens
         .iter()
@@ -545,11 +548,25 @@ fn package_manager_test_family(command: &str) -> Option<ValidationFamily> {
         if shell_control_token(token) {
             break;
         }
-        if token == "test" || (token == "run" && tokens.get(i + 1).is_some_and(|t| t == "test")) {
+        if token == "test"
+            || token.starts_with("test:")
+            || (token == "run"
+                && tokens
+                    .get(i + 1)
+                    .is_some_and(|t| t == "test" || t.starts_with("test:")))
+        {
             return match manager {
                 "npm" => Some(ValidationFamily::NpmTest),
                 "pnpm" => Some(ValidationFamily::PnpmTest),
                 "yarn" => Some(ValidationFamily::YarnTest),
+                _ => None,
+            };
+        }
+        if token == "build" || (token == "run" && tokens.get(i + 1).is_some_and(|t| t == "build")) {
+            return match manager {
+                "npm" => Some(ValidationFamily::NpmBuild),
+                "pnpm" => Some(ValidationFamily::PnpmBuild),
+                "yarn" => Some(ValidationFamily::YarnBuild),
                 _ => None,
             };
         }
@@ -856,6 +873,14 @@ fn is_package_install_command(lower: &str) -> bool {
         || lower.starts_with("go get ")
         || lower.starts_with("go install ")
         || lower.starts_with("brew install ")
+        || is_playwright_browser_install_command(lower)
+}
+
+fn is_playwright_browser_install_command(lower: &str) -> bool {
+    let tokens = shell_tokens(lower);
+    tokens
+        .windows(2)
+        .any(|window| window[0] == "playwright" && window[1] == "install")
 }
 
 fn is_dev_server_command(lower: &str) -> bool {
@@ -1337,6 +1362,15 @@ fn stable_validation_permission_prefix(
         }
         Some(ValidationFamily::PnpmTest) => Some("pnpm test"),
         Some(ValidationFamily::YarnTest) => Some("yarn test"),
+        Some(ValidationFamily::NpmBuild) => {
+            if lower.starts_with("npm run build") {
+                Some("npm run build")
+            } else {
+                Some("npm build")
+            }
+        }
+        Some(ValidationFamily::PnpmBuild) => Some("pnpm build"),
+        Some(ValidationFamily::YarnBuild) => Some("yarn build"),
         Some(ValidationFamily::Pytest) => {
             if lower.starts_with("python -m pytest") {
                 Some("python -m pytest")

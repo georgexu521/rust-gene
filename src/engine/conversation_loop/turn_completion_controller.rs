@@ -185,8 +185,10 @@ fn record_completion_contract(
         && changed_files == 0
         && (final_content_mentions_blocked_action(final_content)
             || task_goal_requests_blocked_destructive_action(&task_bundle.agent_state.main_goal));
+    let proof_verified = proof == "verified";
 
     let (status, terminal_status, reason) = if route.risk == RiskLevel::High
+        && !proof_verified
         && matches!(
             latest_stop
                 .as_ref()
@@ -676,6 +678,85 @@ mod tests {
         assert!(!task_goal_requests_blocked_destructive_action(
             "修复删除按钮的样式问题"
         ));
+    }
+
+    #[test]
+    fn completion_contract_verified_proof_overrides_recovered_high_risk_stop() {
+        let mut route = IntentRouter::new().route("fix a high-risk permission recovery fixture");
+        route.workflow = WorkflowKind::CodeChange;
+        route.risk = RiskLevel::High;
+        let task_bundle = TaskContextBundle::new(
+            "fix a high-risk permission recovery fixture",
+            ".",
+            route.clone(),
+            None,
+        );
+        let code_workflow = CodeChangeWorkflowRunner::new(&task_bundle);
+        let trace = TraceCollector::new(TurnTrace::new("session", 1, "fix fixture"));
+
+        trace.record(TraceEvent::StopCheckEvaluated {
+            status: "stop".to_string(),
+            reason: "action_needs_revision".to_string(),
+            stage: "PreAction".to_string(),
+            terminal_status: Some("blocked".to_string()),
+            action: "replan".to_string(),
+            no_code_progress_rounds: 1,
+            action_checkpoint_active: true,
+            summary: "Action rejected before execution".to_string(),
+            evidence_items: 1,
+            failure_type: Some("edit".to_string()),
+            recovery_plan_id: None,
+            rollback_recommended: false,
+            next_action: None,
+        });
+        trace.record(TraceEvent::FinalCloseoutPrepared {
+            status: "passed".to_string(),
+            terminal_status: Some("completed".to_string()),
+            stop_reason: Some("no_issue".to_string()),
+            stop_action: Some("continue".to_string()),
+            failure_type: None,
+            recovery_plan_id: None,
+            rollback_status: None,
+            changed_files: 1,
+            validation_items: 3,
+            tool_records: 4,
+            tool_evidence: None,
+            verification_proof_status: Some("verified".to_string()),
+            verification_proof_summary: Some("required validation passed 3/3 commands".to_string()),
+            verification_proof_kind_summary: Some(
+                "command_passed,required_validation_passed".to_string(),
+            ),
+            verification_proof_support_status: Some("verified".to_string()),
+            verification_proof_support_summary: Some("verified by required validation".to_string()),
+            verification_proof_supports_verified: Some(true),
+            verification_proof_residual_risk: Some(false),
+            acceptance_items: 1,
+            residual_risks: 0,
+        });
+
+        record_completion_contract(
+            &trace,
+            &route,
+            &code_workflow,
+            &task_bundle,
+            &["cargo test -q".to_string()],
+            "Closeout: passed",
+        );
+
+        let finished = trace.finish(TurnStatus::Completed);
+        assert!(finished.events.iter().any(|event| matches!(
+            event,
+            TraceEvent::CompletionContractEvaluated {
+                status,
+                terminal_status,
+                verification_proof_status,
+                reason,
+                ..
+            } if status == "completed"
+                && terminal_status == "completed"
+                && verification_proof_status == "verified"
+                && reason == "required validation proof is verified"
+        )));
     }
 
     #[tokio::test]

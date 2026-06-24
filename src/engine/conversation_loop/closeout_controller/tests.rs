@@ -134,6 +134,75 @@ fn evaluator_uses_ledger_runtime_validation_for_no_diff_audit_closeout() {
         .any(|item| item == "required validation: passed (passed:1/1)"));
 }
 
+#[tokio::test]
+async fn final_closeout_keeps_verified_no_diff_audit_passed_despite_tool_settlement_pressure() {
+    let mut env = EnvVarGuard::acquire().await;
+    let store_dir = tempfile::tempdir().unwrap();
+    isolate_project_memory_stores(&mut env, &store_dir);
+    let mut bundle = TaskContextBundle::new("审查已有实现", ".", audit_route(), None);
+    bundle.add_acceptance_check("required regression checks pass");
+    let code_workflow = CodeChangeWorkflowRunner::new(&bundle);
+    let trace = TraceCollector::new(TurnTrace::new("session", 1, "verified audit"));
+    let mut runtime_diet = RuntimeDietSnapshot::new(true);
+    let mut evidence_ledger = EvidenceLedger::new();
+    evidence_ledger.record_tool_result(
+        &ToolCall {
+            id: "inspect".to_string(),
+            name: "bash".to_string(),
+            arguments: serde_json::json!({"command": "rg coverage apps/desktop/tests"}),
+        },
+        &crate::tools::ToolResult::success("apps/desktop/tests/run-event-state.spec.ts"),
+    );
+    evidence_ledger.record_tool_result(
+        &ToolCall {
+            id: "validate".to_string(),
+            name: "bash".to_string(),
+            arguments: serde_json::json!({"command": "cargo test -q memory"}),
+        },
+        &crate::tools::ToolResult::success("test result: ok"),
+    );
+    let mut final_content =
+        "Existing implementation satisfies the audit; no files changed.".to_string();
+    let mut messages = Vec::new();
+    let mut claim_gate_repair_used = true;
+
+    let flow = FinalCloseoutController::apply_final_closeout(FinalCloseoutContext {
+        trace: &trace,
+        code_workflow: &code_workflow,
+        task_bundle: &bundle,
+        required_validation_commands: &["cargo test -q memory".to_string()],
+        runtime_diet: &mut runtime_diet,
+        final_content: &mut final_content,
+        final_tool_calls: &[],
+        messages: &mut messages,
+        claim_gate_repair_used: &mut claim_gate_repair_used,
+        iterations_used: 1,
+        max_iterations: 10,
+        evidence_ledger: &evidence_ledger,
+        settlement_gaps: &[],
+        memory_generate_enabled: false,
+        tx: None,
+    })
+    .await;
+
+    assert_eq!(flow, FinalCloseoutFlow::Completed);
+    assert!(final_content.contains("- Status: passed"));
+    assert!(!final_content.contains("settlement_gap"));
+
+    let finished = trace.finish(TurnStatus::Completed);
+    assert!(
+        finished.events.iter().any(|event| matches!(
+            event,
+            TraceEvent::FinalCloseoutPrepared {
+                status,
+                changed_files: 0,
+                ..
+            } if status == "passed"
+        )),
+        "verified no-diff audit should not be downgraded by settlement gap"
+    );
+}
+
 #[test]
 fn evaluator_downgrades_verified_status_when_proof_kind_support_is_partial() {
     let mut bundle = TaskContextBundle::new("审查已有 diff", ".", audit_route(), None);
@@ -524,6 +593,65 @@ fn evaluator_prefers_required_command_success_over_exploratory_validation_failur
     );
     assert!(closeout.validation.iter().any(|item| {
         item.contains("verification proof: verified (required validation passed 2/2 commands)")
+    }));
+}
+
+#[test]
+fn evaluator_promotes_verified_required_validation_for_direct_read_only_closeout() {
+    let mut bundle = TaskContextBundle::new(
+        "以当前工作区 evidence 为准回答，不要修改文件",
+        ".",
+        direct_route(),
+        None,
+    );
+    bundle.add_acceptance_check("current.txt content is observed and recorded");
+    bundle.add_acceptance_check("No files modified during evaluation");
+    bundle.add_acceptance_check("Closeout confirms current evidence wins");
+    bundle.add_acceptance_check("required validation command: cargo check");
+    let mut code_workflow = CodeChangeWorkflowRunner::new(&bundle);
+    code_workflow.activate_trigger(
+        crate::engine::code_change_workflow::AdaptiveWorkflowTrigger::RequiredValidation,
+    );
+    let mut evidence_ledger = EvidenceLedger::new();
+    evidence_ledger.record_tool_result(
+        &ToolCall {
+            id: "read_current".to_string(),
+            name: "file_read".to_string(),
+            arguments: serde_json::json!({
+                "path": "fixtures/runtime_spine_p0b/memory_retrieval_conflict/current.txt"
+            }),
+        },
+        &crate::tools::ToolResult::success(
+            "validation_command = cargo test -q runtime_spine_behavior",
+        ),
+    );
+    evidence_ledger.record_validation_result(
+        "required_validation",
+        Some("rg '^validation_command = cargo test -q runtime_spine_behavior$' fixtures/runtime_spine_p0b/memory_retrieval_conflict/current.txt"),
+        true,
+        "validation_command = cargo test -q runtime_spine_behavior",
+    );
+    let required_commands = vec![
+        "rg '^validation_command = cargo test -q runtime_spine_behavior$' fixtures/runtime_spine_p0b/memory_retrieval_conflict/current.txt"
+            .to_string(),
+    ];
+
+    let evaluation = CloseoutEvaluator::evaluate(
+        &code_workflow,
+        &bundle,
+        &evidence_ledger,
+        &required_commands,
+    );
+    let closeout = evaluation.closeout.expect("closeout");
+
+    assert_eq!(closeout.status, StageValidationStatus::Passed);
+    assert!(closeout.changed_files.is_empty());
+    assert!(closeout.acceptance.iter().any(|item| {
+        item.contains("accepted=true") && item.contains("required validation passed")
+    }));
+    assert_eq!(closeout.residual_risks, vec!["none recorded".to_string()]);
+    assert!(closeout.validation.iter().any(|item| {
+        item.contains("verification proof: verified (required validation passed 1/1 commands)")
     }));
 }
 

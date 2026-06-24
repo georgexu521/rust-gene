@@ -933,6 +933,31 @@ mod tests {
     }
 
     #[test]
+    fn stderr_fd_merge_keeps_desktop_release_validation_observational() {
+        for command in [
+            "pnpm --dir apps/desktop build 2>&1",
+            "pnpm --dir apps/desktop exec playwright test tests/run-event-state.spec.ts 2>&1",
+            "pnpm --dir apps/desktop test:ui-smoke 2>&1",
+        ] {
+            let profile = ActionSideEffectProfile::from_tool_call(
+                &call("bash", json!({"command": command})),
+                None,
+                Path::new("/repo"),
+            );
+
+            assert_eq!(
+                profile.external_side_effect,
+                ExternalSideEffect::None,
+                "stderr fd merge should not make release validation a workspace mutation: {command}"
+            );
+            assert!(
+                !profile.mutates_local_workspace,
+                "release validation should not require a checkpoint just because stderr is merged: {command}"
+            );
+        }
+    }
+
+    #[test]
     fn local_pip_install_is_not_classified_as_network_package_install() {
         let profile = ActionSideEffectProfile::from_tool_call(
             &call(

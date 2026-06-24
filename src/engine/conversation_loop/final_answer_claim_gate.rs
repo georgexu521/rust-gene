@@ -12,6 +12,7 @@ pub(crate) enum FinalAnswerClaimKind {
     ValidationPassed,
     CommitCreated,
     Pushed,
+    ToolUsageDenied,
     #[allow(dead_code)]
     FileInspected,
     TaskCompleted,
@@ -62,6 +63,10 @@ impl FinalAnswerClaimObservation {
             self.runtime_evidence.changed_files.len()
         ));
         text.push_str(&format!(
+            "- tool_execution_records={}\n",
+            self.runtime_evidence.tool_execution_records
+        ));
+        text.push_str(&format!(
             "- successful_mutation_tools={}\n",
             self.runtime_evidence.successful_mutation_tools
         ));
@@ -97,6 +102,7 @@ fn claim_kind_label(kind: FinalAnswerClaimKind) -> &'static str {
         FinalAnswerClaimKind::ValidationPassed => "validation_passed",
         FinalAnswerClaimKind::CommitCreated => "commit_created",
         FinalAnswerClaimKind::Pushed => "pushed",
+        FinalAnswerClaimKind::ToolUsageDenied => "tool_usage_denied",
         FinalAnswerClaimKind::FileInspected => "file_inspected",
         FinalAnswerClaimKind::TaskCompleted => "task_completed",
     }
@@ -105,6 +111,7 @@ fn claim_kind_label(kind: FinalAnswerClaimKind) -> &'static str {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct FinalAnswerEvidenceSnapshot {
     pub(crate) changed_files: Vec<String>,
+    pub(crate) tool_execution_records: usize,
     pub(crate) successful_mutation_tools: usize,
     pub(crate) validation_records: Vec<ValidationEvidenceSnapshot>,
     pub(crate) verification_status: String,
@@ -297,6 +304,33 @@ fn extract_claims(content: &str) -> Vec<FinalAnswerClaim> {
         });
     }
 
+    // Tool-use denial claims — English/Chinese.
+    if contains_any(
+        &lower,
+        &[
+            "no tool calls",
+            "no tools were",
+            "no tool was",
+            "have not executed any tool",
+            "haven't executed any tool",
+            "did not execute any tool",
+        ],
+    ) || contains_any(
+        content,
+        &[
+            "没有执行任何工具",
+            "没有任何工具调用",
+            "还没有执行任何工具调用",
+        ],
+    ) {
+        claims.push(FinalAnswerClaim {
+            kind: FinalAnswerClaimKind::ToolUsageDenied,
+            span_preview: extract_tool_denial_preview(content),
+            command: None,
+            path: None,
+        });
+    }
+
     // Task completion claims — scoped to action workflows
     if (contains_any(&lower, &["done", "all set", "everything is fixed"])
         || contains_any(content, &["完成了", "搞定了", "全部完成"]))
@@ -346,6 +380,7 @@ fn is_claim_supported(
         ),
         FinalAnswerClaimKind::CommitCreated => !evidence.git_commit_records.is_empty(),
         FinalAnswerClaimKind::Pushed => !evidence.git_push_records.is_empty(),
+        FinalAnswerClaimKind::ToolUsageDenied => evidence.tool_execution_records == 0,
         FinalAnswerClaimKind::FileInspected => {
             // Read/inspection claims are allowed on read-only routes or when file evidence exists
             matches!(
@@ -443,6 +478,7 @@ fn build_evidence_snapshot(
     verification_proof: &VerificationProof,
 ) -> FinalAnswerEvidenceSnapshot {
     let changed_files = ledger.changed_files();
+    let tool_execution_records = ledger.tool_execution_records().len();
     let successful_mutation_tools = ledger
         .tool_execution_records()
         .iter()
@@ -489,12 +525,32 @@ fn build_evidence_snapshot(
 
     FinalAnswerEvidenceSnapshot {
         changed_files,
+        tool_execution_records,
         successful_mutation_tools,
         validation_records,
         verification_status: verification_proof.status.label().to_string(),
         git_commit_records,
         git_push_records,
     }
+}
+
+fn extract_tool_denial_preview(content: &str) -> String {
+    let lines: Vec<&str> = content.lines().collect();
+    for line in &lines {
+        let lower = line.to_lowercase();
+        if lower.contains("no tool")
+            || lower.contains("executed any tool")
+            || line.contains("没有执行任何工具")
+            || line.contains("没有任何工具调用")
+        {
+            let trimmed = line.trim();
+            if trimmed.len() > 120 {
+                return format!("{}...", &trimmed[..120]);
+            }
+            return trimmed.to_string();
+        }
+    }
+    "tool usage denial claim".to_string()
 }
 
 fn is_effective_mutation_record(record: &ToolExecutionRecord) -> bool {
@@ -855,6 +911,42 @@ mod tests {
             "expected Repair, got {:?}",
             decision
         );
+    }
+
+    #[test]
+    fn tool_usage_denial_with_tool_records_triggers_repair() {
+        let route = code_change_route();
+        let mut ledger = EvidenceLedger::new();
+        ledger.record_tool_result(
+            &tool_call("grep", serde_json::json!({"pattern": "provider_health"})),
+            &ToolResult::success("src/diagnostics/provider_health.rs"),
+        );
+        let proof = VerificationProof::new(VerificationProofStatus::Verified, "validation passed");
+
+        let input = gate_input(
+            "我还没有执行任何工具调用，因此没有实际发现。",
+            &route,
+            &ledger,
+            &proof,
+        );
+        let decision = FinalAnswerClaimGate::evaluate(input);
+
+        assert!(
+            matches!(decision, FinalAnswerClaimGateDecision::Repair { .. }),
+            "expected Repair, got {:?}",
+            decision
+        );
+    }
+
+    #[test]
+    fn tool_usage_denial_without_tool_records_passes() {
+        let route = code_change_route();
+        let (ledger, proof) = empty_ledger_and_proof();
+
+        let input = gate_input("No tool calls were executed.", &route, &ledger, &proof);
+        let decision = FinalAnswerClaimGate::evaluate(input);
+
+        assert_eq!(decision, FinalAnswerClaimGateDecision::Pass);
     }
 
     #[test]

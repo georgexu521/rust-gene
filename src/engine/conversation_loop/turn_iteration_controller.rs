@@ -54,6 +54,7 @@ struct TurnPostChangeCloseoutContext<'a> {
     code_workflow: &'a mut CodeChangeWorkflowRunner,
     task_bundle: &'a mut TaskContextBundle,
     round_state: &'a mut super::turn_tool_round_step_controller::TurnToolRoundState,
+    no_diff_audit_closeout_allowed: bool,
     required_validation_commands: &'a [String],
     successful_required_validation_commands: &'a mut HashSet<String>,
     turn_state: &'a mut TurnRuntimeState,
@@ -95,6 +96,31 @@ impl TurnPostChangeCloseoutController {
             return TurnPostChangeCloseoutFlow::Break;
         }
 
+        if no_diff_audit_required_validation_is_complete(
+            context.no_diff_audit_closeout_allowed,
+            context.round_state,
+            context.required_validation_commands,
+            context.successful_required_validation_commands,
+        ) {
+            context
+                .task_bundle
+                .agent_state
+                .observe_tool_round(AgentToolRoundObservation {
+                    any_tool_success: true,
+                    batch_has_unsuccessful_tools: false,
+                    used_write_tool: false,
+                    successful_write_tool: false,
+                    has_worktree_changes: false,
+                    has_successful_validation_commands: true,
+                    failed_tool_evidence_present: false,
+                });
+            context.trace.record(TraceEvent::WorkflowFallback {
+                error: "no-diff audit required validation passed; preparing deterministic closeout"
+                    .to_string(),
+            });
+            return TurnPostChangeCloseoutFlow::Break;
+        }
+
         let iteration_closeout =
             TurnIterationCloseoutController::run(TurnIterationCloseoutContext {
                 conversation: context.conversation,
@@ -114,6 +140,23 @@ impl TurnPostChangeCloseoutController {
             TurnPostChangeCloseoutFlow::Continue
         }
     }
+}
+
+fn no_diff_audit_required_validation_is_complete(
+    no_diff_audit_closeout_allowed: bool,
+    round_state: &super::turn_tool_round_step_controller::TurnToolRoundState,
+    required_validation_commands: &[String],
+    successful_required_validation_commands: &HashSet<String>,
+) -> bool {
+    no_diff_audit_closeout_allowed
+        && round_state.changed_files.is_empty()
+        && !required_validation_commands.is_empty()
+        && super::validation_runner::RequiredValidationController::pending_commands(
+            required_validation_commands,
+            &round_state.successful_validation_commands,
+            successful_required_validation_commands,
+        )
+        .is_empty()
 }
 use std::path::{Path, PathBuf};
 use tokio::sync::mpsc;
@@ -288,6 +331,8 @@ impl TurnIterationController {
             context.task_bundle,
             context.turn_state,
             &tool_round_state,
+            context.required_validation_commands,
+            &context.loop_state.successful_required_validation_commands,
             exposed_tool_names.len(),
             tool_calls.len(),
             false,
@@ -313,6 +358,8 @@ impl TurnIterationController {
             context.task_bundle,
             context.turn_state,
             &tool_round_state,
+            context.required_validation_commands,
+            &context.loop_state.successful_required_validation_commands,
             exposed_tool_names.len(),
             tool_calls.len(),
             matches!(focused_repair_flow, TurnFocusedRepairFlow::Continue),
@@ -355,6 +402,7 @@ impl TurnIterationController {
             code_workflow: &mut *context.code_workflow,
             task_bundle: &mut *context.task_bundle,
             round_state: &mut tool_round_state,
+            no_diff_audit_closeout_allowed: context.no_diff_audit_closeout_allowed,
             required_validation_commands: context.required_validation_commands,
             successful_required_validation_commands: &mut context
                 .loop_state
@@ -378,6 +426,8 @@ fn record_stop_check(
     task_bundle: &mut TaskContextBundle,
     turn_state: &TurnRuntimeState,
     tool_round_state: &super::turn_tool_round_step_controller::TurnToolRoundState,
+    required_validation_commands: &[String],
+    successful_required_validation_commands: &HashSet<String>,
     exposed_tool_count: usize,
     selected_tool_calls: usize,
     force_patch_synthesis_after_no_change: bool,
@@ -400,7 +450,11 @@ fn record_stop_check(
     let decision = StopChecker::evaluate(StopCheckInput {
         any_tool_success: tool_round_state.any_tool_success,
         successful_write_tool: tool_round_state.successful_write_tool,
-        has_successful_validation_commands: tool_round_state.has_successful_validation_commands(),
+        has_successful_validation_commands: stop_check_validation_ready(
+            tool_round_state,
+            required_validation_commands,
+            successful_required_validation_commands,
+        ),
         no_code_progress_rounds: turn_state.focused_repair.no_code_progress_rounds,
         action_checkpoint_active: turn_state.focused_repair.action_checkpoint_active,
         action_checkpoint_no_change_rounds: turn_state
@@ -500,6 +554,23 @@ fn record_stop_check(
         ),
     });
     should_stop
+}
+
+fn stop_check_validation_ready(
+    tool_round_state: &super::turn_tool_round_step_controller::TurnToolRoundState,
+    required_validation_commands: &[String],
+    successful_required_validation_commands: &HashSet<String>,
+) -> bool {
+    if required_validation_commands.is_empty() {
+        return tool_round_state.has_successful_validation_commands();
+    }
+
+    super::validation_runner::RequiredValidationController::pending_commands(
+        required_validation_commands,
+        &tool_round_state.successful_validation_commands,
+        successful_required_validation_commands,
+    )
+    .is_empty()
 }
 
 fn terminal_stop_check(decision: &crate::engine::stop_checker::StopCheckDecision) -> bool {
@@ -676,6 +747,8 @@ mod tests {
             &mut task_bundle,
             &turn_state,
             &round_state,
+            &[],
+            &HashSet::new(),
             4,
             1,
             false,
@@ -722,6 +795,8 @@ mod tests {
             &mut task_bundle,
             &turn_state,
             &round_state,
+            &[],
+            &HashSet::new(),
             4,
             1,
             false,
@@ -768,6 +843,89 @@ mod tests {
     }
 
     #[test]
+    fn stop_check_ignores_successful_validation_that_does_not_satisfy_required_command() {
+        let route = IntentRouter::new().route("audit required validation");
+        let mut task_bundle = TaskContextBundle::new("audit required validation", ".", route, None);
+        let turn_state = TurnRuntimeState::new(true);
+        let mut round_state = round_state(false);
+        round_state.any_tool_success = true;
+        round_state
+            .successful_validation_commands
+            .push("cargo test -q memory".to_string());
+        let required_validation_commands =
+            vec!["cargo test -q memory -- --test-threads=1".to_string()];
+        let trace = TraceCollector::new(TurnTrace::new("session", 1, "audit required validation"));
+
+        let should_stop = record_stop_check(
+            &trace,
+            &mut task_bundle,
+            &turn_state,
+            &round_state,
+            &required_validation_commands,
+            &HashSet::new(),
+            4,
+            1,
+            false,
+        );
+
+        assert!(!should_stop);
+        let stop_check = task_bundle
+            .agent_state
+            .stop_checks
+            .last()
+            .expect("stop check");
+        assert_eq!(
+            stop_check.status,
+            crate::engine::task_context::StopCheckStatus::Continue
+        );
+        assert_eq!(
+            stop_check.reason,
+            crate::engine::task_context::StopCheckReason::NoIssue
+        );
+    }
+
+    #[test]
+    fn stop_check_closes_out_after_required_validation_is_fully_satisfied() {
+        let route = IntentRouter::new().route("audit required validation");
+        let mut task_bundle = TaskContextBundle::new("audit required validation", ".", route, None);
+        let turn_state = TurnRuntimeState::new(true);
+        let mut round_state = round_state(false);
+        round_state.any_tool_success = true;
+        let required_validation_commands =
+            vec!["cargo test -q memory -- --test-threads=1".to_string()];
+        let successful_required_validation_commands =
+            HashSet::from(["cargo test -q memory -- --test-threads=1".to_string()]);
+        let trace = TraceCollector::new(TurnTrace::new("session", 1, "audit required validation"));
+
+        let should_stop = record_stop_check(
+            &trace,
+            &mut task_bundle,
+            &turn_state,
+            &round_state,
+            &required_validation_commands,
+            &successful_required_validation_commands,
+            4,
+            1,
+            false,
+        );
+
+        assert!(should_stop);
+        let stop_check = task_bundle
+            .agent_state
+            .stop_checks
+            .last()
+            .expect("stop check");
+        assert_eq!(
+            stop_check.status,
+            crate::engine::task_context::StopCheckStatus::Stop
+        );
+        assert_eq!(
+            stop_check.reason,
+            crate::engine::task_context::StopCheckReason::VerificationReady
+        );
+    }
+
+    #[test]
     fn stop_check_terminal_permission_block_breaks_iteration() {
         let route = IntentRouter::new().route("inspect the project");
         let mut task_bundle = TaskContextBundle::new("inspect the project", ".", route, None);
@@ -796,6 +954,8 @@ mod tests {
             &mut task_bundle,
             &turn_state,
             &round_state,
+            &[],
+            &HashSet::new(),
             4,
             1,
             false,
@@ -870,6 +1030,7 @@ mod tests {
             code_workflow: &mut code_workflow,
             task_bundle: &mut task_bundle,
             round_state,
+            no_diff_audit_closeout_allowed: false,
             required_validation_commands: &required_validation_commands,
             successful_required_validation_commands: &mut successful_required_validation_commands,
             turn_state: &mut turn_state,
@@ -907,6 +1068,58 @@ mod tests {
             event,
             TraceEvent::WorkflowFallback { error }
                 if error == "verified code change passed validation; preparing deterministic closeout"
+        )));
+    }
+
+    #[tokio::test]
+    async fn no_diff_audit_breaks_after_required_validation_passes_without_changes() {
+        let trace = TraceCollector::new(TurnTrace::new("session", 1, "audit only"));
+        let conversation = conversation(ChatResponse {
+            content: String::new(),
+            tool_calls: None,
+            usage: None,
+            tool_call_repair: None,
+            finish_reason: None,
+        });
+        let route = IntentRouter::new().route("audit only");
+        let mut task_bundle = TaskContextBundle::new("audit only", ".", route.clone(), None);
+        let mut code_workflow = CodeChangeWorkflowRunner::new(&task_bundle);
+        let mut successful_required_validation_commands = HashSet::new();
+        let mut turn_state = TurnRuntimeState::new(true);
+        let mut final_content = "done".to_string();
+        let mut messages = vec![Message::user("audit only")];
+        let required_validation_commands = vec!["true".to_string()];
+        let mut round_state = round_state(false);
+
+        let flow = TurnPostChangeCloseoutController::run(TurnPostChangeCloseoutContext {
+            conversation: &conversation,
+            trace: &trace,
+            route: &route,
+            code_workflow: &mut code_workflow,
+            task_bundle: &mut task_bundle,
+            round_state: &mut round_state,
+            no_diff_audit_closeout_allowed: true,
+            required_validation_commands: &required_validation_commands,
+            successful_required_validation_commands: &mut successful_required_validation_commands,
+            turn_state: &mut turn_state,
+            final_content: &mut final_content,
+            messages: &mut messages,
+            last_user_preview: "audit only",
+        })
+        .await;
+
+        assert!(matches!(flow, TurnPostChangeCloseoutFlow::Break));
+        assert!(successful_required_validation_commands.contains("true"));
+        assert_eq!(
+            task_bundle.agent_state.verification_plan.status,
+            crate::engine::task_context::VerificationStatus::Verified
+        );
+
+        let finished = trace.finish(TurnStatus::Completed);
+        assert!(finished.events.iter().any(|event| matches!(
+            event,
+            TraceEvent::WorkflowFallback { error }
+                if error == "no-diff audit required validation passed; preparing deterministic closeout"
         )));
     }
 }

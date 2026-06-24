@@ -193,6 +193,36 @@ fn test_stream_event_creation() {
     assert!(matches!(event, StreamEvent::TextChunk(_)));
 }
 
+#[tokio::test]
+async fn turn_timeout_failure_emits_closeout_before_error() {
+    let (tx, mut rx) = tokio::sync::mpsc::channel(8);
+
+    emit_turn_timeout_failure(&tx, "turn", std::time::Duration::from_secs(60)).await;
+    drop(tx);
+
+    let diagnostic = rx.recv().await.expect("timeout diagnostic");
+    assert!(matches!(
+        diagnostic,
+        StreamEvent::RuntimeDiagnostic { diagnostic }
+            if diagnostic.get("schema").and_then(|value| value.as_str()) == Some("turn_timeout.v1")
+                && diagnostic.get("status").and_then(|value| value.as_str()) == Some("timed_out")
+    ));
+
+    let closeout = rx.recv().await.expect("timeout closeout");
+    assert!(matches!(
+        closeout,
+        StreamEvent::Closeout { status, evidence_summary }
+            if status == "timed_out"
+                && evidence_summary.as_deref().unwrap_or_default().contains("timed out")
+    ));
+
+    let error = rx.recv().await.expect("timeout error");
+    assert!(matches!(
+        error,
+        StreamEvent::Error(message) if message.contains("turn execution timed out after 60s")
+    ));
+}
+
 #[test]
 fn test_runtime_model_switch_updates_label() {
     let engine = StreamingQueryEngine::new(

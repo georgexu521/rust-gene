@@ -766,22 +766,6 @@ fn required_validation_preflight_repairs(
         });
     }
 
-    let long_output_rel = "fixtures/core_quality/long_output/output.log";
-    let long_output_log = working_dir.join(long_output_rel);
-    let long_output_generator =
-        working_dir.join("fixtures/core_quality/long_output/generate_log.py");
-    if normalized.contains(long_output_rel)
-        && !long_output_log.is_file()
-        && long_output_generator.is_file()
-    {
-        repairs.push(RequiredValidationPreflightRepair {
-            id: "core_long_output_generate_log".to_string(),
-            command: "python3 fixtures/core_quality/long_output/generate_log.py > fixtures/core_quality/long_output/output.log".to_string(),
-            note: "generate missing long-output artifact before required checks".to_string(),
-            cleanup_command: None,
-        });
-    }
-
     repairs
 }
 
@@ -1235,7 +1219,7 @@ mod tests {
     }
 
     #[test]
-    fn preflight_adds_long_output_generation_when_missing() {
+    fn preflight_does_not_generate_long_output_task_artifacts() {
         let tmp = tempfile::tempdir().expect("create temp dir");
         let fixture = tmp.path().join("fixtures/core_quality/long_output");
         std::fs::create_dir_all(&fixture).expect("create fixture dir");
@@ -1244,9 +1228,10 @@ mod tests {
             "rg 'line 0537 ERROR_ANCHOR payment retry budget exceeded' fixtures/core_quality/long_output/output.log";
 
         let repairs = required_validation_preflight_repairs(tmp.path(), command);
-        assert_eq!(repairs.len(), 1);
-        assert_eq!(repairs[0].id, "core_long_output_generate_log");
-        assert!(repairs[0].command.contains("generate_log.py >"));
+        assert!(
+            repairs.is_empty(),
+            "preflight must not create semantic task artifacts"
+        );
     }
 
     #[test]

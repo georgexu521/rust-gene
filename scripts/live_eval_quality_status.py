@@ -96,6 +96,13 @@ verification_events = [event for event in trace_events if event.get("type") == "
 stage_validation_events = [event for event in trace_events if event.get("type") == "stage_validation_completed"]
 acceptance_events = [event for event in trace_events if event.get("type") == "acceptance_review_completed"]
 closeout_events = [event for event in trace_events if event.get("type") == "final_closeout_prepared"]
+direct_closeout_events = [event for event in events if event.get("event") == "closeout"]
+turn_timeout_events = [
+    event
+    for event in events
+    if event.get("event") == "runtime_diagnostic"
+    and (event.get("diagnostic") or {}).get("schema") == "turn_timeout.v1"
+]
 adaptive_trigger_events = [event for event in trace_events if event.get("type") == "adaptive_workflow_triggered"]
 runtime_diet_events = [event for event in trace_events if event.get("type") == "runtime_diet_report"]
 risk_signal_events = [event for event in trace_events if event.get("type") == "risk_signal_assessed"]
@@ -107,11 +114,14 @@ for event in adaptive_trigger_events:
 latest_verification = verification_events[-1] if verification_events else {}
 latest_stage_validation = stage_validation_events[-1] if stage_validation_events else {}
 latest_closeout = closeout_events[-1] if closeout_events else {}
+latest_direct_closeout = direct_closeout_events[-1] if direct_closeout_events else {}
 latest_acceptance = acceptance_events[-1] if acceptance_events else {}
 latest_runtime_diet = runtime_diet_events[-1] if runtime_diet_events else {}
 entry_risk_signal = next((event for event in reversed(risk_signal_events) if event.get("phase") == "turn_entry"), {})
 runtime_risk_signal = next((event for event in reversed(risk_signal_events) if event.get("phase") == "runtime"), {})
 closeout_status = str(latest_closeout.get("status", "missing")).lower()
+if closeout_status == "missing" and latest_direct_closeout:
+    closeout_status = str(latest_direct_closeout.get("status", "missing")).lower()
 runtime_validation = str(latest_runtime_diet.get("validation_evidence", "")).lower()
 
 def positive_count(value):
@@ -379,6 +389,9 @@ if tool_errors:
 if "no effective progress timeout after" in stderr_text.lower():
     print("warning: no_effective_progress_timeout")
     failures.append("no_effective_progress_timeout")
+if turn_timeout_events or "turn execution timed out after" in stderr_text.lower():
+    print("warning: turn_execution_timeout")
+    failures.append("turn_execution_timeout")
 if stale_edit_warnings >= 2:
     print("warning: repeated_stale_edit_warnings")
     warnings.append("repeated_stale_edit_warnings")
@@ -427,7 +440,7 @@ if trajectory_assertions["trajectory_assertion_status"] == "failed":
 if runtime_spine["runtime_spine_status"] in {"failed", "missing"}:
     print("warning: runtime_spine_assertions_not_passing")
     failures.append("runtime_spine_assertions_not_passing")
-if closeout_status in {"failed", "not_verified", "blocked", "missing"}:
+if closeout_status in {"failed", "not_verified", "blocked", "missing", "timed_out"}:
     print("warning: closeout_not_successful")
     failures.append("closeout_not_successful")
 if accepted is False:

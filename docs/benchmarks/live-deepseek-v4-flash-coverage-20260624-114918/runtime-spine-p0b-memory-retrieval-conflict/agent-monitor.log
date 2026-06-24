@@ -1,0 +1,11 @@
+[2026-06-24T11:50:17+0800] agent-run still running elapsed=31s idle_for=20s stdout_bytes=0 stderr_bytes=147 output_bytes=0 events_bytes=4740
+[2026-06-24T11:50:48+0800] agent-run still running elapsed=62s idle_for=20s stdout_bytes=0 stderr_bytes=331 output_bytes=0 events_bytes=4740
+[2026-06-24T11:51:19+0800] agent-run still running elapsed=93s idle_for=20s stdout_bytes=0 stderr_bytes=515 output_bytes=0 events_bytes=4740
+[2026-06-24T11:51:50+0800] agent-run still running elapsed=124s idle_for=20s stdout_bytes=0 stderr_bytes=699 output_bytes=0 events_bytes=4740
+[2026-06-24T11:52:21+0800] agent-run still running elapsed=154s idle_for=20s stdout_bytes=0 stderr_bytes=885 output_bytes=0 events_bytes=4740
+[2026-06-24T11:52:51+0800] agent-run still running elapsed=185s idle_for=25s stdout_bytes=0 stderr_bytes=1071 output_bytes=0 events_bytes=4740
+[2026-06-24T11:53:22+0800] agent-run still running elapsed=215s idle_for=25s stdout_bytes=0 stderr_bytes=1257 output_bytes=0 events_bytes=4740
+[2026-06-24T11:53:52+0800] agent-run still running elapsed=245s idle_for=25s stdout_bytes=0 stderr_bytes=1443 output_bytes=0 events_bytes=4740
+[2026-06-24T11:54:22+0800] agent-run still running elapsed=276s idle_for=25s stdout_bytes=0 stderr_bytes=1629 output_bytes=0 events_bytes=4740
+[2026-06-24T11:54:53+0800] agent-run still running elapsed=306s idle_for=25s stdout_bytes=0 stderr_bytes=1815 output_bytes=0 events_bytes=4740
+[2026-06-24T11:55:23+0800] agent-run still running elapsed=337s idle_for=25s stdout_bytes=0 stderr_bytes=2001 output_bytes=0 events_bytes=4740

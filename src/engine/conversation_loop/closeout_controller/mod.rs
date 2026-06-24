@@ -171,6 +171,7 @@ impl CloseoutEvaluator {
             );
             apply_verified_runtime_validation_to_closeout(
                 closeout,
+                task_bundle,
                 &verification_proof,
                 validation_required,
             );
@@ -306,16 +307,21 @@ fn apply_verification_proof_to_closeout(
 
 fn apply_verified_runtime_validation_to_closeout(
     closeout: &mut WorkflowCloseout,
+    task_bundle: &TaskContextBundle,
     proof: &VerificationProof,
     validation_required: bool,
 ) {
+    let verified_validation_can_settle_closeout = !closeout.changed_files.is_empty()
+        || !crate::engine::code_change_workflow::is_programming_workflow(
+            task_bundle.route.workflow,
+        );
     if !validation_required
         || proof.status != VerificationProofStatus::Verified
         || proof.derived_support.status != VerificationProofStatus::Verified
         || !proof.derived_support.supports_verified
         || proof.derived_support.residual_risk
         || closeout.status == StageValidationStatus::Failed
-        || closeout.changed_files.is_empty()
+        || !verified_validation_can_settle_closeout
     {
         return;
     }
@@ -502,12 +508,17 @@ impl FinalCloseoutController {
             }
 
             let evidence_snapshot = context.evidence_ledger.snapshot();
+            let verification_supports_closeout = verification_proof.status
+                == VerificationProofStatus::Verified
+                && verification_proof.derived_support.supports_verified
+                && !verification_proof.derived_support.residual_risk;
 
             // Settlement gap check: if tools were invoked in a programming workflow
             // but verification is incomplete, surface the settlement risk.
             if closeout.changed_files.is_empty()
                 && evidence_snapshot.tool_execution_records > 1
                 && !context.required_validation_commands.is_empty()
+                && !verification_supports_closeout
                 && closeout.status != StageValidationStatus::Failed
             {
                 closeout.status = StageValidationStatus::NotVerified;

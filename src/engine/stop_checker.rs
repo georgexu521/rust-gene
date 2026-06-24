@@ -207,7 +207,7 @@ impl StopChecker {
         if input.has_successful_validation_commands {
             return decision(
                 &input,
-                StopCheckStatus::Continue,
+                StopCheckStatus::Stop,
                 StopCheckReason::VerificationReady,
                 Some(TaskTerminalStatus::Completed),
                 StopAction::Closeout,
@@ -430,7 +430,7 @@ mod tests {
             ..input()
         });
 
-        assert_eq!(decision.status, StopCheckStatus::Continue);
+        assert_eq!(decision.status, StopCheckStatus::Stop);
         assert_eq!(decision.reason, StopCheckReason::VerificationReady);
         assert_eq!(
             decision.terminal_status,

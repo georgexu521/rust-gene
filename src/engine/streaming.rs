@@ -1115,10 +1115,10 @@ impl StreamingQueryEngine {
             .await
             {
                 Ok(result) => result,
-                Err(_) => Err(anyhow::anyhow!(
-                    "turn execution timed out after {}s",
-                    turn_timeout.as_secs()
-                )),
+                Err(_) => {
+                    emit_turn_timeout_failure(&tx, "turn", turn_timeout).await;
+                    return;
+                }
             };
 
             match run_result {
@@ -1280,12 +1280,9 @@ impl StreamingQueryEngine {
                                     let _ = tx.send(StreamEvent::Error(fb_err.to_string())).await;
                                 }
                                 Err(_) => {
-                                    let _ = tx
-                                        .send(StreamEvent::Error(format!(
-                                            "fallback turn execution timed out after {}s",
-                                            turn_timeout.as_secs()
-                                        )))
+                                    emit_turn_timeout_failure(&tx, "fallback_turn", turn_timeout)
                                         .await;
+                                    return;
                                 }
                             }
                         } else {
@@ -1361,6 +1358,32 @@ impl StreamingQueryEngine {
 
         Ok(result)
     }
+}
+
+async fn emit_turn_timeout_failure(
+    tx: &mpsc::Sender<StreamEvent>,
+    stage: &str,
+    timeout: std::time::Duration,
+) {
+    let message = format!("{stage} execution timed out after {}s", timeout.as_secs());
+    let _ = tx
+        .send(StreamEvent::RuntimeDiagnostic {
+            diagnostic: serde_json::json!({
+                "schema": "turn_timeout.v1",
+                "stage": stage,
+                "status": "timed_out",
+                "timeout_secs": timeout.as_secs(),
+                "message": message,
+            }),
+        })
+        .await;
+    let _ = tx
+        .send(StreamEvent::Closeout {
+            status: "timed_out".to_string(),
+            evidence_summary: Some(message.clone()),
+        })
+        .await;
+    let _ = tx.send(StreamEvent::Error(message)).await;
 }
 
 /// 内部执行引擎

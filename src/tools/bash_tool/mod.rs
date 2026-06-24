@@ -510,8 +510,12 @@ fn shell_result_data(input: ShellResultData<'_>) -> (String, serde_json::Value) 
         input.terminal_kind,
         input.sandbox,
     );
+    let validation_output_failed = command_classification.is_safe_validation()
+        && validation_output_indicates_failure(input.combined_output);
     let evidence_status = if input.timed_out {
         "timed_out"
+    } else if validation_output_failed {
+        "failed"
     } else if input.exit_code == 0 {
         "passed"
     } else {
@@ -1399,11 +1403,21 @@ impl Tool for BashTool {
             }
         }
 
-        if output.status.success() {
+        let validation_output_failed = classification.is_safe_validation()
+            && validation_output_indicates_failure(&result_content);
+
+        if output.status.success() && !validation_output_failed {
             ToolResult::success_with_data(result_preview, result_data)
         } else if timed_out {
             let mut result = ToolResult::error_with_content(
                 format!("Command timed out after {} seconds", timeout),
+                result_preview,
+            );
+            result.data = Some(result_data);
+            result
+        } else if validation_output_failed {
+            let mut result = ToolResult::error_with_content(
+                "Validation output indicates failure despite exit code 0".to_string(),
                 result_preview,
             );
             result.data = Some(result_data);
@@ -1431,6 +1445,17 @@ impl Tool for BashTool {
             .as_str()
             .map(|cmd| format!("This command may be destructive: {}\nAllow execution?", cmd))
     }
+}
+
+fn validation_output_indicates_failure(output: &str) -> bool {
+    let lower = output.to_ascii_lowercase();
+    lower.contains("error: could not compile")
+        || lower.contains("test result: failed")
+        || lower.contains("\nfailures:\n")
+        || lower.contains("compilation failed")
+        || output
+            .lines()
+            .any(|line| line.trim_start().starts_with("error[E"))
 }
 
 fn kill_process_tree(child_pid: Option<i32>) {

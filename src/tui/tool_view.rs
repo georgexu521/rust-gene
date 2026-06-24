@@ -496,6 +496,11 @@ fn summarize_bash(args: Option<&Value>, run: &ToolRunView) -> String {
         | Some(crate::tools::bash_tool::command_classifier::ValidationFamily::CargoFmtCheck) => {
             terminal_summary(run, "Running cargo", "Ran cargo")
         }
+        Some(crate::tools::bash_tool::command_classifier::ValidationFamily::NpmBuild)
+        | Some(crate::tools::bash_tool::command_classifier::ValidationFamily::PnpmBuild)
+        | Some(crate::tools::bash_tool::command_classifier::ValidationFamily::YarnBuild) => {
+            terminal_summary(run, "Running build", "Ran build")
+        }
         Some(crate::tools::bash_tool::command_classifier::ValidationFamily::RgAssertion) => {
             summarize_search_terminal(run, "Running search assertion", "Ran search assertion")
         }

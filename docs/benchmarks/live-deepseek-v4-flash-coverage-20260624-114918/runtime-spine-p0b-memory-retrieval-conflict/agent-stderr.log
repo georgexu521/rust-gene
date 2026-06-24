@@ -1,0 +1,13 @@
+2026-06-24T03:49:46.497802Z  WARN priority_agent::services::config::runtime: Failed to load AppConfig, using defaults: missing field `temperature`
+2026-06-24T03:50:25.883052Z  WARN priority_agent::engine::conversation_loop::validation_runner: required validation still running after 30s command_preview=cargo check elapsed_secs=30
+2026-06-24T03:50:55.887359Z  WARN priority_agent::engine::conversation_loop::validation_runner: required validation still running after 60s command_preview=cargo check elapsed_secs=60
+2026-06-24T03:51:25.889095Z  WARN priority_agent::engine::conversation_loop::validation_runner: required validation still running after 90s command_preview=cargo check elapsed_secs=90
+2026-06-24T03:51:55.887599Z  WARN priority_agent::engine::conversation_loop::validation_runner: required validation still running after 120s command_preview=cargo check elapsed_secs=120
+2026-06-24T03:52:25.887847Z  WARN priority_agent::engine::conversation_loop::validation_runner: required validation still running after 150s command_preview=cargo check elapsed_secs=150
+2026-06-24T03:52:55.886637Z  WARN priority_agent::engine::conversation_loop::validation_runner: required validation still running after 180s command_preview=cargo check elapsed_secs=180
+2026-06-24T03:53:25.886460Z  WARN priority_agent::engine::conversation_loop::validation_runner: required validation still running after 210s command_preview=cargo check elapsed_secs=210
+2026-06-24T03:53:55.886800Z  WARN priority_agent::engine::conversation_loop::validation_runner: required validation still running after 240s command_preview=cargo check elapsed_secs=240
+2026-06-24T03:54:25.886771Z  WARN priority_agent::engine::conversation_loop::validation_runner: required validation still running after 270s command_preview=cargo check elapsed_secs=270
+2026-06-24T03:54:55.887828Z  WARN priority_agent::engine::conversation_loop::validation_runner: required validation still running after 300s command_preview=cargo check elapsed_secs=300
+2026-06-24T03:55:25.886132Z  WARN priority_agent::engine::conversation_loop::validation_runner: required validation still running after 330s command_preview=cargo check elapsed_secs=330
+2026-06-24T03:55:36.857472Z  WARN priority_agent::engine::streaming::text_progress: session end memory flush join failed: task 26 was cancelled

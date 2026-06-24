@@ -115,6 +115,17 @@ fn shell_compatibility_hint_explains_macos_bash_associative_arrays() {
 }
 
 #[test]
+fn validation_output_failure_detector_catches_piped_rust_errors() {
+    let output = r#"error[E0061]: this method takes 4 arguments but 3 arguments were supplied
+error: could not compile `priority-agent` (lib) due to 1 previous error"#;
+
+    assert!(validation_output_indicates_failure(output));
+    assert!(!validation_output_indicates_failure(
+        "cargo check finished cleanly"
+    ));
+}
+
+#[test]
 fn test_external_command_with_placeholder() {
     let built = external_command_with_template("sandbox-run {command}", "echo hi");
     assert_eq!(built, "sandbox-run 'echo hi'");

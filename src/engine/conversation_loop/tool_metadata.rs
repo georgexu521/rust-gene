@@ -588,6 +588,11 @@ pub(super) fn tool_execution_start_progress(
             | Some(crate::tools::bash_tool::command_classifier::ValidationFamily::YarnTest) => {
                 "Running JS tests"
             }
+            Some(crate::tools::bash_tool::command_classifier::ValidationFamily::NpmBuild)
+            | Some(crate::tools::bash_tool::command_classifier::ValidationFamily::PnpmBuild)
+            | Some(crate::tools::bash_tool::command_classifier::ValidationFamily::YarnBuild) => {
+                "Running JS build"
+            }
             Some(crate::tools::bash_tool::command_classifier::ValidationFamily::Pytest)
             | Some(crate::tools::bash_tool::command_classifier::ValidationFamily::PythonCompile)
             | Some(crate::tools::bash_tool::command_classifier::ValidationFamily::PythonUnittest) => {
