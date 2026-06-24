@@ -1,0 +1,16 @@
+{
+  "status": 0,
+  "termination_reason": "process_exit",
+  "started_at_epoch": 1782280985.115746,
+  "elapsed_secs": 15.331,
+  "idle_for_secs": 0.054,
+  "no_effective_progress_for_secs": 0.054,
+  "first_activity_after_start_secs": 0.113,
+  "first_effective_action_after_start_secs": 15.277,
+  "provider_family": "deepseek",
+  "provider_model": "deepseek-v4-flash",
+  "streaming_tool_mode": "non_streaming",
+  "wall_timeout_secs": 1800,
+  "idle_timeout_secs": 300,
+  "no_effective_progress_timeout_secs": 0
+}

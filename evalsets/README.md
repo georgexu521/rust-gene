@@ -70,7 +70,7 @@ Boundary conditions, failure modes, and advanced runtime scenarios.
 - `runtime-spine-p0b-isolated-worktree-implementer` — Isolated worktree implementer
 - `runtime-spine-p0b-memory-retrieval-conflict` — Memory retrieval conflict
 - `runtime-spine-p0b-permission-required` — Permission required scenarios
-- `runtime-spine-p0b-route-mistake-recovery` — Route mistake recovery
+- `runtime-spine-p0b-route-mistake-recovery` — Bounded route-scoped config fix
 - `runtime-spine-p0b-skill-guidance` — Skill guidance
 - `runtime-spine-p0b-subagent-verifier` — Subagent verifier
 - `runtime-spine-p0b-test-failure-repair` — Test failure repair
