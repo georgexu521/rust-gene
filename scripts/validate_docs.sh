@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Documentation validation script
-# Checks for doc/implementation conflicts
+# Checks current documentation anchors, registry smoke counts, file-size policy,
+# advisory rustdoc coverage, compile wiring, and workflow-enabled tests.
 
 set -e
 
@@ -21,6 +22,7 @@ required_files=(
     "docs/RELEASE_STRUCTURE_CLEANUP_RECOMMENDATIONS_2026-06-22.md"
     "docs/REMAINING_STRUCTURE_REFINEMENT_PLAN_2026-06-22.md"
     "docs/CODE_DOCUMENTATION_PLAN_2026-06-22.md"
+    "docs/NEXT_PRIORITY_CORE_WEIGHT_REFINEMENT_PLAN_2026-06-24.md"
 )
 
 for file in "${required_files[@]}"; do
@@ -34,11 +36,7 @@ done
 
 echo ""
 
-# Check for "not implemented" or placeholder markers in docs that claim to be complete
-echo "Checking for doc/implementation conflicts..."
-
-# Extract commands/tools that are marked as Production/Usable
-# and verify they have implementations
+echo "Checking registry smoke counts and source policy..."
 
 # Get registered tools from source
 echo "  Verifying tool registry..."
@@ -58,9 +56,9 @@ python3 scripts/audit_rust_docs.py --limit 0
 
 echo ""
 
-# Run cargo check using all feature wiring without paying the binary link cost.
+# Run cargo check using the same broad target/feature wiring as CI.
 echo "Running cargo check..."
-if cargo check --all-features > /dev/null 2>&1; then
+if cargo check --workspace --all-targets --all-features > /dev/null 2>&1; then
     echo "  [OK] Check passes"
 else
     echo "  [FAIL] Check failed"
@@ -92,5 +90,5 @@ echo "  - Check: PASS"
 echo "  - Tests: PASS"
 echo ""
 echo "Note: For full validation, also run:"
-echo "  - cargo clippy -- -D warnings"
-echo "  - cargo doc --no-deps"
+echo "  - cargo clippy --workspace --all-targets --all-features -- -D warnings"
+echo "  - cargo doc --workspace --all-features --no-deps"

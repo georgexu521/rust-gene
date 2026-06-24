@@ -1,6 +1,4 @@
-//! 权重计算引擎 - Priority Agent 的核心
-//!
-//! 提供分层权重系统的计算和管理
+//! Priority weighting models and analysis helpers.
 
 pub mod calculator;
 pub mod types;
@@ -8,7 +6,8 @@ pub mod types;
 pub use calculator::WeightCalculator;
 pub use types::{Task, TaskId, Weight};
 
-/// 权重分析工具 (stub)
+/// Computes a deterministic weight summary for a project.
+#[derive(Debug, Clone, Default)]
 pub struct WeightAnalysisTool;
 
 impl WeightAnalysisTool {
@@ -16,20 +15,66 @@ impl WeightAnalysisTool {
         Self
     }
 
-    pub fn analyze_project(&self, _project: &types::Project) -> WeightAnalysisResult {
+    pub fn analyze_project(&self, project: &types::Project) -> WeightAnalysisResult {
+        let calculator = WeightCalculator::new();
+        let absolute_weights = calculator.calculate_absolute_weights(project);
+        let mut weights: Vec<_> = absolute_weights
+            .into_iter()
+            .map(|(task_id, weight)| (task_id.0, weight.value()))
+            .collect();
+
+        weights.sort_by(|left, right| {
+            right
+                .1
+                .total_cmp(&left.1)
+                .then_with(|| left.0.cmp(&right.0))
+        });
+
         WeightAnalysisResult {
-            weights: std::collections::HashMap::new(),
+            project_name: project.name.clone(),
+            total_tasks: project.all_tasks().len(),
+            weights,
+            next_task: calculator.next_task(project).map(|task| task.task_name),
         }
     }
 }
 
-impl Default for WeightAnalysisTool {
-    fn default() -> Self {
-        Self::new()
+/// Deterministic project weight analysis result.
+#[derive(Debug, Clone, PartialEq)]
+pub struct WeightAnalysisResult {
+    pub project_name: String,
+    pub total_tasks: usize,
+    pub weights: Vec<(String, f64)>,
+    pub next_task: Option<String>,
+}
+
+impl WeightAnalysisResult {
+    pub fn weight_for_task(&self, task_id: &str) -> Option<f64> {
+        self.weights
+            .iter()
+            .find(|(id, _)| id == task_id)
+            .map(|(_, weight)| *weight)
     }
 }
 
-/// 权重分析结果 (stub)
-pub struct WeightAnalysisResult {
-    pub weights: std::collections::HashMap<String, f64>,
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::weight_engine::types::Project;
+
+    #[test]
+    fn weight_analysis_returns_calculated_weights() {
+        let mut project = Project::new("project", "Project");
+        project.add_task(Task::new("small", "Small").with_weight(0.25));
+        project.add_task(Task::new("large", "Large").with_weight(0.75));
+
+        let result = WeightAnalysisTool::new().analyze_project(&project);
+
+        assert_eq!(result.project_name, "Project");
+        assert_eq!(result.total_tasks, 2);
+        assert_eq!(result.next_task.as_deref(), Some("Large"));
+        assert_eq!(result.weights[0].0, "large");
+        assert_eq!(result.weight_for_task("large"), Some(0.75));
+        assert_eq!(result.weight_for_task("small"), Some(0.25));
+    }
 }

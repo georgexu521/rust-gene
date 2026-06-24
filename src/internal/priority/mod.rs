@@ -88,12 +88,7 @@ impl PriorityScheduler {
     }
 
     fn get_task_weight(&self, task: &Task, analysis: &WeightAnalysisResult) -> f64 {
-        analysis
-            .weights
-            .iter()
-            .find(|(id, _)| id.as_str() == task.id.0.as_str())
-            .map(|(_, w)| *w)
-            .unwrap_or(0.0)
+        analysis.weight_for_task(&task.id.0).unwrap_or(0.0)
     }
 
     fn estimate_completion(&self, project: &Project) -> String {
@@ -177,5 +172,18 @@ mod tests {
         let plan = scheduler.create_execution_plan(&project);
 
         assert_eq!(plan.project_name, "Test Project");
+    }
+
+    #[test]
+    fn execution_plan_uses_calculated_weights() {
+        let scheduler = PriorityScheduler::new();
+        let mut project = Project::new("weighted", "Weighted Project");
+        project.add_task(Task::new("small", "Small").with_weight(0.2));
+        project.add_task(Task::new("large", "Large").with_weight(0.8));
+
+        let plan = scheduler.create_execution_plan(&project);
+
+        assert_eq!(plan.high_priority_tasks[0], "Large");
+        assert_eq!(plan.high_priority_tasks[1], "Small");
     }
 }

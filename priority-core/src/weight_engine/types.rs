@@ -1,7 +1,7 @@
 //! 权重系统的核心类型定义
 
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// 任务唯一标识
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -27,7 +27,11 @@ pub struct Weight(pub f64);
 impl Weight {
     /// 创建新权重，自动限制在 0.0-1.0 范围内
     pub fn new(value: f64) -> Self {
-        Self(value.clamp(0.0, 1.0))
+        if value.is_finite() {
+            Self(value.clamp(0.0, 1.0))
+        } else {
+            Self(0.0)
+        }
     }
 
     /// 获取权重值
@@ -141,6 +145,13 @@ impl Task {
 
     /// 检查是否所有依赖都已完成
     pub fn dependencies_satisfied(&self, completed_tasks: &[TaskId]) -> bool {
+        self.dependencies
+            .iter()
+            .all(|dep| completed_tasks.contains(dep))
+    }
+
+    /// 检查是否所有依赖都在已完成集合中
+    pub fn dependencies_satisfied_by(&self, completed_tasks: &HashSet<TaskId>) -> bool {
         self.dependencies
             .iter()
             .all(|dep| completed_tasks.contains(dep))
@@ -261,6 +272,13 @@ mod tests {
 
         let w3 = Weight::new(0.5);
         assert_eq!(w3.value(), 0.5);
+    }
+
+    #[test]
+    fn test_weight_rejects_non_finite_values() {
+        assert_eq!(Weight::new(f64::NAN).value(), 0.0);
+        assert_eq!(Weight::new(f64::INFINITY).value(), 0.0);
+        assert_eq!(Weight::new(f64::NEG_INFINITY).value(), 0.0);
     }
 
     #[test]

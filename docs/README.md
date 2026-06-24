@@ -30,6 +30,7 @@ and high-value reference docs. Older plans and completed audits live under
 | [DESKTOP_FRONTEND_PRODUCT_PLAN_2026-06-21.md](DESKTOP_FRONTEND_PRODUCT_PLAN_2026-06-21.md) | Desktop workbench product direction and QA path. |
 | [DESKTOP_FRONTEND_COMPLETION_AUDIT_2026-06-22.md](DESKTOP_FRONTEND_COMPLETION_AUDIT_2026-06-22.md) | Requirement-level desktop completion evidence. |
 | [DESKTOP_FRONTEND_CHANGESET_CLOSEOUT_2026-06-22.md](DESKTOP_FRONTEND_CHANGESET_CLOSEOUT_2026-06-22.md) | Desktop changeset scope, validation evidence, and closeout notes. |
+| [NEXT_PRIORITY_CORE_WEIGHT_REFINEMENT_PLAN_2026-06-24.md](NEXT_PRIORITY_CORE_WEIGHT_REFINEMENT_PLAN_2026-06-24.md) | Next focused cleanup for `priority-core` weight analysis ownership, completion-state semantics, and status/validation truthfulness. |
 | [LAB_AGENT_WORKFLOW_PLAN_2026-06-18.md](LAB_AGENT_WORKFLOW_PLAN_2026-06-18.md) | LabRun workflow design and staged agent roles. |
 | [LAB_GRADUATE_EXECUTION_POLICY_DISCUSSION_2026-06-21.md](LAB_GRADUATE_EXECUTION_POLICY_DISCUSSION_2026-06-21.md) | LabRun graduate execution policy and evidence boundaries. |
 | [UNWIRED_MODULES_AUDIT_2026-06-18.md](UNWIRED_MODULES_AUDIT_2026-06-18.md) | Audit of modules that are connected, opt-in, deprecated, or intentionally not on the main path. |

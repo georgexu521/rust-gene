@@ -1,7 +1,54 @@
 # Project Status
 Status: Current
 
-Last updated: 2026-06-23
+Last updated: 2026-06-24
+
+## Post-Review Release Trust Cleanup - 2026-06-24
+
+The external-review cleanup is tracked in
+`docs/FRIEND_REVIEW_CODE_QUALITY_IMPROVEMENT_PLAN_2026-06-24.md`, with the
+priority/weight follow-up tracked in
+`docs/NEXT_PRIORITY_CORE_WEIGHT_REFINEMENT_PLAN_2026-06-24.md`.
+
+Implemented in this slice:
+
+- Repository identity is documented as `georgexu521/rust-gene`, while the
+  product remains Priority Agent and the command/crate remains
+  `priority-agent` / `pa`.
+- CI quality gates now run real workspace all-targets/all-features checks,
+  clippy, tests, docs validation, whitespace validation, release artifact
+  packaging, checksums, and draft GitHub Release creation for `v*` tags.
+- Tool result caching is fail-closed: only explicitly allowlisted tools with a
+  positive TTL can be cached.
+- `priority-core` no longer exposes an empty weight-analysis stub. Its analysis
+  wrapper now uses `WeightCalculator`, and the orphan skill-layer
+  `weight_skill.rs` implementation was removed from the core crate.
+- `priority-core` dependency readiness now merges persisted
+  `TaskStatus::Completed` state with session-level `mark_completed` overlays,
+  so loaded projects and runtime updates make consistent scheduling decisions.
+- `Weight::new` rejects `NaN` and infinite inputs by normalizing them to `0.0`.
+- Credential and platform boundaries are documented honestly: `/connect` stores
+  plaintext dotenv credentials with Unix `0600` permissions where available,
+  while Keychain/Secret Service/Windows Credential Manager support remains
+  future work; the release target is macOS/Linux with Windows best-effort.
+- `scripts/validate_docs.sh` now describes its actual contract: required docs,
+  registry smoke counts, file-size policy, advisory rustdoc coverage, broad
+  check wiring, and workflow-enabled tests.
+
+Current validation baseline for this cleanup:
+
+```bash
+cargo fmt --check
+git diff --check
+cargo test -q -p priority-core
+cargo test -q internal::priority --lib
+bash scripts/validate_docs.sh
+cargo check -q
+cargo check --features legacy-cli -q
+cargo check --features experimental-api-server -q
+cargo clippy --workspace --all-targets --all-features -- -D warnings
+cargo test --workspace --all-features -- --test-threads=1
+```
 
 ## Public API Surface — Narrowed (2026-06-23)
 

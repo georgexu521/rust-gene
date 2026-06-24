@@ -19,21 +19,22 @@ Agent, and the released command/crate name remains `priority-agent` with the
 
 Current project status is tracked in [docs/PROJECT_STATUS.md](docs/PROJECT_STATUS.md).
 
-Latest release-cleanup baseline recorded on 2026-06-22:
+Latest release-trust and priority-core cleanup baseline recorded on 2026-06-24:
 
 - `cargo fmt --check`
+- `git diff --check`
 - `cargo check -q`
 - `cargo check --features legacy-cli -q`
 - `cargo check --features experimental-api-server -q`
-- `cargo doc --no-deps -q`
-- `cargo clippy --lib --all-features -- -D warnings`
-- `cargo clippy --all-targets --all-features -- -D warnings`
-- `cargo test -q`
+- `cargo doc --workspace --all-features --no-deps`
+- `cargo clippy --workspace --all-targets --all-features -- -D warnings`
+- `cargo test --workspace --all-features -- --test-threads=1`
 - `bash scripts/validate_docs.sh`
-- `git diff --check`
 
 Full release readiness is tracked in
-[docs/RELEASE_STRUCTURE_CLEANUP_RECOMMENDATIONS_2026-06-22.md](docs/RELEASE_STRUCTURE_CLEANUP_RECOMMENDATIONS_2026-06-22.md).
+[docs/FRIEND_REVIEW_CODE_QUALITY_IMPROVEMENT_PLAN_2026-06-24.md](docs/FRIEND_REVIEW_CODE_QUALITY_IMPROVEMENT_PLAN_2026-06-24.md)
+and
+[docs/NEXT_PRIORITY_CORE_WEIGHT_REFINEMENT_PLAN_2026-06-24.md](docs/NEXT_PRIORITY_CORE_WEIGHT_REFINEMENT_PLAN_2026-06-24.md).
 Before publishing a formal release, rerun the full gate set from
 `QUALITY_GATES.md` on the exact release commit.
 

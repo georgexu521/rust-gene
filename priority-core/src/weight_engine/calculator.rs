@@ -73,7 +73,7 @@ fn comparable_priority_float(value: f64) -> f64 {
 /// 权重计算器
 pub struct WeightCalculator {
     /// 已完成的任务ID
-    completed_tasks: Vec<TaskId>,
+    completed_tasks: HashSet<TaskId>,
     /// 任务依赖图
     #[allow(dead_code)]
     dependency_graph: HashMap<TaskId, Vec<TaskId>>,
@@ -82,16 +82,14 @@ pub struct WeightCalculator {
 impl WeightCalculator {
     pub fn new() -> Self {
         Self {
-            completed_tasks: Vec::new(),
+            completed_tasks: HashSet::new(),
             dependency_graph: HashMap::new(),
         }
     }
 
     /// 标记任务为完成
     pub fn mark_completed(&mut self, task_id: TaskId) {
-        if !self.completed_tasks.contains(&task_id) {
-            self.completed_tasks.push(task_id);
-        }
+        self.completed_tasks.insert(task_id);
     }
 
     /// 计算项目中所有任务的绝对权重
@@ -133,6 +131,7 @@ impl WeightCalculator {
     /// 获取当前可执行的任务（依赖已满足且未完成的）
     pub fn get_executable_tasks(&self, project: &Project) -> Vec<ExecutableTask> {
         let absolute_weights = self.calculate_absolute_weights(project);
+        let completed_tasks = self.completed_task_set(project);
         let mut executable = Vec::new();
 
         for task in project.all_tasks() {
@@ -140,7 +139,7 @@ impl WeightCalculator {
                 continue;
             }
 
-            if task.dependencies_satisfied(&self.completed_tasks) {
+            if task.dependencies_satisfied_by(&completed_tasks) {
                 let weight = absolute_weights
                     .get(&task.id)
                     .copied()
@@ -166,6 +165,18 @@ impl WeightCalculator {
         executable.sort_by(|a, b| b.cmp(a));
 
         executable
+    }
+
+    fn completed_task_set(&self, project: &Project) -> HashSet<TaskId> {
+        let mut completed = self.completed_tasks.clone();
+        completed.extend(
+            project
+                .all_tasks()
+                .into_iter()
+                .filter(|task| task.status == TaskStatus::Completed)
+                .map(|task| task.id.clone()),
+        );
+        completed
     }
 
     /// 计算优先级分数
@@ -275,6 +286,7 @@ pub struct ProgressReport {
 impl ProgressReport {
     pub fn generate(calculator: &WeightCalculator, project: &Project) -> Self {
         let all_tasks = project.all_tasks();
+        let completed_tasks = calculator.completed_task_set(project);
         let mut completed = 0;
         let mut in_progress = 0;
         let mut pending = 0;
@@ -285,7 +297,7 @@ impl ProgressReport {
                 TaskStatus::Completed => completed += 1,
                 TaskStatus::InProgress => in_progress += 1,
                 TaskStatus::Pending => {
-                    if task.dependencies_satisfied(&calculator.completed_tasks) {
+                    if task.dependencies_satisfied_by(&completed_tasks) {
                         pending += 1;
                     } else {
                         blocked += 1;
@@ -371,6 +383,64 @@ mod tests {
         // 应该按权重排序：b(60%) > a(40%) > a1(24%) > a2(16%)
         assert_eq!(executable[0].task_id.0, "b");
         assert_eq!(executable[1].task_id.0, "a");
+    }
+
+    #[test]
+    fn completed_task_status_satisfies_dependencies_without_overlay() {
+        let mut project = Project::new("status", "Status Project");
+        let mut dependency = Task::new("dependency", "Dependency").with_weight(0.6);
+        dependency.status = TaskStatus::Completed;
+        let mut dependent = Task::new("dependent", "Dependent").with_weight(0.4);
+        dependent.add_dependency(TaskId::new("dependency"));
+        project.add_task(dependency);
+        project.add_task(dependent);
+
+        let calculator = WeightCalculator::new();
+        let executable = calculator.get_executable_tasks(&project);
+
+        assert_eq!(executable.len(), 1);
+        assert_eq!(executable[0].task_id.0, "dependent");
+    }
+
+    #[test]
+    fn marked_completed_tasks_still_satisfy_dependencies() {
+        let mut project = Project::new("overlay", "Overlay Project");
+        let dependency = Task::new("dependency", "Dependency").with_weight(0.6);
+        let mut dependent = Task::new("dependent", "Dependent").with_weight(0.4);
+        dependent.add_dependency(TaskId::new("dependency"));
+        project.add_task(dependency);
+        project.add_task(dependent);
+
+        let mut calculator = WeightCalculator::new();
+        calculator.mark_completed(TaskId::new("dependency"));
+        let executable = calculator.get_executable_tasks(&project);
+
+        assert!(executable.iter().any(|task| task.task_id.0 == "dependent"));
+    }
+
+    #[test]
+    fn progress_report_uses_merged_completed_state() {
+        let mut project = Project::new("progress", "Progress Project");
+        let mut dependency = Task::new("dependency", "Dependency").with_weight(0.4);
+        dependency.status = TaskStatus::Completed;
+        let mut ready = Task::new("ready", "Ready").with_weight(0.3);
+        ready.add_dependency(TaskId::new("dependency"));
+        let mut blocked = Task::new("blocked", "Blocked").with_weight(0.3);
+        blocked.add_dependency(TaskId::new("missing"));
+        project.add_task(dependency);
+        project.add_task(ready);
+        project.add_task(blocked);
+
+        let calculator = WeightCalculator::new();
+        let report = ProgressReport::generate(&calculator, &project);
+
+        assert_eq!(report.completed_count, 1);
+        assert_eq!(report.pending_count, 1);
+        assert_eq!(report.blocked_count, 1);
+        assert!(report
+            .next_recommended_task
+            .as_deref()
+            .is_some_and(|task| task.contains("Ready")));
     }
 
     #[test]
