@@ -425,6 +425,8 @@ fn safety_proof_event_lines(events: &[crate::lab::model::LabEvent], limit: usize
                     | "lab_graduate_provider_execution_policy"
                     | "lab_graduate_isolation_missing"
                     | "lab_graduate_isolation_verified"
+                    | "labrun_policy_allowed"
+                    | "labrun_policy_blocked"
                     | "postdoc_read_only_audit_written"
                     | "lab_artifact_semantic_gate_blocked"
                     | "lab_artifact_acceptance_blocked_by_semantic_gate"
@@ -504,6 +506,27 @@ fn format_safety_proof_event(event: &crate::lab::model::LabEvent) -> String {
                 .unwrap_or("none"),
             payload
                 .get("worktree_path")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("none")
+        ),
+        "labrun_policy_allowed" | "labrun_policy_blocked" => format!(
+            "{} role={} stage={} action={} paths={} reason={}",
+            event.event_type,
+            payload
+                .get("role")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("unknown"),
+            payload
+                .get("stage")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("unknown"),
+            payload
+                .get("action_family")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("unknown"),
+            value_string_array(payload.get("paths")).join(","),
+            payload
+                .get("reason")
                 .and_then(serde_json::Value::as_str)
                 .unwrap_or("none")
         ),

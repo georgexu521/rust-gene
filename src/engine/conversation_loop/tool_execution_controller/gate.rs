@@ -84,6 +84,10 @@ impl<'a> ToolExecutionGate<'a> {
             destructive_scope_check: Some(destructive_check.clone()),
             action_checkpoint_rejection: action_checkpoint_rejection.clone(),
         });
+        let _ = crate::lab::policy_overlay::record_labrun_policy_event(
+            self.working_dir,
+            &review.labrun_policy,
+        );
         record_action_review(self.trace, &review);
 
         if !review.tool_contract.available {

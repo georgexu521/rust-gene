@@ -4,6 +4,8 @@ use crate::engine::action_decision::{
 };
 use crate::engine::intent_router::{RiskLevel, WorkflowKind};
 use crate::engine::task_context::{AgentTaskStage, TaskContextBundle};
+use crate::lab::model::LabRole;
+use crate::lab::orchestrator::LabOrchestrator;
 use crate::tools::{
     BashTool, FormatTool, GitTool, InstallDependenciesTool, ToolContext, ToolResult,
 };
@@ -212,6 +214,56 @@ fn confirmation_tool_is_typed_ask_user() {
         review.primary_reason,
         ActionReviewReason::PermissionRequired
     );
+}
+
+#[test]
+fn labrun_policy_blocks_postdoc_mutation() {
+    let temp = tempfile::tempdir().unwrap();
+    let orchestrator = LabOrchestrator::for_project(temp.path());
+    let proposal = orchestrator
+        .store()
+        .create_proposal("Build LabRun", None)
+        .unwrap();
+    let run = orchestrator
+        .approve_proposal(&proposal.proposal_id)
+        .unwrap();
+    let mut saved = orchestrator.store().load_run(&run.lab_run_id).unwrap();
+    saved.current_stage = "postdoc_plan".to_string();
+    saved.internal_owner = LabRole::Postdoc;
+    orchestrator.store().save_run(&saved).unwrap();
+
+    let tool = FileEditLikeTool;
+    let tool_call = call(
+        "file_edit",
+        serde_json::json!({"path": "src/lab/model.rs", "new_string": "changed"}),
+    );
+    let exposed = HashSet::from(["file_edit".to_string()]);
+    let mut permission_context = PermissionContext::new(temp.path());
+    permission_context.mode = crate::permissions::PermissionMode::AutoAll;
+
+    let review = ActionReview::build(ActionReviewInput {
+        tool_call: &tool_call,
+        tool: Some(&tool),
+        exposed_tool_names: &exposed,
+        scheduled_count: 0,
+        max_tool_calls: 4,
+        action_decision: decision(&tool_call),
+        permission_context: Some(&permission_context),
+        task_state: None,
+        working_dir: Some(temp.path()),
+        tool_allowed_by_context: true,
+        destructive_scope_check: None,
+        action_checkpoint_rejection: None,
+    });
+
+    assert_eq!(review.decision, ActionReviewDecision::Deny);
+    assert_eq!(
+        review.primary_reason,
+        ActionReviewReason::LabRunPolicyViolation
+    );
+    assert!(review.labrun_policy.applies);
+    assert!(!review.labrun_policy.allowed);
+    assert_eq!(review.labrun_policy.role.as_deref(), Some("Postdoc"));
 }
 
 #[test]

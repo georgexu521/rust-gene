@@ -950,6 +950,162 @@ fn postdoc_integration_summary_accepts_unblocked_graduate_results() {
 }
 
 #[test]
+fn postdoc_audit_redacts_secret_like_snippets_and_diffs() {
+    let temp = tempfile::tempdir().unwrap();
+    init_git_dir(temp.path());
+    let changed_file = "src/lab/provider_config.rs";
+    write_tracked_file_with_diff(
+        temp.path(),
+        changed_file,
+        "pub const PROVIDER: &str = \"before\";\n",
+        concat!(
+            "OPENAI_API_KEY=sk-testabcdefghijklmnopqrstuvwxyz123456\n",
+            "Authorization: Bearer abcdefghijklmnopqrstuvwxyz123456\n",
+            "-----BEGIN PRIVATE KEY-----\nabc123\n-----END PRIVATE KEY-----\n",
+            "TOKEN=AbCdEfGhIjKlMnOpQrStUvWxYz1234567890\n",
+        ),
+    );
+    let orchestrator = LabOrchestrator::for_project(temp.path());
+    let proposal = orchestrator
+        .store()
+        .create_proposal("Build LabRun", None)
+        .unwrap();
+    let run = orchestrator
+        .approve_proposal(&proposal.proposal_id)
+        .unwrap();
+    let task = orchestrator
+        .store()
+        .create_graduate_task(
+            &run.lab_run_id,
+            "Implement scoped slice",
+            "Update provider config.",
+            vec![changed_file.to_string()],
+            vec!["cargo check -q".to_string()],
+        )
+        .unwrap();
+    orchestrator
+        .create_graduate_result_for_task_latest(
+            &task.task_id,
+            "Implemented provider config.",
+            vec![changed_file.to_string()],
+            vec!["cargo check -q passed".to_string()],
+            Vec::new(),
+            Vec::new(),
+        )
+        .unwrap();
+    record_lab_validation_pass(&orchestrator, &run.lab_run_id, "cargo check -q");
+    let mut saved = orchestrator.store().load_run(&run.lab_run_id).unwrap();
+    saved.current_stage = "postdoc_review".to_string();
+    saved.internal_owner = LabRole::Postdoc;
+    orchestrator.store().save_run(&saved).unwrap();
+
+    let created = orchestrator
+        .create_postdoc_integration_summary_for_latest(Some("Postdoc checked redaction."))
+        .unwrap();
+
+    let audit_path = match created.artifact {
+        StageArtifact::PostdocIntegrationSummary(envelope) => envelope
+            .evidence_refs
+            .iter()
+            .find(|item| item.contains("postdoc_audits/postdoc_audit_"))
+            .cloned()
+            .expect("postdoc audit evidence ref"),
+        other => panic!(
+            "expected integration summary, got {:?}",
+            other.artifact_type()
+        ),
+    };
+    let audit_text = std::fs::read_to_string(audit_path).unwrap();
+    assert!(audit_text.contains("[REDACTED:"));
+    assert!(audit_text.contains("\"redaction_applied\": true"));
+    assert!(!audit_text.contains("sk-testabcdefghijklmnopqrstuvwxyz123456"));
+    assert!(!audit_text.contains("abcdefghijklmnopqrstuvwxyz123456"));
+    assert!(!audit_text.contains("BEGIN PRIVATE KEY"));
+    assert!(!audit_text.contains("AbCdEfGhIjKlMnOpQrStUvWxYz1234567890"));
+}
+
+#[test]
+fn postdoc_audit_suppresses_sensitive_path_snippets_and_diffs() {
+    let temp = tempfile::tempdir().unwrap();
+    init_git_dir(temp.path());
+    let changed_file = ".env";
+    write_tracked_file_with_diff(
+        temp.path(),
+        changed_file,
+        "OPENAI_API_KEY=old\n",
+        "OPENAI_API_KEY=sk-testabcdefghijklmnopqrstuvwxyz123456\n",
+    );
+    let orchestrator = LabOrchestrator::for_project(temp.path());
+    let proposal = orchestrator
+        .store()
+        .create_proposal("Build LabRun", None)
+        .unwrap();
+    let run = orchestrator
+        .approve_proposal(&proposal.proposal_id)
+        .unwrap();
+    let task = orchestrator
+        .store()
+        .create_graduate_task(
+            &run.lab_run_id,
+            "Implement scoped slice",
+            "Update dotenv config.",
+            vec![changed_file.to_string()],
+            vec!["test -f .env".to_string()],
+        )
+        .unwrap();
+    orchestrator
+        .create_graduate_result_for_task_latest(
+            &task.task_id,
+            "Implemented dotenv config.",
+            vec![changed_file.to_string()],
+            vec!["test -f .env passed".to_string()],
+            Vec::new(),
+            Vec::new(),
+        )
+        .unwrap();
+    record_lab_validation_pass(&orchestrator, &run.lab_run_id, "test -f .env");
+    let mut saved = orchestrator.store().load_run(&run.lab_run_id).unwrap();
+    saved.current_stage = "postdoc_review".to_string();
+    saved.internal_owner = LabRole::Postdoc;
+    orchestrator.store().save_run(&saved).unwrap();
+
+    let created = orchestrator
+        .create_postdoc_integration_summary_for_latest(Some("Postdoc checked dotenv redaction."))
+        .unwrap();
+
+    let audit_path = match created.artifact {
+        StageArtifact::PostdocIntegrationSummary(envelope) => envelope
+            .evidence_refs
+            .iter()
+            .find(|item| item.contains("postdoc_audits/postdoc_audit_"))
+            .cloned()
+            .expect("postdoc audit evidence ref"),
+        other => panic!(
+            "expected integration summary, got {:?}",
+            other.artifact_type()
+        ),
+    };
+    let audit: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(audit_path).unwrap()).unwrap();
+    let snippet = audit["file_snippets"].as_array().unwrap().first().unwrap();
+    assert_eq!(snippet["snippet_redacted"], true);
+    assert!(snippet.get("snippet").is_none());
+    assert!(snippet["content_hash"]
+        .as_str()
+        .unwrap_or("")
+        .starts_with("sha256:"));
+    let diff = audit["diff_summaries"].as_array().unwrap().first().unwrap();
+    assert_eq!(diff["diff_redacted"], true);
+    assert!(diff.get("summary").is_none());
+    assert!(diff["diff_hash"]
+        .as_str()
+        .unwrap_or("")
+        .starts_with("sha256:"));
+    let audit_text = serde_json::to_string(&audit).unwrap();
+    assert!(!audit_text.contains("sk-testabcdefghijklmnopqrstuvwxyz123456"));
+}
+
+#[test]
 fn postdoc_integration_summary_includes_graduate_worktree_runtime_proof() {
     let temp = tempfile::tempdir().unwrap();
     let orchestrator = LabOrchestrator::for_project(temp.path());

@@ -119,7 +119,7 @@ impl PermissionPreset {
             }
             Self::ReviewOnly => "read-only audit mode; write operations stay blocked",
             Self::Labrun => {
-                "LabRun-named conservative mode; currently AutoLowRisk with stage/role guidance surfaced separately"
+                "LabRun conservative mode; AutoLowRisk plus runtime LabRun role/stage policy overlay when an active LabRun is present"
             }
         }
     }

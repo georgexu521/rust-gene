@@ -141,34 +141,31 @@ fn run_lab_validation_commands_with_events(
         }
         let plan = match classify_lab_validation_command(command) {
             LabValidationPolicyDecision::Allow(mut plan) => {
-                plan.workspace_trust = resolve_lab_workspace_trust(cwd).to_string();
-                plan.policy_action =
-                    validation_policy_action(&plan.validation_kind, &plan.workspace_trust)
-                        .to_string();
-                if plan.policy_action == "block" {
-                    let reason =
-                        "package-script validation requires a trusted workspace".to_string();
-                    record_validation_event(
-                        store,
-                        lab_run_id,
-                        "lab_validation_command_blocked",
-                        &plan.original,
-                        LabValidationEventMetadata {
-                            reason: Some(&reason),
-                            status_code: None,
-                            output: None,
-                            validation_kind: &plan.validation_kind,
-                            workspace_trust: &plan.workspace_trust,
-                            policy_action: &plan.policy_action,
-                        },
-                    )?;
-                    return Err(anyhow!(
-                        "required validation `{}` blocked by Lab validation policy: {}",
-                        plan.original,
-                        reason
-                    ));
+                let workspace_trust = resolve_lab_workspace_trust(cwd);
+                match finalize_validation_plan_for_workspace(&mut plan, workspace_trust) {
+                    Ok(()) => plan,
+                    Err(reason) => {
+                        record_validation_event(
+                            store,
+                            lab_run_id,
+                            "lab_validation_command_blocked",
+                            &plan.original,
+                            LabValidationEventMetadata {
+                                reason: Some(&reason),
+                                status_code: None,
+                                output: None,
+                                validation_kind: &plan.validation_kind,
+                                workspace_trust: &plan.workspace_trust,
+                                policy_action: &plan.policy_action,
+                            },
+                        )?;
+                        return Err(anyhow!(
+                            "required validation `{}` blocked by Lab validation policy: {}",
+                            plan.original,
+                            reason
+                        ));
+                    }
                 }
-                plan
             }
             LabValidationPolicyDecision::Block { command, reason } => {
                 let workspace_trust = resolve_lab_workspace_trust(cwd);
@@ -283,6 +280,20 @@ fn record_validation_event(
     )
 }
 
+fn finalize_validation_plan_for_workspace(
+    plan: &mut LabValidationCommandPlan,
+    workspace_trust: &str,
+) -> Result<(), String> {
+    plan.workspace_trust = workspace_trust.to_string();
+    plan.policy_action =
+        validation_policy_action(&plan.validation_kind, &plan.workspace_trust).to_string();
+    if plan.policy_action == "block" {
+        Err("package-script validation requires trusted workspace approval".to_string())
+    } else {
+        Ok(())
+    }
+}
+
 fn validation_kind_for_allowed_command(program: &str, args: &[String]) -> Option<&'static str> {
     match program {
         "cargo" => Some("cargo"),
@@ -314,10 +325,10 @@ fn resolve_lab_workspace_trust(_cwd: &Path) -> &'static str {
 }
 
 fn validation_policy_action(validation_kind: &str, workspace_trust: &str) -> &'static str {
-    if validation_kind == "package_script" && workspace_trust == "untrusted" {
-        "block"
-    } else {
-        "allow"
+    match (validation_kind, workspace_trust) {
+        ("package_script", "trusted") => "allow",
+        ("package_script", _) => "block",
+        _ => "allow",
     }
 }
 
@@ -378,6 +389,18 @@ fn suspicious_word(word: &str) -> Option<String> {
 }
 
 fn suspicious_arg(word: &str) -> Option<String> {
+    if let Some((flag, _value)) = word.split_once('=') {
+        if is_path_bearing_validation_flag(flag) {
+            return Some(format!(
+                "path-bearing validation flag `{flag}` is not allowed"
+            ));
+        }
+    }
+    if is_path_bearing_validation_flag(word) {
+        return Some(format!(
+            "path-bearing validation flag `{word}` is not allowed"
+        ));
+    }
     if word.starts_with('/') || has_windows_drive_prefix(word) {
         return Some("absolute validation arguments are not allowed".to_string());
     }
@@ -385,6 +408,22 @@ fn suspicious_arg(word: &str) -> Option<String> {
         return Some("parent traversal is not allowed in validation arguments".to_string());
     }
     None
+}
+
+fn is_path_bearing_validation_flag(flag: &str) -> bool {
+    matches!(
+        flag,
+        "--manifest-path"
+            | "--target-dir"
+            | "--config"
+            | "--rootdir"
+            | "--confcutdir"
+            | "--workdir"
+            | "--ignore"
+            | "--ignore-glob"
+            | "--path"
+            | "--workspace-root"
+    )
 }
 
 fn allow_cargo(args: &[String]) -> Option<String> {
@@ -490,9 +529,33 @@ mod tests {
         assert_eq!(package_plan.workspace_trust, "unknown");
         assert_eq!(package_plan.policy_action, "allow");
         assert_eq!(
+            validation_policy_action("package_script", "unknown"),
+            "block"
+        );
+        assert_eq!(
             validation_policy_action("package_script", "untrusted"),
             "block"
         );
+        assert_eq!(
+            validation_policy_action("package_script", "trusted"),
+            "allow"
+        );
+
+        let mut unknown = package_plan.clone();
+        let unknown_reason = finalize_validation_plan_for_workspace(&mut unknown, "unknown")
+            .expect_err("unknown package script should block");
+        assert_eq!(unknown.policy_action, "block");
+        assert!(unknown_reason.contains("trusted workspace approval"));
+
+        let mut untrusted = package_plan.clone();
+        finalize_validation_plan_for_workspace(&mut untrusted, "untrusted")
+            .expect_err("untrusted package script should block");
+        assert_eq!(untrusted.policy_action, "block");
+
+        let mut trusted = package_plan;
+        finalize_validation_plan_for_workspace(&mut trusted, "trusted")
+            .expect("trusted package script should be allowed");
+        assert_eq!(trusted.policy_action, "allow");
 
         let python_plan =
             match classify_lab_validation_command("python3 -m py_compile scripts/check.py") {
@@ -543,6 +606,11 @@ mod tests {
             "python3 -m py_compile ../outside.py",
             "/bin/bash scripts/validate_docs.sh",
             "./scripts/validate_docs.sh",
+            "cargo test --manifest-path=../outside/Cargo.toml",
+            "cargo check --target-dir=../tmp",
+            "cargo check --manifest-path ../outside/Cargo.toml",
+            "python3 -m pytest --rootdir=../outside",
+            "pytest --ignore=../outside",
         ] {
             assert!(
                 matches!(

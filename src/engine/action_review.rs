@@ -68,6 +68,7 @@ pub enum ActionReviewReason {
     ExternalSideEffectRequiresConfirmation,
     BudgetExceeded,
     CheckpointRequired,
+    LabRunPolicyViolation,
     SafeToExecute,
 }
 
@@ -93,6 +94,7 @@ impl ActionReviewReason {
             }
             Self::BudgetExceeded => "budget_exceeded",
             Self::CheckpointRequired => "checkpoint_required",
+            Self::LabRunPolicyViolation => "labrun_policy_violation",
             Self::SafeToExecute => "safe_to_execute",
         }
     }
@@ -113,6 +115,7 @@ pub struct ActionReview {
     pub scope: ScopeReviewVerdict,
     pub budget: BudgetReviewVerdict,
     pub checkpoint: CheckpointReviewVerdict,
+    pub labrun_policy: crate::lab::policy_overlay::LabRunPolicyReview,
     pub user_reason: String,
     pub model_recovery: String,
     pub debug: Value,
@@ -129,6 +132,21 @@ impl ActionReview {
         );
         let permission = PermissionReviewVerdict::from_input(&input);
         let scope = ScopeReviewVerdict::from_check(input.destructive_scope_check.as_ref());
+        let labrun_policy = input
+            .working_dir
+            .map(|working_dir| {
+                crate::lab::policy_overlay::review_labrun_tool_action(
+                    working_dir,
+                    &input.tool_call.name,
+                    tool_contract.read_only,
+                    &tool_contract.input_paths,
+                )
+            })
+            .unwrap_or_else(|| {
+                crate::lab::policy_overlay::LabRunPolicyReview::not_applicable(
+                    "action review has no working directory",
+                )
+            });
         let budget = BudgetReviewVerdict {
             allowed: input.scheduled_count < input.max_tool_calls,
             scheduled_count: input.scheduled_count,
@@ -149,15 +167,16 @@ impl ActionReview {
             &side_effects,
         );
 
-        let (decision, primary_reason, mut reasons) = final_decision(
-            &tool_contract,
-            &worth,
-            &permission,
-            &scope,
-            &budget,
-            &checkpoint,
-            input.action_checkpoint_rejection.as_deref(),
-        );
+        let (decision, primary_reason, mut reasons) = final_decision(FinalDecisionInput {
+            contract: &tool_contract,
+            worth: &worth,
+            permission: &permission,
+            scope: &scope,
+            budget: &budget,
+            checkpoint: &checkpoint,
+            labrun_policy: &labrun_policy,
+            action_checkpoint_rejection: input.action_checkpoint_rejection.as_deref(),
+        });
         if !reasons.contains(&primary_reason) {
             reasons.insert(0, primary_reason);
         }
@@ -184,6 +203,7 @@ impl ActionReview {
             "hard_gate_reason": hard_gate.then(|| primary_reason.as_str()),
             "advisory_reasons": advisory_reasons,
             "action_checkpoint_rejection": input.action_checkpoint_rejection,
+            "labrun_policy": labrun_policy,
             "exposed_tool_alternatives": tool_contract.available_alternatives,
             "candidate_action_request": candidate_action_request(decision, primary_reason, &reasons, &worth),
         });
@@ -202,6 +222,7 @@ impl ActionReview {
             scope,
             budget,
             checkpoint,
+            labrun_policy,
             user_reason,
             model_recovery,
             debug,
@@ -736,19 +757,35 @@ fn allow_bash_artifact_prep_without_checkpoint(
         )
 }
 
+struct FinalDecisionInput<'a> {
+    contract: &'a ToolContractReview,
+    worth: &'a ActionWorthVerdict,
+    permission: &'a PermissionReviewVerdict,
+    scope: &'a ScopeReviewVerdict,
+    budget: &'a BudgetReviewVerdict,
+    checkpoint: &'a CheckpointReviewVerdict,
+    labrun_policy: &'a crate::lab::policy_overlay::LabRunPolicyReview,
+    action_checkpoint_rejection: Option<&'a str>,
+}
+
 fn final_decision(
-    contract: &ToolContractReview,
-    worth: &ActionWorthVerdict,
-    permission: &PermissionReviewVerdict,
-    scope: &ScopeReviewVerdict,
-    budget: &BudgetReviewVerdict,
-    checkpoint: &CheckpointReviewVerdict,
-    action_checkpoint_rejection: Option<&str>,
+    input: FinalDecisionInput<'_>,
 ) -> (
     ActionReviewDecision,
     ActionReviewReason,
     Vec<ActionReviewReason>,
 ) {
+    let FinalDecisionInput {
+        contract,
+        worth,
+        permission,
+        scope,
+        budget,
+        checkpoint,
+        labrun_policy,
+        action_checkpoint_rejection,
+    } = input;
+
     if !contract.available {
         return (
             ActionReviewDecision::Revise,
@@ -796,6 +833,13 @@ fn final_decision(
             ActionReviewDecision::Deny,
             ActionReviewReason::DestructiveScopeViolation,
             vec![ActionReviewReason::DestructiveScopeViolation],
+        );
+    }
+    if labrun_policy.applies && !labrun_policy.allowed {
+        return (
+            ActionReviewDecision::Deny,
+            ActionReviewReason::LabRunPolicyViolation,
+            vec![ActionReviewReason::LabRunPolicyViolation],
         );
     }
     if action_checkpoint_rejection.is_some() {
@@ -873,6 +917,9 @@ fn user_reason(
             reason.as_str()
         ),
         ActionReviewDecision::Deny => {
+            if reason == ActionReviewReason::LabRunPolicyViolation {
+                return "Action denied before execution: LabRun role/stage policy blocked this mutation.".to_string();
+            }
             format!("Action denied before execution: {}.", reason.as_str())
         }
         ActionReviewDecision::Revise => {
@@ -925,10 +972,15 @@ fn model_recovery(
             "Action needs user approval before execution: {}. Wait for the permission result and do not claim the tool ran until it succeeds.",
             reason.as_str()
         ),
-        ActionReviewDecision::Deny => format!(
-            "Action denied before execution: {}. Choose a lower-risk action inside the current task scope.",
-            reason.as_str()
-        ),
+        ActionReviewDecision::Deny => {
+            if reason == ActionReviewReason::LabRunPolicyViolation {
+                return "Action denied before execution: labrun_policy_violation. Use read-only inspection for professor/postdoc stages, or route scoped mutations through the active graduate task allowed_scope.".to_string();
+            }
+            format!(
+                "Action denied before execution: {}. Choose a lower-risk action inside the current task scope.",
+                reason.as_str()
+            )
+        }
         ActionReviewDecision::Revise => {
             if reason == ActionReviewReason::LowValueAction {
                 return "Action rejected before execution: low_value_action. Inspect the target with file_read or grep first, then retry the smallest safe mutation if the evidence supports it.".to_string();

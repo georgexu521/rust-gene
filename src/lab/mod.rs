@@ -5,6 +5,7 @@
 //! history as the source of truth.
 
 pub(crate) mod artifact_semantics;
+pub(crate) mod audit_redaction;
 pub mod commands;
 pub mod context;
 pub mod delegation;
@@ -13,6 +14,7 @@ pub mod model;
 pub mod next_action;
 pub mod orchestrator;
 pub(crate) mod path_scope;
+pub(crate) mod policy_overlay;
 pub mod provider_certification;
 pub mod report;
 pub mod scheduler;

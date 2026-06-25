@@ -15,6 +15,8 @@ and high-value reference docs. Older plans and completed audits live under
 |-----|-----|
 | [PROJECT_STATUS.md](PROJECT_STATUS.md) | Current project status, validated baselines, release evidence, and known issues. |
 | [PROJECT_MAP.md](PROJECT_MAP.md) | Navigation map for runtime entrypoints, tools, memory, TUI, desktop, and validation. |
+| [THREAT_MODEL.md](THREAT_MODEL.md) | Current local-agent threat model, trust boundaries, mitigations, and residual risks. |
+| [SECURITY_RELEASE_CHECKLIST.md](SECURITY_RELEASE_CHECKLIST.md) | Release security checklist for gates, secret review, dependency review, and artifact checks. |
 | [PERSONAL_AGENT_PRODUCT_PRINCIPLES_2026-05-18.md](PERSONAL_AGENT_PRODUCT_PRINCIPLES_2026-05-18.md) | Product principles: narrow, deep, personal, local, and verifiable. |
 | [RELEASE_STRUCTURE_CLEANUP_RECOMMENDATIONS_2026-06-22.md](RELEASE_STRUCTURE_CLEANUP_RECOMMENDATIONS_2026-06-22.md) | Current release-structure cleanup plan and release-ready definition. |
 | [REMAINING_STRUCTURE_REFINEMENT_PLAN_2026-06-22.md](REMAINING_STRUCTURE_REFINEMENT_PLAN_2026-06-22.md) | Follow-up structure refinement record: public API surface, maturity labels, source grouping, wording, and file-size guard. |
@@ -34,6 +36,7 @@ and high-value reference docs. Older plans and completed audits live under
 | [LABRUN_GENERAL_AGENT_INTEGRATION_PLAN_2026-06-24.md](LABRUN_GENERAL_AGENT_INTEGRATION_PLAN_2026-06-24.md) | Next development plan for LabRun/general-agent integration, `/lab next`, actionable Lab context, stage-aware tools, permission presets, and proof surfaces. |
 | [LABRUN_VALIDATION_SECURITY_AND_REVIEW_HARDENING_PLAN_2026-06-25.md](LABRUN_VALIDATION_SECURITY_AND_REVIEW_HARDENING_PLAN_2026-06-25.md) | LabRun validation-command security, artifact semantic gates, postdoc read-only audit, provider safeguards, and path-scope hardening plan. |
 | [LABRUN_POST_HARDENING_FOLLOWUP_PLAN_2026-06-25.md](LABRUN_POST_HARDENING_FOLLOWUP_PLAN_2026-06-25.md) | Follow-up plan for truthful `/lab plan` gate output, code-aware postdoc audit, isolated-worktree enforcement, and package-script validation trust. |
+| [LABRUN_SECURITY_GOVERNANCE_NEXT_PLAN_2026-06-25.md](LABRUN_SECURITY_GOVERNANCE_NEXT_PLAN_2026-06-25.md) | Next security/governance plan for LabRun audit redaction, validation argument hardening, package-script trust, role/stage policy overlay, and release governance files. |
 | [LAB_AGENT_WORKFLOW_PLAN_2026-06-18.md](LAB_AGENT_WORKFLOW_PLAN_2026-06-18.md) | LabRun workflow design and staged agent roles. |
 | [LAB_GRADUATE_EXECUTION_POLICY_DISCUSSION_2026-06-21.md](LAB_GRADUATE_EXECUTION_POLICY_DISCUSSION_2026-06-21.md) | LabRun graduate execution policy and evidence boundaries. |
 | [UNWIRED_MODULES_AUDIT_2026-06-18.md](UNWIRED_MODULES_AUDIT_2026-06-18.md) | Audit of modules that are connected, opt-in, deprecated, or intentionally not on the main path. |
@@ -76,6 +79,8 @@ and high-value reference docs. Older plans and completed audits live under
 |-----|-----|
 | [README.md](../README.md) | Repository entrypoint, quick start, and architecture summary. |
 | [QUICKSTART.md](../QUICKSTART.md) | Install, provider setup, run, and basic validation. |
+| [SECURITY.md](../SECURITY.md) | Security reporting policy, known limitations, and sensitive change guidance. |
+| [CONTRIBUTING.md](../CONTRIBUTING.md) | Contribution workflow, validation expectations, and security-sensitive change checklist. |
 | [AGENTS.md](../AGENTS.md) | Prompt-injected runtime guidance. |
 | [CLAUDE.md](../CLAUDE.md) | Claude Code-compatible compact project guide. |
 | [PLAN.md](../PLAN.md) | Root plan snapshot. |

@@ -207,20 +207,18 @@ pub(super) fn collect_postdoc_read_only_audit_proof(
                             changed_file
                         ));
                     } else {
-                        file_snippets.push(serde_json::json!({
-                            "artifact_id": result.artifact_id,
-                            "path": path.clone(),
-                            "snippet": bounded_file_snippet(&parent_path, 1600),
-                        }));
+                        file_snippets.push(audit_file_snippet_payload(
+                            &result.artifact_id,
+                            &path,
+                            &parent_path,
+                        ));
                     }
-                    if let Some(diff_summary) =
-                        git_diff_summary_for_path(store.project_root(), &path)
-                    {
-                        diff_summaries.push(serde_json::json!({
-                            "artifact_id": result.artifact_id,
-                            "path": path.clone(),
-                            "summary": diff_summary,
-                        }));
+                    if let Some(diff_text) = git_diff_for_path(store.project_root(), &path) {
+                        diff_summaries.push(audit_diff_summary_payload(
+                            &result.artifact_id,
+                            &path,
+                            &diff_text,
+                        ));
                     } else {
                         audit_risks.push(format!(
                             "{} audit risk: no git diff evidence available for {} in parent workspace",
@@ -323,14 +321,65 @@ fn postdoc_validation_event_refs(
     Ok(refs)
 }
 
-fn bounded_file_snippet(path: &Path, limit: usize) -> String {
-    let Ok(content) = std::fs::read_to_string(path) else {
-        return "unreadable".to_string();
+fn audit_file_snippet_payload(artifact_id: &str, path: &str, parent_path: &Path) -> Value {
+    let bytes = match std::fs::read(parent_path) {
+        Ok(bytes) => bytes,
+        Err(err) => {
+            return serde_json::json!({
+                "artifact_id": artifact_id,
+                "path": path,
+                "snippet": "unreadable",
+                "read_error": err.to_string(),
+                "redaction_applied": false,
+                "redaction_reasons": [],
+            });
+        }
     };
-    compact_result_preview(&content, limit)
+    if let Some(reason) = crate::lab::audit_redaction::sensitive_audit_path_reason(path) {
+        return serde_json::json!({
+            "artifact_id": artifact_id,
+            "path": path,
+            "snippet_redacted": true,
+            "redaction_applied": true,
+            "redaction_reasons": [reason],
+            "content_hash": crate::lab::audit_redaction::audit_bytes_hash(&bytes),
+            "byte_len": bytes.len(),
+        });
+    }
+    let content = String::from_utf8_lossy(&bytes);
+    let redacted = crate::lab::audit_redaction::redact_lab_audit_text(&content);
+    serde_json::json!({
+        "artifact_id": artifact_id,
+        "path": path,
+        "snippet": compact_result_preview(&redacted.text, 1600),
+        "redaction_applied": redacted.redaction_applied,
+        "redaction_reasons": redacted.redaction_reasons,
+    })
 }
 
-fn git_diff_summary_for_path(project_root: &Path, path: &str) -> Option<String> {
+fn audit_diff_summary_payload(artifact_id: &str, path: &str, diff_text: &str) -> Value {
+    if let Some(reason) = crate::lab::audit_redaction::sensitive_audit_path_reason(path) {
+        return serde_json::json!({
+            "artifact_id": artifact_id,
+            "path": path,
+            "diff_redacted": true,
+            "redaction_applied": true,
+            "redaction_reasons": [reason],
+            "diff_hash": crate::lab::audit_redaction::audit_text_hash(diff_text),
+            "byte_len": diff_text.len(),
+        });
+    }
+    let redacted = crate::lab::audit_redaction::redact_lab_audit_text(diff_text);
+    serde_json::json!({
+        "artifact_id": artifact_id,
+        "path": path,
+        "summary": compact_result_preview(&redacted.text, 1600),
+        "redaction_applied": redacted.redaction_applied,
+        "redaction_reasons": redacted.redaction_reasons,
+    })
+}
+
+fn git_diff_for_path(project_root: &Path, path: &str) -> Option<String> {
     let output = Command::new("git")
         .args(["diff", "--no-ext-diff", "--", path])
         .current_dir(project_root)
@@ -343,7 +392,7 @@ fn git_diff_summary_for_path(project_root: &Path, path: &str) -> Option<String> 
     if diff.is_empty() {
         return None;
     }
-    Some(compact_result_preview(&diff, 1600))
+    Some(diff)
 }
 
 pub(super) fn format_graduate_workspace_snapshot_for_postdoc(event: &LabEvent) -> String {

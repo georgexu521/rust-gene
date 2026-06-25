@@ -3,6 +3,54 @@ Status: Current
 
 Last updated: 2026-06-25
 
+## LabRun Security And Governance Hardening - 2026-06-25
+
+The security/governance workstream is tracked in
+`docs/LABRUN_SECURITY_GOVERNANCE_NEXT_PLAN_2026-06-25.md`.
+
+Implemented in this slice:
+
+- Postdoc audit evidence now applies Lab-specific secret redaction before
+  snippets and diffs are persisted. Sensitive paths such as dotenv files and key
+  material record hashes and redaction metadata instead of raw content.
+- Lab validation command review now blocks path-bearing flag escapes in both
+  `--flag=../path` and `--flag ../path` forms for cargo, pytest/python, and
+  other controlled validation surfaces.
+- Package-script validation no longer silently counts as verified proof in
+  unknown workspaces. `npm test`, `pnpm test`, and `yarn test` require explicit
+  trusted workspace configuration before LabRun verification accepts them.
+- LabRun role/stage policy is now enforced at the action-review boundary:
+  professor and postdoc modes are read/audit/review oriented, while graduate
+  mutation is limited to current task allowed scope. Policy decisions are also
+  recorded into LabRun proof events.
+- The repository now has baseline security/governance scaffolding:
+  `SECURITY.md`, `CONTRIBUTING.md`, `.github/CODEOWNERS`,
+  `.github/dependabot.yml`, `.github/workflows/codeql.yml`,
+  `docs/THREAT_MODEL.md`, and `docs/SECURITY_RELEASE_CHECKLIST.md`.
+- README architecture guidance now stays product-level and points to
+  `docs/PROJECT_MAP.md` as the canonical source layout.
+
+Validation for this slice:
+
+```bash
+cargo test -q lab::audit_redaction --lib -- --test-threads=1
+cargo test -q lab::validation --lib -- --test-threads=1
+cargo test -q lab::policy_overlay --lib -- --test-threads=1
+cargo test -q action_review --lib -- --test-threads=1
+cargo test -q lab::orchestrator --lib -- --test-threads=1
+cargo test -q lab:: --lib -- --test-threads=1
+cargo fmt --check
+git diff --check
+ruby -e 'require "yaml"; ARGV.each { |path| YAML.load_file(path); puts "OK #{path}" }' .github/workflows/*.yml .github/dependabot.yml
+cargo check -q
+bash scripts/validate_docs.sh
+cargo clippy --workspace --all-targets --all-features -- -D warnings
+cargo doc --workspace --all-features --no-deps
+```
+
+`scripts/validate_docs.sh` passed its internal full test run: 3177 passed, 0
+failed, 1 ignored.
+
 ## LabRun Post-Hardening Follow-Up - 2026-06-25
 
 The follow-up hardening workstream is tracked in
@@ -107,13 +155,14 @@ Implemented in this slice:
 - Lab context maintenance is named and traced separately from Lab context
   assembly: compression decisions and auto-created summaries remain intentional
   persisted maintenance artifacts, not hidden read-only context assembly.
-- Permission presets include a `labrun` preset, currently mapped to
-  `AutoLowRisk` with LabRun stage/role guidance surfaced separately.
+- Permission presets include a `labrun` preset. It still uses conservative
+  `AutoLowRisk` defaults for ordinary approvals, and now has an active LabRun
+  role/stage policy overlay at the action-review boundary when an active LabRun
+  is present.
 
 Deferred:
 
-- Full LabRun permission overlay: role/stage enforcement, graduate allowed-scope
-  integration, postdoc/professor no-mutation policy, and high-risk ask policy
+- High-risk role/stage ask flows beyond the current deterministic overlay
   remain future work.
 - `/lab evidence graph` remains future LabRun proof-surface work.
 

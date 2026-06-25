@@ -1,0 +1,18 @@
+# Default ownership for all repository changes.
+* @georgexu521
+
+# Security-sensitive runtime boundaries.
+/src/lab/ @georgexu521
+/src/permissions/ @georgexu521
+/src/security/ @georgexu521
+/src/engine/action_review.rs @georgexu521
+/src/engine/conversation_loop/tool_execution_controller/ @georgexu521
+/src/services/api/credentials.rs @georgexu521
+
+# Release, dependency, and automation surfaces.
+/.github/ @georgexu521
+/scripts/ @georgexu521
+/Cargo.toml @georgexu521
+/Cargo.lock @georgexu521
+/QUALITY_GATES.md @georgexu521
+/SECURITY.md @georgexu521

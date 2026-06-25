@@ -142,19 +142,20 @@ Common interactive commands:
 
 ## Architecture
 
-```text
-src/
-├── engine/               # Conversation loop, routing, trace, workflow, MCP
-├── tools/                # Local tools, MCP tools, memory, project index, web
-├── memory/               # Snapshot, prefetch, extraction, maintenance
-├── agent/                # Sub-agent lifecycle, role memory, swarm support
-├── tui/                  # Interactive CLI UI and slash commands
-├── session_store/        # SQLite persistence, traces, learning events
-├── permissions/          # Permission rules, sources, decisions
-├── services/api/         # LLM provider adapters
-├── api/                  # HTTP/WebSocket/SSE API
-└── platform/             # Platform adapters such as Telegram
-```
+Priority Agent is organized around a small product runtime:
+
+- `engine` owns conversation flow, routing, traces, workflow state, and tool
+  execution control.
+- `tools`, `permissions`, `memory`, and `session_store` provide local execution,
+  policy, retrieval, and persistence boundaries.
+- `lab` adds the professor/postdoc/graduate LabRun orchestration layer for
+  scoped implementation, validation, evidence, and review.
+- `services/api`, `api`, and `platform` expose provider and integration
+  surfaces without changing the terminal CLI as the main product path.
+
+The canonical source layout and module-boundary map lives in
+[docs/PROJECT_MAP.md](docs/PROJECT_MAP.md). Keep detailed architecture changes
+there so this README remains a stable product entrypoint.
 
 Core runtime flow:
 
@@ -164,7 +165,7 @@ User prompt
   -> TurnTrace
   -> SessionGoal / goal drift checks
   -> Retrieval and memory prefetch
-  -> Tool execution with permissions and recovery metadata
+  -> Tool execution with action review, permissions, and LabRun policy overlay
   -> LearningEvent persistence
   -> CLI panels backed by trace/state
 ```
