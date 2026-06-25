@@ -47,11 +47,11 @@ formal compliance document.
 - Local credential storage is plaintext dotenv with best-effort file permissions.
 - Unknown third-party repositories can contain hostile build scripts, tests, or
   package lifecycle hooks.
-- CodeQL and manual dependency review improve coverage but do not replace human
-  review.
+- CodeQL, manual dependency review, `cargo audit`, and `cargo deny` improve
+  coverage but do not replace human review.
 - Windows behavior is not yet validated to the same level as macOS/Linux.
-- Release signing, SBOM, dependency license audit, and provenance are future
-  release-hardening work.
+- Release signing, SBOM generation, provenance attestations, and automated
+  secret scanning are future release-hardening work.
 
 ## Review Cadence
 

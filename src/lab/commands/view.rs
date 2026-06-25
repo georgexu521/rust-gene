@@ -510,7 +510,7 @@ fn format_safety_proof_event(event: &crate::lab::model::LabEvent) -> String {
                 .unwrap_or("none")
         ),
         "labrun_policy_allowed" | "labrun_policy_blocked" => format!(
-            "{} role={} stage={} action={} paths={} reason={}",
+            "{} role={} stage={} status={} activation={} source={} action={} paths={} reason={}",
             event.event_type,
             payload
                 .get("role")
@@ -518,6 +518,18 @@ fn format_safety_proof_event(event: &crate::lab::model::LabEvent) -> String {
                 .unwrap_or("unknown"),
             payload
                 .get("stage")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("unknown"),
+            payload
+                .get("status")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("unknown"),
+            payload
+                .get("activation")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("unknown"),
+            payload
+                .get("action_source")
                 .and_then(serde_json::Value::as_str)
                 .unwrap_or("unknown"),
             payload

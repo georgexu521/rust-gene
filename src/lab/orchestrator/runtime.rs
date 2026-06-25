@@ -31,6 +31,9 @@ pub(super) struct PostdocWorktreeProof {
     pub(super) evidence_refs: Vec<String>,
 }
 
+const MAX_POSTDOC_AUDIT_FILE_BYTES: u64 = 256 * 1024;
+const MAX_POSTDOC_AUDIT_DIFF_BYTES: usize = 512 * 1024;
+
 pub(super) fn collect_graduate_worktree_proof_for_postdoc(
     store: &LabStore,
     lab_run_id: &str,
@@ -213,11 +216,11 @@ pub(super) fn collect_postdoc_read_only_audit_proof(
                             &parent_path,
                         ));
                     }
-                    if let Some(diff_text) = git_diff_for_path(store.project_root(), &path) {
+                    if let Some(diff_capture) = git_diff_for_path(store.project_root(), &path) {
                         diff_summaries.push(audit_diff_summary_payload(
                             &result.artifact_id,
                             &path,
-                            &diff_text,
+                            &diff_capture,
                         ));
                     } else {
                         audit_risks.push(format!(
@@ -322,8 +325,8 @@ fn postdoc_validation_event_refs(
 }
 
 fn audit_file_snippet_payload(artifact_id: &str, path: &str, parent_path: &Path) -> Value {
-    let bytes = match std::fs::read(parent_path) {
-        Ok(bytes) => bytes,
+    let metadata = match std::fs::metadata(parent_path) {
+        Ok(metadata) => metadata,
         Err(err) => {
             return serde_json::json!({
                 "artifact_id": artifact_id,
@@ -335,6 +338,7 @@ fn audit_file_snippet_payload(artifact_id: &str, path: &str, parent_path: &Path)
             });
         }
     };
+    let byte_len = metadata.len();
     if let Some(reason) = crate::lab::audit_redaction::sensitive_audit_path_reason(path) {
         return serde_json::json!({
             "artifact_id": artifact_id,
@@ -342,10 +346,49 @@ fn audit_file_snippet_payload(artifact_id: &str, path: &str, parent_path: &Path)
             "snippet_redacted": true,
             "redaction_applied": true,
             "redaction_reasons": [reason],
-            "content_hash": crate::lab::audit_redaction::audit_bytes_hash(&bytes),
-            "byte_len": bytes.len(),
+            "content_hash": audit_file_hash(parent_path).ok(),
+            "byte_len": byte_len,
         });
     }
+    if let Some(reason) = crate::lab::audit_redaction::bulky_audit_path_reason(path) {
+        return serde_json::json!({
+            "artifact_id": artifact_id,
+            "path": path,
+            "snippet_omitted": true,
+            "audit_omission_reason": reason,
+            "redaction_applied": false,
+            "redaction_reasons": [],
+            "content_hash": audit_file_hash(parent_path).ok(),
+            "byte_len": byte_len,
+        });
+    }
+    if byte_len > MAX_POSTDOC_AUDIT_FILE_BYTES {
+        return serde_json::json!({
+            "artifact_id": artifact_id,
+            "path": path,
+            "snippet_omitted": true,
+            "audit_omission_reason": "omitted_large_file",
+            "redaction_applied": false,
+            "redaction_reasons": [],
+            "content_hash": audit_file_hash(parent_path).ok(),
+            "byte_len": byte_len,
+            "max_audit_file_bytes": MAX_POSTDOC_AUDIT_FILE_BYTES,
+        });
+    }
+    let bytes = match std::fs::read(parent_path) {
+        Ok(bytes) => bytes,
+        Err(err) => {
+            return serde_json::json!({
+                "artifact_id": artifact_id,
+                "path": path,
+                "snippet": "unreadable",
+                "read_error": err.to_string(),
+                "redaction_applied": false,
+                "redaction_reasons": [],
+                "byte_len": byte_len,
+            });
+        }
+    };
     let content = String::from_utf8_lossy(&bytes);
     let redacted = crate::lab::audit_redaction::redact_lab_audit_text(&content);
     serde_json::json!({
@@ -354,10 +397,15 @@ fn audit_file_snippet_payload(artifact_id: &str, path: &str, parent_path: &Path)
         "snippet": compact_result_preview(&redacted.text, 1600),
         "redaction_applied": redacted.redaction_applied,
         "redaction_reasons": redacted.redaction_reasons,
+        "byte_len": byte_len,
     })
 }
 
-fn audit_diff_summary_payload(artifact_id: &str, path: &str, diff_text: &str) -> Value {
+fn audit_diff_summary_payload(
+    artifact_id: &str,
+    path: &str,
+    diff_capture: &crate::lab::audit_redaction::AuditCapturedBytes,
+) -> Value {
     if let Some(reason) = crate::lab::audit_redaction::sensitive_audit_path_reason(path) {
         return serde_json::json!({
             "artifact_id": artifact_id,
@@ -365,34 +413,83 @@ fn audit_diff_summary_payload(artifact_id: &str, path: &str, diff_text: &str) ->
             "diff_redacted": true,
             "redaction_applied": true,
             "redaction_reasons": [reason],
-            "diff_hash": crate::lab::audit_redaction::audit_text_hash(diff_text),
-            "byte_len": diff_text.len(),
+            "diff_hash": diff_capture.content_hash,
+            "byte_len": diff_capture.byte_len,
+            "diff_truncated": diff_capture.truncated,
         });
     }
-    let redacted = crate::lab::audit_redaction::redact_lab_audit_text(diff_text);
+    if let Some(reason) = crate::lab::audit_redaction::bulky_audit_path_reason(path) {
+        return serde_json::json!({
+            "artifact_id": artifact_id,
+            "path": path,
+            "diff_omitted": true,
+            "audit_omission_reason": reason,
+            "redaction_applied": false,
+            "redaction_reasons": [],
+            "diff_hash": diff_capture.content_hash,
+            "byte_len": diff_capture.byte_len,
+            "diff_truncated": diff_capture.truncated,
+        });
+    }
+    if diff_capture.truncated {
+        let preview = String::from_utf8_lossy(&diff_capture.preview);
+        let redacted = crate::lab::audit_redaction::redact_lab_audit_text(&preview);
+        return serde_json::json!({
+            "artifact_id": artifact_id,
+            "path": path,
+            "diff_omitted": true,
+            "audit_omission_reason": "omitted_large_diff",
+            "summary_preview": compact_result_preview(&redacted.text, 1600),
+            "redaction_applied": redacted.redaction_applied,
+            "redaction_reasons": redacted.redaction_reasons,
+            "diff_hash": diff_capture.content_hash,
+            "byte_len": diff_capture.byte_len,
+            "diff_truncated": true,
+            "max_audit_diff_bytes": MAX_POSTDOC_AUDIT_DIFF_BYTES,
+        });
+    }
+    let diff_text = String::from_utf8_lossy(&diff_capture.preview);
+    let redacted = crate::lab::audit_redaction::redact_lab_audit_text(&diff_text);
     serde_json::json!({
         "artifact_id": artifact_id,
         "path": path,
         "summary": compact_result_preview(&redacted.text, 1600),
         "redaction_applied": redacted.redaction_applied,
         "redaction_reasons": redacted.redaction_reasons,
+        "diff_hash": diff_capture.content_hash,
+        "byte_len": diff_capture.byte_len,
+        "diff_truncated": false,
     })
 }
 
-fn git_diff_for_path(project_root: &Path, path: &str) -> Option<String> {
-    let output = Command::new("git")
+fn audit_file_hash(path: &Path) -> std::io::Result<String> {
+    let file = std::fs::File::open(path)?;
+    crate::lab::audit_redaction::audit_reader_hash(file)
+}
+
+fn git_diff_for_path(
+    project_root: &Path,
+    path: &str,
+) -> Option<crate::lab::audit_redaction::AuditCapturedBytes> {
+    let mut child = Command::new("git")
         .args(["diff", "--no-ext-diff", "--", path])
         .current_dir(project_root)
-        .output()
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
         .ok()?;
-    if !output.status.success() {
+    let stdout = child.stdout.take()?;
+    let captured =
+        crate::lab::audit_redaction::capture_reader_with_hash(stdout, MAX_POSTDOC_AUDIT_DIFF_BYTES)
+            .ok()?;
+    let status = child.wait().ok()?;
+    if !status.success() || captured.byte_len == 0 {
         return None;
     }
-    let diff = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    if diff.is_empty() {
+    if String::from_utf8_lossy(&captured.preview).trim().is_empty() {
         return None;
     }
-    Some(diff)
+    Some(captured)
 }
 
 pub(super) fn format_graduate_workspace_snapshot_for_postdoc(event: &LabEvent) -> String {

@@ -53,8 +53,10 @@ boundaries:
   until shell defaults, installer behavior, and credential paths are validated.
 - MCP servers, plugins, package scripts, and repository-local scripts can execute
   code. Use trusted workspaces and review permission prompts carefully.
-- Release signing, provenance attestations, SBOM generation, and license audit
-  gates are future release-hardening work.
+- Release signing, provenance attestations, SBOM generation, and automated
+  secret scanning are future release-hardening work. Dependency vulnerability
+  and license checks are available through
+  `scripts/security_dependency_audit.sh`.
 
 ## Security-Sensitive Changes
 

@@ -1106,6 +1106,178 @@ fn postdoc_audit_suppresses_sensitive_path_snippets_and_diffs() {
 }
 
 #[test]
+fn postdoc_audit_omits_bulky_low_value_paths() {
+    let temp = tempfile::tempdir().unwrap();
+    init_git_dir(temp.path());
+    let changed_file = "Cargo.lock";
+    write_tracked_file_with_diff(
+        temp.path(),
+        changed_file,
+        "old lock content\n",
+        "new lock content\nLOW_VALUE_LOCKFILE_DETAIL_SHOULD_NOT_APPEAR\n",
+    );
+    let orchestrator = LabOrchestrator::for_project(temp.path());
+    let proposal = orchestrator
+        .store()
+        .create_proposal("Build LabRun", None)
+        .unwrap();
+    let run = orchestrator
+        .approve_proposal(&proposal.proposal_id)
+        .unwrap();
+    let task = orchestrator
+        .store()
+        .create_graduate_task(
+            &run.lab_run_id,
+            "Implement scoped slice",
+            "Update lockfile.",
+            vec![changed_file.to_string()],
+            vec!["test -f Cargo.lock".to_string()],
+        )
+        .unwrap();
+    orchestrator
+        .create_graduate_result_for_task_latest(
+            &task.task_id,
+            "Updated lockfile.",
+            vec![changed_file.to_string()],
+            vec!["test -f Cargo.lock passed".to_string()],
+            Vec::new(),
+            Vec::new(),
+        )
+        .unwrap();
+    record_lab_validation_pass(&orchestrator, &run.lab_run_id, "test -f Cargo.lock");
+    let mut saved = orchestrator.store().load_run(&run.lab_run_id).unwrap();
+    saved.current_stage = "postdoc_review".to_string();
+    saved.internal_owner = LabRole::Postdoc;
+    orchestrator.store().save_run(&saved).unwrap();
+
+    let created = orchestrator
+        .create_postdoc_integration_summary_for_latest(Some("Postdoc checked lockfile policy."))
+        .unwrap();
+
+    let audit_path = match created.artifact {
+        StageArtifact::PostdocIntegrationSummary(envelope) => envelope
+            .evidence_refs
+            .iter()
+            .find(|item| item.contains("postdoc_audits/postdoc_audit_"))
+            .cloned()
+            .expect("postdoc audit evidence ref"),
+        other => panic!(
+            "expected integration summary, got {:?}",
+            other.artifact_type()
+        ),
+    };
+    let audit: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&audit_path).unwrap()).unwrap();
+    let snippet = audit["file_snippets"].as_array().unwrap().first().unwrap();
+    assert_eq!(snippet["snippet_omitted"], true);
+    assert_eq!(snippet["audit_omission_reason"], "omitted_lockfile");
+    assert!(snippet.get("snippet").is_none());
+    assert!(snippet["content_hash"]
+        .as_str()
+        .unwrap_or("")
+        .starts_with("sha256:"));
+    let diff = audit["diff_summaries"].as_array().unwrap().first().unwrap();
+    assert_eq!(diff["diff_omitted"], true);
+    assert_eq!(diff["audit_omission_reason"], "omitted_lockfile");
+    assert!(diff.get("summary").is_none());
+    assert!(diff["diff_hash"]
+        .as_str()
+        .unwrap_or("")
+        .starts_with("sha256:"));
+    let audit_text = std::fs::read_to_string(audit_path).unwrap();
+    assert!(!audit_text.contains("LOW_VALUE_LOCKFILE_DETAIL_SHOULD_NOT_APPEAR"));
+}
+
+#[test]
+fn postdoc_audit_omits_large_files_and_large_diffs() {
+    let temp = tempfile::tempdir().unwrap();
+    init_git_dir(temp.path());
+    let changed_file = "src/lab/large_output.rs";
+    let mut large_after = "pub const LARGE: &str = \"".to_string();
+    large_after.push_str(&"A".repeat(600 * 1024));
+    large_after.push_str("TAIL_MARKER_SHOULD_NOT_APPEAR\";\n");
+    write_tracked_file_with_diff(
+        temp.path(),
+        changed_file,
+        "pub const LARGE: &str = \"small\";\n",
+        &large_after,
+    );
+    let orchestrator = LabOrchestrator::for_project(temp.path());
+    let proposal = orchestrator
+        .store()
+        .create_proposal("Build LabRun", None)
+        .unwrap();
+    let run = orchestrator
+        .approve_proposal(&proposal.proposal_id)
+        .unwrap();
+    let task = orchestrator
+        .store()
+        .create_graduate_task(
+            &run.lab_run_id,
+            "Implement scoped slice",
+            "Update large output.",
+            vec![changed_file.to_string()],
+            vec!["test -f src/lab/large_output.rs".to_string()],
+        )
+        .unwrap();
+    orchestrator
+        .create_graduate_result_for_task_latest(
+            &task.task_id,
+            "Updated large output.",
+            vec![changed_file.to_string()],
+            vec!["test -f src/lab/large_output.rs passed".to_string()],
+            Vec::new(),
+            Vec::new(),
+        )
+        .unwrap();
+    record_lab_validation_pass(
+        &orchestrator,
+        &run.lab_run_id,
+        "test -f src/lab/large_output.rs",
+    );
+    let mut saved = orchestrator.store().load_run(&run.lab_run_id).unwrap();
+    saved.current_stage = "postdoc_review".to_string();
+    saved.internal_owner = LabRole::Postdoc;
+    orchestrator.store().save_run(&saved).unwrap();
+
+    let created = orchestrator
+        .create_postdoc_integration_summary_for_latest(Some("Postdoc checked large audit policy."))
+        .unwrap();
+
+    let audit_path = match created.artifact {
+        StageArtifact::PostdocIntegrationSummary(envelope) => envelope
+            .evidence_refs
+            .iter()
+            .find(|item| item.contains("postdoc_audits/postdoc_audit_"))
+            .cloned()
+            .expect("postdoc audit evidence ref"),
+        other => panic!(
+            "expected integration summary, got {:?}",
+            other.artifact_type()
+        ),
+    };
+    let audit: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&audit_path).unwrap()).unwrap();
+    let snippet = audit["file_snippets"].as_array().unwrap().first().unwrap();
+    assert_eq!(snippet["snippet_omitted"], true);
+    assert_eq!(snippet["audit_omission_reason"], "omitted_large_file");
+    assert!(snippet["content_hash"]
+        .as_str()
+        .unwrap_or("")
+        .starts_with("sha256:"));
+    let diff = audit["diff_summaries"].as_array().unwrap().first().unwrap();
+    assert_eq!(diff["diff_omitted"], true);
+    assert_eq!(diff["audit_omission_reason"], "omitted_large_diff");
+    assert_eq!(diff["diff_truncated"], true);
+    assert!(diff["diff_hash"]
+        .as_str()
+        .unwrap_or("")
+        .starts_with("sha256:"));
+    let audit_text = std::fs::read_to_string(audit_path).unwrap();
+    assert!(!audit_text.contains("TAIL_MARKER_SHOULD_NOT_APPEAR"));
+}
+
+#[test]
 fn postdoc_integration_summary_includes_graduate_worktree_runtime_proof() {
     let temp = tempfile::tempdir().unwrap();
     let orchestrator = LabOrchestrator::for_project(temp.path());

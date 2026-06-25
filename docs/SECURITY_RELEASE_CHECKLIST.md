@@ -12,6 +12,7 @@ Use this checklist before tagging a formal Priority Agent release.
 - [ ] `cargo test --workspace --all-features -- --test-threads=1`
 - [ ] `bash scripts/validate_docs.sh`
 - [ ] `cargo doc --workspace --all-features --no-deps`
+- [ ] `bash scripts/security_dependency_audit.sh`
 
 ## Security Review
 
@@ -19,6 +20,8 @@ Use this checklist before tagging a formal Priority Agent release.
 - [ ] Review `docs/THREAT_MODEL.md` for changed trust boundaries.
 - [ ] Review CodeQL results on the release commit.
 - [ ] Review dependency updates manually before release.
+- [ ] Review `cargo audit` and `cargo deny check` output from
+      `scripts/security_dependency_audit.sh`.
 - [ ] Confirm no provider keys, bearer tokens, dotenv files, private keys, or
       local LabRun artifacts are staged.
 - [ ] Run targeted LabRun security tests:
@@ -35,12 +38,13 @@ cargo test -q action_review --lib -- --test-threads=1
 - [ ] Build release artifacts from the exact release commit.
 - [ ] Smoke test the packaged binary.
 - [ ] Generate and verify checksums.
+- [ ] Record whether SBOM generation, artifact signing, and provenance
+      attestation were completed or intentionally deferred.
 - [ ] Record any skipped gates or platform limitations in release notes.
 
 ## Future Hardening
 
 - [ ] Add release signing and provenance attestations.
 - [ ] Add SBOM generation.
-- [ ] Add dependency license audit.
 - [ ] Add automated secret scanning if GitHub Advanced Security or an approved
       open-source scanner is available.

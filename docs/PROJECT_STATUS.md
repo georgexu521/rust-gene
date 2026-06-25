@@ -3,6 +3,57 @@ Status: Current
 
 Last updated: 2026-06-25
 
+## LabRun Policy, Audit Scale, And Supply Chain Hardening - 2026-06-25
+
+The policy/audit/supply-chain hardening workstream is tracked in
+`docs/LABRUN_POLICY_AUDIT_SUPPLY_CHAIN_HARDENING_PLAN_2026-06-25.md`.
+
+Implemented in this slice:
+
+- LabRun policy overlay activation is now status-aware. `Active` LabRuns keep
+  the full role/stage overlay, while `Paused`, `PausedShutdown`, `NeedsUser`,
+  and `Blocked` runs no longer unexpectedly hard-block ordinary tool actions.
+- LabRun policy reviews now carry status, activation reason, and action source,
+  and `/lab proof` displays those fields for allowed/blocked policy events.
+- `LabRole::Runtime` no longer grants blanket mutation permission to
+  model-proposed tools. Runtime maintenance writes are allowed only through an
+  explicit runtime-maintenance source and only under `.priority-agent/lab`.
+- Postdoc audit now has bounded file and diff evidence collection. Large files,
+  large diffs, sensitive paths, lockfiles, generated/vendor paths, and
+  binary/media paths record hash/size/reason metadata instead of raw full text.
+- Non-noisy dependency governance is now present through `deny.toml` and
+  `scripts/security_dependency_audit.sh`, which runs `cargo audit` and
+  `cargo deny check` without creating dependency-update branches or PRs.
+- Release supply-chain gaps remain explicit: SBOM generation, artifact signing,
+  provenance attestations, and automated secret scanning stay future
+  release-candidate hardening work.
+
+Validation for this slice:
+
+```bash
+cargo test -q lab::policy_overlay --lib -- --test-threads=1
+cargo test -q lab::audit_redaction --lib -- --test-threads=1
+cargo test -q action_review --lib -- --test-threads=1
+cargo test -q lab::orchestrator --lib -- --test-threads=1
+cargo test -q lab::commands --lib -- --test-threads=1
+cargo test -q lab:: --lib -- --test-threads=1
+cargo fmt --check
+git diff --check
+cargo check -q
+bash scripts/validate_docs.sh
+cargo clippy --workspace --all-targets --all-features -- -D warnings
+cargo doc --workspace --all-features --no-deps
+bash -n scripts/security_dependency_audit.sh
+```
+
+`scripts/validate_docs.sh` passed its internal full test run: 3184 passed, 0
+failed, 1 ignored.
+
+`scripts/security_dependency_audit.sh` is wired as the release dependency gate.
+On this machine, `cargo-audit` and `cargo-deny` are not installed, so the script
+reports the missing tools and exits with setup guidance instead of reporting a
+false pass.
+
 ## LabRun Security And Governance Hardening - 2026-06-25
 
 The security/governance workstream is tracked in

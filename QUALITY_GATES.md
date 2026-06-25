@@ -1,6 +1,6 @@
 # Quality Gates
 
-> Last updated: 2026-06-24
+> Last updated: 2026-06-25
 > Purpose: Define the validation gates required before merging, release
 > candidates, and production-style dogfood runs.
 
@@ -45,10 +45,17 @@ cargo build --release --workspace --all-features
 cargo check --features experimental-api-server -q
 cargo check --features legacy-cli -q
 bash scripts/workflow-production-gates.sh
+bash scripts/security_dependency_audit.sh
 ```
 
 Release artifacts must include the built `priority-agent` binary, public setup
 docs, and a checksum generated from the packaged archive.
+
+`scripts/security_dependency_audit.sh` requires local `cargo-audit` and
+`cargo-deny` installations. If those tools are unavailable on a developer
+machine, record the skip explicitly and run the script before tagging a formal
+release candidate. The check is intentionally non-noisy: it does not create
+dependency-update branches or PRs.
 
 ## Runtime And Agent Dogfood Gate
 
@@ -103,6 +110,7 @@ The default CI gate must cover:
 - workspace all-targets/all-features clippy with warnings denied;
 - docs generation;
 - repo docs validation;
+- non-noisy dependency and license checks before formal release candidates;
 - whitespace diff validation;
 - release artifact packaging on `main` and `v*` tags.
 
