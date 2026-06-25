@@ -1084,15 +1084,11 @@ Do not answer in prose unless no safe patch exists."#;
                         return false;
                     }
                 }
-                ']' => {
-                    if stack.pop() != Some('[') {
-                        return false;
-                    }
+                ']' if stack.pop() != Some('[') => {
+                    return false;
                 }
-                '}' => {
-                    if stack.pop() != Some('{') {
-                        return false;
-                    }
+                '}' if stack.pop() != Some('{') => {
+                    return false;
                 }
                 _ => {}
             }

@@ -113,16 +113,16 @@ jobs:
             comment_body="$(jq -r '.comment.body // ""' "$GITHUB_EVENT_PATH")"
             trigger_ref="$(jq -r '.comment.html_url // ""' "$GITHUB_EVENT_PATH")"
             cat > /tmp/priority-agent-prompt.txt <<'EOF'
-You are running in GitHub Action as Priority Agent. Reply in Chinese and use this exact Markdown structure:
+          You are running in GitHub Action as Priority Agent. Reply in Chinese and use this exact Markdown structure:
 
-## 结论
-## 改动建议
-## 验证步骤
-## 风险与边界
-## 下一步
+          ## 结论
+          ## 改动建议
+          ## 验证步骤
+          ## 风险与边界
+          ## 下一步
 
-Keep it concise and actionable.
-EOF
+          Keep it concise and actionable.
+          EOF
             {
               echo
               echo "Repository: ${GITHUB_REPOSITORY}"
@@ -140,20 +140,20 @@ EOF
             label_name="$(jq -r '.label.name // ""' "$GITHUB_EVENT_PATH")"
             trigger_ref="$(jq -r '.issue.html_url // ""' "$GITHUB_EVENT_PATH")"
             cat > /tmp/priority-agent-prompt.txt <<EOF
-You are running in GitHub Action as Priority Agent. The issue got label "${label_name}".
-Reply in Chinese and use this exact Markdown structure:
+          You are running in GitHub Action as Priority Agent. The issue got label "${label_name}".
+          Reply in Chinese and use this exact Markdown structure:
 
-## 结论
-## 改动建议
-## 验证步骤
-## 风险与边界
-## 下一步
+          ## 结论
+          ## 改动建议
+          ## 验证步骤
+          ## 风险与边界
+          ## 下一步
 
-Repository: ${GITHUB_REPOSITORY}
-Issue #${issue_number}: ${issue_title}
-Issue Body:
-${issue_body}
-EOF
+          Repository: ${GITHUB_REPOSITORY}
+          Issue #${issue_number}: ${issue_title}
+          Issue Body:
+          ${issue_body}
+          EOF
           else
             issue_number="${{ inputs.issue_number }}"
             dispatch_prompt="${{ inputs.prompt }}"
@@ -163,30 +163,30 @@ EOF
             fi
             trigger_ref="workflow_dispatch"
             cat > /tmp/priority-agent-prompt.txt <<EOF
-You are running in GitHub Action as Priority Agent.
-Reply in Chinese and use this exact Markdown structure:
+          You are running in GitHub Action as Priority Agent.
+          Reply in Chinese and use this exact Markdown structure:
 
-## 结论
-## 改动建议
-## 验证步骤
-## 风险与边界
-## 下一步
+          ## 结论
+          ## 改动建议
+          ## 验证步骤
+          ## 风险与边界
+          ## 下一步
 
-Repository: ${GITHUB_REPOSITORY}
-Manual Prompt:
-${dispatch_prompt}
-EOF
+          Repository: ${GITHUB_REPOSITORY}
+          Manual Prompt:
+          ${dispatch_prompt}
+          EOF
           fi
 
           # Budget guard: keep prompt bounded for CI cost control.
           python3 - <<'PY'
-from pathlib import Path
-p = Path("/tmp/priority-agent-prompt.txt")
-txt = p.read_text(encoding="utf-8")
-max_chars = 12000
-if len(txt) > max_chars:
-    p.write_text(txt[:max_chars] + "\n\n[Truncated by CI budget guard]\n", encoding="utf-8")
-PY
+          from pathlib import Path
+          p = Path("/tmp/priority-agent-prompt.txt")
+          txt = p.read_text(encoding="utf-8")
+          max_chars = 12000
+          if len(txt) > max_chars:
+              p.write_text(txt[:max_chars] + "\n\n[Truncated by CI budget guard]\n", encoding="utf-8")
+          PY
 
           echo "issue_number=${issue_number}" >> "$GITHUB_OUTPUT"
           echo "trigger_type=${trigger_type}" >> "$GITHUB_OUTPUT"
@@ -247,4 +247,3 @@ PY
           if [[ -f /tmp/priority-agent-api.pid ]]; then
             kill "$(cat /tmp/priority-agent-api.pid)" 2>/dev/null || true
           fi
-

@@ -205,7 +205,7 @@ impl TaskAnalyzer {
             .collect();
 
         // 按依赖数排序
-        bottlenecks.sort_by(|a, b| b.1.cmp(&a.1));
+        bottlenecks.sort_by_key(|bottleneck| std::cmp::Reverse(bottleneck.1));
         bottlenecks
     }
 

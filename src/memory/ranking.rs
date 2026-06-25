@@ -366,7 +366,7 @@ pub(super) fn search_memory(content: &str, keywords: &[String], max_results: usi
         .filter(|(score, _)| *score > 0)
         .collect();
 
-    scored.sort_by(|a, b| b.0.cmp(&a.0));
+    scored.sort_by_key(|score| std::cmp::Reverse(score.0));
     scored
         .into_iter()
         .take(max_results)

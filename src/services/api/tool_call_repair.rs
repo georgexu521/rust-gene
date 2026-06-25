@@ -608,10 +608,8 @@ fn close_brackets_and_strings(raw: &str) -> String {
             '"' => in_string = !in_string,
             '{' if !in_string => stack.push('}'),
             '[' if !in_string => stack.push(']'),
-            '}' | ']' if !in_string => {
-                if stack.last() == Some(&ch) {
-                    stack.pop();
-                }
+            '}' | ']' if !in_string && stack.last() == Some(&ch) => {
+                stack.pop();
             }
             _ => {}
         }

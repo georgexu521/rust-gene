@@ -171,7 +171,7 @@ pub fn fuzzy_search(query: &str, files: &[String], limit: usize) -> Vec<SearchRe
         .collect();
 
     // 按分数降序排列（分数越高越好）
-    results.sort_by(|a, b| b.score.cmp(&a.score));
+    results.sort_by_key(|result| std::cmp::Reverse(result.score));
     results.truncate(limit);
     results
 }

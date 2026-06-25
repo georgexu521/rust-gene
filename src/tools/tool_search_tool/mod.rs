@@ -231,7 +231,7 @@ async fn search_mcp_tools(
         }
     }
 
-    scored.sort_by(|a, b| b.1.cmp(&a.1));
+    scored.sort_by_key(|score| std::cmp::Reverse(score.1));
     scored
         .into_iter()
         .map(|(name, _)| name)

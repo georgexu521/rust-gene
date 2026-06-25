@@ -208,11 +208,11 @@ impl SessionMemoryCompact {
 
         // 取出现频率最高的文件（top 5）
         let mut hot_files: Vec<(String, usize)> = file_counts.into_iter().collect();
-        hot_files.sort_by(|a, b| b.1.cmp(&a.1));
+        hot_files.sort_by_key(|file| std::cmp::Reverse(file.1));
 
         // 取出现频率最高的工具模式（top 3）
         let mut tool_patterns: Vec<(String, usize)> = tool_counts.into_iter().collect();
-        tool_patterns.sort_by(|a, b| b.1.cmp(&a.1));
+        tool_patterns.sort_by_key(|pattern| std::cmp::Reverse(pattern.1));
 
         Self {
             hot_files: hot_files.into_iter().take(5).map(|(f, _)| f).collect(),

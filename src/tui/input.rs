@@ -574,11 +574,10 @@ pub(super) async fn handle_key_event(key: KeyEvent, app: &mut TuiApp) -> anyhow:
                     total_tool_calls += stats.calls;
                     total_tool_success += stats.success;
                     total_tool_failed += stats.failed;
-                    let avg = if stats.calls > 0 {
-                        stats.total_duration_ms / stats.calls
-                    } else {
-                        0
-                    };
+                    let avg = stats
+                        .total_duration_ms
+                        .checked_div(stats.calls)
+                        .unwrap_or(0);
                     tool_durations.insert(name.clone(), avg);
                 }
 

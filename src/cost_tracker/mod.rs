@@ -564,7 +564,7 @@ impl CostTracker {
             }
         }
         let mut rows: Vec<(String, u64)> = agg.into_iter().collect();
-        rows.sort_by(|a, b| b.1.cmp(&a.1));
+        rows.sort_by_key(|row| std::cmp::Reverse(row.1));
         let items: Vec<String> = rows
             .into_iter()
             .take(limit)

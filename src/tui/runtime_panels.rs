@@ -313,11 +313,11 @@ pub async fn render_context_panel(app: &TuiApp) -> String {
 
     if let Some(engine) = app.streaming_engine.as_ref() {
         let usage = engine.context_usage_report().await;
-        let usage_pct = if usage.max_context_tokens > 0 {
-            usage.total_estimated_tokens.saturating_mul(100) / usage.max_context_tokens
-        } else {
-            0
-        };
+        let usage_pct = usage
+            .total_estimated_tokens
+            .saturating_mul(100)
+            .checked_div(usage.max_context_tokens)
+            .unwrap_or(0);
         lines.push(format!(
             "Estimated request tokens: {} / {} ({}%)",
             usage.total_estimated_tokens, usage.max_context_tokens, usage_pct

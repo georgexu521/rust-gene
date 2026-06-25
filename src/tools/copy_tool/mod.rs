@@ -8,6 +8,19 @@ use serde_json::{json, Value};
 
 pub struct CopyTool;
 
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+fn write_stdin_and_wait(mut child: std::process::Child, text: &str) -> bool {
+    use std::io::Write;
+
+    let write_ok = match child.stdin.take() {
+        Some(mut stdin) => stdin.write_all(text.as_bytes()).is_ok(),
+        None => true,
+    };
+
+    let status_ok = child.wait().map(|status| status.success()).unwrap_or(false);
+    write_ok && status_ok
+}
+
 #[async_trait]
 impl Tool for CopyTool {
     fn name(&self) -> &str {
@@ -42,18 +55,12 @@ impl Tool for CopyTool {
         #[cfg(target_os = "macos")]
         {
             use std::process::Command;
-            let result = Command::new("pbcopy")
-                .stdin(std::process::Stdio::piped())
-                .spawn();
 
-            if let Ok(mut child) = result {
-                use std::io::Write;
-                let write_ok = if let Some(ref mut stdin) = child.stdin {
-                    stdin.write_all(text.as_bytes()).is_ok()
-                } else {
-                    true
-                };
-                if write_ok && child.wait().is_ok() {
+            if let Ok(child) = Command::new("pbcopy")
+                .stdin(std::process::Stdio::piped())
+                .spawn()
+            {
+                if write_stdin_and_wait(child, text) {
                     return ToolResult::success("Text copied to clipboard");
                 }
             }
@@ -62,40 +69,21 @@ impl Tool for CopyTool {
         #[cfg(target_os = "linux")]
         {
             use std::process::Command;
-            // Try xclip first, then xsel
-            let result = Command::new("xclip")
-                .args(["-selection", "clipboard"])
-                .stdin(std::process::Stdio::piped())
-                .spawn();
 
-            if let Ok(mut child) = result {
-                use std::io::Write;
-                if let Some(ref mut stdin) = child.stdin {
-                    if stdin.write_all(text.as_bytes()).is_err() {
-                        continue;
-                    }
-                }
-                if child.wait().is_ok() {
-                    return ToolResult::success("Text copied to clipboard");
-                }
+            fn try_copy_with(command: &str, args: &[&str], text: &str) -> bool {
+                Command::new(command)
+                    .args(args)
+                    .stdin(std::process::Stdio::piped())
+                    .spawn()
+                    .map(|child| write_stdin_and_wait(child, text))
+                    .unwrap_or(false)
             }
 
-            // Try xsel as fallback
-            let result = Command::new("xsel")
-                .args(["--clipboard", "--input"])
-                .stdin(std::process::Stdio::piped())
-                .spawn();
-
-            if let Ok(mut child) = result {
-                use std::io::Write;
-                if let Some(ref mut stdin) = child.stdin {
-                    if stdin.write_all(text.as_bytes()).is_err() {
-                        continue;
-                    }
-                }
-                if child.wait().is_ok() {
-                    return ToolResult::success("Text copied to clipboard");
-                }
+            // Try xclip first, then xsel
+            if try_copy_with("xclip", &["-selection", "clipboard"], text)
+                || try_copy_with("xsel", &["--clipboard", "--input"], text)
+            {
+                return ToolResult::success("Text copied to clipboard");
             }
         }
 

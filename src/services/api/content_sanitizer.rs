@@ -99,10 +99,7 @@ fn strip_dsml_blocks(content: &str) -> String {
     )
     .expect("valid DSML close regex");
     let mut result = content.to_string();
-    loop {
-        let Some(open_match) = open_re.find(&result) else {
-            break;
-        };
+    while let Some(open_match) = open_re.find(&result) {
         let after_open = &result[open_match.end()..];
         let Some(close_match) = close_re.find(after_open) else {
             break;

@@ -109,7 +109,7 @@ Telemetry only collects data when the user has explicitly enabled it via PRIORIT
                 if !data.aggregated_tool_stats.is_empty() {
                     lines.push("\nTool Usage:".to_string());
                     let mut tools: Vec<_> = data.aggregated_tool_stats.iter().collect();
-                    tools.sort_by(|a, b| b.1.calls.cmp(&a.1.calls));
+                    tools.sort_by_key(|tool| std::cmp::Reverse(tool.1.calls));
                     for (name, stats) in tools.iter().take(20) {
                         let success_rate = if stats.calls > 0 {
                             (stats.success as f64 / stats.calls as f64) * 100.0

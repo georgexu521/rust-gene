@@ -2,7 +2,9 @@
 //!
 //! 支持 `code --goto`, `code --reuse-window` 等操作
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
+#[cfg(target_os = "macos")]
+use std::path::PathBuf;
 use tokio::process::Command;
 
 /// VS Code / Cursor 客户端

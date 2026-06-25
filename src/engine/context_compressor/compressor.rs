@@ -449,11 +449,11 @@ impl ContextCompressor {
                         "Heavy (LLM) compression succeeded: {} -> {} tokens (saved {}%)",
                         tokens_before,
                         tokens_after,
-                        if tokens_before > 0 {
-                            (tokens_before - tokens_after) * 100 / tokens_before
-                        } else {
-                            0
-                        }
+                        tokens_before
+                            .saturating_sub(tokens_after)
+                            .saturating_mul(100)
+                            .checked_div(tokens_before)
+                            .unwrap_or(0)
                     );
                     compressed
                 }
@@ -1235,12 +1235,13 @@ impl ContextCompressor {
                         pending_tool_calls.insert(tc.id.clone(), i);
                     }
                 }
-                Message::Tool { tool_call_id, .. } => {
-                    if pending_tool_calls.remove(tool_call_id).is_none() {
-                        // 没有对应的 tool_call，标记移除
-                        to_remove.push(i);
-                    }
+                Message::Tool { tool_call_id, .. }
+                    if pending_tool_calls.remove(tool_call_id).is_none() =>
+                {
+                    // 没有对应的 tool_call，标记移除
+                    to_remove.push(i);
                 }
+                Message::Tool { .. } => {}
                 _ => {}
             }
         }
@@ -1365,14 +1366,12 @@ impl ContextCompressor {
 
     /// 获取压缩统计
     pub fn stats(&self) -> CompressionStats {
-        let savings_rate = if self.total_tokens_before > 0 {
-            self.total_tokens_before
-                .saturating_sub(self.total_tokens_after)
-                .saturating_mul(100)
-                / self.total_tokens_before
-        } else {
-            0
-        };
+        let savings_rate = self
+            .total_tokens_before
+            .saturating_sub(self.total_tokens_after)
+            .saturating_mul(100)
+            .checked_div(self.total_tokens_before)
+            .unwrap_or(0);
         CompressionStats {
             compression_count: self.compression_count,
             max_context_tokens: self.budget.max_context_tokens,

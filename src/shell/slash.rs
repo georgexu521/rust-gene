@@ -1032,11 +1032,11 @@ pub async fn handle_context(host: &dyn ShellHost) -> String {
         return "No engine available.".to_string();
     };
     let usage = engine.context_usage_report().await;
-    let pct = if usage.max_context_tokens > 0 {
-        usage.total_estimated_tokens * 100 / usage.max_context_tokens
-    } else {
-        0
-    };
+    let pct = usage
+        .total_estimated_tokens
+        .saturating_mul(100)
+        .checked_div(usage.max_context_tokens)
+        .unwrap_or(0);
     format!(
         "Context: {} / {} tokens ({}%)\n  history: {} messages ({} tokens)\n  tool schema: {} tokens\n  memory snapshot: {} tokens\n  fingerprint: {}",
         usage.total_estimated_tokens,

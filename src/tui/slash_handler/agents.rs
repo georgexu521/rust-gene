@@ -1296,8 +1296,12 @@ pub async fn handle_context(app: &TuiApp) -> String {
                 stats.total_tokens_after
             ));
             if stats.total_tokens_before > 0 {
-                let savings = (stats.total_tokens_before - stats.total_tokens_after) * 100
-                    / stats.total_tokens_before;
+                let savings = stats
+                    .total_tokens_before
+                    .saturating_sub(stats.total_tokens_after)
+                    .saturating_mul(100)
+                    .checked_div(stats.total_tokens_before)
+                    .unwrap_or(0);
                 lines.push(format!("  Overall savings: {}%", savings));
             }
             lines.push(format!(
