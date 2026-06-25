@@ -31,6 +31,45 @@ fn init_git_dir(path: &Path) {
         .expect("git commit");
 }
 
+fn write_tracked_file_with_diff(path: &Path, relative_path: &str, before: &str, after: &str) {
+    let file_path = path.join(relative_path);
+    if let Some(parent) = file_path.parent() {
+        std::fs::create_dir_all(parent).expect("create tracked file parent");
+    }
+    std::fs::write(&file_path, before).expect("write tracked file before");
+    std::process::Command::new("git")
+        .args(["add", relative_path])
+        .current_dir(path)
+        .output()
+        .expect("git add tracked file");
+    std::process::Command::new("git")
+        .args(["commit", "-m", "add audited file"])
+        .current_dir(path)
+        .output()
+        .expect("git commit tracked file");
+    std::fs::write(&file_path, after).expect("write tracked file after");
+}
+
+fn record_lab_validation_pass(orchestrator: &LabOrchestrator, lab_run_id: &str, command: &str) {
+    orchestrator
+        .store()
+        .record_run_event(
+            lab_run_id,
+            "lab_validation_command_passed",
+            serde_json::json!({
+                "command": command,
+                "policy_reason": "test validation",
+                "status_code": 0,
+                "stdout_preview": "",
+                "stderr_preview": "",
+                "validation_kind": "cargo",
+                "workspace_trust": "unknown",
+                "policy_action": "allow",
+            }),
+        )
+        .unwrap();
+}
+
 fn lab_context_with_agent_worktree(
     project_root: &Path,
     session_id: &str,
@@ -795,6 +834,13 @@ fn graduate_result_artifact_completes_task_and_preserves_not_verified_status() {
 #[test]
 fn postdoc_integration_summary_accepts_unblocked_graduate_results() {
     let temp = tempfile::tempdir().unwrap();
+    init_git_dir(temp.path());
+    write_tracked_file_with_diff(
+        temp.path(),
+        "src/lab/orchestrator.rs",
+        "before audit\n",
+        "after audit\n",
+    );
     let orchestrator = LabOrchestrator::for_project(temp.path());
     let proposal = orchestrator
         .store()
@@ -823,6 +869,7 @@ fn postdoc_integration_summary_accepts_unblocked_graduate_results() {
             Vec::new(),
         )
         .unwrap();
+    record_lab_validation_pass(&orchestrator, &run.lab_run_id, "cargo check -q");
     let mut saved = orchestrator.store().load_run(&run.lab_run_id).unwrap();
     saved.current_stage = "postdoc_review".to_string();
     saved.internal_owner = LabRole::Postdoc;
@@ -841,7 +888,7 @@ fn postdoc_integration_summary_accepts_unblocked_graduate_results() {
         created.artifact.validation_status(),
         Some("postdoc_integrated_pending_professor_review")
     );
-    match created.artifact {
+    let audit_path = match created.artifact {
         StageArtifact::PostdocIntegrationSummary(envelope) => {
             assert!(envelope
                 .body
@@ -857,12 +904,42 @@ fn postdoc_integration_summary_accepts_unblocked_graduate_results() {
                 .evidence_refs
                 .iter()
                 .any(|item| item.contains("postdoc_audits/postdoc_audit_")));
+            envelope
+                .evidence_refs
+                .iter()
+                .find(|item| item.contains("postdoc_audits/postdoc_audit_"))
+                .cloned()
+                .expect("postdoc audit evidence ref")
         }
         other => panic!(
             "expected integration summary, got {:?}",
             other.artifact_type()
         ),
-    }
+    };
+    let audit: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(audit_path).unwrap()).unwrap();
+    assert_eq!(audit["audit_status"], "postdoc_audit_verified");
+    assert!(audit["file_snippets"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|item| item["snippet"]
+            .as_str()
+            .unwrap_or("")
+            .contains("after audit")));
+    assert!(audit["diff_summaries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|item| {
+            let summary = item["summary"].as_str().unwrap_or("");
+            summary.contains("-before audit") && summary.contains("+after audit")
+        }));
+    assert!(audit["validation_event_refs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|item| item.as_str().unwrap_or("").starts_with("event:")));
     let events = orchestrator
         .store()
         .list_run_events(&run.lab_run_id)
@@ -961,6 +1038,13 @@ fn postdoc_integration_summary_includes_graduate_worktree_runtime_proof() {
 #[test]
 fn postdoc_integration_summary_includes_workspace_snapshot_evidence() {
     let temp = tempfile::tempdir().unwrap();
+    init_git_dir(temp.path());
+    write_tracked_file_with_diff(
+        temp.path(),
+        "src/lab/orchestrator.rs",
+        "before workspace audit\n",
+        "after workspace audit\n",
+    );
     let orchestrator = LabOrchestrator::for_project(temp.path());
     let proposal = orchestrator
         .store()
@@ -989,6 +1073,7 @@ fn postdoc_integration_summary_includes_workspace_snapshot_evidence() {
             Vec::new(),
         )
         .unwrap();
+    record_lab_validation_pass(&orchestrator, &run.lab_run_id, "cargo check -q");
     orchestrator
         .store()
         .record_run_event(
@@ -1127,6 +1212,13 @@ fn postdoc_integration_summary_blocks_on_graduate_result_blockers() {
 #[test]
 fn professor_review_blocks_deterministic_closeout() {
     let temp = tempfile::tempdir().unwrap();
+    init_git_dir(temp.path());
+    write_tracked_file_with_diff(
+        temp.path(),
+        "src/lab/orchestrator.rs",
+        "before professor audit\n",
+        "after professor audit\n",
+    );
     let orchestrator = LabOrchestrator::for_project(temp.path());
     let proposal = orchestrator
         .store()
@@ -1155,6 +1247,7 @@ fn professor_review_blocks_deterministic_closeout() {
             Vec::new(),
         )
         .unwrap();
+    record_lab_validation_pass(&orchestrator, &run.lab_run_id, "cargo check -q");
     let mut saved = orchestrator.store().load_run(&run.lab_run_id).unwrap();
     saved.current_stage = "postdoc_review".to_string();
     saved.internal_owner = LabRole::Postdoc;
@@ -1499,11 +1592,13 @@ fn graduate_scope_validation_normalizes_and_rejects_unsafe_paths() {
 fn graduate_runtime_verification_rejects_missing_actual_changes() {
     let project = tempfile::tempdir().unwrap();
     init_git_dir(project.path());
+    let worktree = tempfile::tempdir().unwrap();
+    init_git_dir(worktree.path());
     let context = lab_context_with_agent_worktree(
         project.path(),
         "lab-provider-command",
         "agent_1",
-        project.path(),
+        worktree.path(),
     );
     let task = GraduateTask {
         schema_version: LAB_SCHEMA_VERSION,
@@ -1530,11 +1625,57 @@ fn graduate_runtime_verification_rejects_missing_actual_changes() {
         Some("agent_1"),
         "lab-graduate-gradtask_test",
         &[],
+        &crate::lab::provider_certification::graduate_provider_execution_policy(&context),
     )
     .unwrap_err()
     .to_string();
 
     assert!(err.contains("no actual file changes"));
+}
+
+#[test]
+fn graduate_runtime_verification_requires_isolated_worktree_when_policy_requires_it() {
+    let project = tempfile::tempdir().unwrap();
+    init_git_dir(project.path());
+    let context = ToolContext::new(project.path(), "lab-provider-command");
+    let task = GraduateTask {
+        schema_version: LAB_SCHEMA_VERSION,
+        task_id: "gradtask_test".to_string(),
+        lab_run_id: "labrun_test".to_string(),
+        created_at: Utc::now(),
+        updated_at: Utc::now(),
+        created_by: LabRole::Postdoc,
+        assigned_role: LabRole::Graduate,
+        status: LabTaskStatus::InProgress,
+        title: "Write proof".to_string(),
+        instructions: "Create proof.txt".to_string(),
+        allowed_scope: vec!["proof.txt".to_string()],
+        required_validation: vec!["test -f proof.txt".to_string()],
+        evidence_ids: Vec::new(),
+        result_artifact_id: None,
+        blocker: None,
+        cycle_id: Some("0".to_string()),
+    };
+
+    let err = runtime_verify_graduate_task_result(
+        &task,
+        &context,
+        Some("agent_1"),
+        "lab-graduate-gradtask_test",
+        &["proof.txt".to_string()],
+        &crate::lab::provider_certification::graduate_provider_execution_policy(&context),
+    )
+    .unwrap_err()
+    .to_string();
+
+    assert!(err.contains("requires isolated worktree proof"));
+    let events = LabStore::for_project(project.path())
+        .list_run_events(&task.lab_run_id)
+        .unwrap();
+    assert!(events.iter().any(|event| {
+        event.event_type == "lab_graduate_isolation_missing"
+            && event.payload["task_id"] == task.task_id
+    }));
 }
 
 #[test]
@@ -1575,6 +1716,7 @@ fn graduate_runtime_verification_blocks_shell_validation_and_records_event() {
         Some("agent_1"),
         "lab-graduate-gradtask_test",
         &[],
+        &crate::lab::provider_certification::graduate_provider_execution_policy(&context),
     )
     .unwrap_err()
     .to_string();
@@ -1631,6 +1773,7 @@ fn graduate_runtime_verification_checks_worktree_scope_and_validation() {
         Some("agent_1"),
         "lab-graduate-gradtask_test",
         &[],
+        &crate::lab::provider_certification::graduate_provider_execution_policy(&context),
     )
     .unwrap();
 
@@ -1679,6 +1822,7 @@ fn graduate_runtime_verification_falls_back_to_durable_task_id() {
         Some("unknown_agent"),
         "lab-graduate-gradtask_test",
         &[],
+        &crate::lab::provider_certification::graduate_provider_execution_policy(&context),
     )
     .unwrap();
 
@@ -1863,6 +2007,7 @@ fn unbound_graduate_success_can_bind_runtime_verified_result() {
             Some("agent_runtime_verified"),
             &[],
             "The iteration limit was reached before final JSON.",
+            &crate::lab::provider_certification::graduate_provider_execution_policy(&context),
         )
         .unwrap();
 
@@ -1885,6 +2030,9 @@ fn unbound_graduate_success_can_bind_runtime_verified_result() {
             assert!(envelope
                 .evidence_refs
                 .contains(&"agent:agent_runtime_verified".to_string()));
+            assert!(envelope
+                .evidence_refs
+                .contains(&"runtime_isolation:isolated_worktree".to_string()));
         }
         other => panic!("expected GraduateResult, got {:?}", other.artifact_type()),
     }

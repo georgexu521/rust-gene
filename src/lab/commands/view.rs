@@ -423,6 +423,8 @@ fn safety_proof_event_lines(events: &[crate::lab::model::LabEvent], limit: usize
                     | "lab_validation_command_failed"
                     | "lab_validation_command_passed"
                     | "lab_graduate_provider_execution_policy"
+                    | "lab_graduate_isolation_missing"
+                    | "lab_graduate_isolation_verified"
                     | "postdoc_read_only_audit_written"
                     | "lab_artifact_semantic_gate_blocked"
                     | "lab_artifact_acceptance_blocked_by_semantic_gate"
@@ -448,8 +450,20 @@ fn format_safety_proof_event(event: &crate::lab::model::LabEvent) -> String {
         "lab_validation_command_blocked"
         | "lab_validation_command_failed"
         | "lab_validation_command_passed" => format!(
-            "{} command={} reason={}",
+            "{} kind={} trust={} action={} command={} reason={}",
             event.event_type,
+            payload
+                .get("validation_kind")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("unknown"),
+            payload
+                .get("workspace_trust")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("unknown"),
+            payload
+                .get("policy_action")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("unknown"),
             payload
                 .get("command")
                 .and_then(serde_json::Value::as_str)
@@ -473,9 +487,33 @@ fn format_safety_proof_event(event: &crate::lab::model::LabEvent) -> String {
                 .unwrap_or_else(|| "unknown".to_string()),
             value_string_array(payload.get("proof_labels")).join(",")
         ),
-        "postdoc_read_only_audit_written" => format!(
-            "{} path={}",
+        "lab_graduate_isolation_missing" | "lab_graduate_isolation_verified" => format!(
+            "{} task={} agent_task={} reason={} worktree={}",
             event.event_type,
+            payload
+                .get("task_id")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("unknown"),
+            payload
+                .get("agent_task_id")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("unknown"),
+            payload
+                .get("reason")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("none"),
+            payload
+                .get("worktree_path")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("none")
+        ),
+        "postdoc_read_only_audit_written" => format!(
+            "{} status={} path={}",
+            event.event_type,
+            payload
+                .get("audit_status")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("unknown"),
             payload
                 .get("audit_path")
                 .and_then(serde_json::Value::as_str)

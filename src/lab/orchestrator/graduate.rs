@@ -133,6 +133,7 @@ impl LabOrchestrator {
                     agent_id.as_deref(),
                     &graduate_agent_task_id(&task),
                     &changed_by_agent,
+                    &provider_policy,
                 ) {
                     Ok(evidence) => evidence,
                     Err(err) => {
@@ -161,6 +162,7 @@ impl LabOrchestrator {
                     .extend(runtime_evidence.validation_attempts);
                 parsed.validation_attempts.sort();
                 parsed.validation_attempts.dedup();
+                parsed.evidence_ids.extend(runtime_evidence.evidence_refs);
                 parsed.evidence_ids.extend(
                     provider_policy
                         .proof_labels
@@ -192,6 +194,7 @@ impl LabOrchestrator {
                 agent_id.as_deref(),
                 &changed_by_agent,
                 &result.content,
+                &provider_policy,
             ) {
                 Ok(created) => {
                     return self.store.update_graduate_dispatch_status(
@@ -283,6 +286,7 @@ impl LabOrchestrator {
         agent_id: Option<&str>,
         parent_changed_files: &[String],
         result_content: &str,
+        provider_policy: &crate::lab::provider_certification::LabGraduateProviderExecutionPolicy,
     ) -> anyhow::Result<CreatedStageArtifact> {
         let agent_task_id = graduate_agent_task_id(task);
         let runtime_evidence = runtime_verify_graduate_task_result(
@@ -291,6 +295,7 @@ impl LabOrchestrator {
             agent_id,
             &agent_task_id,
             parent_changed_files,
+            provider_policy,
         )?;
         let mut evidence_ids = vec![
             format!("agent_task:{agent_task_id}"),
@@ -299,8 +304,7 @@ impl LabOrchestrator {
         if let Some(agent_id) = agent_id {
             evidence_ids.push(format!("agent:{agent_id}"));
         }
-        let provider_policy =
-            crate::lab::provider_certification::graduate_provider_execution_policy(context);
+        evidence_ids.extend(runtime_evidence.evidence_refs.clone());
         evidence_ids.extend(
             provider_policy
                 .proof_labels

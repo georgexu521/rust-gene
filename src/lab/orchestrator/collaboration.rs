@@ -442,6 +442,7 @@ impl LabOrchestrator {
             Some(&state.agent_id),
             &agent_task_id,
             &[],
+            &provider_policy,
         ) {
             Ok(evidence) => evidence,
             Err(err) => {
@@ -459,6 +460,7 @@ impl LabOrchestrator {
             .extend(runtime_evidence.validation_attempts);
         parsed.validation_attempts.sort();
         parsed.validation_attempts.dedup();
+        parsed.evidence_ids.extend(runtime_evidence.evidence_refs);
         parsed
             .evidence_ids
             .push(format!("agent_task:{}", agent_task_id));
@@ -653,6 +655,7 @@ impl LabOrchestrator {
             risk.contains("blockers:")
                 || risk.contains("no validation attempts")
                 || risk.contains("No graduate result")
+                || risk.contains("audit risk:")
         }) {
             "needs_revision"
         } else {

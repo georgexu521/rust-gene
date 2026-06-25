@@ -4,7 +4,61 @@ use crate::services::api::{ChatResponse, ToolCall};
 use async_openai::types::ChatCompletionResponseStream;
 use async_trait::async_trait;
 use std::collections::VecDeque;
+use std::path::Path;
 use std::sync::Mutex;
+
+fn lab_draft_git(path: &Path, args: &[&str]) {
+    let output = std::process::Command::new("git")
+        .current_dir(path)
+        .args(args)
+        .output()
+        .unwrap_or_else(|err| panic!("failed to run git {}: {}", args.join(" "), err));
+    assert!(
+        output.status.success(),
+        "git {} failed: {}",
+        args.join(" "),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+fn prepare_draft_postdoc_code_audit_input(
+    path: &Path,
+    store: &LabStore,
+    lab_run_id: &str,
+    relative_path: &str,
+) {
+    lab_draft_git(path, &["init", "-q"]);
+    lab_draft_git(path, &["config", "user.email", "lab@example.test"]);
+    lab_draft_git(path, &["config", "user.name", "Lab Test"]);
+    std::fs::write(path.join("README.md"), "base\n").expect("seed draft git repo");
+    lab_draft_git(path, &["add", "README.md"]);
+    lab_draft_git(path, &["commit", "-q", "-m", "initial"]);
+
+    let file_path = path.join(relative_path);
+    if let Some(parent) = file_path.parent() {
+        std::fs::create_dir_all(parent).expect("create draft audit parent");
+    }
+    std::fs::write(&file_path, "before draft audit\n").expect("write draft audit baseline");
+    lab_draft_git(path, &["add", relative_path]);
+    lab_draft_git(path, &["commit", "-q", "-m", "add draft audit file"]);
+    std::fs::write(&file_path, "after draft audit\n").expect("write draft audit change");
+    store
+        .record_run_event(
+            lab_run_id,
+            "lab_validation_command_passed",
+            serde_json::json!({
+                "command": "test -f src/lab/draft.rs",
+                "policy_reason": "draft test validation",
+                "status_code": 0,
+                "stdout_preview": "",
+                "stderr_preview": "",
+                "validation_kind": "filesystem_test",
+                "workspace_trust": "unknown",
+                "policy_action": "allow",
+            }),
+        )
+        .unwrap();
+}
 
 #[test]
 fn sponsor_message_classification_parses_task_decision() {
@@ -1025,6 +1079,12 @@ async fn hybrid_run_stops_at_deterministic_professor_review_gate() {
             Vec::new(),
         )
         .unwrap();
+    prepare_draft_postdoc_code_audit_input(
+        temp.path(),
+        &store,
+        &run.lab_run_id,
+        "src/lab/draft.rs",
+    );
     let mut saved = store.load_run(&run.lab_run_id).unwrap();
     saved.current_stage = "postdoc_review".to_string();
     saved.internal_owner = crate::lab::model::LabRole::Postdoc;
@@ -1090,6 +1150,12 @@ async fn hybrid_run_syncs_completed_durable_graduate_and_reaches_user_report() {
             vec!["test -f src/lab/draft.rs".to_string()],
         )
         .unwrap();
+    prepare_draft_postdoc_code_audit_input(
+        temp.path(),
+        &store,
+        &run.lab_run_id,
+        "src/lab/draft.rs",
+    );
     let dispatch = crate::lab::delegation::build_graduate_task_dispatch(&task).unwrap();
     let record = store
         .record_graduate_dispatch(&run.lab_run_id, &task.task_id, dispatch)
@@ -1264,6 +1330,12 @@ async fn hybrid_run_plans_queues_graduate_syncs_and_reaches_user_report() {
     assert_eq!(
         task.required_validation,
         vec!["test -f src/lab/draft.rs".to_string()]
+    );
+    prepare_draft_postdoc_code_audit_input(
+        temp.path(),
+        &store,
+        &run.lab_run_id,
+        "src/lab/draft.rs",
     );
     let dispatch = crate::lab::delegation::build_graduate_task_dispatch(&task).unwrap();
     store

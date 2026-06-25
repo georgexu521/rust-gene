@@ -32,6 +32,40 @@ fn init_lab_command_git_repo(path: &Path) {
     lab_command_git(path, &["commit", "-q", "-m", "initial"]);
 }
 
+fn prepare_lab_command_code_audit_input(
+    path: &Path,
+    orchestrator: &LabOrchestrator,
+    lab_run_id: &str,
+    relative_path: &str,
+) {
+    init_lab_command_git_repo(path);
+    let file_path = path.join(relative_path);
+    if let Some(parent) = file_path.parent() {
+        std::fs::create_dir_all(parent).expect("create audited command parent");
+    }
+    std::fs::write(&file_path, "before command audit\n").expect("write audited command file");
+    lab_command_git(path, &["add", relative_path]);
+    lab_command_git(path, &["commit", "-q", "-m", "add audited command file"]);
+    std::fs::write(&file_path, "after command audit\n").expect("modify audited command file");
+    orchestrator
+        .store()
+        .record_run_event(
+            lab_run_id,
+            "lab_validation_command_passed",
+            serde_json::json!({
+                "command": "cargo check -q",
+                "policy_reason": "command test validation",
+                "status_code": 0,
+                "stdout_preview": "",
+                "stderr_preview": "",
+                "validation_kind": "cargo",
+                "workspace_trust": "unknown",
+                "policy_action": "allow",
+            }),
+        )
+        .unwrap();
+}
+
 fn drive_lab_command_to_user_report(path: &Path) {
     let orchestrator = LabOrchestrator::for_project(path);
     for stage in [
@@ -1568,7 +1602,7 @@ fn advance_requires_gate_satisfaction() {
         "plan Professor direction",
     );
     assert!(planned.contains("Created ProfessorPlan artifact"));
-    assert!(planned.contains("Gate satisfied"));
+    assert!(planned.contains("Gate: professor_discussion (satisfied)"));
 
     let advanced = handle_lab_command(temp.path(), Some("session".to_string()), "advance");
     assert!(advanced.contains("postdoc_plan"));
@@ -1596,12 +1630,50 @@ fn plan_command_creates_artifact_and_allows_advance() {
         "plan Professor direction",
     );
     assert!(planned.contains("Created ProfessorPlan artifact"));
-    assert!(planned.contains("Gate satisfied"));
+    assert!(planned.contains("Gate: professor_discussion (satisfied)"));
     assert!(planned.contains("Report: "));
 
     let advanced = handle_lab_command(temp.path(), Some("session".to_string()), "advance");
     assert!(advanced.contains("postdoc_plan"));
     assert!(temp.path().join(".priority-agent/lab/runs").exists());
+}
+
+#[test]
+fn plan_command_reports_blocked_semantic_gate_with_blockers() {
+    let temp = tempfile::tempdir().unwrap();
+    let proposal = handle_lab_command(temp.path(), Some("session".to_string()), "propose Build it");
+    let proposal_id = proposal
+        .lines()
+        .find_map(|line| line.strip_prefix("Lab proposal created: "))
+        .unwrap()
+        .to_string();
+    let approved = handle_lab_command(
+        temp.path(),
+        Some("session".to_string()),
+        &format!("approve {proposal_id}"),
+    );
+    assert!(approved.contains("LabRun created"));
+    let planned = handle_lab_command(
+        temp.path(),
+        Some("session".to_string()),
+        "plan Professor direction",
+    );
+    assert!(planned.contains("Gate: professor_discussion (satisfied)"));
+    let advanced = handle_lab_command(temp.path(), Some("session".to_string()), "advance");
+    assert!(advanced.contains("postdoc_plan"));
+
+    let postdoc = handle_lab_command(
+        temp.path(),
+        Some("session".to_string()),
+        "plan Postdoc plan",
+    );
+
+    assert!(postdoc.contains("Created PostdocPlan artifact"));
+    assert!(postdoc.contains("Gate: postdoc_plan (blocked)"));
+    assert!(postdoc.contains("Validation: needs_revision"));
+    assert!(postdoc.contains("Blockers:"));
+    assert!(postdoc.contains("PostdocPlan.files_expected must contain at least one item"));
+    assert!(!postdoc.contains("Gate satisfied"));
 }
 
 #[test]
@@ -2482,7 +2554,7 @@ fn proof_command_rolls_up_persisted_lab_evidence() {
         Some("session".to_string()),
         "plan initial professor direction",
     );
-    assert!(planned.contains("Gate satisfied"));
+    assert!(planned.contains("Gate: professor_discussion (satisfied)"));
     let store = LabStore::for_project(temp.path());
     let run = store.latest_run().unwrap().unwrap();
     store
@@ -3890,6 +3962,12 @@ fn integrate_command_writes_postdoc_summary() {
     let run = orchestrator
         .approve_proposal(&proposal.proposal_id)
         .unwrap();
+    prepare_lab_command_code_audit_input(
+        temp.path(),
+        &orchestrator,
+        &run.lab_run_id,
+        "src/lab/commands.rs",
+    );
     let task = orchestrator
         .store()
         .create_graduate_task(
@@ -3938,6 +4016,12 @@ fn professor_review_command_writes_final_review() {
     let run = orchestrator
         .approve_proposal(&proposal.proposal_id)
         .unwrap();
+    prepare_lab_command_code_audit_input(
+        temp.path(),
+        &orchestrator,
+        &run.lab_run_id,
+        "src/lab/commands.rs",
+    );
     let task = orchestrator
         .store()
         .create_graduate_task(

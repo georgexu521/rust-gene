@@ -16,7 +16,7 @@ use crate::lab::model::{
     LabProviderCertificationKind, LabProviderCertificationOutcome, LabProviderCertificationRecord,
     LabRole, LabRunStatus, ProfessorSteeringDecision, SponsorMessageStatus, StageArtifact,
 };
-use crate::lab::orchestrator::LabOrchestrator;
+use crate::lab::orchestrator::{CreatedStageArtifact, LabOrchestrator};
 use crate::lab::provider_certification::provider_certification_report;
 use crate::lab::scheduler::{
     background_scheduler_status, default_background_interval_ms, default_background_max_steps,
@@ -174,14 +174,7 @@ pub fn handle_lab_command(
         },
         "gate" => view::handle_gate_command(&orchestrator, rest),
         "plan" => match orchestrator.create_current_stage_artifact_for_latest(rest) {
-            Ok(created) => format!(
-                "Created {} artifact: {}\nGate satisfied for stage '{}'.\nArtifact: {}\nReport: {}",
-                created.artifact.artifact_type().as_str(),
-                created.artifact.artifact_id(),
-                created.gate.stage,
-                created.path.display(),
-                created.report_path.display()
-            ),
+            Ok(created) => format_created_stage_artifact(&created),
             Err(err) => format!("Failed to create Lab artifact: {err}"),
         },
         "integrate" => match orchestrator.create_postdoc_integration_summary_for_latest(Some(rest)) {
@@ -314,6 +307,31 @@ pub fn handle_lab_command(
         "review" => view::handle_review_command(&orchestrator, store, rest),
         _ => format!("Unknown /lab command: {subcommand}\n\n{}", lab_help()),
     }
+}
+
+fn format_created_stage_artifact(created: &CreatedStageArtifact) -> String {
+    let gate_status = if created.gate.is_satisfied() {
+        "satisfied"
+    } else {
+        "blocked"
+    };
+    let mut lines = vec![
+        format!(
+            "Created {} artifact: {}",
+            created.artifact.artifact_type().as_str(),
+            created.artifact.artifact_id()
+        ),
+        format!("Gate: {} ({gate_status})", created.gate.stage),
+    ];
+    if let Some(validation_status) = created.gate.validation_status.as_deref() {
+        lines.push(format!("Validation: {validation_status}"));
+    }
+    if !created.gate.blockers.is_empty() {
+        lines.push(format!("Blockers: {}", created.gate.blockers.join("; ")));
+    }
+    lines.push(format!("Artifact: {}", created.path.display()));
+    lines.push(format!("Report: {}", created.report_path.display()));
+    lines.join("\n")
 }
 
 /// Handles LabRun commands that need provider or tool context.

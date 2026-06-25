@@ -17,12 +17,24 @@ pub(crate) struct LabValidationCommandPlan {
     pub(crate) program: String,
     pub(crate) args: Vec<String>,
     pub(crate) reason: String,
+    pub(crate) validation_kind: String,
+    pub(crate) workspace_trust: String,
+    pub(crate) policy_action: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum LabValidationPolicyDecision {
     Allow(LabValidationCommandPlan),
     Block { command: String, reason: String },
+}
+
+struct LabValidationEventMetadata<'a> {
+    reason: Option<&'a str>,
+    status_code: Option<i32>,
+    output: Option<(&'a str, &'a str)>,
+    validation_kind: &'a str,
+    workspace_trust: &'a str,
+    policy_action: &'a str,
 }
 
 pub(crate) fn classify_lab_validation_command(command: &str) -> LabValidationPolicyDecision {
@@ -79,11 +91,17 @@ pub(crate) fn classify_lab_validation_command(command: &str) -> LabValidationPol
         _ => None,
     };
     if let Some(reason) = allowed_reason {
+        let validation_kind = validation_kind_for_allowed_command(&program, &args)
+            .unwrap_or("unknown")
+            .to_string();
         LabValidationPolicyDecision::Allow(LabValidationCommandPlan {
             original: command.to_string(),
             program,
             args,
             reason,
+            validation_kind,
+            workspace_trust: "unknown".to_string(),
+            policy_action: "allow".to_string(),
         })
     } else {
         LabValidationPolicyDecision::Block {
@@ -122,16 +140,51 @@ fn run_lab_validation_commands_with_events(
             continue;
         }
         let plan = match classify_lab_validation_command(command) {
-            LabValidationPolicyDecision::Allow(plan) => plan,
+            LabValidationPolicyDecision::Allow(mut plan) => {
+                plan.workspace_trust = resolve_lab_workspace_trust(cwd).to_string();
+                plan.policy_action =
+                    validation_policy_action(&plan.validation_kind, &plan.workspace_trust)
+                        .to_string();
+                if plan.policy_action == "block" {
+                    let reason =
+                        "package-script validation requires a trusted workspace".to_string();
+                    record_validation_event(
+                        store,
+                        lab_run_id,
+                        "lab_validation_command_blocked",
+                        &plan.original,
+                        LabValidationEventMetadata {
+                            reason: Some(&reason),
+                            status_code: None,
+                            output: None,
+                            validation_kind: &plan.validation_kind,
+                            workspace_trust: &plan.workspace_trust,
+                            policy_action: &plan.policy_action,
+                        },
+                    )?;
+                    return Err(anyhow!(
+                        "required validation `{}` blocked by Lab validation policy: {}",
+                        plan.original,
+                        reason
+                    ));
+                }
+                plan
+            }
             LabValidationPolicyDecision::Block { command, reason } => {
+                let workspace_trust = resolve_lab_workspace_trust(cwd);
                 record_validation_event(
                     store,
                     lab_run_id,
                     "lab_validation_command_blocked",
                     &command,
-                    Some(&reason),
-                    None,
-                    None,
+                    LabValidationEventMetadata {
+                        reason: Some(&reason),
+                        status_code: None,
+                        output: None,
+                        validation_kind: "unknown",
+                        workspace_trust,
+                        policy_action: "block",
+                    },
                 )?;
                 return Err(anyhow!(
                     "required validation `{}` blocked by Lab validation policy: {}",
@@ -156,9 +209,14 @@ fn run_lab_validation_commands_with_events(
                 lab_run_id,
                 "lab_validation_command_passed",
                 &plan.original,
-                Some(&plan.reason),
-                output.status.code(),
-                None,
+                LabValidationEventMetadata {
+                    reason: Some(&plan.reason),
+                    status_code: output.status.code(),
+                    output: None,
+                    validation_kind: &plan.validation_kind,
+                    workspace_trust: &plan.workspace_trust,
+                    policy_action: &plan.policy_action,
+                },
             )?;
             attempts.push(format!("runtime validation `{}` passed", plan.original));
         } else {
@@ -169,9 +227,14 @@ fn run_lab_validation_commands_with_events(
                 lab_run_id,
                 "lab_validation_command_failed",
                 &plan.original,
-                Some(&plan.reason),
-                output.status.code(),
-                Some((&stdout, &stderr)),
+                LabValidationEventMetadata {
+                    reason: Some(&plan.reason),
+                    status_code: output.status.code(),
+                    output: Some((&stdout, &stderr)),
+                    validation_kind: &plan.validation_kind,
+                    workspace_trust: &plan.workspace_trust,
+                    policy_action: &plan.policy_action,
+                },
             )?;
             return Err(anyhow!(
                 "required validation `{}` failed with status {:?}; stdout={}; stderr={}",
@@ -190,14 +253,13 @@ fn record_validation_event(
     lab_run_id: Option<&str>,
     event_type: &str,
     command: &str,
-    reason: Option<&str>,
-    status_code: Option<i32>,
-    output: Option<(&str, &str)>,
+    metadata: LabValidationEventMetadata<'_>,
 ) -> anyhow::Result<()> {
     let (Some(store), Some(lab_run_id)) = (store, lab_run_id) else {
         return Ok(());
     };
-    let (stdout_preview, stderr_preview) = output
+    let (stdout_preview, stderr_preview) = metadata
+        .output
         .map(|(stdout, stderr)| {
             (
                 compact_validation_preview(stdout, 240),
@@ -210,12 +272,53 @@ fn record_validation_event(
         event_type,
         json!({
             "command": command,
-            "policy_reason": reason.unwrap_or(""),
-            "status_code": status_code,
+            "policy_reason": metadata.reason.unwrap_or(""),
+            "validation_kind": metadata.validation_kind,
+            "workspace_trust": metadata.workspace_trust,
+            "policy_action": metadata.policy_action,
+            "status_code": metadata.status_code,
             "stdout_preview": stdout_preview,
             "stderr_preview": stderr_preview,
         }),
     )
+}
+
+fn validation_kind_for_allowed_command(program: &str, args: &[String]) -> Option<&'static str> {
+    match program {
+        "cargo" => Some("cargo"),
+        "npm" | "pnpm" | "yarn" => Some("package_script"),
+        "pytest" => Some("pytest"),
+        "python" | "python3" if args.len() >= 2 && args[0] == "-m" && args[1] == "pytest" => {
+            Some("pytest")
+        }
+        "python" | "python3" if args.len() >= 2 && args[0] == "-m" && args[1] == "py_compile" => {
+            Some("python_py_compile")
+        }
+        "bash" => Some("bash_allowlisted_script"),
+        "test" => Some("filesystem_test"),
+        _ => None,
+    }
+}
+
+fn resolve_lab_workspace_trust(_cwd: &Path) -> &'static str {
+    match std::env::var("PRIORITY_AGENT_LAB_WORKSPACE_TRUST")
+        .unwrap_or_default()
+        .trim()
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "trusted" | "trust" | "true" | "1" => "trusted",
+        "untrusted" | "false" | "0" => "untrusted",
+        _ => "unknown",
+    }
+}
+
+fn validation_policy_action(validation_kind: &str, workspace_trust: &str) -> &'static str {
+    if validation_kind == "package_script" && workspace_trust == "untrusted" {
+        "block"
+    } else {
+        "allow"
+    }
 }
 
 fn dangerous_shell_construct(command: &str) -> Option<String> {
@@ -375,6 +478,58 @@ mod tests {
                 "{command} should be allowed"
             );
         }
+    }
+
+    #[test]
+    fn classifies_validation_kind_and_policy_action() {
+        let package_plan = match classify_lab_validation_command("pnpm test") {
+            LabValidationPolicyDecision::Allow(plan) => plan,
+            other => panic!("expected package validation to be allowed, got {other:?}"),
+        };
+        assert_eq!(package_plan.validation_kind, "package_script");
+        assert_eq!(package_plan.workspace_trust, "unknown");
+        assert_eq!(package_plan.policy_action, "allow");
+        assert_eq!(
+            validation_policy_action("package_script", "untrusted"),
+            "block"
+        );
+
+        let python_plan =
+            match classify_lab_validation_command("python3 -m py_compile scripts/check.py") {
+                LabValidationPolicyDecision::Allow(plan) => plan,
+                other => panic!("expected py_compile validation to be allowed, got {other:?}"),
+            };
+        assert_eq!(python_plan.validation_kind, "python_py_compile");
+
+        let filesystem_plan = match classify_lab_validation_command("test -f src/lab/mod.rs") {
+            LabValidationPolicyDecision::Allow(plan) => plan,
+            other => panic!("expected filesystem validation to be allowed, got {other:?}"),
+        };
+        assert_eq!(filesystem_plan.validation_kind, "filesystem_test");
+    }
+
+    #[test]
+    fn validation_events_include_kind_trust_and_policy_action() {
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::write(temp.path().join("proof.txt"), "ok\n").unwrap();
+        let store = LabStore::for_project(temp.path());
+
+        run_lab_validation_commands_for_lab(
+            temp.path(),
+            &["test -f proof.txt".to_string()],
+            &store,
+            "labrun_validation_metadata",
+        )
+        .unwrap();
+
+        let events = store.list_run_events("labrun_validation_metadata").unwrap();
+        let event = events
+            .iter()
+            .find(|event| event.event_type == "lab_validation_command_passed")
+            .expect("validation pass event");
+        assert_eq!(event.payload["validation_kind"], "filesystem_test");
+        assert_eq!(event.payload["workspace_trust"], "unknown");
+        assert_eq!(event.payload["policy_action"], "allow");
     }
 
     #[test]

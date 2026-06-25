@@ -3,6 +3,41 @@ Status: Current
 
 Last updated: 2026-06-25
 
+## LabRun Post-Hardening Follow-Up - 2026-06-25
+
+The follow-up hardening workstream is tracked in
+`docs/LABRUN_POST_HARDENING_FOLLOWUP_PLAN_2026-06-25.md`.
+
+Implemented in this slice:
+
+- `/lab plan` now renders the true gate status, validation status, and semantic
+  blockers. It no longer says a gate is satisfied when semantic validation
+  produced a blocked `needs_revision` gate.
+- Graduate runtime verification now enforces provider-policy isolation. When
+  `isolated_worktree_required` is true, verified GraduateResult binding requires
+  a distinct existing isolated worktree and records isolation proof; missing
+  proof records `lab_graduate_isolation_missing` and blocks verified binding.
+- Postdoc read-only audit now performs code-aware inspection by recording
+  changed-file snippets, `git diff -- <path>` summaries, GraduateResult artifact
+  paths, validation event refs, audit status, and explicit audit risks.
+- Postdoc integration gates now treat audit risks as `needs_revision` blockers,
+  so missing files, missing diff evidence, invalid changed paths, or missing Lab
+  validation events cannot be hidden behind a satisfied postdoc gate.
+- Lab validation events now carry `validation_kind`, `workspace_trust`, and
+  `policy_action`; package-script validation is distinguishable from direct
+  cargo/python/filesystem validation, and explicitly untrusted package-script
+  validation is blocked.
+- `/lab proof` now displays validation kind/trust/action, isolated-worktree
+  proof gaps, and postdoc audit status.
+
+Validation for this slice:
+
+```bash
+cargo test -q lab::validation --lib -- --test-threads=1
+cargo test -q lab::orchestrator --lib -- --test-threads=1
+cargo test -q lab::commands --lib -- --test-threads=1
+```
+
 ## LabRun Validation Security And Review Hardening - 2026-06-25
 
 The LabRun hardening workstream is tracked in

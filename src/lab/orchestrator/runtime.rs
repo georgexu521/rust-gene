@@ -165,9 +165,18 @@ pub(super) fn collect_postdoc_read_only_audit_proof(
     let mut proof = PostdocWorktreeProof::default();
     let mut audited_results = Vec::new();
     let mut inspected_paths = Vec::new();
+    let mut diff_summaries = Vec::new();
+    let mut file_snippets = Vec::new();
     let mut audit_risks = Vec::new();
+    let validation_event_refs = postdoc_validation_event_refs(store, &run.lab_run_id)?;
     for result in graduate_results {
         audited_results.push(result.artifact_id.clone());
+        let artifact_path = store
+            .root()
+            .join("runs")
+            .join(&run.lab_run_id)
+            .join("artifacts")
+            .join(format!("{}.json", result.artifact_id));
         if result.body.changed_files.is_empty() {
             audit_risks.push(format!(
                 "{} audit risk: no changed_files to inspect",
@@ -183,15 +192,38 @@ pub(super) fn collect_postdoc_read_only_audit_proof(
         for changed_file in &result.body.changed_files {
             match crate::lab::path_scope::normalize_lab_relative_path(changed_file) {
                 Ok(path) => {
-                    let exists_in_parent = store.project_root().join(&path).exists();
+                    let parent_path = store.project_root().join(&path);
+                    let exists_in_parent = parent_path.exists();
                     inspected_paths.push(serde_json::json!({
                         "artifact_id": result.artifact_id,
-                        "path": path,
+                        "path": path.clone(),
                         "exists_in_parent_workspace": exists_in_parent,
+                        "graduate_result_artifact": artifact_path.display().to_string(),
                     }));
                     if !exists_in_parent {
                         audit_risks.push(format!(
-                            "{} audit note: {} is not present in the parent workspace; rely on isolated worktree or dispatch evidence",
+                            "{} audit risk: {} is not present in the parent workspace; rely on isolated worktree or dispatch evidence",
+                            result.artifact_id,
+                            changed_file
+                        ));
+                    } else {
+                        file_snippets.push(serde_json::json!({
+                            "artifact_id": result.artifact_id,
+                            "path": path.clone(),
+                            "snippet": bounded_file_snippet(&parent_path, 1600),
+                        }));
+                    }
+                    if let Some(diff_summary) =
+                        git_diff_summary_for_path(store.project_root(), &path)
+                    {
+                        diff_summaries.push(serde_json::json!({
+                            "artifact_id": result.artifact_id,
+                            "path": path.clone(),
+                            "summary": diff_summary,
+                        }));
+                    } else {
+                        audit_risks.push(format!(
+                            "{} audit risk: no git diff evidence available for {} in parent workspace",
                             result.artifact_id,
                             changed_file
                         ));
@@ -206,6 +238,16 @@ pub(super) fn collect_postdoc_read_only_audit_proof(
             }
         }
     }
+    if validation_event_refs.is_empty() {
+        audit_risks.push("postdoc audit risk: no Lab validation command events found".to_string());
+    }
+    let audit_status = if graduate_results.is_empty() {
+        "postdoc_audit_not_verified"
+    } else if audit_risks.iter().any(|risk| risk.contains("risk:")) {
+        "postdoc_audit_needs_revision"
+    } else {
+        "postdoc_audit_verified"
+    };
     let audit_id = format!("postdoc_audit_{}", Uuid::new_v4().simple());
     let audit_dir = store
         .root()
@@ -221,15 +263,28 @@ pub(super) fn collect_postdoc_read_only_audit_proof(
         "cycle_id": run.cycle_count.to_string(),
         "role": "postdoc",
         "mode": "read_only",
+        "audit_status": audit_status,
         "audited_results": audited_results,
+        "graduate_result_artifact_ids": graduate_results
+            .iter()
+            .map(|result| result.artifact_id.as_str())
+            .collect::<Vec<_>>(),
         "inspected_paths": inspected_paths,
-        "risks": audit_risks,
+        "changed_files_inspected": graduate_results
+            .iter()
+            .flat_map(|result| result.body.changed_files.iter().map(String::as_str))
+            .collect::<Vec<_>>(),
+        "diff_summaries": diff_summaries,
+        "file_snippets": file_snippets,
+        "validation_event_refs": validation_event_refs,
+        "risks": audit_risks.clone(),
         "forbidden_actions": ["file_write", "file_edit", "file_patch", "arbitrary_shell"],
     });
     std::fs::write(&audit_path, serde_json::to_vec_pretty(&payload)?)?;
     proof.evidence_refs.push(audit_path.display().to_string());
     proof.accepted_results.push(format!(
-        "postdoc read-only audit reviewed {} graduate result artifact(s)",
+        "postdoc read-only audit {} reviewed {} graduate result artifact(s)",
+        audit_status,
         graduate_results.len()
     ));
     proof.remaining_risks.extend(audit_risks);
@@ -239,9 +294,56 @@ pub(super) fn collect_postdoc_read_only_audit_proof(
         serde_json::json!({
             "audit_path": audit_path.display().to_string(),
             "graduate_result_count": graduate_results.len(),
+            "audit_status": audit_status,
         }),
     )?;
     Ok(proof)
+}
+
+fn postdoc_validation_event_refs(
+    store: &LabStore,
+    lab_run_id: &str,
+) -> anyhow::Result<Vec<String>> {
+    let mut refs = store
+        .list_run_events(lab_run_id)?
+        .into_iter()
+        .filter(|event| {
+            matches!(
+                event.event_type.as_str(),
+                "lab_validation_command_passed"
+                    | "lab_validation_command_failed"
+                    | "lab_validation_command_blocked"
+            )
+        })
+        .rev()
+        .take(8)
+        .map(|event| format!("event:{}", event.event_id))
+        .collect::<Vec<_>>();
+    refs.reverse();
+    Ok(refs)
+}
+
+fn bounded_file_snippet(path: &Path, limit: usize) -> String {
+    let Ok(content) = std::fs::read_to_string(path) else {
+        return "unreadable".to_string();
+    };
+    compact_result_preview(&content, limit)
+}
+
+fn git_diff_summary_for_path(project_root: &Path, path: &str) -> Option<String> {
+    let output = Command::new("git")
+        .args(["diff", "--no-ext-diff", "--", path])
+        .current_dir(project_root)
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let diff = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if diff.is_empty() {
+        return None;
+    }
+    Some(compact_result_preview(&diff, 1600))
 }
 
 pub(super) fn format_graduate_workspace_snapshot_for_postdoc(event: &LabEvent) -> String {
@@ -633,6 +735,7 @@ pub(super) fn durable_graduate_task_is_completed(
 pub(super) struct GraduateRuntimeEvidence {
     pub(super) changed_files: Vec<String>,
     pub(super) validation_attempts: Vec<String>,
+    pub(super) evidence_refs: Vec<String>,
 }
 
 pub(super) fn runtime_verify_graduate_task_result(
@@ -641,11 +744,15 @@ pub(super) fn runtime_verify_graduate_task_result(
     agent_id: Option<&str>,
     agent_task_id: &str,
     parent_changed_files: &[String],
+    provider_policy: &crate::lab::provider_certification::LabGraduateProviderExecutionPolicy,
 ) -> anyhow::Result<GraduateRuntimeEvidence> {
-    let verification_root = agent_id
-        .and_then(|agent_id| agent_worktree_path(context, agent_id))
-        .or_else(|| agent_worktree_path(context, agent_task_id))
-        .unwrap_or_else(|| context.working_dir.clone());
+    let (verification_root, evidence_refs) = resolve_graduate_verification_root(
+        task,
+        context,
+        agent_id,
+        agent_task_id,
+        provider_policy,
+    )?;
     if !verification_root.exists() {
         return Err(anyhow!(
             "graduate runtime verification worktree does not exist: {}",
@@ -675,7 +782,107 @@ pub(super) fn runtime_verify_graduate_task_result(
     Ok(GraduateRuntimeEvidence {
         changed_files,
         validation_attempts,
+        evidence_refs,
     })
+}
+
+pub(super) fn resolve_graduate_verification_root(
+    task: &GraduateTask,
+    context: &ToolContext,
+    agent_id: Option<&str>,
+    agent_task_id: &str,
+    provider_policy: &crate::lab::provider_certification::LabGraduateProviderExecutionPolicy,
+) -> anyhow::Result<(PathBuf, Vec<String>)> {
+    let agent_worktree = agent_id
+        .and_then(|agent_id| agent_worktree_path(context, agent_id))
+        .or_else(|| agent_worktree_path(context, agent_task_id));
+    if provider_policy.isolated_worktree_required {
+        let Some(worktree) = agent_worktree else {
+            record_graduate_isolation_event(
+                task,
+                context,
+                agent_id,
+                agent_task_id,
+                "lab_graduate_isolation_missing",
+                "no isolated_worktree.path found in durable agent task state",
+                None,
+            );
+            return Err(anyhow!(
+                "graduate runtime verification requires isolated worktree proof for provider policy {}; no isolated_worktree.path found",
+                provider_policy.certification.as_str()
+            ));
+        };
+        if same_filesystem_path(&worktree, &context.working_dir) {
+            record_graduate_isolation_event(
+                task,
+                context,
+                agent_id,
+                agent_task_id,
+                "lab_graduate_isolation_missing",
+                "isolated_worktree.path resolves to the parent workspace",
+                Some(&worktree),
+            );
+            return Err(anyhow!(
+                "graduate runtime verification requires a distinct isolated worktree; {} resolves to the parent workspace",
+                worktree.display()
+            ));
+        }
+        if !worktree.exists() {
+            record_graduate_isolation_event(
+                task,
+                context,
+                agent_id,
+                agent_task_id,
+                "lab_graduate_isolation_missing",
+                "isolated_worktree.path does not exist",
+                Some(&worktree),
+            );
+            return Err(anyhow!(
+                "graduate runtime verification isolated worktree does not exist: {}",
+                worktree.display()
+            ));
+        }
+        record_graduate_isolation_event(
+            task,
+            context,
+            agent_id,
+            agent_task_id,
+            "lab_graduate_isolation_verified",
+            "isolated worktree proof accepted for graduate runtime verification",
+            Some(&worktree),
+        );
+        return Ok((
+            worktree,
+            vec!["runtime_isolation:isolated_worktree".to_string()],
+        ));
+    }
+    Ok((
+        agent_worktree.unwrap_or_else(|| context.working_dir.clone()),
+        Vec::new(),
+    ))
+}
+
+fn record_graduate_isolation_event(
+    task: &GraduateTask,
+    context: &ToolContext,
+    agent_id: Option<&str>,
+    agent_task_id: &str,
+    event_type: &str,
+    reason: &str,
+    worktree: Option<&Path>,
+) {
+    let store = LabStore::for_project(&context.working_dir);
+    let _ = store.record_run_event(
+        &task.lab_run_id,
+        event_type,
+        serde_json::json!({
+            "task_id": task.task_id,
+            "agent_id": agent_id,
+            "agent_task_id": agent_task_id,
+            "reason": reason,
+            "worktree_path": worktree.map(|path| path.display().to_string()),
+        }),
+    );
 }
 
 pub(super) fn agent_worktree_path(context: &ToolContext, agent_id: &str) -> Option<PathBuf> {
