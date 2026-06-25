@@ -879,3 +879,31 @@ fn bash_redirect_commands_require_confirmation() {
         assert!(needs, "redirect command {cmd:?} must require confirmation");
     }
 }
+
+#[test]
+fn permission_presets_map_to_existing_hard_modes() {
+    use crate::permissions::{PermissionMode, PermissionPreset};
+
+    assert_eq!(
+        PermissionPreset::parse("fast-coding")
+            .unwrap()
+            .permission_mode(),
+        PermissionMode::AutoAll
+    );
+    assert_eq!(
+        PermissionPreset::parse("safe_coding")
+            .unwrap()
+            .permission_mode(),
+        PermissionMode::AutoLowRisk
+    );
+    assert_eq!(
+        PermissionPreset::parse("review-only")
+            .unwrap()
+            .permission_mode(),
+        PermissionMode::ReadOnly
+    );
+    assert_eq!(
+        PermissionPreset::parse("labrun").unwrap().permission_mode(),
+        PermissionMode::AutoLowRisk
+    );
+}

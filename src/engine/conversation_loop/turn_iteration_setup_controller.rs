@@ -3,6 +3,7 @@
 //! Owns one focused stage of turn execution so permissions, validation, repair, and closeout stay explicit in the runtime.
 
 use super::turn_state::TurnRuntimeState;
+use crate::engine::task_context::AgentTaskStage;
 use crate::memory::MemoryManager;
 use crate::services::api::{Message, Tool};
 use std::collections::{HashMap, HashSet};
@@ -12,12 +13,21 @@ use tracing::debug;
 
 pub(super) struct ToolExposureRequest<'a> {
     pub(super) base_tools: &'a [Tool],
+    pub(super) task_stage: AgentTaskStage,
 }
 
 pub(super) struct ToolExposurePlan {
     pub(super) tools: Vec<Tool>,
     pub(super) exposed_tool_names: HashSet<String>,
     pub(super) focused_repair_prompt: Option<Message>,
+    pub(super) stage_advisory: StageToolExposureAdvisory,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct StageToolExposureAdvisory {
+    pub(super) task_stage: AgentTaskStage,
+    pub(super) recommended_tool_names: Vec<String>,
+    pub(super) missing_recommended_tool_names: Vec<String>,
 }
 
 impl ToolExposurePlan {
@@ -27,11 +37,33 @@ impl ToolExposurePlan {
             .iter()
             .map(|tool| tool.name.clone())
             .collect::<HashSet<_>>();
+        let stage_advisory =
+            StageToolExposureAdvisory::build(request.task_stage, &exposed_tool_names);
 
         Self {
             tools,
             exposed_tool_names,
             focused_repair_prompt: None,
+            stage_advisory,
+        }
+    }
+}
+
+impl StageToolExposureAdvisory {
+    fn build(task_stage: AgentTaskStage, exposed_tool_names: &HashSet<String>) -> Self {
+        let recommended_tool_names = stage_recommended_tools(task_stage)
+            .iter()
+            .map(|name| (*name).to_string())
+            .collect::<Vec<_>>();
+        let missing_recommended_tool_names = recommended_tool_names
+            .iter()
+            .filter(|name| !exposed_tool_names.contains(*name))
+            .cloned()
+            .collect();
+        Self {
+            task_stage,
+            recommended_tool_names,
+            missing_recommended_tool_names,
         }
     }
 }
@@ -43,6 +75,7 @@ pub(super) struct TurnIterationSetupContext<'a> {
     pub(super) memory_manager: Option<&'a Arc<Mutex<MemoryManager>>>,
     pub(super) base_tools: &'a [Tool],
     pub(super) available_tools: &'a [Tool],
+    pub(super) task_stage: AgentTaskStage,
 }
 
 pub(super) enum TurnIterationSetupFlow {
@@ -75,9 +108,40 @@ impl TurnIterationSetupController {
             context.available_tools,
             &context.turn_state.route_recovery,
         );
-        ToolExposurePlan::build(ToolExposureRequest {
+        let plan = ToolExposurePlan::build(ToolExposureRequest {
             base_tools: &base_tools,
-        })
+            task_stage: context.task_stage,
+        });
+        debug!(
+            task_stage = ?plan.stage_advisory.task_stage,
+            recommended_tools = ?plan.stage_advisory.recommended_tool_names,
+            missing_tools = ?plan.stage_advisory.missing_recommended_tool_names,
+            "stage-aware tool exposure advisory"
+        );
+        plan
+    }
+}
+
+fn stage_recommended_tools(stage: AgentTaskStage) -> &'static [&'static str] {
+    match stage {
+        AgentTaskStage::Understand | AgentTaskStage::Plan => {
+            &["project_list", "grep", "glob", "file_read", "symbol_query"]
+        }
+        AgentTaskStage::Edit => &["file_read", "grep", "file_edit", "file_write", "file_patch"],
+        AgentTaskStage::Validate => &["bash", "run_tests", "git_diff", "git_status", "format"],
+        AgentTaskStage::Closeout | AgentTaskStage::Done => {
+            &["git_diff", "git_status", "trace", "cost"]
+        }
+        AgentTaskStage::Repair => &[
+            "file_read",
+            "grep",
+            "file_edit",
+            "file_write",
+            "file_patch",
+            "bash",
+            "run_tests",
+            "git_diff",
+        ],
     }
 }
 
@@ -134,6 +198,7 @@ mod tests {
             memory_manager: None,
             base_tools: &[tool("file_read")],
             available_tools: &[tool("file_read")],
+            task_stage: AgentTaskStage::Understand,
         })
         .await;
 
@@ -154,6 +219,7 @@ mod tests {
             memory_manager: None,
             base_tools: &[tool("file_read"), tool("bash")],
             available_tools: &[tool("file_read"), tool("bash")],
+            task_stage: AgentTaskStage::Repair,
         })
         .await;
 
@@ -184,6 +250,7 @@ mod tests {
             memory_manager: None,
             base_tools: &base_tools,
             available_tools: &available_tools,
+            task_stage: AgentTaskStage::Understand,
         })
         .await;
 
@@ -213,6 +280,7 @@ mod tests {
 
         let plan = ToolExposurePlan::build(ToolExposureRequest {
             base_tools: &base_tools,
+            task_stage: AgentTaskStage::Edit,
         });
 
         assert_eq!(plan.tools.len(), base_tools.len());
@@ -220,5 +288,27 @@ mod tests {
             assert!(plan.exposed_tool_names.contains(&tool.name));
         }
         assert!(plan.focused_repair_prompt.is_none());
+    }
+
+    #[test]
+    fn stage_advisory_reports_recommended_and_missing_tools_without_filtering() {
+        let base_tools = vec![tool("file_read"), tool("grep"), tool("bash")];
+
+        let plan = ToolExposurePlan::build(ToolExposureRequest {
+            base_tools: &base_tools,
+            task_stage: AgentTaskStage::Validate,
+        });
+
+        assert_eq!(plan.tools.len(), base_tools.len());
+        assert_eq!(plan.stage_advisory.task_stage, AgentTaskStage::Validate);
+        assert!(plan
+            .stage_advisory
+            .recommended_tool_names
+            .contains(&"run_tests".to_string()));
+        assert!(plan
+            .stage_advisory
+            .missing_recommended_tool_names
+            .contains(&"run_tests".to_string()));
+        assert!(plan.exposed_tool_names.contains("file_read"));
     }
 }

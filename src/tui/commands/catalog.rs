@@ -229,7 +229,7 @@ pub const CMD_PERMISSIONS: CommandDef = CommandDef::new(
     "/permissions",
     &["/perm"],
     "Info",
-    "/permissions [mode|rules|allow|deny|ask] ...",
+    "/permissions [mode|preset|rules|allow|deny|ask] ...",
     "View/update permission mode and policy rules",
 );
 

@@ -2188,6 +2188,130 @@ fn context_command_renders_packet_fingerprints() {
 }
 
 #[test]
+fn next_command_recommends_proposal_approval() {
+    let temp = tempfile::tempdir().unwrap();
+    let proposal = handle_lab_command(temp.path(), Some("session".to_string()), "propose Build it");
+    let proposal_id = proposal
+        .lines()
+        .find_map(|line| line.strip_prefix("Lab proposal created: "))
+        .unwrap()
+        .to_string();
+
+    let next = handle_lab_command(temp.path(), Some("session".to_string()), "next");
+
+    assert!(next.contains(&format!("Lab next: /lab approve {proposal_id}")));
+    assert!(next.contains("State: proposal_awaiting_approval"));
+    assert!(next.contains("Owner: Professor"));
+}
+
+#[test]
+fn next_command_recommends_current_gate_artifact() {
+    let temp = tempfile::tempdir().unwrap();
+    let proposal = handle_lab_command(temp.path(), Some("session".to_string()), "propose Build it");
+    let proposal_id = proposal
+        .lines()
+        .find_map(|line| line.strip_prefix("Lab proposal created: "))
+        .unwrap()
+        .to_string();
+    let approved = handle_lab_command(
+        temp.path(),
+        Some("session".to_string()),
+        &format!("approve {proposal_id}"),
+    );
+    assert!(approved.contains("LabRun created"));
+
+    let next = handle_lab_command(temp.path(), Some("session".to_string()), "next");
+
+    assert!(next.contains("Lab next: /lab plan <note>"));
+    assert!(next.contains("State: gate_required"));
+    assert!(next.contains("Stage: professor_discussion"));
+    assert!(next.contains("Gate: stage=professor_discussion artifact_type=ProfessorPlan"));
+}
+
+#[test]
+fn next_command_recommends_queued_graduate_task() {
+    let temp = tempfile::tempdir().unwrap();
+    let store = LabStore::for_project(temp.path());
+    let proposal = store
+        .create_proposal("Build LabRun", Some("session".to_string()))
+        .unwrap();
+    let run = LabOrchestrator::for_project(temp.path())
+        .approve_proposal(&proposal.proposal_id)
+        .unwrap();
+    let task = store
+        .create_graduate_task(
+            &run.lab_run_id,
+            "Fix lab model",
+            "Update the LabRun model.",
+            vec!["src/lab/model.rs".to_string()],
+            vec!["cargo check -q".to_string()],
+        )
+        .unwrap();
+    let mut saved = store.load_run(&run.lab_run_id).unwrap();
+    saved.current_stage = "graduate_work".to_string();
+    saved.internal_owner = LabRole::Graduate;
+    store.save_run(&saved).unwrap();
+
+    let next = handle_lab_command(temp.path(), Some("session".to_string()), "next");
+
+    assert!(next.contains(&format!("Lab next: /lab task run {}", task.task_id)));
+    assert!(next.contains("State: queued_graduate_task"));
+    assert!(next.contains("Tasks: open=1 blocked=0"));
+    assert!(next.contains(&format!("Task: {}", task.task_id)));
+}
+
+#[test]
+fn next_command_recommends_blocked_graduate_task_revision() {
+    let temp = tempfile::tempdir().unwrap();
+    let store = LabStore::for_project(temp.path());
+    let proposal = store
+        .create_proposal("Build LabRun", Some("session".to_string()))
+        .unwrap();
+    let run = LabOrchestrator::for_project(temp.path())
+        .approve_proposal(&proposal.proposal_id)
+        .unwrap();
+    let task = store
+        .create_graduate_task(
+            &run.lab_run_id,
+            "Fix lab model",
+            "Update the LabRun model.",
+            vec!["src/lab/model.rs".to_string()],
+            vec!["cargo check -q".to_string()],
+        )
+        .unwrap();
+    store
+        .block_graduate_task(&run.lab_run_id, &task.task_id, "validation failed")
+        .unwrap();
+    let mut saved = store.load_run(&run.lab_run_id).unwrap();
+    saved.current_stage = "graduate_work".to_string();
+    saved.internal_owner = LabRole::Graduate;
+    store.save_run(&saved).unwrap();
+
+    let next = handle_lab_command(temp.path(), Some("session".to_string()), "next");
+
+    assert!(next.contains("State: blocked_graduate_task"));
+    assert!(next.contains(&format!("Lab next: /lab task revise {}", task.task_id)));
+    assert!(next.contains("Tasks: open=1 blocked=1"));
+    assert!(next.contains("Blocker: validation failed"));
+}
+
+#[test]
+fn next_json_command_is_machine_readable() {
+    let temp = tempfile::tempdir().unwrap();
+    handle_lab_command(temp.path(), Some("session".to_string()), "propose Build it");
+
+    let json = handle_lab_command(temp.path(), Some("session".to_string()), "next --json");
+    let value: serde_json::Value = serde_json::from_str(&json).unwrap();
+
+    assert_eq!(value["state"], "proposal_awaiting_approval");
+    assert!(value["recommended_command"]
+        .as_str()
+        .unwrap()
+        .starts_with("/lab approve labproposal_"));
+    assert_eq!(value["open_task_count"], 0);
+}
+
+#[test]
 fn dashboard_command_renders_status_panel_summary() {
     let temp = tempfile::tempdir().unwrap();
     let proposal = handle_lab_command(temp.path(), Some("session".to_string()), "propose Build it");
@@ -2215,6 +2339,61 @@ fn dashboard_command_renders_status_panel_summary() {
     assert!(dashboard.contains("Indexed dashboard: missing"));
     assert!(dashboard.contains("Graduate worktree proof: none"));
     assert!(dashboard.contains("Graduate workspace snapshots: none"));
+}
+
+#[test]
+fn proof_command_rolls_up_persisted_lab_evidence() {
+    let temp = tempfile::tempdir().unwrap();
+    let proposal = handle_lab_command(temp.path(), Some("session".to_string()), "propose Build it");
+    let proposal_id = proposal
+        .lines()
+        .find_map(|line| line.strip_prefix("Lab proposal created: "))
+        .unwrap()
+        .to_string();
+    let approved = handle_lab_command(
+        temp.path(),
+        Some("session".to_string()),
+        &format!("approve {proposal_id}"),
+    );
+    assert!(approved.contains("LabRun created"));
+    let planned = handle_lab_command(
+        temp.path(),
+        Some("session".to_string()),
+        "plan initial professor direction",
+    );
+    assert!(planned.contains("Gate satisfied"));
+
+    let proof = handle_lab_command(temp.path(), Some("session".to_string()), "proof");
+
+    assert!(proof.contains("Lab proof:"));
+    assert!(proof.contains("Run: status=Active"));
+    assert!(proof.contains("Next: /lab advance"));
+    assert!(proof.contains("professor_discussion artifact=artifact_professorplan_"));
+    assert!(proof.contains("Recent artifacts:"));
+    assert!(proof.contains("ProfessorPlan artifact_professorplan_"));
+}
+
+#[test]
+fn trace_command_shows_recent_lab_events() {
+    let temp = tempfile::tempdir().unwrap();
+    let proposal = handle_lab_command(temp.path(), Some("session".to_string()), "propose Build it");
+    let proposal_id = proposal
+        .lines()
+        .find_map(|line| line.strip_prefix("Lab proposal created: "))
+        .unwrap()
+        .to_string();
+    let approved = handle_lab_command(
+        temp.path(),
+        Some("session".to_string()),
+        &format!("approve {proposal_id}"),
+    );
+    assert!(approved.contains("LabRun created"));
+
+    let trace = handle_lab_command(temp.path(), Some("session".to_string()), "trace 3");
+
+    assert!(trace.contains("Lab trace:"));
+    assert!(trace.contains("Events:"));
+    assert!(trace.contains("labrun_created") || trace.contains("artifact_gate_written"));
 }
 
 #[test]

@@ -400,10 +400,12 @@ impl RequestPreparationController {
         let retries = store
             .list_validation_retries(&run.lab_run_id)
             .unwrap_or_default();
-        let artifact_gate_refs =
-            crate::lab::orchestrator::LabOrchestrator::for_project(working_dir)
-                .artifact_gate_evidence_context_for_run(&run.lab_run_id, 20)
-                .unwrap_or_default();
+        let orchestrator = crate::lab::orchestrator::LabOrchestrator::for_project(working_dir);
+        let artifact_gate_refs = orchestrator
+            .artifact_gate_evidence_context_for_run(&run.lab_run_id, 20)
+            .unwrap_or_default();
+        let next_action =
+            crate::lab::next_action::recommend_next_action_from_store(&store, &orchestrator).ok();
         let packet =
             crate::lab::context::build_lab_context_packet_with_evidence_retries_and_artifact_refs(
                 &run,
@@ -452,6 +454,10 @@ impl RequestPreparationController {
             ),
             format!("total_estimated_tokens: {}", packet.total_estimated_tokens),
         ];
+        if let Some(next_action) = next_action {
+            lines.push("\n[next_safe_actions]".to_string());
+            lines.extend(next_action.context_lines());
+        }
         if let Some(decision) = recorded_decision {
             lines.push(format!(
                 "compression_decision: id={} action={:?} usage={:.1}% reason={}",

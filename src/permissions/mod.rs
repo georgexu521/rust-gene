@@ -71,6 +71,69 @@ pub enum PermissionMode {
     Once,
 }
 
+/// User-facing permission presets mapped onto hard runtime permission modes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum PermissionPreset {
+    FastCoding,
+    SafeCoding,
+    ReviewOnly,
+    Labrun,
+}
+
+impl PermissionPreset {
+    pub fn parse(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().replace('_', "-").as_str() {
+            "fast-coding" | "fast" => Some(Self::FastCoding),
+            "safe-coding" | "safe" => Some(Self::SafeCoding),
+            "review-only" | "review" | "readonly" | "read-only" => Some(Self::ReviewOnly),
+            "labrun" | "lab-run" | "lab" => Some(Self::Labrun),
+            _ => None,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::FastCoding => "fast-coding",
+            Self::SafeCoding => "safe-coding",
+            Self::ReviewOnly => "review-only",
+            Self::Labrun => "labrun",
+        }
+    }
+
+    pub fn permission_mode(self) -> PermissionMode {
+        match self {
+            Self::FastCoding => PermissionMode::AutoAll,
+            Self::SafeCoding | Self::Labrun => PermissionMode::AutoLowRisk,
+            Self::ReviewOnly => PermissionMode::ReadOnly,
+        }
+    }
+
+    pub fn description(self) -> &'static str {
+        match self {
+            Self::FastCoding => {
+                "developer dogfood mode; common coding actions auto-run while high-risk gates remain active"
+            }
+            Self::SafeCoding => {
+                "conservative coding mode; low-risk operations auto-run and broader actions ask"
+            }
+            Self::ReviewOnly => "read-only audit mode; write operations stay blocked",
+            Self::Labrun => {
+                "conservative LabRun mode; stage-aware runtime guidance plus low-risk auto approvals"
+            }
+        }
+    }
+
+    pub fn all() -> &'static [Self] {
+        &[
+            Self::FastCoding,
+            Self::SafeCoding,
+            Self::ReviewOnly,
+            Self::Labrun,
+        ]
+    }
+}
+
 /// 风险级别
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum RiskLevel {

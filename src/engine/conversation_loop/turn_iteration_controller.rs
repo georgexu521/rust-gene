@@ -226,6 +226,7 @@ impl TurnIterationController {
                 memory_manager: context.conversation.memory_manager.as_ref(),
                 base_tools: context.base_tools,
                 available_tools: context.available_tools,
+                task_stage: context.task_bundle.agent_state.stage,
             })
             .await;
         let tools = exposure_plan.tools;

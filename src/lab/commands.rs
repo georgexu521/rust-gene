@@ -105,10 +105,13 @@ pub fn handle_lab_command(
             }
         }
         "status" => view::lab_status(store),
+        "next" => view::handle_next_command(project_root, rest),
         "runs" => view::handle_runs_command(store),
         "recovery" | "recover" => handle_recovery_command(project_root, store),
         "report" | "reports" => view::handle_report_command(store, rest),
         "dashboard" => view::handle_dashboard_command(project_root, &orchestrator, store),
+        "proof" => view::handle_proof_command(project_root, store),
+        "trace" => view::handle_trace_command(store, rest),
         "provider" | "providers" | "certification" => {
             if rest.trim().starts_with("record ") {
                 "Usage: /lab provider record <control-plane|graduate> <passed|failed> <evidence_path> [summary] requires the Lab Mode shell provider. In non-interactive mode use `pa lab --command \"provider record ...\" --with-provider`."
@@ -697,6 +700,7 @@ fn lab_help() -> String {
         "  /lab approve <proposal_id>   Formally create LabRun",
         "  /lab start <goal>            Shortcut: draft proposal, still requires approval",
         "  /lab status                  Show latest proposal or LabRun",
+        "  /lab next [--json]           Recommend the next safe LabRun command",
         "  /lab runs                    List recent LabRuns",
         "  /lab provider                Show active provider Lab diagnostics",
         "  /lab provider compare        Compare generic subagent vs Lab graduate on the same provider",
@@ -704,6 +708,8 @@ fn lab_help() -> String {
         "  /lab recovery                Show paused/recoverable LabRun options",
         "  /lab report [list|latest]    Show latest generated Lab report preview",
         "  /lab dashboard               Show LabRun status panel summary",
+        "  /lab proof                   Show persisted LabRun verification proof rollup",
+        "  /lab trace [limit]           Show recent persisted LabRun trace events",
         "  /lab lifecycle               Show app-owned Lab lifecycle state",
         "  /lab daemon [status|health|enable [strict|hybrid|hybrid-cycles] [max_steps] [max_steps_per_cycle] [interval_ms] [instructions]|start|launchd [label]|service [status|install|uninstall|load|unload|restart|supervise|commands] [label]|disable]",
         "                               Persist app-owned background daemon policy",
@@ -776,6 +782,12 @@ fn lab_help() -> String {
         "  /lab closeout <auto|verified|not_verified|partial|blocked|failed> [note]",
         "  /lab open <lab_run_id>       Open LabRun for inspection without resuming",
         "  /lab close                   Cancel latest LabRun",
+        "",
+        "Lab interaction boundary:",
+        "  Plain text in Lab Mode is a normal full-agent turn with LabRun context.",
+        "  /lab commands inspect or mutate persisted LabRun state explicitly.",
+        "  /lab step llm uses provider-backed Professor/Postdoc draft or review.",
+        "  /lab task run executes a scoped Graduate task through the runtime agent tool.",
     ]
     .join("\n")
 }

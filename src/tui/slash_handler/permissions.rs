@@ -5,7 +5,7 @@ use crate::engine::action_decision::{ActionDecision, ActionDecisionInput};
 use crate::engine::action_review::{ActionReview, ActionReviewInput};
 use crate::engine::task_context::AgentTaskStage;
 use crate::permissions::{
-    match_wildcard, PermissionContext, PermissionMode, RuleSource, SourcedRule,
+    match_wildcard, PermissionContext, PermissionMode, PermissionPreset, RuleSource, SourcedRule,
 };
 use crate::services::api::ToolCall;
 use crate::tools::ToolRegistry;
@@ -30,7 +30,7 @@ pub fn handle_permissions(app: &mut TuiApp, args: &str) -> String {
             let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
             let ctx = crate::permissions::PermissionContext::new(&cwd);
             let mut output = format!(
-                "Permission mode: {}\nRules: allow={} deny={} ask={}\nProject config: {}\nGlobal config: {}\n\nUsage:\n  /permissions mode <default|auto|auto_low_risk|auto_all|read_only>\n  /permissions rules [tool_name]\n  /permissions explain <tool_name> [json_params] - explain permission and runtime action review\n  /permissions export [path] - export rules to a file\n  /permissions import <path> [project|global] [merge] - import rules (merge to append)\n  /permissions dry-run <allow|deny|ask> <pattern> - test a rule against all registered tools\n  /permissions <allow|deny|ask> <pattern> [project|global]",
+                "Permission mode: {}\nRules: allow={} deny={} ask={}\nProject config: {}\nGlobal config: {}\n\nUsage:\n  /permissions mode <default|auto|auto_low_risk|auto_all|read_only>\n  /permissions preset <fast-coding|safe-coding|review-only|labrun>\n  /permissions rules [tool_name]\n  /permissions explain <tool_name> [json_params] - explain permission and runtime action review\n  /permissions export [path] - export rules to a file\n  /permissions import <path> [project|global] [merge] - import rules (merge to append)\n  /permissions dry-run <allow|deny|ask> <pattern> - test a rule against all registered tools\n  /permissions <allow|deny|ask> <pattern> [project|global]",
                 permission_mode_name(mode),
                 ctx.rules.always_allow.len(),
                 ctx.rules.always_deny.len(),
@@ -310,6 +310,49 @@ pub fn handle_permissions(app: &mut TuiApp, args: &str) -> String {
                 )
             }
         }
+        Some("preset") => {
+            if let Some(preset_arg) = parts.next() {
+                if let Some(preset) = PermissionPreset::parse(preset_arg) {
+                    let mode = preset.permission_mode();
+                    if let Some(ref engine) = app.streaming_engine {
+                        engine.set_permission_mode(mode);
+                        format!(
+                            "Permission preset '{}' applied.\nMode: {}\nPolicy: {}",
+                            preset.label(),
+                            permission_mode_name(mode),
+                            preset.description()
+                        )
+                    } else {
+                        "Cannot set permission preset: engine unavailable.".to_string()
+                    }
+                } else {
+                    permission_preset_usage()
+                }
+            } else {
+                let current = app
+                    .streaming_engine
+                    .as_ref()
+                    .map(|e| e.permission_mode())
+                    .unwrap_or(PermissionMode::AutoAll);
+                let presets = PermissionPreset::all()
+                    .iter()
+                    .map(|preset| {
+                        format!(
+                            "{} -> {} ({})",
+                            preset.label(),
+                            permission_mode_name(preset.permission_mode()),
+                            preset.description()
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                format!(
+                    "Current mode: {}\nAvailable permission presets:\n{}",
+                    permission_mode_name(current),
+                    presets
+                )
+            }
+        }
         Some("rules") => {
             let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
             let ctx = crate::permissions::PermissionContext::new(&cwd);
@@ -377,8 +420,12 @@ pub fn handle_permissions(app: &mut TuiApp, args: &str) -> String {
                 Err(e) => format!("Failed to save rule: {}", e),
             }
         }
-        Some(_) => "Usage: /permissions [mode|rules|allow|deny|ask] ...".to_string(),
+        Some(_) => "Usage: /permissions [mode|preset|rules|allow|deny|ask] ...".to_string(),
     }
+}
+
+fn permission_preset_usage() -> String {
+    "Invalid preset. Use: fast-coding | safe-coding | review-only | labrun".to_string()
 }
 
 fn parse_permission_explain_args(args: &str) -> Result<(String, Value), String> {

@@ -5,6 +5,55 @@
 
 use super::*;
 
+pub(super) fn handle_next_command(project_root: &Path, args: &str) -> String {
+    let action = match crate::lab::next_action::recommend_next_action(project_root) {
+        Ok(action) => action,
+        Err(err) => return format!("Failed to compute LabRun next action: {err}"),
+    };
+    if args.trim() == "--json" || args.trim() == "json" {
+        return serde_json::to_string_pretty(&action)
+            .unwrap_or_else(|err| format!("Failed to render LabRun next action JSON: {err}"));
+    }
+
+    let mut lines = vec![
+        format!("Lab next: {}", action.recommended_command),
+        format!("State: {}", action.state),
+        format!("Why: {}", action.reason),
+    ];
+    if let Some(lab_run_id) = action.lab_run_id.as_deref() {
+        lines.push(format!("LabRun: {lab_run_id}"));
+    }
+    if let Some(proposal_id) = action.proposal_id.as_deref() {
+        lines.push(format!("Proposal: {proposal_id}"));
+    }
+    if let Some(stage) = action.current_stage.as_deref() {
+        lines.push(format!("Stage: {stage}"));
+    }
+    if let Some(owner) = action.owner {
+        lines.push(format!("Owner: {owner:?}"));
+    }
+    if let Some(status) = action.run_status {
+        lines.push(format!("Status: {status:?}"));
+    }
+    if let Some(task_id) = action.next_task_id.as_deref() {
+        lines.push(format!("Task: {task_id}"));
+    }
+    lines.push(format!(
+        "Tasks: open={} blocked={}",
+        action.open_task_count, action.blocked_task_count
+    ));
+    if let Some(gate) = action.current_gate_requirement.as_deref() {
+        lines.push(format!("Gate: {gate}"));
+    }
+    if let Some(blocker) = action.blocker.as_deref() {
+        lines.push(format!("Blocker: {blocker}"));
+    }
+    if !action.alternatives.is_empty() {
+        lines.push(format!("Alternatives: {}", action.alternatives.join(" · ")));
+    }
+    lines.join("\n")
+}
+
 pub(super) fn handle_gate_command(orchestrator: &LabOrchestrator, args: &str) -> String {
     let parts: Vec<&str> = args.split_whitespace().collect();
     if parts.is_empty() {
@@ -195,6 +244,167 @@ pub(super) fn handle_review_command(
     }
     lines.push("  Inspect latest report: /lab report".to_string());
     lines.join("\n")
+}
+
+pub(super) fn handle_proof_command(project_root: &Path, store: &LabStore) -> String {
+    let run = match store.latest_run() {
+        Ok(Some(run)) => run,
+        Ok(None) => return "No LabRun found for proof.".to_string(),
+        Err(err) => return format!("Failed to read LabRun proof state: {err}"),
+    };
+    let tasks = match store.list_graduate_tasks(&run.lab_run_id) {
+        Ok(tasks) => tasks,
+        Err(err) => return format!("Failed to read LabRun proof tasks: {err}"),
+    };
+    let dispatches = match store.list_graduate_dispatches(&run.lab_run_id) {
+        Ok(dispatches) => dispatches,
+        Err(err) => return format!("Failed to read LabRun proof dispatches: {err}"),
+    };
+    let artifacts = match store.list_stage_artifacts(&run.lab_run_id) {
+        Ok(artifacts) => artifacts,
+        Err(err) => return format!("Failed to read LabRun proof artifacts: {err}"),
+    };
+    let retries = match store.list_validation_retries(&run.lab_run_id) {
+        Ok(retries) => retries,
+        Err(err) => return format!("Failed to read LabRun proof retries: {err}"),
+    };
+    let evidence = match store.list_evidence_refs(&run.lab_run_id) {
+        Ok(evidence) => evidence,
+        Err(err) => return format!("Failed to read LabRun proof evidence refs: {err}"),
+    };
+    let next_action = crate::lab::next_action::recommend_next_action(project_root)
+        .map(|action| action.recommended_command)
+        .unwrap_or_else(|err| format!("unavailable ({err})"));
+    let open_tasks = tasks.iter().filter(|task| task.status.is_open()).count();
+    let blocked_tasks = tasks
+        .iter()
+        .filter(|task| matches!(task.status, crate::lab::model::LabTaskStatus::Blocked))
+        .count();
+    let latest_dispatch = dispatches.last();
+    let latest_artifact = artifacts.last();
+
+    let mut lines = vec![
+        format!("Lab proof: {}", run.lab_run_id),
+        format!(
+            "Run: status={:?} closeout={:?} stage={} owner={:?} needs_user={}",
+            run.status, run.closeout_status, run.current_stage, run.internal_owner, run.needs_user
+        ),
+        format!(
+            "Tasks: total={} open={} blocked={}",
+            tasks.len(),
+            open_tasks,
+            blocked_tasks
+        ),
+        format!(
+            "Graduate dispatches: total={} latest={}",
+            dispatches.len(),
+            latest_dispatch
+                .map(format_dispatch_proof_line)
+                .unwrap_or_else(|| "none".to_string())
+        ),
+        format!(
+            "Artifacts: total={} latest={}",
+            artifacts.len(),
+            latest_artifact
+                .map(format_artifact_proof_line)
+                .unwrap_or_else(|| "none".to_string())
+        ),
+        format!(
+            "Validation retries: total={} escalated={}",
+            retries.len(),
+            retries.iter().filter(|retry| retry.escalated).count()
+        ),
+        format!("Evidence refs: {}", evidence.len()),
+        format!("Next: {next_action}"),
+        "Gates:".to_string(),
+    ];
+    for stage in [
+        "professor_discussion",
+        "postdoc_plan",
+        "graduate_work",
+        "postdoc_review",
+        "professor_review",
+    ] {
+        match store.load_artifact_gate(&run.lab_run_id, stage) {
+            Ok(gate) => lines.push(format!(
+                "  {} artifact={} validation={} satisfied={} blockers={}",
+                stage,
+                gate.artifact_id.as_deref().unwrap_or("none"),
+                gate.validation_status.as_deref().unwrap_or("none"),
+                gate.is_satisfied(),
+                if gate.blockers.is_empty() {
+                    "none".to_string()
+                } else {
+                    gate.blockers.join("; ")
+                }
+            )),
+            Err(_) => lines.push(format!("  {stage} missing")),
+        }
+    }
+    if !artifacts.is_empty() {
+        lines.push("Recent artifacts:".to_string());
+        for artifact in artifacts.iter().rev().take(6).rev() {
+            lines.push(format!("  {}", format_artifact_proof_line(artifact)));
+        }
+    }
+    lines.join("\n")
+}
+
+pub(super) fn handle_trace_command(store: &LabStore, args: &str) -> String {
+    let run = match store.latest_run() {
+        Ok(Some(run)) => run,
+        Ok(None) => return "No LabRun found for trace.".to_string(),
+        Err(err) => return format!("Failed to read LabRun trace state: {err}"),
+    };
+    let events = match store.list_run_events(&run.lab_run_id) {
+        Ok(events) => events,
+        Err(err) => return format!("Failed to read LabRun trace events: {err}"),
+    };
+    let limit = args
+        .split_whitespace()
+        .next()
+        .and_then(|value| value.parse::<usize>().ok())
+        .filter(|value| *value > 0)
+        .unwrap_or(12)
+        .min(50);
+    let mut lines = vec![
+        format!("Lab trace: {}", run.lab_run_id),
+        format!("Events: {} showing_last={}", events.len(), limit),
+    ];
+    let mut recent = events.iter().rev().take(limit).collect::<Vec<_>>();
+    recent.reverse();
+    for event in recent {
+        lines.push(format!(
+            "- {} {} {}",
+            event.created_at.to_rfc3339(),
+            event.event_type,
+            compact_message_line(&event.payload.to_string(), 300)
+        ));
+    }
+    lines.join("\n")
+}
+
+fn format_dispatch_proof_line(dispatch: &GraduateDispatchRecord) -> String {
+    format!(
+        "task={} dispatch={} status={:?} cleanup={} result={}",
+        dispatch.task_id,
+        dispatch.dispatch_id,
+        dispatch.status,
+        dispatch.cleanup_status.as_str(),
+        dispatch.result_artifact_id.as_deref().unwrap_or("none")
+    )
+}
+
+fn format_artifact_proof_line(artifact: &StageArtifact) -> String {
+    format!(
+        "{} {} stage={} status={:?} validation={} evidence_refs={}",
+        artifact.artifact_type().as_str(),
+        artifact.artifact_id(),
+        artifact.stage(),
+        artifact.status(),
+        artifact.validation_status().unwrap_or("none"),
+        artifact.evidence_refs().len()
+    )
 }
 
 fn graduate_worktree_proof_lines(
