@@ -224,7 +224,7 @@ jobs:
 
       - name: Post result comment
         if: ${{ steps.prep.outputs.issue_number != '' }}
-        uses: peter-evans/create-or-update-comment@v4
+        uses: peter-evans/create-or-update-comment@v5
         with:
           issue-number: ${{ steps.prep.outputs.issue_number }}
           body-path: /tmp/priority-agent-comment.md
