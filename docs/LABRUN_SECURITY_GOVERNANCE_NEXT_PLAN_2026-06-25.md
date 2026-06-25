@@ -16,7 +16,9 @@ security/governance hardening slice. The code now includes Lab audit redaction,
 validation key/value path hardening, stricter package-script trust behavior, a
 LabRun role/stage policy overlay at action review, and proof visibility for the
 policy decisions. The repository also now has baseline governance files,
-Dependabot, CodeQL, a threat model, and a security release checklist.
+CodeQL, a threat model, and a security release checklist. Dependency-update
+automation was intentionally disabled after the initial automated rollout
+created public branch noise.
 
 ## Executive Summary
 
@@ -32,8 +34,8 @@ hardening and project governance:
 - P1: Add a real LabRun role/stage policy overlay instead of treating
   `labrun` as only an `AutoLowRisk` preset name.
 - P2: Add formal project governance files and security automation:
-  `SECURITY.md`, `CONTRIBUTING.md`, `CODEOWNERS`, Dependabot, CodeQL, and a
-  threat-model note.
+  `SECURITY.md`, `CONTRIBUTING.md`, `CODEOWNERS`, CodeQL, and a threat-model
+  note.
 - P2: Simplify the README architecture section so `docs/PROJECT_MAP.md` remains
   the canonical architecture map.
 
@@ -46,7 +48,7 @@ hardening and project governance:
 | `package_script` with `workspace_trust=unknown` is still allowed. | Correct. | `validation_policy_action()` blocks only `package_script + untrusted`; unknown remains allow. | P1. Change unknown to ask/block for LabRun verification paths. |
 | LabRun role/stage permission overlay is deferred. | Correct. | `PermissionPreset::Labrun` maps to `PermissionMode::AutoLowRisk`; status docs explicitly say full overlay is future work. | P1. Add a policy overlay at the permission/action-review boundary. |
 | README architecture is less canonical than `PROJECT_MAP.md`. | Correct but low risk. | README keeps a compact source tree that can drift from `docs/PROJECT_MAP.md`. | P2. Make README product-level and point to Project Map for current architecture. |
-| Formal project governance is incomplete. | Correct. | The repo has CI workflows and quality gates, but no root `SECURITY.md`, `CONTRIBUTING.md`, `CODEOWNERS`, Dependabot config, or CodeQL workflow. | P2. Add governance scaffolding and security automation. |
+| Formal project governance is incomplete. | Correct. | The repo has CI workflows and quality gates, but no root `SECURITY.md`, `CONTRIBUTING.md`, `CODEOWNERS`, or CodeQL workflow. | P2. Add governance scaffolding and security automation. |
 
 ## Current Strengths To Preserve
 
@@ -386,7 +388,6 @@ Add the following without over-bureaucratizing the project:
 - `SECURITY.md`
 - `CONTRIBUTING.md`
 - `.github/CODEOWNERS`
-- `.github/dependabot.yml`
 - `.github/workflows/codeql.yml`
 - `docs/THREAT_MODEL.md`
 - optional `docs/SECURITY_RELEASE_CHECKLIST.md`
@@ -416,13 +417,6 @@ Add the following without over-bureaucratizing the project:
 - stricter ownership for `src/lab/`, `src/permissions/`, `src/security/`,
   `.github/`, provider credentials, and release scripts.
 
-Dependabot:
-
-- Cargo weekly updates;
-- GitHub Actions weekly updates;
-- npm/pnpm updates for `apps/desktop` if supported by the current package
-  manager setup.
-
 CodeQL:
 
 - Rust/C++ if supported by current GitHub CodeQL setup;
@@ -443,7 +437,8 @@ Threat model:
 
 - The repository has clear security reporting and contribution guidance.
 - Ownership and security-sensitive paths are explicit.
-- Dependency and static-analysis automation are present in `.github/`.
+- Static-analysis automation is present in `.github/`; dependency updates remain
+  manual until automatic dependency PRs are useful enough to re-enable.
 - `docs/README.md` links the threat model or security checklist.
 
 ## P2. Simplify README Architecture
@@ -536,9 +531,9 @@ Implemented files and surfaces:
   role/stage policy is enforced before normal tool execution proceeds.
 - `src/lab/commands/view.rs`: `/lab proof` includes LabRun policy decisions.
 - `SECURITY.md`, `CONTRIBUTING.md`, `.github/CODEOWNERS`,
-  `.github/dependabot.yml`, `.github/workflows/codeql.yml`,
-  `docs/THREAT_MODEL.md`, and `docs/SECURITY_RELEASE_CHECKLIST.md`: baseline
-  public security and governance posture.
+  `.github/workflows/codeql.yml`, `docs/THREAT_MODEL.md`, and
+  `docs/SECURITY_RELEASE_CHECKLIST.md`: baseline public security and governance
+  posture.
 
 Remaining future hardening:
 
@@ -548,6 +543,8 @@ Remaining future hardening:
   package-script validation needs a first-class user approval flow.
 - Expand LabRun policy overlay to MCP/plugin mutation families as those
   surfaces gain more formal LabRun integration tests.
+- Re-enable dependency-update automation only when the project is ready to
+  triage automated PR branches.
 
 Validation recorded for closeout:
 
@@ -556,7 +553,7 @@ cargo test -q lab:: --lib -- --test-threads=1
 cargo test -q action_review --lib -- --test-threads=1
 cargo fmt --check
 git diff --check
-ruby -e 'require "yaml"; ARGV.each { |path| YAML.load_file(path); puts "OK #{path}" }' .github/workflows/*.yml .github/dependabot.yml
+ruby -e 'require "yaml"; ARGV.each { |path| YAML.load_file(path); puts "OK #{path}" }' .github/workflows/*.yml
 cargo check -q
 bash scripts/validate_docs.sh
 cargo clippy --workspace --all-targets --all-features -- -D warnings

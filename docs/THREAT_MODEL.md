@@ -47,7 +47,8 @@ formal compliance document.
 - Local credential storage is plaintext dotenv with best-effort file permissions.
 - Unknown third-party repositories can contain hostile build scripts, tests, or
   package lifecycle hooks.
-- CodeQL and Dependabot improve coverage but do not replace human review.
+- CodeQL and manual dependency review improve coverage but do not replace human
+  review.
 - Windows behavior is not yet validated to the same level as macOS/Linux.
 - Release signing, SBOM, dependency license audit, and provenance are future
   release-hardening work.

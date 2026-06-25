@@ -25,8 +25,9 @@ Implemented in this slice:
   recorded into LabRun proof events.
 - The repository now has baseline security/governance scaffolding:
   `SECURITY.md`, `CONTRIBUTING.md`, `.github/CODEOWNERS`,
-  `.github/dependabot.yml`, `.github/workflows/codeql.yml`,
-  `docs/THREAT_MODEL.md`, and `docs/SECURITY_RELEASE_CHECKLIST.md`.
+  `.github/workflows/codeql.yml`, `docs/THREAT_MODEL.md`, and
+  `docs/SECURITY_RELEASE_CHECKLIST.md`. Dependency-update automation is
+  intentionally disabled for now to keep the public branch list clean.
 - README architecture guidance now stays product-level and points to
   `docs/PROJECT_MAP.md` as the canonical source layout.
 
@@ -41,7 +42,7 @@ cargo test -q lab::orchestrator --lib -- --test-threads=1
 cargo test -q lab:: --lib -- --test-threads=1
 cargo fmt --check
 git diff --check
-ruby -e 'require "yaml"; ARGV.each { |path| YAML.load_file(path); puts "OK #{path}" }' .github/workflows/*.yml .github/dependabot.yml
+ruby -e 'require "yaml"; ARGV.each { |path| YAML.load_file(path); puts "OK #{path}" }' .github/workflows/*.yml
 cargo check -q
 bash scripts/validate_docs.sh
 cargo clippy --workspace --all-targets --all-features -- -D warnings

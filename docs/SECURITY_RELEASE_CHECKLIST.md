@@ -18,7 +18,7 @@ Use this checklist before tagging a formal Priority Agent release.
 - [ ] Review `SECURITY.md` for current reporting instructions and known limits.
 - [ ] Review `docs/THREAT_MODEL.md` for changed trust boundaries.
 - [ ] Review CodeQL results on the release commit.
-- [ ] Review Dependabot alerts and dependency PRs.
+- [ ] Review dependency updates manually before release.
 - [ ] Confirm no provider keys, bearer tokens, dotenv files, private keys, or
       local LabRun artifacts are staged.
 - [ ] Run targeted LabRun security tests:
