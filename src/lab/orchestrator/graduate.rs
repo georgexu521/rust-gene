@@ -40,9 +40,26 @@ impl LabOrchestrator {
             None,
             None,
         )?;
-        if let Err(error) =
-            crate::lab::provider_certification::validate_graduate_provider_for_execution(&context)
-        {
+        let provider_policy =
+            crate::lab::provider_certification::graduate_provider_execution_policy(&context);
+        self.store.record_run_event(
+            &run.lab_run_id,
+            "lab_graduate_provider_execution_policy",
+            serde_json::json!({
+                "task_id": task.task_id,
+                "dispatch_id": running.dispatch_id,
+                "certification": provider_policy.certification.as_str(),
+                "execution_allowed": provider_policy.execution_allowed,
+                "isolated_worktree_required": provider_policy.isolated_worktree_required,
+                "controlled_validation_required": provider_policy.controlled_validation_required,
+                "postdoc_audit_required": provider_policy.postdoc_audit_required,
+                "user_override_required": provider_policy.user_override_required,
+                "proof_labels": provider_policy.proof_labels.clone(),
+                "reason": provider_policy.reason.clone(),
+            }),
+        )?;
+        if !provider_policy.execution_allowed {
+            let error = provider_policy.reason.clone();
             let _ = self
                 .store
                 .block_graduate_task(&run.lab_run_id, &task.task_id, &error);
@@ -144,6 +161,14 @@ impl LabOrchestrator {
                     .extend(runtime_evidence.validation_attempts);
                 parsed.validation_attempts.sort();
                 parsed.validation_attempts.dedup();
+                parsed.evidence_ids.extend(
+                    provider_policy
+                        .proof_labels
+                        .iter()
+                        .map(|label| format!("provider_policy:{label}")),
+                );
+                parsed.evidence_ids.sort();
+                parsed.evidence_ids.dedup();
                 let created = self.create_graduate_result_for_task_latest(
                     &task.task_id,
                     &parsed.task_summary,
@@ -274,6 +299,14 @@ impl LabOrchestrator {
         if let Some(agent_id) = agent_id {
             evidence_ids.push(format!("agent:{agent_id}"));
         }
+        let provider_policy =
+            crate::lab::provider_certification::graduate_provider_execution_policy(context);
+        evidence_ids.extend(
+            provider_policy
+                .proof_labels
+                .iter()
+                .map(|label| format!("provider_policy:{label}")),
+        );
         evidence_ids.sort();
         evidence_ids.dedup();
         let preview = compact_result_preview(result_content, 240);

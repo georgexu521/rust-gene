@@ -4,6 +4,7 @@
 //! runtime loop can build on these typed artifacts without depending on chat
 //! history as the source of truth.
 
+pub(crate) mod artifact_semantics;
 pub mod commands;
 pub mod context;
 pub mod delegation;
@@ -11,7 +12,9 @@ pub mod draft;
 pub mod model;
 pub mod next_action;
 pub mod orchestrator;
+pub(crate) mod path_scope;
 pub mod provider_certification;
 pub mod report;
 pub mod scheduler;
 pub mod store;
+pub(crate) mod validation;

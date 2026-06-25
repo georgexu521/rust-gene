@@ -956,7 +956,7 @@ async fn hybrid_run_hands_graduate_stage_to_strict_scheduler() {
                 "postdoc_plan": {
                     "implementation_summary": "Implement the hybrid run slice.",
                     "slices": ["Provider planning", "Strict graduate boundary"],
-                    "files_expected": [],
+                    "files_expected": ["src/lab/draft.rs"],
                     "validation_plan": ["cargo check -q --tests"],
                     "graduate_handoff": "Scheduler must not execute without scoped graduate work."
                 }
@@ -981,13 +981,16 @@ async fn hybrid_run_hands_graduate_stage_to_strict_scheduler() {
     assert_eq!(
         outcome.stop_reason,
         LabHybridRunStopReason::SchedulerStopped(
-            crate::lab::orchestrator::LabSchedulerStepAction::Blocked
+            crate::lab::orchestrator::LabSchedulerStepAction::GraduateDispatched
         )
     );
     assert!(matches!(
         outcome.steps.last(),
         Some(LabHybridRunStep::Scheduler(step))
-            if matches!(step.action, crate::lab::orchestrator::LabSchedulerStepAction::Blocked)
+            if matches!(
+                step.action,
+                crate::lab::orchestrator::LabSchedulerStepAction::GraduateDispatched
+            )
     ));
     assert_eq!(outcome.final_stage, "graduate_work");
     let saved = store.latest_run().unwrap().unwrap();

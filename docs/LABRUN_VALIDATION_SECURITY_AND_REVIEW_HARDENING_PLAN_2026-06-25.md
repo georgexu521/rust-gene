@@ -1,7 +1,27 @@
 # LabRun Validation Security And Review Hardening Plan
-Status: Proposed implementation plan
+Status: Implemented
 
 Date: 2026-06-25
+
+Implementation closeout:
+
+- Controlled Lab validation runner implemented; provider-authored validation
+  strings no longer run through `sh -lc`.
+- LabRun relative path normalization implemented for graduate allowed scope and
+  changed-file verification.
+- Semantic gates implemented for critical stage artifacts.
+- Provider execution policy implemented with certified/unverified/known
+  unsupported proof labels and override behavior.
+- First-phase Postdoc read-only audit evidence implemented and attached to
+  `PostdocIntegrationSummary`.
+- `/lab proof` now surfaces safety/proof events, including validation policy,
+  provider policy, semantic gate, postdoc audit, and Lab context maintenance
+  events.
+- Validation passed: targeted LabRun tests, request-preparation regression,
+  `cargo fmt --check`, `git diff --check`, `cargo check -q`,
+  `bash scripts/validate_docs.sh`, `bash -n scripts/run_live_eval.sh`,
+  `python3 -m py_compile scripts/live_eval_report_parser.py`, all-features
+  clippy, and all-features rustdoc.
 
 This plan triages a fresh external review of the LabRun professor/postdoc/graduate
 workflow against the current repository. The useful direction is clear: keep the

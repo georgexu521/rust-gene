@@ -112,6 +112,15 @@ impl LabStore {
                 gate.owner
             ));
         }
+        let semantic_blockers =
+            crate::lab::artifact_semantics::stage_artifact_semantic_blockers(&artifact);
+        if !semantic_blockers.is_empty() {
+            return Err(anyhow!(
+                "artifact gate '{}' semantic validation failed: {}",
+                stage,
+                semantic_blockers.join("; ")
+            ));
+        }
         Ok(())
     }
 

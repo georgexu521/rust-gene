@@ -22,7 +22,7 @@ pub enum LabGraduateProviderCertification {
 
 impl LabGraduateProviderCertification {
     pub fn allows_graduate_execution(self) -> bool {
-        true
+        !matches!(self, Self::KnownUnsupported)
     }
 
     pub fn as_str(self) -> &'static str {
@@ -35,11 +35,24 @@ impl LabGraduateProviderCertification {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LabGraduateProviderExecutionPolicy {
+    pub certification: LabGraduateProviderCertification,
+    pub execution_allowed: bool,
+    pub isolated_worktree_required: bool,
+    pub controlled_validation_required: bool,
+    pub postdoc_audit_required: bool,
+    pub user_override_required: bool,
+    pub proof_labels: Vec<String>,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LabProviderCertificationReport {
     pub provider_id: String,
     pub model: String,
     pub graduate_certification: LabGraduateProviderCertification,
     pub graduate_execution_allowed: bool,
+    pub graduate_execution_policy: LabGraduateProviderExecutionPolicy,
     pub override_enabled: bool,
     pub latest_control_plane_record: Option<LabProviderCertificationRecord>,
     pub latest_graduate_record: Option<LabProviderCertificationRecord>,
@@ -58,8 +71,86 @@ pub fn graduate_provider_certification(
 }
 
 pub fn validate_graduate_provider_for_execution(context: &ToolContext) -> Result<(), String> {
-    let _ = context;
-    Ok(())
+    let policy = graduate_provider_execution_policy(context);
+    if policy.execution_allowed {
+        Ok(())
+    } else {
+        Err(policy.reason)
+    }
+}
+
+pub fn graduate_provider_execution_policy(
+    context: &ToolContext,
+) -> LabGraduateProviderExecutionPolicy {
+    let provider_id = provider_id_from_context(context)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("unknown")
+        .to_string();
+    let model = if context.model.trim().is_empty() {
+        "unknown".to_string()
+    } else {
+        context.model.trim().to_string()
+    };
+    let latest_graduate_record = latest_provider_record(
+        context,
+        &provider_id,
+        &model,
+        LabProviderCertificationKind::Graduate,
+    );
+    let certification = graduate_provider_certification_from_record(
+        Some(&provider_id),
+        &model,
+        latest_graduate_record.as_ref(),
+    );
+    let override_enabled = allow_uncertified_override();
+    match certification {
+        LabGraduateProviderCertification::Certified => LabGraduateProviderExecutionPolicy {
+            certification,
+            execution_allowed: true,
+            isolated_worktree_required: true,
+            controlled_validation_required: true,
+            postdoc_audit_required: false,
+            user_override_required: false,
+            proof_labels: vec!["provider_certified".to_string()],
+            reason: "provider has a passing Lab graduate certification record".to_string(),
+        },
+        LabGraduateProviderCertification::Unverified => LabGraduateProviderExecutionPolicy {
+            certification,
+            execution_allowed: true,
+            isolated_worktree_required: true,
+            controlled_validation_required: true,
+            postdoc_audit_required: true,
+            user_override_required: false,
+            proof_labels: vec!["provider_unverified".to_string()],
+            reason: "provider is unverified; execution requires isolated worktree, controlled validation, and postdoc audit".to_string(),
+        },
+        LabGraduateProviderCertification::KnownUnsupported if override_enabled => {
+            LabGraduateProviderExecutionPolicy {
+                certification,
+                execution_allowed: true,
+                isolated_worktree_required: true,
+                controlled_validation_required: true,
+                postdoc_audit_required: true,
+                user_override_required: true,
+                proof_labels: vec![
+                    "provider_known_unsupported".to_string(),
+                    "provider_override_enabled".to_string(),
+                ],
+                reason: "provider has a failed Lab graduate certification record; explicit override is enabled".to_string(),
+            }
+        }
+        LabGraduateProviderCertification::KnownUnsupported => LabGraduateProviderExecutionPolicy {
+            certification,
+            execution_allowed: false,
+            isolated_worktree_required: true,
+            controlled_validation_required: true,
+            postdoc_audit_required: true,
+            user_override_required: true,
+            proof_labels: vec!["provider_known_unsupported".to_string()],
+            reason: "provider has a failed Lab graduate certification record; explicit user override is required before graduate execution".to_string(),
+        },
+    }
 }
 
 pub fn provider_certification_report(context: &ToolContext) -> LabProviderCertificationReport {
@@ -90,19 +181,20 @@ pub fn provider_certification_report(context: &ToolContext) -> LabProviderCertif
         &model,
         latest_graduate_record.as_ref(),
     );
+    let graduate_execution_policy = graduate_provider_execution_policy(context);
     let override_enabled = allow_uncertified_override();
-    let graduate_execution_allowed = true;
+    let graduate_execution_allowed = graduate_execution_policy.execution_allowed;
     let recommendation = match (graduate_certification, override_enabled) {
         (LabGraduateProviderCertification::KnownUnsupported, false) => {
-            "Historical diagnostics mark this provider/model as weak, but Lab graduate dispatch is provider-neutral; rely on task evidence, scope checks, validation, and postdoc review."
+            "Historical diagnostics mark this provider/model as failed for graduate work; graduate execution requires explicit user override plus isolated worktree, controlled validation, and postdoc audit."
                 .to_string()
         }
         (LabGraduateProviderCertification::KnownUnsupported, true) => {
-            "Diagnostic override is set, but graduate dispatch is already provider-neutral; results still require runtime-observed file changes and validation."
+            "Diagnostic override is set for a known unsupported provider/model; results must carry provider_known_unsupported proof labels and still require runtime-observed file changes, controlled validation, and postdoc audit."
                 .to_string()
         }
         (LabGraduateProviderCertification::Unverified, _) => {
-            "Run --live-graduate or /lab provider compare for diagnostics; graduate execution is not blocked by provider name."
+            "Run --live-graduate or /lab provider compare for diagnostics; graduate execution is allowed but proof is labeled provider_unverified and requires stricter safeguards."
                 .to_string()
         }
         (LabGraduateProviderCertification::Certified, _) => {
@@ -115,6 +207,7 @@ pub fn provider_certification_report(context: &ToolContext) -> LabProviderCertif
         model,
         graduate_certification,
         graduate_execution_allowed,
+        graduate_execution_policy,
         override_enabled,
         latest_control_plane_record,
         latest_graduate_record,
@@ -130,10 +223,14 @@ fn graduate_provider_certification_from_record(
     latest_graduate_record: Option<&LabProviderCertificationRecord>,
 ) -> LabGraduateProviderCertification {
     if latest_graduate_record
-        .filter(|record| record.outcome == LabProviderCertificationOutcome::Passed)
-        .is_some()
+        .is_some_and(|record| record.outcome == LabProviderCertificationOutcome::Passed)
     {
         return LabGraduateProviderCertification::Certified;
+    }
+    if latest_graduate_record
+        .is_some_and(|record| record.outcome == LabProviderCertificationOutcome::Failed)
+    {
+        return LabGraduateProviderCertification::KnownUnsupported;
     }
     graduate_provider_certification(provider_id, model)
 }
@@ -210,6 +307,18 @@ mod tests {
             .metadata
             .insert("provider_id".to_string(), "deepseek".to_string());
 
+        let policy = graduate_provider_execution_policy(&context);
+        assert_eq!(
+            policy.certification,
+            LabGraduateProviderCertification::Unverified
+        );
+        assert!(policy.execution_allowed);
+        assert!(policy.isolated_worktree_required);
+        assert!(policy.controlled_validation_required);
+        assert!(policy.postdoc_audit_required);
+        assert!(policy
+            .proof_labels
+            .contains(&"provider_unverified".to_string()));
         validate_graduate_provider_for_execution(&context).unwrap();
     }
 
@@ -243,7 +352,7 @@ mod tests {
     }
 
     #[test]
-    fn local_graduate_failed_record_stays_diagnostic_not_blocking() {
+    fn local_graduate_failed_record_requires_explicit_override() {
         let temp = tempfile::tempdir().unwrap();
         let store = LabStore::for_project(temp.path());
         store
@@ -265,12 +374,20 @@ mod tests {
 
         assert_eq!(
             report.graduate_certification,
-            LabGraduateProviderCertification::Unverified
+            LabGraduateProviderCertification::KnownUnsupported
         );
-        assert!(report.graduate_execution_allowed);
+        assert!(!report.graduate_execution_allowed);
+        assert!(report.graduate_execution_policy.user_override_required);
+        assert!(report
+            .graduate_execution_policy
+            .proof_labels
+            .contains(&"provider_known_unsupported".to_string()));
         assert!(report
             .recommendation
-            .contains("not blocked by provider name"));
-        validate_graduate_provider_for_execution(&context).unwrap();
+            .contains("requires explicit user override"));
+        let err = validate_graduate_provider_for_execution(&context)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("explicit user override is required"));
     }
 }

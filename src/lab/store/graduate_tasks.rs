@@ -25,6 +25,8 @@ impl LabStore {
         }
         let mut run = self.load_run(lab_run_id)?;
         let now = Utc::now();
+        let allowed_scope = crate::lab::path_scope::normalize_lab_relative_paths(&allowed_scope)
+            .with_context(|| "graduate task allowed_scope failed LabRun path normalization")?;
         let task = GraduateTask {
             schema_version: LAB_SCHEMA_VERSION,
             task_id: next_id("gradtask"),
@@ -36,7 +38,7 @@ impl LabStore {
             status: LabTaskStatus::Queued,
             title: title.to_string(),
             instructions: instructions.to_string(),
-            allowed_scope: clean_string_vec(allowed_scope),
+            allowed_scope,
             required_validation: clean_string_vec(required_validation),
             evidence_ids: Vec::new(),
             result_artifact_id: None,
@@ -180,7 +182,9 @@ impl LabStore {
             ));
         }
 
-        task.allowed_scope = clean_string_vec(allowed_scope);
+        task.allowed_scope =
+            crate::lab::path_scope::normalize_lab_relative_paths(&allowed_scope)
+                .with_context(|| "graduate task allowed_scope failed LabRun path normalization")?;
         task.required_validation = clean_string_vec(required_validation);
         if let Some(instructions) = instructions
             .map(str::trim)

@@ -399,6 +399,29 @@ impl LabOrchestrator {
             self.fail_synced_graduate_task(&run, &task, &state.agent_id, &error)?;
             return Err(anyhow!(error));
         }
+        let provider_policy =
+            crate::lab::provider_certification::graduate_provider_execution_policy(&context);
+        self.store.record_run_event(
+            &run.lab_run_id,
+            "lab_graduate_provider_execution_policy",
+            serde_json::json!({
+                "task_id": task.task_id,
+                "agent_task_id": agent_task_id,
+                "certification": provider_policy.certification.as_str(),
+                "execution_allowed": provider_policy.execution_allowed,
+                "isolated_worktree_required": provider_policy.isolated_worktree_required,
+                "controlled_validation_required": provider_policy.controlled_validation_required,
+                "postdoc_audit_required": provider_policy.postdoc_audit_required,
+                "user_override_required": provider_policy.user_override_required,
+                "proof_labels": provider_policy.proof_labels.clone(),
+                "reason": provider_policy.reason.clone(),
+            }),
+        )?;
+        if !provider_policy.execution_allowed {
+            let error = provider_policy.reason.clone();
+            self.fail_synced_graduate_task(&run, &task, &state.agent_id, &error)?;
+            return Err(anyhow!(error));
+        }
         let mut parsed = match parse_graduate_agent_result(
             Some(&artifact.payload),
             &artifact.output,
@@ -442,6 +465,12 @@ impl LabOrchestrator {
         parsed
             .evidence_ids
             .push(format!("agent_artifact:{}", artifact_id));
+        parsed.evidence_ids.extend(
+            provider_policy
+                .proof_labels
+                .iter()
+                .map(|label| format!("provider_policy:{label}")),
+        );
         parsed.evidence_ids.sort();
         parsed.evidence_ids.dedup();
 
@@ -605,6 +634,11 @@ impl LabOrchestrator {
         accepted_results.extend(workspace_proof.accepted_results);
         remaining_risks.extend(workspace_proof.remaining_risks);
         evidence_refs.extend(workspace_proof.evidence_refs);
+        let postdoc_audit =
+            collect_postdoc_read_only_audit_proof(&self.store, &run, &graduate_results)?;
+        accepted_results.extend(postdoc_audit.accepted_results);
+        remaining_risks.extend(postdoc_audit.remaining_risks);
+        evidence_refs.extend(postdoc_audit.evidence_refs);
 
         if accepted_results.is_empty() {
             remaining_risks

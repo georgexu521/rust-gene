@@ -3,6 +3,56 @@ Status: Current
 
 Last updated: 2026-06-25
 
+## LabRun Validation Security And Review Hardening - 2026-06-25
+
+The LabRun hardening workstream is tracked in
+`docs/LABRUN_VALIDATION_SECURITY_AND_REVIEW_HARDENING_PLAN_2026-06-25.md`.
+
+Implemented in this slice:
+
+- Graduate required validation no longer executes provider-authored strings via
+  `sh -lc`. LabRun uses a controlled validation runner with direct allowlisted
+  commands and explicit blocked/failed/passed run events.
+- Graduate allowed scope and changed-file checks now share LabRun relative path
+  normalization, rejecting absolute paths, parent traversal, internal runtime
+  paths, and malformed separators before verified GraduateResult binding.
+- Critical stage artifacts now have semantic gate checks. Weak or placeholder
+  `PostdocPlan`, `GraduateResult`, `PostdocIntegrationSummary`, and
+  `ProfessorReview` artifacts produce `needs_revision` blockers instead of
+  silently advancing the LabRun stage.
+- Provider graduate certification now produces an execution policy. Unverified
+  providers remain dogfoodable with stricter proof labels; providers with failed
+  graduate certification records require explicit override before execution.
+- Postdoc integration now writes a first-phase read-only audit evidence file and
+  attaches it to `PostdocIntegrationSummary.evidence_refs`.
+- `/lab proof` now rolls up recent safety/proof events, including validation
+  policy decisions, provider policy labels, semantic gate blocks, postdoc audit
+  evidence, and Lab context maintenance.
+
+Validation for this slice:
+
+```bash
+cargo test -q lab::path_scope --lib -- --test-threads=1
+cargo test -q lab::validation --lib -- --test-threads=1
+cargo test -q lab::provider_certification --lib -- --test-threads=1
+cargo test -q lab::orchestrator --lib -- --test-threads=1
+cargo test -q lab::store --lib -- --test-threads=1
+cargo test -q lab::draft --lib -- --test-threads=1
+cargo test -q lab::commands --lib -- --test-threads=1
+cargo test -q request_preparation_controller -- --test-threads=1
+cargo fmt --check
+git diff --check
+cargo check -q
+bash scripts/validate_docs.sh
+bash -n scripts/run_live_eval.sh
+python3 -m py_compile scripts/live_eval_report_parser.py
+cargo clippy --workspace --all-targets --all-features -- -D warnings
+cargo doc --workspace --all-features --no-deps
+```
+
+`scripts/validate_docs.sh` also passed its internal full test run: 3163 passed,
+0 failed, 1 ignored.
+
 ## LabRun / General Agent Integration - 2026-06-25
 
 The LabRun/general-agent integration workstream is tracked in
@@ -30,8 +80,7 @@ Deferred:
 - Full LabRun permission overlay: role/stage enforcement, graduate allowed-scope
   integration, postdoc/professor no-mutation policy, and high-risk ask policy
   remain future work.
-- Postdoc read-only audit and `/lab evidence graph` remain future LabRun
-  proof-surface work.
+- `/lab evidence graph` remains future LabRun proof-surface work.
 
 ## Post-Review Release Trust Cleanup - 2026-06-24
 

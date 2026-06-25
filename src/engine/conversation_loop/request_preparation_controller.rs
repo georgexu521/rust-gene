@@ -3,7 +3,9 @@
 //! Owns one focused stage of turn execution so permissions, validation, repair, and closeout stay explicit in the runtime.
 
 use super::context_budget_controller::ContextBudgetController;
+use super::lab_context_maintenance::maybe_record_lab_context_maintenance;
 use super::runtime_diet::RuntimeDietSnapshot;
+use super::stage_tool_advisory::inject_stage_tool_advisory_zone;
 use crate::engine::candidate_action::model_led_weighting_enabled;
 use crate::engine::context_assembly::{ContextAssemblyInput, ContextAssemblyPlan, ContextZone};
 use crate::engine::context_ledger::{
@@ -65,11 +67,6 @@ struct MemoryPrefetchContext<'a> {
     runtime_diet: &'a mut RuntimeDietSnapshot,
 }
 
-struct LabContextMaintenanceOutcome {
-    recorded_decision: Option<crate::lab::model::LabCompressionDecision>,
-    auto_compression_artifact_id: Option<String>,
-}
-
 pub(super) struct RequestPreparationController;
 
 impl RequestPreparationController {
@@ -117,7 +114,7 @@ impl RequestPreparationController {
             );
             Self::inject_focused_repair_zone(focused_repair_prompt, &mut dynamic_blocks);
             Self::inject_context_ledger_hint(session_store, session_id, &mut dynamic_blocks);
-            Self::inject_stage_tool_advisory_zone(trace, &mut dynamic_blocks);
+            inject_stage_tool_advisory_zone(trace, &mut dynamic_blocks);
             Self::inject_project_map_zone(
                 &request_messages,
                 trace,
@@ -424,7 +421,7 @@ impl RequestPreparationController {
                 &artifact_gate_refs,
             );
         let maintenance =
-            Self::maybe_record_lab_context_maintenance(&store, working_dir, &run, &packet, trace);
+            maybe_record_lab_context_maintenance(&store, working_dir, &run, &packet, trace);
         let mut lines = vec![
             format!("lab_run_id: {}", packet.lab_run_id),
             format!("role: {:?}", packet.role),
@@ -461,103 +458,6 @@ impl RequestPreparationController {
             ));
         }
         if let Some(block) = tagged_block(LAB_CONTEXT_TAG, lines.join("\n")) {
-            dynamic_blocks.push(block);
-        }
-    }
-
-    fn maybe_record_lab_context_maintenance(
-        store: &crate::lab::store::LabStore,
-        working_dir: &std::path::Path,
-        run: &crate::lab::model::LabRun,
-        packet: &crate::lab::context::LabContextPacket,
-        trace: &TraceCollector,
-    ) -> LabContextMaintenanceOutcome {
-        // Keep LabRun persistence named separately from context assembly so a
-        // normal request can explain intentional compression maintenance.
-        let compression_decision =
-            crate::lab::context::evaluate_lab_context_compression(run, packet);
-        let recorded_decision = store.record_compression_decision(compression_decision).ok();
-        let auto_compression_artifact_id = recorded_decision.as_ref().and_then(|decision| {
-            if matches!(
-                decision.action,
-                crate::lab::model::LabCompressionAction::None
-            ) {
-                return None;
-            }
-            match crate::lab::orchestrator::LabOrchestrator::for_project(working_dir)
-                .auto_create_compression_summary_for_decision(decision)
-            {
-                Ok(Some(created)) => Some(created.artifact.artifact_id().to_string()),
-                Ok(None) => None,
-                Err(err) => {
-                    debug!(
-                        target: "lab",
-                        error = %err,
-                        lab_run_id = %decision.lab_run_id,
-                        "failed to auto-create LabRun compression summary"
-                    );
-                    None
-                }
-            }
-        });
-
-        if let Some(decision) = recorded_decision.as_ref() {
-            trace.record(TraceEvent::LabContextMaintenanceRecorded {
-                lab_run_id: decision.lab_run_id.clone(),
-                decision_id: Some(decision.decision_id.clone()),
-                action: format!("{:?}", decision.action),
-                artifact_id: auto_compression_artifact_id.clone(),
-                source: "request_preparation.lab_context_maintenance".to_string(),
-            });
-        }
-
-        LabContextMaintenanceOutcome {
-            recorded_decision,
-            auto_compression_artifact_id,
-        }
-    }
-
-    fn inject_stage_tool_advisory_zone(
-        trace: &TraceCollector,
-        dynamic_blocks: &mut DynamicContextBlockBuilder,
-    ) {
-        let snapshot = trace.snapshot();
-        let Some((task_stage, recommended_tools, missing_tools, policy)) =
-            snapshot.events.iter().rev().find_map(|event| {
-                if let TraceEvent::StageToolExposureAdvisory {
-                    task_stage,
-                    recommended_tools,
-                    missing_tools,
-                    policy,
-                    ..
-                } = event
-                {
-                    Some((
-                        task_stage,
-                        recommended_tools,
-                        missing_tools,
-                        policy.as_str(),
-                    ))
-                } else {
-                    None
-                }
-            })
-        else {
-            return;
-        };
-        let missing = if missing_tools.is_empty() {
-            "none".to_string()
-        } else {
-            missing_tools.join(",")
-        };
-        let body = format!(
-            "stage_tool_advisory:\n  current_stage={}\n  recommended={}\n  missing={}\n  policy={}; exposed tools were not filtered or auto-added",
-            task_stage,
-            recommended_tools.join(","),
-            missing,
-            policy
-        );
-        if let Some(block) = tagged_block(RECENT_OBSERVATION_TAG, body) {
             dynamic_blocks.push(block);
         }
     }

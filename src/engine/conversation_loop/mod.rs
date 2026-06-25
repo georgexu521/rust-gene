@@ -21,6 +21,7 @@ mod first_code_change_controller;
 #[cfg(test)]
 mod focused_repair_recovery;
 mod focused_repair_state_controller;
+mod lab_context_maintenance;
 mod legacy_workflow_gate_controller;
 mod memory_snapshot_controller;
 mod memory_sync_controller;
@@ -48,6 +49,7 @@ mod risk_signal_controller;
 mod route_scoped_tools_tests;
 mod runtime_diet;
 mod session_processor;
+mod stage_tool_advisory;
 mod step_executor;
 mod task_guidance_controller;
 mod text_sanitizer;

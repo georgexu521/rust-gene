@@ -90,18 +90,129 @@ fn drive_to_user_report_with_explicit_artifacts(orchestrator: &LabOrchestrator) 
         "postdoc_review",
         "professor_review",
     ] {
-        let created = orchestrator
-            .create_current_stage_artifact_for_latest(&format!("explicit artifact for {stage}"))
+        let run = orchestrator.store().latest_run().unwrap().unwrap();
+        let artifact = valid_test_artifact_for_stage(&run, stage);
+        orchestrator
+            .store()
+            .write_stage_artifact(&artifact)
             .unwrap();
-        assert!(
-            created.gate.is_satisfied(),
-            "gate should be satisfied for explicit artifact at {stage}"
-        );
+        orchestrator
+            .store()
+            .write_stage_artifact_report(&artifact)
+            .unwrap();
+        let gate = orchestrator
+            .accept_artifact_latest(artifact.artifact_id(), "accepted")
+            .unwrap();
+        assert!(gate.is_satisfied(), "gate should be satisfied for {stage}");
         let advanced = orchestrator.advance_latest().unwrap();
         if stage == "professor_review" {
             assert_eq!(advanced.current_stage, "user_report");
             assert!(advanced.needs_user);
         }
+    }
+}
+
+fn valid_test_artifact_for_stage(run: &LabRun, stage: &str) -> StageArtifact {
+    let artifact_id = match stage {
+        "professor_discussion" => format!("artifact_professorplan_test_{}", run.cycle_count),
+        "postdoc_plan" => format!("artifact_postdocplan_test_{}", run.cycle_count),
+        "graduate_work" => format!("artifact_graduateresult_test_{}", run.cycle_count),
+        "postdoc_review" => {
+            format!(
+                "artifact_postdocintegrationsummary_test_{}",
+                run.cycle_count
+            )
+        }
+        "professor_review" => format!("artifact_professorreview_test_{}", run.cycle_count),
+        other => format!("artifact_test_{}_{}", other, run.cycle_count),
+    };
+    match stage {
+        "professor_discussion" => StageArtifact::ProfessorPlan(LabArtifactEnvelope::new(
+            artifact_id,
+            run.lab_run_id.clone(),
+            LabArtifactType::ProfessorPlan,
+            "Professor plan".to_string(),
+            Utc::now(),
+            ProfessorPlan {
+                problem_statement: run.user_goal.clone(),
+                strategic_direction: "Implement the scoped LabRun slice.".to_string(),
+                success_criteria: vec!["The slice has runtime proof.".to_string()],
+                constraints: vec!["Preserve safety gates.".to_string()],
+                risks: vec!["Validation may fail and require revision.".to_string()],
+                handoff_to_postdoc: "Prepare files_expected and validation_plan.".to_string(),
+            },
+        )),
+        "postdoc_plan" => StageArtifact::PostdocPlan(LabArtifactEnvelope::new(
+            artifact_id,
+            run.lab_run_id.clone(),
+            LabArtifactType::PostdocPlan,
+            "Postdoc plan".to_string(),
+            Utc::now(),
+            PostdocPlan {
+                implementation_summary: "Implement a narrow LabRun test slice.".to_string(),
+                slices: vec!["Update the scoped LabRun file.".to_string()],
+                files_expected: vec!["src/lab/orchestrator.rs".to_string()],
+                validation_plan: vec!["cargo check -q --tests".to_string()],
+                graduate_handoff: "Return changed files and validation evidence.".to_string(),
+            },
+        )),
+        "graduate_work" => StageArtifact::GraduateResult(LabArtifactEnvelope::new(
+            artifact_id,
+            run.lab_run_id.clone(),
+            LabArtifactType::GraduateResult,
+            "Graduate result".to_string(),
+            Utc::now(),
+            GraduateResult {
+                task_summary: "Implemented the scoped slice.".to_string(),
+                changed_files: vec!["src/lab/orchestrator.rs".to_string()],
+                validation_attempts: vec![
+                    "runtime validation `test -f src/lab/orchestrator.rs` passed".to_string(),
+                ],
+                blockers: Vec::new(),
+                handoff_to_postdoc: "Review diff and validation evidence.".to_string(),
+            },
+        )),
+        "postdoc_review" => {
+            let mut artifact = StageArtifact::PostdocIntegrationSummary(LabArtifactEnvelope::new(
+                artifact_id,
+                run.lab_run_id.clone(),
+                LabArtifactType::PostdocIntegrationSummary,
+                "Postdoc integration".to_string(),
+                Utc::now(),
+                PostdocIntegrationSummary {
+                    integration_summary: "Reviewed graduate result evidence.".to_string(),
+                    accepted_results: vec!["GraduateResult artifact accepted.".to_string()],
+                    validation_status: "postdoc_integrated_pending_professor_review".to_string(),
+                    remaining_risks: Vec::new(),
+                    handoff_to_professor: "Review final user-facing readiness.".to_string(),
+                },
+            ));
+            if let StageArtifact::PostdocIntegrationSummary(envelope) = &mut artifact {
+                envelope.evidence_refs = vec!["artifact:graduate_result".to_string()];
+            }
+            artifact
+        }
+        "professor_review" => {
+            let mut artifact = StageArtifact::ProfessorReview(LabArtifactEnvelope::new(
+                artifact_id,
+                run.lab_run_id.clone(),
+                LabArtifactType::ProfessorReview,
+                "Professor review".to_string(),
+                Utc::now(),
+                ProfessorReview {
+                    review_summary: "Accepted postdoc integration evidence.".to_string(),
+                    strategic_assessment: "The scoped result is ready for user report.".to_string(),
+                    accepted: true,
+                    required_revisions: Vec::new(),
+                    user_report: "The LabRun slice is complete with evidence.".to_string(),
+                },
+            ));
+            if let StageArtifact::ProfessorReview(envelope) = &mut artifact {
+                envelope.evidence_refs = vec!["artifact:postdoc_integration".to_string()];
+            }
+            artifact
+        }
+        other => panic!("unexpected stage {other}"),
     }
 }
 
@@ -270,7 +381,7 @@ fn accepting_postdoc_plan_queues_graduate_tasks_once() {
 }
 
 #[test]
-fn accepting_postdoc_plan_without_scope_blocks_generated_task() {
+fn accepting_postdoc_plan_without_scope_is_blocked_by_semantic_gate() {
     let temp = tempfile::tempdir().unwrap();
     let orchestrator = LabOrchestrator::for_project(temp.path());
     let proposal = orchestrator
@@ -291,21 +402,23 @@ fn accepting_postdoc_plan_without_scope_blocks_generated_task() {
     let postdoc = orchestrator
         .create_current_stage_artifact_for_latest("Postdoc plan missing scope")
         .unwrap();
-    orchestrator
+    assert!(!postdoc.gate.is_satisfied());
+    assert!(postdoc
+        .gate
+        .blockers
+        .iter()
+        .any(|blocker| blocker.contains("files_expected")));
+    let err = orchestrator
         .accept_artifact_latest(postdoc.artifact.artifact_id(), "accepted")
-        .unwrap();
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("failed semantic validation"));
 
     let tasks = orchestrator
         .store()
         .list_graduate_tasks(&run.lab_run_id)
         .unwrap();
-    assert_eq!(tasks.len(), 1);
-    assert_eq!(tasks[0].status, LabTaskStatus::Blocked);
-    assert!(tasks[0]
-        .blocker
-        .as_deref()
-        .unwrap_or("")
-        .contains("missing files_expected"));
+    assert!(tasks.is_empty());
 }
 
 #[test]
@@ -740,12 +853,23 @@ fn postdoc_integration_summary_accepts_unblocked_graduate_results() {
                 .remaining_risks
                 .iter()
                 .any(|risk| risk.contains("pending parent verification")));
+            assert!(envelope
+                .evidence_refs
+                .iter()
+                .any(|item| item.contains("postdoc_audits/postdoc_audit_")));
         }
         other => panic!(
             "expected integration summary, got {:?}",
             other.artifact_type()
         ),
     }
+    let events = orchestrator
+        .store()
+        .list_run_events(&run.lab_run_id)
+        .unwrap();
+    assert!(events
+        .iter()
+        .any(|event| event.event_type == "postdoc_read_only_audit_written"));
 }
 
 #[test]
@@ -1351,6 +1475,27 @@ fn workspace_change_delta_ignores_preexisting_dirty_files() {
 }
 
 #[test]
+fn graduate_scope_validation_normalizes_and_rejects_unsafe_paths() {
+    assert!(validate_changed_files_within_scope(
+        &["src/lab".to_string()],
+        &["src\\lab\\orchestrator.rs".to_string()],
+    )
+    .is_ok());
+    for changed in [
+        vec!["src/../secrets.rs".to_string()],
+        vec!["/tmp/outside.rs".to_string()],
+        vec![".git/config".to_string()],
+        vec![".priority-agent/lab/state.json".to_string()],
+        vec!["target/lab-live-validation/run.json".to_string()],
+    ] {
+        assert!(
+            validate_changed_files_within_scope(&["src".to_string()], &changed).is_err(),
+            "{changed:?} should be rejected"
+        );
+    }
+}
+
+#[test]
 fn graduate_runtime_verification_rejects_missing_actual_changes() {
     let project = tempfile::tempdir().unwrap();
     init_git_dir(project.path());
@@ -1390,6 +1535,62 @@ fn graduate_runtime_verification_rejects_missing_actual_changes() {
     .to_string();
 
     assert!(err.contains("no actual file changes"));
+}
+
+#[test]
+fn graduate_runtime_verification_blocks_shell_validation_and_records_event() {
+    let project = tempfile::tempdir().unwrap();
+    init_git_dir(project.path());
+    let worktree = tempfile::tempdir().unwrap();
+    init_git_dir(worktree.path());
+    std::fs::write(worktree.path().join("proof.txt"), "verified\n").unwrap();
+    let context = lab_context_with_agent_worktree(
+        project.path(),
+        "lab-provider-command",
+        "agent_1",
+        worktree.path(),
+    );
+    let task = GraduateTask {
+        schema_version: LAB_SCHEMA_VERSION,
+        task_id: "gradtask_test".to_string(),
+        lab_run_id: "labrun_test".to_string(),
+        created_at: Utc::now(),
+        updated_at: Utc::now(),
+        created_by: LabRole::Postdoc,
+        assigned_role: LabRole::Graduate,
+        status: LabTaskStatus::InProgress,
+        title: "Write proof".to_string(),
+        instructions: "Create proof.txt".to_string(),
+        allowed_scope: vec!["proof.txt".to_string()],
+        required_validation: vec!["test -f proof.txt && rm -rf target".to_string()],
+        evidence_ids: Vec::new(),
+        result_artifact_id: None,
+        blocker: None,
+        cycle_id: Some("0".to_string()),
+    };
+
+    let err = runtime_verify_graduate_task_result(
+        &task,
+        &context,
+        Some("agent_1"),
+        "lab-graduate-gradtask_test",
+        &[],
+    )
+    .unwrap_err()
+    .to_string();
+
+    assert!(err.contains("blocked by Lab validation policy"));
+    let events = LabStore::for_project(project.path())
+        .list_run_events(&task.lab_run_id)
+        .unwrap();
+    assert!(events.iter().any(|event| {
+        event.event_type == "lab_validation_command_blocked"
+            && event
+                .payload
+                .get("command")
+                .and_then(serde_json::Value::as_str)
+                == Some("test -f proof.txt && rm -rf target")
+    }));
 }
 
 #[test]
@@ -1954,6 +2155,69 @@ async fn graduate_dispatch_is_not_blocked_by_provider_name_before_agent_run() {
     assert_eq!(saved_task.status, LabTaskStatus::Blocked);
     let saved_run = orchestrator.store().load_run(&run.lab_run_id).unwrap();
     assert_eq!(saved_run.failure_count, 1);
+}
+
+#[tokio::test]
+async fn graduate_dispatch_blocks_known_unsupported_provider_record() {
+    let temp = tempfile::tempdir().unwrap();
+    let orchestrator = LabOrchestrator::for_project(temp.path());
+    let proposal = orchestrator
+        .store()
+        .create_proposal("Build LabRun", None)
+        .unwrap();
+    let run = orchestrator
+        .approve_proposal(&proposal.proposal_id)
+        .unwrap();
+    orchestrator
+        .store()
+        .record_provider_certification(
+            "deepseek",
+            "deepseek-v4-flash",
+            crate::lab::model::LabProviderCertificationKind::Graduate,
+            crate::lab::model::LabProviderCertificationOutcome::Failed,
+            "target/lab-live-validation/fail/report.md",
+            "graduate validation failed",
+        )
+        .unwrap();
+    let task = orchestrator
+        .store()
+        .create_graduate_task(
+            &run.lab_run_id,
+            "Implement scoped slice",
+            "Update only the lab model.",
+            vec!["src/lab/model.rs".to_string()],
+            vec!["cargo check -q".to_string()],
+        )
+        .unwrap();
+    let mut context = ToolContext::new(temp.path(), "lab-test").with_model("deepseek-v4-flash");
+    context
+        .metadata
+        .insert("provider_id".to_string(), "deepseek".to_string());
+
+    let dispatch = orchestrator
+        .execute_graduate_task_latest_with_context(&task.task_id, context)
+        .await
+        .unwrap();
+
+    assert_eq!(dispatch.status, GraduateDispatchStatus::Failed);
+    let error = dispatch.error.as_deref().unwrap_or_default();
+    assert!(error.contains("explicit user override is required"));
+    let events = orchestrator
+        .store()
+        .list_run_events(&run.lab_run_id)
+        .unwrap();
+    assert!(events.iter().any(|event| {
+        event.event_type == "lab_graduate_provider_execution_policy"
+            && event
+                .payload
+                .get("proof_labels")
+                .and_then(serde_json::Value::as_array)
+                .is_some_and(|labels| {
+                    labels
+                        .iter()
+                        .any(|label| label.as_str() == Some("provider_known_unsupported"))
+                })
+    }));
 }
 
 #[test]

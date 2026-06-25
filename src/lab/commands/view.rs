@@ -272,6 +272,10 @@ pub(super) fn handle_proof_command(project_root: &Path, store: &LabStore) -> Str
         Ok(evidence) => evidence,
         Err(err) => return format!("Failed to read LabRun proof evidence refs: {err}"),
     };
+    let events = match store.list_run_events(&run.lab_run_id) {
+        Ok(events) => events,
+        Err(err) => return format!("Failed to read LabRun proof events: {err}"),
+    };
     let next_action = crate::lab::next_action::recommend_next_action(project_root)
         .map(|action| action.recommended_command)
         .unwrap_or_else(|err| format!("unavailable ({err})"));
@@ -347,6 +351,7 @@ pub(super) fn handle_proof_command(project_root: &Path, store: &LabStore) -> Str
             lines.push(format!("  {}", format_artifact_proof_line(artifact)));
         }
     }
+    lines.extend(safety_proof_event_lines(&events, 8));
     lines.join("\n")
 }
 
@@ -405,6 +410,112 @@ fn format_artifact_proof_line(artifact: &StageArtifact) -> String {
         artifact.validation_status().unwrap_or("none"),
         artifact.evidence_refs().len()
     )
+}
+
+fn safety_proof_event_lines(events: &[crate::lab::model::LabEvent], limit: usize) -> Vec<String> {
+    let mut proof_events = events
+        .iter()
+        .rev()
+        .filter(|event| {
+            matches!(
+                event.event_type.as_str(),
+                "lab_validation_command_blocked"
+                    | "lab_validation_command_failed"
+                    | "lab_validation_command_passed"
+                    | "lab_graduate_provider_execution_policy"
+                    | "postdoc_read_only_audit_written"
+                    | "lab_artifact_semantic_gate_blocked"
+                    | "lab_artifact_acceptance_blocked_by_semantic_gate"
+                    | "lab_context_maintenance"
+            )
+        })
+        .take(limit)
+        .map(format_safety_proof_event)
+        .collect::<Vec<_>>();
+    proof_events.reverse();
+    if proof_events.is_empty() {
+        vec!["Safety/proof events: none".to_string()]
+    } else {
+        let mut lines = vec!["Safety/proof events:".to_string()];
+        lines.extend(proof_events.into_iter().map(|line| format!("  {line}")));
+        lines
+    }
+}
+
+fn format_safety_proof_event(event: &crate::lab::model::LabEvent) -> String {
+    let payload = &event.payload;
+    match event.event_type.as_str() {
+        "lab_validation_command_blocked"
+        | "lab_validation_command_failed"
+        | "lab_validation_command_passed" => format!(
+            "{} command={} reason={}",
+            event.event_type,
+            payload
+                .get("command")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("unknown"),
+            payload
+                .get("policy_reason")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("none")
+        ),
+        "lab_graduate_provider_execution_policy" => format!(
+            "{} certification={} allowed={} labels={}",
+            event.event_type,
+            payload
+                .get("certification")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("unknown"),
+            payload
+                .get("execution_allowed")
+                .and_then(serde_json::Value::as_bool)
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "unknown".to_string()),
+            value_string_array(payload.get("proof_labels")).join(",")
+        ),
+        "postdoc_read_only_audit_written" => format!(
+            "{} path={}",
+            event.event_type,
+            payload
+                .get("audit_path")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("unknown")
+        ),
+        "lab_context_maintenance" => format!(
+            "{} decision={} action={} artifact={}",
+            event.event_type,
+            payload
+                .get("decision_id")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("unknown"),
+            payload
+                .get("action")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("unknown"),
+            payload
+                .get("artifact_id")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("none")
+        ),
+        _ => format!(
+            "{} {}",
+            event.event_type,
+            compact_message_line(&payload.to_string(), 180)
+        ),
+    }
+}
+
+fn value_string_array(value: Option<&serde_json::Value>) -> Vec<String> {
+    value
+        .and_then(serde_json::Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(serde_json::Value::as_str)
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 fn graduate_worktree_proof_lines(

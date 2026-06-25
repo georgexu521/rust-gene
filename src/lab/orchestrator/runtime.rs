@@ -157,6 +157,93 @@ pub(super) fn collect_graduate_workspace_snapshot_proof_for_postdoc(
     Ok(proof)
 }
 
+pub(super) fn collect_postdoc_read_only_audit_proof(
+    store: &LabStore,
+    run: &LabRun,
+    graduate_results: &[LabArtifactEnvelope<GraduateResult>],
+) -> anyhow::Result<PostdocWorktreeProof> {
+    let mut proof = PostdocWorktreeProof::default();
+    let mut audited_results = Vec::new();
+    let mut inspected_paths = Vec::new();
+    let mut audit_risks = Vec::new();
+    for result in graduate_results {
+        audited_results.push(result.artifact_id.clone());
+        if result.body.changed_files.is_empty() {
+            audit_risks.push(format!(
+                "{} audit risk: no changed_files to inspect",
+                result.artifact_id
+            ));
+        }
+        if result.body.validation_attempts.is_empty() {
+            audit_risks.push(format!(
+                "{} audit risk: no validation attempts to inspect",
+                result.artifact_id
+            ));
+        }
+        for changed_file in &result.body.changed_files {
+            match crate::lab::path_scope::normalize_lab_relative_path(changed_file) {
+                Ok(path) => {
+                    let exists_in_parent = store.project_root().join(&path).exists();
+                    inspected_paths.push(serde_json::json!({
+                        "artifact_id": result.artifact_id,
+                        "path": path,
+                        "exists_in_parent_workspace": exists_in_parent,
+                    }));
+                    if !exists_in_parent {
+                        audit_risks.push(format!(
+                            "{} audit note: {} is not present in the parent workspace; rely on isolated worktree or dispatch evidence",
+                            result.artifact_id,
+                            changed_file
+                        ));
+                    }
+                }
+                Err(err) => {
+                    audit_risks.push(format!(
+                        "{} audit risk: invalid changed file path: {}",
+                        result.artifact_id, err
+                    ));
+                }
+            }
+        }
+    }
+    let audit_id = format!("postdoc_audit_{}", Uuid::new_v4().simple());
+    let audit_dir = store
+        .root()
+        .join("runs")
+        .join(&run.lab_run_id)
+        .join("postdoc_audits");
+    std::fs::create_dir_all(&audit_dir)?;
+    let audit_path = audit_dir.join(format!("{audit_id}.json"));
+    let payload = serde_json::json!({
+        "schema_version": crate::lab::model::LAB_SCHEMA_VERSION,
+        "audit_id": audit_id,
+        "lab_run_id": run.lab_run_id,
+        "cycle_id": run.cycle_count.to_string(),
+        "role": "postdoc",
+        "mode": "read_only",
+        "audited_results": audited_results,
+        "inspected_paths": inspected_paths,
+        "risks": audit_risks,
+        "forbidden_actions": ["file_write", "file_edit", "file_patch", "arbitrary_shell"],
+    });
+    std::fs::write(&audit_path, serde_json::to_vec_pretty(&payload)?)?;
+    proof.evidence_refs.push(audit_path.display().to_string());
+    proof.accepted_results.push(format!(
+        "postdoc read-only audit reviewed {} graduate result artifact(s)",
+        graduate_results.len()
+    ));
+    proof.remaining_risks.extend(audit_risks);
+    store.record_run_event(
+        &run.lab_run_id,
+        "postdoc_read_only_audit_written",
+        serde_json::json!({
+            "audit_path": audit_path.display().to_string(),
+            "graduate_result_count": graduate_results.len(),
+        }),
+    )?;
+    Ok(proof)
+}
+
 pub(super) fn format_graduate_workspace_snapshot_for_postdoc(event: &LabEvent) -> String {
     let payload = &event.payload;
     let phase = payload
@@ -516,36 +603,14 @@ pub(super) fn validate_changed_files_within_scope(
     allowed_scope: &[String],
     changed_files: &[String],
 ) -> anyhow::Result<()> {
-    if changed_files.is_empty() {
-        return Ok(());
-    }
-    if allowed_scope.is_empty() {
-        return Err(anyhow!(
-            "graduate result cannot report changed files without allowed_scope"
-        ));
-    }
-    let outside = changed_files
-        .iter()
-        .find(|file| !path_matches_any_scope(file, allowed_scope));
-    if let Some(file) = outside {
-        return Err(anyhow!(
-            "graduate result changed file '{}' is outside allowed_scope ({})",
-            file,
-            allowed_scope.join(", ")
-        ));
-    }
-    Ok(())
-}
-
-pub(super) fn path_matches_any_scope(file: &str, allowed_scope: &[String]) -> bool {
-    let file = file.trim().trim_start_matches("./");
-    allowed_scope.iter().any(|scope| {
-        let scope = scope.trim().trim_start_matches("./");
-        if scope.is_empty() {
-            return false;
-        }
-        file == scope || file.starts_with(&format!("{}/", scope.trim_end_matches('/')))
-    })
+    crate::lab::path_scope::changed_files_within_scope(allowed_scope, changed_files)
+        .map_err(|err| {
+            anyhow!(
+                "graduate result changed file is outside allowed_scope or invalid: {}; allowed_scope=({})",
+                err,
+                allowed_scope.join(", ")
+            )
+        })
 }
 
 pub(super) fn durable_graduate_task_is_completed(
@@ -600,8 +665,12 @@ pub(super) fn runtime_verify_graduate_task_result(
         ));
     }
     validate_changed_files_within_scope(&task.allowed_scope, &changed_files)?;
-    let validation_attempts =
-        run_required_validation_commands(&verification_root, &task.required_validation)?;
+    let store = LabStore::for_project(&context.working_dir);
+    let validation_attempts = run_required_validation_commands(
+        &verification_root,
+        &task.required_validation,
+        Some((&store, task.lab_run_id.as_str())),
+    )?;
 
     Ok(GraduateRuntimeEvidence {
         changed_files,
@@ -679,34 +748,15 @@ pub(super) fn git_stdout(cwd: &Path, args: &[&str]) -> Option<String> {
 pub(super) fn run_required_validation_commands(
     cwd: &Path,
     commands: &[String],
+    lab_event_sink: Option<(&LabStore, &str)>,
 ) -> anyhow::Result<Vec<String>> {
-    let mut attempts = Vec::new();
-    for command in commands {
-        let command = command.trim();
-        if command.is_empty() {
-            continue;
-        }
-        let output = Command::new("sh")
-            .arg("-lc")
-            .arg(command)
-            .current_dir(cwd)
-            .output()
-            .map_err(|err| anyhow!("failed to run required validation `{command}`: {err}"))?;
-        if output.status.success() {
-            attempts.push(format!("runtime validation `{command}` passed"));
-        } else {
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(anyhow!(
-                "required validation `{}` failed with status {:?}; stdout={}; stderr={}",
-                command,
-                output.status.code(),
-                compact_result_preview(&stdout, 240),
-                compact_result_preview(&stderr, 240)
-            ));
-        }
+    if let Some((store, lab_run_id)) = lab_event_sink {
+        crate::lab::validation::run_lab_validation_commands_for_lab(
+            cwd, commands, store, lab_run_id,
+        )
+    } else {
+        crate::lab::validation::run_lab_validation_commands(cwd, commands)
     }
-    Ok(attempts)
 }
 
 pub(super) fn workspace_change_snapshot(project_root: &Path) -> BTreeMap<String, String> {
@@ -797,13 +847,7 @@ pub(super) fn changed_paths_between(
 }
 
 pub(super) fn is_internal_lab_runtime_path(path: &str) -> bool {
-    let path = path.trim().trim_start_matches("./");
-    path.starts_with(".priority-agent/")
-        || path == ".priority-agent"
-        || path.starts_with(".git/")
-        || path == ".git"
-        || path.starts_with(".claude/worktrees/")
-        || path == ".claude/worktrees"
+    crate::lab::path_scope::is_internal_lab_runtime_path(path)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

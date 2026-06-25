@@ -24,6 +24,28 @@ pub(super) fn handle_provider_command(project_root: &Path, tool_context: ToolCon
                 "blocked"
             }
         ),
+        format!(
+            "Graduate execution reason: {}",
+            report.graduate_execution_policy.reason
+        ),
+        format!(
+            "Graduate safeguards: isolated_worktree={} controlled_validation={} postdoc_audit={} user_override_required={}",
+            report
+                .graduate_execution_policy
+                .isolated_worktree_required,
+            report
+                .graduate_execution_policy
+                .controlled_validation_required,
+            report.graduate_execution_policy.postdoc_audit_required,
+            report.graduate_execution_policy.user_override_required
+        ),
+        format!(
+            "Graduate proof labels: {}",
+            report
+                .graduate_execution_policy
+                .proof_labels
+                .join(",")
+        ),
         format!("Diagnostic override enabled: {}", report.override_enabled),
         format!("Legacy override env enabled: {}", report.override_enabled),
         format!("Control-plane diagnostic: {}", report.control_plane_command),
@@ -174,6 +196,28 @@ pub(super) async fn handle_provider_compare_command(
                 "blocked"
             }
         ),
+        format!(
+            "Graduate execution reason: {}",
+            report.graduate_execution_policy.reason
+        ),
+        format!(
+            "Graduate safeguards: isolated_worktree={} controlled_validation={} postdoc_audit={} user_override_required={}",
+            report
+                .graduate_execution_policy
+                .isolated_worktree_required,
+            report
+                .graduate_execution_policy
+                .controlled_validation_required,
+            report.graduate_execution_policy.postdoc_audit_required,
+            report.graduate_execution_policy.user_override_required
+        ),
+        format!(
+            "Graduate proof labels: {}",
+            report
+                .graduate_execution_policy
+                .proof_labels
+                .join(",")
+        ),
         String::new(),
         generic_result.summary.clone(),
         String::new(),
@@ -255,6 +299,28 @@ pub(super) async fn handle_provider_tool_diagnostics_command(tool_context: ToolC
             } else {
                 "blocked"
             }
+        ),
+        format!(
+            "Graduate execution reason: {}",
+            report.graduate_execution_policy.reason
+        ),
+        format!(
+            "Graduate safeguards: isolated_worktree={} controlled_validation={} postdoc_audit={} user_override_required={}",
+            report
+                .graduate_execution_policy
+                .isolated_worktree_required,
+            report
+                .graduate_execution_policy
+                .controlled_validation_required,
+            report.graduate_execution_policy.postdoc_audit_required,
+            report.graduate_execution_policy.user_override_required
+        ),
+        format!(
+            "Graduate proof labels: {}",
+            report
+                .graduate_execution_policy
+                .proof_labels
+                .join(",")
         ),
     ];
 

@@ -207,6 +207,26 @@ impl LabOrchestrator {
         }
         gate.evidence_refs.sort();
         gate.evidence_refs.dedup();
+        if let Ok(artifact) = self.store.load_stage_artifact(&run.lab_run_id, artifact_id) {
+            let semantic_blockers =
+                crate::lab::artifact_semantics::stage_artifact_semantic_blockers(&artifact);
+            if !semantic_blockers.is_empty() {
+                gate.validation_status = Some("needs_revision".to_string());
+                gate.blockers = semantic_blockers.clone();
+                gate.next_action = Some("revise_artifact".to_string());
+                self.store.write_artifact_gate(&run.lab_run_id, &gate)?;
+                self.store.record_run_event(
+                    &run.lab_run_id,
+                    "lab_artifact_semantic_gate_blocked",
+                    serde_json::json!({
+                        "artifact_id": artifact.artifact_id(),
+                        "stage": transition.from_stage,
+                        "blockers": semantic_blockers,
+                    }),
+                )?;
+                return Ok(gate);
+            }
+        }
         self.store.write_artifact_gate(&run.lab_run_id, &gate)?;
         self.store
             .validate_artifact_gate(&run.lab_run_id, transition.from_stage)?;
@@ -222,13 +242,9 @@ impl LabOrchestrator {
             .store
             .latest_run()?
             .ok_or_else(|| anyhow!("no LabRun found for artifact acceptance"))?;
-        let artifact = self.store.review_stage_artifact(
-            &run.lab_run_id,
-            artifact_id,
-            LabArtifactStatus::Accepted,
-            "accepted",
-            Some(note),
-        )?;
+        let artifact = self
+            .store
+            .load_stage_artifact(&run.lab_run_id, artifact_id)?;
         let transition = transition_for_stage(artifact.stage()).ok_or_else(|| {
             anyhow!(
                 "LabRun {} has no configured transition for artifact stage '{}'",
@@ -236,6 +252,51 @@ impl LabOrchestrator {
                 artifact.stage()
             )
         })?;
+        let semantic_blockers =
+            crate::lab::artifact_semantics::stage_artifact_semantic_blockers(&artifact);
+        if !semantic_blockers.is_empty() {
+            let mut gate = ArtifactGate::new(
+                transition.from_stage,
+                transition.required_artifact_type,
+                transition.required_owner,
+            );
+            gate.artifact_id = Some(artifact.artifact_id().to_string());
+            gate.validation_status = Some("needs_revision".to_string());
+            gate.next_action = Some("revise_artifact".to_string());
+            gate.blockers = semantic_blockers.clone();
+            gate.evidence_refs.push(
+                self.store
+                    .root()
+                    .join("runs")
+                    .join(&run.lab_run_id)
+                    .join("artifacts")
+                    .join(format!("{}.json", artifact.artifact_id()))
+                    .display()
+                    .to_string(),
+            );
+            self.store.write_artifact_gate(&run.lab_run_id, &gate)?;
+            self.store.record_run_event(
+                &run.lab_run_id,
+                "lab_artifact_acceptance_blocked_by_semantic_gate",
+                serde_json::json!({
+                    "artifact_id": artifact.artifact_id(),
+                    "stage": artifact.stage(),
+                    "blockers": semantic_blockers,
+                }),
+            )?;
+            return Err(anyhow!(
+                "artifact {} failed semantic validation: {}",
+                artifact.artifact_id(),
+                gate.blockers.join("; ")
+            ));
+        }
+        let artifact = self.store.review_stage_artifact(
+            &run.lab_run_id,
+            artifact_id,
+            LabArtifactStatus::Accepted,
+            "accepted",
+            Some(note),
+        )?;
         let mut gate = ArtifactGate::new(
             transition.from_stage,
             transition.required_artifact_type,

@@ -1067,7 +1067,7 @@ fn artifact_gate_validation_blocks_missing_handoff_fields() {
         .to_string();
     assert!(err.contains("has stage 'professor_discussion'"));
 
-    let artifact =
+    let mut artifact =
         StageArtifact::PostdocIntegrationSummary(crate::lab::model::LabArtifactEnvelope::new(
             "artifact_postdoc_summary_001".to_string(),
             run.lab_run_id.clone(),
@@ -1082,6 +1082,9 @@ fn artifact_gate_validation_blocks_missing_handoff_fields() {
                 handoff_to_professor: "Ready for professor review.".to_string(),
             },
         ));
+    if let StageArtifact::PostdocIntegrationSummary(envelope) = &mut artifact {
+        envelope.evidence_refs = vec!["artifact:artifact_graduate_result_001".to_string()];
+    }
     store.write_stage_artifact(&artifact).unwrap();
     store.write_stage_artifact_report(&artifact).unwrap();
     store
