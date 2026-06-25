@@ -342,6 +342,7 @@ fn control_loop_phase_for_event(event: &TraceEvent) -> Option<&'static str> {
         | TraceEvent::SelfEvolutionGuidanceInjected { .. }
         | TraceEvent::RetrievalContextBuilt { .. }
         | TraceEvent::ContextZonesMaterialized { .. }
+        | TraceEvent::StageToolExposureAdvisory { .. }
         | TraceEvent::CacheStabilitySnapshot { .. }
         | TraceEvent::PromptCacheUsageRecorded { .. }
         | TraceEvent::MemoryBoundaryEvaluated { .. }
@@ -388,6 +389,7 @@ fn control_loop_phase_for_event(event: &TraceEvent) -> Option<&'static str> {
         | TraceEvent::AgentLoopStepEvaluated { .. }
         | TraceEvent::StopCheckEvaluated { .. }
         | TraceEvent::WorkflowFallback { .. }
+        | TraceEvent::LabContextMaintenanceRecorded { .. }
         | TraceEvent::ToolObservationRecorded { .. }
         | TraceEvent::RecoveryApplied { .. }
         | TraceEvent::RecoveryPlan { .. } => Some("state_update"),

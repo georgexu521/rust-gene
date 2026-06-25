@@ -43,6 +43,8 @@ impl TraceEvent {
             TraceEvent::SelfEvolutionGuidanceInjected { .. } => "self_evolution.guidance",
             TraceEvent::RetrievalContextBuilt { .. } => "retrieval.context",
             TraceEvent::ContextZonesMaterialized { .. } => "context.zones",
+            TraceEvent::LabContextMaintenanceRecorded { .. } => "lab.context.maintenance",
+            TraceEvent::StageToolExposureAdvisory { .. } => "stage.tool.advisory",
             TraceEvent::CacheStabilitySnapshot { .. } => "cache.stability",
             TraceEvent::PromptCacheUsageRecorded { .. } => "cache.usage",
             TraceEvent::MemoryBoundaryEvaluated { .. } => "memory.boundary",

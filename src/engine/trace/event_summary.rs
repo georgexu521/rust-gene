@@ -161,6 +161,40 @@ impl TraceEvent {
                 recent_observation_overflow,
                 current_decision_request_overflow
             ),
+            TraceEvent::LabContextMaintenanceRecorded {
+                lab_run_id,
+                decision_id,
+                action,
+                artifact_id,
+                source,
+            } => format!(
+                "lab context maintenance: run={} decision={} action={} artifact={} source={}",
+                short_id(lab_run_id),
+                decision_id
+                    .as_deref()
+                    .map(short_id)
+                    .unwrap_or_else(|| "none".to_string()),
+                action,
+                artifact_id
+                    .as_deref()
+                    .map(short_id)
+                    .unwrap_or_else(|| "none".to_string()),
+                source
+            ),
+            TraceEvent::StageToolExposureAdvisory {
+                task_stage,
+                recommended_tools,
+                missing_tools,
+                exposed_tools,
+                policy,
+            } => format!(
+                "stage tool advisory: stage={} recommended={} missing={} exposed={} policy={}",
+                task_stage,
+                compact_label_list(recommended_tools),
+                compact_label_list(missing_tools),
+                compact_label_list(exposed_tools),
+                policy
+            ),
             TraceEvent::CacheStabilitySnapshot {
                 stable_prefix_fingerprint,
                 tool_schema_fingerprint,

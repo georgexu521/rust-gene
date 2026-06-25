@@ -1,7 +1,37 @@
 # Project Status
 Status: Current
 
-Last updated: 2026-06-24
+Last updated: 2026-06-25
+
+## LabRun / General Agent Integration - 2026-06-25
+
+The LabRun/general-agent integration workstream is tracked in
+`docs/LABRUN_GENERAL_AGENT_INTEGRATION_PLAN_2026-06-24.md`.
+
+Implemented in this slice:
+
+- `/lab next` and `/lab next --json` expose the next safe LabRun action for
+  user-facing planning.
+- `<lab-context>` includes `next_safe_actions`, so ordinary full-agent turns can
+  see actionable LabRun state instead of only passive project metadata.
+- `/lab proof` and `/lab trace` expose persisted LabRun proof and trace surfaces
+  for release-readiness review.
+- Stage-aware tool exposure is now explicit observability: the runtime records
+  `stage_tool_advisory` trace events and injects a short recent-observation hint,
+  while tool filtering remains unchanged.
+- Lab context maintenance is named and traced separately from Lab context
+  assembly: compression decisions and auto-created summaries remain intentional
+  persisted maintenance artifacts, not hidden read-only context assembly.
+- Permission presets include a `labrun` preset, currently mapped to
+  `AutoLowRisk` with LabRun stage/role guidance surfaced separately.
+
+Deferred:
+
+- Full LabRun permission overlay: role/stage enforcement, graduate allowed-scope
+  integration, postdoc/professor no-mutation policy, and high-risk ask policy
+  remain future work.
+- Postdoc read-only audit and `/lab evidence graph` remain future LabRun
+  proof-surface work.
 
 ## Post-Review Release Trust Cleanup - 2026-06-24
 

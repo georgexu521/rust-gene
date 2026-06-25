@@ -242,6 +242,21 @@ async fn prepare_auto_writes_lab_compression_summary_once_per_cycle() {
         compression_summaries[0].body.action,
         LabCompressionAction::Required
     );
+    let trace_snapshot = trace.snapshot();
+    assert!(trace_snapshot.events.iter().any(|event| matches!(
+        event,
+        TraceEvent::LabContextMaintenanceRecorded {
+            lab_run_id,
+            decision_id: Some(decision_id),
+            action,
+            artifact_id: Some(artifact_id),
+            source,
+        } if lab_run_id == &run.lab_run_id
+            && !decision_id.is_empty()
+            && action == "Required"
+            && !artifact_id.is_empty()
+            && source == "request_preparation.lab_context_maintenance"
+    )));
 
     let mut second_runtime_diet = RuntimeDietSnapshot::new(true);
     RequestPreparationController::prepare(RequestPreparationContext {
@@ -1076,6 +1091,62 @@ async fn prepare_keeps_stable_prefix_fingerprint_when_dynamic_task_context_chang
     assert_eq!(snapshot_b.1, 1);
     assert_eq!(snapshot_a.2, 0);
     assert_eq!(snapshot_b.2, 0);
+}
+
+#[tokio::test]
+async fn prepare_injects_stage_tool_advisory_as_dynamic_observation() {
+    let trace = TraceCollector::new(TurnTrace::new(
+        "session-stage-advisory".to_string(),
+        1,
+        "validate",
+    ));
+    trace.record(TraceEvent::StageToolExposureAdvisory {
+        task_stage: "Validate".to_string(),
+        recommended_tools: vec![
+            "bash".to_string(),
+            "run_tests".to_string(),
+            "git_diff".to_string(),
+        ],
+        missing_tools: vec!["run_tests".to_string()],
+        exposed_tools: vec!["bash".to_string(), "git_diff".to_string()],
+        policy: "advisory_only_no_filter".to_string(),
+    });
+    let mut runtime_diet = RuntimeDietSnapshot::new(true);
+
+    let prepared = RequestPreparationController::prepare(RequestPreparationContext {
+        messages: &[Message::user("validate")],
+        working_dir: std::path::Path::new("."),
+        lab_context_enabled: false,
+        focused_repair_prompt: None,
+        agent_task_state: None,
+        task_contract: None,
+        context_pack: None,
+        turn_retrieval_context: None,
+        retrieval_policy: RetrievalPolicy::None,
+        memory_manager: None,
+        provider: None,
+        session_store: None,
+        session_id: "session-stage-advisory",
+        model: "test-model",
+        temperature: 0.2,
+        tools: &[tool("bash"), tool("git_diff")],
+        trace: &trace,
+        runtime_diet: &mut runtime_diet,
+        inject_dynamic_context: true,
+        consecutive_repairs: &mut 0,
+    })
+    .await;
+
+    assert!(matches!(
+        prepared.request.messages.first(),
+        Some(Message::User { content })
+            if content.contains("<recent_observation>")
+                && content.contains("stage_tool_advisory:")
+                && content.contains("current_stage=Validate")
+                && content.contains("missing=run_tests")
+                && content.contains("policy=advisory_only_no_filter")
+                && content.contains("exposed tools were not filtered or auto-added")
+    ));
 }
 
 #[tokio::test]

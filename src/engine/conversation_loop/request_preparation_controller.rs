@@ -65,6 +65,11 @@ struct MemoryPrefetchContext<'a> {
     runtime_diet: &'a mut RuntimeDietSnapshot,
 }
 
+struct LabContextMaintenanceOutcome {
+    recorded_decision: Option<crate::lab::model::LabCompressionDecision>,
+    auto_compression_artifact_id: Option<String>,
+}
+
 pub(super) struct RequestPreparationController;
 
 impl RequestPreparationController {
@@ -112,6 +117,7 @@ impl RequestPreparationController {
             );
             Self::inject_focused_repair_zone(focused_repair_prompt, &mut dynamic_blocks);
             Self::inject_context_ledger_hint(session_store, session_id, &mut dynamic_blocks);
+            Self::inject_stage_tool_advisory_zone(trace, &mut dynamic_blocks);
             Self::inject_project_map_zone(
                 &request_messages,
                 trace,
@@ -122,6 +128,7 @@ impl RequestPreparationController {
                 &request_messages,
                 working_dir,
                 lab_context_enabled,
+                trace,
                 &mut dynamic_blocks,
             );
             if let Some(block) =
@@ -367,6 +374,7 @@ impl RequestPreparationController {
         request_messages: &[Message],
         working_dir: &std::path::Path,
         enabled: bool,
+        trace: &TraceCollector,
         dynamic_blocks: &mut DynamicContextBlockBuilder,
     ) {
         if !enabled {
@@ -415,8 +423,59 @@ impl RequestPreparationController {
                 &retries,
                 &artifact_gate_refs,
             );
+        let maintenance =
+            Self::maybe_record_lab_context_maintenance(&store, working_dir, &run, &packet, trace);
+        let mut lines = vec![
+            format!("lab_run_id: {}", packet.lab_run_id),
+            format!("role: {:?}", packet.role),
+            format!(
+                "stable_prefix: hash={} tokens={}",
+                packet.stable_prefix_fingerprint, packet.stable_prefix_tokens
+            ),
+            format!(
+                "dynamic_tail: hash={} tokens={}",
+                packet.dynamic_tail_fingerprint, packet.dynamic_tail_tokens
+            ),
+            format!("total_estimated_tokens: {}", packet.total_estimated_tokens),
+        ];
+        if let Some(next_action) = next_action {
+            lines.push("\n[next_safe_actions]".to_string());
+            lines.extend(next_action.context_lines());
+        }
+        if let Some(decision) = maintenance.recorded_decision {
+            lines.push(format!(
+                "compression_decision: id={} action={:?} usage={:.1}% reason={}",
+                decision.decision_id,
+                decision.action,
+                decision.usage_ratio_percent,
+                decision.reason
+            ));
+        }
+        if let Some(artifact_id) = maintenance.auto_compression_artifact_id {
+            lines.push(format!("auto_compression_artifact: {artifact_id}"));
+        }
+        for layer in &packet.layers {
+            lines.push(format!(
+                "\n[{} {} {:?} estimated_tokens={}]\n{}",
+                layer.layer, layer.label, layer.stability, layer.estimated_tokens, layer.content
+            ));
+        }
+        if let Some(block) = tagged_block(LAB_CONTEXT_TAG, lines.join("\n")) {
+            dynamic_blocks.push(block);
+        }
+    }
+
+    fn maybe_record_lab_context_maintenance(
+        store: &crate::lab::store::LabStore,
+        working_dir: &std::path::Path,
+        run: &crate::lab::model::LabRun,
+        packet: &crate::lab::context::LabContextPacket,
+        trace: &TraceCollector,
+    ) -> LabContextMaintenanceOutcome {
+        // Keep LabRun persistence named separately from context assembly so a
+        // normal request can explain intentional compression maintenance.
         let compression_decision =
-            crate::lab::context::evaluate_lab_context_compression(&run, &packet);
+            crate::lab::context::evaluate_lab_context_compression(run, packet);
         let recorded_decision = store.record_compression_decision(compression_decision).ok();
         let auto_compression_artifact_id = recorded_decision.as_ref().and_then(|decision| {
             if matches!(
@@ -441,42 +500,64 @@ impl RequestPreparationController {
                 }
             }
         });
-        let mut lines = vec![
-            format!("lab_run_id: {}", packet.lab_run_id),
-            format!("role: {:?}", packet.role),
-            format!(
-                "stable_prefix: hash={} tokens={}",
-                packet.stable_prefix_fingerprint, packet.stable_prefix_tokens
-            ),
-            format!(
-                "dynamic_tail: hash={} tokens={}",
-                packet.dynamic_tail_fingerprint, packet.dynamic_tail_tokens
-            ),
-            format!("total_estimated_tokens: {}", packet.total_estimated_tokens),
-        ];
-        if let Some(next_action) = next_action {
-            lines.push("\n[next_safe_actions]".to_string());
-            lines.extend(next_action.context_lines());
+
+        if let Some(decision) = recorded_decision.as_ref() {
+            trace.record(TraceEvent::LabContextMaintenanceRecorded {
+                lab_run_id: decision.lab_run_id.clone(),
+                decision_id: Some(decision.decision_id.clone()),
+                action: format!("{:?}", decision.action),
+                artifact_id: auto_compression_artifact_id.clone(),
+                source: "request_preparation.lab_context_maintenance".to_string(),
+            });
         }
-        if let Some(decision) = recorded_decision {
-            lines.push(format!(
-                "compression_decision: id={} action={:?} usage={:.1}% reason={}",
-                decision.decision_id,
-                decision.action,
-                decision.usage_ratio_percent,
-                decision.reason
-            ));
+
+        LabContextMaintenanceOutcome {
+            recorded_decision,
+            auto_compression_artifact_id,
         }
-        if let Some(artifact_id) = auto_compression_artifact_id {
-            lines.push(format!("auto_compression_artifact: {artifact_id}"));
-        }
-        for layer in &packet.layers {
-            lines.push(format!(
-                "\n[{} {} {:?} estimated_tokens={}]\n{}",
-                layer.layer, layer.label, layer.stability, layer.estimated_tokens, layer.content
-            ));
-        }
-        if let Some(block) = tagged_block(LAB_CONTEXT_TAG, lines.join("\n")) {
+    }
+
+    fn inject_stage_tool_advisory_zone(
+        trace: &TraceCollector,
+        dynamic_blocks: &mut DynamicContextBlockBuilder,
+    ) {
+        let snapshot = trace.snapshot();
+        let Some((task_stage, recommended_tools, missing_tools, policy)) =
+            snapshot.events.iter().rev().find_map(|event| {
+                if let TraceEvent::StageToolExposureAdvisory {
+                    task_stage,
+                    recommended_tools,
+                    missing_tools,
+                    policy,
+                    ..
+                } = event
+                {
+                    Some((
+                        task_stage,
+                        recommended_tools,
+                        missing_tools,
+                        policy.as_str(),
+                    ))
+                } else {
+                    None
+                }
+            })
+        else {
+            return;
+        };
+        let missing = if missing_tools.is_empty() {
+            "none".to_string()
+        } else {
+            missing_tools.join(",")
+        };
+        let body = format!(
+            "stage_tool_advisory:\n  current_stage={}\n  recommended={}\n  missing={}\n  policy={}; exposed tools were not filtered or auto-added",
+            task_stage,
+            recommended_tools.join(","),
+            missing,
+            policy
+        );
+        if let Some(block) = tagged_block(RECENT_OBSERVATION_TAG, body) {
             dynamic_blocks.push(block);
         }
     }

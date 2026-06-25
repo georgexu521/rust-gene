@@ -229,6 +229,22 @@ impl TurnIterationController {
                 task_stage: context.task_bundle.agent_state.stage,
             })
             .await;
+        let mut exposed_tool_names_for_trace = exposure_plan
+            .exposed_tool_names
+            .iter()
+            .cloned()
+            .collect::<Vec<_>>();
+        exposed_tool_names_for_trace.sort();
+        context.trace.record(TraceEvent::StageToolExposureAdvisory {
+            task_stage: format!("{:?}", exposure_plan.stage_advisory.task_stage),
+            recommended_tools: exposure_plan.stage_advisory.recommended_tool_names.clone(),
+            missing_tools: exposure_plan
+                .stage_advisory
+                .missing_recommended_tool_names
+                .clone(),
+            exposed_tools: exposed_tool_names_for_trace,
+            policy: "advisory_only_no_filter".to_string(),
+        });
         let tools = exposure_plan.tools;
         let exposed_tool_names = exposure_plan.exposed_tool_names;
 

@@ -327,6 +327,20 @@ pub enum TraceEvent {
         #[serde(default)]
         zone_provenance_markers: usize,
     },
+    LabContextMaintenanceRecorded {
+        lab_run_id: String,
+        decision_id: Option<String>,
+        action: String,
+        artifact_id: Option<String>,
+        source: String,
+    },
+    StageToolExposureAdvisory {
+        task_stage: String,
+        recommended_tools: Vec<String>,
+        missing_tools: Vec<String>,
+        exposed_tools: Vec<String>,
+        policy: String,
+    },
     CacheStabilitySnapshot {
         #[serde(default)]
         stable_prefix_fingerprint: String,
