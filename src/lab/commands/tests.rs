@@ -1,6 +1,7 @@
 use super::*;
 use crate::lab::model::{
-    GraduateResult, LabRun, PostdocIntegrationSummary, PostdocPlan, ProfessorPlan, ProfessorReview,
+    GraduateResult, GraduateTask, LabEvidenceProvenance, LabRun, PostdocIntegrationSummary,
+    PostdocPlan, ProfessorPlan, ProfessorReview,
 };
 use crate::services::api::{ChatRequest, ChatResponse, LlmProvider, ToolCall, Usage};
 use async_openai::types::ChatCompletionResponseStream;
@@ -64,6 +65,105 @@ fn prepare_lab_command_code_audit_input(
             }),
         )
         .unwrap();
+}
+
+fn write_command_accepted_postdoc_plan_and_task(
+    orchestrator: &LabOrchestrator,
+    lab_run_id: &str,
+    title: &str,
+    instructions: &str,
+    allowed_scope: Vec<String>,
+    required_validation: Vec<String>,
+) -> (String, GraduateTask) {
+    let artifact_id = format!("artifact_postdocplan_command_{}", Uuid::new_v4().simple());
+    let mut envelope = LabArtifactEnvelope::new(
+        artifact_id.clone(),
+        lab_run_id.to_string(),
+        LabArtifactType::PostdocPlan,
+        "Accepted command postdoc plan".to_string(),
+        Utc::now(),
+        PostdocPlan {
+            implementation_summary: "Implement the command test slice.".to_string(),
+            slices: vec![title.to_string()],
+            files_expected: allowed_scope.clone(),
+            validation_plan: required_validation.clone(),
+            graduate_handoff: instructions.to_string(),
+        },
+    );
+    envelope.status = LabArtifactStatus::Accepted;
+    envelope.validation_status = Some("accepted".to_string());
+    let artifact = StageArtifact::PostdocPlan(envelope);
+    orchestrator
+        .store()
+        .write_stage_artifact(&artifact)
+        .unwrap();
+    orchestrator
+        .store()
+        .write_stage_artifact_report(&artifact)
+        .unwrap();
+    let task = orchestrator
+        .store()
+        .create_graduate_task_with_source_postdoc_plan(
+            lab_run_id,
+            title,
+            instructions,
+            allowed_scope,
+            required_validation,
+            Some(artifact_id.clone()),
+        )
+        .unwrap();
+    (artifact_id, task)
+}
+
+fn command_verified_provenance(
+    orchestrator: &LabOrchestrator,
+    task: &GraduateTask,
+    dispatch_id: &str,
+    verification_root: &Path,
+) -> LabEvidenceProvenance {
+    let event = orchestrator
+        .store()
+        .record_run_event_returning(
+            &task.lab_run_id,
+            "lab_validation_command_passed",
+            serde_json::json!({
+                "command": "cargo check -q",
+                "command_hash": format!("command-test-hash-{dispatch_id}"),
+                "policy_reason": "command test validation",
+                "status_code": 0,
+                "stdout_preview": "",
+                "stderr_preview": "",
+                "validation_kind": "cargo",
+                "validation_security": "controlled_not_sandboxed",
+                "workspace_trust": "unknown",
+                "workspace_trust_source": "test",
+                "workspace_trust_scope": "package_scripts",
+                "policy_action": "allow",
+                "cycle_id": task.cycle_id.clone(),
+                "source_postdoc_plan_artifact_id": task.source_postdoc_plan_artifact_id.clone(),
+                "graduate_task_id": task.task_id.clone(),
+                "task_id": task.task_id.clone(),
+                "dispatch_id": dispatch_id,
+                "agent_task_id": format!("agent_{dispatch_id}"),
+                "verification_root": verification_root.display().to_string(),
+            }),
+        )
+        .unwrap();
+    LabEvidenceProvenance {
+        lab_run_id: Some(task.lab_run_id.clone()),
+        cycle_id: task.cycle_id.clone(),
+        source_postdoc_plan_artifact_id: task.source_postdoc_plan_artifact_id.clone(),
+        graduate_task_id: Some(task.task_id.clone()),
+        dispatch_id: Some(dispatch_id.to_string()),
+        agent_task_id: Some(format!("agent_{dispatch_id}")),
+        graduate_result_artifact_id: None,
+        verification_root: Some(verification_root.display().to_string()),
+        worktree_base_commit: Some("base-command-test".to_string()),
+        worktree_head_commit: Some("head-command-test".to_string()),
+        worktree_diff_hash: Some(format!("diff-command-test-{dispatch_id}")),
+        validation_event_ids: vec![event.event_id],
+        verified_at: Some(Utc::now()),
+    }
 }
 
 fn drive_lab_command_to_user_report(path: &Path) {
@@ -156,6 +256,7 @@ fn valid_lab_command_artifact_for_stage(run: &LabRun, stage: &str) -> StageArtif
                 ],
                 blockers: Vec::new(),
                 handoff_to_postdoc: "Review the changed file and validation proof.".to_string(),
+                provenance: LabEvidenceProvenance::default(),
             },
         )),
         "postdoc_review" => {
@@ -3968,24 +4069,29 @@ fn integrate_command_writes_postdoc_summary() {
         &run.lab_run_id,
         "src/lab/commands.rs",
     );
-    let task = orchestrator
-        .store()
-        .create_graduate_task(
-            &run.lab_run_id,
-            "Implement scoped slice",
-            "Update lab commands.",
-            vec!["src/lab/commands.rs".to_string()],
-            vec!["cargo check -q".to_string()],
-        )
-        .unwrap();
+    let (_plan_id, task) = write_command_accepted_postdoc_plan_and_task(
+        &orchestrator,
+        &run.lab_run_id,
+        "Implement scoped slice",
+        "Update lab commands.",
+        vec!["src/lab/commands.rs".to_string()],
+        vec!["cargo check -q".to_string()],
+    );
+    let provenance = command_verified_provenance(
+        &orchestrator,
+        &task,
+        "dispatch_command_integrate",
+        temp.path(),
+    );
     orchestrator
-        .create_graduate_result_for_task_latest(
+        .create_graduate_result_for_task_latest_with_provenance(
             &task.task_id,
             "Implemented command path.",
             vec!["src/lab/commands.rs".to_string()],
             vec!["cargo check -q passed".to_string()],
             Vec::new(),
             Vec::new(),
+            Some(provenance),
         )
         .unwrap();
     let mut saved = orchestrator.store().load_run(&run.lab_run_id).unwrap();
@@ -4022,24 +4128,29 @@ fn professor_review_command_writes_final_review() {
         &run.lab_run_id,
         "src/lab/commands.rs",
     );
-    let task = orchestrator
-        .store()
-        .create_graduate_task(
-            &run.lab_run_id,
-            "Implement scoped slice",
-            "Update lab commands.",
-            vec!["src/lab/commands.rs".to_string()],
-            vec!["cargo check -q".to_string()],
-        )
-        .unwrap();
+    let (_plan_id, task) = write_command_accepted_postdoc_plan_and_task(
+        &orchestrator,
+        &run.lab_run_id,
+        "Implement scoped slice",
+        "Update lab commands.",
+        vec!["src/lab/commands.rs".to_string()],
+        vec!["cargo check -q".to_string()],
+    );
+    let provenance = command_verified_provenance(
+        &orchestrator,
+        &task,
+        "dispatch_command_professor",
+        temp.path(),
+    );
     orchestrator
-        .create_graduate_result_for_task_latest(
+        .create_graduate_result_for_task_latest_with_provenance(
             &task.task_id,
             "Implemented command path.",
             vec!["src/lab/commands.rs".to_string()],
             vec!["cargo check -q passed".to_string()],
             Vec::new(),
             Vec::new(),
+            Some(provenance),
         )
         .unwrap();
     let mut saved = orchestrator.store().load_run(&run.lab_run_id).unwrap();

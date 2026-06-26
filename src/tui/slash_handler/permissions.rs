@@ -537,6 +537,7 @@ fn format_runtime_action_review_with_registry(
         permission_context: Some(ctx),
         task_state: None,
         working_dir: Some(cwd),
+        labrun_context: None,
         tool_allowed_by_context: ctx.should_expose_tool(canonical_tool_name),
         destructive_scope_check: None,
         action_checkpoint_rejection: None,

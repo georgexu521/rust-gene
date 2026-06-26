@@ -20,3 +20,4 @@ pub mod report;
 pub mod scheduler;
 pub mod store;
 pub(crate) mod validation;
+pub(crate) mod workspace_trust;

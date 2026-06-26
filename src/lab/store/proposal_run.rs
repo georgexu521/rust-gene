@@ -127,6 +127,15 @@ impl LabStore {
         self.append_run_event(lab_run_id, event_type, payload)
     }
 
+    pub fn record_run_event_returning(
+        &self,
+        lab_run_id: &str,
+        event_type: &str,
+        payload: serde_json::Value,
+    ) -> anyhow::Result<LabEvent> {
+        self.append_run_event_returning(lab_run_id, event_type, payload)
+    }
+
     pub fn list_run_events(&self, lab_run_id: &str) -> anyhow::Result<Vec<LabEvent>> {
         self.read_run_events(lab_run_id)
     }

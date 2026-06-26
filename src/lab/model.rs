@@ -271,6 +271,8 @@ pub struct GraduateTask {
     pub result_artifact_id: Option<String>,
     pub blocker: Option<String>,
     pub cycle_id: Option<String>,
+    #[serde(default)]
+    pub source_postdoc_plan_artifact_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

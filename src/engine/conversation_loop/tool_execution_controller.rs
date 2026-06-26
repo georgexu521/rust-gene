@@ -691,6 +691,9 @@ impl ToolExecutionController {
             allow_validation_without_changes,
             destructive_scope,
             working_dir: execution.base_tool_context.working_dir.as_path(),
+            labrun_context: crate::lab::policy_overlay::LabRunExecutionContext::from_metadata(
+                &execution.base_tool_context.metadata,
+            ),
             trace: &trace,
             runtime_context: &runtime_context,
             permission_context: &execution.base_tool_context.permission_context,

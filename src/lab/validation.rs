@@ -4,10 +4,13 @@
 //! runner executes only direct, allowlisted validation commands and blocks shell
 //! metacharacters before any process is spawned.
 
+use crate::lab::model::LabEvidenceProvenance;
 use crate::lab::path_scope::normalize_lab_relative_path;
 use crate::lab::store::LabStore;
+use crate::lab::workspace_trust::resolve_lab_workspace_trust;
 use anyhow::anyhow;
 use serde_json::json;
+use sha2::{Digest, Sha256};
 use std::path::Path;
 use std::process::Command;
 
@@ -19,6 +22,8 @@ pub(crate) struct LabValidationCommandPlan {
     pub(crate) reason: String,
     pub(crate) validation_kind: String,
     pub(crate) workspace_trust: String,
+    pub(crate) workspace_trust_source: String,
+    pub(crate) workspace_trust_scope: String,
     pub(crate) policy_action: String,
 }
 
@@ -34,7 +39,16 @@ struct LabValidationEventMetadata<'a> {
     output: Option<(&'a str, &'a str)>,
     validation_kind: &'a str,
     workspace_trust: &'a str,
+    workspace_trust_source: &'a str,
+    workspace_trust_scope: &'a str,
     policy_action: &'a str,
+    provenance: Option<&'a LabEvidenceProvenance>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct LabValidationRunEvidence {
+    pub(crate) attempts: Vec<String>,
+    pub(crate) event_ids: Vec<String>,
 }
 
 pub(crate) fn classify_lab_validation_command(command: &str) -> LabValidationPolicyDecision {
@@ -101,6 +115,8 @@ pub(crate) fn classify_lab_validation_command(command: &str) -> LabValidationPol
             reason,
             validation_kind,
             workspace_trust: "unknown".to_string(),
+            workspace_trust_source: "unresolved".to_string(),
+            workspace_trust_scope: "package_scripts".to_string(),
             policy_action: "allow".to_string(),
         })
     } else {
@@ -115,25 +131,43 @@ pub(crate) fn run_lab_validation_commands(
     cwd: &Path,
     commands: &[String],
 ) -> anyhow::Result<Vec<String>> {
-    run_lab_validation_commands_with_events(cwd, commands, None, None)
+    Ok(run_lab_validation_commands_with_events(cwd, commands, None, None)?.attempts)
 }
 
+#[allow(dead_code)]
 pub(crate) fn run_lab_validation_commands_for_lab(
     cwd: &Path,
     commands: &[String],
     store: &LabStore,
     lab_run_id: &str,
 ) -> anyhow::Result<Vec<String>> {
-    run_lab_validation_commands_with_events(cwd, commands, Some(store), Some(lab_run_id))
+    let provenance = LabEvidenceProvenance {
+        lab_run_id: Some(lab_run_id.to_string()),
+        ..LabEvidenceProvenance::default()
+    };
+    Ok(
+        run_lab_validation_commands_with_events(cwd, commands, Some(store), Some(&provenance))?
+            .attempts,
+    )
+}
+
+pub(crate) fn run_lab_validation_commands_for_lab_with_provenance(
+    cwd: &Path,
+    commands: &[String],
+    store: &LabStore,
+    provenance: &LabEvidenceProvenance,
+) -> anyhow::Result<LabValidationRunEvidence> {
+    run_lab_validation_commands_with_events(cwd, commands, Some(store), Some(provenance))
 }
 
 fn run_lab_validation_commands_with_events(
     cwd: &Path,
     commands: &[String],
     store: Option<&LabStore>,
-    lab_run_id: Option<&str>,
-) -> anyhow::Result<Vec<String>> {
+    provenance: Option<&LabEvidenceProvenance>,
+) -> anyhow::Result<LabValidationRunEvidence> {
     let mut attempts = Vec::new();
+    let mut event_ids = Vec::new();
     for command in commands {
         let command = command.trim();
         if command.is_empty() {
@@ -142,12 +176,16 @@ fn run_lab_validation_commands_with_events(
         let plan = match classify_lab_validation_command(command) {
             LabValidationPolicyDecision::Allow(mut plan) => {
                 let workspace_trust = resolve_lab_workspace_trust(cwd);
-                match finalize_validation_plan_for_workspace(&mut plan, workspace_trust) {
+                plan.workspace_trust_source = workspace_trust.source.clone();
+                plan.workspace_trust_scope = workspace_trust.trust_scope.clone();
+                match finalize_validation_plan_for_workspace(
+                    &mut plan,
+                    workspace_trust.level.as_str(),
+                ) {
                     Ok(()) => plan,
                     Err(reason) => {
-                        record_validation_event(
+                        if let Some(event_id) = record_validation_event(
                             store,
-                            lab_run_id,
                             "lab_validation_command_blocked",
                             &plan.original,
                             LabValidationEventMetadata {
@@ -156,9 +194,14 @@ fn run_lab_validation_commands_with_events(
                                 output: None,
                                 validation_kind: &plan.validation_kind,
                                 workspace_trust: &plan.workspace_trust,
+                                workspace_trust_source: &workspace_trust.source,
+                                workspace_trust_scope: &workspace_trust.trust_scope,
                                 policy_action: &plan.policy_action,
+                                provenance,
                             },
-                        )?;
+                        )? {
+                            event_ids.push(event_id);
+                        }
                         return Err(anyhow!(
                             "required validation `{}` blocked by Lab validation policy: {}",
                             plan.original,
@@ -169,9 +212,8 @@ fn run_lab_validation_commands_with_events(
             }
             LabValidationPolicyDecision::Block { command, reason } => {
                 let workspace_trust = resolve_lab_workspace_trust(cwd);
-                record_validation_event(
+                if let Some(event_id) = record_validation_event(
                     store,
-                    lab_run_id,
                     "lab_validation_command_blocked",
                     &command,
                     LabValidationEventMetadata {
@@ -179,10 +221,15 @@ fn run_lab_validation_commands_with_events(
                         status_code: None,
                         output: None,
                         validation_kind: "unknown",
-                        workspace_trust,
+                        workspace_trust: &workspace_trust.level,
+                        workspace_trust_source: &workspace_trust.source,
+                        workspace_trust_scope: &workspace_trust.trust_scope,
                         policy_action: "block",
+                        provenance,
                     },
-                )?;
+                )? {
+                    event_ids.push(event_id);
+                }
                 return Err(anyhow!(
                     "required validation `{}` blocked by Lab validation policy: {}",
                     command,
@@ -201,9 +248,8 @@ fn run_lab_validation_commands_with_events(
                 )
             })?;
         if output.status.success() {
-            record_validation_event(
+            if let Some(event_id) = record_validation_event(
                 store,
-                lab_run_id,
                 "lab_validation_command_passed",
                 &plan.original,
                 LabValidationEventMetadata {
@@ -212,16 +258,20 @@ fn run_lab_validation_commands_with_events(
                     output: None,
                     validation_kind: &plan.validation_kind,
                     workspace_trust: &plan.workspace_trust,
+                    workspace_trust_source: &plan.workspace_trust_source,
+                    workspace_trust_scope: &plan.workspace_trust_scope,
                     policy_action: &plan.policy_action,
+                    provenance,
                 },
-            )?;
+            )? {
+                event_ids.push(event_id);
+            }
             attempts.push(format!("runtime validation `{}` passed", plan.original));
         } else {
             let stdout = String::from_utf8_lossy(&output.stdout);
             let stderr = String::from_utf8_lossy(&output.stderr);
-            record_validation_event(
+            if let Some(event_id) = record_validation_event(
                 store,
-                lab_run_id,
                 "lab_validation_command_failed",
                 &plan.original,
                 LabValidationEventMetadata {
@@ -230,9 +280,14 @@ fn run_lab_validation_commands_with_events(
                     output: Some((&stdout, &stderr)),
                     validation_kind: &plan.validation_kind,
                     workspace_trust: &plan.workspace_trust,
+                    workspace_trust_source: &plan.workspace_trust_source,
+                    workspace_trust_scope: &plan.workspace_trust_scope,
                     policy_action: &plan.policy_action,
+                    provenance,
                 },
-            )?;
+            )? {
+                event_ids.push(event_id);
+            }
             return Err(anyhow!(
                 "required validation `{}` failed with status {:?}; stdout={}; stderr={}",
                 plan.original,
@@ -242,18 +297,26 @@ fn run_lab_validation_commands_with_events(
             ));
         }
     }
-    Ok(attempts)
+    Ok(LabValidationRunEvidence {
+        attempts,
+        event_ids,
+    })
 }
 
 fn record_validation_event(
     store: Option<&LabStore>,
-    lab_run_id: Option<&str>,
     event_type: &str,
     command: &str,
     metadata: LabValidationEventMetadata<'_>,
-) -> anyhow::Result<()> {
-    let (Some(store), Some(lab_run_id)) = (store, lab_run_id) else {
-        return Ok(());
+) -> anyhow::Result<Option<String>> {
+    let Some(store) = store else {
+        return Ok(None);
+    };
+    let Some(lab_run_id) = metadata
+        .provenance
+        .and_then(|provenance| provenance.lab_run_id.as_deref())
+    else {
+        return Ok(None);
     };
     let (stdout_preview, stderr_preview) = metadata
         .output
@@ -264,20 +327,36 @@ fn record_validation_event(
             )
         })
         .unwrap_or_default();
-    store.record_run_event(
-        lab_run_id,
-        event_type,
-        json!({
-            "command": command,
-            "policy_reason": metadata.reason.unwrap_or(""),
-            "validation_kind": metadata.validation_kind,
-            "workspace_trust": metadata.workspace_trust,
-            "policy_action": metadata.policy_action,
-            "status_code": metadata.status_code,
-            "stdout_preview": stdout_preview,
-            "stderr_preview": stderr_preview,
-        }),
-    )
+    let mut payload = json!({
+        "command": command,
+        "command_hash": command_hash(command),
+        "policy_reason": metadata.reason.unwrap_or(""),
+        "validation_kind": metadata.validation_kind,
+        "validation_security": "controlled_not_sandboxed",
+        "workspace_trust": metadata.workspace_trust,
+        "workspace_trust_source": metadata.workspace_trust_source,
+        "workspace_trust_scope": metadata.workspace_trust_scope,
+        "policy_action": metadata.policy_action,
+        "status_code": metadata.status_code,
+        "stdout_preview": stdout_preview,
+        "stderr_preview": stderr_preview,
+    });
+    if let Some(provenance) = metadata.provenance {
+        payload["cycle_id"] = json!(provenance.cycle_id);
+        payload["source_postdoc_plan_artifact_id"] =
+            json!(provenance.source_postdoc_plan_artifact_id);
+        payload["graduate_task_id"] = json!(provenance.graduate_task_id);
+        payload["task_id"] = json!(provenance.graduate_task_id);
+        payload["dispatch_id"] = json!(provenance.dispatch_id);
+        payload["agent_task_id"] = json!(provenance.agent_task_id);
+        payload["graduate_result_artifact_id"] = json!(provenance.graduate_result_artifact_id);
+        payload["verification_root"] = json!(provenance.verification_root);
+        payload["worktree_base_commit"] = json!(provenance.worktree_base_commit);
+        payload["worktree_head_commit"] = json!(provenance.worktree_head_commit);
+        payload["worktree_diff_hash"] = json!(provenance.worktree_diff_hash);
+    }
+    let event = store.record_run_event_returning(lab_run_id, event_type, payload)?;
+    Ok(Some(event.event_id))
 }
 
 fn finalize_validation_plan_for_workspace(
@@ -311,25 +390,18 @@ fn validation_kind_for_allowed_command(program: &str, args: &[String]) -> Option
     }
 }
 
-fn resolve_lab_workspace_trust(_cwd: &Path) -> &'static str {
-    match std::env::var("PRIORITY_AGENT_LAB_WORKSPACE_TRUST")
-        .unwrap_or_default()
-        .trim()
-        .to_ascii_lowercase()
-        .as_str()
-    {
-        "trusted" | "trust" | "true" | "1" => "trusted",
-        "untrusted" | "false" | "0" => "untrusted",
-        _ => "unknown",
-    }
-}
-
 fn validation_policy_action(validation_kind: &str, workspace_trust: &str) -> &'static str {
     match (validation_kind, workspace_trust) {
         ("package_script", "trusted") => "allow",
         ("package_script", _) => "block",
         _ => "allow",
     }
+}
+
+fn command_hash(command: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(command.as_bytes());
+    format!("{:x}", hasher.finalize())
 }
 
 fn dangerous_shell_construct(command: &str) -> Option<String> {
@@ -593,6 +665,66 @@ mod tests {
         assert_eq!(event.payload["validation_kind"], "filesystem_test");
         assert_eq!(event.payload["workspace_trust"], "unknown");
         assert_eq!(event.payload["policy_action"], "allow");
+    }
+
+    #[test]
+    fn validation_events_bind_to_graduate_result_provenance() {
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::write(temp.path().join("proof.txt"), "ok\n").unwrap();
+        let store = LabStore::for_project(temp.path());
+        let provenance = LabEvidenceProvenance {
+            lab_run_id: Some("labrun_bound_validation".to_string()),
+            cycle_id: Some("2".to_string()),
+            source_postdoc_plan_artifact_id: Some("artifact_postdocplan_bound".to_string()),
+            graduate_task_id: Some("gradtask_bound".to_string()),
+            dispatch_id: Some("graddispatch_bound".to_string()),
+            agent_task_id: Some("agenttask_bound".to_string()),
+            graduate_result_artifact_id: Some("artifact_graduateresult_bound".to_string()),
+            verification_root: Some(temp.path().display().to_string()),
+            worktree_base_commit: Some("base".to_string()),
+            worktree_head_commit: Some("head".to_string()),
+            worktree_diff_hash: Some("diffhash".to_string()),
+            validation_event_ids: Vec::new(),
+            verified_at: None,
+        };
+
+        let evidence = run_lab_validation_commands_for_lab_with_provenance(
+            temp.path(),
+            &["test -f proof.txt".to_string()],
+            &store,
+            &provenance,
+        )
+        .unwrap();
+
+        assert_eq!(evidence.attempts.len(), 1);
+        assert_eq!(evidence.event_ids.len(), 1);
+        let events = store.list_run_events("labrun_bound_validation").unwrap();
+        let event = events
+            .iter()
+            .find(|event| event.event_id == evidence.event_ids[0])
+            .expect("bound validation event");
+        assert_eq!(event.payload["cycle_id"], "2");
+        assert_eq!(event.payload["graduate_task_id"], "gradtask_bound");
+        assert_eq!(event.payload["task_id"], "gradtask_bound");
+        assert_eq!(event.payload["dispatch_id"], "graddispatch_bound");
+        assert_eq!(event.payload["agent_task_id"], "agenttask_bound");
+        assert_eq!(
+            event.payload["graduate_result_artifact_id"],
+            "artifact_graduateresult_bound"
+        );
+        assert_eq!(
+            event.payload["verification_root"],
+            temp.path().display().to_string()
+        );
+        assert_eq!(
+            event.payload["validation_security"],
+            "controlled_not_sandboxed"
+        );
+        assert!(event
+            .payload
+            .get("command_hash")
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|value| value.len() == 64));
     }
 
     #[test]

@@ -32,6 +32,27 @@ impl LabStore {
         append_jsonl(&run_dir.join("events.jsonl"), &event)
     }
 
+    pub(super) fn append_run_event_returning(
+        &self,
+        lab_run_id: &str,
+        event_type: &str,
+        payload: serde_json::Value,
+    ) -> anyhow::Result<LabEvent> {
+        let event = LabEvent {
+            schema_version: LAB_SCHEMA_VERSION,
+            event_id: next_id("event"),
+            lab_run_id: Some(lab_run_id.to_string()),
+            proposal_id: None,
+            event_type: event_type.to_string(),
+            created_at: Utc::now(),
+            payload,
+        };
+        let run_dir = self.run_dir(lab_run_id);
+        fs::create_dir_all(&run_dir)?;
+        append_jsonl(&run_dir.join("events.jsonl"), &event)?;
+        Ok(event)
+    }
+
     pub(super) fn read_run_events(&self, lab_run_id: &str) -> anyhow::Result<Vec<LabEvent>> {
         let path = self.run_dir(lab_run_id).join("events.jsonl");
         if !path.exists() {

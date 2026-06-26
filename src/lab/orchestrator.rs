@@ -16,28 +16,35 @@ use crate::lab::model::{
     ArtifactGate, GraduateDispatchRecord, GraduateDispatchStatus, GraduateResult, GraduateTask,
     LabArtifactEnvelope, LabArtifactStatus, LabArtifactType, LabBlockerReport, LabCloseoutStatus,
     LabCompressionAction, LabCompressionDecision, LabCompressionSummary, LabCycleSummary, LabEvent,
-    LabMeetingRequest, LabMeetingSummary, LabRevisionTask, LabRole, LabRun, LabRunStatus,
-    LabTaskStatus, PostdocIntegrationSummary, PostdocPlan, ProfessorPlan, ProfessorReview,
-    ProfessorSteeringDecision, SponsorMessageStatus, SponsorMessageType, StageArtifact,
+    LabEvidenceProvenance, LabMeetingRequest, LabMeetingSummary, LabRevisionTask, LabRole, LabRun,
+    LabRunStatus, LabTaskStatus, PostdocIntegrationSummary, PostdocPlan, ProfessorPlan,
+    ProfessorReview, ProfessorSteeringDecision, SponsorMessageStatus, SponsorMessageType,
+    StageArtifact,
 };
 use crate::lab::store::LabStore;
 use crate::tools::ToolContext;
 use anyhow::anyhow;
 use chrono::Utc;
 use serde_json::Value;
-use std::collections::BTreeMap;
-use std::hash::{Hash, Hasher};
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use uuid::Uuid;
 
+mod artifact_factory;
 mod collaboration;
 mod graduate;
+mod graduate_verification;
+mod postdoc_audit;
 mod runtime;
+mod runtime_evidence;
 mod scheduler_flow;
 mod stage_flow;
 
+use artifact_factory::*;
+use graduate_verification::*;
+use postdoc_audit::*;
 use runtime::*;
+use runtime_evidence::*;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 /// Static transition rule between two LabRun stages.

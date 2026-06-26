@@ -155,6 +155,37 @@ pub struct PostdocPlan {
     pub graduate_handoff: String,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+/// Provenance binding for graduate evidence across task, dispatch, validation, and audit.
+pub struct LabEvidenceProvenance {
+    #[serde(default)]
+    pub lab_run_id: Option<String>,
+    #[serde(default)]
+    pub cycle_id: Option<String>,
+    #[serde(default)]
+    pub source_postdoc_plan_artifact_id: Option<String>,
+    #[serde(default)]
+    pub graduate_task_id: Option<String>,
+    #[serde(default)]
+    pub dispatch_id: Option<String>,
+    #[serde(default)]
+    pub agent_task_id: Option<String>,
+    #[serde(default)]
+    pub graduate_result_artifact_id: Option<String>,
+    #[serde(default)]
+    pub verification_root: Option<String>,
+    #[serde(default)]
+    pub worktree_base_commit: Option<String>,
+    #[serde(default)]
+    pub worktree_head_commit: Option<String>,
+    #[serde(default)]
+    pub worktree_diff_hash: Option<String>,
+    #[serde(default)]
+    pub validation_event_ids: Vec<String>,
+    #[serde(default)]
+    pub verified_at: Option<DateTime<Utc>>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 /// Data model for graduate result in LabRun persistence or orchestration.
 pub struct GraduateResult {
@@ -163,6 +194,8 @@ pub struct GraduateResult {
     pub validation_attempts: Vec<String>,
     pub blockers: Vec<String>,
     pub handoff_to_postdoc: String,
+    #[serde(default)]
+    pub provenance: LabEvidenceProvenance,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

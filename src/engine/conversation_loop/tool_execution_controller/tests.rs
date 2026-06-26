@@ -446,6 +446,7 @@ fn action_review_metadata_includes_observed_checkpoint_id() {
         permission_context: Some(&permission_context),
         task_state: None,
         working_dir: Some(std::path::Path::new(".")),
+        labrun_context: None,
         tool_allowed_by_context: true,
         destructive_scope_check: None,
         action_checkpoint_rejection: None,

@@ -135,11 +135,12 @@ impl ActionReview {
         let labrun_policy = input
             .working_dir
             .map(|working_dir| {
-                crate::lab::policy_overlay::review_labrun_tool_action(
+                crate::lab::policy_overlay::review_labrun_tool_action_with_context(
                     working_dir,
                     &input.tool_call.name,
                     tool_contract.read_only,
                     &tool_contract.input_paths,
+                    input.labrun_context.as_ref(),
                 )
             })
             .unwrap_or_else(|| {
@@ -253,6 +254,7 @@ pub struct ActionReviewInput<'a> {
     pub permission_context: Option<&'a PermissionContext>,
     pub task_state: Option<&'a AgentTaskState>,
     pub working_dir: Option<&'a Path>,
+    pub labrun_context: Option<crate::lab::policy_overlay::LabRunExecutionContext>,
     pub tool_allowed_by_context: bool,
     pub destructive_scope_check: Option<DestructiveScopeCheck>,
     pub action_checkpoint_rejection: Option<String>,

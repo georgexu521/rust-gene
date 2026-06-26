@@ -87,7 +87,9 @@ impl LabOrchestrator {
             &before_snapshot,
             &[],
         )?;
-        let result = execute_graduate_task_with_agent_tool(&task, context.clone()).await;
+        let result =
+            execute_graduate_task_with_agent_tool(&task, &running.dispatch_id, context.clone())
+                .await;
         let after_snapshot = workspace_change_snapshot(&context.working_dir);
         let agent_id = result
             .data
@@ -132,6 +134,7 @@ impl LabOrchestrator {
                     &context,
                     agent_id.as_deref(),
                     &graduate_agent_task_id(&task),
+                    Some(&running.dispatch_id),
                     &changed_by_agent,
                     &provider_policy,
                 ) {
@@ -171,13 +174,14 @@ impl LabOrchestrator {
                 );
                 parsed.evidence_ids.sort();
                 parsed.evidence_ids.dedup();
-                let created = self.create_graduate_result_for_task_latest(
+                let created = self.create_graduate_result_for_task_latest_with_provenance(
                     &task.task_id,
                     &parsed.task_summary,
                     parsed.changed_files,
                     parsed.validation_attempts,
                     parsed.blockers,
                     parsed.evidence_ids,
+                    Some(runtime_evidence.provenance),
                 )?;
                 return self.store.update_graduate_dispatch_status(
                     &run.lab_run_id,
@@ -192,6 +196,7 @@ impl LabOrchestrator {
                 &task,
                 &context,
                 agent_id.as_deref(),
+                Some(&running.dispatch_id),
                 &changed_by_agent,
                 &result.content,
                 &provider_policy,
@@ -279,11 +284,13 @@ impl LabOrchestrator {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn create_runtime_verified_graduate_result_for_unbound_success(
         &self,
         task: &GraduateTask,
         context: &ToolContext,
         agent_id: Option<&str>,
+        dispatch_id: Option<&str>,
         parent_changed_files: &[String],
         result_content: &str,
         provider_policy: &crate::lab::provider_certification::LabGraduateProviderExecutionPolicy,
@@ -294,6 +301,7 @@ impl LabOrchestrator {
             context,
             agent_id,
             &agent_task_id,
+            dispatch_id,
             parent_changed_files,
             provider_policy,
         )?;
@@ -322,13 +330,14 @@ impl LabOrchestrator {
                 "Runtime verified graduate task output without bindable GraduateResult JSON. Subagent preview: {preview}"
             )
         };
-        self.create_graduate_result_for_task_latest(
+        self.create_graduate_result_for_task_latest_with_provenance(
             &task.task_id,
             &task_summary,
             runtime_evidence.changed_files,
             runtime_evidence.validation_attempts,
             Vec::new(),
             evidence_ids,
+            Some(runtime_evidence.provenance),
         )
     }
 

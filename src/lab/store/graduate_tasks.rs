@@ -15,6 +15,25 @@ impl LabStore {
         allowed_scope: Vec<String>,
         required_validation: Vec<String>,
     ) -> anyhow::Result<GraduateTask> {
+        self.create_graduate_task_with_source_postdoc_plan(
+            lab_run_id,
+            title,
+            instructions,
+            allowed_scope,
+            required_validation,
+            None,
+        )
+    }
+
+    pub fn create_graduate_task_with_source_postdoc_plan(
+        &self,
+        lab_run_id: &str,
+        title: &str,
+        instructions: &str,
+        allowed_scope: Vec<String>,
+        required_validation: Vec<String>,
+        source_postdoc_plan_artifact_id: Option<String>,
+    ) -> anyhow::Result<GraduateTask> {
         let title = title.trim();
         if title.is_empty() {
             return Err(anyhow!("graduate task title cannot be empty"));
@@ -44,6 +63,9 @@ impl LabStore {
             result_artifact_id: None,
             blocker: None,
             cycle_id: Some(run.cycle_count.to_string()),
+            source_postdoc_plan_artifact_id: source_postdoc_plan_artifact_id
+                .map(|value| value.trim().to_string())
+                .filter(|value| !value.is_empty()),
         };
         self.write_graduate_task(&task)?;
         sync_open_task(&mut run, &task);
@@ -57,6 +79,8 @@ impl LabStore {
                 "title": &task.title,
                 "allowed_scope": &task.allowed_scope,
                 "required_validation": &task.required_validation,
+                "cycle_id": &task.cycle_id,
+                "source_postdoc_plan_artifact_id": &task.source_postdoc_plan_artifact_id,
             }),
         )?;
         Ok(task)

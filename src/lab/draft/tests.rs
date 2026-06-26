@@ -1,5 +1,8 @@
 use super::*;
-use crate::lab::model::{LabArtifactType, StageArtifact};
+use crate::lab::model::{
+    GraduateTask, LabArtifactEnvelope, LabArtifactStatus, LabArtifactType, LabEvidenceProvenance,
+    PostdocPlan, StageArtifact,
+};
 use crate::services::api::{ChatResponse, ToolCall};
 use async_openai::types::ChatCompletionResponseStream;
 use async_trait::async_trait;
@@ -58,6 +61,112 @@ fn prepare_draft_postdoc_code_audit_input(
             }),
         )
         .unwrap();
+}
+
+fn prepare_draft_worktree_with_diff(path: &Path, relative_path: &str, before: &str, after: &str) {
+    std::fs::create_dir_all(path).expect("create draft worktree");
+    lab_draft_git(path, &["init", "-q"]);
+    lab_draft_git(path, &["config", "user.email", "lab@example.test"]);
+    lab_draft_git(path, &["config", "user.name", "Lab Test"]);
+    let file_path = path.join(relative_path);
+    if let Some(parent) = file_path.parent() {
+        std::fs::create_dir_all(parent).expect("create draft worktree parent");
+    }
+    std::fs::write(&file_path, before).expect("write draft worktree baseline");
+    lab_draft_git(path, &["add", relative_path]);
+    lab_draft_git(path, &["commit", "-q", "-m", "add draft worktree file"]);
+    std::fs::write(&file_path, after).expect("write draft worktree change");
+}
+
+fn write_draft_accepted_postdoc_plan_and_task(
+    store: &LabStore,
+    lab_run_id: &str,
+    title: &str,
+    instructions: &str,
+    allowed_scope: Vec<String>,
+    required_validation: Vec<String>,
+) -> (String, GraduateTask) {
+    let artifact_id = format!("artifact_postdocplan_draft_{}", Uuid::new_v4().simple());
+    let mut envelope = LabArtifactEnvelope::new(
+        artifact_id.clone(),
+        lab_run_id.to_string(),
+        LabArtifactType::PostdocPlan,
+        "Accepted draft postdoc plan".to_string(),
+        Utc::now(),
+        PostdocPlan {
+            implementation_summary: "Implement the draft test slice.".to_string(),
+            slices: vec![title.to_string()],
+            files_expected: allowed_scope.clone(),
+            validation_plan: required_validation.clone(),
+            graduate_handoff: instructions.to_string(),
+        },
+    );
+    envelope.status = LabArtifactStatus::Accepted;
+    envelope.validation_status = Some("accepted".to_string());
+    let artifact = StageArtifact::PostdocPlan(envelope);
+    store.write_stage_artifact(&artifact).unwrap();
+    store.write_stage_artifact_report(&artifact).unwrap();
+    let task = store
+        .create_graduate_task_with_source_postdoc_plan(
+            lab_run_id,
+            title,
+            instructions,
+            allowed_scope,
+            required_validation,
+            Some(artifact_id.clone()),
+        )
+        .unwrap();
+    (artifact_id, task)
+}
+
+fn draft_verified_provenance(
+    store: &LabStore,
+    task: &GraduateTask,
+    dispatch_id: &str,
+    verification_root: &Path,
+) -> LabEvidenceProvenance {
+    let event = store
+        .record_run_event_returning(
+            &task.lab_run_id,
+            "lab_validation_command_passed",
+            serde_json::json!({
+                "command": "cargo check -q",
+                "command_hash": format!("draft-test-hash-{dispatch_id}"),
+                "policy_reason": "draft test validation",
+                "status_code": 0,
+                "stdout_preview": "",
+                "stderr_preview": "",
+                "validation_kind": "cargo",
+                "validation_security": "controlled_not_sandboxed",
+                "workspace_trust": "unknown",
+                "workspace_trust_source": "test",
+                "workspace_trust_scope": "package_scripts",
+                "policy_action": "allow",
+                "cycle_id": task.cycle_id.clone(),
+                "source_postdoc_plan_artifact_id": task.source_postdoc_plan_artifact_id.clone(),
+                "graduate_task_id": task.task_id.clone(),
+                "task_id": task.task_id.clone(),
+                "dispatch_id": dispatch_id,
+                "agent_task_id": format!("agent_{dispatch_id}"),
+                "verification_root": verification_root.display().to_string(),
+            }),
+        )
+        .unwrap();
+    LabEvidenceProvenance {
+        lab_run_id: Some(task.lab_run_id.clone()),
+        cycle_id: task.cycle_id.clone(),
+        source_postdoc_plan_artifact_id: task.source_postdoc_plan_artifact_id.clone(),
+        graduate_task_id: Some(task.task_id.clone()),
+        dispatch_id: Some(dispatch_id.to_string()),
+        agent_task_id: Some(format!("agent_{dispatch_id}")),
+        graduate_result_artifact_id: None,
+        verification_root: Some(verification_root.display().to_string()),
+        worktree_base_commit: Some("base-draft-test".to_string()),
+        worktree_head_commit: Some("head-draft-test".to_string()),
+        worktree_diff_hash: Some(format!("diff-draft-test-{dispatch_id}")),
+        validation_event_ids: vec![event.event_id],
+        verified_at: Some(Utc::now()),
+    }
 }
 
 #[test]
@@ -1060,31 +1169,32 @@ async fn hybrid_run_stops_at_deterministic_professor_review_gate() {
     let run = orchestrator
         .approve_proposal(&proposal.proposal_id)
         .unwrap();
-    let task = store
-        .create_graduate_task(
-            &run.lab_run_id,
-            "Implement scoped slice",
-            "Update deterministic review bridge.",
-            vec!["src/lab/draft.rs".to_string()],
-            vec!["cargo check -q".to_string()],
-        )
-        .unwrap();
-    orchestrator
-        .create_graduate_result_for_task_latest(
-            &task.task_id,
-            "Implemented deterministic review bridge.",
-            vec!["src/lab/draft.rs".to_string()],
-            vec!["cargo check -q passed".to_string()],
-            Vec::new(),
-            Vec::new(),
-        )
-        .unwrap();
     prepare_draft_postdoc_code_audit_input(
         temp.path(),
         &store,
         &run.lab_run_id,
         "src/lab/draft.rs",
     );
+    let (_plan_id, task) = write_draft_accepted_postdoc_plan_and_task(
+        &store,
+        &run.lab_run_id,
+        "Implement scoped slice",
+        "Update deterministic review bridge.",
+        vec!["src/lab/draft.rs".to_string()],
+        vec!["cargo check -q".to_string()],
+    );
+    let provenance = draft_verified_provenance(&store, &task, "dispatch_draft_review", temp.path());
+    orchestrator
+        .create_graduate_result_for_task_latest_with_provenance(
+            &task.task_id,
+            "Implemented deterministic review bridge.",
+            vec!["src/lab/draft.rs".to_string()],
+            vec!["cargo check -q passed".to_string()],
+            Vec::new(),
+            Vec::new(),
+            Some(provenance),
+        )
+        .unwrap();
     let mut saved = store.load_run(&run.lab_run_id).unwrap();
     saved.current_stage = "postdoc_review".to_string();
     saved.internal_owner = crate::lab::model::LabRole::Postdoc;
@@ -1141,15 +1251,14 @@ async fn hybrid_run_syncs_completed_durable_graduate_and_reaches_user_report() {
     run.current_stage = "graduate_work".to_string();
     run.internal_owner = LabRole::Graduate;
     store.save_run(&run).unwrap();
-    let task = store
-        .create_graduate_task(
-            &run.lab_run_id,
-            "Implement durable hybrid slice",
-            "Update hybrid graduate proof.",
-            vec!["src/lab/draft.rs".to_string()],
-            vec!["test -f src/lab/draft.rs".to_string()],
-        )
-        .unwrap();
+    let (_plan_id, task) = write_draft_accepted_postdoc_plan_and_task(
+        &store,
+        &run.lab_run_id,
+        "Implement durable hybrid slice",
+        "Update hybrid graduate proof.",
+        vec!["src/lab/draft.rs".to_string()],
+        vec!["test -f src/lab/draft.rs".to_string()],
+    );
     prepare_draft_postdoc_code_audit_input(
         temp.path(),
         &store,
@@ -1165,13 +1274,12 @@ async fn hybrid_run_syncs_completed_durable_graduate_and_reaches_user_report() {
         .unwrap();
 
     let worktree = temp.path().join("hybrid-graduate-worktree");
-    std::fs::create_dir_all(worktree.join("src/lab")).unwrap();
-    std::process::Command::new("git")
-        .args(["init", "-q"])
-        .current_dir(&worktree)
-        .output()
-        .expect("git init worktree");
-    std::fs::write(worktree.join("src/lab/draft.rs"), "hybrid graduate edit\n").unwrap();
+    prepare_draft_worktree_with_diff(
+        &worktree,
+        "src/lab/draft.rs",
+        "hybrid graduate baseline\n",
+        "hybrid graduate edit\n",
+    );
 
     let session_store = Arc::new(crate::session_store::SessionStore::in_memory().unwrap());
     session_store
@@ -1346,17 +1454,12 @@ async fn hybrid_run_plans_queues_graduate_syncs_and_reaches_user_report() {
         .unwrap();
 
     let worktree = temp.path().join("hybrid-full-graduate-worktree");
-    std::fs::create_dir_all(worktree.join("src/lab")).unwrap();
-    std::process::Command::new("git")
-        .args(["init", "-q"])
-        .current_dir(&worktree)
-        .output()
-        .expect("git init worktree");
-    std::fs::write(
-        worktree.join("src/lab/draft.rs"),
+    prepare_draft_worktree_with_diff(
+        &worktree,
+        "src/lab/draft.rs",
+        "hybrid full graduate baseline\n",
         "hybrid full graduate edit\n",
-    )
-    .unwrap();
+    );
 
     let session_store = Arc::new(crate::session_store::SessionStore::in_memory().unwrap());
     session_store

@@ -428,12 +428,13 @@ impl LabOrchestrator {
                 slice = slice.trim(),
                 handoff = body.graduate_handoff.trim(),
             );
-            let task = self.store.create_graduate_task(
+            let task = self.store.create_graduate_task_with_source_postdoc_plan(
                 &plan_artifact.lab_run_id,
                 &title,
                 &instructions,
                 body.files_expected.clone(),
                 body.validation_plan.clone(),
+                Some(plan_artifact.artifact_id.clone()),
             )?;
             let task = if task.allowed_scope.is_empty() || task.required_validation.is_empty() {
                 let reason = if task.allowed_scope.is_empty() && task.required_validation.is_empty()

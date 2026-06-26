@@ -51,6 +51,7 @@ pub(super) struct ToolExecutionGate<'a> {
     pub(super) allow_validation_without_changes: bool,
     pub(super) destructive_scope: &'a DestructiveScopeContract,
     pub(super) working_dir: &'a Path,
+    pub(super) labrun_context: Option<crate::lab::policy_overlay::LabRunExecutionContext>,
     pub(super) trace: &'a Option<TraceCollector>,
     pub(super) runtime_context: &'a ToolRuntimeContext,
     pub(super) permission_context: &'a crate::permissions::PermissionContext,
@@ -80,6 +81,7 @@ impl<'a> ToolExecutionGate<'a> {
             permission_context: Some(self.permission_context),
             task_state: self.task_state,
             working_dir: Some(self.working_dir),
+            labrun_context: self.labrun_context.clone(),
             tool_allowed_by_context: context_allows_tool,
             destructive_scope_check: Some(destructive_check.clone()),
             action_checkpoint_rejection: action_checkpoint_rejection.clone(),
@@ -159,6 +161,16 @@ impl<'a> ToolExecutionGate<'a> {
             } else {
                 ToolResult::error(reason)
             };
+            return self.deny_with_trace(tool_call, result, &review);
+        }
+
+        if let Err(reason) = crate::lab::policy_overlay::revalidate_labrun_policy_review(
+            self.working_dir,
+            &review.labrun_policy,
+        ) {
+            let result = ToolResult::error(format!(
+                "LabRun policy state changed before execution: {reason}"
+            ));
             return self.deny_with_trace(tool_call, result, &review);
         }
 

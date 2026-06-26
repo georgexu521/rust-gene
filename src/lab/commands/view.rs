@@ -452,7 +452,7 @@ fn format_safety_proof_event(event: &crate::lab::model::LabEvent) -> String {
         "lab_validation_command_blocked"
         | "lab_validation_command_failed"
         | "lab_validation_command_passed" => format!(
-            "{} kind={} trust={} action={} command={} reason={}",
+            "{} kind={} trust={} source={} action={} security={} task={} dispatch={} command={} reason={}",
             event.event_type,
             payload
                 .get("validation_kind")
@@ -463,9 +463,26 @@ fn format_safety_proof_event(event: &crate::lab::model::LabEvent) -> String {
                 .and_then(serde_json::Value::as_str)
                 .unwrap_or("unknown"),
             payload
+                .get("workspace_trust_source")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("unknown"),
+            payload
                 .get("policy_action")
                 .and_then(serde_json::Value::as_str)
                 .unwrap_or("unknown"),
+            payload
+                .get("validation_security")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("unknown"),
+            payload
+                .get("graduate_task_id")
+                .or_else(|| payload.get("task_id"))
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("none"),
+            payload
+                .get("dispatch_id")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("none"),
             payload
                 .get("command")
                 .and_then(serde_json::Value::as_str)

@@ -226,6 +226,28 @@ impl LabOrchestrator {
         blockers: Vec<String>,
         evidence_ids: Vec<String>,
     ) -> anyhow::Result<CreatedStageArtifact> {
+        self.create_graduate_result_for_task_latest_with_provenance(
+            task_id,
+            task_summary,
+            changed_files,
+            validation_attempts,
+            blockers,
+            evidence_ids,
+            None,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn create_graduate_result_for_task_latest_with_provenance(
+        &self,
+        task_id: &str,
+        task_summary: &str,
+        changed_files: Vec<String>,
+        validation_attempts: Vec<String>,
+        blockers: Vec<String>,
+        evidence_ids: Vec<String>,
+        provenance: Option<LabEvidenceProvenance>,
+    ) -> anyhow::Result<CreatedStageArtifact> {
         let run = self
             .store
             .latest_run()?
@@ -253,6 +275,20 @@ impl LabOrchestrator {
         let evidence_ids = clean_string_vec(evidence_ids);
 
         let artifact_id = format!("artifact_graduateresult_{}", Uuid::new_v4().simple());
+        let mut provenance = provenance.unwrap_or_else(|| LabEvidenceProvenance {
+            lab_run_id: Some(run.lab_run_id.clone()),
+            cycle_id: task.cycle_id.clone(),
+            source_postdoc_plan_artifact_id: task.source_postdoc_plan_artifact_id.clone(),
+            graduate_task_id: Some(task.task_id.clone()),
+            ..LabEvidenceProvenance::default()
+        });
+        provenance.lab_run_id = Some(run.lab_run_id.clone());
+        provenance.cycle_id = provenance.cycle_id.or_else(|| task.cycle_id.clone());
+        provenance.source_postdoc_plan_artifact_id = provenance
+            .source_postdoc_plan_artifact_id
+            .or_else(|| task.source_postdoc_plan_artifact_id.clone());
+        provenance.graduate_task_id = Some(task.task_id.clone());
+        provenance.graduate_result_artifact_id = Some(artifact_id.clone());
         let mut envelope = LabArtifactEnvelope::new(
             artifact_id,
             run.lab_run_id.clone(),
@@ -268,6 +304,7 @@ impl LabOrchestrator {
                     "Review graduate task {}. This result is a claim until parent verification.",
                     task.task_id
                 ),
+                provenance,
             },
         );
         envelope.evidence_refs = evidence_ids.clone();
@@ -309,6 +346,12 @@ impl LabOrchestrator {
                 "artifact_id": artifact.artifact_id(),
                 "report_path": report_path.display().to_string(),
                 "validation_status": artifact.validation_status(),
+                "provenance": match &artifact {
+                    StageArtifact::GraduateResult(envelope) => {
+                        serde_json::to_value(&envelope.body.provenance).unwrap_or_default()
+                    }
+                    _ => serde_json::Value::Null,
+                },
             }),
         )?;
 
@@ -436,11 +479,16 @@ impl LabOrchestrator {
                 return Err(anyhow!(error));
             }
         };
+        let dispatch =
+            self.latest_dispatch_for_agent_task(&run.lab_run_id, &task.task_id, &agent_task_id)?;
         let runtime_evidence = match runtime_verify_graduate_task_result(
             &task,
             &context,
             Some(&state.agent_id),
             &agent_task_id,
+            dispatch
+                .as_ref()
+                .map(|dispatch| dispatch.dispatch_id.as_str()),
             &[],
             &provider_policy,
         ) {
@@ -476,17 +524,16 @@ impl LabOrchestrator {
         parsed.evidence_ids.sort();
         parsed.evidence_ids.dedup();
 
-        let created = self.create_graduate_result_for_task_latest(
+        let created = self.create_graduate_result_for_task_latest_with_provenance(
             &task.task_id,
             &parsed.task_summary,
             parsed.changed_files,
             parsed.validation_attempts,
             parsed.blockers,
             parsed.evidence_ids,
+            Some(runtime_evidence.provenance),
         )?;
-        if let Some(dispatch) =
-            self.latest_dispatch_for_agent_task(&run.lab_run_id, &task.task_id, &agent_task_id)?
-        {
+        if let Some(dispatch) = dispatch {
             self.store.update_graduate_dispatch_status(
                 &run.lab_run_id,
                 &dispatch.dispatch_id,
@@ -579,13 +626,68 @@ impl LabOrchestrator {
             ));
         }
 
-        let graduate_results = self
+        let stage_artifacts = self.store.list_stage_artifacts(&run.lab_run_id)?;
+        let current_postdoc_plan_id =
+            stage_artifacts
+                .iter()
+                .rev()
+                .find_map(|artifact| match artifact {
+                    StageArtifact::PostdocPlan(plan)
+                        if plan.status == LabArtifactStatus::Accepted
+                            && plan.validation_status.as_deref() == Some("accepted") =>
+                    {
+                        (plan.created_at <= run.updated_at
+                            && plan.lab_run_id == run.lab_run_id
+                            && plan.stage == "postdoc_plan")
+                            .then(|| plan.artifact_id.clone())
+                    }
+                    _ => None,
+                });
+        let current_cycle_id = run.cycle_count.to_string();
+        let current_tasks = self
             .store
-            .list_stage_artifacts(&run.lab_run_id)?
+            .list_graduate_tasks(&run.lab_run_id)?
+            .into_iter()
+            .filter(|task| task.cycle_id.as_deref() == Some(current_cycle_id.as_str()))
+            .filter(|task| {
+                current_postdoc_plan_id.as_ref().is_none_or(|plan_id| {
+                    task.source_postdoc_plan_artifact_id.as_deref() == Some(plan_id.as_str())
+                })
+            })
+            .collect::<Vec<_>>();
+        let current_task_ids = current_tasks
+            .iter()
+            .map(|task| task.task_id.clone())
+            .collect::<BTreeSet<_>>();
+        let all_graduate_results = stage_artifacts
             .into_iter()
             .filter_map(|artifact| match artifact {
                 StageArtifact::GraduateResult(result) => Some(result),
                 _ => None,
+            })
+            .collect::<Vec<_>>();
+        let mut excluded_results = Vec::new();
+        let graduate_results = all_graduate_results
+            .into_iter()
+            .filter(|result| {
+                let provenance = &result.body.provenance;
+                let matches_cycle = provenance.cycle_id.as_deref() == Some(current_cycle_id.as_str());
+                let matches_plan = current_postdoc_plan_id.as_ref().is_none_or(|plan_id| {
+                    provenance.source_postdoc_plan_artifact_id.as_deref()
+                        == Some(plan_id.as_str())
+                });
+                let matches_task = provenance
+                    .graduate_task_id
+                    .as_deref()
+                    .is_some_and(|task_id| current_task_ids.contains(task_id));
+                let current = matches_cycle && matches_plan && matches_task;
+                if !current {
+                    excluded_results.push(format!(
+                        "{} excluded from current postdoc integration: cycle_match={} plan_match={} task_match={}",
+                        result.artifact_id, matches_cycle, matches_plan, matches_task
+                    ));
+                }
+                current
             })
             .collect::<Vec<_>>();
         if graduate_results.is_empty() {
@@ -598,9 +700,35 @@ impl LabOrchestrator {
         let mut accepted_results = Vec::new();
         let mut remaining_risks = Vec::new();
         let mut evidence_refs = Vec::new();
+        remaining_risks.extend(excluded_results);
+        if current_postdoc_plan_id.is_none() {
+            remaining_risks.push(
+                "No accepted current-cycle PostdocPlan provenance found; legacy current-cycle results are treated as unverified."
+                    .to_string(),
+            );
+        }
         for result in &graduate_results {
             evidence_refs.push(format!("artifact:{}", result.artifact_id));
             evidence_refs.extend(result.evidence_refs.iter().cloned());
+            let provenance = &result.body.provenance;
+            if provenance.dispatch_id.is_none() {
+                remaining_risks.push(format!(
+                    "{} has no dispatch-bound provenance",
+                    result.artifact_id
+                ));
+            }
+            if provenance.validation_event_ids.is_empty() {
+                remaining_risks.push(format!(
+                    "{} has no task-bound validation event ids",
+                    result.artifact_id
+                ));
+            }
+            if provenance.verification_root.is_none() {
+                remaining_risks.push(format!(
+                    "{} has no verification_root provenance",
+                    result.artifact_id
+                ));
+            }
             if result.body.validation_attempts.is_empty() {
                 remaining_risks.push(format!(
                     "{} has no validation attempts recorded",
@@ -654,6 +782,10 @@ impl LabOrchestrator {
         let validation_status = if remaining_risks.iter().any(|risk| {
             risk.contains("blockers:")
                 || risk.contains("no validation attempts")
+                || risk.contains("no task-bound validation event ids")
+                || risk.contains("no dispatch-bound provenance")
+                || risk.contains("no verification_root provenance")
+                || risk.contains("No accepted current-cycle PostdocPlan")
                 || risk.contains("No graduate result")
                 || risk.contains("audit risk:")
         }) {

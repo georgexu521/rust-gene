@@ -81,12 +81,25 @@ pub fn build_graduate_task_dispatch(task: &GraduateTask) -> anyhow::Result<Gradu
 
 pub async fn execute_graduate_task_with_agent_tool(
     task: &GraduateTask,
-    context: ToolContext,
+    dispatch_id: &str,
+    mut context: ToolContext,
 ) -> ToolResult {
     let dispatch = match build_graduate_task_dispatch(task) {
         Ok(dispatch) => dispatch,
         Err(err) => return ToolResult::error(format!("Invalid graduate task dispatch: {err}")),
     };
+    context
+        .metadata
+        .insert("lab_mode_enabled".to_string(), "true".to_string());
+    context
+        .metadata
+        .insert("active_lab_run_id".to_string(), task.lab_run_id.clone());
+    context
+        .metadata
+        .insert("active_graduate_task_id".to_string(), task.task_id.clone());
+    context
+        .metadata
+        .insert("active_dispatch_id".to_string(), dispatch_id.to_string());
     let tool = AgentTool::with_working_dir(&context.working_dir);
     tool.execute(dispatch.agent_tool_params, context).await
 }
@@ -196,6 +209,7 @@ mod tests {
             result_artifact_id: None,
             blocker: None,
             cycle_id: Some("0".to_string()),
+            source_postdoc_plan_artifact_id: Some("artifact_postdocplan_test".to_string()),
         }
     }
 
@@ -273,8 +287,12 @@ mod tests {
 
     #[tokio::test]
     async fn graduate_task_executor_uses_existing_agent_tool_availability() {
-        let result =
-            execute_graduate_task_with_agent_tool(&task(), ToolContext::new(".", "lab-test")).await;
+        let result = execute_graduate_task_with_agent_tool(
+            &task(),
+            "graddispatch_test",
+            ToolContext::new(".", "lab-test"),
+        )
+        .await;
 
         assert!(!result.success);
         assert!(result

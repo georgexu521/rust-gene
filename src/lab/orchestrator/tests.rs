@@ -50,6 +50,54 @@ fn write_tracked_file_with_diff(path: &Path, relative_path: &str, before: &str, 
     std::fs::write(&file_path, after).expect("write tracked file after");
 }
 
+fn write_accepted_postdoc_plan_and_task(
+    orchestrator: &LabOrchestrator,
+    lab_run_id: &str,
+    title: &str,
+    instructions: &str,
+    allowed_scope: Vec<String>,
+    required_validation: Vec<String>,
+) -> (String, GraduateTask) {
+    let artifact_id = format!("artifact_postdocplan_{}", Uuid::new_v4().simple());
+    let mut envelope = LabArtifactEnvelope::new(
+        artifact_id.clone(),
+        lab_run_id.to_string(),
+        LabArtifactType::PostdocPlan,
+        "Accepted postdoc plan".to_string(),
+        Utc::now(),
+        PostdocPlan {
+            implementation_summary: "Implement the current verified slice.".to_string(),
+            slices: vec![title.to_string()],
+            files_expected: allowed_scope.clone(),
+            validation_plan: required_validation.clone(),
+            graduate_handoff: instructions.to_string(),
+        },
+    );
+    envelope.status = LabArtifactStatus::Accepted;
+    envelope.validation_status = Some("accepted".to_string());
+    let artifact = StageArtifact::PostdocPlan(envelope);
+    orchestrator
+        .store()
+        .write_stage_artifact(&artifact)
+        .unwrap();
+    orchestrator
+        .store()
+        .write_stage_artifact_report(&artifact)
+        .unwrap();
+    let task = orchestrator
+        .store()
+        .create_graduate_task_with_source_postdoc_plan(
+            lab_run_id,
+            title,
+            instructions,
+            allowed_scope,
+            required_validation,
+            Some(artifact_id.clone()),
+        )
+        .unwrap();
+    (artifact_id, task)
+}
+
 fn record_lab_validation_pass(orchestrator: &LabOrchestrator, lab_run_id: &str, command: &str) {
     orchestrator
         .store()
@@ -68,6 +116,70 @@ fn record_lab_validation_pass(orchestrator: &LabOrchestrator, lab_run_id: &str, 
             }),
         )
         .unwrap();
+}
+
+fn bound_validation_event_id(
+    orchestrator: &LabOrchestrator,
+    task: &GraduateTask,
+    dispatch_id: &str,
+    verification_root: &Path,
+    command: &str,
+) -> String {
+    orchestrator
+        .store()
+        .record_run_event_returning(
+            &task.lab_run_id,
+            "lab_validation_command_passed",
+            serde_json::json!({
+                "command": command,
+                "command_hash": format!("test-hash-{dispatch_id}"),
+                "policy_reason": "test validation",
+                "status_code": 0,
+                "stdout_preview": "",
+                "stderr_preview": "",
+                "validation_kind": "cargo",
+                "validation_security": "controlled_not_sandboxed",
+                "workspace_trust": "unknown",
+                "workspace_trust_source": "test",
+                "workspace_trust_scope": "package_scripts",
+                "policy_action": "allow",
+                "cycle_id": task.cycle_id.clone(),
+                "source_postdoc_plan_artifact_id": task.source_postdoc_plan_artifact_id.clone(),
+                "graduate_task_id": task.task_id.clone(),
+                "task_id": task.task_id.clone(),
+                "dispatch_id": dispatch_id,
+                "agent_task_id": format!("agent_{dispatch_id}"),
+                "verification_root": verification_root.display().to_string(),
+            }),
+        )
+        .unwrap()
+        .event_id
+}
+
+fn verified_test_provenance(
+    orchestrator: &LabOrchestrator,
+    task: &GraduateTask,
+    dispatch_id: &str,
+    verification_root: &Path,
+    command: &str,
+) -> LabEvidenceProvenance {
+    let event_id =
+        bound_validation_event_id(orchestrator, task, dispatch_id, verification_root, command);
+    LabEvidenceProvenance {
+        lab_run_id: Some(task.lab_run_id.clone()),
+        cycle_id: task.cycle_id.clone(),
+        source_postdoc_plan_artifact_id: task.source_postdoc_plan_artifact_id.clone(),
+        graduate_task_id: Some(task.task_id.clone()),
+        dispatch_id: Some(dispatch_id.to_string()),
+        agent_task_id: Some(format!("agent_{dispatch_id}")),
+        graduate_result_artifact_id: None,
+        verification_root: Some(verification_root.display().to_string()),
+        worktree_base_commit: Some("base-test".to_string()),
+        worktree_head_commit: Some("head-test".to_string()),
+        worktree_diff_hash: Some(format!("diff-test-{dispatch_id}")),
+        validation_event_ids: vec![event_id],
+        verified_at: Some(Utc::now()),
+    }
 }
 
 fn lab_context_with_agent_worktree(
@@ -209,6 +321,7 @@ fn valid_test_artifact_for_stage(run: &LabRun, stage: &str) -> StageArtifact {
                 ],
                 blockers: Vec::new(),
                 handoff_to_postdoc: "Review diff and validation evidence.".to_string(),
+                provenance: LabEvidenceProvenance::default(),
             },
         )),
         "postdoc_review" => {
@@ -849,27 +962,32 @@ fn postdoc_integration_summary_accepts_unblocked_graduate_results() {
     let run = orchestrator
         .approve_proposal(&proposal.proposal_id)
         .unwrap();
-    let task = orchestrator
-        .store()
-        .create_graduate_task(
-            &run.lab_run_id,
-            "Implement scoped slice",
-            "Update lab integration bridge.",
-            vec!["src/lab/orchestrator.rs".to_string()],
-            vec!["cargo check -q".to_string()],
-        )
-        .unwrap();
+    let (_plan_id, task) = write_accepted_postdoc_plan_and_task(
+        &orchestrator,
+        &run.lab_run_id,
+        "Implement scoped slice",
+        "Update lab integration bridge.",
+        vec!["src/lab/orchestrator.rs".to_string()],
+        vec!["cargo check -q".to_string()],
+    );
+    let provenance = verified_test_provenance(
+        &orchestrator,
+        &task,
+        "dispatch_accept_unblocked_result",
+        temp.path(),
+        "cargo check -q",
+    );
     let result = orchestrator
-        .create_graduate_result_for_task_latest(
+        .create_graduate_result_for_task_latest_with_provenance(
             &task.task_id,
             "Implemented integration bridge.",
             vec!["src/lab/orchestrator.rs".to_string()],
             vec!["cargo check -q passed".to_string()],
             Vec::new(),
             Vec::new(),
+            Some(provenance),
         )
         .unwrap();
-    record_lab_validation_pass(&orchestrator, &run.lab_run_id, "cargo check -q");
     let mut saved = orchestrator.store().load_run(&run.lab_run_id).unwrap();
     saved.current_stage = "postdoc_review".to_string();
     saved.internal_owner = LabRole::Postdoc;
@@ -947,6 +1065,387 @@ fn postdoc_integration_summary_accepts_unblocked_graduate_results() {
     assert!(events
         .iter()
         .any(|event| event.event_type == "postdoc_read_only_audit_written"));
+}
+
+#[test]
+fn postdoc_audit_rejects_unbound_validation_event() {
+    let temp = tempfile::tempdir().unwrap();
+    init_git_dir(temp.path());
+    write_tracked_file_with_diff(
+        temp.path(),
+        "src/lab/orchestrator.rs",
+        "before audit\n",
+        "after audit\n",
+    );
+    let orchestrator = LabOrchestrator::for_project(temp.path());
+    let proposal = orchestrator
+        .store()
+        .create_proposal("Build LabRun", None)
+        .unwrap();
+    let run = orchestrator
+        .approve_proposal(&proposal.proposal_id)
+        .unwrap();
+    let (plan_id, task_a) = write_accepted_postdoc_plan_and_task(
+        &orchestrator,
+        &run.lab_run_id,
+        "Implement task A",
+        "Update task A.",
+        vec!["src/lab/orchestrator.rs".to_string()],
+        vec!["cargo check -q".to_string()],
+    );
+    let task_b = orchestrator
+        .store()
+        .create_graduate_task_with_source_postdoc_plan(
+            &run.lab_run_id,
+            "Implement task B",
+            "Update task B.",
+            vec!["src/lab/orchestrator.rs".to_string()],
+            vec!["cargo check -q".to_string()],
+            Some(plan_id),
+        )
+        .unwrap();
+    let task_a_event = bound_validation_event_id(
+        &orchestrator,
+        &task_a,
+        "dispatch_task_a",
+        temp.path(),
+        "cargo check -q",
+    );
+    let provenance = LabEvidenceProvenance {
+        lab_run_id: Some(run.lab_run_id.clone()),
+        cycle_id: task_b.cycle_id.clone(),
+        source_postdoc_plan_artifact_id: task_b.source_postdoc_plan_artifact_id.clone(),
+        graduate_task_id: Some(task_b.task_id.clone()),
+        dispatch_id: Some("dispatch_task_b".to_string()),
+        agent_task_id: Some("agent_task_b".to_string()),
+        graduate_result_artifact_id: None,
+        verification_root: Some(temp.path().display().to_string()),
+        worktree_base_commit: Some("base-test".to_string()),
+        worktree_head_commit: Some("head-test".to_string()),
+        worktree_diff_hash: Some("diff-test".to_string()),
+        validation_event_ids: vec![task_a_event],
+        verified_at: Some(Utc::now()),
+    };
+    orchestrator
+        .create_graduate_result_for_task_latest_with_provenance(
+            &task_b.task_id,
+            "Implemented task B.",
+            vec!["src/lab/orchestrator.rs".to_string()],
+            vec!["cargo check -q passed".to_string()],
+            Vec::new(),
+            Vec::new(),
+            Some(provenance),
+        )
+        .unwrap();
+    let mut saved = orchestrator.store().load_run(&run.lab_run_id).unwrap();
+    saved.current_stage = "postdoc_review".to_string();
+    saved.internal_owner = LabRole::Postdoc;
+    orchestrator.store().save_run(&saved).unwrap();
+
+    let created = orchestrator
+        .create_postdoc_integration_summary_for_latest(Some("Postdoc checked validation binding."))
+        .unwrap();
+
+    assert!(!created.gate.is_satisfied());
+    assert!(created
+        .gate
+        .blockers
+        .iter()
+        .any(|blocker| blocker.contains("no task-bound Lab validation command events")));
+    let audit_path = match created.artifact {
+        StageArtifact::PostdocIntegrationSummary(envelope) => envelope
+            .evidence_refs
+            .iter()
+            .find(|item| item.contains("postdoc_audits/postdoc_audit_"))
+            .cloned()
+            .expect("postdoc audit evidence ref"),
+        other => panic!(
+            "expected integration summary, got {:?}",
+            other.artifact_type()
+        ),
+    };
+    let audit: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(audit_path).unwrap()).unwrap();
+    assert_eq!(audit["validation_event_refs"].as_array().unwrap().len(), 0);
+    assert!(audit["risks"].as_array().unwrap().iter().any(|risk| {
+        risk.as_str()
+            .unwrap_or("")
+            .contains("no task-bound Lab validation command events")
+    }));
+}
+
+#[test]
+fn postdoc_integration_excludes_previous_cycle_results() {
+    let temp = tempfile::tempdir().unwrap();
+    init_git_dir(temp.path());
+    write_tracked_file_with_diff(
+        temp.path(),
+        "src/lab/current.rs",
+        "before current\n",
+        "after current\n",
+    );
+    let orchestrator = LabOrchestrator::for_project(temp.path());
+    let proposal = orchestrator
+        .store()
+        .create_proposal("Build LabRun", None)
+        .unwrap();
+    let run = orchestrator
+        .approve_proposal(&proposal.proposal_id)
+        .unwrap();
+    let (_old_plan_id, old_task) = write_accepted_postdoc_plan_and_task(
+        &orchestrator,
+        &run.lab_run_id,
+        "Implement old cycle",
+        "Update old cycle files.",
+        vec!["src/lab/old.rs".to_string()],
+        vec!["cargo check -q".to_string()],
+    );
+    let old_provenance = verified_test_provenance(
+        &orchestrator,
+        &old_task,
+        "dispatch_old_cycle",
+        temp.path(),
+        "cargo check -q",
+    );
+    let old_result = orchestrator
+        .create_graduate_result_for_task_latest_with_provenance(
+            &old_task.task_id,
+            "Implemented old cycle.",
+            vec!["src/lab/old.rs".to_string()],
+            vec!["cargo check -q passed".to_string()],
+            Vec::new(),
+            Vec::new(),
+            Some(old_provenance),
+        )
+        .unwrap();
+
+    let mut next_cycle = orchestrator.store().load_run(&run.lab_run_id).unwrap();
+    next_cycle.cycle_count = 1;
+    orchestrator.store().save_run(&next_cycle).unwrap();
+    let (_current_plan_id, current_task) = write_accepted_postdoc_plan_and_task(
+        &orchestrator,
+        &run.lab_run_id,
+        "Implement current cycle",
+        "Update current cycle files.",
+        vec!["src/lab/current.rs".to_string()],
+        vec!["cargo check -q".to_string()],
+    );
+    let current_provenance = verified_test_provenance(
+        &orchestrator,
+        &current_task,
+        "dispatch_current_cycle",
+        temp.path(),
+        "cargo check -q",
+    );
+    let current_result = orchestrator
+        .create_graduate_result_for_task_latest_with_provenance(
+            &current_task.task_id,
+            "Implemented current cycle.",
+            vec!["src/lab/current.rs".to_string()],
+            vec!["cargo check -q passed".to_string()],
+            Vec::new(),
+            Vec::new(),
+            Some(current_provenance),
+        )
+        .unwrap();
+    let mut saved = orchestrator.store().load_run(&run.lab_run_id).unwrap();
+    saved.current_stage = "postdoc_review".to_string();
+    saved.internal_owner = LabRole::Postdoc;
+    orchestrator.store().save_run(&saved).unwrap();
+
+    let created = orchestrator
+        .create_postdoc_integration_summary_for_latest(Some("Postdoc checked current cycle only."))
+        .unwrap();
+
+    assert!(created.gate.is_satisfied());
+    match created.artifact {
+        StageArtifact::PostdocIntegrationSummary(envelope) => {
+            assert!(envelope
+                .body
+                .accepted_results
+                .iter()
+                .any(|item| item.contains(current_result.artifact.artifact_id())));
+            assert!(!envelope
+                .body
+                .accepted_results
+                .iter()
+                .any(|item| item.contains(old_result.artifact.artifact_id())));
+            assert!(envelope.body.remaining_risks.iter().any(|risk| {
+                risk.contains(old_result.artifact.artifact_id())
+                    && risk.contains("excluded from current postdoc integration")
+            }));
+        }
+        other => panic!(
+            "expected integration summary, got {:?}",
+            other.artifact_type()
+        ),
+    }
+}
+
+#[test]
+fn postdoc_audit_reads_verification_root() {
+    let parent = tempfile::tempdir().unwrap();
+    let worktree = tempfile::tempdir().unwrap();
+    init_git_dir(parent.path());
+    init_git_dir(worktree.path());
+    write_tracked_file_with_diff(
+        parent.path(),
+        "src/lab/orchestrator.rs",
+        "parent before\n",
+        "parent after should not appear\n",
+    );
+    write_tracked_file_with_diff(
+        worktree.path(),
+        "src/lab/orchestrator.rs",
+        "worktree before\n",
+        "worktree after should appear\n",
+    );
+    let orchestrator = LabOrchestrator::for_project(parent.path());
+    let proposal = orchestrator
+        .store()
+        .create_proposal("Build LabRun", None)
+        .unwrap();
+    let run = orchestrator
+        .approve_proposal(&proposal.proposal_id)
+        .unwrap();
+    let (_plan_id, task) = write_accepted_postdoc_plan_and_task(
+        &orchestrator,
+        &run.lab_run_id,
+        "Implement worktree slice",
+        "Update worktree file.",
+        vec!["src/lab/orchestrator.rs".to_string()],
+        vec!["cargo check -q".to_string()],
+    );
+    let provenance = verified_test_provenance(
+        &orchestrator,
+        &task,
+        "dispatch_worktree_audit",
+        worktree.path(),
+        "cargo check -q",
+    );
+    orchestrator
+        .create_graduate_result_for_task_latest_with_provenance(
+            &task.task_id,
+            "Implemented worktree slice.",
+            vec!["src/lab/orchestrator.rs".to_string()],
+            vec!["cargo check -q passed".to_string()],
+            Vec::new(),
+            Vec::new(),
+            Some(provenance),
+        )
+        .unwrap();
+    let mut saved = orchestrator.store().load_run(&run.lab_run_id).unwrap();
+    saved.current_stage = "postdoc_review".to_string();
+    saved.internal_owner = LabRole::Postdoc;
+    orchestrator.store().save_run(&saved).unwrap();
+
+    let created = orchestrator
+        .create_postdoc_integration_summary_for_latest(Some("Postdoc checked audit root."))
+        .unwrap();
+
+    assert!(created.gate.is_satisfied());
+    let audit_path = match created.artifact {
+        StageArtifact::PostdocIntegrationSummary(envelope) => envelope
+            .evidence_refs
+            .iter()
+            .find(|item| item.contains("postdoc_audits/postdoc_audit_"))
+            .cloned()
+            .expect("postdoc audit evidence ref"),
+        other => panic!(
+            "expected integration summary, got {:?}",
+            other.artifact_type()
+        ),
+    };
+    let audit_text = std::fs::read_to_string(audit_path).unwrap();
+    assert!(audit_text.contains("worktree after should appear"));
+    assert!(!audit_text.contains("parent after should not appear"));
+    assert!(audit_text.contains(&worktree.path().display().to_string()));
+}
+
+#[test]
+fn postdoc_audit_refuses_missing_verification_root() {
+    let parent = tempfile::tempdir().unwrap();
+    let worktree = tempfile::tempdir().unwrap();
+    let worktree_path = worktree.path().to_path_buf();
+    init_git_dir(parent.path());
+    init_git_dir(&worktree_path);
+    write_tracked_file_with_diff(
+        parent.path(),
+        "src/lab/orchestrator.rs",
+        "parent before\n",
+        "parent after must not be substituted\n",
+    );
+    write_tracked_file_with_diff(
+        &worktree_path,
+        "src/lab/orchestrator.rs",
+        "worktree before\n",
+        "worktree after disappears\n",
+    );
+    let orchestrator = LabOrchestrator::for_project(parent.path());
+    let proposal = orchestrator
+        .store()
+        .create_proposal("Build LabRun", None)
+        .unwrap();
+    let run = orchestrator
+        .approve_proposal(&proposal.proposal_id)
+        .unwrap();
+    let (_plan_id, task) = write_accepted_postdoc_plan_and_task(
+        &orchestrator,
+        &run.lab_run_id,
+        "Implement worktree slice",
+        "Update worktree file.",
+        vec!["src/lab/orchestrator.rs".to_string()],
+        vec!["cargo check -q".to_string()],
+    );
+    let provenance = verified_test_provenance(
+        &orchestrator,
+        &task,
+        "dispatch_missing_worktree_audit",
+        &worktree_path,
+        "cargo check -q",
+    );
+    orchestrator
+        .create_graduate_result_for_task_latest_with_provenance(
+            &task.task_id,
+            "Implemented worktree slice.",
+            vec!["src/lab/orchestrator.rs".to_string()],
+            vec!["cargo check -q passed".to_string()],
+            Vec::new(),
+            Vec::new(),
+            Some(provenance),
+        )
+        .unwrap();
+    drop(worktree);
+    let mut saved = orchestrator.store().load_run(&run.lab_run_id).unwrap();
+    saved.current_stage = "postdoc_review".to_string();
+    saved.internal_owner = LabRole::Postdoc;
+    orchestrator.store().save_run(&saved).unwrap();
+
+    let created = orchestrator
+        .create_postdoc_integration_summary_for_latest(Some("Postdoc checked missing audit root."))
+        .unwrap();
+
+    assert!(!created.gate.is_satisfied());
+    assert!(created
+        .gate
+        .blockers
+        .iter()
+        .any(|blocker| blocker.contains("is not present in audit root")));
+    let audit_path = match created.artifact {
+        StageArtifact::PostdocIntegrationSummary(envelope) => envelope
+            .evidence_refs
+            .iter()
+            .find(|item| item.contains("postdoc_audits/postdoc_audit_"))
+            .cloned()
+            .expect("postdoc audit evidence ref"),
+        other => panic!(
+            "expected integration summary, got {:?}",
+            other.artifact_type()
+        ),
+    };
+    let audit_text = std::fs::read_to_string(audit_path).unwrap();
+    assert!(audit_text.contains(&worktree_path.display().to_string()));
+    assert!(!audit_text.contains("parent after must not be substituted"));
 }
 
 #[test]
@@ -1381,27 +1880,32 @@ fn postdoc_integration_summary_includes_workspace_snapshot_evidence() {
     let run = orchestrator
         .approve_proposal(&proposal.proposal_id)
         .unwrap();
-    let task = orchestrator
-        .store()
-        .create_graduate_task(
-            &run.lab_run_id,
-            "Implement scoped slice",
-            "Update lab integration bridge.",
-            vec!["src/lab/orchestrator.rs".to_string()],
-            vec!["cargo check -q".to_string()],
-        )
-        .unwrap();
+    let (_plan_id, task) = write_accepted_postdoc_plan_and_task(
+        &orchestrator,
+        &run.lab_run_id,
+        "Implement scoped slice",
+        "Update lab integration bridge.",
+        vec!["src/lab/orchestrator.rs".to_string()],
+        vec!["cargo check -q".to_string()],
+    );
+    let provenance = verified_test_provenance(
+        &orchestrator,
+        &task,
+        "dispatch_workspace_snapshot",
+        temp.path(),
+        "cargo check -q",
+    );
     orchestrator
-        .create_graduate_result_for_task_latest(
+        .create_graduate_result_for_task_latest_with_provenance(
             &task.task_id,
             "Implemented integration bridge.",
             vec!["src/lab/orchestrator.rs".to_string()],
             vec!["cargo check -q passed".to_string()],
             Vec::new(),
             Vec::new(),
+            Some(provenance),
         )
         .unwrap();
-    record_lab_validation_pass(&orchestrator, &run.lab_run_id, "cargo check -q");
     orchestrator
         .store()
         .record_run_event(
@@ -1555,27 +2059,32 @@ fn professor_review_blocks_deterministic_closeout() {
     let run = orchestrator
         .approve_proposal(&proposal.proposal_id)
         .unwrap();
-    let task = orchestrator
-        .store()
-        .create_graduate_task(
-            &run.lab_run_id,
-            "Implement scoped slice",
-            "Update lab professor review bridge.",
-            vec!["src/lab/orchestrator.rs".to_string()],
-            vec!["cargo check -q".to_string()],
-        )
-        .unwrap();
+    let (_plan_id, task) = write_accepted_postdoc_plan_and_task(
+        &orchestrator,
+        &run.lab_run_id,
+        "Implement scoped slice",
+        "Update lab professor review bridge.",
+        vec!["src/lab/orchestrator.rs".to_string()],
+        vec!["cargo check -q".to_string()],
+    );
+    let provenance = verified_test_provenance(
+        &orchestrator,
+        &task,
+        "dispatch_professor_review",
+        temp.path(),
+        "cargo check -q",
+    );
     orchestrator
-        .create_graduate_result_for_task_latest(
+        .create_graduate_result_for_task_latest_with_provenance(
             &task.task_id,
             "Implemented professor review bridge.",
             vec!["src/lab/orchestrator.rs".to_string()],
             vec!["cargo check -q passed".to_string()],
             Vec::new(),
             Vec::new(),
+            Some(provenance),
         )
         .unwrap();
-    record_lab_validation_pass(&orchestrator, &run.lab_run_id, "cargo check -q");
     let mut saved = orchestrator.store().load_run(&run.lab_run_id).unwrap();
     saved.current_stage = "postdoc_review".to_string();
     saved.internal_owner = LabRole::Postdoc;
@@ -1945,6 +2454,7 @@ fn graduate_runtime_verification_rejects_missing_actual_changes() {
         result_artifact_id: None,
         blocker: None,
         cycle_id: Some("0".to_string()),
+        source_postdoc_plan_artifact_id: Some("artifact_postdocplan_test".to_string()),
     };
 
     let err = runtime_verify_graduate_task_result(
@@ -1952,6 +2462,7 @@ fn graduate_runtime_verification_rejects_missing_actual_changes() {
         &context,
         Some("agent_1"),
         "lab-graduate-gradtask_test",
+        None,
         &[],
         &crate::lab::provider_certification::graduate_provider_execution_policy(&context),
     )
@@ -1983,6 +2494,7 @@ fn graduate_runtime_verification_requires_isolated_worktree_when_policy_requires
         result_artifact_id: None,
         blocker: None,
         cycle_id: Some("0".to_string()),
+        source_postdoc_plan_artifact_id: Some("artifact_postdocplan_test".to_string()),
     };
 
     let err = runtime_verify_graduate_task_result(
@@ -1990,6 +2502,7 @@ fn graduate_runtime_verification_requires_isolated_worktree_when_policy_requires
         &context,
         Some("agent_1"),
         "lab-graduate-gradtask_test",
+        None,
         &["proof.txt".to_string()],
         &crate::lab::provider_certification::graduate_provider_execution_policy(&context),
     )
@@ -2036,6 +2549,7 @@ fn graduate_runtime_verification_blocks_shell_validation_and_records_event() {
         result_artifact_id: None,
         blocker: None,
         cycle_id: Some("0".to_string()),
+        source_postdoc_plan_artifact_id: Some("artifact_postdocplan_test".to_string()),
     };
 
     let err = runtime_verify_graduate_task_result(
@@ -2043,6 +2557,7 @@ fn graduate_runtime_verification_blocks_shell_validation_and_records_event() {
         &context,
         Some("agent_1"),
         "lab-graduate-gradtask_test",
+        None,
         &[],
         &crate::lab::provider_certification::graduate_provider_execution_policy(&context),
     )
@@ -2093,6 +2608,7 @@ fn graduate_runtime_verification_checks_worktree_scope_and_validation() {
         result_artifact_id: None,
         blocker: None,
         cycle_id: Some("0".to_string()),
+        source_postdoc_plan_artifact_id: Some("artifact_postdocplan_test".to_string()),
     };
 
     let evidence = runtime_verify_graduate_task_result(
@@ -2100,6 +2616,7 @@ fn graduate_runtime_verification_checks_worktree_scope_and_validation() {
         &context,
         Some("agent_1"),
         "lab-graduate-gradtask_test",
+        None,
         &[],
         &crate::lab::provider_certification::graduate_provider_execution_policy(&context),
     )
@@ -2142,6 +2659,7 @@ fn graduate_runtime_verification_falls_back_to_durable_task_id() {
         result_artifact_id: None,
         blocker: None,
         cycle_id: Some("0".to_string()),
+        source_postdoc_plan_artifact_id: Some("artifact_postdocplan_test".to_string()),
     };
 
     let evidence = runtime_verify_graduate_task_result(
@@ -2149,6 +2667,7 @@ fn graduate_runtime_verification_falls_back_to_durable_task_id() {
         &context,
         Some("unknown_agent"),
         "lab-graduate-gradtask_test",
+        None,
         &[],
         &crate::lab::provider_certification::graduate_provider_execution_policy(&context),
     )
@@ -2333,6 +2852,7 @@ fn unbound_graduate_success_can_bind_runtime_verified_result() {
             &task,
             &context,
             Some("agent_runtime_verified"),
+            None,
             &[],
             "The iteration limit was reached before final JSON.",
             &crate::lab::provider_certification::graduate_provider_execution_policy(&context),

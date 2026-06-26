@@ -63,6 +63,24 @@ Product surfaces:
 - `src/desktop_runtime/`: runtime facade consumed by the Tauri workbench.
 - `src/lab/`: LabRun professor/postdoc/graduate workflow surface and storage.
 
+LabRun internals:
+
+- `src/lab/orchestrator.rs`: LabRun orchestration boundary and stage transition
+  entrypoint.
+- `src/lab/orchestrator/artifact_factory.rs`: default artifact construction
+  and compact artifact formatting helpers.
+- `src/lab/orchestrator/graduate_verification.rs`: Graduate verification root,
+  worktree proof, scope checking, validation execution, and workspace snapshots.
+- `src/lab/orchestrator/postdoc_audit.rs`: Postdoc code-aware audit,
+  validation-event binding, redaction, diff/file size budgets, and audit proof.
+- `src/lab/orchestrator/runtime_evidence.rs`: runtime closeout mapping and
+  Graduate agent result parsing.
+- `src/lab/policy_overlay.rs`: role/stage action policy overlay and state
+  revalidation for tool mutations.
+- `src/lab/validation.rs`: controlled validation command parser/runner and
+  Lab validation event recording.
+- `src/lab/workspace_trust.rs`: project-scoped package-script trust lookup.
+
 Integrations and adapters:
 
 - `src/services/`: provider APIs, credentials, and runtime config services.
