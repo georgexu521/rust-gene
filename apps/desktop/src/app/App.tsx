@@ -43,6 +43,7 @@ import {
   selectProject,
   setProviderModel,
   setDetailLevel,
+  setLabDaemonSupervisionEnabled,
   setPermissionMode,
   superviseLabDaemon,
   goalStatus,
@@ -194,6 +195,9 @@ export function App() {
   }, [composer, isSettingsOpen, paletteOpen, pendingDeleteSession]);
 
   useEffect(() => {
+    if (settings?.lab_daemon_supervision_enabled !== true) {
+      return;
+    }
     let busy = false;
     const supervise = async () => {
       if (busy) {
@@ -211,7 +215,7 @@ export function App() {
       void supervise();
     }, 120_000);
     return () => clearInterval(interval);
-  }, []);
+  }, [settings?.lab_daemon_supervision_enabled]);
 
   async function initialize() {
     const { settings: nextSettings, sessions: nextSessions } = await loadDesktopBootstrap();
@@ -285,6 +289,14 @@ export function App() {
   async function handlePermissionModeChange(mode: PermissionModeId) {
     try {
       setSettings(await setPermissionMode(mode));
+    } catch (err) {
+      setRunState((current) => withError(current, err));
+    }
+  }
+
+  async function handleLabDaemonSupervisionChange(enabled: boolean) {
+    try {
+      setSettings(await setLabDaemonSupervisionEnabled(enabled));
     } catch (err) {
       setRunState((current) => withError(current, err));
     }
@@ -947,6 +959,9 @@ export function App() {
           onRefresh={() => void refreshDiagnostics()}
           onDetailLevelChange={(level) => void handleDetailLevelChange(level)}
           onPermissionModeChange={(mode) => void handlePermissionModeChange(mode)}
+          onLabDaemonSupervisionChange={(enabled) =>
+            void handleLabDaemonSupervisionChange(enabled)
+          }
           onOpenDiagnosticsFolder={() => void openDiagnosticsFolder()}
           onOpenSettingsFolder={() => void openSettingsFolder()}
           onOpenShellProfile={() => void openShellProfile()}

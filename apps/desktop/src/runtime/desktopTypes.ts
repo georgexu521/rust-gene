@@ -339,6 +339,10 @@ export type DesktopSettings = {
   recent_projects: string[];
   archived_session_ids: string[];
   startup_state: DesktopStartupState;
+  lab_daemon_supervision_enabled: boolean;
+  lab_daemon_last_supervision?: string | null;
+  lab_daemon_last_supervision_result?: string | null;
+  lab_daemon_next_supervision?: string | null;
 };
 
 export type DesktopStartupState = {

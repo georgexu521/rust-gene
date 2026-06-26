@@ -648,7 +648,7 @@ test.describe("run event state", () => {
       metadata: {
         tool: "file_read",
         success: true,
-        path: "/Users/georgexu/Desktop/phageGPT/README.md",
+        path: "/Users/example/projects/phageGPT/README.md",
         line_start: 1,
         line_end: 82,
         read_coverage: "full",
@@ -666,7 +666,7 @@ test.describe("run event state", () => {
       metadata: {
         tool: "file_read",
         success: true,
-        path: "/Users/georgexu/Desktop/phageGPT/README.md",
+        path: "/Users/example/projects/phageGPT/README.md",
         line_start: 1,
         line_end: 82,
         read_coverage: "full",
@@ -685,7 +685,7 @@ test.describe("run event state", () => {
       expect.objectContaining({
         summary: expect.objectContaining({
           repeatCount: 2,
-          path: "/Users/georgexu/Desktop/phageGPT/README.md",
+          path: "/Users/example/projects/phageGPT/README.md",
         }),
       }),
     );

@@ -427,6 +427,7 @@ fn desktop_smoke_settings_round_trip() {
         model: Some("kimi-k2.5".to_string()),
         recent_projects: Some(vec!["/tmp/project".to_string()]),
         archived_session_ids: Some(vec!["old-session".to_string()]),
+        lab_daemon_supervision_enabled: Some(true),
     };
 
     write_desktop_settings(&path, &settings).unwrap();
@@ -439,6 +440,7 @@ fn desktop_smoke_settings_round_trip() {
     assert_eq!(loaded.detail_level.as_deref(), Some("daily"));
     assert_eq!(loaded.provider_name.as_deref(), Some("kimi"));
     assert_eq!(loaded.model.as_deref(), Some("kimi-k2.5"));
+    assert_eq!(loaded.lab_daemon_supervision_enabled, Some(true));
     assert_eq!(
         loaded.recent_projects.as_deref(),
         Some(["/tmp/project".to_string()].as_slice())
@@ -808,6 +810,7 @@ fn desktop_smoke_initial_project_falls_back_when_saved_path_is_missing() {
         model: None,
         recent_projects: None,
         archived_session_ids: None,
+        lab_daemon_supervision_enabled: None,
     };
 
     assert_eq!(initial_desktop_project(cwd, &settings), expected);
@@ -834,6 +837,7 @@ fn desktop_smoke_initial_project_falls_back_when_saved_path_is_filesystem_root()
         model: None,
         recent_projects: None,
         archived_session_ids: None,
+        lab_daemon_supervision_enabled: None,
     };
     let expected = root.canonicalize().unwrap();
     let selected = initial_desktop_project(tauri_dir.canonicalize().unwrap(), &settings);
@@ -875,6 +879,7 @@ fn desktop_smoke_initial_project_migrates_old_tauri_subdir_default() {
         model: None,
         recent_projects: None,
         archived_session_ids: None,
+        lab_daemon_supervision_enabled: None,
     };
     let expected = root.canonicalize().unwrap();
     let selected = initial_desktop_project(tauri_dir.canonicalize().unwrap(), &settings);
@@ -971,6 +976,7 @@ fn desktop_smoke_provider_setup_info_uses_shell_profile() {
 
 #[test]
 fn desktop_smoke_permission_mode_normalization() {
+    assert_eq!(normalized_permission_mode_label(None), "auto_low_risk");
     assert_eq!(normalized_permission_mode_label(Some("ask")), "default");
     assert_eq!(
         normalized_permission_mode_label(Some("auto_low_risk")),
@@ -981,11 +987,85 @@ fn desktop_smoke_permission_mode_normalization() {
         normalized_permission_mode_label(Some("readonly")),
         "read_only"
     );
-    assert_eq!(normalized_permission_mode_label(Some("once")), "auto");
+    assert_eq!(normalized_permission_mode_label(Some("once")), "auto_low_risk");
+    assert_eq!(parse_desktop_permission_mode("auto"), PermissionMode::AutoAll);
+    assert_eq!(
+        parse_desktop_permission_mode("auto_low_risk"),
+        PermissionMode::AutoLowRisk
+    );
     assert_eq!(
         parse_desktop_permission_mode("read_only"),
         PermissionMode::ReadOnly
     );
+}
+
+#[test]
+fn desktop_open_target_is_scoped_to_project_and_app_dirs() {
+    let temp = tempfile::tempdir().unwrap();
+    let project = temp.path().join("project");
+    let settings_dir = temp.path().join("settings");
+    let diagnostics_dir = temp.path().join("diagnostics");
+    std::fs::create_dir_all(project.join(".priority-agent/lab/runs/run_1")).unwrap();
+    std::fs::create_dir_all(&settings_dir).unwrap();
+    std::fs::create_dir_all(&diagnostics_dir).unwrap();
+    std::fs::write(project.join("README.md"), "project").unwrap();
+    std::fs::write(
+        project.join(".priority-agent/lab/runs/run_1/report.md"),
+        "lab",
+    )
+    .unwrap();
+    std::fs::write(diagnostics_dir.join("desktop.log"), "log").unwrap();
+    let settings_path = settings_dir.join("settings.json");
+    let diagnostics_path = diagnostics_dir.join("desktop.log");
+
+    let project_target =
+        scoped_desktop_open_target("README.md", &project, &settings_path, &diagnostics_path)
+            .unwrap();
+    assert_eq!(project_target, project.join("README.md").canonicalize().unwrap());
+
+    let lab_target = scoped_desktop_open_target(
+        ".priority-agent/lab/runs/run_1/report.md",
+        &project,
+        &settings_path,
+        &diagnostics_path,
+    )
+    .unwrap();
+    assert_eq!(
+        lab_target,
+        project
+            .join(".priority-agent/lab/runs/run_1/report.md")
+            .canonicalize()
+            .unwrap()
+    );
+
+    let diagnostics_target = scoped_desktop_open_target(
+        diagnostics_path.to_str().unwrap(),
+        &project,
+        &settings_path,
+        &diagnostics_path,
+    )
+    .unwrap();
+    assert_eq!(diagnostics_target, diagnostics_path.canonicalize().unwrap());
+
+    let outside = temp.path().join("outside.txt");
+    std::fs::write(&outside, "outside").unwrap();
+    let err = scoped_desktop_open_target(
+        outside.to_str().unwrap(),
+        &project,
+        &settings_path,
+        &diagnostics_path,
+    )
+    .unwrap_err();
+    assert!(err.contains("outside allowed desktop open roots"));
+
+    let traversal = scoped_desktop_open_target(
+        "../outside.txt",
+        &project,
+        &settings_path,
+        &diagnostics_path,
+    )
+    .unwrap_err();
+    assert!(traversal.contains("outside allowed desktop open roots"));
 }
 
 #[test]

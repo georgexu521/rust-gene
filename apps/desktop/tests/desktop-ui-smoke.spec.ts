@@ -5,16 +5,16 @@ test.describe("desktop UI smoke", () => {
     await page.goto("/?previewFixture=1");
 
     const composer = page.locator(".composer");
-    await expect(page.locator(".project-pill")).toContainText("rust-agent");
+    await expect(page.locator(".project-pill")).toContainText("priority-agent-demo");
     await expect(
-      page.locator(".empty-state").getByRole("heading", { name: "What should we build in rust-agent?" }),
+      page.locator(".empty-state").getByRole("heading", { name: "What should we build in priority-agent-demo?" }),
     ).not.toBeVisible();
 
     await composer.getByRole("button", { name: "Project" }).click();
-    await page.getByRole("textbox", { name: "Project path" }).fill("/Users/georgexu/Desktop/bioclaw");
+    await page.getByRole("textbox", { name: "Project path" }).fill("/Users/example/projects/sample-workspace");
 
-    await expect(page.locator(".project-pill")).toContainText("rust-agent");
-    await expect(composer.getByRole("button", { exact: true, name: "Project" })).toContainText("rust-agent");
+    await expect(page.locator(".project-pill")).toContainText("priority-agent-demo");
+    await expect(composer.getByRole("button", { exact: true, name: "Project" })).toContainText("priority-agent-demo");
   });
 
   test("desktop layout renders core controls and settings drawer", async ({ page }, testInfo) => {
@@ -32,11 +32,11 @@ test.describe("desktop UI smoke", () => {
     await expect(page.getByRole("tabpanel", { name: "Context" })).toContainText("Provider input");
     await expect(page.getByRole("tabpanel", { name: "Context" })).toContainText("unavailable");
     const statusbar = page.locator(".statusbar");
-    await statusbar.getByRole("button", { name: /Open Files inspector for workspace rust-agent/ }).click();
+    await statusbar.getByRole("button", { name: /Open Files inspector for workspace priority-agent-demo/ }).click();
     await expect(page.getByRole("tab", { name: "Files" })).toHaveAttribute("aria-selected", "true");
     await statusbar.getByRole("button", { name: /Open Context inspector for prompt cache/ }).click();
     await expect(page.getByRole("tab", { name: "Context" })).toHaveAttribute("aria-selected", "true");
-    await statusbar.getByRole("button", { name: /Open Settings for model deepseek-v4-flash/ }).click();
+    await statusbar.getByRole("button", { name: /Open Settings for model sample-model/ }).click();
     await expect(page.getByRole("complementary", { name: "Settings" })).toBeVisible();
     await page.keyboard.press("Escape");
     await expect(page.getByRole("complementary", { name: "Settings" })).not.toBeVisible();
@@ -132,7 +132,7 @@ test.describe("desktop UI smoke", () => {
     await expect(page.getByLabel("Model", { exact: true })).toBeVisible();
     const composer = page.locator(".composer");
     await expect(page.getByLabel("Attached context", { exact: true })).toContainText("Project");
-    await expect(page.getByLabel("Attached context", { exact: true })).toContainText("rust-agent");
+    await expect(page.getByLabel("Attached context", { exact: true })).toContainText("priority-agent-demo");
     await expect(page.getByLabel("Attached context", { exact: true })).toContainText("Add files or current diff");
     await page.getByRole("textbox", { name: "Message" }).fill("/lab");
     await expect(page.getByRole("listbox", { name: "Slash commands" })).toContainText("/lab dashboard");
@@ -179,13 +179,13 @@ test.describe("desktop UI smoke", () => {
     await composer.getByRole("button", { name: "Project" }).click();
     await expect(page.getByRole("dialog", { name: "Project controls" })).toBeVisible();
     await expect(page.getByRole("textbox", { name: "Project path" })).toHaveValue(
-      "/Users/georgexu/Desktop/rust-agent",
+      "/Users/example/projects/priority-agent-demo",
     );
     await expect(page.getByRole("dialog", { name: "Project controls" })).toContainText("Recent projects");
-    await expect(page.getByRole("button", { name: /Use recent project bioclaw/ })).toBeVisible();
+    await expect(page.getByRole("button", { name: /Use recent project sample-workspace/ })).toBeVisible();
     await composer.getByRole("button", { name: "Mode" }).click();
     await expect(page.getByRole("dialog", { name: "Mode details" })).toContainText("Coding");
-    await expect(page.getByRole("dialog", { name: "Mode details" })).toContainText("Full access");
+    await expect(page.getByRole("dialog", { name: "Mode details" })).toContainText("Auto low risk");
     await page.getByRole("button", { name: /Use mode Daily work/ }).click();
     await expect(page.getByRole("dialog", { name: "Mode details" })).toContainText("Daily work");
     await page.getByRole("button", { name: /Use permission Auto low risk/ }).click();
@@ -194,24 +194,24 @@ test.describe("desktop UI smoke", () => {
     await expect(page.getByRole("dialog", { name: "Mode details" })).not.toBeVisible();
     await composer.getByRole("button", { exact: true, name: "Provider" }).click();
     const providerDialog = page.getByRole("dialog", { name: "Provider controls" });
-    await expect(providerDialog).toContainText("deepseek-v4-flash");
+    await expect(providerDialog).toContainText("sample-model");
     await expect(providerDialog).toContainText("Provider setup repair");
     await providerDialog.getByRole("button", { name: "Repair provider Kimi Code" }).click();
     await providerDialog.getByLabel("Repair provider", { exact: true }).selectOption("kimi-code");
     await providerDialog.getByLabel("Provider API key").fill("sk-preview-kimi-code-12345678");
     await providerDialog.getByRole("button", { name: "Save key" }).click();
     await expect(providerDialog).toContainText("Saved preview credential for kimi-code");
-    await page.getByRole("button", { exact: true, name: "Use model deepseek-chat" }).click();
+    await page.getByRole("button", { exact: true, name: "Use model sample-model-fast" }).click();
     await expect(page.getByRole("dialog", { name: "Provider controls" })).not.toBeVisible();
     await expect(page.getByRole("button", { name: "New Chat" })).toBeVisible();
-    await expect(page.locator(".project-pill")).toContainText("rust-agent");
+    await expect(page.locator(".project-pill")).toContainText("priority-agent-demo");
     await expect(page.getByLabel("Current session", { exact: true })).toContainText("Continuing");
     await expect(page.getByLabel("Current session", { exact: true })).toContainText("Desktop app Phase 1");
     await expect(page.locator(".startup-state-card")).toContainText("Restored session");
     await expect(page.locator(".startup-state-card")).toContainText("Desktop app Phase 1");
     await page.getByRole("button", { name: "Environment information" }).click();
     await expect(page.getByRole("complementary", { name: "Environment details" })).toBeVisible();
-    await expect(page.getByRole("complementary", { name: "Environment details" })).toContainText("rust-agent");
+    await expect(page.getByRole("complementary", { name: "Environment details" })).toContainText("priority-agent-demo");
     await expect(page.getByRole("complementary", { name: "Environment details" })).toContainText("Permission mode");
     await page.keyboard.press("Escape");
     await expect(page.getByRole("complementary", { name: "Environment details" })).not.toBeVisible();
@@ -265,7 +265,7 @@ test.describe("desktop UI smoke", () => {
     await expect(page.getByLabel("Current session", { exact: true })).toContainText("No active session");
     await expect(page.locator(".startup-state-card")).not.toBeVisible();
     await expect(
-      page.locator(".empty-state").getByRole("heading", { name: "What should we build in rust-agent?" }),
+      page.locator(".empty-state").getByRole("heading", { name: "What should we build in priority-agent-demo?" }),
     ).toBeVisible();
     await expect(page.locator(".composer")).toHaveClass(/empty-composer/);
     await expect(page.getByPlaceholder("Ask anything")).toBeVisible();
@@ -428,8 +428,14 @@ test.describe("desktop UI smoke", () => {
     await expect(page.getByText("Active session", { exact: true })).toBeVisible();
     await expect(page.getByText("Diagnostic log", { exact: true })).toBeVisible();
     await expect(page.getByRole("button", { name: "Open diagnostics folder" })).toBeVisible();
-    await expect(page.locator(".settings-project-list")).toContainText("rust-agent");
-    await expect(page.locator(".settings-project-list")).toContainText("bioclaw");
+    await expect(page.getByText("Lab daemon supervision")).toBeVisible();
+    await expect(page.getByLabel("Run automatic supervision while the desktop app is open")).not.toBeChecked();
+    await expect(page.getByText("Next supervision")).toBeVisible();
+    await expect(page.getByText("Not scheduled")).toBeVisible();
+    await expect(page.getByText("Last result")).toBeVisible();
+    await expect(page.getByText("Preview supervision completed.")).toBeVisible();
+    await expect(page.locator(".settings-project-list")).toContainText("priority-agent-demo");
+    await expect(page.locator(".settings-project-list")).toContainText("sample-workspace");
     await settingsNav.getByRole("button", { name: "Permissions" }).click();
     await expect(settingsNav.getByRole("button", { name: "Permissions" })).toHaveClass(/active/);
     await expect(page.getByText("Permission defaults")).toBeVisible();
@@ -437,6 +443,8 @@ test.describe("desktop UI smoke", () => {
     await expect(page.getByRole("button", { name: /Auto low risk/ })).toHaveClass(/active/);
     await settingsNav.getByRole("button", { name: "Provider" }).click();
     await expect(page.getByText("Provider setup")).toBeVisible();
+    await expect(page.getByText("not the system keychain")).toBeVisible();
+    await expect(page.getByRole("button", { name: "Open settings folder" })).toBeVisible();
     await settingsNav.getByRole("button", { name: "Diagnostics" }).click();
     await expect(
       page.getByRole("complementary", { name: "Settings" }).locator(".settings-diagnostic", {
@@ -897,7 +905,7 @@ async function assertStartupStateCardReadable(page: Page) {
   expect(result).toMatchObject({
     ok: true,
     overflowWrap: "anywhere",
-    text: "Continuing Desktop app Phase 1 in rust-agent",
+    text: "Continuing Desktop app Phase 1 in priority-agent-demo",
     whiteSpace: "normal",
   });
 }
@@ -905,7 +913,7 @@ async function assertStartupStateCardReadable(page: Page) {
 async function assertSessionHeaderMetaReadable(page: Page) {
   const result = await page.evaluate(() => {
     const provider = Array.from(document.querySelectorAll<HTMLElement>(".session-header-meta span"))
-      .find((element) => element.textContent?.includes("deepseek-v4-flash"));
+      .find((element) => element.textContent?.includes("sample-model"));
     if (!provider) {
       return { ok: false, reason: "missing provider meta" };
     }
@@ -926,7 +934,7 @@ async function assertSessionHeaderMetaReadable(page: Page) {
   expect(result).toMatchObject({
     ok: true,
     overflowWrap: "anywhere",
-    text: "deepseek / deepseek-v4-flash",
+    text: "sample-provider / sample-model",
     whiteSpace: "normal",
   });
 }
@@ -1078,7 +1086,7 @@ async function assertMobileStatusBarReadable(page: Page) {
     const rect = statusbar.getBoundingClientRect();
     const style = window.getComputedStyle(statusbar);
     const text = statusbar.textContent?.replace(/\s+/g, " ").trim() || "";
-    const required = ["api.deepseek.com", "Cache", "Tokens", "Context", "deepseek-v4-flash", "rust-agent"];
+    const required = ["api.example.com", "Cache", "Tokens", "Context", "sample-model", "priority-agent-demo"];
     return {
       ok:
         rect.left >= -1 &&

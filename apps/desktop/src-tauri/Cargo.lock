@@ -3800,6 +3800,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_yaml",
+ "sha2",
  "syntect",
  "thiserror 1.0.69",
  "tiktoken-rs",
@@ -3833,6 +3834,7 @@ dependencies = [
  "tauri-build",
  "tauri-plugin-dialog",
  "tauri-plugin-opener",
+ "tempfile",
  "tokio",
 ]
 

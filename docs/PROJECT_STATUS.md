@@ -3,6 +3,59 @@ Status: Current
 
 Last updated: 2026-06-26
 
+## Desktop Security, Reliability, And LabRun E2E Hardening - 2026-06-26
+
+The desktop/LabRun E2E hardening workstream is tracked in
+`docs/DESKTOP_SECURITY_RELIABILITY_AND_LABRUN_E2E_PLAN_2026-06-26.md`.
+
+Implemented in this slice:
+
+- LabRun child-agent scope is now proven through live tool-gate tests. A
+  Graduate child dispatch scoped to `src/lab` cannot write `README.md` through
+  `file_write` or an ordinary shell mutation path, the target file remains
+  unchanged, and `labrun_policy_blocked` proof events are persisted with the
+  active GraduateTask/dispatch binding.
+- Desktop Tauri now uses a conservative CSP instead of `csp = null`.
+- Desktop first-run/missing permission mode now defaults to `auto_low_risk`;
+  explicit `auto` remains available as deliberate Developer Auto.
+- Desktop native path opening is scoped to selected-project, app settings/data,
+  diagnostic, and selected-project LabRun roots, with canonicalized rejection
+  for unrelated absolute paths and traversal.
+- Desktop provider key saving now visibly explains that the current backend is
+  the local Priority Agent dotenv file, not the system keychain.
+- The Tauri backend now has a single-run guard plus `cancel_run` and
+  `force_reset_run` commands so duplicate desktop submissions cannot create
+  overlapping streams.
+- Lab daemon automatic supervision is opt-in and visible in Settings with last
+  supervision, last result, and next scheduled supervision state. Manual
+  supervision remains available from the LabRun panel.
+- Root CI now includes a dedicated desktop job for the separate Tauri
+  workspace: frontend build, Playwright smoke, Tauri Rust tests, and push-only
+  native smoke.
+- Desktop web-preview fixtures and Playwright expectations now use neutral
+  sample project/provider/model data instead of personal paths or provider
+  examples.
+
+Validation completed for this slice:
+
+```bash
+cargo fmt --check
+git diff --check
+cargo test -q labrun_child_ --lib -- --test-threads=1
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -q -- --test-threads=1
+corepack pnpm --dir apps/desktop build
+corepack pnpm --dir apps/desktop test:ui-smoke
+bash scripts/validate_docs.sh
+cargo clippy --workspace --all-targets --all-features -- -D warnings
+cargo test --workspace --all-features -- --test-threads=1
+cargo doc --workspace --all-features --no-deps
+```
+
+Deferred long-term desktop/product items remain P2: first-run wizard,
+project-trust wizard, platform keychain storage, true sandbox/container
+validation for untrusted workspaces, redacted diagnostics export, and
+SQLite-authoritative LabStore transactions.
+
 ## LabRun Subagent Scope, Validation, And Profile Hardening - 2026-06-26
 
 The child-agent boundary hardening workstream is tracked in

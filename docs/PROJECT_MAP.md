@@ -85,6 +85,21 @@ LabRun internals:
   bounded Lab validation event recording.
 - `src/lab/workspace_trust.rs`: project-scoped package-script trust lookup.
 
+Desktop/Tauri surface:
+
+- `apps/desktop/src-tauri/src/lib.rs`: Tauri command boundary for settings,
+  full-agent turns, run cancellation/reset, scoped native path opening, Lab
+  daemon supervision state, and native smoke fixtures.
+- `apps/desktop/src-tauri/src/desktop_state.rs`: desktop settings persistence,
+  conservative permission-mode normalization, provider model defaults, and
+  session-state recovery helpers.
+- `apps/desktop/src-tauri/tauri.conf.json`: desktop security policy, including
+  the conservative CSP used for model/tool output rendering.
+- `apps/desktop/src/runtime/desktopApi.ts`: frontend runtime API facade and
+  neutral web-preview fixtures.
+- `apps/desktop/tests/`: Playwright smoke and runtime-event tests for desktop
+  product behavior.
+
 Integrations and adapters:
 
 - `src/services/`: provider APIs, credentials, and runtime config services.

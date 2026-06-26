@@ -281,3 +281,274 @@ impl<'a> ToolExecutionGate<'a> {
         ToolExecutionGateOutcome::Deny(result)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::super::runtime_context::ToolRuntimeContextInput;
+    use super::*;
+    use crate::engine::intent_router::ReasoningPolicy;
+    use crate::engine::resource_policy::{LatencyTarget, ResourcePolicy};
+    use crate::engine::task_context::AgentTaskStage;
+    use crate::lab::execution_binding::LabExecutionBinding;
+    use crate::lab::orchestrator::LabOrchestrator;
+    use crate::permissions::{PermissionContext, PermissionMode};
+    use crate::services::api::ToolCall;
+    use crate::tools::{BashTool, FileWriteTool, ToolContextRetainedContext, ToolRegistry};
+    use std::collections::{HashMap, HashSet};
+
+    fn test_resource_policy() -> ResourcePolicy {
+        ResourcePolicy {
+            latency: LatencyTarget::Fast,
+            cost_ceiling_usd: 0.0,
+            reasoning: ReasoningPolicy::Low,
+            parallelism_limit: 1,
+            max_tool_calls: 8,
+            context_budget_tokens: 1024,
+            allow_fallback_model: false,
+            reason: "test policy".to_string(),
+        }
+    }
+
+    fn test_runtime_context<'a>(
+        policy: &'a ResourcePolicy,
+        retained_context: &'a ToolContextRetainedContext,
+    ) -> ToolRuntimeContext {
+        ToolRuntimeContext::new(ToolRuntimeContextInput {
+            route: None,
+            policy,
+            task_stage: AgentTaskStage::Edit,
+            action_checkpoint_active: false,
+            no_progress_rounds: 0,
+            has_changes_before_tools: false,
+            exposed_tools_count: 2,
+            retained_context,
+            task_state: None,
+        })
+    }
+
+    #[test]
+    fn labrun_child_file_write_scope_violation_is_denied_before_execution() {
+        let temp = tempfile::tempdir().unwrap();
+        let project_root = temp.path();
+        std::fs::create_dir_all(project_root.join("src/lab")).unwrap();
+        let isolated = project_root.join("isolated-worktree");
+        std::fs::create_dir_all(&isolated).unwrap();
+        std::fs::write(isolated.join("README.md"), "original\n").unwrap();
+
+        let orchestrator = LabOrchestrator::for_project(project_root);
+        let proposal = orchestrator
+            .store()
+            .create_proposal("Build LabRun", None)
+            .unwrap();
+        let run = orchestrator
+            .approve_proposal(&proposal.proposal_id)
+            .unwrap();
+        let task = orchestrator
+            .store()
+            .create_graduate_task(
+                &run.lab_run_id,
+                "Implement scoped LabRun slice",
+                "Only edit src/lab.",
+                vec!["src/lab".to_string()],
+                vec!["cargo check -q".to_string()],
+            )
+            .unwrap();
+        let binding = LabExecutionBinding::for_graduate_task(
+            &task,
+            "dispatch_scope_test",
+            "agent_task_scope_test",
+            project_root,
+            &isolated,
+            Some("state_v1".to_string()),
+        )
+        .unwrap();
+        let mut metadata = HashMap::new();
+        binding.insert_into_metadata(&mut metadata).unwrap();
+        let labrun_context =
+            crate::lab::policy_overlay::LabRunExecutionContext::from_metadata(&metadata);
+
+        let mut registry = ToolRegistry::new();
+        registry.register(FileWriteTool);
+        let resource_policy = test_resource_policy();
+        let retained_context = ToolContextRetainedContext::default();
+        let runtime_context = test_runtime_context(&resource_policy, &retained_context);
+        let exposed_tool_names = HashSet::from(["file_write".to_string()]);
+        let allowed_tools = None;
+        let destructive_scope =
+            crate::engine::destructive_scope::DestructiveScopeContract::from_user_request(
+                "make a scoped LabRun edit",
+                &isolated,
+            );
+        let mut permission_context = PermissionContext::new(&isolated);
+        permission_context.mode = PermissionMode::AutoAll;
+        let trace = None;
+        let gate = ToolExecutionGate {
+            tool_registry: &registry,
+            active_goal: None,
+            task_state: None,
+            allowed_tools: &allowed_tools,
+            resource_policy: &resource_policy,
+            exposed_tool_names: &exposed_tool_names,
+            action_checkpoint_active: false,
+            action_checkpoint_lookup_count: 0,
+            has_changes_before_tools: false,
+            allow_validation_without_changes: false,
+            destructive_scope: &destructive_scope,
+            working_dir: &isolated,
+            labrun_context,
+            trace: &trace,
+            runtime_context: &runtime_context,
+            permission_context: &permission_context,
+        };
+        let tool_call = ToolCall {
+            id: "call_file_write".to_string(),
+            name: "file_write".to_string(),
+            arguments: serde_json::json!({
+                "path": "README.md",
+                "content": "out of scope\n",
+            }),
+        };
+
+        let result = match gate.evaluate(&tool_call, 0) {
+            ToolExecutionGateOutcome::Deny(result) => result,
+            ToolExecutionGateOutcome::Allow(_) => {
+                panic!("out-of-scope LabRun child file_write should be denied")
+            }
+        };
+
+        assert!(!result.success);
+        assert!(result
+            .error
+            .as_deref()
+            .unwrap_or_default()
+            .contains("labrun_policy_violation"));
+        assert_eq!(
+            std::fs::read_to_string(isolated.join("README.md")).unwrap(),
+            "original\n"
+        );
+        let events = orchestrator
+            .store()
+            .list_run_events(&run.lab_run_id)
+            .unwrap();
+        assert!(events.iter().any(|event| {
+            event.event_type == "labrun_policy_blocked"
+                && event.payload["active_graduate_task_id"] == task.task_id
+                && event.payload["active_dispatch_id"] == "dispatch_scope_test"
+                && event.payload["action_family"] == "file_mutation"
+                && event.payload["allowed_scope"]
+                    .as_array()
+                    .is_some_and(|paths| paths.iter().any(|path| path == "src/lab"))
+        }));
+    }
+
+    #[test]
+    fn labrun_child_bash_scope_violation_is_denied_before_execution() {
+        let temp = tempfile::tempdir().unwrap();
+        let project_root = temp.path();
+        std::fs::create_dir_all(project_root.join("src/lab")).unwrap();
+        let isolated = project_root.join("isolated-worktree");
+        std::fs::create_dir_all(&isolated).unwrap();
+        std::fs::write(isolated.join("README.md"), "original\n").unwrap();
+
+        let orchestrator = LabOrchestrator::for_project(project_root);
+        let proposal = orchestrator
+            .store()
+            .create_proposal("Build LabRun", None)
+            .unwrap();
+        let run = orchestrator
+            .approve_proposal(&proposal.proposal_id)
+            .unwrap();
+        let task = orchestrator
+            .store()
+            .create_graduate_task(
+                &run.lab_run_id,
+                "Implement scoped LabRun slice",
+                "Only edit src/lab.",
+                vec!["src/lab".to_string()],
+                vec!["cargo check -q".to_string()],
+            )
+            .unwrap();
+        let binding = LabExecutionBinding::for_graduate_task(
+            &task,
+            "dispatch_bash_scope_test",
+            "agent_task_bash_scope_test",
+            project_root,
+            &isolated,
+            Some("state_v1".to_string()),
+        )
+        .unwrap();
+        let mut metadata = HashMap::new();
+        binding.insert_into_metadata(&mut metadata).unwrap();
+        let labrun_context =
+            crate::lab::policy_overlay::LabRunExecutionContext::from_metadata(&metadata);
+
+        let mut registry = ToolRegistry::new();
+        registry.register(BashTool);
+        let resource_policy = test_resource_policy();
+        let retained_context = ToolContextRetainedContext::default();
+        let runtime_context = test_runtime_context(&resource_policy, &retained_context);
+        let exposed_tool_names = HashSet::from(["bash".to_string()]);
+        let allowed_tools = None;
+        let destructive_scope =
+            crate::engine::destructive_scope::DestructiveScopeContract::from_user_request(
+                "make a scoped LabRun edit",
+                &isolated,
+            );
+        let mut permission_context = PermissionContext::new(&isolated);
+        permission_context.mode = PermissionMode::AutoAll;
+        let trace = None;
+        let gate = ToolExecutionGate {
+            tool_registry: &registry,
+            active_goal: None,
+            task_state: None,
+            allowed_tools: &allowed_tools,
+            resource_policy: &resource_policy,
+            exposed_tool_names: &exposed_tool_names,
+            action_checkpoint_active: false,
+            action_checkpoint_lookup_count: 0,
+            has_changes_before_tools: false,
+            allow_validation_without_changes: false,
+            destructive_scope: &destructive_scope,
+            working_dir: &isolated,
+            labrun_context,
+            trace: &trace,
+            runtime_context: &runtime_context,
+            permission_context: &permission_context,
+        };
+        let tool_call = ToolCall {
+            id: "call_bash".to_string(),
+            name: "bash".to_string(),
+            arguments: serde_json::json!({
+                "command": "printf hacked > README.md",
+            }),
+        };
+
+        let result = match gate.evaluate(&tool_call, 0) {
+            ToolExecutionGateOutcome::Deny(result) => result,
+            ToolExecutionGateOutcome::Allow(_) => {
+                panic!("out-of-scope LabRun child bash mutation should be denied")
+            }
+        };
+
+        assert!(!result.success);
+        assert!(result
+            .error
+            .as_deref()
+            .unwrap_or_default()
+            .contains("labrun_policy_violation"));
+        assert_eq!(
+            std::fs::read_to_string(isolated.join("README.md")).unwrap(),
+            "original\n"
+        );
+        let events = orchestrator
+            .store()
+            .list_run_events(&run.lab_run_id)
+            .unwrap();
+        assert!(events.iter().any(|event| {
+            event.event_type == "labrun_policy_blocked"
+                && event.payload["active_graduate_task_id"] == task.task_id
+                && event.payload["active_dispatch_id"] == "dispatch_bash_scope_test"
+                && event.payload["action_family"] == "shell_mutation"
+        }));
+    }
+}

@@ -37,6 +37,32 @@
   line-height: 1.45;
 }
 
+.settings-toggle-row {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-height: 32px;
+  margin: 0 0 12px;
+  color: #30343a;
+  font-size: 13px;
+}
+
+.settings-toggle-row input {
+  width: 16px;
+  height: 16px;
+}
+
+.settings-link-button {
+  min-height: 30px;
+  margin: 0 0 4px;
+  padding: 5px 9px;
+  border: 1px solid #cbd2da;
+  border-radius: 6px;
+  color: #30343a;
+  background: #ffffff;
+  font-size: 12px;
+}
+
 .provider-guide {
   margin-bottom: 9px;
   padding: 9px;

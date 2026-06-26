@@ -137,10 +137,48 @@ jobs:
       - name: CLI smoke
         run: cargo run --quiet -- --help >/tmp/priority-agent-help.txt
 
+  desktop:
+    name: Desktop
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: apps/desktop/pnpm-lock.yaml
+
+      - name: Enable corepack
+        run: corepack enable
+
+      - name: Install desktop dependencies
+        run: corepack pnpm --dir apps/desktop install --frozen-lockfile
+
+      - name: Install Playwright browser
+        run: corepack pnpm --dir apps/desktop exec playwright install chromium
+
+      - name: Build desktop frontend
+        run: corepack pnpm --dir apps/desktop build
+
+      - name: Desktop UI smoke
+        run: corepack pnpm --dir apps/desktop test:ui-smoke
+
+      - name: Desktop Tauri Rust tests
+        run: cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -- --test-threads=1
+
+      - name: Desktop native smoke
+        if: github.event_name == 'push'
+        run: bash scripts/desktop-native-smoke.sh --no-screenshot --timeout 30
+
   quality-gates:
     name: Quality Gates
     runs-on: ubuntu-latest
-    needs: [check, test, dependency-security, macos-focused]
+    needs: [check, test, dependency-security, macos-focused, desktop]
     steps:
       - uses: actions/checkout@v4
 

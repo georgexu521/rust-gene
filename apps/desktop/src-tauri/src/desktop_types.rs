@@ -147,6 +147,7 @@ pub(crate) struct DesktopSettings {
     pub(crate) model: Option<String>,
     pub(crate) recent_projects: Option<Vec<String>>,
     pub(crate) archived_session_ids: Option<Vec<String>>,
+    pub(crate) lab_daemon_supervision_enabled: Option<bool>,
 }
 
 #[derive(Debug, Serialize)]
@@ -163,6 +164,10 @@ pub(crate) struct DesktopSettingsResponse {
     pub(crate) recent_projects: Vec<String>,
     pub(crate) archived_session_ids: Vec<String>,
     pub(crate) startup_state: DesktopStartupState,
+    pub(crate) lab_daemon_supervision_enabled: bool,
+    pub(crate) lab_daemon_last_supervision: Option<String>,
+    pub(crate) lab_daemon_last_supervision_result: Option<String>,
+    pub(crate) lab_daemon_next_supervision: Option<String>,
 }
 
 #[derive(Debug, Serialize)]

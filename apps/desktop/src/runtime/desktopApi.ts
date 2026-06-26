@@ -60,25 +60,32 @@ declare global {
 }
 
 let webPreviewSettings: DesktopSettings = {
-  selected_project: "/Users/georgexu/Desktop/rust-agent",
+  selected_project: "/Users/example/projects/priority-agent-demo",
   active_session_id: "web-preview",
-  permission_mode: "auto",
+  permission_mode: "auto_low_risk",
   detail_level: "coding",
   agent_mode: "auto",
-  provider_name: "deepseek",
-  model: "deepseek-v4-flash",
+  provider_name: "sample-provider",
+  model: "sample-model",
   settings_path: "web-preview",
   diagnostic_logs_path: "web-preview/logs/desktop.log",
-  recent_projects: ["/Users/georgexu/Desktop/rust-agent", "/Users/georgexu/Desktop/bioclaw"],
+  recent_projects: [
+    "/Users/example/projects/priority-agent-demo",
+    "/Users/example/projects/sample-workspace",
+  ],
   archived_session_ids: [],
   startup_state: {
     status: "restored_session",
-    detail: "Restored web-preview in rust-agent",
+    detail: "Restored web-preview in priority-agent-demo",
     lab_run_id: null,
     lab_stage: null,
     lab_owner: null,
     lab_pause_reason: null,
   },
+  lab_daemon_supervision_enabled: false,
+  lab_daemon_last_supervision: null,
+  lab_daemon_last_supervision_result: null,
+  lab_daemon_next_supervision: null,
 };
 let webPreviewSessions: RecentSession[] = [
   {
@@ -103,7 +110,7 @@ export function desktopHealth(): Promise<DesktopHealth> {
     return Promise.resolve({
       status: "web-preview",
       version: "0.1.0",
-      cwd: "/Users/georgexu/Desktop/rust-agent",
+      cwd: "/Users/example/projects/priority-agent-demo",
     });
   }
 
@@ -337,6 +344,12 @@ export function desktopWorkbenchSnapshot(): Promise<DesktopWorkbenchSnapshot> {
 export async function superviseLabDaemon(): Promise<DesktopLabDaemonActionResult> {
   if (!isTauriRuntime()) {
     const snapshot = await desktopWorkbenchSnapshot();
+    webPreviewSettings = {
+      ...webPreviewSettings,
+      lab_daemon_last_supervision: "preview",
+      lab_daemon_last_supervision_result: "Preview supervision completed.",
+      lab_daemon_next_supervision: webPreviewSettings.lab_daemon_supervision_enabled ? "preview +120s" : null,
+    };
     return {
       action: "supervise",
       output: "Lab daemon service supervision repaired missing service.\nPreview mode",
@@ -345,6 +358,19 @@ export async function superviseLabDaemon(): Promise<DesktopLabDaemonActionResult
   }
 
   return invoke("lab_daemon_supervise");
+}
+
+export function setLabDaemonSupervisionEnabled(enabled: boolean): Promise<DesktopSettings> {
+  if (!isTauriRuntime()) {
+    webPreviewSettings = {
+      ...webPreviewSettings,
+      lab_daemon_supervision_enabled: enabled,
+      lab_daemon_next_supervision: enabled ? "preview +120s" : null,
+    };
+    return Promise.resolve(webPreviewSettings);
+  }
+
+  return invoke("set_lab_daemon_supervision_enabled", { enabled });
 }
 
 export function selectProject(path: string): Promise<SelectedProject> {
@@ -589,21 +615,21 @@ export function providerSetupInfo(): Promise<ProviderSetupInfo> {
 export function providerModelStatus(): Promise<ProviderModelStatus> {
   if (!isTauriRuntime()) {
     return Promise.resolve({
-      active_provider: "deepseek",
-      active_provider_label: "DeepSeek",
-      active_model: "deepseek-v4-flash",
-      active_base_url: "https://api.deepseek.com",
-      runtime_model: "deepseek-v4-flash",
+      active_provider: "sample-provider",
+      active_provider_label: "Sample Provider",
+      active_model: "sample-model",
+      active_base_url: "https://api.example.com",
+      runtime_model: "sample-model",
       runtime_provider_ready: true,
       selection_source: "preview",
       configured_count: 1,
       providers: [
         {
-          id: "deepseek",
-          label: "DeepSeek",
-          provider_type: "DeepSeek",
-          model: "deepseek-v4-flash",
-          base_url: "https://api.deepseek.com",
+          id: "sample-provider",
+          label: "Sample Provider",
+          provider_type: "Sample",
+          model: "sample-model",
+          base_url: "https://api.example.com",
           configured: true,
           active: true,
           note: "current",
@@ -661,23 +687,23 @@ export function providerModelStatus(): Promise<ProviderModelStatus> {
       ],
       models: [
         {
-          id: "deepseek-v4-flash",
-          label: "deepseek-v4-flash",
-          provider_id: "deepseek",
+          id: "sample-model",
+          label: "sample-model",
+          provider_id: "sample-provider",
           active: true,
           note: "current",
         },
         {
-          id: "deepseek-chat",
-          label: "deepseek-chat",
-          provider_id: "deepseek",
+          id: "sample-model-fast",
+          label: "sample-model-fast",
+          provider_id: "sample-provider",
           active: false,
           note: "takes effect next request",
         },
         {
-          id: "deepseek-reasoner",
-          label: "deepseek-reasoner",
-          provider_id: "deepseek",
+          id: "sample-model-reasoning",
+          label: "sample-model-reasoning",
+          provider_id: "sample-provider",
           active: false,
           note: "takes effect next request",
         },
@@ -746,6 +772,22 @@ export function saveProviderCredential(providerId: string, key: string): Promise
   }
 
   return invoke("save_provider_credential", { providerId, key });
+}
+
+export function cancelRun(): Promise<boolean> {
+  if (!isTauriRuntime()) {
+    return Promise.resolve(false);
+  }
+
+  return invoke("cancel_run");
+}
+
+export function forceResetRun(): Promise<boolean> {
+  if (!isTauriRuntime()) {
+    return Promise.resolve(false);
+  }
+
+  return invoke("force_reset_run");
 }
 
 export function openFilePath(path: string): Promise<void> {
@@ -995,7 +1037,7 @@ export async function pickProjectDirectory(): Promise<string | null> {
 
 export async function pickProjectFile(): Promise<string | null> {
   if (!isTauriRuntime()) {
-    return "/Users/georgexu/Desktop/rust-agent/apps/desktop/src/app/App.tsx";
+    return "/Users/example/projects/priority-agent-demo/apps/desktop/src/app/App.tsx";
   }
 
   const selected = await open({

@@ -6,7 +6,7 @@ use priority_agent::engine::turn_ingress::classify_turn_ingress;
 use priority_agent::permissions::PermissionMode;
 use priority_agent::session_store::SessionStore;
 use std::collections::HashSet;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter, Manager, State, WebviewWindow};
 use tokio::sync::Mutex;
@@ -30,8 +30,15 @@ use preview_commands::*;
 use revert_commands::*;
 use session_commands::*;
 
+#[derive(Debug, Clone)]
+struct DesktopRunHandle {
+    id: String,
+    cancel_requested: bool,
+}
+
 struct DesktopAppState {
     runtime: Mutex<Option<DesktopRuntime>>,
+    active_run: Mutex<Option<DesktopRunHandle>>,
     selected_project: Mutex<PathBuf>,
     active_session_id: Mutex<Option<String>>,
     permission_mode: Mutex<Option<String>>,
@@ -41,6 +48,10 @@ struct DesktopAppState {
     model: Mutex<Option<String>>,
     recent_projects: Mutex<Vec<PathBuf>>,
     archived_session_ids: Mutex<Vec<String>>,
+    lab_daemon_supervision_enabled: Mutex<bool>,
+    lab_daemon_last_supervision: Mutex<Option<String>>,
+    lab_daemon_last_supervision_result: Mutex<Option<String>>,
+    lab_daemon_next_supervision: Mutex<Option<String>>,
     native_smoke_permission_pending: Mutex<bool>,
     goal_runner: Mutex<Option<GoalRunner>>,
     settings_path: PathBuf,
@@ -61,6 +72,14 @@ async fn desktop_settings(
         .map(|path| path.display().to_string())
         .collect::<Vec<_>>();
     let archived_session_ids = state.archived_session_ids.lock().await.clone();
+    let lab_daemon_supervision_enabled = *state.lab_daemon_supervision_enabled.lock().await;
+    let lab_daemon_last_supervision = state.lab_daemon_last_supervision.lock().await.clone();
+    let lab_daemon_last_supervision_result = state
+        .lab_daemon_last_supervision_result
+        .lock()
+        .await
+        .clone();
+    let lab_daemon_next_supervision = state.lab_daemon_next_supervision.lock().await.clone();
 
     Ok(DesktopSettingsResponse {
         selected_project: selected_project.display().to_string(),
@@ -84,6 +103,10 @@ async fn desktop_settings(
         diagnostic_logs_path: state.diagnostic_logs_path.display().to_string(),
         recent_projects,
         archived_session_ids,
+        lab_daemon_supervision_enabled,
+        lab_daemon_last_supervision,
+        lab_daemon_last_supervision_result,
+        lab_daemon_next_supervision,
     })
 }
 
@@ -138,6 +161,23 @@ async fn set_agent_mode(
     {
         let mut agent_mode = state.agent_mode.lock().await;
         *agent_mode = Some(normalized);
+    }
+    persist_current_settings(&state).await?;
+    desktop_settings(state).await
+}
+
+#[tauri::command]
+async fn set_lab_daemon_supervision_enabled(
+    enabled: bool,
+    state: State<'_, DesktopAppState>,
+) -> Result<DesktopSettingsResponse, String> {
+    {
+        let mut stored = state.lab_daemon_supervision_enabled.lock().await;
+        *stored = enabled;
+    }
+    {
+        let mut next = state.lab_daemon_next_supervision.lock().await;
+        *next = None;
     }
     persist_current_settings(&state).await?;
     desktop_settings(state).await
@@ -333,14 +373,15 @@ async fn open_diagnostics_folder(state: State<'_, DesktopAppState>) -> Result<()
 }
 
 #[tauri::command]
-async fn open_file_path(path: String) -> Result<(), String> {
-    let p = std::path::PathBuf::from(&path);
-    if let Some(parent) = p.parent() {
-        if parent.exists() {
-            return open_path(parent);
-        }
-    }
-    Err(format!("path does not exist: {}", path))
+async fn open_file_path(path: String, state: State<'_, DesktopAppState>) -> Result<(), String> {
+    let selected_project = state.selected_project.lock().await.clone();
+    let target = scoped_desktop_open_target(
+        &path,
+        &selected_project,
+        &state.settings_path,
+        &state.diagnostic_logs_path,
+    )?;
+    open_path(&target)
 }
 
 #[tauri::command]
@@ -526,6 +567,34 @@ async fn send_message(
     contexts: Vec<DesktopRunContext>,
     state: State<'_, DesktopAppState>,
 ) -> Result<(), String> {
+    let run_guard = match acquire_desktop_run_guard(&state).await {
+        Ok(run_id) => run_id,
+        Err(err) => {
+            let _ = append_desktop_log(
+                &state.diagnostic_logs_path,
+                &format!("run_error message={}", sanitize_log_value(&err)),
+            );
+            let _ = app.emit(
+                "desktop-run-event",
+                DesktopRunEvent::RunError {
+                    message: err.clone(),
+                },
+            );
+            return Err(err);
+        }
+    };
+    let result = send_message_inner(app, message, contexts, &state, &run_guard).await;
+    release_desktop_run_guard(&state, &run_guard).await;
+    result
+}
+
+async fn send_message_inner(
+    app: AppHandle,
+    message: String,
+    contexts: Vec<DesktopRunContext>,
+    state: &State<'_, DesktopAppState>,
+    run_guard: &str,
+) -> Result<(), String> {
     let agent_mode_label = state
         .agent_mode
         .lock()
@@ -648,6 +717,21 @@ async fn send_message(
         if matches!(event, StreamEvent::Start) {
             continue;
         }
+        if desktop_run_cancel_requested(state, run_guard).await {
+            let message = "Desktop run cancelled by user".to_string();
+            app.emit(
+                "desktop-run-event",
+                DesktopRunEvent::RunError {
+                    message: message.clone(),
+                },
+            )
+            .map_err(|err| err.to_string())?;
+            let _ = append_desktop_log(
+                &diagnostic_logs_path,
+                &format!("run_error message={}", sanitize_log_value(&message)),
+            );
+            break;
+        }
         let mut desktop_event = DesktopRunEvent::from_stream_event(event);
         if let DesktopRunEvent::RunStarted { session_id, .. } = &mut desktop_event {
             *session_id = active_session_id.clone();
@@ -681,6 +765,87 @@ async fn send_message(
     }
 
     Ok(())
+}
+
+async fn acquire_desktop_run_guard(state: &State<'_, DesktopAppState>) -> Result<String, String> {
+    let mut active_run = state.active_run.lock().await;
+    if let Some(existing) = active_run.as_ref() {
+        return Err(format!(
+            "A desktop run is already active: {}. Cancel or force reset it before starting another run.",
+            existing.id
+        ));
+    }
+    let id = format!(
+        "desktop-run-lock-{}",
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or_default()
+    );
+    *active_run = Some(DesktopRunHandle {
+        id: id.clone(),
+        cancel_requested: false,
+    });
+    Ok(id)
+}
+
+async fn release_desktop_run_guard(state: &State<'_, DesktopAppState>, run_id: &str) {
+    let mut active_run = state.active_run.lock().await;
+    if active_run
+        .as_ref()
+        .is_some_and(|handle| handle.id.as_str() == run_id)
+    {
+        *active_run = None;
+    }
+}
+
+async fn desktop_run_cancel_requested(state: &State<'_, DesktopAppState>, run_id: &str) -> bool {
+    state
+        .active_run
+        .lock()
+        .await
+        .as_ref()
+        .is_some_and(|handle| handle.id == run_id && handle.cancel_requested)
+}
+
+#[tauri::command]
+async fn cancel_run(app: AppHandle, state: State<'_, DesktopAppState>) -> Result<bool, String> {
+    let mut active_run = state.active_run.lock().await;
+    let Some(handle) = active_run.as_mut() else {
+        return Ok(false);
+    };
+    handle.cancel_requested = true;
+    let _ = append_desktop_log(
+        &state.diagnostic_logs_path,
+        &format!("run_cancel_requested id={}", sanitize_log_value(&handle.id)),
+    );
+    let _ = app.emit(
+        "desktop-run-event",
+        DesktopRunEvent::RuntimeDiagnostic {
+            diagnostic: serde_json::json!({
+                "schema": "desktop_run_guard",
+                "status": "cancel_requested",
+                "run_id": handle.id,
+            }),
+        },
+    );
+    Ok(true)
+}
+
+#[tauri::command]
+async fn force_reset_run(app: AppHandle, state: State<'_, DesktopAppState>) -> Result<bool, String> {
+    let mut active_run = state.active_run.lock().await;
+    let had_active_run = active_run.take().is_some();
+    if had_active_run {
+        let _ = append_desktop_log(&state.diagnostic_logs_path, "run_force_reset");
+        let _ = app.emit(
+            "desktop-run-event",
+            DesktopRunEvent::RunError {
+                message: "Desktop run state was force reset by user".to_string(),
+            },
+        );
+    }
+    Ok(had_active_run)
 }
 
 fn desktop_stream_event_log(event: &StreamEvent) -> Option<String> {
@@ -886,7 +1051,22 @@ async fn lab_daemon_supervise(
     state: State<'_, DesktopAppState>,
 ) -> Result<DesktopLabDaemonActionResult, String> {
     let selected_project = state.selected_project.lock().await.clone();
-    Ok(desktop_lab_daemon_supervise_for_project(&selected_project))
+    let result = desktop_lab_daemon_supervise_for_project(&selected_project);
+    let now = desktop_unix_millis_string();
+    {
+        let mut last = state.lab_daemon_last_supervision.lock().await;
+        *last = Some(format!("{}: {}", now, result.action));
+    }
+    {
+        let mut last_result = state.lab_daemon_last_supervision_result.lock().await;
+        *last_result = Some(compact_desktop_supervision_result(&result.output));
+    }
+    {
+        let enabled = *state.lab_daemon_supervision_enabled.lock().await;
+        let mut next = state.lab_daemon_next_supervision.lock().await;
+        *next = enabled.then(|| desktop_next_supervision_hint(120));
+    }
+    Ok(result)
 }
 
 fn desktop_lab_daemon_supervise_for_project(
@@ -955,7 +1135,7 @@ fn native_smoke_enabled() -> bool {
 async fn emit_native_smoke_run_fixture(
     app: AppHandle,
     message: String,
-    state: State<'_, DesktopAppState>,
+    state: &State<'_, DesktopAppState>,
 ) -> Result<(), String> {
     {
         let mut pending = state.native_smoke_permission_pending.lock().await;
@@ -1239,6 +1419,120 @@ async fn emit_native_smoke_permission_resolution(
     }
 }
 
+fn desktop_unix_millis_string() -> String {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis().to_string())
+        .unwrap_or_else(|_| "0".to_string())
+}
+
+fn desktop_next_supervision_hint(delay_secs: u64) -> String {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| (duration.as_secs() + delay_secs).to_string())
+        .unwrap_or_else(|_| delay_secs.to_string())
+}
+
+fn compact_desktop_supervision_result(output: &str) -> String {
+    const MAX_CHARS: usize = 240;
+    let normalized = output.split_whitespace().collect::<Vec<_>>().join(" ");
+    if normalized.chars().count() <= MAX_CHARS {
+        return normalized;
+    }
+    let mut compact = normalized.chars().take(MAX_CHARS).collect::<String>();
+    compact.push_str("...");
+    compact
+}
+
+fn scoped_desktop_open_target(
+    requested: &str,
+    selected_project: &Path,
+    settings_path: &Path,
+    diagnostic_logs_path: &Path,
+) -> Result<PathBuf, String> {
+    let requested_path = PathBuf::from(requested);
+    if requested_path.as_os_str().is_empty() {
+        return Err("path cannot be empty".to_string());
+    }
+    let allowed_roots =
+        desktop_open_allowed_roots(selected_project, settings_path, diagnostic_logs_path)?;
+    let candidate = if requested_path.is_absolute() {
+        requested_path
+    } else {
+        selected_project.join(requested_path)
+    };
+    let existing_target = if candidate.exists() {
+        candidate
+            .canonicalize()
+            .map_err(|err| format!("failed to resolve {}: {err}", candidate.display()))?
+    } else {
+        nearest_existing_allowed_parent(&candidate, &allowed_roots)?
+    };
+    if allowed_roots
+        .iter()
+        .any(|root| existing_target == *root || existing_target.starts_with(root))
+    {
+        Ok(existing_target)
+    } else {
+        Err(format!(
+            "path is outside allowed desktop open roots: {}",
+            requested
+        ))
+    }
+}
+
+fn desktop_open_allowed_roots(
+    selected_project: &Path,
+    settings_path: &Path,
+    diagnostic_logs_path: &Path,
+) -> Result<Vec<PathBuf>, String> {
+    let mut roots = Vec::new();
+    for root in [
+        selected_project.to_path_buf(),
+        selected_project.join(".priority-agent/lab"),
+        settings_path
+            .parent()
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| settings_path.to_path_buf()),
+        diagnostic_logs_path
+            .parent()
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| diagnostic_logs_path.to_path_buf()),
+    ] {
+        if root.exists() {
+            roots.push(root.canonicalize().map_err(|err| {
+                format!("failed to resolve allowed root {}: {err}", root.display())
+            })?);
+        }
+    }
+    roots.sort();
+    roots.dedup();
+    Ok(roots)
+}
+
+fn nearest_existing_allowed_parent(
+    candidate: &Path,
+    allowed_roots: &[PathBuf],
+) -> Result<PathBuf, String> {
+    let mut current = candidate;
+    while let Some(parent) = current.parent() {
+        if parent.exists() {
+            let resolved = parent
+                .canonicalize()
+                .map_err(|err| format!("failed to resolve {}: {err}", parent.display()))?;
+            if allowed_roots
+                .iter()
+                .any(|root| resolved == *root || resolved.starts_with(root))
+            {
+                return Ok(resolved);
+            }
+            break;
+        }
+        current = parent;
+    }
+    Err(format!("path does not exist: {}", candidate.display()))
+}
+
 async fn runtime_for_state(state: &State<'_, DesktopAppState>) -> Result<DesktopRuntime, String> {
     if let Some(runtime) = state.runtime.lock().await.clone() {
         return Ok(runtime);
@@ -1407,6 +1701,7 @@ pub fn run() {
             }
             app.manage(DesktopAppState {
                 runtime: Mutex::new(None),
+                active_run: Mutex::new(None),
                 selected_project: Mutex::new(selected_project),
                 active_session_id: Mutex::new(settings.active_session_id),
                 permission_mode: Mutex::new(Some(
@@ -1421,6 +1716,12 @@ pub fn run() {
                 model: Mutex::new(settings.model),
                 recent_projects: Mutex::new(recent_projects),
                 archived_session_ids: Mutex::new(settings.archived_session_ids.unwrap_or_default()),
+                lab_daemon_supervision_enabled: Mutex::new(
+                    settings.lab_daemon_supervision_enabled.unwrap_or(false),
+                ),
+                lab_daemon_last_supervision: Mutex::new(None),
+                lab_daemon_last_supervision_result: Mutex::new(None),
+                lab_daemon_next_supervision: Mutex::new(None),
                 native_smoke_permission_pending: Mutex::new(false),
                 goal_runner: Mutex::new(None),
                 settings_path,
@@ -1434,6 +1735,7 @@ pub fn run() {
             set_permission_mode,
             set_detail_level,
             set_agent_mode,
+            set_lab_daemon_supervision_enabled,
             permission_mode_options,
             agent_mode_options,
             provider_model_status,
@@ -1465,6 +1767,8 @@ pub fn run() {
             desktop_file_preview,
             revert_last_turn,
             send_message,
+            cancel_run,
+            force_reset_run,
             compact_context,
             desktop_context_snapshot,
             desktop_workbench_snapshot,

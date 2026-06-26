@@ -37,6 +37,7 @@ type SettingsDrawerProps = {
   onRefresh: () => void;
   onDetailLevelChange: (level: DetailLevelId) => void;
   onPermissionModeChange: (mode: PermissionModeId) => void;
+  onLabDaemonSupervisionChange: (enabled: boolean) => void;
   onOpenDiagnosticsFolder: () => void;
   onOpenSettingsFolder: () => void;
   onOpenShellProfile: () => void;
@@ -59,6 +60,7 @@ export function SettingsDrawer({
   onRefresh,
   onDetailLevelChange,
   onPermissionModeChange,
+  onLabDaemonSupervisionChange,
   onOpenDiagnosticsFolder,
   onOpenSettingsFolder,
   onOpenShellProfile,
@@ -219,6 +221,37 @@ export function SettingsDrawer({
                   </button>
                 </div>
               </section>
+              <section className="settings-section">
+                <h3>Lab daemon supervision</h3>
+                <p className="settings-copy">
+                  Automatic LabRun daemon supervision is off by default. Manual
+                  supervision stays available from the LabRun panel.
+                </p>
+                <label className="settings-toggle-row">
+                  <input
+                    type="checkbox"
+                    checked={settings?.lab_daemon_supervision_enabled === true}
+                    onChange={(event) =>
+                      onLabDaemonSupervisionChange(event.target.checked)
+                    }
+                  />
+                  <span>Run automatic supervision while the desktop app is open</span>
+                </label>
+                <dl className="settings-kv">
+                  <div>
+                    <dt>Last supervision</dt>
+                    <dd>{settings?.lab_daemon_last_supervision || "Not run"}</dd>
+                  </div>
+                  <div>
+                    <dt>Last result</dt>
+                    <dd>{settings?.lab_daemon_last_supervision_result || "No result"}</dd>
+                  </div>
+                  <div>
+                    <dt>Next supervision</dt>
+                    <dd>{settings?.lab_daemon_next_supervision || "Not scheduled"}</dd>
+                  </div>
+                </dl>
+              </section>
             </>
           ) : null}
 
@@ -230,6 +263,7 @@ export function SettingsDrawer({
                 diagnostic={providerDiagnostic}
                 providerSetup={providerSetup}
                 providerStatus={providerStatus}
+                onOpenSettingsFolder={onOpenSettingsFolder}
                 onOpenShellProfile={onOpenShellProfile}
                 onRefresh={onRefresh}
               />
@@ -347,6 +381,7 @@ type ProviderSetupGuideProps = {
   diagnostic?: DesktopDiagnostic;
   providerSetup: ProviderSetupInfo | null;
   providerStatus: ProviderModelStatus | null;
+  onOpenSettingsFolder: () => void;
   onOpenShellProfile: () => void;
   onRefresh: () => void;
 };
@@ -356,6 +391,7 @@ function ProviderSetupGuide({
   diagnostic,
   providerSetup,
   providerStatus,
+  onOpenSettingsFolder,
   onOpenShellProfile,
   onRefresh,
 }: ProviderSetupGuideProps) {
@@ -402,6 +438,14 @@ function ProviderSetupGuide({
         Paste your API key below to save it directly, or follow the shell
         profile steps.
       </p>
+      <p className="settings-copy">
+        Desktop key saving currently writes to the local Priority Agent dotenv
+        file, not the system keychain. Use a non-shared machine and avoid
+        production secrets until keychain storage is available.
+      </p>
+      <button className="settings-link-button" type="button" onClick={onOpenSettingsFolder}>
+        Open settings folder
+      </button>
       <div className="provider-credential-row">
         <select
           aria-label="Provider"

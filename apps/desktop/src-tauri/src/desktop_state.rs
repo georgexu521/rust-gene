@@ -79,6 +79,7 @@ pub(super) async fn persist_current_settings(
         .map(|path| path.display().to_string())
         .collect::<Vec<_>>();
     let archived_session_ids = state.archived_session_ids.lock().await.clone();
+    let lab_daemon_supervision_enabled = *state.lab_daemon_supervision_enabled.lock().await;
     write_desktop_settings(
         &state.settings_path,
         &DesktopSettings {
@@ -91,6 +92,7 @@ pub(super) async fn persist_current_settings(
             model,
             recent_projects: Some(recent_projects),
             archived_session_ids: Some(archived_session_ids),
+            lab_daemon_supervision_enabled: Some(lab_daemon_supervision_enabled),
         },
     )
 }
@@ -285,12 +287,12 @@ pub(super) fn desktop_permission_mode_options() -> Vec<PermissionModeOption> {
 }
 
 pub(super) fn normalized_permission_mode_label(mode: Option<&str>) -> &'static str {
-    match mode.unwrap_or("auto").trim() {
+    match mode.unwrap_or("auto_low_risk").trim() {
         "default" | "ask" | "ask_each_time" => "default",
         "auto_low_risk" | "autolowrisk" | "low_risk" => "auto_low_risk",
         "auto" | "auto_all" | "developer_auto" => "auto",
         "read_only" | "readonly" => "read_only",
-        _ => "auto",
+        _ => "auto_low_risk",
     }
 }
 

@@ -60,11 +60,11 @@ test.describe("desktop API web preview state", () => {
     expect(clearedSettings.archived_session_ids).toContain("web-preview-release");
     await expect(listRecentSessions()).resolves.toEqual([]);
 
-    const selected = await selectProject("/Users/georgexu/Desktop/phageGPT");
-    expect(selected.path).toBe("/Users/georgexu/Desktop/phageGPT");
+    const selected = await selectProject("/Users/example/projects/phageGPT");
+    expect(selected.path).toBe("/Users/example/projects/phageGPT");
     expect(await desktopSettings()).toEqual(
       expect.objectContaining({
-        selected_project: "/Users/georgexu/Desktop/phageGPT",
+        selected_project: "/Users/example/projects/phageGPT",
         active_session_id: null,
         startup_state: expect.objectContaining({
           status: "new_conversation",
