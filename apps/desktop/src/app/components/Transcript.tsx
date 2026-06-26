@@ -24,9 +24,14 @@ type TranscriptProps = {
   items: TranscriptItem[];
   isRunning: boolean;
   diagnostics: DesktopDiagnostic[];
+  dismissedRunReviewIds?: Set<string>;
+  onContinueFromRunReview?: (prompt: string) => void;
+  onDismissRunReview?: (runId: string) => void;
   onPermissionAnswer?: (approved: boolean) => void;
   onOpenContext?: (context: DesktopRunContext) => void;
   onOpenTrace?: (traceId: string) => void;
+  onOpenToolOutput?: () => void;
+  onRevertLastTurn?: () => void;
   projectPath: string;
   providerStatus: ProviderModelStatus | null;
 };
@@ -35,9 +40,14 @@ export function Transcript({
   items,
   isRunning,
   diagnostics,
+  dismissedRunReviewIds,
+  onContinueFromRunReview,
+  onDismissRunReview,
   onPermissionAnswer,
   onOpenContext,
   onOpenTrace,
+  onOpenToolOutput,
+  onRevertLastTurn,
   projectPath,
   providerStatus,
 }: TranscriptProps) {
@@ -89,9 +99,14 @@ export function Transcript({
               className={className}
               item={item}
               runGroup={runGroup}
+              dismissedRunReviewIds={dismissedRunReviewIds}
+              onContinueFromRunReview={onContinueFromRunReview}
               onOpenContext={onOpenContext}
               onPermissionAnswer={onPermissionAnswer}
               onOpenTrace={onOpenTrace}
+              onOpenToolOutput={onOpenToolOutput}
+              onDismissRunReview={onDismissRunReview}
+              onRevertLastTurn={onRevertLastTurn}
             />
           ) : (
             <article
@@ -292,13 +307,23 @@ function TimelineEvent({
   onPermissionAnswer,
   onOpenContext,
   onOpenTrace,
+  onOpenToolOutput,
+  onDismissRunReview,
+  onContinueFromRunReview,
+  onRevertLastTurn,
+  dismissedRunReviewIds,
 }: {
   className?: string;
   item: TimelineEventItem;
   runGroup?: RunGroupPreview;
+  dismissedRunReviewIds?: Set<string>;
+  onContinueFromRunReview?: (prompt: string) => void;
   onOpenContext?: (context: DesktopRunContext) => void;
   onPermissionAnswer?: (approved: boolean) => void;
   onOpenTrace?: (traceId: string) => void;
+  onOpenToolOutput?: () => void;
+  onDismissRunReview?: (runId: string) => void;
+  onRevertLastTurn?: () => void;
 }) {
   const isCompact = isCompactToolEvent(item);
   const isCompactPermission = item.kind === "permission" && item.status === "waiting";
@@ -340,8 +365,17 @@ function TimelineEvent({
             Trace
           </button>
         ) : null}
-        {runGroup && hasRunGroupPreview(runGroup) ? (
-          <RunGroupPanel runGroup={runGroup} onOpenTrace={onOpenTrace} />
+        {runGroup && hasRunGroupPreview(runGroup) && !dismissedRunReviewIds?.has(item.id) ? (
+          <RunGroupPanel
+            runGroup={runGroup}
+            runId={item.id}
+            runStatus={item.status}
+            onContinueFromRunReview={onContinueFromRunReview}
+            onDismissRunReview={onDismissRunReview}
+            onOpenToolOutput={onOpenToolOutput}
+            onOpenTrace={onOpenTrace}
+            onRevertLastTurn={onRevertLastTurn}
+          />
         ) : null}
       </article>
     );
@@ -444,24 +478,42 @@ function runStatusText(item: TimelineEventItem) {
 
 function RunGroupPanel({
   runGroup,
+  runId,
+  runStatus,
+  onContinueFromRunReview,
+  onDismissRunReview,
+  onOpenToolOutput,
   onOpenTrace,
+  onRevertLastTurn,
 }: {
   runGroup: RunGroupPreview;
+  runId: string;
+  runStatus?: TimelineStatus;
+  onContinueFromRunReview?: (prompt: string) => void;
+  onDismissRunReview?: (runId: string) => void;
+  onOpenToolOutput?: () => void;
   onOpenTrace?: (traceId: string) => void;
+  onRevertLastTurn?: () => void;
 }) {
   const groups = [
     { key: "validations", label: "Validation", items: runGroup.validations },
-    { key: "files", label: "Diff", items: runGroup.files },
+    { key: "files", label: "Changed files / Diff", items: runGroup.files },
     { key: "permissions", label: "Permission", items: runGroup.permissions },
-    { key: "failures", label: "Needs attention", items: runGroup.failures },
+    { key: "failures", label: "Residual risks / Needs attention", items: runGroup.failures },
     { key: "tools", label: "Tools", items: runGroup.tools },
   ].filter((group) => group.items.length > 0);
+  const repairPrompt = buildRunReviewRepairPrompt(runGroup);
+  const latestTraceId = latestTraceIdFromRunGroup(runGroup);
 
   return (
     <div className="run-group-panel" aria-label="Run summary panel">
       <div className="run-group-panel-header">
-        <span>Run summary</span>
-        {runGroup.finalText ? <span>{runGroup.finalText}</span> : null}
+        <span>Run review</span>
+        <span>
+          {runStatus === "failed"
+            ? "Needs attention"
+            : runGroup.finalText || "Review changes, validation, permissions, and residual risk"}
+        </span>
       </div>
       <div className="run-group-panel-grid">
         {groups.map((group) => (
@@ -493,8 +545,64 @@ function RunGroupPanel({
           </section>
         ))}
       </div>
+      <div className="run-review-actions" aria-label="Run review actions">
+        <button type="button" onClick={() => onDismissRunReview?.(runId)}>
+          Accept
+        </button>
+        <button type="button" onClick={() => onDismissRunReview?.(runId)}>
+          Dismiss review
+        </button>
+        <button type="button" disabled={!onRevertLastTurn} onClick={onRevertLastTurn}>
+          Revert last turn
+        </button>
+        <button
+          type="button"
+          disabled={!onContinueFromRunReview}
+          onClick={() => onContinueFromRunReview?.(repairPrompt)}
+        >
+          Continue with fix
+        </button>
+        <button
+          type="button"
+          disabled={!latestTraceId || !onOpenTrace}
+          onClick={() => latestTraceId && onOpenTrace?.(latestTraceId)}
+        >
+          Open trace
+        </button>
+        <button type="button" disabled={!onOpenToolOutput} onClick={onOpenToolOutput}>
+          Open tool output
+        </button>
+      </div>
     </div>
   );
+}
+
+function latestTraceIdFromRunGroup(runGroup: RunGroupPreview) {
+  return [
+    ...runGroup.failures,
+    ...runGroup.validations,
+    ...runGroup.files,
+    ...runGroup.permissions,
+    ...runGroup.tools,
+  ]
+    .map((step) => step.traceId)
+    .filter(Boolean)
+    .at(-1);
+}
+
+function buildRunReviewRepairPrompt(runGroup: RunGroupPreview) {
+  const failures = runGroup.failures.map((item) => `${item.title}: ${item.detail || "failed"}`);
+  const failedValidation = runGroup.validations
+    .filter((item) => item.status === "failed")
+    .map((item) => `${item.title}: ${item.detail || "failed"}`);
+  const missingValidation =
+    runGroup.validations.length === 0 ? ["No validation evidence was visible in the run review."] : [];
+  const lines = [...failures, ...failedValidation, ...missingValidation].slice(0, 5);
+  return [
+    "Please continue from the run review and fix the remaining issue.",
+    ...lines.map((line) => `- ${line}`),
+    "After the fix, rerun the relevant validation and report the evidence.",
+  ].join("\n");
 }
 
 function buildRunGroupPreview(items: TranscriptItem[], runIndex: number): RunGroupPreview | undefined {

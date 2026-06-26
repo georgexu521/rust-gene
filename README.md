@@ -100,9 +100,32 @@ with `/connect`.
 
 ## Platform Support
 
-The current release target is macOS and Linux. Windows support is best-effort
-until the installer, shell execution defaults, and credential-storage paths are
-implemented and validated on Windows.
+The current CLI release target is macOS and Linux. Windows support is
+best-effort until the installer, shell execution defaults, and
+credential-storage paths are implemented and validated on Windows.
+
+The desktop app under `apps/desktop` is a macOS-first Tauri app today.
+Windows/Linux desktop packaging remains a future validation target. Desktop
+credential saving currently uses the Priority Agent dotenv fallback and
+environment-variable flow; the UI reports this explicitly until a system
+keychain backend is implemented.
+
+## Desktop App
+
+```bash
+# Development desktop app
+PRIORITY_AGENT_DESKTOP_PROJECT_DIR="$PWD" corepack pnpm --dir apps/desktop tauri dev
+
+# Frontend build and smoke
+corepack pnpm --dir apps/desktop build
+corepack pnpm --dir apps/desktop test:ui-smoke
+```
+
+First launch shows a guided setup for project, provider status, credential
+storage acknowledgement, permission default, workspace trust, and Direct
+Agent/LabRun entry mode. Completed desktop runs show a Run Review with changed
+files, validation, permissions, residual risks, revert, continue, trace, and
+tool-output actions.
 
 ## Usage
 

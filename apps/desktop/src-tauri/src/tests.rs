@@ -170,10 +170,8 @@ fn desktop_smoke_loads_persisted_long_session_parts_for_reload() {
     store
         .create_session(session_id, "Desktop Long Reload", "mock-model", None)
         .unwrap();
-    let writer = priority_agent::session_store::SessionEventWriter::new(
-        store.shared_conn(),
-        session_id,
-    );
+    let writer =
+        priority_agent::session_store::SessionEventWriter::new(store.shared_conn(), session_id);
 
     for index in 0..5 {
         writer
@@ -397,12 +395,9 @@ fn desktop_file_preview_rejects_path_outside_project() {
     std::fs::create_dir_all(&project).unwrap();
     std::fs::write(&outside, "outside\n").unwrap();
 
-    let outside_relative = format!(
-        "../{}",
-        outside.file_name().unwrap().to_string_lossy()
-    );
-    let err = desktop_file_preview_for_project(&project, &outside_relative, Some(1024))
-        .unwrap_err();
+    let outside_relative = format!("../{}", outside.file_name().unwrap().to_string_lossy());
+    let err =
+        desktop_file_preview_for_project(&project, &outside_relative, Some(1024)).unwrap_err();
     assert!(err.contains("Failed to resolve") || err.contains("inside the selected project"));
 
     let _ = std::fs::remove_dir_all(&project);
@@ -428,6 +423,28 @@ fn desktop_smoke_settings_round_trip() {
         recent_projects: Some(vec!["/tmp/project".to_string()]),
         archived_session_ids: Some(vec!["old-session".to_string()]),
         lab_daemon_supervision_enabled: Some(true),
+        onboarding_state: Some(DesktopOnboardingState {
+            onboarding_version: 1,
+            completed_at: Some("unix_ms:1".to_string()),
+            project_root: Some("/tmp/project".to_string()),
+            permission_mode: Some("auto_low_risk".to_string()),
+            workspace_trust_summary: None,
+            credential_storage_acknowledged: true,
+            skipped: false,
+            starting_mode: Some("direct".to_string()),
+        }),
+        workspace_trust: Some(DesktopWorkspaceTrustStatus {
+            canonical_project_path: "/tmp/project".to_string(),
+            repo_identity: "repo".to_string(),
+            repo_fingerprint: "fingerprint".to_string(),
+            trust_source: "test".to_string(),
+            package_scripts: "trusted".to_string(),
+            shell_validation: "ask".to_string(),
+            lab_daemon_supervision: true,
+            developer_auto_acknowledged: false,
+            trusted_capabilities: vec!["allow_package_scripts".to_string()],
+            last_updated: Some("unix_ms:1".to_string()),
+        }),
     };
 
     write_desktop_settings(&path, &settings).unwrap();
@@ -442,6 +459,20 @@ fn desktop_smoke_settings_round_trip() {
     assert_eq!(loaded.model.as_deref(), Some("kimi-k2.5"));
     assert_eq!(loaded.lab_daemon_supervision_enabled, Some(true));
     assert_eq!(
+        loaded
+            .onboarding_state
+            .as_ref()
+            .map(|state| state.onboarding_version),
+        Some(1)
+    );
+    assert_eq!(
+        loaded
+            .workspace_trust
+            .as_ref()
+            .map(|trust| trust.package_scripts.as_str()),
+        Some("trusted")
+    );
+    assert_eq!(
         loaded.recent_projects.as_deref(),
         Some(["/tmp/project".to_string()].as_slice())
     );
@@ -449,6 +480,74 @@ fn desktop_smoke_settings_round_trip() {
         loaded.archived_session_ids.as_deref(),
         Some(["old-session".to_string()].as_slice())
     );
+}
+
+#[test]
+fn desktop_smoke_workspace_trust_writes_and_revokes_project_record() {
+    let _lock = DESKTOP_ENV_LOCK.lock().unwrap();
+    let temp = tempfile::tempdir().unwrap();
+    let project = temp.path().join("project");
+    std::fs::create_dir_all(&project).unwrap();
+    let trust_path = temp.path().join("trusted-workspaces.json");
+    let mut env = DesktopEnvGuard::new();
+    env.set(
+        "PRIORITY_AGENT_TRUSTED_WORKSPACES_PATH",
+        trust_path.to_str().unwrap(),
+    );
+
+    let trusted = apply_workspace_trust_for_project(
+        &project,
+        &DesktopWorkspaceTrustInput {
+            package_scripts: "trusted".to_string(),
+            shell_validation: "trusted".to_string(),
+            lab_daemon_supervision: true,
+            developer_auto_acknowledged: true,
+        },
+    )
+    .unwrap();
+    assert!(trusted
+        .trusted_capabilities
+        .contains(&"allow_package_scripts".to_string()));
+    assert!(trusted
+        .trusted_capabilities
+        .contains(&"allow_shell_validation".to_string()));
+    let file = std::fs::read_to_string(&trust_path).unwrap();
+    assert!(file.contains("allow_package_scripts"));
+    assert!(file.contains("desktop_trust_wizard"));
+
+    let revoked = apply_workspace_trust_for_project(
+        &project,
+        &DesktopWorkspaceTrustInput {
+            package_scripts: "ask".to_string(),
+            shell_validation: "ask".to_string(),
+            lab_daemon_supervision: false,
+            developer_auto_acknowledged: false,
+        },
+    )
+    .unwrap();
+    assert!(revoked.trusted_capabilities.is_empty());
+    let file = std::fs::read_to_string(&trust_path).unwrap();
+    assert!(!file.contains("allow_package_scripts"));
+}
+
+#[test]
+fn desktop_smoke_diagnostics_redaction_removes_secrets() {
+    let text = [
+        "OPENAI_API_KEY=sk-test-secret-token",
+        "Authorization: Bearer abcdefghijklmnop",
+        "header Bearer sk-another-secret-token",
+        "-----BEGIN PRIVATE KEY-----",
+        "very-secret-private-key-material",
+        "-----END PRIVATE KEY-----",
+    ]
+    .join("\n");
+    let redacted = redact_desktop_support_text(&text);
+
+    assert!(redacted.contains("OPENAI_API_KEY=<redacted>"));
+    assert!(redacted.contains("Authorization: <redacted>"));
+    assert!(redacted.contains("Bearer <redacted>"));
+    assert!(!redacted.contains("sk-test-secret-token"));
+    assert!(!redacted.contains("very-secret-private-key-material"));
 }
 
 #[test]
@@ -465,11 +564,19 @@ fn desktop_smoke_lab_status_reads_file_backed_labrun_state() {
     assert!(!empty.available);
 
     let store = priority_agent::lab::store::LabStore::for_project(&project);
-    let proposal = store.create_proposal("Build Lab status panel", None).unwrap();
+    let proposal = store
+        .create_proposal("Build Lab status panel", None)
+        .unwrap();
     let proposed = desktop_lab_status_for_project(&project);
     assert_eq!(proposed.state, "proposal");
-    assert_eq!(proposed.proposal_id.as_deref(), Some(proposal.proposal_id.as_str()));
-    assert_eq!(proposed.proposal_status.as_deref(), Some("AwaitingApproval"));
+    assert_eq!(
+        proposed.proposal_id.as_deref(),
+        Some(proposal.proposal_id.as_str())
+    );
+    assert_eq!(
+        proposed.proposal_status.as_deref(),
+        Some("AwaitingApproval")
+    );
     assert!(proposed.needs_user);
 
     let run = store.approve_proposal(&proposal.proposal_id).unwrap();
@@ -547,16 +654,9 @@ fn desktop_smoke_lab_status_reads_file_backed_labrun_state() {
         .unwrap_or_default()
         .contains("Desktop status surface proof"));
     assert!(!with_rows.reports[0].truncated);
-    let report_page = desktop_lab_report_page_for_project(
-        &project,
-        &with_rows.reports[0].path,
-        0,
-        512,
-    )
-    .unwrap();
-    assert!(report_page
-        .content
-        .contains("Desktop status surface proof"));
+    let report_page =
+        desktop_lab_report_page_for_project(&project, &with_rows.reports[0].path, 0, 512).unwrap();
+    assert!(report_page.content.contains("Desktop status surface proof"));
     assert_eq!(report_page.offset, 0);
     assert!(report_page.total_bytes > 0);
     let artifact_body =
@@ -572,13 +672,9 @@ fn desktop_smoke_lab_status_reads_file_backed_labrun_state() {
     assert!(missing_artifact.contains("not registered"));
     let outside = project.join("README.md");
     std::fs::write(&outside, "outside").unwrap();
-    let rejected = desktop_lab_report_page_for_project(
-        &project,
-        outside.to_string_lossy().as_ref(),
-        0,
-        512,
-    )
-    .unwrap_err();
+    let rejected =
+        desktop_lab_report_page_for_project(&project, outside.to_string_lossy().as_ref(), 0, 512)
+            .unwrap_err();
     assert!(rejected.contains(".priority-agent/lab"));
     assert_eq!(with_rows.evidence_refs.len(), 1);
     assert_eq!(with_rows.evidence_refs[0].kind, "File");
@@ -671,7 +767,10 @@ fn desktop_smoke_subagent_tasks_reads_active_session_artifacts_and_recovery() {
     assert_eq!(tasks[0].task_id, "task_1");
     assert_eq!(tasks[0].result_artifact_id, Some(artifact_id));
     assert_eq!(tasks[0].artifact_status.as_deref(), Some("completed"));
-    assert_eq!(tasks[0].result_preview.as_deref(), Some("finished child result"));
+    assert_eq!(
+        tasks[0].result_preview.as_deref(),
+        Some("finished child result")
+    );
     assert_eq!(
         tasks[0].tools_used,
         vec!["file_write".to_string(), "file_read".to_string()]
@@ -811,6 +910,7 @@ fn desktop_smoke_initial_project_falls_back_when_saved_path_is_missing() {
         recent_projects: None,
         archived_session_ids: None,
         lab_daemon_supervision_enabled: None,
+        ..Default::default()
     };
 
     assert_eq!(initial_desktop_project(cwd, &settings), expected);
@@ -838,6 +938,7 @@ fn desktop_smoke_initial_project_falls_back_when_saved_path_is_filesystem_root()
         recent_projects: None,
         archived_session_ids: None,
         lab_daemon_supervision_enabled: None,
+        ..Default::default()
     };
     let expected = root.canonicalize().unwrap();
     let selected = initial_desktop_project(tauri_dir.canonicalize().unwrap(), &settings);
@@ -880,6 +981,7 @@ fn desktop_smoke_initial_project_migrates_old_tauri_subdir_default() {
         recent_projects: None,
         archived_session_ids: None,
         lab_daemon_supervision_enabled: None,
+        ..Default::default()
     };
     let expected = root.canonicalize().unwrap();
     let selected = initial_desktop_project(tauri_dir.canonicalize().unwrap(), &settings);
@@ -987,8 +1089,14 @@ fn desktop_smoke_permission_mode_normalization() {
         normalized_permission_mode_label(Some("readonly")),
         "read_only"
     );
-    assert_eq!(normalized_permission_mode_label(Some("once")), "auto_low_risk");
-    assert_eq!(parse_desktop_permission_mode("auto"), PermissionMode::AutoAll);
+    assert_eq!(
+        normalized_permission_mode_label(Some("once")),
+        "auto_low_risk"
+    );
+    assert_eq!(
+        parse_desktop_permission_mode("auto"),
+        PermissionMode::AutoAll
+    );
     assert_eq!(
         parse_desktop_permission_mode("auto_low_risk"),
         PermissionMode::AutoLowRisk
@@ -1021,7 +1129,10 @@ fn desktop_open_target_is_scoped_to_project_and_app_dirs() {
     let project_target =
         scoped_desktop_open_target("README.md", &project, &settings_path, &diagnostics_path)
             .unwrap();
-    assert_eq!(project_target, project.join("README.md").canonicalize().unwrap());
+    assert_eq!(
+        project_target,
+        project.join("README.md").canonicalize().unwrap()
+    );
 
     let lab_target = scoped_desktop_open_target(
         ".priority-agent/lab/runs/run_1/report.md",

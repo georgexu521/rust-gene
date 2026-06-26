@@ -343,6 +343,9 @@ export type DesktopSettings = {
   lab_daemon_last_supervision?: string | null;
   lab_daemon_last_supervision_result?: string | null;
   lab_daemon_next_supervision?: string | null;
+  onboarding_state?: DesktopOnboardingState | null;
+  workspace_trust: DesktopWorkspaceTrustStatus;
+  credential_storage: DesktopCredentialStorageStatus;
 };
 
 export type DesktopStartupState = {
@@ -352,6 +355,52 @@ export type DesktopStartupState = {
   lab_stage?: string | null;
   lab_owner?: string | null;
   lab_pause_reason?: string | null;
+};
+
+export type DesktopOnboardingState = {
+  onboarding_version: number;
+  completed_at?: string | null;
+  project_root?: string | null;
+  permission_mode?: PermissionModeId | string | null;
+  workspace_trust_summary?: DesktopWorkspaceTrustStatus | null;
+  credential_storage_acknowledged: boolean;
+  skipped: boolean;
+  starting_mode?: "direct" | "labrun" | string | null;
+};
+
+export type DesktopOnboardingInput = {
+  project_root?: string | null;
+  permission_mode?: PermissionModeId | string | null;
+  workspace_trust?: DesktopWorkspaceTrustInput | null;
+  credential_storage_acknowledged: boolean;
+  starting_mode?: "direct" | "labrun" | string | null;
+  skipped?: boolean | null;
+};
+
+export type DesktopWorkspaceTrustInput = {
+  package_scripts: "ask" | "trusted";
+  shell_validation: "ask" | "trusted";
+  lab_daemon_supervision: boolean;
+  developer_auto_acknowledged: boolean;
+};
+
+export type DesktopWorkspaceTrustStatus = DesktopWorkspaceTrustInput & {
+  canonical_project_path: string;
+  repo_identity: string;
+  repo_fingerprint: string;
+  trust_source: string;
+  trusted_capabilities: string[];
+  last_updated?: string | null;
+};
+
+export type DesktopCredentialStorageStatus = {
+  active_store: "dotenv_fallback" | "environment_only" | "system_keychain" | string;
+  system_keychain_available: boolean;
+  dotenv_fallback_path: string;
+  environment_only_available: boolean;
+  acknowledgement_required: boolean;
+  last_updated_source: string;
+  detail: string;
 };
 
 export type DetailLevelId = "coding" | "daily";
@@ -390,6 +439,18 @@ export type DesktopExportResult = {
   path: string;
   format: string;
   privacy: string;
+};
+
+export type DesktopDiagnosticsRedaction = {
+  include_logs?: boolean | null;
+  max_log_bytes?: number | null;
+};
+
+export type DesktopDiagnosticsBundleResult = {
+  path: string;
+  privacy: string;
+  redacted: boolean;
+  summary: string;
 };
 
 export type ProviderSetupInfo = {

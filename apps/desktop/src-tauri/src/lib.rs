@@ -13,19 +13,31 @@ use tokio::sync::Mutex;
 
 mod desktop_context;
 mod desktop_state;
+mod desktop_support;
 mod desktop_types;
 mod diagnostics;
+mod diagnostics_export;
 mod goal_commands;
 mod health_commands;
+mod lab_daemon_commands;
+mod native_smoke;
+mod onboarding_commands;
+mod open_commands;
 mod preview_commands;
 mod revert_commands;
 mod session_commands;
-use desktop_state::*;
 pub(crate) use desktop_context::*;
+use desktop_state::*;
+use desktop_support::*;
 pub(crate) use desktop_types::*;
 use diagnostics::*;
+use diagnostics_export::*;
 use goal_commands::*;
 use health_commands::*;
+use lab_daemon_commands::*;
+use native_smoke::*;
+use onboarding_commands::*;
+use open_commands::*;
 use preview_commands::*;
 use revert_commands::*;
 use session_commands::*;
@@ -52,6 +64,8 @@ struct DesktopAppState {
     lab_daemon_last_supervision: Mutex<Option<String>>,
     lab_daemon_last_supervision_result: Mutex<Option<String>>,
     lab_daemon_next_supervision: Mutex<Option<String>>,
+    onboarding_state: Mutex<Option<DesktopOnboardingState>>,
+    workspace_trust: Mutex<Option<DesktopWorkspaceTrustStatus>>,
     native_smoke_permission_pending: Mutex<bool>,
     goal_runner: Mutex<Option<GoalRunner>>,
     settings_path: PathBuf,
@@ -80,6 +94,9 @@ async fn desktop_settings(
         .await
         .clone();
     let lab_daemon_next_supervision = state.lab_daemon_next_supervision.lock().await.clone();
+    let onboarding_state = state.onboarding_state.lock().await.clone();
+    let stored_workspace_trust = state.workspace_trust.lock().await.clone();
+    let workspace_trust = desktop_workspace_trust_status(&selected_project, stored_workspace_trust);
 
     Ok(DesktopSettingsResponse {
         selected_project: selected_project.display().to_string(),
@@ -107,6 +124,9 @@ async fn desktop_settings(
         lab_daemon_last_supervision,
         lab_daemon_last_supervision_result,
         lab_daemon_next_supervision,
+        onboarding_state,
+        workspace_trust,
+        credential_storage: desktop_credential_storage_status_value(),
     })
 }
 
@@ -152,7 +172,10 @@ async fn set_agent_mode(
     state: State<'_, DesktopAppState>,
 ) -> Result<DesktopSettingsResponse, String> {
     let normalized = mode.trim().to_ascii_lowercase();
-    if !matches!(normalized.as_str(), "auto" | "build" | "plan" | "explore" | "review") {
+    if !matches!(
+        normalized.as_str(),
+        "auto" | "build" | "plan" | "explore" | "review"
+    ) {
         return Err(format!(
             "Invalid agent mode '{}'. Valid modes: auto, build, plan, explore, review.",
             mode
@@ -330,9 +353,16 @@ async fn export_session(
 fn parse_desktop_export_format(
     value: Option<&str>,
 ) -> Result<priority_agent::session_store::export::SessionExportFormat, String> {
-    match value.unwrap_or("markdown").trim().to_ascii_lowercase().as_str() {
+    match value
+        .unwrap_or("markdown")
+        .trim()
+        .to_ascii_lowercase()
+        .as_str()
+    {
         "json" => Ok(priority_agent::session_store::export::SessionExportFormat::Json),
-        "md" | "markdown" => Ok(priority_agent::session_store::export::SessionExportFormat::Markdown),
+        "md" | "markdown" => {
+            Ok(priority_agent::session_store::export::SessionExportFormat::Markdown)
+        }
         other => Err(format!("Unsupported export format: {other}")),
     }
 }
@@ -340,7 +370,12 @@ fn parse_desktop_export_format(
 fn parse_desktop_export_privacy(
     value: Option<&str>,
 ) -> Result<priority_agent::session_store::export::SessionExportPrivacy, String> {
-    match value.unwrap_or("redacted").trim().to_ascii_lowercase().as_str() {
+    match value
+        .unwrap_or("redacted")
+        .trim()
+        .to_ascii_lowercase()
+        .as_str()
+    {
         "full" => Ok(priority_agent::session_store::export::SessionExportPrivacy::Full),
         "redacted" => Ok(priority_agent::session_store::export::SessionExportPrivacy::Redacted),
         "summary" => Ok(priority_agent::session_store::export::SessionExportPrivacy::Summary),
@@ -351,67 +386,6 @@ fn parse_desktop_export_privacy(
 #[tauri::command]
 async fn provider_setup_info() -> Result<ProviderSetupInfo, String> {
     Ok(provider_setup_info_value())
-}
-
-#[tauri::command]
-async fn open_settings_folder(state: State<'_, DesktopAppState>) -> Result<(), String> {
-    let folder = state
-        .settings_path
-        .parent()
-        .ok_or_else(|| "settings path has no parent directory".to_string())?;
-    open_path(folder)
-}
-
-#[tauri::command]
-async fn open_diagnostics_folder(state: State<'_, DesktopAppState>) -> Result<(), String> {
-    let folder = state
-        .diagnostic_logs_path
-        .parent()
-        .ok_or_else(|| "diagnostic log path has no parent directory".to_string())?;
-    std::fs::create_dir_all(folder).map_err(|err| err.to_string())?;
-    open_path(folder)
-}
-
-#[tauri::command]
-async fn open_file_path(path: String, state: State<'_, DesktopAppState>) -> Result<(), String> {
-    let selected_project = state.selected_project.lock().await.clone();
-    let target = scoped_desktop_open_target(
-        &path,
-        &selected_project,
-        &state.settings_path,
-        &state.diagnostic_logs_path,
-    )?;
-    open_path(&target)
-}
-
-#[tauri::command]
-async fn open_shell_profile() -> Result<(), String> {
-    let profile = shell_profile_path();
-    if !profile.exists() {
-        if let Some(parent) = profile.parent() {
-            std::fs::create_dir_all(parent).map_err(|err| err.to_string())?;
-        }
-        std::fs::write(&profile, "").map_err(|err| err.to_string())?;
-    }
-    open_path(&profile)
-}
-
-#[tauri::command]
-async fn save_provider_credential(provider_id: String, key: String) -> Result<String, String> {
-    match priority_agent::services::api::credentials::save_credential(&provider_id, &key) {
-        priority_agent::services::api::credentials::CredentialSaveOutcome::Verified => {
-            Ok(format!("Saved and activated key for {}", provider_id))
-        }
-        priority_agent::services::api::credentials::CredentialSaveOutcome::SavedUnverified => {
-            Ok(format!(
-                "Saved key for {}, but provider activation could not be verified",
-                provider_id
-            ))
-        }
-        priority_agent::services::api::credentials::CredentialSaveOutcome::Rejected { reason } => {
-            Err(reason)
-        }
-    }
 }
 
 #[tauri::command]
@@ -443,7 +417,10 @@ async fn record_native_smoke_result(
     let status = if ok { "ok=true" } else { "ok=false" };
     append_desktop_log(
         &diagnostic_logs_path,
-        &format!("{smoke_name} {status} result={}", sanitize_log_value(&result)),
+        &format!(
+            "{smoke_name} {status} result={}",
+            sanitize_log_value(&result)
+        ),
     )
 }
 
@@ -601,8 +578,8 @@ async fn send_message_inner(
         .await
         .clone()
         .unwrap_or_else(|| "auto".to_string());
-    let agent_mode = priority_agent::engine::agent_mode::AgentMode::parse(&agent_mode_label)
-        .unwrap_or_default();
+    let agent_mode =
+        priority_agent::engine::agent_mode::AgentMode::parse(&agent_mode_label).unwrap_or_default();
     // ... rest of function
     let diagnostic_logs_path = state.diagnostic_logs_path.clone();
     let _ = append_desktop_log(
@@ -617,10 +594,9 @@ async fn send_message_inner(
         return emit_native_smoke_run_fixture(app, message, state).await;
     }
 
-    let runtime = runtime_for_state(&state).await?;
+    let runtime = runtime_for_state(state).await?;
     let ingress_lane = classify_turn_ingress(&message, !contexts.is_empty());
-    let force_full_agent_lane =
-        agent_mode != priority_agent::engine::agent_mode::AgentMode::Auto;
+    let force_full_agent_lane = agent_mode != priority_agent::engine::agent_mode::AgentMode::Auto;
     if ingress_lane.is_lightweight() && !force_full_agent_lane {
         let outcome = runtime
             .run_lightweight_turn(&message, ingress_lane)
@@ -632,7 +608,7 @@ async fn send_message_inner(
                 let mut stored_session_id = state.active_session_id.lock().await;
                 *stored_session_id = active_session_id;
             }
-            persist_current_settings(&state).await?;
+            persist_current_settings(state).await?;
         }
         let usage_log = outcome
             .usage
@@ -681,7 +657,7 @@ async fn send_message_inner(
             let mut stored_session_id = state.active_session_id.lock().await;
             *stored_session_id = active_session_id.clone();
         }
-        persist_current_settings(&state).await?;
+        persist_current_settings(state).await?;
     }
     let desktop_run_id = format!(
         "desktop-run-{}",
@@ -740,7 +716,7 @@ async fn send_message_inner(
                     let mut stored_session_id = state.active_session_id.lock().await;
                     *stored_session_id = active_session_id.clone();
                 }
-                persist_current_settings(&state).await?;
+                persist_current_settings(state).await?;
             }
         }
         let is_terminal = matches!(
@@ -833,7 +809,10 @@ async fn cancel_run(app: AppHandle, state: State<'_, DesktopAppState>) -> Result
 }
 
 #[tauri::command]
-async fn force_reset_run(app: AppHandle, state: State<'_, DesktopAppState>) -> Result<bool, String> {
+async fn force_reset_run(
+    app: AppHandle,
+    state: State<'_, DesktopAppState>,
+) -> Result<bool, String> {
     let mut active_run = state.active_run.lock().await;
     let had_active_run = active_run.take().is_some();
     if had_active_run {
@@ -1047,41 +1026,6 @@ async fn desktop_workbench_snapshot(
 }
 
 #[tauri::command]
-async fn lab_daemon_supervise(
-    state: State<'_, DesktopAppState>,
-) -> Result<DesktopLabDaemonActionResult, String> {
-    let selected_project = state.selected_project.lock().await.clone();
-    let result = desktop_lab_daemon_supervise_for_project(&selected_project);
-    let now = desktop_unix_millis_string();
-    {
-        let mut last = state.lab_daemon_last_supervision.lock().await;
-        *last = Some(format!("{}: {}", now, result.action));
-    }
-    {
-        let mut last_result = state.lab_daemon_last_supervision_result.lock().await;
-        *last_result = Some(compact_desktop_supervision_result(&result.output));
-    }
-    {
-        let enabled = *state.lab_daemon_supervision_enabled.lock().await;
-        let mut next = state.lab_daemon_next_supervision.lock().await;
-        *next = enabled.then(|| desktop_next_supervision_hint(120));
-    }
-    Ok(result)
-}
-
-fn desktop_lab_daemon_supervise_for_project(
-    project: &std::path::Path,
-) -> DesktopLabDaemonActionResult {
-    let output =
-        priority_agent::lab::commands::handle_lab_command(project, None, "daemon service supervise");
-    DesktopLabDaemonActionResult {
-        action: "supervise",
-        output,
-        lab_status: desktop_lab_status_for_project(project),
-    }
-}
-
-#[tauri::command]
 async fn answer_permission(
     app: AppHandle,
     approved: bool,
@@ -1126,411 +1070,6 @@ async fn answer_permission(
     }
 
     Ok(false)
-}
-
-fn native_smoke_enabled() -> bool {
-    std::env::var("PRIORITY_AGENT_DESKTOP_NATIVE_SMOKE").as_deref() == Ok("1")
-}
-
-async fn emit_native_smoke_run_fixture(
-    app: AppHandle,
-    message: String,
-    state: &State<'_, DesktopAppState>,
-) -> Result<(), String> {
-    {
-        let mut pending = state.native_smoke_permission_pending.lock().await;
-        *pending = true;
-    }
-    tokio::time::sleep(std::time::Duration::from_millis(150)).await;
-    let session_id = state.active_session_id.lock().await.clone();
-    let events = vec![
-        DesktopRunEvent::RunStarted {
-            run_id: "native-smoke-run".to_string(),
-            session_id,
-        },
-        DesktopRunEvent::ThinkingStarted,
-        DesktopRunEvent::ThinkingCompleted,
-        DesktopRunEvent::ToolStarted {
-            id: "native-smoke-validation".to_string(),
-            name: "bash".to_string(),
-        },
-        DesktopRunEvent::ToolExecutionProgress {
-            id: "native-smoke-validation".to_string(),
-            progress: "Running native validation fixture".to_string(),
-        },
-        DesktopRunEvent::ToolCompleted {
-            id: "native-smoke-validation".to_string(),
-            result_preview: "native smoke validation passed".to_string(),
-            metadata: Some(serde_json::json!({
-                "tool": "bash",
-                "call_id": "native-smoke-validation",
-                "success": true,
-                "command": "scripts/desktop-native-smoke.sh --fixture-run",
-                "command_category": "validation",
-                "validation_family": "native_smoke",
-                "command_kind": "script",
-                "duration_ms": 410,
-                "output_chars": 30,
-                "terminal_task": {
-                    "status": "completed",
-                    "exit_code": 0,
-                    "duration_ms": 410
-                }
-            })),
-        },
-        DesktopRunEvent::ToolStarted {
-            id: "native-smoke-file".to_string(),
-            name: "file_edit".to_string(),
-        },
-        DesktopRunEvent::ToolCompleted {
-            id: "native-smoke-file".to_string(),
-            result_preview: "Edited apps/desktop/src/app/Composer.tsx".to_string(),
-            metadata: Some(serde_json::json!({
-                "tool": "file_edit",
-                "call_id": "native-smoke-file",
-                "success": true,
-                "path": "apps/desktop/src/app/Composer.tsx",
-                "replacements": 1,
-                "additions": 4,
-                "deletions": 1,
-                "diff_preview": "@@ -140,6 +140,9 @@\n <textarea aria-label=\"Message\" />\n+<button aria-label=\"Send message\" />\n",
-                "diff_preview_truncated": false,
-                "duration_ms": 55,
-                "output_chars": 48
-            })),
-        },
-        DesktopRunEvent::PermissionRequest {
-            id: "native-smoke-permission".to_string(),
-            tool_name: "bash".to_string(),
-            arguments: serde_json::json!({
-                "command": "git status --short"
-            }),
-            prompt: format!("Allow native smoke permission check for: {message}"),
-            metadata: Some(serde_json::json!({
-                "permission_evidence": {
-                    "schema": "permission_decision_evidence.v1",
-                    "request_kind": "runtime_rule",
-                    "permission_family": "shell",
-                    "decision": "ask",
-                    "risk_level": "low",
-                    "recovery": {
-                        "recommended_action": "Approve once to continue the native smoke run."
-                    },
-                    "command_classification": {
-                        "parser_status": "simple",
-                        "category": "git",
-                        "mutation": false
-                    }
-                },
-                "action_review": {
-                    "schema": "action_review.v1",
-                    "tool": "bash",
-                    "call_id": "native-smoke-permission",
-                    "decision": "ask_user",
-                    "primary_reason": "permission_required",
-                    "permission": {
-                        "allowed_by_context": true,
-                        "requires_confirmation": true,
-                        "decision": "Ask",
-                        "risk_level": "Low",
-                        "confidence": 0.82,
-                        "warnings": []
-                    },
-                    "scope": {
-                        "allowed": true,
-                        "reason": "native smoke request is inside the selected project"
-                    },
-                    "budget": {
-                        "allowed": true,
-                        "scheduled_count": 0,
-                        "max_tool_calls": 4,
-                        "reason": "tool-call budget still has room"
-                    },
-                    "checkpoint": {
-                        "required": false,
-                        "status": "not_needed",
-                        "enforcement": "none",
-                        "rollback_scope": "none",
-                        "requires_user_approval": false,
-                        "reason": "git status is observational"
-                    },
-                    "side_effects": {
-                        "schema": "action_side_effect_profile.v1",
-                        "external_side_effect": "none",
-                        "network": {
-                            "class": "none",
-                            "target": null,
-                            "trusted": true,
-                            "reason": "no network access detected"
-                        },
-                        "mutates_local_workspace": false,
-                        "mutates_local_machine": false,
-                        "remote_side_effect": false,
-                        "paths": [],
-                        "summary": "external_effect=None network=None paths=0"
-                    },
-                    "user_reason": "Action requires user confirmation before execution: permission_required.",
-                    "model_recovery": "Action needs user approval before execution: permission_required. Wait for the permission result and do not claim the tool ran until it succeeds."
-                }
-            })),
-            review: None,
-        },
-    ];
-
-    for event in events {
-        app.emit("desktop-run-event", event)
-            .map_err(|err| err.to_string())?;
-        tokio::time::sleep(std::time::Duration::from_millis(75)).await;
-    }
-    let _ = append_desktop_log(
-        &state.diagnostic_logs_path,
-        "native_smoke_fixture permission_request=true",
-    );
-    Ok(())
-}
-
-async fn emit_native_smoke_permission_resolution(
-    app: AppHandle,
-    diagnostic_logs_path: PathBuf,
-    approved: bool,
-) {
-    tokio::time::sleep(std::time::Duration::from_millis(350)).await;
-    if approved {
-        let Some(window) = app.get_webview_window("main") else {
-            let _ = append_desktop_log(
-                &diagnostic_logs_path,
-                "native_smoke_fixture emit_error=missing main window",
-            );
-            return;
-        };
-        let events = vec![
-            DesktopRunEvent::ToolCompleted {
-                id: "native-smoke-permission-result".to_string(),
-                result_preview: "Permission approved; inspected git status".to_string(),
-                metadata: Some(serde_json::json!({
-                    "tool": "bash",
-                    "call_id": "native-smoke-permission-result",
-                    "success": true,
-                    "command": "git status --short",
-                    "command_category": "inspection",
-                    "command_kind": "git",
-                    "duration_ms": 75,
-                    "output_chars": 12,
-                    "terminal_task": {
-                        "status": "completed",
-                        "exit_code": 0,
-                        "duration_ms": 75
-                    }
-                })),
-            },
-            DesktopRunEvent::AssistantDelta {
-                text: "Native smoke fixture completed. Timeline cards, permission approval, and final answer rendering are visible.".to_string(),
-            },
-            DesktopRunEvent::RuntimeDiagnostic {
-                diagnostic: serde_json::json!({
-                    "schema": "desktop_runtime_diagnostic.v1",
-                    "task_state": {
-                        "goal": "native smoke fixture",
-                        "mode": "full",
-                        "stage": "closeout",
-                        "mode_score": {
-                            "confidence": 82,
-                            "complexity": 7,
-                            "risk": 5,
-                            "uncertainty": 3,
-                            "tool_need": 8,
-                            "user_impact": 7
-                        },
-                        "lightweight_plan": null,
-                        "verification": {
-                            "status": "verified",
-                            "required_checks": ["scripts/desktop-native-smoke.sh --fixture-run"]
-                        },
-                        "done": {
-                            "satisfied": true,
-                            "summary": "native smoke fixture completed"
-                        },
-                        "active_files": ["apps/desktop/src/app/Composer.tsx"],
-                        "stop_check": {
-                            "status": "stop",
-                            "reason": "verification_ready",
-                            "summary": "ready for closeout"
-                        }
-                    },
-                    "verification_proof": {
-                        "status": "verified",
-                        "summary": "native smoke validation passed",
-                        "closeout_status": "passed",
-                        "changed_files": 1,
-                        "validation_items": 1,
-                        "acceptance_items": 1,
-                        "residual_risks": 0
-                    },
-                    "control_loop": {
-                        "coverage": "7/7",
-                        "summary": "native smoke runtime diagnostic",
-                        "phases": [
-                            { "phase": "context", "events": 1, "latest_label": "task.context" },
-                            { "phase": "decision", "events": 1, "latest_label": "action.decision" },
-                            { "phase": "permission", "events": 1, "latest_label": "permission.resolve" },
-                            { "phase": "tool_execution", "events": 3, "latest_label": "tool.done" },
-                            { "phase": "state_update", "events": 1, "latest_label": "stop.check" },
-                            { "phase": "verification", "events": 1, "latest_label": "verify.done" },
-                            { "phase": "closeout", "events": 2, "latest_label": "assistant" }
-                        ]
-                    }
-                }),
-            },
-            DesktopRunEvent::Usage {
-                prompt_tokens: 32,
-                completion_tokens: 18,
-                reasoning_tokens: Some(4),
-                cached_tokens: Some(8),
-                cache_write_tokens: Some(12),
-            },
-            DesktopRunEvent::RunCompleted,
-        ];
-        for event in events {
-            if let Err(err) = window.emit("desktop-run-event", event) {
-                let _ = append_desktop_log(
-                    &diagnostic_logs_path,
-                    &format!(
-                        "native_smoke_fixture emit_error={}",
-                        sanitize_log_value(&err.to_string())
-                    ),
-                );
-            }
-            tokio::time::sleep(std::time::Duration::from_millis(75)).await;
-        }
-        let _ = append_desktop_log(&diagnostic_logs_path, "run_completed");
-    } else {
-        if let Some(window) = app.get_webview_window("main") {
-            let _ = window.emit(
-                "desktop-run-event",
-                DesktopRunEvent::RunError {
-                    message: "Native smoke permission rejected".to_string(),
-                },
-            );
-        }
-        let _ = append_desktop_log(
-            &diagnostic_logs_path,
-            "run_error message=Native smoke permission rejected",
-        );
-    }
-}
-
-fn desktop_unix_millis_string() -> String {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_millis().to_string())
-        .unwrap_or_else(|_| "0".to_string())
-}
-
-fn desktop_next_supervision_hint(delay_secs: u64) -> String {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| (duration.as_secs() + delay_secs).to_string())
-        .unwrap_or_else(|_| delay_secs.to_string())
-}
-
-fn compact_desktop_supervision_result(output: &str) -> String {
-    const MAX_CHARS: usize = 240;
-    let normalized = output.split_whitespace().collect::<Vec<_>>().join(" ");
-    if normalized.chars().count() <= MAX_CHARS {
-        return normalized;
-    }
-    let mut compact = normalized.chars().take(MAX_CHARS).collect::<String>();
-    compact.push_str("...");
-    compact
-}
-
-fn scoped_desktop_open_target(
-    requested: &str,
-    selected_project: &Path,
-    settings_path: &Path,
-    diagnostic_logs_path: &Path,
-) -> Result<PathBuf, String> {
-    let requested_path = PathBuf::from(requested);
-    if requested_path.as_os_str().is_empty() {
-        return Err("path cannot be empty".to_string());
-    }
-    let allowed_roots =
-        desktop_open_allowed_roots(selected_project, settings_path, diagnostic_logs_path)?;
-    let candidate = if requested_path.is_absolute() {
-        requested_path
-    } else {
-        selected_project.join(requested_path)
-    };
-    let existing_target = if candidate.exists() {
-        candidate
-            .canonicalize()
-            .map_err(|err| format!("failed to resolve {}: {err}", candidate.display()))?
-    } else {
-        nearest_existing_allowed_parent(&candidate, &allowed_roots)?
-    };
-    if allowed_roots
-        .iter()
-        .any(|root| existing_target == *root || existing_target.starts_with(root))
-    {
-        Ok(existing_target)
-    } else {
-        Err(format!(
-            "path is outside allowed desktop open roots: {}",
-            requested
-        ))
-    }
-}
-
-fn desktop_open_allowed_roots(
-    selected_project: &Path,
-    settings_path: &Path,
-    diagnostic_logs_path: &Path,
-) -> Result<Vec<PathBuf>, String> {
-    let mut roots = Vec::new();
-    for root in [
-        selected_project.to_path_buf(),
-        selected_project.join(".priority-agent/lab"),
-        settings_path
-            .parent()
-            .map(Path::to_path_buf)
-            .unwrap_or_else(|| settings_path.to_path_buf()),
-        diagnostic_logs_path
-            .parent()
-            .map(Path::to_path_buf)
-            .unwrap_or_else(|| diagnostic_logs_path.to_path_buf()),
-    ] {
-        if root.exists() {
-            roots.push(root.canonicalize().map_err(|err| {
-                format!("failed to resolve allowed root {}: {err}", root.display())
-            })?);
-        }
-    }
-    roots.sort();
-    roots.dedup();
-    Ok(roots)
-}
-
-fn nearest_existing_allowed_parent(
-    candidate: &Path,
-    allowed_roots: &[PathBuf],
-) -> Result<PathBuf, String> {
-    let mut current = candidate;
-    while let Some(parent) = current.parent() {
-        if parent.exists() {
-            let resolved = parent
-                .canonicalize()
-                .map_err(|err| format!("failed to resolve {}: {err}", parent.display()))?;
-            if allowed_roots
-                .iter()
-                .any(|root| resolved == *root || resolved.starts_with(root))
-            {
-                return Ok(resolved);
-            }
-            break;
-        }
-        current = parent;
-    }
-    Err(format!("path does not exist: {}", candidate.display()))
 }
 
 async fn runtime_for_state(state: &State<'_, DesktopAppState>) -> Result<DesktopRuntime, String> {
@@ -1722,6 +1261,8 @@ pub fn run() {
                 lab_daemon_last_supervision: Mutex::new(None),
                 lab_daemon_last_supervision_result: Mutex::new(None),
                 lab_daemon_next_supervision: Mutex::new(None),
+                onboarding_state: Mutex::new(settings.onboarding_state),
+                workspace_trust: Mutex::new(settings.workspace_trust),
                 native_smoke_permission_pending: Mutex::new(false),
                 goal_runner: Mutex::new(None),
                 settings_path,
@@ -1736,11 +1277,17 @@ pub fn run() {
             set_detail_level,
             set_agent_mode,
             set_lab_daemon_supervision_enabled,
+            complete_desktop_onboarding,
+            skip_desktop_onboarding,
+            set_workspace_trust,
+            reset_workspace_trust,
             permission_mode_options,
             agent_mode_options,
             provider_model_status,
             set_provider_model,
             desktop_diagnostics,
+            desktop_credential_storage_status,
+            export_desktop_diagnostics_bundle,
             export_session,
             provider_setup_info,
             open_settings_folder,

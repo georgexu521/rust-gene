@@ -35,6 +35,46 @@
   background: #f1f4f7;
 }
 
+.run-recovery-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: min(790px, calc(100% - 56px));
+  margin: 8px auto 0;
+  padding: 7px 9px;
+  border: 1px solid #d8e2ed;
+  border-radius: 8px;
+  color: #36404b;
+  background: #f4f8fc;
+  font-size: 12px;
+}
+
+.run-recovery-bar > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 720;
+}
+
+.run-recovery-bar div {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 6px;
+}
+
+.run-recovery-bar button {
+  min-height: 28px;
+  padding: 4px 8px;
+  border: 1px solid #c7d2df;
+  border-radius: 7px;
+  color: #303740;
+  background: #ffffff;
+  font-size: 12px;
+  font-weight: 720;
+}
+
 .confirm-backdrop {
   position: fixed;
   inset: 0;
@@ -551,6 +591,8 @@
 }
 
 .run-group-panel {
+  position: relative;
+  z-index: 2;
   flex: 1 0 100%;
   margin-top: 5px;
   padding: 8px;
@@ -584,6 +626,35 @@
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(155px, 1fr));
   gap: 7px;
+}
+
+.run-review-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 9px;
+  padding-top: 9px;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.run-review-actions button {
+  min-height: 28px;
+  padding: 4px 8px;
+  border: 1px solid #cbd2da;
+  border-radius: 7px;
+  color: #303740;
+  background: #ffffff;
+  font-size: 12px;
+  font-weight: 720;
+}
+
+.run-review-actions button:hover {
+  background: #f3f5f7;
+}
+
+.run-review-actions button:disabled {
+  color: #8b949e;
+  background: #f1f3f6;
 }
 
 .run-group-card {
@@ -1169,4 +1240,3 @@
   z-index: 23;
   width: min(760px, 100vw);
 }
-

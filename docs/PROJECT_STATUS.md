@@ -3,6 +3,52 @@ Status: Current
 
 Last updated: 2026-06-26
 
+## Desktop Product Maturity - 2026-06-26
+
+The desktop product-maturity workstream is tracked in
+`docs/DESKTOP_APP_PRODUCT_MATURITY_NEXT_PLAN_2026-06-26.md`.
+
+Implemented in this slice:
+
+- Desktop first-run setup now has a guided onboarding wizard for project,
+  provider status, credential-storage acknowledgement, permission default,
+  workspace trust, and starting mode.
+- Project-level workspace trust is visible and revocable from Settings. The
+  desktop trust wizard writes compatible `trusted-workspaces.json` records so
+  trusted package-script validation can affect LabRun validation policy, while
+  the default remains ask/off.
+- Completed runs now surface a Run Review card with changed files, validation,
+  permissions, residual risks, Accept/Dismiss, Revert last turn, Continue with
+  fix, Open trace, and Open tool output actions.
+- Desktop Stop run and guarded Force reset controls are visible for active or
+  duplicate-guarded runs, using the existing Tauri `cancel_run` and
+  `force_reset_run` backend commands.
+- Desktop diagnostics export now produces a redacted JSON support bundle with
+  settings summary, provider metadata without keys, workspace trust,
+  credential-storage status, recent logs, diagnostics, and LabRun summary.
+- Desktop credential storage now has an explicit desktop abstraction/status:
+  this build uses the CLI-compatible dotenv fallback, environment variables
+  remain supported, and system keychain storage is reported as not active
+  rather than silently implied.
+- README, QUICKSTART, and project status now state the desktop boundary as a
+  macOS-first Tauri app until Windows/Linux desktop packages are implemented
+  and validated. A macOS release checklist was added at
+  `docs/DESKTOP_MACOS_RELEASE_CHECKLIST_2026-06-26.md`.
+
+Validation completed for this slice:
+
+```bash
+cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml -q
+corepack pnpm --dir apps/desktop build
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -q -- --test-threads=1
+corepack pnpm --dir apps/desktop test:ui-smoke
+```
+
+Remaining desktop P2 items: true system keychain backend, update channel,
+signed/notarized public macOS distribution, sandbox/container validation for
+untrusted workspaces, Linux/Windows desktop package validation, and longer
+unattended desktop dogfood.
+
 ## Desktop Security, Reliability, And LabRun E2E Hardening - 2026-06-26
 
 The desktop/LabRun E2E hardening workstream is tracked in
@@ -51,9 +97,10 @@ cargo test --workspace --all-features -- --test-threads=1
 cargo doc --workspace --all-features --no-deps
 ```
 
-Deferred long-term desktop/product items remain P2: first-run wizard,
-project-trust wizard, platform keychain storage, true sandbox/container
-validation for untrusted workspaces, redacted diagnostics export, and
+Later desktop product-maturity work resolved the first-run wizard,
+project-trust wizard, visible run review/recovery, and redacted diagnostics
+export items. Remaining long-term items are platform keychain storage, true
+sandbox/container validation for untrusted workspaces, and
 SQLite-authoritative LabStore transactions.
 
 ## LabRun Subagent Scope, Validation, And Profile Hardening - 2026-06-26

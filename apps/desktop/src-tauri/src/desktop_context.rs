@@ -287,16 +287,14 @@ pub(crate) fn desktop_lab_status_for_project(project: &Path) -> DesktopLabStatus
                 .iter()
                 .filter_map(|task| {
                     task.blocker.as_ref().map(|blocker| {
-                        format!(
-                            "{}: {}",
-                            task.title,
-                            compact_desktop_lab_text(blocker, 96)
-                        )
+                        format!("{}: {}", task.title, compact_desktop_lab_text(blocker, 96))
                     })
                 })
-                .chain(run.blocked_reason.as_ref().map(|reason| {
-                    format!("Run: {}", compact_desktop_lab_text(reason, 96))
-                }))
+                .chain(
+                    run.blocked_reason
+                        .as_ref()
+                        .map(|reason| format!("Run: {}", compact_desktop_lab_text(reason, 96))),
+                )
                 .take(6)
                 .collect::<Vec<_>>();
             let validation_retries = store
@@ -338,7 +336,9 @@ pub(crate) fn desktop_lab_status_for_project(project: &Path) -> DesktopLabStatus
                 .map(|artifact| {
                     desktop_lab_artifact_snapshot(
                         &artifact,
-                        report_paths_by_artifact.get(artifact.artifact_id()).cloned(),
+                        report_paths_by_artifact
+                            .get(artifact.artifact_id())
+                            .cloned(),
                         report_previews_by_artifact
                             .get(artifact.artifact_id())
                             .cloned(),
@@ -577,15 +577,9 @@ pub(crate) fn desktop_lab_artifact_title(
         }
         priority_agent::lab::model::StageArtifact::ProfessorReview(envelope) => &envelope.title,
         priority_agent::lab::model::StageArtifact::CycleSummary(envelope) => &envelope.title,
-        priority_agent::lab::model::StageArtifact::CompressionSummary(envelope) => {
-            &envelope.title
-        }
-        priority_agent::lab::model::StageArtifact::LabMeetingRequest(envelope) => {
-            &envelope.title
-        }
-        priority_agent::lab::model::StageArtifact::LabMeetingSummary(envelope) => {
-            &envelope.title
-        }
+        priority_agent::lab::model::StageArtifact::CompressionSummary(envelope) => &envelope.title,
+        priority_agent::lab::model::StageArtifact::LabMeetingRequest(envelope) => &envelope.title,
+        priority_agent::lab::model::StageArtifact::LabMeetingSummary(envelope) => &envelope.title,
         priority_agent::lab::model::StageArtifact::LabBlockerReport(envelope) => &envelope.title,
         priority_agent::lab::model::StageArtifact::LabRevisionTask(envelope) => &envelope.title,
         priority_agent::lab::model::StageArtifact::ProfessorSteeringDecision(envelope) => {
@@ -594,20 +588,26 @@ pub(crate) fn desktop_lab_artifact_title(
     }
 }
 
-fn desktop_lab_artifact_created_at(
-    artifact: &priority_agent::lab::model::StageArtifact,
-) -> String {
+fn desktop_lab_artifact_created_at(artifact: &priority_agent::lab::model::StageArtifact) -> String {
     match artifact {
-        priority_agent::lab::model::StageArtifact::ProfessorPlan(envelope) => envelope.created_at.to_rfc3339(),
-        priority_agent::lab::model::StageArtifact::PostdocPlan(envelope) => envelope.created_at.to_rfc3339(),
-        priority_agent::lab::model::StageArtifact::GraduateResult(envelope) => envelope.created_at.to_rfc3339(),
+        priority_agent::lab::model::StageArtifact::ProfessorPlan(envelope) => {
+            envelope.created_at.to_rfc3339()
+        }
+        priority_agent::lab::model::StageArtifact::PostdocPlan(envelope) => {
+            envelope.created_at.to_rfc3339()
+        }
+        priority_agent::lab::model::StageArtifact::GraduateResult(envelope) => {
+            envelope.created_at.to_rfc3339()
+        }
         priority_agent::lab::model::StageArtifact::PostdocIntegrationSummary(envelope) => {
             envelope.created_at.to_rfc3339()
         }
         priority_agent::lab::model::StageArtifact::ProfessorReview(envelope) => {
             envelope.created_at.to_rfc3339()
         }
-        priority_agent::lab::model::StageArtifact::CycleSummary(envelope) => envelope.created_at.to_rfc3339(),
+        priority_agent::lab::model::StageArtifact::CycleSummary(envelope) => {
+            envelope.created_at.to_rfc3339()
+        }
         priority_agent::lab::model::StageArtifact::CompressionSummary(envelope) => {
             envelope.created_at.to_rfc3339()
         }
@@ -629,20 +629,26 @@ fn desktop_lab_artifact_created_at(
     }
 }
 
-fn desktop_lab_artifact_updated_at(
-    artifact: &priority_agent::lab::model::StageArtifact,
-) -> String {
+fn desktop_lab_artifact_updated_at(artifact: &priority_agent::lab::model::StageArtifact) -> String {
     match artifact {
-        priority_agent::lab::model::StageArtifact::ProfessorPlan(envelope) => envelope.updated_at.to_rfc3339(),
-        priority_agent::lab::model::StageArtifact::PostdocPlan(envelope) => envelope.updated_at.to_rfc3339(),
-        priority_agent::lab::model::StageArtifact::GraduateResult(envelope) => envelope.updated_at.to_rfc3339(),
+        priority_agent::lab::model::StageArtifact::ProfessorPlan(envelope) => {
+            envelope.updated_at.to_rfc3339()
+        }
+        priority_agent::lab::model::StageArtifact::PostdocPlan(envelope) => {
+            envelope.updated_at.to_rfc3339()
+        }
+        priority_agent::lab::model::StageArtifact::GraduateResult(envelope) => {
+            envelope.updated_at.to_rfc3339()
+        }
         priority_agent::lab::model::StageArtifact::PostdocIntegrationSummary(envelope) => {
             envelope.updated_at.to_rfc3339()
         }
         priority_agent::lab::model::StageArtifact::ProfessorReview(envelope) => {
             envelope.updated_at.to_rfc3339()
         }
-        priority_agent::lab::model::StageArtifact::CycleSummary(envelope) => envelope.updated_at.to_rfc3339(),
+        priority_agent::lab::model::StageArtifact::CycleSummary(envelope) => {
+            envelope.updated_at.to_rfc3339()
+        }
         priority_agent::lab::model::StageArtifact::CompressionSummary(envelope) => {
             envelope.updated_at.to_rfc3339()
         }
@@ -1067,7 +1073,11 @@ fn escape_context_attr(value: &str) -> String {
 mod tests {
     use super::*;
 
-    fn file_context(line_start: Option<usize>, line_end: Option<usize>, selection_text: Option<&str>) -> DesktopRunContext {
+    fn file_context(
+        line_start: Option<usize>,
+        line_end: Option<usize>,
+        selection_text: Option<&str>,
+    ) -> DesktopRunContext {
         DesktopRunContext {
             context_type: "file".to_string(),
             label: None,

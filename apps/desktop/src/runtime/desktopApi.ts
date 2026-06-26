@@ -8,6 +8,9 @@ import type {
   DesktopContextSnapshot,
   DesktopDiagnostic,
   DesktopDiagnosticsResponse,
+  DesktopDiagnosticsBundleResult,
+  DesktopDiagnosticsRedaction,
+  DesktopCredentialStorageStatus,
   DesktopExportResult,
   DesktopFilePreview,
   DesktopHealth,
@@ -21,6 +24,8 @@ import type {
   DesktopRunEvent,
   DesktopSessionRevertRecord,
   DesktopSettings,
+  DesktopOnboardingInput,
+  DesktopWorkspaceTrustInput,
   DesktopToolOutputMeta,
   DesktopToolOutputPage,
   DesktopWorkbenchSnapshot,
@@ -86,6 +91,18 @@ let webPreviewSettings: DesktopSettings = {
   lab_daemon_last_supervision: null,
   lab_daemon_last_supervision_result: null,
   lab_daemon_next_supervision: null,
+  onboarding_state: {
+    onboarding_version: 1,
+    completed_at: "preview",
+    project_root: "/Users/example/projects/priority-agent-demo",
+    permission_mode: "auto_low_risk",
+    workspace_trust_summary: previewWorkspaceTrust("/Users/example/projects/priority-agent-demo"),
+    credential_storage_acknowledged: true,
+    skipped: false,
+    starting_mode: "direct",
+  },
+  workspace_trust: previewWorkspaceTrust("/Users/example/projects/priority-agent-demo"),
+  credential_storage: previewCredentialStorage(),
 };
 let webPreviewSessions: RecentSession[] = [
   {
@@ -104,6 +121,60 @@ let webPreviewSessions: RecentSession[] = [
   },
 ];
 let webPreviewArchivedSessions: RecentSession[] = [];
+
+function previewWorkspaceTrust(project: string) {
+  return {
+    canonical_project_path: project,
+    repo_identity: "preview://priority-agent-demo",
+    repo_fingerprint: `preview-${basename(project)}`,
+    trust_source: "web_preview",
+    package_scripts: "ask" as const,
+    shell_validation: "ask" as const,
+    lab_daemon_supervision: false,
+    developer_auto_acknowledged: false,
+    trusted_capabilities: [],
+    last_updated: null,
+  };
+}
+
+function previewCredentialStorage(): DesktopCredentialStorageStatus {
+  return {
+    active_store: "dotenv_fallback",
+    system_keychain_available: false,
+    dotenv_fallback_path: "web-preview/.priority-agent/.env",
+    environment_only_available: true,
+    acknowledgement_required: true,
+    last_updated_source: "web_preview",
+    detail: "Web preview simulates dotenv fallback credential storage.",
+  };
+}
+
+function trustStatusFromInput(project: string, input: DesktopWorkspaceTrustInput | null) {
+  const normalized = input || {
+    package_scripts: "ask" as const,
+    shell_validation: "ask" as const,
+    lab_daemon_supervision: false,
+    developer_auto_acknowledged: false,
+  };
+  const trusted_capabilities = [
+    normalized.package_scripts === "trusted" ? "allow_package_scripts" : null,
+    normalized.shell_validation === "trusted" ? "allow_shell_validation" : null,
+    normalized.lab_daemon_supervision ? "allow_lab_daemon_supervision" : null,
+    normalized.developer_auto_acknowledged ? "allow_developer_auto" : null,
+  ].filter((capability): capability is string => Boolean(capability));
+  return {
+    canonical_project_path: project,
+    repo_identity: "preview://priority-agent-demo",
+    repo_fingerprint: `preview-${basename(project)}`,
+    trust_source: trusted_capabilities.length ? "web_preview_trusted" : "web_preview",
+    package_scripts: normalized.package_scripts,
+    shell_validation: normalized.shell_validation,
+    lab_daemon_supervision: normalized.lab_daemon_supervision,
+    developer_auto_acknowledged: normalized.developer_auto_acknowledged,
+    trusted_capabilities,
+    last_updated: "preview",
+  };
+}
 
 export function desktopHealth(): Promise<DesktopHealth> {
   if (!isTauriRuntime()) {
@@ -362,10 +433,19 @@ export async function superviseLabDaemon(): Promise<DesktopLabDaemonActionResult
 
 export function setLabDaemonSupervisionEnabled(enabled: boolean): Promise<DesktopSettings> {
   if (!isTauriRuntime()) {
+    const trust = {
+      ...webPreviewSettings.workspace_trust,
+      lab_daemon_supervision: enabled,
+      trusted_capabilities: enabled
+        ? Array.from(new Set([...webPreviewSettings.workspace_trust.trusted_capabilities, "allow_lab_daemon_supervision"]))
+        : webPreviewSettings.workspace_trust.trusted_capabilities.filter((item) => item !== "allow_lab_daemon_supervision"),
+      last_updated: "preview",
+    };
     webPreviewSettings = {
       ...webPreviewSettings,
       lab_daemon_supervision_enabled: enabled,
       lab_daemon_next_supervision: enabled ? "preview +120s" : null,
+      workspace_trust: trust,
     };
     return Promise.resolve(webPreviewSettings);
   }
@@ -380,6 +460,7 @@ export function selectProject(path: string): Promise<SelectedProject> {
       selected_project: path,
       active_session_id: null,
       recent_projects: [path, ...webPreviewSettings.recent_projects.filter((project) => project !== path)].slice(0, 8),
+      workspace_trust: previewWorkspaceTrust(path),
       startup_state: {
         status: "new_conversation",
         detail: `Ready for a new conversation in ${basename(path)}`,
@@ -397,7 +478,15 @@ export function selectProject(path: string): Promise<SelectedProject> {
 
 export function desktopSettings(): Promise<DesktopSettings> {
   if (!isTauriRuntime()) {
-    if (webPreviewFixtureName() === "labRecovery") {
+    const fixture = webPreviewFixtureName();
+    if (fixture === "onboarding" && !webPreviewOnboardingFixtureCompleted()) {
+      return Promise.resolve({
+        ...webPreviewSettings,
+        onboarding_state: null,
+        workspace_trust: previewWorkspaceTrust(webPreviewSettings.selected_project),
+      });
+    }
+    if (fixture === "labRecovery") {
       return Promise.resolve({
         ...webPreviewSettings,
         startup_state: {
@@ -414,6 +503,107 @@ export function desktopSettings(): Promise<DesktopSettings> {
   }
 
   return invoke("desktop_settings");
+}
+
+export function completeDesktopOnboarding(input: DesktopOnboardingInput): Promise<DesktopSettings> {
+  if (!isTauriRuntime()) {
+    const project = input.project_root || webPreviewSettings.selected_project;
+    const trust = trustStatusFromInput(project, input.workspace_trust || null);
+    webPreviewSettings = {
+      ...webPreviewSettings,
+      selected_project: project,
+      permission_mode: (input.permission_mode as PermissionModeId) || "auto_low_risk",
+      lab_daemon_supervision_enabled: trust.lab_daemon_supervision,
+      lab_daemon_next_supervision: trust.lab_daemon_supervision ? "preview +120s" : null,
+      workspace_trust: trust,
+      onboarding_state: {
+        onboarding_version: 1,
+        completed_at: "preview",
+        project_root: project,
+        permission_mode: input.permission_mode || "auto_low_risk",
+        workspace_trust_summary: trust,
+        credential_storage_acknowledged: input.credential_storage_acknowledged,
+        skipped: input.skipped === true,
+        starting_mode: input.starting_mode || "direct",
+      },
+      credential_storage: previewCredentialStorage(),
+    };
+    markWebPreviewOnboardingFixtureCompleted();
+    return Promise.resolve(webPreviewSettings);
+  }
+
+  return invoke("complete_desktop_onboarding", { input });
+}
+
+export function skipDesktopOnboarding(): Promise<DesktopSettings> {
+  if (!isTauriRuntime()) {
+    return completeDesktopOnboarding({
+      project_root: webPreviewSettings.selected_project,
+      permission_mode: "auto_low_risk",
+      workspace_trust: {
+        package_scripts: "ask",
+        shell_validation: "ask",
+        lab_daemon_supervision: false,
+        developer_auto_acknowledged: false,
+      },
+      credential_storage_acknowledged: false,
+      starting_mode: "direct",
+      skipped: true,
+    });
+  }
+
+  return invoke("skip_desktop_onboarding");
+}
+
+export function setWorkspaceTrust(input: DesktopWorkspaceTrustInput): Promise<DesktopSettings> {
+  if (!isTauriRuntime()) {
+    const trust = trustStatusFromInput(webPreviewSettings.selected_project, input);
+    webPreviewSettings = {
+      ...webPreviewSettings,
+      workspace_trust: trust,
+      lab_daemon_supervision_enabled: trust.lab_daemon_supervision,
+      lab_daemon_next_supervision: trust.lab_daemon_supervision ? "preview +120s" : null,
+    };
+    return Promise.resolve(webPreviewSettings);
+  }
+
+  return invoke("set_workspace_trust", { input });
+}
+
+export function resetWorkspaceTrust(): Promise<DesktopSettings> {
+  if (!isTauriRuntime()) {
+    return setWorkspaceTrust({
+      package_scripts: "ask",
+      shell_validation: "ask",
+      lab_daemon_supervision: false,
+      developer_auto_acknowledged: false,
+    });
+  }
+
+  return invoke("reset_workspace_trust");
+}
+
+export function desktopCredentialStorageStatus(): Promise<DesktopCredentialStorageStatus> {
+  if (!isTauriRuntime()) {
+    return Promise.resolve(webPreviewSettings.credential_storage);
+  }
+
+  return invoke("desktop_credential_storage_status");
+}
+
+export function exportDesktopDiagnosticsBundle(
+  redaction: DesktopDiagnosticsRedaction = { include_logs: true, max_log_bytes: 32768 },
+): Promise<DesktopDiagnosticsBundleResult> {
+  if (!isTauriRuntime()) {
+    return Promise.resolve({
+      path: `${webPreviewSettings.selected_project}/.priority-agent/desktop-diagnostics/exports/priority-agent-desktop-diagnostics-preview.json`,
+      privacy: "redacted",
+      redacted: true,
+      summary: "Redacted preview diagnostics bundle exported",
+    });
+  }
+
+  return invoke("export_desktop_diagnostics_bundle", { redaction });
 }
 
 export function newConversation(): Promise<DesktopSettings> {
@@ -1062,6 +1252,20 @@ function webPreviewFixtureName() {
     return "";
   }
   return new URLSearchParams(window.location.search).get("previewFixture") || "";
+}
+
+function webPreviewOnboardingFixtureCompleted() {
+  if (typeof window === "undefined") {
+    return false;
+  }
+  return window.sessionStorage.getItem("priority-agent.onboardingFixtureCompleted") === "1";
+}
+
+function markWebPreviewOnboardingFixtureCompleted() {
+  if (typeof window === "undefined") {
+    return;
+  }
+  window.sessionStorage.setItem("priority-agent.onboardingFixtureCompleted", "1");
 }
 
 export function compactContext(): Promise<DesktopCompactionAttempt | null> {

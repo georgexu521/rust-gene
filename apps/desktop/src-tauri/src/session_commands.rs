@@ -22,6 +22,10 @@ pub(crate) async fn select_project(
         let mut active_session_id = state.active_session_id.lock().await;
         *active_session_id = None;
     }
+    {
+        let mut workspace_trust = state.workspace_trust.lock().await;
+        *workspace_trust = Some(desktop_workspace_trust_status(&project, None));
+    }
     persist_current_settings(&state).await?;
 
     Ok(selected_project_response(project))
@@ -228,9 +232,7 @@ pub(crate) fn desktop_tool_output_page(
             limit.unwrap_or(64 * 1024),
         )
         .map_err(|err| err.to_string())?;
-    let meta = store
-        .read_meta(&id_or_uri)
-        .map_err(|err| err.to_string())?;
+    let meta = store.read_meta(&id_or_uri).map_err(|err| err.to_string())?;
     Ok(DesktopToolOutputPage {
         id: meta.id.clone(),
         uri: meta.uri(),

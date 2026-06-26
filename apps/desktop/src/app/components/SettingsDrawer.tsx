@@ -8,6 +8,7 @@ import {
   MessageCircle,
   RefreshCw,
   Settings,
+  ShieldCheck,
   Terminal,
 } from "lucide-react";
 import {
@@ -18,6 +19,7 @@ import {
   PermissionModeOption,
   ProviderModelStatus,
   ProviderSetupInfo,
+  DesktopWorkspaceTrustInput,
 } from "../../runtime/desktopApi";
 import { saveProviderCredential as saveCred } from "../../runtime/desktopApi";
 import { useDrawerKeyboard } from "./useDrawerKeyboard";
@@ -38,12 +40,15 @@ type SettingsDrawerProps = {
   onDetailLevelChange: (level: DetailLevelId) => void;
   onPermissionModeChange: (mode: PermissionModeId) => void;
   onLabDaemonSupervisionChange: (enabled: boolean) => void;
+  onWorkspaceTrustChange: (input: DesktopWorkspaceTrustInput) => void;
+  onWorkspaceTrustReset: () => void;
+  onExportDiagnosticsBundle: () => void;
   onOpenDiagnosticsFolder: () => void;
   onOpenSettingsFolder: () => void;
   onOpenShellProfile: () => void;
 };
 
-type SettingsCategory = "general" | "provider" | "permissions" | "diagnostics";
+type SettingsCategory = "general" | "provider" | "permissions" | "trust" | "diagnostics";
 
 export function SettingsDrawer({
   isOpen,
@@ -61,6 +66,9 @@ export function SettingsDrawer({
   onDetailLevelChange,
   onPermissionModeChange,
   onLabDaemonSupervisionChange,
+  onWorkspaceTrustChange,
+  onWorkspaceTrustReset,
+  onExportDiagnosticsBundle,
   onOpenDiagnosticsFolder,
   onOpenSettingsFolder,
   onOpenShellProfile,
@@ -104,6 +112,12 @@ export function SettingsDrawer({
           icon={<KeyRound aria-hidden="true" size={17} />}
           label="Permissions"
           onClick={() => setActiveCategory("permissions")}
+        />
+        <SettingsNavButton
+          active={activeCategory === "trust"}
+          icon={<ShieldCheck aria-hidden="true" size={17} />}
+          label="Trust"
+          onClick={() => setActiveCategory("trust")}
         />
         <SettingsNavButton
           active={activeCategory === "diagnostics"}
@@ -280,7 +294,21 @@ export function SettingsDrawer({
                   <dt>Example</dt>
                   <dd>{providerSetup?.example || "Not loaded"}</dd>
                 </div>
+                <div>
+                  <dt>Credential store</dt>
+                  <dd>{settings?.credential_storage.active_store || "Not loaded"}</dd>
+                </div>
+                <div>
+                  <dt>System keychain</dt>
+                  <dd>{settings?.credential_storage.system_keychain_available ? "available" : "not active"}</dd>
+                </div>
               </dl>
+              {settings?.credential_storage ? (
+                <p className="settings-copy">
+                  {settings.credential_storage.detail} Fallback path:{" "}
+                  {settings.credential_storage.dotenv_fallback_path}
+                </p>
+              ) : null}
             </section>
           ) : null}
 
@@ -312,10 +340,22 @@ export function SettingsDrawer({
             </section>
           ) : null}
 
+          {activeCategory === "trust" ? (
+            <WorkspaceTrustSection
+              settings={settings}
+              onChange={onWorkspaceTrustChange}
+              onReset={onWorkspaceTrustReset}
+            />
+          ) : null}
+
           {activeCategory === "diagnostics" ? (
             <section className="settings-section">
               <h3>Diagnostics</h3>
               <div className="settings-actions">
+                <button type="button" onClick={onExportDiagnosticsBundle}>
+                  <RefreshCw aria-hidden="true" size={14} />
+                  <span>Export redacted diagnostics</span>
+                </button>
                 <button type="button" onClick={onOpenDiagnosticsFolder}>
                   <FolderOpen aria-hidden="true" size={14} />
                   <span>Open diagnostics folder</span>
@@ -365,11 +405,94 @@ function settingsCategoryTitle(category: SettingsCategory) {
       return "Provider";
     case "permissions":
       return "Permissions";
+    case "trust":
+      return "Workspace Trust";
     case "diagnostics":
       return "Diagnostics";
     default:
       return "General";
   }
+}
+
+function WorkspaceTrustSection({
+  settings,
+  onChange,
+  onReset,
+}: {
+  settings: DesktopSettings | null;
+  onChange: (input: DesktopWorkspaceTrustInput) => void;
+  onReset: () => void;
+}) {
+  const trust = settings?.workspace_trust;
+  const current: DesktopWorkspaceTrustInput = {
+    package_scripts: trust?.package_scripts === "trusted" ? "trusted" : "ask",
+    shell_validation: trust?.shell_validation === "trusted" ? "trusted" : "ask",
+    lab_daemon_supervision: trust?.lab_daemon_supervision === true,
+    developer_auto_acknowledged: trust?.developer_auto_acknowledged === true,
+  };
+  const update = (patch: Partial<DesktopWorkspaceTrustInput>) => onChange({ ...current, ...patch });
+
+  return (
+    <section className="settings-section">
+      <h3>Workspace trust</h3>
+      <p className="settings-copy">
+        Trust is scoped to the selected project and is revocable from this panel.
+      </p>
+      <div className="settings-trust-grid">
+        <TrustCard label="Project" value={trust?.canonical_project_path || settings?.selected_project || "Not loaded"} />
+        <TrustCard label="Repository" value={trust?.repo_identity || "unknown"} />
+        <TrustCard label="Source" value={trust?.trust_source || "not loaded"} />
+        <TrustCard
+          label="Capabilities"
+          value={trust?.trusted_capabilities.length ? trust.trusted_capabilities.join(", ") : "none"}
+        />
+      </div>
+      <div className="trust-choice-row">
+        <span>Package-script validation</span>
+        <div role="group" aria-label="Package-script validation trust">
+          <button className={current.package_scripts === "ask" ? "active" : ""} type="button" onClick={() => update({ package_scripts: "ask" })}>Ask</button>
+          <button className={current.package_scripts === "trusted" ? "active" : ""} type="button" onClick={() => update({ package_scripts: "trusted" })}>Trusted</button>
+        </div>
+      </div>
+      <div className="trust-choice-row">
+        <span>Shell validation</span>
+        <div role="group" aria-label="Shell validation trust">
+          <button className={current.shell_validation === "ask" ? "active" : ""} type="button" onClick={() => update({ shell_validation: "ask" })}>Ask</button>
+          <button className={current.shell_validation === "trusted" ? "active" : ""} type="button" onClick={() => update({ shell_validation: "trusted" })}>Trusted</button>
+        </div>
+      </div>
+      <label className="settings-toggle-row">
+        <input
+          type="checkbox"
+          checked={current.lab_daemon_supervision}
+          onChange={(event) => update({ lab_daemon_supervision: event.target.checked })}
+        />
+        <span>Allow automatic Lab daemon supervision for this project.</span>
+      </label>
+      <label className="settings-toggle-row">
+        <input
+          type="checkbox"
+          checked={current.developer_auto_acknowledged}
+          onChange={(event) => update({ developer_auto_acknowledged: event.target.checked })}
+        />
+        <span>Allow Developer Auto after explicit project trust acknowledgement.</span>
+      </label>
+      <div className="settings-actions">
+        <button type="button" onClick={onReset}>
+          Revoke project trust
+        </button>
+      </div>
+    </section>
+  );
+}
+
+function TrustCard({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="settings-trust-card">
+      <strong>{label}</strong>
+      <span>{value}</span>
+    </div>
+  );
 }
 
 function basename(path: string) {

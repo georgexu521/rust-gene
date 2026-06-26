@@ -1,15 +1,19 @@
 import { expect, test } from "@playwright/test";
 import {
   archiveSession,
+  completeDesktopOnboarding,
   deleteSession,
   desktopSettings,
+  exportDesktopDiagnosticsBundle,
   listRecentSessions,
   newConversation,
   renameSession,
+  resetWorkspaceTrust,
   restoreArchivedSession,
   searchSessions,
   selectProject,
   setDetailLevel,
+  setWorkspaceTrust,
 } from "../src/runtime/desktopApi";
 
 test.describe("desktop API web preview state", () => {
@@ -80,5 +84,54 @@ test.describe("desktop API web preview state", () => {
     await expect(setDetailLevel("daily")).resolves.toEqual(
       expect.objectContaining({ detail_level: "daily" }),
     );
+  });
+
+  test("supports onboarding, workspace trust, and redacted diagnostics export state", async () => {
+    const completed = await completeDesktopOnboarding({
+      project_root: "/Users/example/projects/priority-agent-demo",
+      permission_mode: "auto_low_risk",
+      workspace_trust: {
+        package_scripts: "trusted",
+        shell_validation: "ask",
+        lab_daemon_supervision: false,
+        developer_auto_acknowledged: false,
+      },
+      credential_storage_acknowledged: true,
+      starting_mode: "direct",
+      skipped: false,
+    });
+    expect(completed.onboarding_state).toEqual(
+      expect.objectContaining({
+        onboarding_version: 1,
+        credential_storage_acknowledged: true,
+        skipped: false,
+      }),
+    );
+    expect(completed.workspace_trust.trusted_capabilities).toContain("allow_package_scripts");
+
+    const trusted = await setWorkspaceTrust({
+      package_scripts: "trusted",
+      shell_validation: "trusted",
+      lab_daemon_supervision: true,
+      developer_auto_acknowledged: true,
+    });
+    expect(trusted.workspace_trust.trusted_capabilities).toEqual(
+      expect.arrayContaining([
+        "allow_package_scripts",
+        "allow_shell_validation",
+        "allow_lab_daemon_supervision",
+        "allow_developer_auto",
+      ]),
+    );
+
+    const reset = await resetWorkspaceTrust();
+    expect(reset.workspace_trust.trusted_capabilities).toEqual([]);
+    await expect(exportDesktopDiagnosticsBundle()).resolves.toEqual(
+      expect.objectContaining({
+        privacy: "redacted",
+        redacted: true,
+      }),
+    );
+    expect((await desktopSettings()).credential_storage.active_store).toBe("dotenv_fallback");
   });
 });

@@ -25,11 +25,12 @@ pub(super) fn collect_desktop_diagnostics(
 pub(super) fn provider_setup_info_value() -> ProviderSetupInfo {
     ProviderSetupInfo {
         shell_profile_path: shell_profile_path().display().to_string(),
-        provider_env_vars: priority_agent::services::api::provider_manifest::ProviderManifestLoader::load_merged()
-            .provider
-            .iter()
-            .flat_map(|spec| spec.env.iter().cloned())
-            .collect(),
+        provider_env_vars:
+            priority_agent::services::api::provider_manifest::ProviderManifestLoader::load_merged()
+                .provider
+                .iter()
+                .flat_map(|spec| spec.env.iter().cloned())
+                .collect(),
         example: "export MINIMAX_API_KEY=\"your-key-here\"",
     }
 }
@@ -71,23 +72,27 @@ fn product_readiness_identity(name: &str) -> (&'static str, &'static str) {
         "session_store" => ("product_ready_session_store", "Product readiness: sessions"),
         "export" => ("product_ready_export", "Product readiness: export"),
         "lsp" => ("product_ready_lsp", "Product readiness: LSP"),
-        "permissions" => ("product_ready_permissions", "Product readiness: permissions"),
+        "permissions" => (
+            "product_ready_permissions",
+            "Product readiness: permissions",
+        ),
         "runtime" => ("product_ready_runtime", "Product readiness: runtime"),
         _ => ("product_ready_other", "Product readiness"),
     }
 }
 
 pub(super) fn provider_key_diagnostic() -> DesktopDiagnostic {
-    let configured: Vec<String> = priority_agent::services::api::provider_manifest::ProviderManifestLoader::load_merged()
-        .provider
-        .iter()
-        .filter_map(|spec| {
-            spec.env
-                .iter()
-                .any(|env| env_is_set(env))
-                .then_some(spec.name.clone())
-        })
-        .collect();
+    let configured: Vec<String> =
+        priority_agent::services::api::provider_manifest::ProviderManifestLoader::load_merged()
+            .provider
+            .iter()
+            .filter_map(|spec| {
+                spec.env
+                    .iter()
+                    .any(|env| env_is_set(env))
+                    .then_some(spec.name.clone())
+            })
+            .collect();
 
     if configured.is_empty() {
         DesktopDiagnostic {

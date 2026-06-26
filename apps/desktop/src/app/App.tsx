@@ -24,10 +24,12 @@ import {
   DesktopGoalStatus,
   archiveSession,
   compactContext,
+  cancelRun,
   deleteSession,
   desktopRunContextDetail,
   desktopSettings,
   exportSession,
+  exportDesktopDiagnosticsBundle,
   openFilePath,
   newConversation,
   openDiagnosticsFolder,
@@ -39,8 +41,13 @@ import {
   renameSession,
   restoreArchivedSession,
   revertLastTurn,
+  forceResetRun,
   resumeSession,
   selectProject,
+  completeDesktopOnboarding,
+  skipDesktopOnboarding,
+  setWorkspaceTrust,
+  resetWorkspaceTrust,
   setProviderModel,
   setDetailLevel,
   setLabDaemonSupervisionEnabled,
@@ -52,6 +59,8 @@ import {
   goalResume,
   goalClear,
   goalEdit,
+  type DesktopOnboardingInput,
+  type DesktopWorkspaceTrustInput,
 } from "../runtime/desktopApi";
 import { Composer } from "./components/Composer";
 import { GoalProgressRow } from "./components/GoalProgressRow";
@@ -68,6 +77,7 @@ import { SessionHeader, type WorkspaceMode } from "./components/SessionHeader";
 import { StatusBar } from "./components/StatusBar";
 import { StartupStateCard } from "./components/StartupStateCard";
 import { PermissionCard } from "./components/PermissionCard";
+import { OnboardingWizard } from "./components/OnboardingWizard";
 import { SettingsDrawer } from "./components/SettingsDrawer";
 import { Sidebar } from "./components/Sidebar";
 import { Transcript } from "./components/Transcript";
@@ -142,6 +152,8 @@ export function App() {
   const [pendingDeleteSession, setPendingDeleteSession] = useState<RecentSession | null>(null);
   const [currentGoal, setCurrentGoal] = useState<DesktopGoalStatus | null>(null);
   const [dismissedStartupLabRecoveryId, setDismissedStartupLabRecoveryId] = useState<string | null>(null);
+  const [dismissedRunReviewIds, setDismissedRunReviewIds] = useState<Set<string>>(() => new Set());
+  const [isForceResetConfirmOpen, setIsForceResetConfirmOpen] = useState(false);
   const {
     clearRunWatchdog,
     handlePermission,
@@ -299,6 +311,70 @@ export function App() {
       setSettings(await setLabDaemonSupervisionEnabled(enabled));
     } catch (err) {
       setRunState((current) => withError(current, err));
+    }
+  }
+
+  async function handleWorkspaceTrustChange(input: DesktopWorkspaceTrustInput) {
+    try {
+      setSettings(await setWorkspaceTrust(input));
+      void refreshDiagnostics();
+    } catch (err) {
+      setRunState((current) => withError(current, err));
+    }
+  }
+
+  async function handleWorkspaceTrustReset() {
+    try {
+      setSettings(await resetWorkspaceTrust());
+      void refreshDiagnostics();
+    } catch (err) {
+      setRunState((current) => withError(current, err));
+    }
+  }
+
+  async function handleExportDesktopDiagnosticsBundle() {
+    try {
+      const result = await exportDesktopDiagnosticsBundle();
+      setExportNotice(`${result.summary}: ${result.path}`);
+      setExportPath(result.path);
+    } catch (err) {
+      setRunState((current) => withError(current, err));
+    }
+  }
+
+  async function handleCompleteOnboarding(input: DesktopOnboardingInput) {
+    try {
+      const nextSettings = await completeDesktopOnboarding(input);
+      setSettings(nextSettings);
+      setProjectPath(nextSettings.selected_project);
+      setWorkspaceMode(input.starting_mode === "labrun" ? "labrun" : "direct");
+      if (input.starting_mode === "labrun") {
+        stageSlashCommand("/lab start ");
+      }
+      void refreshDiagnostics();
+      void refreshWorkbenchSnapshot();
+    } catch (err) {
+      setRunState((current) => withError(current, err));
+    }
+  }
+
+  async function handleSkipOnboarding() {
+    try {
+      const nextSettings = await skipDesktopOnboarding();
+      setSettings(nextSettings);
+      setProjectPath(nextSettings.selected_project);
+      void refreshDiagnostics();
+    } catch (err) {
+      setRunState((current) => withError(current, err));
+    }
+  }
+
+  async function handleOnboardingBrowseProject() {
+    try {
+      return await pickProjectDirectory();
+    } catch (err) {
+      setRunState((current) => withError(current, err));
+      return null;
     }
   }
 
@@ -501,6 +577,42 @@ export function App() {
       setRunState((current) => withError(current, err));
     } finally {
       setIsRevertingTurn(false);
+    }
+  }
+
+  async function handleStopRun() {
+    try {
+      const cancelled = await cancelRun();
+      setRunState((current) => ({
+        ...current,
+        isRunning: false,
+        pendingPermission: null,
+        error: cancelled ? "Stop requested for the active desktop run." : current.error,
+      }));
+      clearRunWatchdog();
+      void refreshSessions();
+      void refreshWorkbenchSnapshot();
+    } catch (err) {
+      setRunState((current) => withError(current, err));
+    }
+  }
+
+  async function handleForceResetRun() {
+    try {
+      const reset = await forceResetRun();
+      setIsForceResetConfirmOpen(false);
+      setRunState((current) => ({
+        ...current,
+        isRunning: false,
+        pendingPermission: null,
+        error: reset ? "Desktop run state was force reset." : null,
+      }));
+      clearRunWatchdog();
+      void refreshSessions();
+      void refreshContextSnapshot();
+      void refreshWorkbenchSnapshot();
+    } catch (err) {
+      setRunState((current) => withError(current, err));
     }
   }
 
@@ -809,6 +921,11 @@ export function App() {
     return <Splash onDone={() => setShowSplash(false)} />;
   }
 
+  const shouldShowOnboarding =
+    Boolean(settings) && settings?.onboarding_state?.onboarding_version !== 1;
+  const duplicateRunGuardActive =
+    runState.error?.toLocaleLowerCase().includes("desktop run is already active") === true;
+
   return (
     <ErrorBoundary label="App">
     <main className="app-shell">
@@ -897,13 +1014,44 @@ export function App() {
           </div>
         ) : null}
 
+        {runState.isRunning || duplicateRunGuardActive ? (
+          <div className="run-recovery-bar" role="status">
+            <span>
+              {duplicateRunGuardActive
+                ? "A run is already active."
+                : "Agent run in progress."}
+            </span>
+            <div>
+              <button type="button" onClick={() => void handleStopRun()}>
+                Stop run
+              </button>
+              <button type="button" onClick={() => openTraceDrawer(runState.traceItems.at(-1)?.id || null)}>
+                Open trace
+              </button>
+              <button type="button" onClick={() => setIsForceResetConfirmOpen(true)}>
+                Force reset...
+              </button>
+            </div>
+          </div>
+        ) : null}
+
         <Transcript
           diagnostics={diagnostics}
+          dismissedRunReviewIds={dismissedRunReviewIds}
           isRunning={runState.isRunning}
           items={runState.items}
+          onContinueFromRunReview={(prompt) => {
+            setComposer(prompt);
+            setComposerFocusRequest((request) => request + 1);
+          }}
+          onDismissRunReview={(runId) =>
+            setDismissedRunReviewIds((current) => new Set([...current, runId]))
+          }
           onOpenContext={setActiveContextDetail}
           onOpenTrace={(traceId) => openTraceDrawer(traceId)}
+          onOpenToolOutput={openToolOutputDrawer}
           onPermissionAnswer={(approved) => void handlePermission(approved)}
+          onRevertLastTurn={() => void handleRevertLastTurn()}
           projectPath={projectPath}
           providerStatus={providerStatus}
         />
@@ -962,6 +1110,9 @@ export function App() {
           onLabDaemonSupervisionChange={(enabled) =>
             void handleLabDaemonSupervisionChange(enabled)
           }
+          onWorkspaceTrustChange={(input) => void handleWorkspaceTrustChange(input)}
+          onWorkspaceTrustReset={() => void handleWorkspaceTrustReset()}
+          onExportDiagnosticsBundle={() => void handleExportDesktopDiagnosticsBundle()}
           onOpenDiagnosticsFolder={() => void openDiagnosticsFolder()}
           onOpenSettingsFolder={() => void openSettingsFolder()}
           onOpenShellProfile={() => void openShellProfile()}
@@ -1042,6 +1193,16 @@ export function App() {
                   Open trace
                 </button>
               ) : null}
+              {duplicateRunGuardActive || runState.isRunning ? (
+                <button type="button" onClick={() => void handleStopRun()}>
+                  Stop run
+                </button>
+              ) : null}
+              {duplicateRunGuardActive ? (
+                <button type="button" onClick={() => setIsForceResetConfirmOpen(true)}>
+                  Force reset
+                </button>
+              ) : null}
               <button type="button" onClick={() => openInspectorTab("diagnostics")}>
                 Diagnostics
               </button>
@@ -1072,6 +1233,45 @@ export function App() {
           onCancel={() => setPendingDeleteSession(null)}
           onConfirm={() => void handleConfirmDeleteSession()}
         />
+      ) : null}
+
+      {settings && shouldShowOnboarding ? (
+        <OnboardingWizard
+          settings={settings}
+          permissionOptions={permissionOptions}
+          providerStatus={providerStatus}
+          projectPath={projectPath}
+          onBrowseProject={handleOnboardingBrowseProject}
+          onComplete={handleCompleteOnboarding}
+          onSkip={handleSkipOnboarding}
+        />
+      ) : null}
+
+      {isForceResetConfirmOpen ? (
+        <section
+          aria-label="Force reset run"
+          aria-modal="true"
+          className="confirm-backdrop"
+          role="dialog"
+        >
+          <div className="confirm-dialog">
+            <div>
+              <h2>Force reset active run?</h2>
+              <p>
+                This clears the desktop run guard. Use it only when Stop run did
+                not recover the UI.
+              </p>
+            </div>
+            <div className="confirm-dialog-actions">
+              <button type="button" onClick={() => setIsForceResetConfirmOpen(false)}>
+                Cancel
+              </button>
+              <button className="danger" type="button" onClick={() => void handleForceResetRun()}>
+                Force reset
+              </button>
+            </div>
+          </div>
+        </section>
       ) : null}
 
       <RuntimeInspectorSurfaces

@@ -127,8 +127,22 @@
   .diagnostics-panel,
   .workbench-panel,
   .permission-card,
-  .error-banner {
+  .error-banner,
+  .run-recovery-bar {
     width: calc(100vw - 40px);
+  }
+
+  .run-recovery-bar {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .run-recovery-bar > span {
+    white-space: normal;
+  }
+
+  .run-recovery-bar div {
+    flex-wrap: wrap;
   }
 
   .runtime-alert {
@@ -139,6 +153,38 @@
   .runtime-alert-actions {
     grid-column: 1 / -1;
     justify-content: flex-start;
+  }
+
+  .onboarding-backdrop {
+    padding: 12px;
+  }
+
+  .onboarding-wizard {
+    max-height: calc(100vh - 24px);
+  }
+
+  .onboarding-header {
+    grid-template-columns: 1fr;
+  }
+
+  .onboarding-stepper {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .onboarding-kv,
+  .onboarding-start-options,
+  .settings-trust-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .trust-choice-row {
+    grid-template-columns: 1fr;
+    align-items: stretch;
+  }
+
+  .trust-choice-row div {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
   }
 
   .workbench-panel {

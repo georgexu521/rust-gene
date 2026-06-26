@@ -126,11 +126,36 @@ cargo test --quiet
 Use `--test-threads=1` for workflow-enabled or older broad suites when a slice
 mutates process environment variables.
 
+## Desktop App
+
+The desktop app is currently a macOS-first Tauri app. Use the CLI for the
+primary macOS/Linux release path; use desktop packaging as a separate release
+candidate flow.
+
+```bash
+# Development desktop app bound to this project
+PRIORITY_AGENT_DESKTOP_PROJECT_DIR="$PWD" corepack pnpm --dir apps/desktop tauri dev
+
+# Frontend build and browser smoke
+corepack pnpm --dir apps/desktop build
+corepack pnpm --dir apps/desktop test:ui-smoke
+
+# Tauri backend tests
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -- --test-threads=1
+```
+
+On first launch, the desktop app guides project selection, provider status,
+credential-storage acknowledgement, permission defaults, workspace trust, and
+Direct Agent/LabRun mode. Saved desktop keys still use the local dotenv
+fallback in this build; prefer environment variables for shared machines or
+production credentials.
+
 ## Platform Support
 
-Priority Agent currently targets macOS and Linux. Windows is best-effort until
-installer behavior, shell execution defaults, and credential storage are tested
-and documented for Windows.
+Priority Agent currently targets macOS and Linux for the CLI. Windows is
+best-effort until installer behavior, shell execution defaults, and credential
+storage are tested and documented for Windows. Desktop packaging is macOS-first
+until Windows/Linux Tauri packages are implemented and validated.
 
 ## Troubleshooting
 

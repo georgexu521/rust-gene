@@ -80,6 +80,8 @@ pub(super) async fn persist_current_settings(
         .collect::<Vec<_>>();
     let archived_session_ids = state.archived_session_ids.lock().await.clone();
     let lab_daemon_supervision_enabled = *state.lab_daemon_supervision_enabled.lock().await;
+    let onboarding_state = state.onboarding_state.lock().await.clone();
+    let workspace_trust = state.workspace_trust.lock().await.clone();
     write_desktop_settings(
         &state.settings_path,
         &DesktopSettings {
@@ -93,6 +95,8 @@ pub(super) async fn persist_current_settings(
             recent_projects: Some(recent_projects),
             archived_session_ids: Some(archived_session_ids),
             lab_daemon_supervision_enabled: Some(lab_daemon_supervision_enabled),
+            onboarding_state,
+            workspace_trust,
         },
     )
 }
@@ -201,8 +205,7 @@ pub(super) fn desktop_startup_state(
     project: &Path,
     active_session_id: Option<&str>,
 ) -> DesktopStartupState {
-    if let Ok(Some(run)) = priority_agent::lab::store::LabStore::for_project(project).latest_run()
-    {
+    if let Ok(Some(run)) = priority_agent::lab::store::LabStore::for_project(project).latest_run() {
         if matches!(
             run.status,
             priority_agent::lab::model::LabRunStatus::Paused

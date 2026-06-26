@@ -148,6 +148,8 @@ pub(crate) struct DesktopSettings {
     pub(crate) recent_projects: Option<Vec<String>>,
     pub(crate) archived_session_ids: Option<Vec<String>>,
     pub(crate) lab_daemon_supervision_enabled: Option<bool>,
+    pub(crate) onboarding_state: Option<DesktopOnboardingState>,
+    pub(crate) workspace_trust: Option<DesktopWorkspaceTrustStatus>,
 }
 
 #[derive(Debug, Serialize)]
@@ -168,6 +170,9 @@ pub(crate) struct DesktopSettingsResponse {
     pub(crate) lab_daemon_last_supervision: Option<String>,
     pub(crate) lab_daemon_last_supervision_result: Option<String>,
     pub(crate) lab_daemon_next_supervision: Option<String>,
+    pub(crate) onboarding_state: Option<DesktopOnboardingState>,
+    pub(crate) workspace_trust: DesktopWorkspaceTrustStatus,
+    pub(crate) credential_storage: DesktopCredentialStorageStatus,
 }
 
 #[derive(Debug, Serialize)]
@@ -178,6 +183,76 @@ pub(crate) struct DesktopStartupState {
     pub(crate) lab_stage: Option<String>,
     pub(crate) lab_owner: Option<String>,
     pub(crate) lab_pause_reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct DesktopOnboardingState {
+    pub(crate) onboarding_version: u32,
+    pub(crate) completed_at: Option<String>,
+    pub(crate) project_root: Option<String>,
+    pub(crate) permission_mode: Option<String>,
+    pub(crate) workspace_trust_summary: Option<DesktopWorkspaceTrustStatus>,
+    pub(crate) credential_storage_acknowledged: bool,
+    pub(crate) skipped: bool,
+    pub(crate) starting_mode: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct DesktopOnboardingInput {
+    pub(crate) project_root: Option<String>,
+    pub(crate) permission_mode: Option<String>,
+    pub(crate) workspace_trust: Option<DesktopWorkspaceTrustInput>,
+    pub(crate) credential_storage_acknowledged: bool,
+    pub(crate) starting_mode: Option<String>,
+    pub(crate) skipped: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct DesktopWorkspaceTrustInput {
+    pub(crate) package_scripts: String,
+    pub(crate) shell_validation: String,
+    pub(crate) lab_daemon_supervision: bool,
+    pub(crate) developer_auto_acknowledged: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct DesktopWorkspaceTrustStatus {
+    pub(crate) canonical_project_path: String,
+    pub(crate) repo_identity: String,
+    pub(crate) repo_fingerprint: String,
+    pub(crate) trust_source: String,
+    pub(crate) package_scripts: String,
+    pub(crate) shell_validation: String,
+    pub(crate) lab_daemon_supervision: bool,
+    pub(crate) developer_auto_acknowledged: bool,
+    #[serde(default)]
+    pub(crate) trusted_capabilities: Vec<String>,
+    pub(crate) last_updated: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub(crate) struct DesktopCredentialStorageStatus {
+    pub(crate) active_store: String,
+    pub(crate) system_keychain_available: bool,
+    pub(crate) dotenv_fallback_path: String,
+    pub(crate) environment_only_available: bool,
+    pub(crate) acknowledgement_required: bool,
+    pub(crate) last_updated_source: String,
+    pub(crate) detail: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct DesktopDiagnosticsRedaction {
+    pub(crate) include_logs: Option<bool>,
+    pub(crate) max_log_bytes: Option<usize>,
+}
+
+#[derive(Debug, Serialize)]
+pub(crate) struct DesktopDiagnosticsBundleResult {
+    pub(crate) path: String,
+    pub(crate) privacy: String,
+    pub(crate) redacted: bool,
+    pub(crate) summary: String,
 }
 
 #[derive(Debug, Serialize)]

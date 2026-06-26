@@ -1,6 +1,31 @@
 import { expect, test, type Page } from "@playwright/test";
 
 test.describe("desktop UI smoke", () => {
+  test("first-run onboarding can be skipped and completed preview starts cleanly", async ({ page }) => {
+    await page.goto("/?previewFixture=onboarding");
+
+    const wizard = page.getByRole("dialog", { name: "First-run setup" });
+    await expect(wizard).toBeVisible();
+    await expect(wizard).toContainText("Desktop setup");
+    await wizard.getByRole("button", { name: "Skip setup" }).click();
+    await expect(wizard).not.toBeVisible();
+
+    await page.evaluate(() => window.sessionStorage.removeItem("priority-agent.onboardingFixtureCompleted"));
+    await page.goto("/?previewFixture=onboarding");
+    const freshWizard = page.getByRole("dialog", { name: "First-run setup" });
+    await expect(freshWizard).toBeVisible();
+    await freshWizard.getByRole("button", { name: /Credentials/ }).click();
+    await freshWizard.getByLabel(/local dotenv fallback/).check();
+    await freshWizard.getByRole("button", { name: /Trust/ }).click();
+    await freshWizard.getByRole("group", { name: "Package-script validation" }).getByRole("button", { name: "Trusted" }).click();
+    await freshWizard.locator(".onboarding-stepper").getByRole("button", { name: /Start/ }).click();
+    await freshWizard.locator(".onboarding-actions").getByRole("button", { name: "Start" }).click();
+    await expect(freshWizard).not.toBeVisible();
+
+    await page.goto("/?previewFixture=1");
+    await expect(page.getByRole("dialog", { name: "First-run setup" })).not.toBeVisible();
+  });
+
   test("project path edits stay draft-only until applied", async ({ page }) => {
     await page.goto("/?previewFixture=1");
 
@@ -325,6 +350,14 @@ test.describe("desktop UI smoke", () => {
     await expect(page.getByLabel("Run summary panel")).toContainText("Needs attention");
     await expect(page.getByLabel("Run summary panel")).toContainText("Pnpm Test");
     await expect(page.getByLabel("Run summary panel")).toContainText("Edited file");
+    await expect(page.getByLabel("Run summary panel")).toContainText("Run review");
+    await page.getByLabel("Run review actions").getByRole("button", { name: "Continue with fix" }).click();
+    await expect(page.getByRole("textbox", { name: "Message", exact: true })).toHaveValue(
+      /Please continue from the run review/,
+    );
+    await page.getByLabel("Run review actions").getByRole("button", { name: "Dismiss review" }).click();
+    await expect(page.getByLabel("Run summary panel")).not.toBeVisible();
+    await page.getByRole("textbox", { name: "Message", exact: true }).fill("");
     await page.locator(".timeline-run-row").getByRole("button", { name: "Open run context Current diff" }).click();
     await expect(page.getByRole("complementary", { name: "Context details" })).toContainText("Changed files");
     await assertDrawerFocusTrap(page, "Context details", "Close context details");
