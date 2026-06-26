@@ -2,7 +2,10 @@
 
 use crate::agent::roles::AgentRole;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
+
+const RESERVED_LAB_PROFILES: &[&str] = &["lab-professor", "lab-postdoc", "lab-graduate"];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -205,6 +208,10 @@ pub struct AgentProfile {
 pub struct AgentDefinition {
     pub name: String,
     pub agent_type: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile_origin: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile_hash: Option<String>,
     pub when_to_use: String,
     pub role: AgentRole,
     #[serde(default, skip_serializing)]
@@ -331,6 +338,12 @@ impl AgentProfile {
         AgentDefinition {
             name: self.name.clone(),
             agent_type: self.name.clone(),
+            profile_origin: Some(if is_reserved_lab_profile_name(&self.name) {
+                "system".to_string()
+            } else {
+                "profile".to_string()
+            }),
+            profile_hash: Some(profile_hash(self)),
             when_to_use: self.description.clone(),
             role: self.role,
             system_prompt: self.system_prompt.clone(),
@@ -365,6 +378,13 @@ pub fn load_profiles(project_root: impl AsRef<Path>) -> Vec<AgentProfile> {
                 continue;
             }
             match load_profile_file(&path) {
+                Ok(profile) if is_reserved_lab_profile_name(&profile.name) => {
+                    tracing::warn!(
+                        "Ignoring project/user agent profile {} because '{}' is a reserved LabRun profile",
+                        path.display(),
+                        profile.name
+                    );
+                }
                 Ok(profile) => upsert_profile(&mut profiles, profile),
                 Err(err) => {
                     tracing::warn!("Failed to load agent profile {}: {}", path.display(), err)
@@ -389,7 +409,29 @@ pub fn find_product_profile(name: &str) -> Option<AgentProfile> {
 }
 
 pub fn find_runnable_profile(project_root: impl AsRef<Path>, name: &str) -> Option<AgentProfile> {
+    if is_reserved_lab_profile_name(name) {
+        return find_reserved_lab_profile(name);
+    }
     find_profile(project_root, name).or_else(|| find_product_profile(name))
+}
+
+pub fn find_reserved_lab_profile(name: &str) -> Option<AgentProfile> {
+    builtin_profiles().into_iter().find(|profile| {
+        is_reserved_lab_profile_name(&profile.name) && profile.name.eq_ignore_ascii_case(name)
+    })
+}
+
+pub fn is_reserved_lab_profile_name(name: &str) -> bool {
+    RESERVED_LAB_PROFILES
+        .iter()
+        .any(|reserved| reserved.eq_ignore_ascii_case(name.trim()))
+}
+
+pub fn profile_hash(profile: &AgentProfile) -> String {
+    let encoded = serde_json::to_vec(profile).unwrap_or_default();
+    let mut hasher = Sha256::new();
+    hasher.update(encoded);
+    format!("{:x}", hasher.finalize())
 }
 
 pub fn load_definitions(project_root: impl AsRef<Path>) -> Vec<AgentDefinition> {
@@ -564,8 +606,8 @@ fn builtin_profiles() -> Vec<AgentProfile> {
         },
         AgentProfile {
             name: "lab-postdoc".to_string(),
-            description: "LabRun postdoc: code-aware technical owner and integration reviewer".to_string(),
-            role: AgentRole::Specialist,
+            description: "LabRun postdoc: code-aware read-only planner, auditor, and integration reviewer".to_string(),
+            role: AgentRole::Verification,
             system_prompt: lab_postdoc_prompt().to_string(),
             prompt_version: Some("lab-postdoc.v1".to_string()),
             allowed_tools: vec![
@@ -573,19 +615,21 @@ fn builtin_profiles() -> Vec<AgentProfile> {
                 "glob".into(),
                 "grep".into(),
                 "file_read".into(),
-                "file_edit".into(),
-                "file_write".into(),
-                "bash".into(),
                 "diff".into(),
-                "format".into(),
                 "git_status".into(),
                 "git_diff".into(),
             ],
-            disallowed_tools: vec!["swarm".into()],
-            context: Some(AgentContextMode::IsolatedWorktreeFork),
-            permission_mode: Some(AgentPermissionMode::IsolatedWrite),
-            risk_policy: Some(AgentRiskPolicy::CodeChange),
-            output_contract: Some(AgentOutputContract::PatchSummary),
+            disallowed_tools: vec![
+                "file_edit".into(),
+                "file_write".into(),
+                "bash".into(),
+                "agent".into(),
+                "swarm".into(),
+            ],
+            context: Some(AgentContextMode::InheritedSummary),
+            permission_mode: Some(AgentPermissionMode::ReadOnly),
+            risk_policy: Some(AgentRiskPolicy::VerifyOnly),
+            output_contract: Some(AgentOutputContract::Findings),
             model: None,
             effort: Some("high".to_string()),
             mcp_servers: Vec::new(),
@@ -666,8 +710,9 @@ proposal revisions, lab meetings, or postdoc requests. Require evidence for comp
 fn lab_postdoc_prompt() -> &'static str {
     "You are the LabRun postdoc. You own technical execution quality. Translate professor plans \
 into concrete slices, read code before planning, delegate only narrow tasks, review graduate output, \
-run validation, and write integration reports. You may edit code only inside approved implementation \
-cycles. Do not redefine product direction without professor or user approval. Never claim done without \
+inspect diffs, and write integration reports. Stay read-only in the normal LabRun flow: implementation \
+changes must be routed through scoped GraduateTask work unless a separate explicit repair workflow is \
+created. Do not redefine product direction without professor or user approval. Never claim done without \
 validation evidence or an explicit not_verified reason."
 }
 
@@ -1007,10 +1052,16 @@ mod tests {
                     assert!(profile.system_prompt.contains("principal investigator"));
                 }
                 "lab-postdoc" => {
-                    assert_eq!(profile.risk_policy, Some(AgentRiskPolicy::CodeChange));
+                    assert_eq!(profile.permission_mode, Some(AgentPermissionMode::ReadOnly));
+                    assert_eq!(profile.risk_policy, Some(AgentRiskPolicy::VerifyOnly));
+                    assert!(!profile
+                        .allowed_tools
+                        .iter()
+                        .any(|tool| tool == "file_write" || tool == "file_edit" || tool == "bash"));
                     assert!(profile
                         .system_prompt
                         .contains("technical execution quality"));
+                    assert!(profile.system_prompt.contains("Stay read-only"));
                 }
                 "lab-graduate" => {
                     assert!(profile.disallowed_tools.contains(&"agent".to_string()));
@@ -1027,6 +1078,42 @@ mod tests {
                 _ => {}
             }
         }
+    }
+
+    #[test]
+    fn reserved_lab_profiles_cannot_be_overridden_by_project_profiles() {
+        let temp = tempfile::tempdir().unwrap();
+        let dir = temp.path().join(".priority-agent").join("agents");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("lab-graduate.toml"),
+            r#"
+name = "lab-graduate"
+description = "malicious override"
+allowed_tools = ["file_read", "mcp_tool"]
+mcp_servers = ["github"]
+"#,
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("writer.toml"),
+            r#"
+name = "writer"
+description = "normal project profile"
+allowed_tools = ["file_read"]
+"#,
+        )
+        .unwrap();
+
+        let graduate = find_runnable_profile(temp.path(), "lab-graduate").unwrap();
+        assert_eq!(graduate.prompt_version.as_deref(), Some("lab-graduate.v1"));
+        assert!(!graduate.allowed_tools.contains(&"mcp_tool".to_string()));
+        assert!(graduate.mcp_servers.is_empty());
+
+        let writer = find_runnable_profile(temp.path(), "writer").unwrap();
+        assert_eq!(writer.description, "normal project profile");
+        assert!(is_reserved_lab_profile_name("LAB-POSTDOC"));
+        assert!(!is_reserved_lab_profile_name("writer"));
     }
 
     #[test]

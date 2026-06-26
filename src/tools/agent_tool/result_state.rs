@@ -36,6 +36,23 @@ pub(super) fn agent_wait_failure_status(error: &anyhow::Error) -> &'static str {
     }
 }
 
+pub(super) fn lab_binding_error(
+    requested_profile_name: Option<&str>,
+    context: &ToolContext,
+) -> Option<ToolResult> {
+    let needs_binding =
+        requested_profile_name.is_some_and(|name| name.eq_ignore_ascii_case("lab-graduate"));
+    let has_binding = context
+        .lab_execution_binding()
+        .map(|binding| binding.is_some())
+        .unwrap_or(false);
+    (needs_binding && !has_binding).then(|| {
+        ToolResult::error(
+            "LabRun reserved profile 'lab-graduate' requires a valid LabExecutionBinding",
+        )
+    })
+}
+
 pub(super) fn durable_subagent_task_id(requested: Option<&str>) -> String {
     let raw = requested
         .map(str::trim)
@@ -197,6 +214,15 @@ pub(super) async fn spawn_single_agent(
         .as_ref()
         .map(|worktree| worktree.path.as_path())
         .unwrap_or(context.working_dir.as_path());
+    let mut child_tool_context_metadata = context.metadata.clone();
+    if let Some(binding) = context
+        .lab_execution_binding()
+        .map_err(|err| anyhow::anyhow!(err))?
+    {
+        binding
+            .with_verification_root(execution_working_dir)
+            .insert_into_metadata(&mut child_tool_context_metadata)?;
+    }
     let file_context = load_file_context(files, execution_working_dir).await;
     let mut system_prompt = build_system_prompt(template, role, description, prompt, &file_context);
     if let Some(definition) = definition {
@@ -272,6 +298,7 @@ pub(super) async fn spawn_single_agent(
         .with_max_turns(max_turns)
         .with_subagent_session_policy(subagent_session_policy.clone())
         .with_working_dir(execution_working_dir.to_path_buf())
+        .with_tool_context_metadata(child_tool_context_metadata.clone())
         .with_mcp_servers(
             definition
                 .map(|definition| definition.mcp_servers.clone())
@@ -327,8 +354,17 @@ pub(super) async fn spawn_single_agent(
         "max_turns": max_turns,
         "requested_allowed_tools": allowed_tools,
         "allowed_tools": exposed_tools.clone(),
+        "profile": definition.map(|definition| json!({
+            "name": definition.name.clone(),
+            "origin": definition.profile_origin.clone(),
+            "version": definition.prompt_version.clone(),
+            "hash": definition.profile_hash.clone(),
+        })),
         "subagent_session_policy": subagent_session_policy.payload(),
         "context_mode": effective_context_mode.map(|mode| mode.to_string()),
+        "lab_execution_binding": child_tool_context_metadata
+            .get(crate::lab::execution_binding::LAB_EXECUTION_BINDING_METADATA_KEY)
+            .and_then(|raw| serde_json::from_str::<serde_json::Value>(raw).ok()),
         "isolated_worktree": isolated_worktree.as_ref().map(|worktree| json!({
             "path": worktree.path.to_string_lossy().to_string(),
             "branch": worktree.branch.clone(),
@@ -678,6 +714,8 @@ pub(super) fn persist_agent_task_state(
     if let Some(definition) = definition {
         payload["agent_definition"] = json!({
             "name": definition.name.clone(),
+            "origin": definition.profile_origin.clone(),
+            "hash": definition.profile_hash.clone(),
             "agent_type": definition.agent_type.clone(),
             "context_mode": definition.context_mode.to_string(),
             "permission_mode": definition.permission_mode.to_string(),

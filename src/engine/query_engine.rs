@@ -5,6 +5,7 @@
 use crate::services::api::{ChatRequest, LlmProvider, Message};
 use crate::tools::ToolRegistry;
 use anyhow::{Context, Result};
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tracing::info;
@@ -246,6 +247,9 @@ impl QueryEngine {
         if let Some(servers) = allowed_mcp_servers {
             lp = lp.with_allowed_mcp_servers(servers);
         }
+        if !options.tool_context_metadata.is_empty() {
+            lp = lp.with_tool_context_metadata(options.tool_context_metadata.clone());
+        }
         if let (Some(store), Some(session_id)) = (session_store, session_id) {
             lp = lp.with_session_store(store, session_id);
         }
@@ -313,6 +317,8 @@ pub struct QueryOptions {
     pub session_store: Option<Arc<crate::session_store::SessionStore>>,
     /// Optional durable session ID paired with `session_store`.
     pub session_id: Option<String>,
+    /// Runtime metadata copied into child tool contexts.
+    pub tool_context_metadata: HashMap<String, String>,
 }
 
 impl Default for QueryOptions {
@@ -328,6 +334,7 @@ impl Default for QueryOptions {
             allowed_mcp_servers: None,
             session_store: None,
             session_id: None,
+            tool_context_metadata: HashMap::new(),
         }
     }
 }
@@ -393,6 +400,14 @@ impl QueryOptions {
     ) -> Self {
         self.session_store = Some(store);
         self.session_id = Some(session_id.into());
+        self
+    }
+
+    pub fn with_tool_context_metadata(
+        mut self,
+        metadata: impl IntoIterator<Item = (String, String)>,
+    ) -> Self {
+        self.tool_context_metadata.extend(metadata);
         self
     }
 }

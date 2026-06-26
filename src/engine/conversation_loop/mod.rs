@@ -142,7 +142,7 @@ use crate::engine::workflow::WorkflowPolicy;
 use crate::services::api::{LlmProvider, Message, ToolCall};
 use crate::tools::{ToolContext, ToolRegistry, ToolResult};
 use anyhow::Result;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::{mpsc, Mutex};
@@ -219,6 +219,8 @@ pub struct ConversationLoop {
     working_dir_override: Option<PathBuf>,
     /// Optional MCP server allowlist for scoped sub-agent runs.
     allowed_mcp_servers: Option<Vec<String>>,
+    /// Runtime-provided metadata copied into every tool context for this loop.
+    tool_context_metadata: HashMap<String, String>,
     /// 本轮是否已触发过 Workflow（每轮最多一次）
     workflow_triggered_this_turn: std::sync::atomic::AtomicBool,
     /// Workflow 策略（默认从环境变量读取，可覆盖）
@@ -287,6 +289,7 @@ impl ConversationLoop {
             allowed_tools: None,
             working_dir_override: None,
             allowed_mcp_servers: None,
+            tool_context_metadata: HashMap::new(),
             workflow_triggered_this_turn: std::sync::atomic::AtomicBool::new(false),
             workflow_policy: WorkflowPolicy::from_env(),
             agent_mode: crate::engine::agent_mode::AgentMode::Auto,
@@ -457,6 +460,14 @@ impl ConversationLoop {
         self
     }
 
+    pub fn with_tool_context_metadata(
+        mut self,
+        metadata: impl IntoIterator<Item = (String, String)>,
+    ) -> Self {
+        self.tool_context_metadata.extend(metadata);
+        self
+    }
+
     pub fn with_workflow_policy(mut self, policy: WorkflowPolicy) -> Self {
         self.workflow_policy = policy;
         self
@@ -502,6 +513,7 @@ impl ConversationLoop {
             .clone()
             .unwrap_or_else(|| PathBuf::from("."));
         let mut ctx = ToolContext::new(working_dir, self.session_id.clone());
+        ctx.metadata.extend(self.tool_context_metadata.clone());
         if let Some(ref manager) = self.agent_manager {
             ctx = ctx.with_agent_manager(manager.clone());
         }

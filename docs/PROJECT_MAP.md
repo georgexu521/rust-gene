@@ -75,10 +75,14 @@ LabRun internals:
   validation-event binding, redaction, diff/file size budgets, and audit proof.
 - `src/lab/orchestrator/runtime_evidence.rs`: runtime closeout mapping and
   Graduate agent result parsing.
+- `src/lab/execution_binding.rs`: typed Graduate child-agent execution binding
+  that carries run/cycle/plan/task/dispatch scope into isolated tool contexts.
 - `src/lab/policy_overlay.rs`: role/stage action policy overlay and state
-  revalidation for tool mutations.
+  revalidation for tool mutations, including binding-based child scope review.
+- `src/lab/runtime_evidence_redaction.rs`: shared redaction for durable LabRun
+  audit and validation evidence before persistence.
 - `src/lab/validation.rs`: controlled validation command parser/runner and
-  Lab validation event recording.
+  bounded Lab validation event recording.
 - `src/lab/workspace_trust.rs`: project-scoped package-script trust lookup.
 
 Integrations and adapters:

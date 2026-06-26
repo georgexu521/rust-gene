@@ -3,6 +3,76 @@ Status: Current
 
 Last updated: 2026-06-26
 
+## LabRun Subagent Scope, Validation, And Profile Hardening - 2026-06-26
+
+The child-agent boundary hardening workstream is tracked in
+`docs/LABRUN_SUBAGENT_SCOPE_VALIDATION_PROFILE_HARDENING_PLAN_2026-06-26.md`.
+
+Implemented in this slice:
+
+- LabRun Graduate dispatch now creates a typed `LabExecutionBinding` carrying
+  project root, run/cycle/plan/task/dispatch identity, agent task identity,
+  allowed scope, verification root, and LabRun state version.
+- The execution binding is serialized through tool context metadata, query
+  options, agent config, child-agent task payloads, and durable AgentTool proof
+  metadata. Child isolated worktrees no longer need to infer LabRun authority
+  from their own `.priority-agent/lab` directory.
+- Graduate child mutation review now fails closed when a reserved
+  `lab-graduate` execution has no valid binding, no explicit mutation path
+  evidence, or a path outside the active task's allowed scope. Scope is bound to
+  the single task/dispatch in the binding, not to all open GraduateTasks.
+- `lab-professor`, `lab-postdoc`, and `lab-graduate` are now reserved system
+  profiles. Project/user profile files with those names are ignored, while
+  normal non-reserved custom profiles still load.
+- Subagent proof metadata now records profile origin and profile hash. Reserved
+  LabRun profile dispatches resolve from the system profile set.
+- `lab-postdoc` is read-only/audit-oriented by default; normal implementation
+  remains routed through scoped GraduateTasks.
+- Controlled validation now uses a bounded direct-process runner with explicit
+  timeout, process cleanup, capped stdout/stderr capture, sanitized environment,
+  redacted previews, truncation flags, output hashes, and
+  `validation_security = controlled_not_sandboxed`.
+- Runtime evidence redaction is shared between audit-style durable evidence and
+  validation stdout/stderr previews so secrets are redacted before event
+  persistence.
+- CI now includes a non-noisy dependency-security job for
+  `scripts/security_dependency_audit.sh` and a focused `macos-latest` job for
+  all-feature compile, LabRun validation/policy tests, and CLI help smoke.
+
+Validation completed for this slice:
+
+```bash
+cargo fmt --check
+git diff --check
+cargo check -q
+cargo test -q lab::execution_binding --lib -- --test-threads=1
+cargo test -q lab::policy_overlay --lib -- --test-threads=1
+cargo test -q lab::validation --lib -- --test-threads=1
+cargo test -q lab::workspace_trust --lib -- --test-threads=1
+cargo test -q lab::delegation --lib -- --test-threads=1
+cargo test -q tools::agent_tool --lib -- --test-threads=1
+cargo test -q tools::run_tests_tool --lib -- --test-threads=1
+cargo test -q agent::profiles --lib -- --test-threads=1
+cargo test --workspace --all-features -- --test-threads=1
+cargo clippy --workspace --all-targets --all-features -- -D warnings
+cargo doc --workspace --all-features --no-deps
+bash scripts/check_source_file_sizes.sh
+bash scripts/validate_docs.sh
+bash scripts/security_dependency_audit.sh
+```
+
+`cargo test --workspace --all-features -- --test-threads=1` passed after a
+clean rerun: `priority_agent` reported 3260 passed, 0 failed, 1 ignored, and
+the remaining binary, integration, priority-core, and doc-test suites passed.
+`scripts/validate_docs.sh` passed its workflow-enabled run: 3204 passed, 0
+failed, 1 ignored. The local `scripts/security_dependency_audit.sh` invocation
+reported missing `cargo-audit` and `cargo-deny`; the CI dependency-security job
+now installs both tools before running the same script.
+
+Remaining long-term items stay in P2: SQLite-authoritative LabStore
+transactions, property/fuzz harnesses, SBOM, provenance/signing, Actions SHA
+pinning, and automated secret scanning.
+
 ## LabRun Evidence Lineage And Concurrency Hardening - 2026-06-26
 
 The evidence-lineage/concurrency hardening workstream is tracked in

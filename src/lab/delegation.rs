@@ -4,6 +4,7 @@
 
 use crate::agent::envelope::AgentTaskEnvelope;
 use crate::agent::types::AgentId;
+use crate::lab::execution_binding::LabExecutionBinding;
 use crate::lab::model::GraduateTask;
 use crate::tools::agent_tool::AgentTool;
 use crate::tools::{Tool, ToolContext, ToolResult};
@@ -100,6 +101,24 @@ pub async fn execute_graduate_task_with_agent_tool(
     context
         .metadata
         .insert("active_dispatch_id".to_string(), dispatch_id.to_string());
+    let binding = match LabExecutionBinding::for_graduate_task(
+        task,
+        dispatch_id,
+        graduate_agent_task_id(task),
+        context.working_dir.clone(),
+        context.working_dir.clone(),
+        context.metadata.get("lab_state_version").cloned(),
+    ) {
+        Ok(binding) => binding,
+        Err(err) => {
+            return ToolResult::error(format!("Invalid graduate task execution binding: {err}"));
+        }
+    };
+    if let Err(err) = binding.insert_into_metadata(&mut context.metadata) {
+        return ToolResult::error(format!(
+            "Failed to encode graduate task execution binding: {err}"
+        ));
+    }
     let tool = AgentTool::with_working_dir(&context.working_dir);
     tool.execute(dispatch.agent_tool_params, context).await
 }

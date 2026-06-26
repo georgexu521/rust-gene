@@ -87,8 +87,13 @@ impl LabOrchestrator {
             &before_snapshot,
             &[],
         )?;
+        let mut dispatch_context = context.clone();
+        dispatch_context.metadata.insert(
+            "lab_state_version".to_string(),
+            crate::lab::policy_overlay::labrun_state_version(&run),
+        );
         let result =
-            execute_graduate_task_with_agent_tool(&task, &running.dispatch_id, context.clone())
+            execute_graduate_task_with_agent_tool(&task, &running.dispatch_id, dispatch_context)
                 .await;
         let after_snapshot = workspace_change_snapshot(&context.working_dir);
         let agent_id = result

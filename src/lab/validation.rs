@@ -6,13 +6,23 @@
 
 use crate::lab::model::LabEvidenceProvenance;
 use crate::lab::path_scope::normalize_lab_relative_path;
+use crate::lab::runtime_evidence_redaction::redact_runtime_evidence_text;
 use crate::lab::store::LabStore;
 use crate::lab::workspace_trust::resolve_lab_workspace_trust;
 use anyhow::anyhow;
 use serde_json::json;
 use sha2::{Digest, Sha256};
+use std::collections::BTreeMap;
+use std::io::Read;
 use std::path::Path;
-use std::process::Command;
+use std::process::{Command, Stdio};
+use std::sync::mpsc;
+use std::time::{Duration, Instant};
+
+const DEFAULT_VALIDATION_TIMEOUT_SECS: u64 = 300;
+const MAX_VALIDATION_STDOUT_BYTES: usize = 64 * 1024;
+const MAX_VALIDATION_STDERR_BYTES: usize = 64 * 1024;
+const VALIDATION_ENVIRONMENT_POLICY: &str = "sanitized_allowlist";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct LabValidationCommandPlan {
@@ -36,13 +46,153 @@ pub(crate) enum LabValidationPolicyDecision {
 struct LabValidationEventMetadata<'a> {
     reason: Option<&'a str>,
     status_code: Option<i32>,
-    output: Option<(&'a str, &'a str)>,
+    output: Option<&'a ControlledProcessOutput>,
     validation_kind: &'a str,
     workspace_trust: &'a str,
     workspace_trust_source: &'a str,
     workspace_trust_scope: &'a str,
     policy_action: &'a str,
     provenance: Option<&'a LabEvidenceProvenance>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ControlledProcessOutput {
+    success: bool,
+    status_code: Option<i32>,
+    timed_out: bool,
+    terminated_process_tree: bool,
+    timeout_secs: u64,
+    stdout_preview: String,
+    stderr_preview: String,
+    stdout_byte_len: u64,
+    stderr_byte_len: u64,
+    stdout_hash: String,
+    stderr_hash: String,
+    stdout_truncated: bool,
+    stderr_truncated: bool,
+    environment_policy: &'static str,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CapturedProcessStream {
+    preview: Vec<u8>,
+    byte_len: u64,
+    content_hash: String,
+    truncated: bool,
+}
+
+#[derive(Debug, Clone)]
+struct ControlledProcessRunner {
+    program: String,
+    args: Vec<String>,
+    cwd: std::path::PathBuf,
+    timeout: Duration,
+    max_stdout_bytes: usize,
+    max_stderr_bytes: usize,
+    sanitized_env: BTreeMap<String, String>,
+}
+
+impl ControlledProcessRunner {
+    fn for_plan(cwd: &Path, plan: &LabValidationCommandPlan) -> Self {
+        Self {
+            program: plan.program.clone(),
+            args: plan.args.clone(),
+            cwd: cwd.to_path_buf(),
+            timeout: validation_timeout(),
+            max_stdout_bytes: MAX_VALIDATION_STDOUT_BYTES,
+            max_stderr_bytes: MAX_VALIDATION_STDERR_BYTES,
+            sanitized_env: sanitized_validation_env(),
+        }
+    }
+
+    fn run(&self) -> anyhow::Result<ControlledProcessOutput> {
+        let mut command = Command::new(&self.program);
+        command
+            .args(&self.args)
+            .current_dir(&self.cwd)
+            .env_clear()
+            .envs(&self.sanitized_env)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::CommandExt;
+            command.process_group(0);
+        }
+
+        let mut child = command.spawn().map_err(|err| {
+            anyhow!(
+                "failed to spawn controlled validation `{}`: {err}",
+                self.command_display()
+            )
+        })?;
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| anyhow!("controlled validation stdout pipe unavailable"))?;
+        let stderr = child
+            .stderr
+            .take()
+            .ok_or_else(|| anyhow!("controlled validation stderr pipe unavailable"))?;
+        let stdout_rx = spawn_capped_reader(stdout, self.max_stdout_bytes);
+        let stderr_rx = spawn_capped_reader(stderr, self.max_stderr_bytes);
+
+        let started = Instant::now();
+        let mut timed_out = false;
+        let mut terminated_process_tree = false;
+        let status = loop {
+            if let Some(status) = child.try_wait()? {
+                break status;
+            }
+            if started.elapsed() >= self.timeout {
+                timed_out = true;
+                terminated_process_tree = terminate_validation_process(&mut child);
+                let _ = child.kill();
+                break child.wait()?;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        };
+
+        let stdout = stdout_rx.recv().unwrap_or_else(|_| CapturedProcessStream {
+            preview: Vec::new(),
+            byte_len: 0,
+            content_hash: "sha256:reader_unavailable".to_string(),
+            truncated: false,
+        });
+        let stderr = stderr_rx.recv().unwrap_or_else(|_| CapturedProcessStream {
+            preview: Vec::new(),
+            byte_len: 0,
+            content_hash: "sha256:reader_unavailable".to_string(),
+            truncated: false,
+        });
+        let stdout_preview = redacted_validation_preview(&stdout.preview);
+        let stderr_preview = redacted_validation_preview(&stderr.preview);
+
+        Ok(ControlledProcessOutput {
+            success: status.success() && !timed_out,
+            status_code: status.code(),
+            timed_out,
+            terminated_process_tree,
+            timeout_secs: self.timeout.as_secs(),
+            stdout_preview,
+            stderr_preview,
+            stdout_byte_len: stdout.byte_len,
+            stderr_byte_len: stderr.byte_len,
+            stdout_hash: stdout.content_hash,
+            stderr_hash: stderr.content_hash,
+            stdout_truncated: stdout.truncated,
+            stderr_truncated: stderr.truncated,
+            environment_policy: VALIDATION_ENVIRONMENT_POLICY,
+        })
+    }
+
+    fn command_display(&self) -> String {
+        std::iter::once(self.program.as_str())
+            .chain(self.args.iter().map(String::as_str))
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -116,7 +266,7 @@ pub(crate) fn classify_lab_validation_command(command: &str) -> LabValidationPol
             validation_kind,
             workspace_trust: "unknown".to_string(),
             workspace_trust_source: "unresolved".to_string(),
-            workspace_trust_scope: "package_scripts".to_string(),
+            workspace_trust_scope: "allow_package_scripts".to_string(),
             policy_action: "allow".to_string(),
         })
     } else {
@@ -237,25 +387,16 @@ fn run_lab_validation_commands_with_events(
                 ));
             }
         };
-        let output = Command::new(&plan.program)
-            .args(&plan.args)
-            .current_dir(cwd)
-            .output()
-            .map_err(|err| {
-                anyhow!(
-                    "failed to run required validation `{}`: {err}",
-                    plan.original
-                )
-            })?;
-        if output.status.success() {
+        let output = ControlledProcessRunner::for_plan(cwd, &plan).run()?;
+        if output.success {
             if let Some(event_id) = record_validation_event(
                 store,
                 "lab_validation_command_passed",
                 &plan.original,
                 LabValidationEventMetadata {
                     reason: Some(&plan.reason),
-                    status_code: output.status.code(),
-                    output: None,
+                    status_code: output.status_code,
+                    output: Some(&output),
                     validation_kind: &plan.validation_kind,
                     workspace_trust: &plan.workspace_trust,
                     workspace_trust_source: &plan.workspace_trust_source,
@@ -268,16 +409,14 @@ fn run_lab_validation_commands_with_events(
             }
             attempts.push(format!("runtime validation `{}` passed", plan.original));
         } else {
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            let stderr = String::from_utf8_lossy(&output.stderr);
             if let Some(event_id) = record_validation_event(
                 store,
                 "lab_validation_command_failed",
                 &plan.original,
                 LabValidationEventMetadata {
                     reason: Some(&plan.reason),
-                    status_code: output.status.code(),
-                    output: Some((&stdout, &stderr)),
+                    status_code: output.status_code,
+                    output: Some(&output),
                     validation_kind: &plan.validation_kind,
                     workspace_trust: &plan.workspace_trust,
                     workspace_trust_source: &plan.workspace_trust_source,
@@ -288,12 +427,21 @@ fn run_lab_validation_commands_with_events(
             )? {
                 event_ids.push(event_id);
             }
+            if output.timed_out {
+                return Err(anyhow!(
+                    "required validation `{}` timed out after {}s; stdout={}; stderr={}",
+                    plan.original,
+                    output.timeout_secs,
+                    output.stdout_preview,
+                    output.stderr_preview
+                ));
+            }
             return Err(anyhow!(
                 "required validation `{}` failed with status {:?}; stdout={}; stderr={}",
                 plan.original,
-                output.status.code(),
-                compact_validation_preview(&stdout, 240),
-                compact_validation_preview(&stderr, 240)
+                output.status_code,
+                output.stdout_preview,
+                output.stderr_preview
             ));
         }
     }
@@ -318,14 +466,9 @@ fn record_validation_event(
     else {
         return Ok(None);
     };
-    let (stdout_preview, stderr_preview) = metadata
-        .output
-        .map(|(stdout, stderr)| {
-            (
-                compact_validation_preview(stdout, 240),
-                compact_validation_preview(stderr, 240),
-            )
-        })
+    let output = metadata.output;
+    let (stdout_preview, stderr_preview) = output
+        .map(|output| (output.stdout_preview.clone(), output.stderr_preview.clone()))
         .unwrap_or_default();
     let mut payload = json!({
         "command": command,
@@ -337,9 +480,29 @@ fn record_validation_event(
         "workspace_trust_source": metadata.workspace_trust_source,
         "workspace_trust_scope": metadata.workspace_trust_scope,
         "policy_action": metadata.policy_action,
-        "status_code": metadata.status_code,
+        "status_code": output
+            .and_then(|output| output.status_code)
+            .or(metadata.status_code),
         "stdout_preview": stdout_preview,
         "stderr_preview": stderr_preview,
+        "timeout_secs": output.map(|output| output.timeout_secs),
+        "timed_out": output.map(|output| output.timed_out).unwrap_or(false),
+        "terminated_process_tree": output
+            .map(|output| output.terminated_process_tree)
+            .unwrap_or(false),
+        "stdout_byte_len": output.map(|output| output.stdout_byte_len),
+        "stderr_byte_len": output.map(|output| output.stderr_byte_len),
+        "stdout_hash": output.map(|output| output.stdout_hash.clone()),
+        "stderr_hash": output.map(|output| output.stderr_hash.clone()),
+        "stdout_truncated": output
+            .map(|output| output.stdout_truncated)
+            .unwrap_or(false),
+        "stderr_truncated": output
+            .map(|output| output.stderr_truncated)
+            .unwrap_or(false),
+        "environment_policy": output
+            .map(|output| output.environment_policy)
+            .unwrap_or(VALIDATION_ENVIRONMENT_POLICY),
     });
     if let Some(provenance) = metadata.provenance {
         payload["cycle_id"] = json!(provenance.cycle_id);
@@ -402,6 +565,129 @@ fn command_hash(command: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(command.as_bytes());
     format!("{:x}", hasher.finalize())
+}
+
+fn validation_timeout() -> Duration {
+    crate::services::config::runtime_config()
+        .required_validation_timeout()
+        .unwrap_or_else(|| Duration::from_secs(DEFAULT_VALIDATION_TIMEOUT_SECS))
+}
+
+fn sanitized_validation_env() -> BTreeMap<String, String> {
+    std::env::vars()
+        .filter(|(key, _)| validation_env_key_allowed(key))
+        .filter(|(key, value)| !env_key_or_value_looks_sensitive(key, value))
+        .collect()
+}
+
+fn validation_env_key_allowed(key: &str) -> bool {
+    matches!(
+        key,
+        "PATH"
+            | "HOME"
+            | "USER"
+            | "LOGNAME"
+            | "SHELL"
+            | "TMPDIR"
+            | "TEMP"
+            | "TMP"
+            | "CARGO_HOME"
+            | "RUSTUP_HOME"
+            | "RUST_BACKTRACE"
+            | "RUSTFLAGS"
+            | "RUSTDOCFLAGS"
+            | "LANG"
+            | "LC_ALL"
+            | "LC_CTYPE"
+            | "SSL_CERT_FILE"
+            | "SSL_CERT_DIR"
+    )
+}
+
+fn env_key_or_value_looks_sensitive(key: &str, value: &str) -> bool {
+    let key = key.to_ascii_uppercase();
+    if key.contains("KEY")
+        || key.contains("TOKEN")
+        || key.contains("SECRET")
+        || key.contains("PASSWORD")
+        || key.contains("AUTH")
+        || key.contains("CREDENTIAL")
+    {
+        return true;
+    }
+    redact_runtime_evidence_text(value).redaction_applied
+}
+
+fn spawn_capped_reader(
+    reader: impl Read + Send + 'static,
+    max_preview_bytes: usize,
+) -> mpsc::Receiver<CapturedProcessStream> {
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let captured = capture_process_stream(reader, max_preview_bytes).unwrap_or_else(|_| {
+            CapturedProcessStream {
+                preview: Vec::new(),
+                byte_len: 0,
+                content_hash: "sha256:read_error".to_string(),
+                truncated: false,
+            }
+        });
+        let _ = tx.send(captured);
+    });
+    rx
+}
+
+fn capture_process_stream(
+    mut reader: impl Read,
+    max_preview_bytes: usize,
+) -> std::io::Result<CapturedProcessStream> {
+    let mut hasher = Sha256::new();
+    let mut preview = Vec::new();
+    let mut byte_len = 0_u64;
+    let mut buffer = [0_u8; 16 * 1024];
+    loop {
+        let read = reader.read(&mut buffer)?;
+        if read == 0 {
+            break;
+        }
+        byte_len += read as u64;
+        hasher.update(&buffer[..read]);
+        if preview.len() < max_preview_bytes {
+            let remaining = max_preview_bytes - preview.len();
+            let take = read.min(remaining);
+            preview.extend_from_slice(&buffer[..take]);
+        }
+    }
+    Ok(CapturedProcessStream {
+        truncated: byte_len as usize > preview.len(),
+        preview,
+        byte_len,
+        content_hash: format!("sha256:{:x}", hasher.finalize()),
+    })
+}
+
+fn redacted_validation_preview(bytes: &[u8]) -> String {
+    let raw = String::from_utf8_lossy(bytes);
+    let redacted = redact_runtime_evidence_text(&raw);
+    compact_validation_preview(&redacted.text, 240)
+}
+
+fn terminate_validation_process(child: &mut std::process::Child) -> bool {
+    #[cfg(unix)]
+    {
+        let pid = child.id();
+        let group = format!("-{}", pid);
+        if Command::new("kill")
+            .arg("-TERM")
+            .arg(&group)
+            .status()
+            .map(|status| status.success())
+            .unwrap_or(false)
+        {
+            return true;
+        }
+    }
+    false
 }
 
 fn dangerous_shell_construct(command: &str) -> Option<String> {
@@ -665,6 +951,117 @@ mod tests {
         assert_eq!(event.payload["validation_kind"], "filesystem_test");
         assert_eq!(event.payload["workspace_trust"], "unknown");
         assert_eq!(event.payload["policy_action"], "allow");
+        assert_eq!(
+            event.payload["validation_security"],
+            "controlled_not_sandboxed"
+        );
+        assert_eq!(event.payload["environment_policy"], "sanitized_allowlist");
+        assert_eq!(event.payload["timed_out"], false);
+        assert_eq!(event.payload["stdout_truncated"], false);
+        assert_eq!(event.payload["stderr_truncated"], false);
+        assert!(event.payload["timeout_secs"].as_u64().unwrap_or(0) > 0);
+    }
+
+    #[test]
+    fn controlled_process_runner_caps_large_output() {
+        let temp = tempfile::tempdir().unwrap();
+        let runner = ControlledProcessRunner {
+            program: "python3".to_string(),
+            args: vec![
+                "-c".to_string(),
+                "import sys; sys.stdout.write('A' * 4096); sys.stderr.write('B' * 4096)"
+                    .to_string(),
+            ],
+            cwd: temp.path().to_path_buf(),
+            timeout: Duration::from_secs(30),
+            max_stdout_bytes: 128,
+            max_stderr_bytes: 64,
+            sanitized_env: sanitized_validation_env(),
+        };
+
+        let output = runner.run().unwrap();
+
+        assert!(output.success);
+        assert!(output.stdout_truncated);
+        assert!(output.stderr_truncated);
+        assert_eq!(output.stdout_preview.len(), 128);
+        assert_eq!(output.stderr_preview.len(), 64);
+        assert_eq!(output.environment_policy, "sanitized_allowlist");
+    }
+
+    #[test]
+    fn controlled_process_runner_removes_secret_environment() {
+        let temp = tempfile::tempdir().unwrap();
+        std::env::set_var("OPENAI_API_KEY", "sk-testabcdefghijklmnopqrstuvwxyz");
+        let runner = ControlledProcessRunner {
+            program: "python3".to_string(),
+            args: vec![
+                "-c".to_string(),
+                "import os; print(os.getenv('OPENAI_API_KEY', 'missing'))".to_string(),
+            ],
+            cwd: temp.path().to_path_buf(),
+            timeout: Duration::from_secs(30),
+            max_stdout_bytes: 1024,
+            max_stderr_bytes: 1024,
+            sanitized_env: sanitized_validation_env(),
+        };
+
+        let output = runner.run().unwrap();
+        std::env::remove_var("OPENAI_API_KEY");
+
+        assert!(output.success);
+        assert_eq!(output.stdout_preview, "missing");
+        assert!(!output
+            .stdout_preview
+            .contains("sk-testabcdefghijklmnopqrstuvwxyz"));
+    }
+
+    #[test]
+    fn controlled_process_runner_redacts_output_preview() {
+        let temp = tempfile::tempdir().unwrap();
+        let runner = ControlledProcessRunner {
+            program: "python3".to_string(),
+            args: vec![
+                "-c".to_string(),
+                "print('Authorization: Bearer abcdefghijklmnopqrstuvwxyz123456')".to_string(),
+            ],
+            cwd: temp.path().to_path_buf(),
+            timeout: Duration::from_secs(30),
+            max_stdout_bytes: 4096,
+            max_stderr_bytes: 4096,
+            sanitized_env: sanitized_validation_env(),
+        };
+
+        let output = runner.run().unwrap();
+
+        assert!(output.success);
+        assert!(output.stdout_preview.contains("[REDACTED"));
+        assert!(!output
+            .stdout_preview
+            .contains("abcdefghijklmnopqrstuvwxyz123456"));
+    }
+
+    #[test]
+    fn controlled_process_runner_times_out() {
+        let temp = tempfile::tempdir().unwrap();
+        let runner = ControlledProcessRunner {
+            program: "python3".to_string(),
+            args: vec![
+                "-c".to_string(),
+                "import time; time.sleep(5); print('late')".to_string(),
+            ],
+            cwd: temp.path().to_path_buf(),
+            timeout: Duration::from_millis(100),
+            max_stdout_bytes: 1024,
+            max_stderr_bytes: 1024,
+            sanitized_env: sanitized_validation_env(),
+        };
+
+        let output = runner.run().unwrap();
+
+        assert!(!output.success);
+        assert!(output.timed_out);
+        assert_eq!(output.timeout_secs, 0);
     }
 
     #[test]

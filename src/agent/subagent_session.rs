@@ -143,6 +143,8 @@ mod tests {
         AgentDefinition {
             name: "worker".to_string(),
             agent_type: "worker".to_string(),
+            profile_origin: Some("test".to_string()),
+            profile_hash: Some("test-hash".to_string()),
             when_to_use: String::new(),
             role: AgentRole::Specialist,
             system_prompt: String::new(),

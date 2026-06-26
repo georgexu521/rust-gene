@@ -37,6 +37,10 @@ struct TrustedWorkspaceRecord {
     #[serde(default)]
     trust_scope: String,
     #[serde(default)]
+    trust_scopes: Vec<String>,
+    #[serde(default)]
+    approved_by: String,
+    #[serde(default)]
     source: String,
 }
 
@@ -48,7 +52,7 @@ pub(crate) fn resolve_lab_workspace_trust(cwd: &Path) -> WorkspaceTrustResolutio
         return WorkspaceTrustResolution {
             level,
             source: "env_override".to_string(),
-            trust_scope: "package_scripts".to_string(),
+            trust_scope: "allow_package_scripts".to_string(),
             canonical_path: canonical.display().to_string(),
             repo_identity,
             repo_fingerprint,
@@ -62,7 +66,7 @@ pub(crate) fn resolve_lab_workspace_trust(cwd: &Path) -> WorkspaceTrustResolutio
                 !record.repo_identity.is_empty() && record.repo_identity == repo_identity;
             let fingerprint_matches =
                 !record.repo_fingerprint.is_empty() && record.repo_fingerprint == repo_fingerprint;
-            record.trust_scope == "package_scripts"
+            record_allows_scope(&record, "allow_package_scripts")
                 && record.canonical_path == canonical.display().to_string()
                 && (identity_matches || fingerprint_matches)
         });
@@ -73,11 +77,17 @@ pub(crate) fn resolve_lab_workspace_trust(cwd: &Path) -> WorkspaceTrustResolutio
         } else {
             "no_project_trust_record".to_string()
         },
-        trust_scope: "package_scripts".to_string(),
+        trust_scope: "allow_package_scripts".to_string(),
         canonical_path: canonical.display().to_string(),
         repo_identity,
         repo_fingerprint,
     }
+}
+
+fn record_allows_scope(record: &TrustedWorkspaceRecord, scope: &str) -> bool {
+    record.trust_scopes.iter().any(|value| value == scope)
+        || (scope == "allow_package_scripts" && record.trust_scope == "package_scripts")
+        || record.trust_scope == scope
 }
 
 fn process_override() -> Option<String> {
@@ -191,7 +201,9 @@ mod tests {
                 repo_identity: String::new(),
                 repo_fingerprint: before.repo_fingerprint.clone(),
                 trusted_at: "2026-06-26T00:00:00Z".to_string(),
-                trust_scope: "package_scripts".to_string(),
+                trust_scope: String::new(),
+                trust_scopes: vec!["allow_package_scripts".to_string()],
+                approved_by: "test".to_string(),
                 source: "test".to_string(),
             }],
         };
@@ -204,6 +216,7 @@ mod tests {
         let trusted_a = resolve_lab_workspace_trust(project_a.path());
         assert_eq!(trusted_a.level, "trusted");
         assert_eq!(trusted_a.source, "trusted_workspaces_file");
+        assert_eq!(trusted_a.trust_scope, "allow_package_scripts");
 
         let unknown_b = resolve_lab_workspace_trust(project_b.path());
         assert_eq!(unknown_b.level, "unknown");
@@ -223,5 +236,38 @@ mod tests {
 
         assert_eq!(resolution.level, "trusted");
         assert_eq!(resolution.source, "env_override");
+        assert_eq!(resolution.trust_scope, "allow_package_scripts");
+    }
+
+    #[test]
+    fn workspace_trust_supports_legacy_package_script_scope() {
+        let project = tempfile::tempdir().unwrap();
+        let trust_file = tempfile::NamedTempFile::new().unwrap();
+        let _trust_path =
+            EnvRestore::set("PRIORITY_AGENT_TRUSTED_WORKSPACES_PATH", trust_file.path());
+        let _process_override = EnvRestore::remove("PRIORITY_AGENT_LAB_WORKSPACE_TRUST");
+
+        let before = resolve_lab_workspace_trust(project.path());
+        let record = TrustedWorkspacesFile {
+            workspaces: vec![TrustedWorkspaceRecord {
+                canonical_path: before.canonical_path.clone(),
+                repo_identity: String::new(),
+                repo_fingerprint: before.repo_fingerprint.clone(),
+                trusted_at: "2026-06-26T00:00:00Z".to_string(),
+                trust_scope: "package_scripts".to_string(),
+                trust_scopes: Vec::new(),
+                approved_by: "test".to_string(),
+                source: "legacy_test".to_string(),
+            }],
+        };
+        std::fs::write(
+            trust_file.path(),
+            serde_json::to_vec_pretty(&record).unwrap(),
+        )
+        .unwrap();
+
+        let trusted = resolve_lab_workspace_trust(project.path());
+        assert_eq!(trusted.level, "trusted");
+        assert_eq!(trusted.trust_scope, "allow_package_scripts");
     }
 }

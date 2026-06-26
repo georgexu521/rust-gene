@@ -5,6 +5,14 @@
 use super::*;
 use std::path::{Path, PathBuf};
 
+/// 子任务定义
+#[derive(Debug, Clone)]
+pub(super) struct SubTask {
+    pub(super) description: String,
+    pub(super) prompt: String,
+    pub(super) files: Vec<String>,
+}
+
 /// 加载文件上下文
 pub(super) async fn load_file_context(files: &[String], working_dir: &Path) -> String {
     let mut context = String::new();

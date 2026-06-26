@@ -256,6 +256,12 @@ impl ToolContext {
         }
     }
 
+    pub(crate) fn lab_execution_binding(
+        &self,
+    ) -> Result<Option<crate::lab::execution_binding::LabExecutionBinding>, String> {
+        crate::lab::execution_binding::LabExecutionBinding::from_metadata(&self.metadata)
+    }
+
     /// 设置权限模式
     pub fn with_permission_mode(mut self, mode: crate::permissions::PermissionMode) -> Self {
         self.permission_context.mode = mode;

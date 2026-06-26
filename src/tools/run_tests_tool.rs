@@ -92,7 +92,8 @@ impl Tool for RunTestsTool {
                 let stdout = String::from_utf8_lossy(&output.stdout);
                 let stderr = String::from_utf8_lossy(&output.stderr);
                 let exit_code = output.status.code();
-                let content = validation_output(command, exit_code, &stdout, &stderr);
+                let signal = exit_signal(&output.status);
+                let content = validation_output(command, exit_code, signal, &stdout, &stderr);
                 let data = json!({
                     "tool": "run_tests",
                     "shell_result": {
@@ -100,6 +101,7 @@ impl Tool for RunTestsTool {
                         "requested_command": requested_command,
                         "cwd": context.working_dir.display().to_string(),
                         "exit_code": exit_code,
+                        "signal": signal,
                         "stdout_bytes": output.stdout.len(),
                         "stderr_bytes": output.stderr.len(),
                         "timed_out": false,
@@ -130,6 +132,7 @@ impl Tool for RunTestsTool {
                         "requested_command": requested_command,
                         "cwd": context.working_dir.display().to_string(),
                         "exit_code": null,
+                        "signal": null,
                         "stdout_bytes": 0,
                         "stderr_bytes": 0,
                         "timed_out": false,
@@ -150,6 +153,7 @@ impl Tool for RunTestsTool {
                         "requested_command": requested_command,
                         "cwd": context.working_dir.display().to_string(),
                         "exit_code": null,
+                        "signal": null,
                         "stdout_bytes": 0,
                         "stderr_bytes": 0,
                         "timed_out": true,
@@ -250,12 +254,32 @@ fn same_working_dir(target: &str, working_dir: &Path) -> bool {
     }
 }
 
-fn validation_output(command: &str, exit_code: Option<i32>, stdout: &str, stderr: &str) -> String {
+fn exit_signal(status: &std::process::ExitStatus) -> Option<i32> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::ExitStatusExt;
+        status.signal()
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = status;
+        None
+    }
+}
+
+fn validation_output(
+    command: &str,
+    exit_code: Option<i32>,
+    signal: Option<i32>,
+    stdout: &str,
+    stderr: &str,
+) -> String {
     let mut out = format!(
         "Validation command `{}` exited with {}",
         command,
         exit_code
             .map(|code| code.to_string())
+            .or_else(|| signal.map(|signal| format!("signal {signal}")))
             .unwrap_or_else(|| "unknown".to_string())
     );
     if !stdout.trim().is_empty() {
@@ -336,7 +360,11 @@ mod tests {
             )
             .await;
 
-        assert!(result.success, "{}", result.content);
+        assert!(
+            result.success,
+            "content={} error={:?} data={:?}",
+            result.content, result.error, result.data
+        );
         let data = result.data.expect("metadata");
         assert_eq!(
             data["shell_result"]["command"],
@@ -362,7 +390,11 @@ mod tests {
             )
             .await;
 
-        assert!(result.success, "{}", result.content);
+        assert!(
+            result.success,
+            "content={} error={:?} data={:?}",
+            result.content, result.error, result.data
+        );
         let data = result.data.expect("metadata");
         assert_eq!(
             data["shell_result"]["command"],

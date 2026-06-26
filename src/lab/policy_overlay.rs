@@ -4,6 +4,7 @@
 //! screens normal tool actions so professor/postdoc turns cannot mutate project
 //! files and graduate turns can mutate only within the current task scope.
 
+use crate::lab::execution_binding::LabExecutionBinding;
 use crate::lab::model::{LabRole, LabRun, LabRunStatus, LabTaskStatus};
 use crate::lab::path_scope::{changed_files_within_scope, normalize_lab_relative_path};
 use crate::lab::store::LabStore;
@@ -59,6 +60,8 @@ pub struct LabRunExecutionContext {
     pub lab_state_version: Option<String>,
     pub active_graduate_task_id: Option<String>,
     pub active_dispatch_id: Option<String>,
+    pub execution_binding: Option<LabExecutionBinding>,
+    pub execution_binding_error: Option<String>,
 }
 
 impl LabRunExecutionContext {
@@ -69,7 +72,14 @@ impl LabRunExecutionContext {
         let has_lab_marker = lab_mode_enabled
             || metadata.contains_key("active_lab_run_id")
             || metadata.contains_key("active_graduate_task_id")
-            || metadata.contains_key("active_dispatch_id");
+            || metadata.contains_key("active_dispatch_id")
+            || metadata
+                .contains_key(crate::lab::execution_binding::LAB_EXECUTION_BINDING_METADATA_KEY);
+        let (execution_binding, execution_binding_error) =
+            match LabExecutionBinding::from_metadata(metadata) {
+                Ok(binding) => (binding, None),
+                Err(err) => (None, Some(err)),
+            };
         has_lab_marker.then(|| Self {
             lab_mode_enabled,
             lab_run_id: metadata.get("active_lab_run_id").cloned(),
@@ -79,12 +89,15 @@ impl LabRunExecutionContext {
             lab_state_version: metadata.get("lab_state_version").cloned(),
             active_graduate_task_id: metadata.get("active_graduate_task_id").cloned(),
             active_dispatch_id: metadata.get("active_dispatch_id").cloned(),
+            execution_binding,
+            execution_binding_error,
         })
     }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct LabRunPolicyReview {
+    pub policy_project_root: Option<String>,
     pub lab_run_id: Option<String>,
     pub state_version: Option<String>,
     pub reviewed_stage: Option<String>,
@@ -112,6 +125,7 @@ impl LabRunPolicyReview {
         Self {
             applies: false,
             allowed: true,
+            policy_project_root: None,
             lab_run_id: None,
             state_version: None,
             reviewed_stage: None,
@@ -136,17 +150,28 @@ impl LabRunPolicyReview {
     fn for_run(input: LabRunPolicyReviewInput<'_>) -> Self {
         Self {
             lab_run_id: Some(input.run.lab_run_id.clone()),
+            policy_project_root: None,
             state_version: Some(labrun_state_version(input.run)),
             reviewed_stage: Some(input.run.current_stage.clone()),
             reviewed_owner: Some(format!("{:?}", input.run.internal_owner)),
             reviewed_status: Some(format!("{:?}", input.run.status)),
             reviewed_at: Some(Utc::now().to_rfc3339()),
-            active_graduate_task_id: input
-                .context
-                .and_then(|context| context.active_graduate_task_id.clone()),
-            active_dispatch_id: input
-                .context
-                .and_then(|context| context.active_dispatch_id.clone()),
+            active_graduate_task_id: input.context.and_then(|context| {
+                context.active_graduate_task_id.clone().or_else(|| {
+                    context
+                        .execution_binding
+                        .as_ref()
+                        .map(|binding| binding.graduate_task_id.clone())
+                })
+            }),
+            active_dispatch_id: input.context.and_then(|context| {
+                context.active_dispatch_id.clone().or_else(|| {
+                    context
+                        .execution_binding
+                        .as_ref()
+                        .map(|binding| binding.dispatch_id.clone())
+                })
+            }),
             applies: input.applies,
             allowed: input.allowed,
             role: Some(format!("{:?}", input.run.internal_owner)),
@@ -236,6 +261,13 @@ pub(crate) fn review_labrun_tool_action_with_source_and_context(
     action_source: LabRunActionSource,
     context: Option<&LabRunExecutionContext>,
 ) -> LabRunPolicyReview {
+    let action_family = action_family_for_tool(tool_name, read_only);
+    if let Some(review) =
+        review_execution_binding_action(action_family.clone(), input_paths, action_source, context)
+    {
+        return review;
+    }
+
     let mut review = LabRunPolicyReview::not_applicable("no active LabRun");
     let store = LabStore::for_project(project_root);
     let run_result =
@@ -266,7 +298,6 @@ pub(crate) fn review_labrun_tool_action_with_source_and_context(
             context,
         );
     }
-    let action_family = action_family_for_tool(tool_name, read_only);
     let mut normalized_paths = Vec::new();
     for path in input_paths {
         let normalized = match action_source {
@@ -361,7 +392,12 @@ pub(crate) fn record_labrun_policy_event(
     if !review.applies {
         return Ok(());
     }
-    let store = LabStore::for_project(project_root);
+    let event_project_root = review
+        .policy_project_root
+        .as_deref()
+        .map(PathBuf::from)
+        .unwrap_or_else(|| project_root.to_path_buf());
+    let store = LabStore::for_project(event_project_root);
     let Some(lab_run_id) = review.lab_run_id.as_deref() else {
         return Ok(());
     };
@@ -375,6 +411,7 @@ pub(crate) fn record_labrun_policy_event(
         event_type,
         serde_json::json!({
             "lab_run_id": review.lab_run_id,
+            "policy_project_root": review.policy_project_root,
             "state_version": review.state_version,
             "reviewed_stage": review.reviewed_stage,
             "reviewed_owner": review.reviewed_owner,
@@ -396,11 +433,154 @@ pub(crate) fn record_labrun_policy_event(
     )
 }
 
+fn review_execution_binding_action(
+    action_family: String,
+    input_paths: &[String],
+    action_source: LabRunActionSource,
+    context: Option<&LabRunExecutionContext>,
+) -> Option<LabRunPolicyReview> {
+    let context = context?;
+    let has_graduate_execution_marker =
+        context.execution_binding.is_some() || context.execution_binding_error.is_some();
+    if !has_graduate_execution_marker {
+        return None;
+    }
+
+    let Some(binding) = context.execution_binding.as_ref() else {
+        if action_family == "read" {
+            return None;
+        }
+        let reason = context
+            .execution_binding_error
+            .clone()
+            .unwrap_or_else(|| "LabRun Graduate mutation requires execution binding".to_string());
+        return Some(binding_policy_review(BindingPolicyReviewInput {
+            binding: None,
+            context,
+            action_source,
+            action_family,
+            allowed: false,
+            reason,
+            paths: input_paths.to_vec(),
+            allowed_scope: Vec::new(),
+        }));
+    };
+
+    if action_family == "read" {
+        return Some(binding_policy_review(BindingPolicyReviewInput {
+            binding: Some(binding),
+            context,
+            action_source,
+            action_family,
+            allowed: true,
+            reason: "read-only action allowed inside LabRun Graduate execution binding".to_string(),
+            paths: input_paths.to_vec(),
+            allowed_scope: binding.allowed_scope.clone(),
+        }));
+    }
+
+    if input_paths.is_empty() {
+        return Some(binding_policy_review(BindingPolicyReviewInput {
+            binding: Some(binding),
+            context,
+            action_source,
+            action_family,
+            allowed: false,
+            reason:
+                "LabRun Graduate mutation has no explicit path evidence to compare with allowed_scope"
+                    .to_string(),
+            paths: Vec::new(),
+            allowed_scope: binding.allowed_scope.clone(),
+        }));
+    }
+
+    match binding.validate_paths_within_scope(input_paths.iter().map(String::as_str)) {
+        Ok(()) => Some(binding_policy_review(BindingPolicyReviewInput {
+            binding: Some(binding),
+            context,
+            action_source,
+            action_family,
+            allowed: true,
+            reason: "LabRun Graduate mutation is within the active task allowed_scope".to_string(),
+            paths: input_paths.to_vec(),
+            allowed_scope: binding.allowed_scope.clone(),
+        })),
+        Err(err) => Some(binding_policy_review(BindingPolicyReviewInput {
+            binding: Some(binding),
+            context,
+            action_source,
+            action_family,
+            allowed: false,
+            reason: format!("LabRun Graduate mutation outside active task allowed_scope: {err}"),
+            paths: input_paths.to_vec(),
+            allowed_scope: binding.allowed_scope.clone(),
+        })),
+    }
+}
+
+struct BindingPolicyReviewInput<'a> {
+    binding: Option<&'a LabExecutionBinding>,
+    context: &'a LabRunExecutionContext,
+    action_source: LabRunActionSource,
+    action_family: String,
+    allowed: bool,
+    reason: String,
+    paths: Vec<String>,
+    allowed_scope: Vec<String>,
+}
+
+fn binding_policy_review(input: BindingPolicyReviewInput<'_>) -> LabRunPolicyReview {
+    let binding = input.binding;
+    let context = input.context;
+    LabRunPolicyReview {
+        policy_project_root: binding
+            .map(|binding| binding.project_root.to_string_lossy().to_string()),
+        lab_run_id: binding
+            .map(|binding| binding.lab_run_id.clone())
+            .or_else(|| context.lab_run_id.clone()),
+        state_version: binding
+            .and_then(|binding| binding.lab_state_version.clone())
+            .or_else(|| context.lab_state_version.clone()),
+        reviewed_stage: context
+            .lab_stage
+            .clone()
+            .or_else(|| Some("graduate_execution".to_string())),
+        reviewed_owner: Some("Graduate".to_string()),
+        reviewed_status: context.lab_status.map(|status| format!("{status:?}")),
+        reviewed_at: Some(Utc::now().to_rfc3339()),
+        active_graduate_task_id: binding
+            .map(|binding| binding.graduate_task_id.clone())
+            .or_else(|| context.active_graduate_task_id.clone()),
+        active_dispatch_id: binding
+            .map(|binding| binding.dispatch_id.clone())
+            .or_else(|| context.active_dispatch_id.clone()),
+        applies: true,
+        allowed: input.allowed,
+        role: Some("Graduate".to_string()),
+        stage: context
+            .lab_stage
+            .clone()
+            .or_else(|| Some("graduate_execution".to_string())),
+        status: context.lab_status.map(|status| format!("{status:?}")),
+        activation: "graduate_execution_binding".to_string(),
+        activation_reason: "LabRun Graduate child tool action carries execution binding"
+            .to_string(),
+        action_source: input.action_source.as_str().to_string(),
+        action_family: input.action_family,
+        reason: input.reason,
+        paths: input.paths,
+        allowed_scope: input.allowed_scope,
+    }
+}
+
 pub(crate) fn revalidate_labrun_policy_review(
     project_root: &Path,
     review: &LabRunPolicyReview,
 ) -> Result<(), String> {
     if !review.applies || !review.allowed || review.action_family == "read" {
+        return Ok(());
+    }
+    if review.activation == "graduate_execution_binding" {
         return Ok(());
     }
     let Some(lab_run_id) = review.lab_run_id.as_deref() else {
@@ -871,6 +1051,8 @@ mod tests {
             lab_state_version: None,
             active_graduate_task_id: Some(task_a.task_id.clone()),
             active_dispatch_id: Some("dispatch_task_a".to_string()),
+            execution_binding: None,
+            execution_binding_error: None,
         };
 
         let allowed = review_labrun_tool_action_with_context(
@@ -913,6 +1095,88 @@ mod tests {
         assert!(denied_without_active_task
             .reason
             .contains("requires one explicit active graduate task"));
+    }
+
+    #[test]
+    fn graduate_execution_binding_enforces_child_scope_without_child_labstore() {
+        let temp = tempfile::tempdir().unwrap();
+        let isolated = temp.path().join("isolated-worktree");
+        std::fs::create_dir_all(&isolated).unwrap();
+        let orchestrator = LabOrchestrator::for_project(temp.path());
+        let proposal = orchestrator
+            .store()
+            .create_proposal("Build LabRun", None)
+            .unwrap();
+        let run = orchestrator
+            .approve_proposal(&proposal.proposal_id)
+            .unwrap();
+        let task = orchestrator
+            .store()
+            .create_graduate_task(
+                &run.lab_run_id,
+                "Implement LabRun slice",
+                "Update LabRun files.",
+                vec!["src/lab".to_string()],
+                vec!["cargo check -q".to_string()],
+            )
+            .unwrap();
+        let binding = crate::lab::execution_binding::LabExecutionBinding::for_graduate_task(
+            &task,
+            "dispatch_child",
+            "lab-graduate-task",
+            temp.path(),
+            &isolated,
+            Some("state_v1".to_string()),
+        )
+        .unwrap();
+        let mut metadata = HashMap::new();
+        binding.insert_into_metadata(&mut metadata).unwrap();
+        let context = LabRunExecutionContext::from_metadata(&metadata).unwrap();
+
+        let allowed = review_labrun_tool_action_with_context(
+            &isolated,
+            "file_write",
+            Some(false),
+            &["src/lab/mod.rs".to_string()],
+            Some(&context),
+        );
+        assert!(allowed.allowed);
+        assert_eq!(allowed.activation, "graduate_execution_binding");
+        assert_eq!(
+            allowed.active_graduate_task_id.as_deref(),
+            Some(task.task_id.as_str())
+        );
+
+        let denied = review_labrun_tool_action_with_context(
+            &isolated,
+            "file_write",
+            Some(false),
+            &["README.md".to_string()],
+            Some(&context),
+        );
+        assert!(!denied.allowed);
+        assert!(denied.reason.contains("outside active task allowed_scope"));
+        record_labrun_policy_event(&isolated, &denied).unwrap();
+        let events = orchestrator
+            .store()
+            .list_run_events(&run.lab_run_id)
+            .unwrap();
+        assert!(events
+            .iter()
+            .any(|event| event.event_type == "labrun_policy_blocked"
+                && event.payload["active_dispatch_id"] == "dispatch_child"));
+
+        let denied_bash_without_path = review_labrun_tool_action_with_context(
+            &isolated,
+            "bash",
+            Some(false),
+            &[],
+            Some(&context),
+        );
+        assert!(!denied_bash_without_path.allowed);
+        assert!(denied_bash_without_path
+            .reason
+            .contains("no explicit path evidence"));
     }
 
     #[test]

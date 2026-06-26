@@ -71,6 +71,32 @@ fn default_subagent_tool_surfaces_are_role_scoped() {
     assert!(!planner.contains(&"bash".to_string()));
 }
 
+#[tokio::test]
+async fn lab_graduate_profile_requires_execution_binding_before_spawn() {
+    let tool = AgentTool::new();
+    let context = crate::tools::ToolContext::new(".", "agent-tool-lab-binding")
+        .with_agent_manager(Arc::new(crate::agent::AgentManager::new()));
+
+    let result = tool
+        .execute(
+            json!({
+                "description": "Try graduate work",
+                "prompt": "Change README.md",
+                "profile": "lab-graduate",
+                "allowed_tools": ["file_write"],
+            }),
+            context,
+        )
+        .await;
+
+    assert!(!result.success);
+    let error = result.error.as_deref().unwrap_or_default();
+    assert!(
+        error.contains("requires a valid LabExecutionBinding"),
+        "unexpected agent tool error: {error}"
+    );
+}
+
 #[test]
 fn subagent_proof_metadata_marks_child_output_as_claim_only() {
     let result = completed_agent_result("agent_1");

@@ -7,6 +7,7 @@ use crate::agent::subagent_session::SubagentSessionPolicy;
 use crate::agent::types::{AgentId, AgentMessage, AgentMessageType, AgentStatus};
 use crate::engine::QueryEngine;
 use crate::services::api::Message;
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::{mpsc, watch};
@@ -49,6 +50,8 @@ pub struct AgentConfig {
     pub child_session_id: Option<String>,
     /// Optional durable completion target for background/foreground result persistence.
     pub completion_sink: Option<AgentCompletionSink>,
+    /// Runtime metadata copied into this agent's tool contexts.
+    pub tool_context_metadata: HashMap<String, String>,
 }
 
 impl Default for AgentConfig {
@@ -71,6 +74,7 @@ impl Default for AgentConfig {
             child_session_store: None,
             child_session_id: None,
             completion_sink: None,
+            tool_context_metadata: HashMap::new(),
         }
     }
 }
@@ -166,6 +170,14 @@ impl AgentConfig {
 
     pub fn with_completion_sink(mut self, sink: AgentCompletionSink) -> Self {
         self.completion_sink = Some(sink);
+        self
+    }
+
+    pub fn with_tool_context_metadata(
+        mut self,
+        metadata: impl IntoIterator<Item = (String, String)>,
+    ) -> Self {
+        self.tool_context_metadata.extend(metadata);
         self
     }
 
@@ -404,6 +416,9 @@ impl Agent {
             self.config.child_session_id.clone(),
         ) {
             options = options.with_session_store(store, session_id);
+        }
+        if !self.config.tool_context_metadata.is_empty() {
+            options = options.with_tool_context_metadata(self.config.tool_context_metadata.clone());
         }
         let agent_system_prompt = self.config.build_system_prompt();
         let cost_before = self.query_engine.estimated_cost_usd().await;
