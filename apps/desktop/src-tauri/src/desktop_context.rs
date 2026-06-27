@@ -48,6 +48,7 @@ pub(crate) struct DesktopWorkbenchSnapshot {
     pub(crate) selected_project: String,
     pub(crate) project_map: DesktopProjectMapSnapshot,
     pub(crate) symbol_index: DesktopSymbolIndexSnapshot,
+    pub(crate) changed_files: Vec<String>,
     pub(crate) runtime_context: Option<DesktopContextSnapshot>,
     pub(crate) lab_status: DesktopLabStatusSnapshot,
     pub(crate) subagent_tasks: Vec<DesktopSubagentTaskSnapshot>,
@@ -775,6 +776,28 @@ pub(crate) fn resolve_current_diff_context(
         preview: None,
         truncated,
     })
+}
+
+pub(crate) fn desktop_changed_files(project: &Path) -> Vec<String> {
+    let mut files = Vec::new();
+    for args in [
+        ["diff", "--name-only"].as_slice(),
+        ["diff", "--cached", "--name-only"].as_slice(),
+    ] {
+        if let Ok(output) = run_git(project, args) {
+            files.extend(
+                output
+                    .lines()
+                    .map(str::trim)
+                    .filter(|path| !path.is_empty())
+                    .map(str::to_string),
+            );
+        }
+    }
+    files.sort();
+    files.dedup();
+    files.truncate(64);
+    files
 }
 
 pub(crate) fn resolve_file_context(

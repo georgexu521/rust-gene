@@ -15,11 +15,50 @@ pub(super) fn collect_desktop_diagnostics(
         command_diagnostic("corepack", "Node package manager bridge", "corepack"),
         xcode_tools_diagnostic(),
         project_access_diagnostic(selected_project),
+        workspace_execution_policy_diagnostic(selected_project),
         settings_access_diagnostic(settings_path),
         diagnostic_logs_access_diagnostic(diagnostic_logs_path),
     ];
     diagnostics.extend(product_readiness_diagnostics());
     diagnostics
+}
+
+fn workspace_execution_policy_diagnostic(project: &Path) -> DesktopDiagnostic {
+    let trust = desktop_workspace_trust_status(project, None);
+    let mut guarded = Vec::new();
+    if trust.package_scripts != "trusted" {
+        guarded.push("package scripts ask");
+    }
+    if trust.shell_validation != "trusted" {
+        guarded.push("shell validation ask");
+    }
+    if !trust.lab_daemon_supervision {
+        guarded.push("LabRun daemon off");
+    }
+    if !trust.developer_auto_acknowledged {
+        guarded.push("Developer Auto off");
+    }
+    let detail = format!(
+        "validation_security=controlled_not_sandboxed; workspace_trust_source={}; package_scripts={}; shell_validation={}; guarded={}",
+        trust.trust_source,
+        trust.package_scripts,
+        trust.shell_validation,
+        if guarded.is_empty() {
+            "none".to_string()
+        } else {
+            guarded.join(", ")
+        }
+    );
+    DesktopDiagnostic {
+        id: "workspace_execution_policy",
+        label: "Workspace execution policy",
+        status: if guarded.is_empty() {
+            DiagnosticStatus::Ok
+        } else {
+            DiagnosticStatus::Warning
+        },
+        detail,
+    }
 }
 
 pub(super) fn provider_setup_info_value() -> ProviderSetupInfo {

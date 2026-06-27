@@ -826,10 +826,32 @@ mod tests {
             .submit_stream_turn_with_agent_mode_and_cancel("hello", AgentMode::Auto, token)
             .await;
 
+        let mut saw_cancel_diagnostic = false;
         let mut saw_cancel_closeout = false;
         let mut saw_cancel_error = false;
         while let Some(event) = stream.next().await {
             match event {
+                StreamEvent::RuntimeDiagnostic { diagnostic }
+                    if diagnostic.get("schema").and_then(|value| value.as_str())
+                        == Some("turn_cancellation.v1") =>
+                {
+                    saw_cancel_diagnostic = diagnostic
+                        .get("cancellation_boundaries")
+                        .and_then(|value| value.as_array())
+                        .is_some_and(|boundaries| {
+                            boundaries.iter().any(|boundary| {
+                                boundary.get("boundary").and_then(|value| value.as_str())
+                                    == Some("provider_request_future")
+                                    && boundary.get("behavior").and_then(|value| value.as_str())
+                                        == Some("drops_future_only")
+                            }) && boundaries.iter().any(|boundary| {
+                                boundary.get("boundary").and_then(|value| value.as_str())
+                                    == Some("required_validation_runner")
+                                    && boundary.get("behavior").and_then(|value| value.as_str())
+                                        == Some("external_process_killed")
+                            })
+                        });
+                }
                 StreamEvent::Closeout { status, .. } if status == "cancelled" => {
                     saw_cancel_closeout = true;
                 }
@@ -841,6 +863,7 @@ mod tests {
             }
         }
 
+        assert!(saw_cancel_diagnostic);
         assert!(saw_cancel_closeout);
         assert!(saw_cancel_error);
     }

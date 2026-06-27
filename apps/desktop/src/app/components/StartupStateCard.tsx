@@ -8,6 +8,8 @@ type StartupStateCardProps = {
   onDismissLabRecovery: (labRunId: string) => void;
   onOpenLabDashboard: () => void;
   onResumeLab: () => void;
+  onExportDiagnostics?: () => void;
+  onForceResetRun?: () => void;
 };
 
 export function StartupStateCard({
@@ -18,6 +20,8 @@ export function StartupStateCard({
   onDismissLabRecovery,
   onOpenLabDashboard,
   onResumeLab,
+  onExportDiagnostics,
+  onForceResetRun,
 }: StartupStateCardProps) {
   if (!settings || settings.startup_state.status === "new_conversation") {
     return null;
@@ -49,6 +53,16 @@ export function StartupStateCard({
           </button>
         </div>
       ) : null}
+      {settings.startup_state.status === "desktop_run_recovery" ? (
+        <div className="startup-state-actions" aria-label="Desktop run recovery actions">
+          <button type="button" onClick={onExportDiagnostics}>
+            Export diagnostics
+          </button>
+          <button type="button" onClick={onForceResetRun}>
+            Force reset
+          </button>
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -59,6 +73,9 @@ function startupStateLabel(status: string) {
   }
   if (status === "restored_session") {
     return "Restored session";
+  }
+  if (status === "desktop_run_recovery") {
+    return "Interrupted run";
   }
   if (status === "new_conversation") {
     return "New conversation";
@@ -77,6 +94,14 @@ function startupStateDetail(
   }
   if (settings.startup_state.status === "restored_session" && selectedSession) {
     return `Continuing ${selectedSession.title} in ${basename(projectPath)}`;
+  }
+  if (settings.startup_state.status === "desktop_run_recovery") {
+    const run = settings.startup_state.desktop_run;
+    if (run) {
+      const provider = run.provider_name || "unknown provider";
+      const session = run.session_id || "unknown session";
+      return `${run.run_id} in ${session} via ${provider}: ${run.status}`;
+    }
   }
   return settings.startup_state.detail;
 }

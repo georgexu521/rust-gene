@@ -192,6 +192,46 @@
   overflow-wrap: anywhere;
 }
 
+.settings-inline-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.settings-inline-list span {
+  padding: 5px 8px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  color: #4f5965;
+  background: #f8fafc;
+  font-size: 12px;
+}
+
+.credential-actions {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.credential-actions label {
+  display: grid;
+  gap: 5px;
+  color: #4f5965;
+  font-size: 12px;
+}
+
+.credential-actions select {
+  width: min(100%, 260px);
+  min-height: 32px;
+  padding: 6px 8px;
+  border: 1px solid #cbd2da;
+  border-radius: 6px;
+  color: #30343a;
+  background: #ffffff;
+  font-size: 13px;
+}
+
 .settings-actions {
   display: flex;
   flex-wrap: wrap;

@@ -12,6 +12,7 @@ import type {
   DesktopDiagnosticsRedaction,
   DesktopRunReviewAcceptanceInput,
   DesktopRunReviewAcceptanceResult,
+  DesktopCredentialProviderBackendStatus,
   DesktopCredentialStorageStatus,
   DesktopExportResult,
   DesktopFilePreview,
@@ -88,6 +89,7 @@ let webPreviewSettings: DesktopSettings = {
     lab_stage: null,
     lab_owner: null,
     lab_pause_reason: null,
+    desktop_run: null,
   },
   lab_daemon_supervision_enabled: false,
   lab_daemon_last_supervision: null,
@@ -144,11 +146,23 @@ function previewCredentialStorage(): DesktopCredentialStorageStatus {
     active_store: "dotenv_fallback",
     preferred_store: "dotenv_fallback",
     system_keychain_available: false,
+    backend_health: [
+      {
+        backend_id: "system_keychain",
+        backend_label: "macOS Keychain",
+        available: false,
+        can_save: false,
+        can_load_status: false,
+        can_delete: false,
+        can_migrate_from_dotenv: false,
+      },
+    ],
     dotenv_fallback_path: "web-preview/.priority-agent/.env",
     activation_mirror: "dotenv_runtime_env",
     environment_only_available: true,
     acknowledgement_required: false,
     migration_available: false,
+    delete_available: true,
     last_updated_source: "web_preview",
     last_save_backend: null,
     detail: "Web preview simulates dotenv fallback credential storage.",
@@ -280,6 +294,7 @@ export function desktopWorkbenchSnapshot(): Promise<DesktopWorkbenchSnapshot> {
           },
         ],
       },
+      changed_files: ["src/tools/project_tool/mod.rs"],
       runtime_context: {
         history_messages: webPreviewSessions.find((session) => session.id === webPreviewSettings.active_session_id)?.message_count || 0,
         history_tokens: 1200,
@@ -474,6 +489,7 @@ export function selectProject(path: string): Promise<SelectedProject> {
         lab_stage: null,
         lab_owner: null,
         lab_pause_reason: null,
+        desktop_run: null,
       },
     };
     return Promise.resolve({ path });
@@ -502,6 +518,7 @@ export function desktopSettings(): Promise<DesktopSettings> {
           lab_stage: "graduate_work",
           lab_owner: "Postdoc",
           lab_pause_reason: "app_shutdown",
+          desktop_run: null,
         },
       });
     }
@@ -639,6 +656,7 @@ export function newConversation(): Promise<DesktopSettings> {
         lab_stage: null,
         lab_owner: null,
         lab_pause_reason: null,
+        desktop_run: null,
       },
     };
     return Promise.resolve(webPreviewSettings);
@@ -781,6 +799,8 @@ export function desktopRunContextDetail(
         line_count: 584,
         preview:
           "import { FormEvent, useEffect, useState, type ReactNode } from \"react\";\n\nexport function App() {\n  return <DesktopShell />;\n}\n",
+        line_start: context.line_start ?? null,
+        line_end: context.line_end ?? null,
         truncated: false,
       });
     }
@@ -983,6 +1003,39 @@ export function saveProviderCredential(providerId: string, key: string): Promise
   }
 
   return invoke("save_provider_credential", { providerId, key });
+}
+
+export function providerCredentialBackendStatus(
+  providerId: string,
+): Promise<DesktopCredentialProviderBackendStatus> {
+  if (!isTauriRuntime()) {
+    return Promise.resolve({
+      backend_id: "system_keychain",
+      backend_label: "macOS Keychain",
+      provider_id: providerId,
+      available: false,
+      credential_present: false,
+      detail: "Web preview does not access a system credential store.",
+    });
+  }
+
+  return invoke("provider_credential_backend_status", { providerId });
+}
+
+export function deleteProviderCredential(providerId: string): Promise<string> {
+  if (!isTauriRuntime()) {
+    return Promise.resolve(`Deleted preview credential for ${providerId}.`);
+  }
+
+  return invoke("delete_provider_credential", { providerId });
+}
+
+export function migrateProviderCredentialToKeychain(providerId: string): Promise<string> {
+  if (!isTauriRuntime()) {
+    return Promise.resolve(`Migrated preview credential for ${providerId}.`);
+  }
+
+  return invoke("migrate_provider_credential_to_keychain", { providerId });
 }
 
 export function cancelRun(): Promise<boolean> {

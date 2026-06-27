@@ -216,6 +216,22 @@ pub(crate) fn schedule_native_restart_smoke(window: WebviewWindow, log_path: Pat
     });
 }
 
+pub(crate) fn schedule_native_rc_failure_smoke(window: WebviewWindow, log_path: PathBuf) {
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_secs(3));
+        let result = window.eval(native_rc_failure_smoke_script());
+        if let Err(err) = result {
+            let _ = append_desktop_log(
+                &log_path,
+                &format!(
+                    "native_rc_failure_smoke ok=false eval_error={}",
+                    sanitize_log_value(&err.to_string())
+                ),
+            );
+        }
+    });
+}
+
 pub(crate) fn native_interaction_smoke_script() -> &'static str {
     r#"
 (async () => {
@@ -1012,13 +1028,17 @@ pub(crate) fn native_lab_recovery_smoke_script() -> &'static str {
   const steps = [];
   const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
   const text = () => document.body?.innerText || "";
+  const candidates = () => Array.from(document.querySelectorAll("button, [role='button'], [aria-label]"));
   const buttonCandidates = () => Array.from(document.querySelectorAll("button, [role='button']"));
   const visible = (element) => {
     const rect = element.getBoundingClientRect();
     return rect.width > 0 && rect.height > 0;
   };
+  const byLabel = (label) => candidates().find((element) => element.getAttribute("aria-label") === label && visible(element));
   const byText = (label) => buttonCandidates().find((element) => element.textContent?.trim() === label && visible(element));
+  const byAnyText = (label) => buttonCandidates().find((element) => element.textContent?.trim() === label);
   const byTextIncludes = (label) => buttonCandidates().find((element) => element.textContent?.trim().includes(label) && visible(element));
+  const submitButton = () => byTextIncludes("Send") || byLabel("Send message");
   const setInputValue = (label, value) => {
     const element = document.querySelector(`input[aria-label="${label}"]`);
     if (!element) {
@@ -1163,6 +1183,129 @@ pub(crate) fn native_restart_smoke_script() -> &'static str {
     return await record(`native_restart_smoke ok=true steps=${steps.join(",")}`);
   } catch (error) {
     return await record(`native_restart_smoke ok=false error=${error?.message || error} steps=${steps.join(",")} text=${text().slice(0, 500)}`);
+  }
+})()
+"#
+}
+
+pub(crate) fn native_rc_failure_smoke_script() -> &'static str {
+    r#"
+(async () => {
+  const steps = [];
+  const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+  const text = () => document.body?.innerText || "";
+  const candidates = () => Array.from(document.querySelectorAll("button, [role='button'], [aria-label]"));
+  const buttonCandidates = () => Array.from(document.querySelectorAll("button, [role='button']"));
+  const visible = (element) => {
+    const rect = element.getBoundingClientRect();
+    return rect.width > 0 && rect.height > 0;
+  };
+  const byLabel = (label) => candidates().find((element) => element.getAttribute("aria-label") === label && visible(element));
+  const byText = (label) => buttonCandidates().find((element) => element.textContent?.trim() === label && visible(element));
+  const byAnyText = (label) => buttonCandidates().find((element) => element.textContent?.trim() === label);
+  const byTextIncludes = (label) => buttonCandidates().find((element) => element.textContent?.trim().includes(label) && visible(element));
+  const submitButton = () => byTextIncludes("Send") || byLabel("Send message");
+  const setTextareaValue = (label, value) => {
+    const element = document.querySelector(`textarea[aria-label="${label}"]`);
+    if (!element) {
+      throw new Error(`missing textarea ${label}`);
+    }
+    const setter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, "value")?.set;
+    setter?.call(element, value);
+    element.dispatchEvent(new Event("input", { bubbles: true }));
+    element.dispatchEvent(new Event("change", { bubbles: true }));
+    steps.push(`typed-${label}`);
+  };
+  const click = async (name, findElement) => {
+    const element = findElement();
+    if (!element) {
+      throw new Error(`missing ${name}`);
+    }
+    element.click();
+    steps.push(name);
+    await sleep(350);
+  };
+  const waitFor = async (name, predicate, attempts = 120, delay = 250) => {
+    for (let index = 0; index < attempts; index += 1) {
+      if (await predicate()) {
+        steps.push(name);
+        return;
+      }
+      await sleep(delay);
+    }
+    throw new Error(`timeout ${name}`);
+  };
+  const invoke = async (name, args = {}) => {
+    if (!window.__TAURI_INTERNALS__?.invoke) {
+      throw new Error("missing tauri invoke");
+    }
+    return await window.__TAURI_INTERNALS__.invoke(name, args);
+  };
+  const record = async (result) => {
+    if (!window.__TAURI_INTERNALS__?.invoke) {
+      return result;
+    }
+    await invoke("record_native_smoke_result", { result });
+    return result;
+  };
+
+  try {
+    await waitFor("app-ready", () => text().includes("What should we build in") || text().includes("Ask Liz to inspect"));
+    if (text().includes("DESKTOP SETUP") && byText("Skip setup")) {
+      await click("skip-first-run-setup", () => byText("Skip setup"));
+      await waitFor("first-run-setup-dismissed", () => !text().includes("DESKTOP SETUP"));
+    }
+    const diagnostics = await invoke("desktop_diagnostics");
+    if (!JSON.stringify(diagnostics).includes("provider_keys")) {
+      throw new Error("missing provider diagnostics");
+    }
+    if (!JSON.stringify(diagnostics).includes("workspace_execution_policy")) {
+      throw new Error("missing workspace execution policy diagnostics");
+    }
+    steps.push("provider-and-policy-diagnostics-verified");
+
+    setTextareaValue("Message", "Native RC cancel path");
+    await click("cancel-run-submit", submitButton);
+    await waitFor("cancel-running", () => text().includes("Priority Agent running") || text().includes("Permission needed"));
+    await click("stop-run", () => byText("Stop run"));
+    await waitFor("cancel-visible", () =>
+      text().includes("Stop requested") ||
+      text().includes("cancelled") ||
+      (text().includes("idle") && text().includes("Permission needed"))
+    );
+    const cancelReset = await invoke("force_reset_run");
+    steps.push(`cancel-force-reset-${cancelReset}`);
+    steps.push("cancel-path-verified");
+
+    setTextareaValue("Message", "Native RC permission rejection path");
+    await click("reject-run-submit", submitButton);
+    await waitFor("permission-visible", () => text().includes("Permission needed") && Boolean(byText("Reject")));
+    await click("permission-reject", () => byText("Reject"));
+    await waitFor("permission-rejected", () => text().includes("Native smoke permission rejected") || text().includes("Permission rejected"));
+    steps.push("permission-reject-verified");
+
+    const bundle = await invoke("export_desktop_diagnostics_bundle", {
+      redaction: { include_logs: true, max_log_bytes: 32768, include_full_paths: false },
+    });
+    if (!bundle?.path || !bundle?.redacted) {
+      throw new Error(`diagnostics bundle was not redacted: ${JSON.stringify(bundle)}`);
+    }
+    steps.push("diagnostics-export-verified");
+
+    const reset = await invoke("force_reset_run");
+    steps.push(`force-reset-${reset}`);
+    setTextareaValue("Message", "Native RC accepted review path");
+    await click("accepted-run-submit", submitButton);
+    await waitFor("permission-visible-accepted", () => text().includes("Permission needed") && Boolean(byText("Approve")));
+    await click("permission-approve", () => byText("Approve"));
+    await waitFor("run-review-visible", () => text().includes("Run review") && Boolean(byAnyText("Accept")));
+    await click("run-review-accept", () => byAnyText("Accept"));
+    await waitFor("run-review-accepted", () => text().includes("Run Review accepted"));
+    steps.push("run-review-accept-verified");
+
+    return await record(`native_rc_failure_smoke ok=true steps=${steps.join(",")}`);
+  } catch (error) {
+    return await record(`native_rc_failure_smoke ok=false error=${error?.message || error} steps=${steps.join(",")} text=${text().slice(0, 700)}`);
   }
 })()
 "#

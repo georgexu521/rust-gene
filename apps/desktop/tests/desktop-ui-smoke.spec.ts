@@ -219,6 +219,30 @@ test.describe("desktop UI smoke", () => {
     await expect(page.getByRole("complementary", { name: "Context details" })).not.toBeVisible();
     await page.getByRole("button", { name: "Remove context App.tsx" }).click();
     await expect(page.getByLabel("Attached context", { exact: true })).not.toContainText("584 lines");
+    await page.getByRole("textbox", { name: "Message" }).fill("@ProjectScanner");
+    const mentionDialog = page.getByRole("dialog", { name: "File and symbol mentions" });
+    await expect(mentionDialog).toContainText("ProjectScanner");
+    await mentionDialog.getByRole("button", { name: "Attach ProjectScanner" }).click();
+    await expect(page.getByLabel("Attached context", { exact: true })).toContainText("ProjectScanner");
+    await expect(page.getByLabel("Attached context", { exact: true })).toContainText(
+      "apps/desktop/src/app/App.tsx:95",
+    );
+    await page.getByRole("button", { name: "Open context ProjectScanner" }).click();
+    await expect(page.getByRole("complementary", { name: "Context details" })).toContainText(
+      "Selected range",
+    );
+    await page.keyboard.press("Escape");
+    await expect(page.getByRole("complementary", { name: "Context details" })).not.toBeVisible();
+    await page.getByRole("button", { name: "Remove context ProjectScanner" }).click();
+    await page.getByRole("textbox", { name: "Message" }).fill("@project_tool");
+    const fileMentionDialog = page.getByRole("dialog", { name: "File and symbol mentions" });
+    await expect(fileMentionDialog).toContainText("src/tools/project_tool/mod.rs");
+    await expect(fileMentionDialog).toContainText("changed");
+    await fileMentionDialog.getByRole("button", { name: "Attach src/tools/project_tool/mod.rs" }).click();
+    await expect(page.getByLabel("Attached context", { exact: true })).toContainText(
+      "src/tools/project_tool/mod.rs",
+    );
+    await page.getByRole("button", { name: "Remove context src/tools/project_tool/mod.rs" }).click();
     await composer.getByRole("button", { name: "Project" }).click();
     await expect(page.getByRole("dialog", { name: "Project controls" })).toBeVisible();
     await expect(page.getByRole("textbox", { name: "Project path" })).toHaveValue(

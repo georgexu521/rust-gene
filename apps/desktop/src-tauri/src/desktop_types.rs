@@ -183,6 +183,21 @@ pub(crate) struct DesktopStartupState {
     pub(crate) lab_stage: Option<String>,
     pub(crate) lab_owner: Option<String>,
     pub(crate) lab_pause_reason: Option<String>,
+    pub(crate) desktop_run: Option<DesktopRunRecoveryMetadata>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct DesktopRunRecoveryMetadata {
+    pub(crate) schema: String,
+    pub(crate) run_id: String,
+    pub(crate) session_id: Option<String>,
+    pub(crate) provider_name: Option<String>,
+    pub(crate) model: Option<String>,
+    pub(crate) started_at: String,
+    pub(crate) last_event_at: Option<String>,
+    pub(crate) cancellation_state: String,
+    pub(crate) latest_closeout: Option<String>,
+    pub(crate) status: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -235,13 +250,36 @@ pub(crate) struct DesktopCredentialStorageStatus {
     pub(crate) active_store: String,
     pub(crate) preferred_store: String,
     pub(crate) system_keychain_available: bool,
+    pub(crate) backend_health: Vec<DesktopCredentialBackendHealth>,
     pub(crate) dotenv_fallback_path: String,
     pub(crate) activation_mirror: Option<String>,
     pub(crate) environment_only_available: bool,
     pub(crate) acknowledgement_required: bool,
     pub(crate) migration_available: bool,
+    pub(crate) delete_available: bool,
     pub(crate) last_updated_source: String,
     pub(crate) last_save_backend: Option<String>,
+    pub(crate) detail: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub(crate) struct DesktopCredentialBackendHealth {
+    pub(crate) backend_id: String,
+    pub(crate) backend_label: String,
+    pub(crate) available: bool,
+    pub(crate) can_save: bool,
+    pub(crate) can_load_status: bool,
+    pub(crate) can_delete: bool,
+    pub(crate) can_migrate_from_dotenv: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub(crate) struct DesktopCredentialProviderBackendStatus {
+    pub(crate) backend_id: String,
+    pub(crate) backend_label: String,
+    pub(crate) provider_id: String,
+    pub(crate) available: bool,
+    pub(crate) credential_present: bool,
     pub(crate) detail: String,
 }
 

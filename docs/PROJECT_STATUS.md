@@ -3,6 +3,77 @@ Status: Current
 
 Last updated: 2026-06-27
 
+## Desktop Release Candidate Closure - 2026-06-27
+
+The desktop RC closure workstream is tracked in
+`docs/DESKTOP_RELEASE_CANDIDATE_CLOSURE_PLAN_2026-06-27.md`.
+
+Implemented in this slice:
+
+- Turn cancellation diagnostics now include a cancellation propagation map for
+  provider futures, streaming, tool execution, bash/local process tools,
+  required validation, and the desktop lightweight lane. The map distinguishes
+  `cancellable`, `drops_future_only`, and `external_process_killed` behavior
+  instead of implying every boundary owns a hard transport abort.
+- macOS Keychain is now modeled as a fuller desktop credential backend:
+  backend health, provider credential status, delete, and dotenv-to-Keychain
+  migration commands are exposed through the Tauri backend and typed desktop
+  API. Settings exposes check, migrate, delete, and fallback-file reveal
+  actions. Tests use fake stores and do not invoke the real system Keychain.
+- Desktop active-run recovery metadata is persisted to the app settings area
+  during full-agent runs. Startup now reports an interrupted desktop run when
+  the previous run remained `active`, `cancel_requested`, or
+  `force_reset_requested`; diagnostics bundles include the recovery metadata.
+- Desktop diagnostics now include an explicit workspace execution policy item
+  with `validation_security=controlled_not_sandboxed`, project trust source,
+  package-script policy, shell-validation policy, and guarded defaults.
+- Composer context chips now use stable context keys, so multiple `@file` or
+  symbol attachments can coexist while exact duplicate file/line selections
+  update in place.
+- Desktop workbench snapshots now expose changed files, and Composer ranks
+  changed-file `@file` suggestions ahead of lower-signal matches while keeping
+  symbol line attachments inspectable.
+- `scripts/desktop-macos-release.sh` can include the existing
+  `scripts/security_dependency_audit.sh` supply-chain gate in RC evidence when
+  `PRIORITY_AGENT_DESKTOP_RELEASE_SUPPLY_CHAIN=1` is set.
+- `scripts/desktop-native-smoke.sh --rc-failure-check` covers cancel,
+  permission reject, redacted diagnostics export, force reset, and Run Review
+  Accept persistence. `scripts/desktop-macos-release.sh` can include it when
+  `PRIORITY_AGENT_DESKTOP_RELEASE_NATIVE_SMOKE=1` is set.
+- `docs/DESKTOP_UNTRUSTED_WORKSPACE_SANDBOX_DESIGN_2026-06-27.md` records the
+  future sandbox backend requirements and keeps current controlled validation
+  clearly separate from untrusted-code isolation.
+
+Validation completed so far for this slice:
+
+```bash
+cargo fmt --check
+cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml --check
+cargo check -q
+cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml -q
+cargo test -q controller_cancel_token_produces_cancelled_stream_events
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -q -- --test-threads=1
+cargo clippy --workspace --all-targets --all-features -- -D warnings
+cargo clippy --manifest-path apps/desktop/src-tauri/Cargo.toml --all-targets -- -D warnings
+cargo doc --workspace --all-features --no-deps
+corepack pnpm --dir apps/desktop build
+corepack pnpm --dir apps/desktop test:ui-smoke
+bash scripts/check_desktop_release_security.sh
+bash -n scripts/desktop-native-smoke.sh
+bash -n scripts/desktop-macos-release.sh
+bash -n scripts/security_dependency_audit.sh
+bash scripts/validate_docs.sh
+bash scripts/desktop-native-smoke.sh --rc-failure-check --no-screenshot --timeout 180
+git diff --check
+```
+
+External RC items still require release credentials or deliberate operator
+choice: real Developer ID signing/notarization evidence, actual system
+Keychain migration on a macOS user machine, optional supply-chain gate tool
+installation (`bash scripts/security_dependency_audit.sh` was executed and reports
+missing `cargo-audit` and `cargo-deny` on this machine), and a future sandbox
+backend for untrusted repositories.
+
 ## Desktop Next Product Hardening - 2026-06-27
 
 The follow-up desktop product-hardening workstream is tracked in

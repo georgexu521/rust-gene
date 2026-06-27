@@ -20,8 +20,11 @@ import {
   ProviderModelStatus,
   ProviderSetupInfo,
   DesktopWorkspaceTrustInput,
+  deleteProviderCredential,
+  migrateProviderCredentialToKeychain,
+  providerCredentialBackendStatus,
+  saveProviderCredential as saveCred,
 } from "../../runtime/desktopApi";
-import { saveProviderCredential as saveCred } from "../../runtime/desktopApi";
 import { useDrawerKeyboard } from "./useDrawerKeyboard";
 
 type SettingsDrawerProps = {
@@ -330,7 +333,26 @@ export function SettingsDrawer({
                   <dt>Migration</dt>
                   <dd>{settings?.credential_storage.migration_available ? "available" : "not needed"}</dd>
                 </div>
+                <div>
+                  <dt>Delete</dt>
+                  <dd>{settings?.credential_storage.delete_available ? "available" : "not available"}</dd>
+                </div>
               </dl>
+              {settings?.credential_storage.backend_health.length ? (
+                <div className="settings-inline-list" aria-label="Credential backend health">
+                  {settings.credential_storage.backend_health.map((backend) => (
+                    <span key={backend.backend_id}>
+                      {backend.backend_label}: {backend.available ? "available" : "not active"}
+                    </span>
+                  ))}
+                </div>
+              ) : null}
+              <CredentialStoreActions
+                settings={settings}
+                providerStatus={providerStatus}
+                onOpenSettingsFolder={onOpenSettingsFolder}
+                onRefresh={onRefresh}
+              />
               {settings?.credential_storage ? (
                 <p className="settings-copy">
                   {settings.credential_storage.detail} Fallback file is still
@@ -525,6 +547,105 @@ function TrustCard({ label, value }: { label: string; value: string }) {
 
 function basename(path: string) {
   return path.split(/[\\/]/).filter(Boolean).at(-1) || path;
+}
+
+function CredentialStoreActions({
+  settings,
+  providerStatus,
+  onOpenSettingsFolder,
+  onRefresh,
+}: {
+  settings: DesktopSettings | null;
+  providerStatus: ProviderModelStatus | null;
+  onOpenSettingsFolder: () => void;
+  onRefresh: () => void;
+}) {
+  const [selectedProviderId, setSelectedProviderId] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState("");
+  const providers = providerStatus?.providers || [];
+  const effectiveProviderId =
+    selectedProviderId ||
+    providerStatus?.active_provider ||
+    providers.find((provider) => provider.configured)?.id ||
+    providers[0]?.id ||
+    "";
+
+  const runAction = async (action: "status" | "migrate" | "delete") => {
+    if (!effectiveProviderId) {
+      setMessage("Choose a provider before running credential actions.");
+      return;
+    }
+    setBusy(true);
+    setMessage("");
+    try {
+      if (action === "status") {
+        const status = await providerCredentialBackendStatus(effectiveProviderId);
+        setMessage(
+          `${status.backend_label}: ${
+            status.credential_present ? "credential present" : "credential not found"
+          } (${status.detail})`,
+        );
+      } else if (action === "migrate") {
+        setMessage(await migrateProviderCredentialToKeychain(effectiveProviderId));
+        onRefresh();
+      } else {
+        setMessage(await deleteProviderCredential(effectiveProviderId));
+        onRefresh();
+      }
+    } catch (err) {
+      setMessage(String(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="credential-actions" aria-label="Credential maintenance">
+      <label>
+        <span>Credential provider</span>
+        <select
+          aria-label="Credential target"
+          value={effectiveProviderId}
+          onChange={(event) => setSelectedProviderId(event.target.value)}
+        >
+          {providers.map((provider) => (
+            <option key={provider.id} value={provider.id}>
+              {provider.label}
+              {provider.configured ? " (configured)" : ""}
+            </option>
+          ))}
+        </select>
+      </label>
+      <div className="settings-actions">
+        <button
+          type="button"
+          disabled={busy || !effectiveProviderId}
+          onClick={() => void runAction("status")}
+        >
+          Check backend
+        </button>
+        <button
+          type="button"
+          disabled={busy || !effectiveProviderId || !settings?.credential_storage.migration_available}
+          onClick={() => void runAction("migrate")}
+        >
+          Migrate to Keychain
+        </button>
+        <button
+          type="button"
+          disabled={busy || !effectiveProviderId || !settings?.credential_storage.delete_available}
+          onClick={() => void runAction("delete")}
+        >
+          Delete credential
+        </button>
+        <button type="button" onClick={onOpenSettingsFolder}>
+          Reveal fallback file
+        </button>
+      </div>
+      {message ? <p className="settings-copy">{message}</p> : null}
+    </div>
+  );
 }
 
 type ProviderSetupGuideProps = {

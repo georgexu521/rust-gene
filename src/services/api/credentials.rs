@@ -65,6 +65,18 @@ pub enum CredentialSaveOutcome {
     Rejected { reason: String },
 }
 
+/// Outcome of removing a stored credential.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CredentialRemoveOutcome {
+    /// A stored credential was removed.
+    Removed,
+    /// The provider is known, but no stored credential was found.
+    NotFound,
+    /// The credential was not removed because the provider is unknown or the
+    /// store could not be updated.
+    Rejected { reason: String },
+}
+
 /// Save a provider credential to `~/.priority-agent/.env`.
 ///
 /// Writes the provider-specific key env var from the catalog (e.g.
@@ -105,6 +117,34 @@ pub fn save_credential(provider_id: &str, key: &str) -> CredentialSaveOutcome {
         CredentialSaveOutcome::Verified
     } else {
         CredentialSaveOutcome::SavedUnverified
+    }
+}
+
+/// Remove a provider credential from the product dotenv mirror.
+pub fn remove_credential(provider_id: &str) -> CredentialRemoveOutcome {
+    let Some(entry) = provider_catalog::find(provider_id) else {
+        return CredentialRemoveOutcome::Rejected {
+            reason: format!("unknown provider '{}'", provider_id),
+        };
+    };
+    let key_env_var = &entry.key_env_vars[0];
+    let store = super::auth_store::AuthStore::from_path(credential_env_path());
+    match store.remove(provider_id, key_env_var) {
+        Ok(true) => {
+            std::env::remove_var(key_env_var);
+            if std::env::var("PRIORITY_AGENT_DEFAULT_PROVIDER")
+                .ok()
+                .as_deref()
+                == Some(provider_id)
+            {
+                std::env::remove_var("PRIORITY_AGENT_DEFAULT_PROVIDER");
+            }
+            CredentialRemoveOutcome::Removed
+        }
+        Ok(false) => CredentialRemoveOutcome::NotFound,
+        Err(err) => CredentialRemoveOutcome::Rejected {
+            reason: format!("cannot remove credential: {}", err),
+        },
     }
 }
 

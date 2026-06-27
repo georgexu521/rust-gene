@@ -4,6 +4,7 @@ import {
   DesktopRunContext,
   DesktopRuntimeDiagnostic,
 } from "../../runtime/desktopApi";
+import { desktopRunContextKey } from "../contextKey";
 import { TimelineSummary, TraceItem } from "../types";
 import { useDrawerKeyboard } from "./useDrawerKeyboard";
 
@@ -108,7 +109,7 @@ export function TraceDrawer({
                     <button
                       aria-label={`Open trace context ${context.label}`}
                       disabled={!onOpenContext}
-                      key={context.type}
+                      key={desktopRunContextKey(context)}
                       type="button"
                       onClick={() => onOpenContext?.(context)}
                     >

@@ -106,7 +106,11 @@ async fn desktop_settings(
 
     Ok(DesktopSettingsResponse {
         selected_project: selected_project.display().to_string(),
-        startup_state: desktop_startup_state(&selected_project, active_session_id.as_deref()),
+        startup_state: desktop_startup_state(
+            &selected_project,
+            active_session_id.as_deref(),
+            &state.settings_path,
+        ),
         active_session_id,
         permission_mode: normalized_permission_mode_label(
             state.permission_mode.lock().await.as_deref(),
@@ -416,6 +420,8 @@ async fn record_native_smoke_result(
         "native_lab_recovery_smoke"
     } else if result.contains("native_restart_smoke") {
         "native_restart_smoke"
+    } else if result.contains("native_rc_failure_smoke") {
+        "native_rc_failure_smoke"
     } else {
         "native_interaction_smoke"
     };
@@ -680,6 +686,23 @@ async fn send_message_inner(
             .map(|duration| duration.as_nanos())
             .unwrap_or_default()
     );
+    let provider_name = state.provider_name.lock().await.clone();
+    let model = state.model.lock().await.clone();
+    let _ = write_desktop_active_run_metadata(
+        &state.settings_path,
+        &DesktopRunRecoveryMetadata {
+            schema: "priority_agent.desktop_active_run.v1".to_string(),
+            run_id: desktop_run_id.clone(),
+            session_id: active_session_id.clone(),
+            provider_name,
+            model,
+            started_at: desktop_timestamp(),
+            last_event_at: Some(desktop_timestamp()),
+            cancellation_state: "none".to_string(),
+            latest_closeout: None,
+            status: "active".to_string(),
+        },
+    );
     app.emit(
         "desktop-run-event",
         DesktopRunEvent::RunStarted {
@@ -700,6 +723,12 @@ async fn send_message_inner(
             event = stream.next() => event,
             _ = tokio::time::sleep(std::time::Duration::from_millis(150)) => {
                 if desktop_run_cancel_requested(state, run_guard).await {
+                    let _ = mark_desktop_active_run_status(
+                        &state.settings_path,
+                        "cancelled",
+                        Some("user_cancelled"),
+                        Some("cancelled"),
+                    );
                     emit_desktop_run_cancelled(&app, &diagnostic_logs_path).await?;
                     break;
                 }
@@ -708,6 +737,12 @@ async fn send_message_inner(
         };
         let Some(event) = event else {
             let _ = append_desktop_log(&diagnostic_logs_path, "run_stream_ended");
+            let _ = mark_desktop_active_run_status(
+                &state.settings_path,
+                "completed",
+                None,
+                Some("stream_ended"),
+            );
             break;
         };
         if let Some(entry) = desktop_stream_event_log(&event) {
@@ -718,6 +753,12 @@ async fn send_message_inner(
         }
         let is_stream_cancellation = desktop_stream_event_is_cancellation(&event);
         if desktop_run_cancel_requested(state, run_guard).await && !is_stream_cancellation {
+            let _ = mark_desktop_active_run_status(
+                &state.settings_path,
+                "cancelled",
+                Some("user_cancelled"),
+                Some("cancelled"),
+            );
             emit_desktop_run_cancelled(&app, &diagnostic_logs_path).await?;
             break;
         }
@@ -743,6 +784,33 @@ async fn send_message_inner(
             }
             _ => None,
         };
+        if is_terminal {
+            match &desktop_event {
+                DesktopRunEvent::RunCompleted => {
+                    let _ = mark_desktop_active_run_status(
+                        &state.settings_path,
+                        "completed",
+                        None,
+                        Some("completed"),
+                    );
+                }
+                DesktopRunEvent::RunError { message } => {
+                    let status = if message.contains("cancelled") {
+                        "cancelled"
+                    } else {
+                        "failed"
+                    };
+                    let cancellation_state = (status == "cancelled").then_some("user_cancelled");
+                    let _ = mark_desktop_active_run_status(
+                        &state.settings_path,
+                        status,
+                        cancellation_state,
+                        Some(message),
+                    );
+                }
+                _ => {}
+            }
+        }
         app.emit("desktop-run-event", desktop_event)
             .map_err(|err| err.to_string())?;
         if let Some(entry) = terminal_log {
@@ -838,6 +906,12 @@ async fn cancel_run(app: AppHandle, state: State<'_, DesktopAppState>) -> Result
     };
     handle.cancel_requested = true;
     handle.cancel_token.cancel();
+    let _ = mark_desktop_active_run_status(
+        &state.settings_path,
+        "cancel_requested",
+        Some("user_requested"),
+        None,
+    );
     let _ = append_desktop_log(
         &state.diagnostic_logs_path,
         &format!("run_cancel_requested id={}", sanitize_log_value(&handle.id)),
@@ -869,6 +943,12 @@ async fn force_reset_run(
         })
         .unwrap_or(false);
     if had_active_run {
+        let _ = mark_desktop_active_run_status(
+            &state.settings_path,
+            "force_reset_requested",
+            Some("force_reset"),
+            Some("force_reset"),
+        );
         let _ = append_desktop_log(&state.diagnostic_logs_path, "run_force_reset");
         let _ = app.emit(
             "desktop-run-event",
@@ -1084,6 +1164,7 @@ async fn desktop_workbench_snapshot(
             files: index.files,
             truncated: index.truncated,
         },
+        changed_files: desktop_changed_files(&selected_project),
         runtime_context,
         lab_status: desktop_lab_status_for_project(&selected_project),
         subagent_tasks,
@@ -1303,6 +1384,11 @@ pub fn run() {
                     schedule_native_restart_smoke(window, diagnostic_logs_path.clone());
                 }
             }
+            if std::env::var("PRIORITY_AGENT_DESKTOP_RC_FAILURE_SMOKE").as_deref() == Ok("1") {
+                if let Some(window) = app.get_webview_window("main") {
+                    schedule_native_rc_failure_smoke(window, diagnostic_logs_path.clone());
+                }
+            }
             app.manage(DesktopAppState {
                 runtime: Mutex::new(None),
                 active_run: Mutex::new(None),
@@ -1360,6 +1446,9 @@ pub fn run() {
             open_shell_profile,
             open_file_path,
             save_provider_credential,
+            provider_credential_backend_status,
+            delete_provider_credential,
+            migrate_provider_credential_to_keychain,
             record_native_smoke_result,
             select_project,
             new_conversation,

@@ -56,6 +56,25 @@ pub(crate) async fn save_provider_credential(
     save_desktop_provider_credential(&provider_id, &key)
 }
 
+#[tauri::command]
+pub(crate) async fn provider_credential_backend_status(
+    provider_id: String,
+) -> Result<DesktopCredentialProviderBackendStatus, String> {
+    desktop_provider_credential_backend_status(&provider_id)
+}
+
+#[tauri::command]
+pub(crate) async fn delete_provider_credential(provider_id: String) -> Result<String, String> {
+    delete_desktop_provider_credential(&provider_id)
+}
+
+#[tauri::command]
+pub(crate) async fn migrate_provider_credential_to_keychain(
+    provider_id: String,
+) -> Result<String, String> {
+    migrate_desktop_provider_credential_to_keychain(&provider_id)
+}
+
 pub(crate) fn scoped_desktop_open_target(
     requested: &str,
     selected_project: &Path,

@@ -2,6 +2,7 @@ use super::*;
 
 pub(crate) fn native_smoke_enabled() -> bool {
     std::env::var("PRIORITY_AGENT_DESKTOP_NATIVE_SMOKE").as_deref() == Ok("1")
+        || std::env::var("PRIORITY_AGENT_DESKTOP_RC_FAILURE_SMOKE").as_deref() == Ok("1")
 }
 
 pub(crate) async fn emit_native_smoke_run_fixture(

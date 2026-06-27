@@ -204,6 +204,7 @@ pub(super) fn remember_recent_project(projects: &mut Vec<PathBuf>, project: Path
 pub(super) fn desktop_startup_state(
     project: &Path,
     active_session_id: Option<&str>,
+    settings_path: &Path,
 ) -> DesktopStartupState {
     if let Ok(Some(run)) = priority_agent::lab::store::LabStore::for_project(project).latest_run() {
         if matches!(
@@ -226,8 +227,26 @@ pub(super) fn desktop_startup_state(
                 lab_stage: Some(run.current_stage),
                 lab_owner: Some(format!("{:?}", run.internal_owner)),
                 lab_pause_reason: Some(pause_reason),
+                desktop_run: None,
             };
         }
+    }
+
+    if let Some(metadata) =
+        load_desktop_active_run_metadata(settings_path).filter(desktop_run_metadata_needs_recovery)
+    {
+        return DesktopStartupState {
+            status: "desktop_run_recovery",
+            detail: format!(
+                "Previous desktop run {} did not close cleanly; last status was {}.",
+                metadata.run_id, metadata.status
+            ),
+            lab_run_id: None,
+            lab_stage: None,
+            lab_owner: None,
+            lab_pause_reason: None,
+            desktop_run: Some(metadata),
+        };
     }
 
     if let Some(session_id) = active_session_id {
@@ -245,6 +264,7 @@ pub(super) fn desktop_startup_state(
             lab_stage: None,
             lab_owner: None,
             lab_pause_reason: None,
+            desktop_run: None,
         }
     } else {
         DesktopStartupState {
@@ -260,8 +280,64 @@ pub(super) fn desktop_startup_state(
             lab_stage: None,
             lab_owner: None,
             lab_pause_reason: None,
+            desktop_run: None,
         }
     }
+}
+
+pub(super) fn desktop_active_run_metadata_path(settings_path: &Path) -> PathBuf {
+    settings_path
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .join("active-run.json")
+}
+
+pub(super) fn load_desktop_active_run_metadata(
+    settings_path: &Path,
+) -> Option<DesktopRunRecoveryMetadata> {
+    let path = desktop_active_run_metadata_path(settings_path);
+    std::fs::read_to_string(path)
+        .ok()
+        .and_then(|text| serde_json::from_str(&text).ok())
+}
+
+pub(super) fn write_desktop_active_run_metadata(
+    settings_path: &Path,
+    metadata: &DesktopRunRecoveryMetadata,
+) -> Result<(), String> {
+    let path = desktop_active_run_metadata_path(settings_path);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|err| err.to_string())?;
+    }
+    let text = serde_json::to_string_pretty(metadata).map_err(|err| err.to_string())?;
+    std::fs::write(path, text).map_err(|err| err.to_string())
+}
+
+pub(super) fn mark_desktop_active_run_status(
+    settings_path: &Path,
+    status: &str,
+    cancellation_state: Option<&str>,
+    latest_closeout: Option<&str>,
+) -> Result<(), String> {
+    let Some(mut metadata) = load_desktop_active_run_metadata(settings_path) else {
+        return Ok(());
+    };
+    metadata.status = status.to_string();
+    metadata.last_event_at = Some(desktop_timestamp());
+    if let Some(cancellation_state) = cancellation_state {
+        metadata.cancellation_state = cancellation_state.to_string();
+    }
+    if let Some(latest_closeout) = latest_closeout {
+        metadata.latest_closeout = Some(latest_closeout.to_string());
+    }
+    write_desktop_active_run_metadata(settings_path, &metadata)
+}
+
+fn desktop_run_metadata_needs_recovery(metadata: &DesktopRunRecoveryMetadata) -> bool {
+    matches!(
+        metadata.status.as_str(),
+        "active" | "cancel_requested" | "force_reset_requested"
+    )
 }
 
 pub(super) fn desktop_permission_mode_options() -> Vec<PermissionModeOption> {

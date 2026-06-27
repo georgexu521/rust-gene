@@ -89,6 +89,7 @@ import { TraceDrawer } from "./components/TraceDrawer";
 import { ToolOutputDrawer } from "./components/ToolOutputDrawer";
 import { WorkbenchDrawer } from "./components/WorkbenchDrawer";
 import { WorkspaceTopbar } from "./components/WorkspaceTopbar";
+import { desktopRunContextKey } from "./contextKey";
 import {
   initialRunViewState,
   loadSessionTranscript,
@@ -710,9 +711,12 @@ export function App() {
     try {
       const detail = await desktopRunContextDetail(context);
       const enrichedContext = { ...context, detail };
+      const nextKey = desktopRunContextKey(enrichedContext);
       setRunContexts((current) =>
-        current.some((existing) => existing.type === context.type)
-          ? current.map((existing) => (existing.type === context.type ? enrichedContext : existing))
+        current.some((existing) => desktopRunContextKey(existing) === nextKey)
+          ? current.map((existing) =>
+              desktopRunContextKey(existing) === nextKey ? enrichedContext : existing,
+            )
           : [...current, enrichedContext],
       );
     } catch (err) {
@@ -734,9 +738,11 @@ export function App() {
     });
   }
 
-  function handleRemoveContext(type: DesktopRunContext["type"]) {
-    setRunContexts((current) => current.filter((context) => context.type !== type));
-    setActiveContextDetail((current) => (current?.type === type ? null : current));
+  function handleRemoveContext(id: string) {
+    setRunContexts((current) => current.filter((context) => desktopRunContextKey(context) !== id));
+    setActiveContextDetail((current) =>
+      current && desktopRunContextKey(current) === id ? null : current,
+    );
   }
 
   function resetConversationView() {
@@ -1032,6 +1038,8 @@ export function App() {
             openWorkbenchDrawer();
           }}
           onResumeLab={() => stageSlashCommand("/lab resume")}
+          onExportDiagnostics={() => void handleExportDesktopDiagnosticsBundle()}
+          onForceResetRun={() => setIsForceResetConfirmOpen(true)}
         />
 
         {lastArchivedSession ? (
@@ -1181,6 +1189,7 @@ export function App() {
           providerStatus={providerStatus}
           providerSetup={providerSetup}
           symbolFiles={workbenchSnapshot?.symbol_index.files || []}
+          changedFiles={workbenchSnapshot?.changed_files || []}
           detailLevel={settings?.detail_level}
           permissionMode={settings?.permission_mode}
           agentMode={settings?.agent_mode}

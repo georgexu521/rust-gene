@@ -1,12 +1,13 @@
 import { useRef } from "react";
 import { X } from "lucide-react";
 import { DesktopRunContext } from "../../runtime/desktopApi";
+import { desktopRunContextKey } from "../contextKey";
 import { useDrawerKeyboard } from "./useDrawerKeyboard";
 
 type ContextDetailDrawerProps = {
   context: DesktopRunContext | null;
   onClose: () => void;
-  onRemove: (type: DesktopRunContext["type"]) => void;
+  onRemove: (id: string) => void;
 };
 
 export function ContextDetailDrawer({ context, onClose, onRemove }: ContextDetailDrawerProps) {
@@ -93,7 +94,7 @@ export function ContextDetailDrawer({ context, onClose, onRemove }: ContextDetai
       )}
 
       <div className="context-detail-actions">
-        <button type="button" onClick={() => onRemove(context.type)}>
+        <button type="button" onClick={() => onRemove(desktopRunContextKey(context))}>
           Remove context
         </button>
       </div>

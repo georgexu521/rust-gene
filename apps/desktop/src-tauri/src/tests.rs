@@ -843,7 +843,8 @@ fn desktop_smoke_startup_state_prefers_recoverable_labrun() {
     let run = store.approve_proposal(&proposal.proposal_id).unwrap();
     store.pause_latest_run_for_shutdown().unwrap().unwrap();
 
-    let startup = desktop_startup_state(&project, Some("restored-session"));
+    let settings_path = project.join(".priority-agent/desktop/settings.json");
+    let startup = desktop_startup_state(&project, Some("restored-session"), &settings_path);
     assert_eq!(startup.status, "lab_recovery");
     assert_eq!(startup.lab_run_id.as_deref(), Some(run.lab_run_id.as_str()));
     assert_eq!(startup.lab_stage.as_deref(), Some("professor_discussion"));
@@ -852,6 +853,36 @@ fn desktop_smoke_startup_state_prefers_recoverable_labrun() {
     assert!(startup.detail.contains("recoverable"));
 
     let _ = std::fs::remove_dir_all(&project);
+}
+
+#[test]
+fn desktop_smoke_startup_state_reports_interrupted_desktop_run() {
+    let temp = tempfile::tempdir().unwrap();
+    let project = temp.path().join("project");
+    std::fs::create_dir_all(&project).unwrap();
+    let settings_path = temp.path().join("desktop/settings.json");
+    let metadata = DesktopRunRecoveryMetadata {
+        schema: "priority_agent.desktop_active_run.v1".to_string(),
+        run_id: "desktop-run-1".to_string(),
+        session_id: Some("session-1".to_string()),
+        provider_name: Some("minimax".to_string()),
+        model: Some("MiniMax-M3".to_string()),
+        started_at: "unix_ms:1".to_string(),
+        last_event_at: Some("unix_ms:2".to_string()),
+        cancellation_state: "none".to_string(),
+        latest_closeout: None,
+        status: "active".to_string(),
+    };
+    write_desktop_active_run_metadata(&settings_path, &metadata).unwrap();
+
+    let startup = desktop_startup_state(&project, Some("restored-session"), &settings_path);
+
+    assert_eq!(startup.status, "desktop_run_recovery");
+    assert_eq!(
+        startup.desktop_run.as_ref().map(|run| run.run_id.as_str()),
+        Some("desktop-run-1")
+    );
+    assert!(startup.detail.contains("did not close cleanly"));
 }
 
 #[test]

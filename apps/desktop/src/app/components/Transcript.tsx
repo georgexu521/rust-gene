@@ -17,6 +17,7 @@ import {
   DetailLevelId,
   ProviderModelStatus,
 } from "../../runtime/desktopApi";
+import { desktopRunContextKey } from "../contextKey";
 import { TimelineKind, TimelineStatus, TimelineSummary, TranscriptItem } from "../types";
 import {
   ReasoningCard,
@@ -362,7 +363,7 @@ function TimelineEvent({
               <button
                 aria-label={`Open run context ${context.label}`}
                 disabled={!onOpenContext}
-                key={context.type}
+                key={desktopRunContextKey(context)}
                 type="button"
                 onClick={() => onOpenContext?.(context)}
               >
@@ -842,7 +843,7 @@ function TimelineSummaryView({
                 <button
                   aria-label={`Open run context ${context.label}`}
                   disabled={!onOpenContext}
-                  key={context.type}
+                  key={desktopRunContextKey(context)}
                   type="button"
                   onClick={() => onOpenContext?.(context)}
                 >

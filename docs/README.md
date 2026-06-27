@@ -43,6 +43,8 @@ and high-value reference docs. Older plans and completed audits live under
 | [DESKTOP_SECURITY_RELIABILITY_AND_LABRUN_E2E_PLAN_2026-06-26.md](DESKTOP_SECURITY_RELIABILITY_AND_LABRUN_E2E_PLAN_2026-06-26.md) | Next hardening plan for LabRun live child-agent scope proof, desktop security defaults, scoped native commands, single-run guard, daemon visibility, and desktop CI. |
 | [DESKTOP_APP_PRODUCT_MATURITY_NEXT_PLAN_2026-06-26.md](DESKTOP_APP_PRODUCT_MATURITY_NEXT_PLAN_2026-06-26.md) | Desktop product-maturity plan for first-run onboarding, workspace trust, Run Review, visible cancel/reset recovery, credential-store abstraction, diagnostics export, and macOS-first release packaging. |
 | [DESKTOP_APP_NEXT_PRODUCT_HARDENING_PLAN_2026-06-26.md](DESKTOP_APP_NEXT_PRODUCT_HARDENING_PLAN_2026-06-26.md) | Next desktop product-hardening plan for information-density view modes, production CSP, real cancellation, persisted Run Review acceptance, inline provider onboarding, diagnostics path redaction, and release delivery. |
+| [DESKTOP_RELEASE_CANDIDATE_CLOSURE_PLAN_2026-06-27.md](DESKTOP_RELEASE_CANDIDATE_CLOSURE_PLAN_2026-06-27.md) | Desktop release-candidate closure plan for provider/tool cancellation depth, Keychain backend completeness, signed/notarized macOS evidence, untrusted-workspace policy, restart recovery, and supply-chain gates. |
+| [DESKTOP_UNTRUSTED_WORKSPACE_SANDBOX_DESIGN_2026-06-27.md](DESKTOP_UNTRUSTED_WORKSPACE_SANDBOX_DESIGN_2026-06-27.md) | Desktop untrusted-workspace boundary and future sandbox backend design; current validation remains controlled, not sandboxed. |
 | [DESKTOP_MACOS_RELEASE_CHECKLIST_2026-06-26.md](DESKTOP_MACOS_RELEASE_CHECKLIST_2026-06-26.md) | macOS-first desktop release candidate checklist for build/smoke, safety, security, signing/notarization, and known-limitations evidence. |
 | [LAB_AGENT_WORKFLOW_PLAN_2026-06-18.md](LAB_AGENT_WORKFLOW_PLAN_2026-06-18.md) | LabRun workflow design and staged agent roles. |
 | [LAB_GRADUATE_EXECUTION_POLICY_DISCUSSION_2026-06-21.md](LAB_GRADUATE_EXECUTION_POLICY_DISCUSSION_2026-06-21.md) | LabRun graduate execution policy and evidence boundaries. |
@@ -116,5 +118,5 @@ PROJECT_MAP.md -> CONTROLLER_MERGE_PLAN.md -> UNIFIED_RUNTIME_ENTRYPOINTS_2026-0
 Desktop workbench:
 
 ```text
-DESKTOP_FRONTEND_PRODUCT_PLAN_2026-06-21.md -> DESKTOP_FRONTEND_COMPLETION_AUDIT_2026-06-22.md -> DESKTOP_APP_PRODUCT_MATURITY_NEXT_PLAN_2026-06-26.md -> DESKTOP_APP_NEXT_PRODUCT_HARDENING_PLAN_2026-06-26.md -> DESKTOP_MACOS_RELEASE_CHECKLIST_2026-06-26.md
+DESKTOP_FRONTEND_PRODUCT_PLAN_2026-06-21.md -> DESKTOP_FRONTEND_COMPLETION_AUDIT_2026-06-22.md -> DESKTOP_APP_PRODUCT_MATURITY_NEXT_PLAN_2026-06-26.md -> DESKTOP_APP_NEXT_PRODUCT_HARDENING_PLAN_2026-06-26.md -> DESKTOP_RELEASE_CANDIDATE_CLOSURE_PLAN_2026-06-27.md -> DESKTOP_UNTRUSTED_WORKSPACE_SANDBOX_DESIGN_2026-06-27.md -> DESKTOP_MACOS_RELEASE_CHECKLIST_2026-06-26.md
 ```

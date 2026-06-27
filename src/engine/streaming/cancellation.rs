@@ -35,6 +35,7 @@ pub(super) async fn emit_turn_cancelled_failure(tx: &mpsc::Sender<StreamEvent>, 
                 "schema": "turn_cancellation.v1",
                 "stage": stage,
                 "status": "cancelled",
+                "cancellation_boundaries": cancellation_boundary_map(),
                 "message": message,
             }),
         })
@@ -46,4 +47,39 @@ pub(super) async fn emit_turn_cancelled_failure(tx: &mpsc::Sender<StreamEvent>, 
         })
         .await;
     let _ = tx.send(StreamEvent::Error(message)).await;
+}
+
+fn cancellation_boundary_map() -> serde_json::Value {
+    serde_json::json!([
+        {
+            "boundary": "provider_request_future",
+            "behavior": "drops_future_only",
+            "detail": "The active provider future is dropped through the selected turn future; provider SDK transport-specific abort hooks are best-effort follow-up work."
+        },
+        {
+            "boundary": "streaming_engine",
+            "behavior": "cancellable",
+            "detail": "Streaming turn preflight and query execution observe the shared CancellationToken."
+        },
+        {
+            "boundary": "tool_execution_controller",
+            "behavior": "drops_future_only",
+            "detail": "Long-running tool futures are interrupted at the runtime selection boundary unless the specific tool owns a process-level cancellation hook."
+        },
+        {
+            "boundary": "bash_local_process_tools",
+            "behavior": "external_process_killed",
+            "detail": "Required validation child processes use kill-on-drop plus explicit process termination when cancellation is wired into that runner."
+        },
+        {
+            "boundary": "required_validation_runner",
+            "behavior": "external_process_killed",
+            "detail": "Required validation stops the child process group and returns Interrupted on cancellation."
+        },
+        {
+            "boundary": "desktop_lightweight_provider_lane",
+            "behavior": "cancellable",
+            "detail": "Desktop lightweight turns select on the same CancellationToken before emitting completion."
+        }
+    ])
 }

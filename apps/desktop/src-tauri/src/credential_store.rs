@@ -1,5 +1,5 @@
 use super::*;
-use priority_agent::services::api::credentials::CredentialSaveOutcome;
+use priority_agent::services::api::credentials::{CredentialRemoveOutcome, CredentialSaveOutcome};
 use std::process::Command;
 
 pub(crate) trait DesktopCredentialStore {
@@ -7,6 +7,26 @@ pub(crate) trait DesktopCredentialStore {
     fn backend_label(&self) -> &'static str;
     fn is_available(&self) -> bool;
     fn save_secret(&self, provider_id: &str, key: &str) -> Result<(), String>;
+    fn load_status(
+        &self,
+        provider_id: &str,
+    ) -> Result<DesktopCredentialProviderBackendStatus, String>;
+    fn delete_secret(&self, provider_id: &str) -> Result<(), String>;
+    fn migrate_from_dotenv(&self, provider_id: &str, key: &str) -> Result<(), String> {
+        self.save_secret(provider_id, key)
+    }
+    fn backend_health(&self) -> DesktopCredentialBackendHealth {
+        let available = self.is_available();
+        DesktopCredentialBackendHealth {
+            backend_id: self.backend_id().to_string(),
+            backend_label: self.backend_label().to_string(),
+            available,
+            can_save: available,
+            can_load_status: available,
+            can_delete: available,
+            can_migrate_from_dotenv: available,
+        }
+    }
 }
 
 struct MacosKeychainCredentialStore;
@@ -27,12 +47,39 @@ impl DesktopCredentialStore for MacosKeychainCredentialStore {
     fn save_secret(&self, provider_id: &str, key: &str) -> Result<(), String> {
         save_to_macos_keychain(provider_id, key)
     }
+
+    fn load_status(
+        &self,
+        provider_id: &str,
+    ) -> Result<DesktopCredentialProviderBackendStatus, String> {
+        let available = self.is_available();
+        let credential_present = available && macos_keychain_credential_exists(provider_id)?;
+        Ok(DesktopCredentialProviderBackendStatus {
+            backend_id: self.backend_id().to_string(),
+            backend_label: self.backend_label().to_string(),
+            provider_id: provider_id.trim().to_string(),
+            available,
+            credential_present,
+            detail: if !available {
+                "macOS Keychain backend is not available".to_string()
+            } else if credential_present {
+                "credential exists in macOS Keychain".to_string()
+            } else {
+                "credential not found in macOS Keychain".to_string()
+            },
+        })
+    }
+
+    fn delete_secret(&self, provider_id: &str) -> Result<(), String> {
+        delete_from_macos_keychain(provider_id)
+    }
 }
 
 pub(crate) fn desktop_credential_storage_status_value() -> DesktopCredentialStorageStatus {
     let dotenv_path = priority_agent::services::api::credentials::credential_env_path();
     let keychain = MacosKeychainCredentialStore;
     let keychain_available = keychain.is_available();
+    let backend_health = vec![keychain.backend_health()];
     DesktopCredentialStorageStatus {
         active_store: if keychain_available {
             keychain.backend_id().to_string()
@@ -45,11 +92,13 @@ pub(crate) fn desktop_credential_storage_status_value() -> DesktopCredentialStor
             "dotenv_fallback".to_string()
         },
         system_keychain_available: keychain_available,
+        backend_health,
         dotenv_fallback_path: dotenv_path.display().to_string(),
         activation_mirror: Some("dotenv_runtime_env".to_string()),
         environment_only_available: true,
         acknowledgement_required: !keychain_available,
         migration_available: keychain_available && dotenv_path.exists(),
+        delete_available: true,
         last_updated_source: if keychain_available {
             "system_keychain_available".to_string()
         } else if dotenv_path.exists() {
@@ -64,6 +113,66 @@ pub(crate) fn desktop_credential_storage_status_value() -> DesktopCredentialStor
             "Desktop credential saving currently uses the Priority Agent dotenv fallback; system keychain support is not active on this platform.".to_string()
         },
     }
+}
+
+pub(crate) fn desktop_provider_credential_backend_status(
+    provider_id: &str,
+) -> Result<DesktopCredentialProviderBackendStatus, String> {
+    let keychain = MacosKeychainCredentialStore;
+    keychain.load_status(provider_id)
+}
+
+pub(crate) fn delete_desktop_provider_credential(provider_id: &str) -> Result<String, String> {
+    let provider_id = provider_id.trim();
+    if provider_id.is_empty() {
+        return Err("provider id must not be empty".to_string());
+    }
+    let keychain = MacosKeychainCredentialStore;
+    let keychain_deleted = if keychain.is_available() {
+        keychain.delete_secret(provider_id)?;
+        true
+    } else {
+        false
+    };
+    let dotenv_deleted =
+        match priority_agent::services::api::credentials::remove_credential(provider_id) {
+            CredentialRemoveOutcome::Removed => true,
+            CredentialRemoveOutcome::NotFound => false,
+            CredentialRemoveOutcome::Rejected { reason } => return Err(reason),
+        };
+    Ok(match (keychain_deleted, dotenv_deleted) {
+        (true, true) => {
+            format!("Deleted key for {provider_id} from macOS Keychain and dotenv mirror")
+        }
+        (true, false) => format!("Deleted key for {provider_id} from macOS Keychain"),
+        (false, true) => format!("Deleted key for {provider_id} from dotenv fallback"),
+        (false, false) => format!("No stored key found for {provider_id}"),
+    })
+}
+
+pub(crate) fn migrate_desktop_provider_credential_to_keychain(
+    provider_id: &str,
+) -> Result<String, String> {
+    let provider_id = provider_id.trim();
+    if provider_id.is_empty() {
+        return Err("provider id must not be empty".to_string());
+    }
+    let keychain = MacosKeychainCredentialStore;
+    if !keychain.is_available() {
+        return Err("macOS Keychain backend is not available".to_string());
+    }
+    let _ = priority_agent::services::api::credentials::load_product_credential_env();
+    let status = priority_agent::services::api::credentials::status_for(provider_id)
+        .ok_or_else(|| format!("unknown provider '{provider_id}'"))?;
+    let env_var = status
+        .active_env_var
+        .ok_or_else(|| format!("no dotenv credential found for {provider_id}"))?;
+    let key = std::env::var(&env_var)
+        .map_err(|_| format!("no runtime credential value found for {env_var}"))?;
+    keychain.migrate_from_dotenv(provider_id, &key)?;
+    Ok(format!(
+        "Migrated key for {provider_id} from dotenv mirror to macOS Keychain"
+    ))
 }
 
 pub(crate) fn save_desktop_provider_credential(
@@ -146,6 +255,47 @@ fn save_to_macos_keychain(provider_id: &str, key: &str) -> Result<(), String> {
     }
 }
 
+fn macos_keychain_credential_exists(provider_id: &str) -> Result<bool, String> {
+    if provider_id.trim().is_empty() {
+        return Err("provider id must not be empty".to_string());
+    }
+    let output = Command::new("security")
+        .args([
+            "find-generic-password",
+            "-a",
+            provider_id.trim(),
+            "-s",
+            "Priority Agent",
+        ])
+        .output()
+        .map_err(|err| format!("cannot query macOS Keychain: {err}"))?;
+    Ok(output.status.success())
+}
+
+fn delete_from_macos_keychain(provider_id: &str) -> Result<(), String> {
+    if provider_id.trim().is_empty() {
+        return Err("provider id must not be empty".to_string());
+    }
+    let output = Command::new("security")
+        .args([
+            "delete-generic-password",
+            "-a",
+            provider_id.trim(),
+            "-s",
+            "Priority Agent",
+        ])
+        .output()
+        .map_err(|err| format!("cannot invoke macOS Keychain: {err}"))?;
+    if output.status.success() || output.status.code() == Some(44) {
+        Ok(())
+    } else {
+        Err(format!(
+            "macOS Keychain delete failed with status {}",
+            output.status.code().unwrap_or(-1)
+        ))
+    }
+}
+
 #[cfg(test)]
 mod credential_store_tests {
     use super::*;
@@ -156,6 +306,8 @@ mod credential_store_tests {
         label: &'static str,
         available: bool,
         result: Result<(), String>,
+        present: bool,
+        deletes: RefCell<Vec<String>>,
         saves: RefCell<Vec<(String, String)>>,
     }
 
@@ -178,6 +330,25 @@ mod credential_store_tests {
                 .push((provider_id.to_string(), key.to_string()));
             self.result.clone()
         }
+
+        fn load_status(
+            &self,
+            provider_id: &str,
+        ) -> Result<DesktopCredentialProviderBackendStatus, String> {
+            Ok(DesktopCredentialProviderBackendStatus {
+                backend_id: self.backend_id().to_string(),
+                backend_label: self.backend_label().to_string(),
+                provider_id: provider_id.to_string(),
+                available: self.available,
+                credential_present: self.available && self.present,
+                detail: "fake status".to_string(),
+            })
+        }
+
+        fn delete_secret(&self, provider_id: &str) -> Result<(), String> {
+            self.deletes.borrow_mut().push(provider_id.to_string());
+            self.result.clone()
+        }
     }
 
     fn fake_store(available: bool, result: Result<(), String>) -> FakeCredentialStore {
@@ -186,6 +357,8 @@ mod credential_store_tests {
             label: "Fake Keychain",
             available,
             result,
+            present: available,
+            deletes: RefCell::new(Vec::new()),
             saves: RefCell::new(Vec::new()),
         }
     }
@@ -220,5 +393,44 @@ mod credential_store_tests {
         let err = save_preferred_primary_store("openai", "sk-test", &[&store]).unwrap_err();
 
         assert_eq!(err, "backend unavailable");
+    }
+
+    #[test]
+    fn backend_status_reports_present_credentials() {
+        let store = fake_store(true, Ok(()));
+
+        let status = store.load_status("openai").unwrap();
+
+        assert_eq!(status.provider_id, "openai");
+        assert!(status.available);
+        assert!(status.credential_present);
+    }
+
+    #[test]
+    fn backend_health_reports_supported_keychain_operations() {
+        let store = fake_store(true, Ok(()));
+
+        let health = store.backend_health();
+
+        assert_eq!(health.backend_id, "fake_keychain");
+        assert!(health.available);
+        assert!(health.can_save);
+        assert!(health.can_load_status);
+        assert!(health.can_delete);
+        assert!(health.can_migrate_from_dotenv);
+    }
+
+    #[test]
+    fn fake_backend_delete_and_migration_use_store_methods() {
+        let store = fake_store(true, Ok(()));
+
+        store.delete_secret("openai").unwrap();
+        store.migrate_from_dotenv("deepseek", "sk-test").unwrap();
+
+        assert_eq!(store.deletes.borrow().as_slice(), &["openai".to_string()]);
+        assert_eq!(
+            store.saves.borrow().as_slice(),
+            &[("deepseek".to_string(), "sk-test".to_string())]
+        );
     }
 }

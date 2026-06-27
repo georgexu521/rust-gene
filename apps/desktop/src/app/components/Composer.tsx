@@ -29,6 +29,7 @@ import {
   ProviderSetupInfo,
   saveProviderCredential,
 } from "../../runtime/desktopApi";
+import { desktopRunContextKey } from "../contextKey";
 
 type ComposerProps = {
   composer: string;
@@ -38,6 +39,7 @@ type ComposerProps = {
   providerStatus: ProviderModelStatus | null;
   providerSetup: ProviderSetupInfo | null;
   symbolFiles?: DesktopIndexedFile[] | null;
+  changedFiles?: string[] | null;
   detailLevel?: DetailLevelId | null;
   permissionMode?: PermissionModeId | null;
   agentMode?: AgentModeId | null;
@@ -59,7 +61,7 @@ type ComposerProps = {
   onProviderCredentialSaved?: () => void;
   onAddContext: (context: DesktopRunContext) => void;
   onAddFileContext: () => void;
-  onRemoveContext: (id: DesktopRunContext["type"]) => void;
+  onRemoveContext: (id: string) => void;
   onSubmit: (event: FormEvent<HTMLFormElement>) => void;
 };
 
@@ -80,6 +82,7 @@ export function Composer({
   providerStatus,
   providerSetup,
   symbolFiles = [],
+  changedFiles = [],
   detailLevel,
   permissionMode,
   permissionOptions = [],
@@ -154,8 +157,8 @@ export function Composer({
     [slashQuery],
   );
   const fileMentionSuggestions = useMemo(
-    () => fileMentionMatches(symbolFiles || [], fileMentionQueryValue || "").slice(0, 8),
-    [symbolFiles, fileMentionQueryValue],
+    () => fileMentionMatches(symbolFiles || [], fileMentionQueryValue || "", changedFiles || []).slice(0, 8),
+    [symbolFiles, fileMentionQueryValue, changedFiles],
   );
   function currentPromptHistory() {
     return promptHistory.length ? promptHistory : localPromptHistoryRef.current;
@@ -512,37 +515,40 @@ export function Composer({
         </div>
         {contexts.length ? (
           <div className="composer-attachment-list">
-            {contexts.map((context) => (
-              <article className="composer-attachment" key={context.type}>
-                <button
-                  aria-label={`Open context ${context.label}`}
-                  className="composer-attachment-main"
-                  type="button"
-                  onClick={() => onOpenContext(context)}
-                >
-                  <span className="composer-attachment-icon">
-                    {context.type === "file" ? (
-                      <FileText aria-hidden="true" size={14} />
-                    ) : (
-                      <GitCompare aria-hidden="true" size={14} />
-                    )}
-                  </span>
-                  <span>
-                    <strong>{context.label}</strong>
-                    <small>{contextAttachmentDetail(context)}</small>
-                  </span>
-                </button>
-                <button
-                  aria-label={`Remove context ${context.label}`}
-                  className="composer-attachment-remove"
-                  title={`Remove ${context.label}`}
-                  type="button"
-                  onClick={() => onRemoveContext(context.type)}
-                >
-                  <X aria-hidden="true" size={13} />
-                </button>
-              </article>
-            ))}
+            {contexts.map((context) => {
+              const contextKey = desktopRunContextKey(context);
+              return (
+                <article className="composer-attachment" key={contextKey}>
+                  <button
+                    aria-label={`Open context ${context.label}`}
+                    className="composer-attachment-main"
+                    type="button"
+                    onClick={() => onOpenContext(context)}
+                  >
+                    <span className="composer-attachment-icon">
+                      {context.type === "file" ? (
+                        <FileText aria-hidden="true" size={14} />
+                      ) : (
+                        <GitCompare aria-hidden="true" size={14} />
+                      )}
+                    </span>
+                    <span>
+                      <strong>{context.label}</strong>
+                      <small>{contextAttachmentDetail(context)}</small>
+                    </span>
+                  </button>
+                  <button
+                    aria-label={`Remove context ${context.label}`}
+                    className="composer-attachment-remove"
+                    title={`Remove ${context.label}`}
+                    type="button"
+                    onClick={() => onRemoveContext(contextKey)}
+                  >
+                    <X aria-hidden="true" size={13} />
+                  </button>
+                </article>
+              );
+            })}
           </div>
         ) : (
           <div className="composer-context-empty">
@@ -1115,19 +1121,38 @@ function removeTrailingFileMention(value: string) {
 function fileMentionMatches(
   files: DesktopIndexedFile[],
   query: string,
+  changedFiles: string[],
 ): FileMentionSuggestion[] {
   const normalizedQuery = query.trim().toLowerCase();
-  const suggestions: FileMentionSuggestion[] = [];
+  const changedFileSet = new Set(changedFiles.map((path) => path.toLowerCase()));
+  const scoredSuggestions: Array<FileMentionSuggestion & { score: number }> = [];
   for (const file of files) {
     const path = file.path;
-    const pathMatch = !normalizedQuery || path.toLowerCase().includes(normalizedQuery);
+    const pathLower = path.toLowerCase();
+    const basename = path.split(/[\\/]/).filter(Boolean).at(-1) || path;
+    const basenameLower = basename.toLowerCase();
+    const pathSegments = pathLower.split(/[\\/]/).filter(Boolean);
+    const pathMatch = !normalizedQuery || pathLower.includes(normalizedQuery);
+    const exactBasenameMatch = Boolean(normalizedQuery && basenameLower === normalizedQuery);
+    const pathSegmentMatch = Boolean(
+      normalizedQuery && pathSegments.some((segment) => segment.startsWith(normalizedQuery)),
+    );
+    const changedFileBoost = changedFileSet.has(pathLower) ? 25 : 0;
     if (pathMatch) {
-      suggestions.push({
+      scoredSuggestions.push({
         id: `file:${path}`,
         kind: "file",
         label: path,
-        detail: `${file.lines} lines · ${file.symbols.length} symbols`,
+        detail: `${file.lines} lines · ${file.symbols.length} symbols${
+          changedFileBoost ? " · changed" : ""
+        }`,
         path,
+        score:
+          changedFileBoost +
+          (exactBasenameMatch ? 100 : 0) +
+          (pathSegmentMatch ? 60 : 0) +
+          (normalizedQuery && basenameLower.startsWith(normalizedQuery) ? 40 : 0) +
+          (normalizedQuery && pathLower.includes(normalizedQuery) ? 10 : 0),
       });
     }
     for (const symbol of file.symbols.slice(0, 8)) {
@@ -1136,20 +1161,29 @@ function fileMentionMatches(
       if (normalizedQuery && !pathMatch && !symbolHaystack.includes(normalizedQuery)) {
         continue;
       }
-      suggestions.push({
+      const symbolNameLower = symbol.name.toLowerCase();
+      scoredSuggestions.push({
         id: `symbol:${path}:${symbol.line}:${symbol.name}`,
         kind: "symbol",
         label: symbol.name,
-        detail: `${path}:${symbol.line} · ${symbol.kind}`,
+        detail: `${path}:${symbol.line} · ${symbol.kind}${changedFileBoost ? " · changed" : ""}`,
         path,
         line: symbol.line,
+        score:
+          changedFileBoost +
+          (symbolNameLower === normalizedQuery ? 110 : 0) +
+          (normalizedQuery && symbolNameLower.startsWith(normalizedQuery) ? 70 : 0) +
+          (normalizedQuery && symbolHaystack.includes(normalizedQuery) ? 30 : 0) +
+          (pathSegmentMatch ? 15 : 0),
       });
     }
-    if (suggestions.length >= 24) {
+    if (scoredSuggestions.length >= 48) {
       break;
     }
   }
-  return suggestions;
+  return scoredSuggestions
+    .sort((a, b) => b.score - a.score || a.label.localeCompare(b.label))
+    .map(({ score: _score, ...suggestion }) => suggestion);
 }
 
 function contextAttachmentDetail(context: DesktopRunContext) {

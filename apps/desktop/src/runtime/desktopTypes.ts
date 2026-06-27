@@ -25,6 +25,7 @@ export type DesktopWorkbenchSnapshot = {
   selected_project: string;
   project_map: DesktopProjectMapSnapshot;
   symbol_index: DesktopSymbolIndexSnapshot;
+  changed_files: string[];
   runtime_context?: DesktopContextSnapshot | null;
   lab_status: DesktopLabStatusSnapshot;
   subagent_tasks: DesktopSubagentTaskSnapshot[];
@@ -355,6 +356,20 @@ export type DesktopStartupState = {
   lab_stage?: string | null;
   lab_owner?: string | null;
   lab_pause_reason?: string | null;
+  desktop_run?: DesktopRunRecoveryMetadata | null;
+};
+
+export type DesktopRunRecoveryMetadata = {
+  schema: string;
+  run_id: string;
+  session_id?: string | null;
+  provider_name?: string | null;
+  model?: string | null;
+  started_at: string;
+  last_event_at?: string | null;
+  cancellation_state: string;
+  latest_closeout?: string | null;
+  status: string;
 };
 
 export type DesktopOnboardingState = {
@@ -397,13 +412,34 @@ export type DesktopCredentialStorageStatus = {
   active_store: "dotenv_fallback" | "environment_only" | "system_keychain" | string;
   preferred_store: "dotenv_fallback" | "environment_only" | "system_keychain" | string;
   system_keychain_available: boolean;
+  backend_health: DesktopCredentialBackendHealth[];
   dotenv_fallback_path: string;
   activation_mirror?: string | null;
   environment_only_available: boolean;
   acknowledgement_required: boolean;
   migration_available: boolean;
+  delete_available: boolean;
   last_updated_source: string;
   last_save_backend?: string | null;
+  detail: string;
+};
+
+export type DesktopCredentialBackendHealth = {
+  backend_id: string;
+  backend_label: string;
+  available: boolean;
+  can_save: boolean;
+  can_load_status: boolean;
+  can_delete: boolean;
+  can_migrate_from_dotenv: boolean;
+};
+
+export type DesktopCredentialProviderBackendStatus = {
+  backend_id: string;
+  backend_label: string;
+  provider_id: string;
+  available: boolean;
+  credential_present: boolean;
   detail: string;
 };
 

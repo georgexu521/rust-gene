@@ -44,6 +44,7 @@ pub(crate) async fn export_desktop_diagnostics_bundle(
     let lab_status = desktop_lab_status_for_project(&selected_project);
     let diagnostics =
         collect_desktop_diagnostics(&selected_project, &settings_path, &diagnostic_logs_path);
+    let active_run_recovery = load_desktop_active_run_metadata(&settings_path);
     let payload = serde_json::json!({
         "schema": "priority_agent.desktop_diagnostics_bundle.v1",
         "created_at": desktop_timestamp(),
@@ -64,6 +65,7 @@ pub(crate) async fn export_desktop_diagnostics_bundle(
             "onboarding": onboarding_state,
             "workspace_trust": workspace_trust,
             "credential_storage": desktop_credential_storage_status_value(),
+            "active_run_recovery": active_run_recovery,
         },
         "provider": provider.map(|status| serde_json::json!({
             "active_provider": status.active_provider,

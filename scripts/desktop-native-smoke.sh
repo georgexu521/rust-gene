@@ -17,6 +17,7 @@ MULTI_TOOL_CHECK=false
 SOAK_CHECK=false
 EXTENDED_SOAK_CHECK=false
 LAB_RECOVERY_CHECK=false
+RC_FAILURE_CHECK=false
 
 usage() {
   cat <<'USAGE'
@@ -38,6 +39,9 @@ Options:
                    Run three real provider tool/file-edit turns in one desktop session.
   --lab-recovery-check
                    Prepare a file-backed paused LabRun and verify desktop recovery/report UI.
+  --rc-failure-check
+                   Verify RC failure paths: cancel, permission reject, diagnostics export,
+                   and run-review accept persistence.
   --restart-check   After a live-provider or LabRun recovery run, restart the app and verify recovery.
   --keep-home       Keep the temporary HOME used for isolated app data.
   --timeout seconds Native launch timeout. Default: 20.
@@ -118,6 +122,14 @@ while [[ $# -gt 0 ]]; do
       fi
       shift
       ;;
+    --rc-failure-check)
+      RC_FAILURE_CHECK=true
+      SMOKE_MODE="rc-failure"
+      if [[ "$TIMEOUT_SECONDS" == "20" ]]; then
+        TIMEOUT_SECONDS=120
+      fi
+      shift
+      ;;
     --keep-home)
       KEEP_ARTIFACT_HOME=true
       shift
@@ -163,8 +175,16 @@ if [[ "$LAB_RECOVERY_CHECK" == true && ( "$MULTI_TOOL_CHECK" == true || "$SOAK_C
   echo "--lab-recovery-check is separate from --multi-tool-check and --soak-check" >&2
   exit 2
 fi
+if [[ "$RC_FAILURE_CHECK" == true && ( "$MULTI_TOOL_CHECK" == true || "$SOAK_CHECK" == true || "$LAB_RECOVERY_CHECK" == true ) ]]; then
+  echo "--rc-failure-check is separate from --multi-tool-check, --soak-check, and --lab-recovery-check" >&2
+  exit 2
+fi
 if [[ "$LAB_RECOVERY_CHECK" == true && ( -n "$PROVIDER_OVERRIDE" || -n "$MODEL_OVERRIDE" ) ]]; then
   echo "--lab-recovery-check does not use provider/model overrides" >&2
+  exit 2
+fi
+if [[ "$RC_FAILURE_CHECK" == true && ( -n "$PROVIDER_OVERRIDE" || -n "$MODEL_OVERRIDE" ) ]]; then
+  echo "--rc-failure-check does not use provider/model overrides" >&2
   exit 2
 fi
 
@@ -300,6 +320,12 @@ EOF
   SCREENSHOT_PATH="$ARTIFACT_DIR/native-lab-recovery-smoke.png"
   RESTART_LOG_PATH="$ARTIFACT_DIR/native-lab-recovery-restart-smoke.log"
   RESTART_APP_LOG_ARTIFACT_PATH="$ARTIFACT_DIR/native-lab-recovery-restart-app-desktop.log"
+elif [[ "$RC_FAILURE_CHECK" == true ]]; then
+  LOG_PATH="$ARTIFACT_DIR/native-rc-failure-smoke.log"
+  APP_LOG_ARTIFACT_PATH="$ARTIFACT_DIR/native-rc-failure-app-desktop.log"
+  SCREENSHOT_PATH="$ARTIFACT_DIR/native-rc-failure-smoke.png"
+  SUCCESS_PATTERN="native_rc_failure_smoke ok=true"
+  FAILURE_PATTERN="native_rc_failure_smoke ok=false"
 else
   LOG_PATH="$ARTIFACT_DIR/native-smoke.log"
   APP_LOG_ARTIFACT_PATH="$ARTIFACT_DIR/native-app-desktop.log"
@@ -387,6 +413,8 @@ if [[ "$SMOKE_MODE" == "live-provider" ]]; then
 else
   if [[ "$LAB_RECOVERY_CHECK" == true ]]; then
     APP_ENV+=("PRIORITY_AGENT_DESKTOP_LAB_RECOVERY_SMOKE=1")
+  elif [[ "$RC_FAILURE_CHECK" == true ]]; then
+    APP_ENV+=("PRIORITY_AGENT_DESKTOP_RC_FAILURE_SMOKE=1")
   else
     APP_ENV+=("PRIORITY_AGENT_DESKTOP_NATIVE_SMOKE=1")
   fi
