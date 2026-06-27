@@ -395,15 +395,19 @@ export type DesktopWorkspaceTrustStatus = DesktopWorkspaceTrustInput & {
 
 export type DesktopCredentialStorageStatus = {
   active_store: "dotenv_fallback" | "environment_only" | "system_keychain" | string;
+  preferred_store: "dotenv_fallback" | "environment_only" | "system_keychain" | string;
   system_keychain_available: boolean;
   dotenv_fallback_path: string;
+  activation_mirror?: string | null;
   environment_only_available: boolean;
   acknowledgement_required: boolean;
+  migration_available: boolean;
   last_updated_source: string;
+  last_save_backend?: string | null;
   detail: string;
 };
 
-export type DetailLevelId = "coding" | "daily";
+export type DetailLevelId = "coding" | "daily" | "engineering" | "labrun";
 
 export type AgentModeId = "auto" | "build" | "plan" | "explore" | "review";
 
@@ -444,6 +448,7 @@ export type DesktopExportResult = {
 export type DesktopDiagnosticsRedaction = {
   include_logs?: boolean | null;
   max_log_bytes?: number | null;
+  include_full_paths?: boolean | null;
 };
 
 export type DesktopDiagnosticsBundleResult = {
@@ -451,6 +456,24 @@ export type DesktopDiagnosticsBundleResult = {
   privacy: string;
   redacted: boolean;
   summary: string;
+};
+
+export type DesktopRunReviewAcceptanceInput = {
+  run_id: string;
+  session_id?: string | null;
+  changed_files: string[];
+  validation_status?: string | null;
+  permission_summary?: string | null;
+  residual_risk_count?: number | null;
+  trace_refs: string[];
+  tool_output_refs: string[];
+};
+
+export type DesktopRunReviewAcceptanceResult = {
+  accepted: boolean;
+  run_id: string;
+  path: string;
+  accepted_at: string;
 };
 
 export type ProviderSetupInfo = {

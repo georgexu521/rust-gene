@@ -602,6 +602,24 @@
   color: #323842;
 }
 
+.daily-hidden,
+.desktop-view-daily .timeline-debug-link,
+.desktop-view-daily .timeline-run-trace,
+.desktop-view-daily .timeline-facts,
+.desktop-view-daily .timeline-run-stats {
+  display: none;
+}
+
+.desktop-view-daily .timeline-event {
+  padding-block: 8px;
+}
+
+.desktop-view-labrun .labrun-status-board,
+.desktop-view-labrun .labrun-report-card,
+.desktop-view-labrun .labrun-control-card {
+  border-color: color-mix(in srgb, var(--accent), transparent 54%);
+}
+
 .run-group-panel-header {
   display: flex;
   align-items: center;

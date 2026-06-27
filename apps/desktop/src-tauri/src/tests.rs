@@ -79,6 +79,29 @@ fn desktop_smoke_project_path_validation_rejects_filesystem_root() {
 }
 
 #[test]
+fn desktop_stream_cancellation_events_are_recognized() {
+    assert!(desktop_stream_event_is_cancellation(
+        &priority_agent::engine::streaming::StreamEvent::RuntimeDiagnostic {
+            diagnostic: serde_json::json!({
+                "schema": "turn_cancellation.v1",
+                "status": "cancelled",
+            }),
+        }
+    ));
+    assert!(desktop_stream_event_is_cancellation(
+        &priority_agent::engine::streaming::StreamEvent::Closeout {
+            status: "cancelled".to_string(),
+            evidence_summary: None,
+        }
+    ));
+    assert!(desktop_stream_event_is_cancellation(
+        &priority_agent::engine::streaming::StreamEvent::Error(
+            "turn cancelled by caller".to_string(),
+        )
+    ));
+}
+
+#[test]
 fn desktop_smoke_recent_sessions_include_message_counts() {
     let store = SessionStore::in_memory().unwrap();
     store
@@ -536,6 +559,7 @@ fn desktop_smoke_diagnostics_redaction_removes_secrets() {
         "OPENAI_API_KEY=sk-test-secret-token",
         "Authorization: Bearer abcdefghijklmnop",
         "header Bearer sk-another-secret-token",
+        "settings_path=/Users/example/Library/Application Support/Priority Agent/settings.json",
         "-----BEGIN PRIVATE KEY-----",
         "very-secret-private-key-material",
         "-----END PRIVATE KEY-----",
@@ -546,8 +570,27 @@ fn desktop_smoke_diagnostics_redaction_removes_secrets() {
     assert!(redacted.contains("OPENAI_API_KEY=<redacted>"));
     assert!(redacted.contains("Authorization: <redacted>"));
     assert!(redacted.contains("Bearer <redacted>"));
+    assert!(redacted.contains("<redacted-path>"));
     assert!(!redacted.contains("sk-test-secret-token"));
     assert!(!redacted.contains("very-secret-private-key-material"));
+    assert!(!redacted.contains("/Users/example"));
+}
+
+#[test]
+fn desktop_smoke_diagnostics_path_descriptor_hides_full_paths_by_default() {
+    let path = Path::new("/Users/example/Library/Application Support/Priority Agent/settings.json");
+    let redacted = desktop_path_descriptor(path, "settings", false);
+    let advanced = desktop_path_descriptor(path, "settings", true);
+
+    assert_eq!(redacted["kind"], "settings");
+    assert_eq!(redacted["basename"], "settings.json");
+    assert!(redacted["path_hash"].as_str().unwrap_or_default().len() >= 32);
+    assert!(redacted["parent_hash"].as_str().unwrap_or_default().len() >= 32);
+    assert!(redacted.get("full_path").is_none());
+    assert_eq!(
+        advanced["full_path"],
+        "/Users/example/Library/Application Support/Priority Agent/settings.json"
+    );
 }
 
 #[test]
@@ -1181,10 +1224,30 @@ fn desktop_open_target_is_scoped_to_project_and_app_dirs() {
 
 #[test]
 fn desktop_smoke_detail_level_normalization() {
-    assert_eq!(normalized_detail_level_label(None), "coding");
+    assert_eq!(normalized_detail_level_label(None), "daily");
     assert_eq!(normalized_detail_level_label(Some("daily_work")), "daily");
     assert_eq!(normalized_detail_level_label(Some("default")), "daily");
-    assert_eq!(normalized_detail_level_label(Some("unknown")), "coding");
+    assert_eq!(normalized_detail_level_label(Some("coding")), "engineering");
+    assert_eq!(
+        normalized_detail_level_label(Some("engineering")),
+        "engineering"
+    );
+    assert_eq!(normalized_detail_level_label(Some("lab")), "labrun");
+    assert_eq!(normalized_detail_level_label(Some("unknown")), "daily");
+}
+
+#[test]
+fn desktop_smoke_credential_storage_status_reports_backend_contract() {
+    let status = desktop_credential_storage_status_value();
+
+    assert!(!status.active_store.is_empty());
+    assert!(!status.preferred_store.is_empty());
+    assert!(matches!(
+        status.activation_mirror.as_deref(),
+        Some("dotenv_runtime_env")
+    ));
+    assert!(!status.dotenv_fallback_path.is_empty());
+    assert!(!status.detail.is_empty());
 }
 
 #[test]

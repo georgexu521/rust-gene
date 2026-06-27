@@ -23,6 +23,7 @@ import {
   RecentSession,
   DesktopGoalStatus,
   archiveSession,
+  acceptRunReview,
   compactContext,
   cancelRun,
   deleteSession,
@@ -48,7 +49,9 @@ import {
   skipDesktopOnboarding,
   setWorkspaceTrust,
   resetWorkspaceTrust,
+  providerModelStatus,
   setProviderModel,
+  saveProviderCredential,
   setDetailLevel,
   setLabDaemonSupervisionEnabled,
   setPermissionMode,
@@ -60,6 +63,7 @@ import {
   goalClear,
   goalEdit,
   type DesktopOnboardingInput,
+  type DesktopRunReviewAcceptanceInput,
   type DesktopWorkspaceTrustInput,
 } from "../runtime/desktopApi";
 import { Composer } from "./components/Composer";
@@ -183,6 +187,12 @@ export function App() {
   }, []);
 
   useEffect(() => {
+    if (settings?.detail_level === "labrun") {
+      openInspectorTab("labrun");
+    }
+  }, [settings?.detail_level]);
+
+  useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (
         event.key !== "/" ||
@@ -298,6 +308,14 @@ export function App() {
     }
   }
 
+  async function handleSaveProviderCredential(providerId: string, key: string) {
+    const result = await saveProviderCredential(providerId, key);
+    setProviderStatus(await providerModelStatus());
+    setSettings(await desktopSettings());
+    void refreshDiagnostics();
+    return result;
+  }
+
   async function handlePermissionModeChange(mode: PermissionModeId) {
     try {
       setSettings(await setPermissionMode(mode));
@@ -336,6 +354,17 @@ export function App() {
     try {
       const result = await exportDesktopDiagnosticsBundle();
       setExportNotice(`${result.summary}: ${result.path}`);
+      setExportPath(result.path);
+    } catch (err) {
+      setRunState((current) => withError(current, err));
+    }
+  }
+
+  async function handleAcceptRunReview(input: DesktopRunReviewAcceptanceInput) {
+    try {
+      const result = await acceptRunReview(input);
+      setDismissedRunReviewIds((current) => new Set([...current, input.run_id]));
+      setExportNotice(`Run Review accepted: ${result.path}`);
       setExportPath(result.path);
     } catch (err) {
       setRunState((current) => withError(current, err));
@@ -799,7 +828,7 @@ export function App() {
 
   function openInspectorTab(tab: InspectorTab) {
     setActiveInspectorTab(tab);
-    if (usesDrawerInspectorFallback()) {
+    if (usesDrawerInspectorFallback() || settings?.detail_level === "daily") {
       closePrimaryDrawers("inspector");
       setIsInspectorDrawerOpen(true);
     } else {
@@ -928,7 +957,7 @@ export function App() {
 
   return (
     <ErrorBoundary label="App">
-    <main className="app-shell">
+    <main className={`app-shell desktop-view-${settings?.detail_level || "daily"}`}>
       <Sidebar
         projectPath={projectPath}
         recentProjects={settings?.recent_projects || []}
@@ -1036,10 +1065,12 @@ export function App() {
         ) : null}
 
         <Transcript
+          detailLevel={settings?.detail_level}
           diagnostics={diagnostics}
           dismissedRunReviewIds={dismissedRunReviewIds}
           isRunning={runState.isRunning}
           items={runState.items}
+          onAcceptRunReview={(input) => void handleAcceptRunReview(input)}
           onContinueFromRunReview={(prompt) => {
             setComposer(prompt);
             setComposerFocusRequest((request) => request + 1);
@@ -1055,7 +1086,7 @@ export function App() {
           projectPath={projectPath}
           providerStatus={providerStatus}
         />
-        <JumpBar items={runState.items} />
+        {settings?.detail_level !== "daily" ? <JumpBar items={runState.items} /> : null}
 
         <TraceDrawer
           activeItemId={activeTraceId}
@@ -1149,6 +1180,7 @@ export function App() {
           recentProjects={settings?.recent_projects || []}
           providerStatus={providerStatus}
           providerSetup={providerSetup}
+          symbolFiles={workbenchSnapshot?.symbol_index.files || []}
           detailLevel={settings?.detail_level}
           permissionMode={settings?.permission_mode}
           agentMode={settings?.agent_mode}
@@ -1239,10 +1271,14 @@ export function App() {
         <OnboardingWizard
           settings={settings}
           permissionOptions={permissionOptions}
+          providerSetup={providerSetup}
           providerStatus={providerStatus}
           projectPath={projectPath}
           onBrowseProject={handleOnboardingBrowseProject}
           onComplete={handleCompleteOnboarding}
+          onProviderModelChange={handleProviderModelChange}
+          onRefreshProviderStatus={async () => setProviderStatus(await providerModelStatus())}
+          onSaveProviderCredential={handleSaveProviderCredential}
           onSkip={handleSkipOnboarding}
         />
       ) : null}
@@ -1274,29 +1310,31 @@ export function App() {
         </section>
       ) : null}
 
-      <RuntimeInspectorSurfaces
-        activeTab={activeInspectorTab}
-        contextSnapshot={contextSnapshot}
-        diagnostics={diagnostics}
-        isDrawerOpen={isInspectorDrawerOpen}
-        isRunning={runState.isRunning}
-        latestUsage={runState.latestUsage}
-        pendingPermission={Boolean(runState.pendingPermission)}
-        sessionId={runState.selectedSessionId}
-        snapshot={workbenchSnapshot}
-        traceItems={runState.traceItems}
-        onCloseDrawer={() => setIsInspectorDrawerOpen(false)}
-        onOpenLabReport={(path) => {
-          openFilePath(path).catch(console.error);
-        }}
-        onOpenOutput={openToolOutputDrawer}
-        onOpenTrace={() => openTraceDrawer()}
-        onRefreshDiagnostics={() => void refreshDiagnostics()}
-        onRefreshWorkbench={() => void refreshWorkbenchSnapshot()}
-        onStageLabCommand={stageSlashCommand}
-        onSuperviseLabDaemon={() => void handleSuperviseLabDaemon()}
-        onTabChange={setActiveInspectorTab}
-      />
+      {settings?.detail_level !== "daily" || isInspectorDrawerOpen ? (
+        <RuntimeInspectorSurfaces
+          activeTab={activeInspectorTab}
+          contextSnapshot={contextSnapshot}
+          diagnostics={diagnostics}
+          isDrawerOpen={isInspectorDrawerOpen}
+          isRunning={runState.isRunning}
+          latestUsage={runState.latestUsage}
+          pendingPermission={Boolean(runState.pendingPermission)}
+          sessionId={runState.selectedSessionId}
+          snapshot={workbenchSnapshot}
+          traceItems={runState.traceItems}
+          onCloseDrawer={() => setIsInspectorDrawerOpen(false)}
+          onOpenLabReport={(path) => {
+            openFilePath(path).catch(console.error);
+          }}
+          onOpenOutput={openToolOutputDrawer}
+          onOpenTrace={() => openTraceDrawer()}
+          onRefreshDiagnostics={() => void refreshDiagnostics()}
+          onRefreshWorkbench={() => void refreshWorkbenchSnapshot()}
+          onStageLabCommand={stageSlashCommand}
+          onSuperviseLabDaemon={() => void handleSuperviseLabDaemon()}
+          onTabChange={setActiveInspectorTab}
+        />
+      ) : null}
 
       <StatusBar
         health={health}

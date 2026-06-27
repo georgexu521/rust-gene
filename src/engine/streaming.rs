@@ -18,8 +18,10 @@ use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::Arc;
 use tokio::sync::mpsc;
+use tokio_util::sync::CancellationToken;
 use tracing::{debug, warn};
 
+mod cancellation;
 mod context_scrubber;
 mod fallback;
 mod text_progress;
@@ -28,6 +30,7 @@ mod turn_messages;
 pub mod config;
 pub use config::StreamingConfig;
 
+use cancellation::{emit_turn_cancelled_failure, emit_turn_timeout_failure};
 use fallback::{ErrorType, FallbackState};
 pub use text_progress::emit_text_progressively;
 use text_progress::flush_session_end_memory_best_effort;
@@ -832,6 +835,25 @@ impl StreamingQueryEngine {
         user_message: impl Into<String>,
         agent_mode: crate::engine::agent_mode::AgentMode,
     ) -> Pin<Box<dyn Stream<Item = StreamEvent> + Send>> {
+        self.query_stream_with_agent_mode_and_cancel(
+            user_message,
+            agent_mode,
+            CancellationToken::new(),
+        )
+        .await
+    }
+
+    /// Execute a streaming turn with an explicit cancellation token.
+    ///
+    /// Desktop and other frontends with a Stop button use this product-runtime
+    /// entry so cancellation can drop the active provider/tool future rather
+    /// than waiting for the next stream event.
+    pub async fn query_stream_with_agent_mode_and_cancel(
+        &self,
+        user_message: impl Into<String>,
+        agent_mode: crate::engine::agent_mode::AgentMode,
+        cancel_token: CancellationToken,
+    ) -> Pin<Box<dyn Stream<Item = StreamEvent> + Send>> {
         let user_msg = user_message.into();
         let (tx, rx) = mpsc::channel(100);
 
@@ -892,6 +914,11 @@ impl StreamingQueryEngine {
         };
 
         tokio::spawn(async move {
+            if cancel_token.is_cancelled() {
+                emit_turn_cancelled_failure(&tx, "turn_start").await;
+                return;
+            }
+
             // 1. 添加用户消息到历史
             {
                 let mut hist = history.lock().await;
@@ -943,6 +970,11 @@ impl StreamingQueryEngine {
                     }),
                 })
                 .await;
+
+            if cancel_token.is_cancelled() {
+                emit_turn_cancelled_failure(&tx, "user_message_recorded").await;
+                return;
+            }
 
             // 2. 检查是否需要压缩
             {
@@ -1073,6 +1105,11 @@ impl StreamingQueryEngine {
                 })
                 .await;
 
+            if cancel_token.is_cancelled() {
+                emit_turn_cancelled_failure(&tx, "preflight_compression_checked").await;
+                return;
+            }
+
             // 3. 获取当前历史用于查询
             let messages_for_query = {
                 let hist = history.lock().await;
@@ -1094,6 +1131,11 @@ impl StreamingQueryEngine {
                 })
                 .await;
 
+            if cancel_token.is_cancelled() {
+                emit_turn_cancelled_failure(&tx, "messages_built").await;
+                return;
+            }
+
             // 4. 执行查询（带 fallback 支持）
             let mut assistant_content = String::new();
             let mut assistant_tool_calls_made = false;
@@ -1108,17 +1150,21 @@ impl StreamingQueryEngine {
                     }),
                 })
                 .await;
-            let run_result = match tokio::time::timeout(
-                turn_timeout,
-                engine.run_query_with_messages(messages_for_query.clone(), &tx, agent_mode),
-            )
-            .await
-            {
-                Ok(result) => result,
-                Err(_) => {
-                    emit_turn_timeout_failure(&tx, "turn", turn_timeout).await;
+            let run_result = tokio::select! {
+                _ = cancel_token.cancelled() => {
+                    emit_turn_cancelled_failure(&tx, "turn").await;
                     return;
                 }
+                result = tokio::time::timeout(
+                    turn_timeout,
+                    engine.run_query_with_messages(messages_for_query.clone(), &tx, agent_mode),
+                ) => match result {
+                    Ok(result) => result,
+                    Err(_) => {
+                        emit_turn_timeout_failure(&tx, "turn", turn_timeout).await;
+                        return;
+                    }
+                },
             };
 
             match run_result {
@@ -1144,12 +1190,15 @@ impl StreamingQueryEngine {
                         )
                         .await
                         {
-                            match tokio::time::timeout(
-                                turn_timeout,
-                                engine.run_query_with_messages(retry_messages, &tx, agent_mode),
-                            )
-                            .await
-                            {
+                            let retry_future =
+                                engine.run_query_with_messages(retry_messages, &tx, agent_mode);
+                            match tokio::select! {
+                                _ = cancel_token.cancelled() => {
+                                    emit_turn_cancelled_failure(&tx, "context_retry_turn").await;
+                                    return;
+                                }
+                                result = tokio::time::timeout(turn_timeout, retry_future) => result,
+                            } {
                                 Ok(Ok((content, tool_calls))) => {
                                     assistant_content = content;
                                     assistant_tool_calls_made = tool_calls;
@@ -1262,16 +1311,18 @@ impl StreamingQueryEngine {
                                 fallback_state: Some(fb_state),
                             };
                             let turn_timeout = config::turn_execution_timeout();
-                            match tokio::time::timeout(
-                                turn_timeout,
-                                fb_engine.run_query_with_messages(
-                                    messages_for_query.clone(),
-                                    &tx,
-                                    agent_mode,
-                                ),
-                            )
-                            .await
-                            {
+                            let fallback_future = fb_engine.run_query_with_messages(
+                                messages_for_query.clone(),
+                                &tx,
+                                agent_mode,
+                            );
+                            match tokio::select! {
+                                _ = cancel_token.cancelled() => {
+                                    emit_turn_cancelled_failure(&tx, "fallback_turn").await;
+                                    return;
+                                }
+                                result = tokio::time::timeout(turn_timeout, fallback_future) => result,
+                            } {
                                 Ok(Ok((content, tool_calls))) => {
                                     assistant_content = content;
                                     assistant_tool_calls_made = tool_calls;
@@ -1358,32 +1409,6 @@ impl StreamingQueryEngine {
 
         Ok(result)
     }
-}
-
-async fn emit_turn_timeout_failure(
-    tx: &mpsc::Sender<StreamEvent>,
-    stage: &str,
-    timeout: std::time::Duration,
-) {
-    let message = format!("{stage} execution timed out after {}s", timeout.as_secs());
-    let _ = tx
-        .send(StreamEvent::RuntimeDiagnostic {
-            diagnostic: serde_json::json!({
-                "schema": "turn_timeout.v1",
-                "stage": stage,
-                "status": "timed_out",
-                "timeout_secs": timeout.as_secs(),
-                "message": message,
-            }),
-        })
-        .await;
-    let _ = tx
-        .send(StreamEvent::Closeout {
-            status: "timed_out".to_string(),
-            evidence_summary: Some(message.clone()),
-        })
-        .await;
-    let _ = tx.send(StreamEvent::Error(message)).await;
 }
 
 /// 内部执行引擎

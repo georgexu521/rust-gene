@@ -10,7 +10,13 @@ import {
   TerminalSquare,
 } from "lucide-react";
 import { useEffect, useRef } from "react";
-import { DesktopDiagnostic, DesktopRunContext, ProviderModelStatus } from "../../runtime/desktopApi";
+import {
+  DesktopDiagnostic,
+  DesktopRunContext,
+  DesktopRunReviewAcceptanceInput,
+  DetailLevelId,
+  ProviderModelStatus,
+} from "../../runtime/desktopApi";
 import { TimelineKind, TimelineStatus, TimelineSummary, TranscriptItem } from "../types";
 import {
   ReasoningCard,
@@ -25,6 +31,8 @@ type TranscriptProps = {
   isRunning: boolean;
   diagnostics: DesktopDiagnostic[];
   dismissedRunReviewIds?: Set<string>;
+  detailLevel?: DetailLevelId | null;
+  onAcceptRunReview?: (input: DesktopRunReviewAcceptanceInput) => void;
   onContinueFromRunReview?: (prompt: string) => void;
   onDismissRunReview?: (runId: string) => void;
   onPermissionAnswer?: (approved: boolean) => void;
@@ -41,6 +49,8 @@ export function Transcript({
   isRunning,
   diagnostics,
   dismissedRunReviewIds,
+  detailLevel,
+  onAcceptRunReview,
   onContinueFromRunReview,
   onDismissRunReview,
   onPermissionAnswer,
@@ -101,6 +111,8 @@ export function Transcript({
               runGroup={runGroup}
               dismissedRunReviewIds={dismissedRunReviewIds}
               onContinueFromRunReview={onContinueFromRunReview}
+              detailLevel={detailLevel}
+              onAcceptRunReview={onAcceptRunReview}
               onOpenContext={onOpenContext}
               onPermissionAnswer={onPermissionAnswer}
               onOpenTrace={onOpenTrace}
@@ -302,8 +314,10 @@ type RunGroupPreview = {
 
 function TimelineEvent({
   className,
+  detailLevel,
   item,
   runGroup,
+  onAcceptRunReview,
   onPermissionAnswer,
   onOpenContext,
   onOpenTrace,
@@ -314,9 +328,11 @@ function TimelineEvent({
   dismissedRunReviewIds,
 }: {
   className?: string;
+  detailLevel?: DetailLevelId | null;
   item: TimelineEventItem;
   runGroup?: RunGroupPreview;
   dismissedRunReviewIds?: Set<string>;
+  onAcceptRunReview?: (input: DesktopRunReviewAcceptanceInput) => void;
   onContinueFromRunReview?: (prompt: string) => void;
   onOpenContext?: (context: DesktopRunContext) => void;
   onPermissionAnswer?: (approved: boolean) => void;
@@ -327,13 +343,14 @@ function TimelineEvent({
 }) {
   const isCompact = isCompactToolEvent(item);
   const isCompactPermission = item.kind === "permission" && item.status === "waiting";
+  const isDailyView = detailLevel === "daily" || !detailLevel;
 
   if (item.kind === "run") {
     return (
       <article className={`timeline-run-row ${item.status || "info"}${className ? ` ${className}` : ""}`}>
         <span>{runStatusText(item)}</span>
         {item.summary?.kind === "run" && item.summary.stats && item.summary.stats.length > 0 ? (
-          <div className="timeline-run-stats compact">
+          <div className={`timeline-run-stats compact${isDailyView ? " daily-hidden" : ""}`}>
             {item.summary.stats.map((stat) => (
               <span key={stat}>{stat}</span>
             ))}
@@ -354,7 +371,7 @@ function TimelineEvent({
             ))}
           </div>
         ) : null}
-        {item.traceId && onOpenTrace ? (
+        {item.traceId && onOpenTrace && !isDailyView ? (
           <button
             aria-label="Open trace for current run"
             className="timeline-run-trace"
@@ -370,6 +387,8 @@ function TimelineEvent({
             runGroup={runGroup}
             runId={item.id}
             runStatus={item.status}
+            sessionId={item.summary?.kind === "run" ? item.summary.sessionId : undefined}
+            onAcceptRunReview={onAcceptRunReview}
             onContinueFromRunReview={onContinueFromRunReview}
             onDismissRunReview={onDismissRunReview}
             onOpenToolOutput={onOpenToolOutput}
@@ -389,7 +408,7 @@ function TimelineEvent({
           <span>{item.title}</span>
           {item.detail ? <span>{item.detail}</span> : null}
         </div>
-        {item.traceId && onOpenTrace ? (
+        {item.traceId && onOpenTrace && !isDailyView ? (
           <button
             aria-label={`Open trace for ${item.title}`}
             className="timeline-debug-link"
@@ -429,7 +448,7 @@ function TimelineEvent({
         {(!item.summary || item.summary.kind === "permission" || isCompactPermission) && item.detail ? (
           <div className="timeline-detail">{item.detail}</div>
         ) : null}
-        {!isCompact && !isCompactPermission && item.facts && item.facts.length > 0 ? (
+        {!isDailyView && !isCompact && !isCompactPermission && item.facts && item.facts.length > 0 ? (
           <div className="timeline-facts">
             {item.facts.map((fact) => (
               <span key={fact}>{fact}</span>
@@ -446,7 +465,7 @@ function TimelineEvent({
             </button>
           </div>
         ) : null}
-        {item.traceId && onOpenTrace ? (
+        {item.traceId && onOpenTrace && !isDailyView ? (
           <button
             aria-label={`Open trace for ${item.title}`}
             className="timeline-debug-link"
@@ -480,6 +499,8 @@ function RunGroupPanel({
   runGroup,
   runId,
   runStatus,
+  sessionId,
+  onAcceptRunReview,
   onContinueFromRunReview,
   onDismissRunReview,
   onOpenToolOutput,
@@ -489,6 +510,8 @@ function RunGroupPanel({
   runGroup: RunGroupPreview;
   runId: string;
   runStatus?: TimelineStatus;
+  sessionId?: string;
+  onAcceptRunReview?: (input: DesktopRunReviewAcceptanceInput) => void;
   onContinueFromRunReview?: (prompt: string) => void;
   onDismissRunReview?: (runId: string) => void;
   onOpenToolOutput?: () => void;
@@ -529,11 +552,11 @@ function RunGroupPanel({
                   </div>
                   {step.traceId && onOpenTrace ? (
                     <button
-                      aria-label={`Open trace for ${step.title}`}
+                      aria-label={`${reviewStepActionLabel(group.key)} for ${step.title}`}
                       type="button"
                       onClick={() => onOpenTrace(step.traceId!)}
                     >
-                      Trace
+                      {reviewStepActionLabel(group.key)}
                     </button>
                   ) : null}
                 </div>
@@ -546,7 +569,12 @@ function RunGroupPanel({
         ))}
       </div>
       <div className="run-review-actions" aria-label="Run review actions">
-        <button type="button" onClick={() => onDismissRunReview?.(runId)}>
+        <button
+          type="button"
+          onClick={() =>
+            onAcceptRunReview?.(buildRunReviewAcceptance(runGroup, runId, sessionId))
+          }
+        >
           Accept
         </button>
         <button type="button" onClick={() => onDismissRunReview?.(runId)}>
@@ -577,6 +605,16 @@ function RunGroupPanel({
   );
 }
 
+function reviewStepActionLabel(groupKey: string): string {
+  if (groupKey === "files") {
+    return "View diff";
+  }
+  if (groupKey === "validations") {
+    return "View validation log";
+  }
+  return "Trace";
+}
+
 function latestTraceIdFromRunGroup(runGroup: RunGroupPreview) {
   return [
     ...runGroup.failures,
@@ -588,6 +626,45 @@ function latestTraceIdFromRunGroup(runGroup: RunGroupPreview) {
     .map((step) => step.traceId)
     .filter(Boolean)
     .at(-1);
+}
+
+function buildRunReviewAcceptance(
+  runGroup: RunGroupPreview,
+  runId: string,
+  sessionId?: string,
+): DesktopRunReviewAcceptanceInput {
+  const changedFiles = runGroup.files
+    .map((item) => item.detail || item.title)
+    .filter(Boolean)
+    .slice(0, 32);
+  const failedValidation = runGroup.validations.find((item) => item.status === "failed");
+  const validationStatus = failedValidation
+    ? "failed"
+    : runGroup.validations.length > 0
+      ? "passed_or_observed"
+      : "not_recorded";
+  return {
+    run_id: runId,
+    session_id: sessionId || null,
+    changed_files: changedFiles,
+    validation_status: validationStatus,
+    permission_summary:
+      runGroup.permissions.length > 0
+        ? `${runGroup.permissions.length} permission event(s)`
+        : "no_permission_events",
+    residual_risk_count: runGroup.failures.length,
+    trace_refs: [
+      ...runGroup.failures,
+      ...runGroup.validations,
+      ...runGroup.files,
+      ...runGroup.permissions,
+      ...runGroup.tools,
+    ]
+      .map((item) => item.traceId)
+      .filter((traceId): traceId is string => Boolean(traceId))
+      .slice(0, 32),
+    tool_output_refs: runGroup.tools.map((item) => item.id).slice(0, 32),
+  };
 }
 
 function buildRunReviewRepairPrompt(runGroup: RunGroupPreview) {

@@ -210,18 +210,6 @@ export function SettingsDrawer({
                 <p className="settings-copy">Choose how much technical detail Liz shows while working.</p>
                 <div className="work-mode-options">
                   <button
-                    className={settings?.detail_level === "coding" ? "active" : ""}
-                    type="button"
-                    onClick={() => onDetailLevelChange("coding")}
-                  >
-                    <Code2 aria-hidden="true" size={18} />
-                    <span>
-                      <strong>Coding</strong>
-                      <small>Show commands, tool activity, file changes, and validation details.</small>
-                    </span>
-                    <i aria-hidden="true" />
-                  </button>
-                  <button
                     className={settings?.detail_level === "daily" ? "active" : ""}
                     type="button"
                     onClick={() => onDetailLevelChange("daily")}
@@ -230,6 +218,34 @@ export function SettingsDrawer({
                     <span>
                       <strong>Daily work</strong>
                       <small>Keep the transcript quieter and emphasize outcomes.</small>
+                    </span>
+                    <i aria-hidden="true" />
+                  </button>
+                  <button
+                    className={
+                      settings?.detail_level === "engineering" || settings?.detail_level === "coding"
+                        ? "active"
+                        : ""
+                    }
+                    type="button"
+                    onClick={() => onDetailLevelChange("engineering")}
+                  >
+                    <Code2 aria-hidden="true" size={18} />
+                    <span>
+                      <strong>Engineering</strong>
+                      <small>Show commands, trace, tool output, workbench, and validation details.</small>
+                    </span>
+                    <i aria-hidden="true" />
+                  </button>
+                  <button
+                    className={settings?.detail_level === "labrun" ? "active" : ""}
+                    type="button"
+                    onClick={() => onDetailLevelChange("labrun")}
+                  >
+                    <ShieldCheck aria-hidden="true" size={18} />
+                    <span>
+                      <strong>LabRun</strong>
+                      <small>Focus on Professor, Postdoc, Graduate proof, reports, and daemon state.</small>
                     </span>
                     <i aria-hidden="true" />
                   </button>
@@ -299,14 +315,26 @@ export function SettingsDrawer({
                   <dd>{settings?.credential_storage.active_store || "Not loaded"}</dd>
                 </div>
                 <div>
+                  <dt>Preferred store</dt>
+                  <dd>{settings?.credential_storage.preferred_store || "Not loaded"}</dd>
+                </div>
+                <div>
                   <dt>System keychain</dt>
                   <dd>{settings?.credential_storage.system_keychain_available ? "available" : "not active"}</dd>
+                </div>
+                <div>
+                  <dt>Runtime mirror</dt>
+                  <dd>{settings?.credential_storage.activation_mirror || "none"}</dd>
+                </div>
+                <div>
+                  <dt>Migration</dt>
+                  <dd>{settings?.credential_storage.migration_available ? "available" : "not needed"}</dd>
                 </div>
               </dl>
               {settings?.credential_storage ? (
                 <p className="settings-copy">
-                  {settings.credential_storage.detail} Fallback path:{" "}
-                  {settings.credential_storage.dotenv_fallback_path}
+                  {settings.credential_storage.detail} Fallback file is still
+                  available for CLI-compatible activation.
                 </p>
               ) : null}
             </section>

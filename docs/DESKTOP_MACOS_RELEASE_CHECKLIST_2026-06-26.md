@@ -13,8 +13,10 @@ Run from the repository root on the exact desktop release candidate commit:
 corepack pnpm --dir apps/desktop build
 corepack pnpm --dir apps/desktop test:ui-smoke
 cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -- --test-threads=1
+bash scripts/check_desktop_release_security.sh
 bash scripts/desktop-native-smoke.sh
 corepack pnpm --dir apps/desktop tauri build
+bash scripts/desktop-macos-release.sh
 ```
 
 ## Product Safety Checks
@@ -33,6 +35,8 @@ corepack pnpm --dir apps/desktop tauri build
 ## Security Checks
 
 - `apps/desktop/src-tauri/tauri.conf.json` has a non-null CSP.
+- Production CSP does not include `http://127.0.0.1:*`; dev localhost access
+  must stay in dev-only config or tooling.
 - Native path opening stays scoped to selected-project, app data, diagnostics,
   and selected-project LabRun roots.
 - Provider key saving clearly states the active storage backend.
@@ -49,6 +53,7 @@ corepack pnpm --dir apps/desktop tauri build
 - Unsigned local builds are labeled as unsigned local builds.
 - Signed builds record certificate identity and signing timestamp.
 - Notarization status is recorded when signing is enabled.
+- `scripts/desktop-macos-release.sh` writes release evidence under `docs/rc/`.
 - App opens after Gatekeeper quarantine on a clean machine.
 - Native smoke logs are saved under `apps/desktop/test-artifacts/`.
 
@@ -60,5 +65,5 @@ corepack pnpm --dir apps/desktop tauri build
 - Known limitations:
   - macOS-first desktop package.
   - Windows/Linux desktop packages not yet validated.
-  - system keychain backend not active in this build.
+  - Linux Secret Service and Windows Credential Manager backends are not yet implemented.
   - controlled validation is not a sandbox for untrusted repositories.

@@ -71,7 +71,7 @@ export function RuntimeInspectorSurfaces({
 
   return (
     <>
-      <InspectorPanel {...sharedProps} />
+      {!isDrawerOpen ? <InspectorPanel {...sharedProps} /> : null}
       {isDrawerOpen ? (
         <InspectorPanel
           {...sharedProps}

@@ -806,6 +806,7 @@ function LabRunInspector({
   const artifactRows = lab.artifacts.filter((artifact) => matchesLabArtifact(artifact, labQuery));
   const reportRows = lab.reports.filter((report) => matchesLabReport(report, labQuery));
   const evidenceRows = lab.evidence_refs.filter((evidence) => matchesLabEvidence(evidence, labQuery));
+  const timelineNodes = labRunTimelineNodes(lab);
   const previewReport = (path: string) => {
     setSelectedReportPath(path);
     setReportOffset(0);
@@ -933,6 +934,34 @@ function LabRunInspector({
         <KeyValue label="Meeting" value={lab.meeting_recommended ? "recommended" : "quiet"} />
         <KeyValue label="Topic" value={lab.meeting_topic || "none"} />
         <KeyValue label="Detail" value={lab.detail} />
+      </section>
+      <section className="inspector-card labrun-timeline-card" aria-label="LabRun role timeline graph">
+        <div className="inspector-section-title">
+          <UsersRound aria-hidden="true" size={14} />
+          <span>Role timeline</span>
+        </div>
+        <div className="labrun-timeline-graph">
+          {timelineNodes.map((node, index) => (
+            <div className="labrun-timeline-step" key={node.id}>
+              <div
+                aria-label={`${node.label}: ${node.status}`}
+                className={`labrun-timeline-node ${node.status}`}
+              >
+                <span>{index + 1}</span>
+              </div>
+              {index < timelineNodes.length - 1 ? (
+                <div
+                  aria-hidden="true"
+                  className={`labrun-timeline-link ${node.status}`}
+                />
+              ) : null}
+              <div className="labrun-timeline-copy">
+                <strong>{node.label}</strong>
+                <small>{node.detail}</small>
+              </div>
+            </div>
+          ))}
+        </div>
       </section>
       <section className="inspector-card labrun-side-channel" aria-label="Professor side-channel">
         <div className="inspector-section-title">
@@ -1292,6 +1321,91 @@ function matchesLabEvidence(
   ]
     .filter(Boolean)
     .some((value) => String(value).toLowerCase().includes(query));
+}
+
+type LabRunTimelineStatus = "done" | "active" | "blocked" | "pending";
+
+function labRunTimelineNodes(lab: DesktopLabStatusSnapshot): Array<{
+  id: string;
+  label: string;
+  detail: string;
+  status: LabRunTimelineStatus;
+}> {
+  const artifactTypes = lab.artifacts.map((artifact) => artifact.artifact_type.toLowerCase());
+  const artifactOwners = lab.artifacts.map((artifact) => artifact.owner.toLowerCase());
+  const stage = (lab.stage || lab.proposal_status || lab.state || "").toLowerCase();
+  const owner = (lab.owner || "").toLowerCase();
+  const blocked = lab.task_blocked > 0 || lab.blockers.length > 0 || lab.needs_user;
+  const hasPostdocPlan = artifactTypes.some((kind) => kind.includes("postdocplan"));
+  const hasGraduateResult = artifactTypes.some((kind) => kind.includes("graduateresult"));
+  const hasValidation =
+    lab.validation_retry_count > 0 ||
+    lab.artifacts.some((artifact) => Boolean(artifact.validation_status));
+  const hasPostdocAudit = artifactTypes.some(
+    (kind) => kind.includes("audit") || kind.includes("integration"),
+  );
+  const hasProfessorReview =
+    artifactTypes.some((kind) => kind.includes("professorreview")) || Boolean(lab.latest_report_path);
+
+  const statusFor = (step: string, done: boolean): LabRunTimelineStatus => {
+    if (blocked && (owner.includes(step) || stage.includes(step))) {
+      return "blocked";
+    }
+    if (owner.includes(step) || stage.includes(step)) {
+      return "active";
+    }
+    return done ? "done" : "pending";
+  };
+
+  const nodes: Array<{
+    id: string;
+    label: string;
+    detail: string;
+    status: LabRunTimelineStatus;
+  }> = [
+    {
+      id: "professor_intake",
+      label: "Professor intake",
+      detail: lab.proposal_id ? lab.proposal_status || "proposal tracked" : "proposal not drafted",
+      status: statusFor("professor", Boolean(lab.proposal_id)),
+    },
+    {
+      id: "postdoc_plan",
+      label: "Postdoc plan",
+      detail: hasPostdocPlan ? "plan artifact present" : "waiting for scoped plan",
+      status: statusFor("postdoc", hasPostdocPlan),
+    },
+    {
+      id: "graduate_task",
+      label: "Graduate task",
+      detail: lab.task_total > 0 ? `${Math.max(0, lab.task_total - lab.task_open)}/${lab.task_total} complete` : "no task dispatched",
+      status: blocked && owner.includes("graduate") ? "blocked" : statusFor("graduate", hasGraduateResult),
+    },
+    {
+      id: "validation",
+      label: "Validation",
+      detail: hasValidation ? `${lab.validation_retry_count} retries recorded` : "no validation evidence yet",
+      status: blocked && stage.includes("validation") ? "blocked" : hasValidation ? "done" : "pending",
+    },
+    {
+      id: "postdoc_audit",
+      label: "Postdoc audit",
+      detail: hasPostdocAudit ? "audit or integration artifact present" : "waiting for code-aware audit",
+      status: statusFor("audit", hasPostdocAudit),
+    },
+    {
+      id: "professor_review",
+      label: "Professor review",
+      detail: hasProfessorReview ? "review/report evidence present" : "waiting for final acceptance",
+      status: statusFor("review", hasProfessorReview),
+    },
+  ];
+  return nodes.map((node) => {
+    if (node.status === "pending" && artifactOwners.some((artifactOwner) => artifactOwner.includes(node.id.split("_")[0]))) {
+      return { ...node, status: "active" as LabRunTimelineStatus };
+    }
+    return node;
+  });
 }
 
 function contextTokenBreakdown(snapshot: DesktopContextSnapshot) {

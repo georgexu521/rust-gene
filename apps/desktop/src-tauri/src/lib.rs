@@ -10,7 +10,9 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter, Manager, State, WebviewWindow};
 use tokio::sync::Mutex;
+use tokio_util::sync::CancellationToken;
 
+mod credential_store;
 mod desktop_context;
 mod desktop_state;
 mod desktop_support;
@@ -25,7 +27,9 @@ mod onboarding_commands;
 mod open_commands;
 mod preview_commands;
 mod revert_commands;
+mod run_review_commands;
 mod session_commands;
+use credential_store::*;
 pub(crate) use desktop_context::*;
 use desktop_state::*;
 use desktop_support::*;
@@ -40,12 +44,14 @@ use onboarding_commands::*;
 use open_commands::*;
 use preview_commands::*;
 use revert_commands::*;
+use run_review_commands::*;
 use session_commands::*;
 
 #[derive(Debug, Clone)]
 struct DesktopRunHandle {
     id: String,
     cancel_requested: bool,
+    cancel_token: CancellationToken,
 }
 
 struct DesktopAppState {
@@ -595,13 +601,21 @@ async fn send_message_inner(
     }
 
     let runtime = runtime_for_state(state).await?;
+    let cancel_token = desktop_run_cancel_token(state, run_guard)
+        .await
+        .ok_or_else(|| format!("desktop run guard is no longer active: {run_guard}"))?;
     let ingress_lane = classify_turn_ingress(&message, !contexts.is_empty());
     let force_full_agent_lane = agent_mode != priority_agent::engine::agent_mode::AgentMode::Auto;
     if ingress_lane.is_lightweight() && !force_full_agent_lane {
-        let outcome = runtime
-            .run_lightweight_turn(&message, ingress_lane)
-            .await
-            .map_err(|err| err.to_string())?;
+        let outcome = tokio::select! {
+            _ = cancel_token.cancelled() => {
+                emit_desktop_run_cancelled(&app, &diagnostic_logs_path).await?;
+                return Ok(());
+            }
+            result = runtime.run_lightweight_turn(&message, ingress_lane) => {
+                result.map_err(|err| err.to_string())?
+            }
+        };
         let active_session_id = runtime.streaming_engine().current_session_id();
         if active_session_id.is_some() {
             {
@@ -677,12 +691,21 @@ async fn send_message_inner(
     let _ = append_desktop_log(&diagnostic_logs_path, "run_started");
 
     let mut stream = runtime
-        .run_full_turn_with_agent_mode(message, agent_mode)
+        .run_full_turn_with_agent_mode_and_cancel(message, agent_mode, cancel_token.clone())
         .await;
     let _ = append_desktop_log(&diagnostic_logs_path, "run_stream_opened");
 
     loop {
-        let event = stream.next().await;
+        let event = tokio::select! {
+            event = stream.next() => event,
+            _ = tokio::time::sleep(std::time::Duration::from_millis(150)) => {
+                if desktop_run_cancel_requested(state, run_guard).await {
+                    emit_desktop_run_cancelled(&app, &diagnostic_logs_path).await?;
+                    break;
+                }
+                continue;
+            }
+        };
         let Some(event) = event else {
             let _ = append_desktop_log(&diagnostic_logs_path, "run_stream_ended");
             break;
@@ -693,19 +716,9 @@ async fn send_message_inner(
         if matches!(event, StreamEvent::Start) {
             continue;
         }
-        if desktop_run_cancel_requested(state, run_guard).await {
-            let message = "Desktop run cancelled by user".to_string();
-            app.emit(
-                "desktop-run-event",
-                DesktopRunEvent::RunError {
-                    message: message.clone(),
-                },
-            )
-            .map_err(|err| err.to_string())?;
-            let _ = append_desktop_log(
-                &diagnostic_logs_path,
-                &format!("run_error message={}", sanitize_log_value(&message)),
-            );
+        let is_stream_cancellation = desktop_stream_event_is_cancellation(&event);
+        if desktop_run_cancel_requested(state, run_guard).await && !is_stream_cancellation {
+            emit_desktop_run_cancelled(&app, &diagnostic_logs_path).await?;
             break;
         }
         let mut desktop_event = DesktopRunEvent::from_stream_event(event);
@@ -743,6 +756,25 @@ async fn send_message_inner(
     Ok(())
 }
 
+async fn emit_desktop_run_cancelled(
+    app: &AppHandle,
+    diagnostic_logs_path: &Path,
+) -> Result<(), String> {
+    let message = "Desktop run cancelled by user".to_string();
+    app.emit(
+        "desktop-run-event",
+        DesktopRunEvent::RunError {
+            message: message.clone(),
+        },
+    )
+    .map_err(|err| err.to_string())?;
+    let _ = append_desktop_log(
+        diagnostic_logs_path,
+        &format!("run_cancelled message={}", sanitize_log_value(&message)),
+    );
+    Ok(())
+}
+
 async fn acquire_desktop_run_guard(state: &State<'_, DesktopAppState>) -> Result<String, String> {
     let mut active_run = state.active_run.lock().await;
     if let Some(existing) = active_run.as_ref() {
@@ -761,6 +793,7 @@ async fn acquire_desktop_run_guard(state: &State<'_, DesktopAppState>) -> Result
     *active_run = Some(DesktopRunHandle {
         id: id.clone(),
         cancel_requested: false,
+        cancel_token: CancellationToken::new(),
     });
     Ok(id)
 }
@@ -784,6 +817,19 @@ async fn desktop_run_cancel_requested(state: &State<'_, DesktopAppState>, run_id
         .is_some_and(|handle| handle.id == run_id && handle.cancel_requested)
 }
 
+async fn desktop_run_cancel_token(
+    state: &State<'_, DesktopAppState>,
+    run_id: &str,
+) -> Option<CancellationToken> {
+    state
+        .active_run
+        .lock()
+        .await
+        .as_ref()
+        .filter(|handle| handle.id == run_id)
+        .map(|handle| handle.cancel_token.clone())
+}
+
 #[tauri::command]
 async fn cancel_run(app: AppHandle, state: State<'_, DesktopAppState>) -> Result<bool, String> {
     let mut active_run = state.active_run.lock().await;
@@ -791,6 +837,7 @@ async fn cancel_run(app: AppHandle, state: State<'_, DesktopAppState>) -> Result
         return Ok(false);
     };
     handle.cancel_requested = true;
+    handle.cancel_token.cancel();
     let _ = append_desktop_log(
         &state.diagnostic_logs_path,
         &format!("run_cancel_requested id={}", sanitize_log_value(&handle.id)),
@@ -814,7 +861,13 @@ async fn force_reset_run(
     state: State<'_, DesktopAppState>,
 ) -> Result<bool, String> {
     let mut active_run = state.active_run.lock().await;
-    let had_active_run = active_run.take().is_some();
+    let had_active_run = active_run
+        .take()
+        .map(|handle| {
+            handle.cancel_token.cancel();
+            true
+        })
+        .unwrap_or(false);
     if had_active_run {
         let _ = append_desktop_log(&state.diagnostic_logs_path, "run_force_reset");
         let _ = app.emit(
@@ -825,6 +878,18 @@ async fn force_reset_run(
         );
     }
     Ok(had_active_run)
+}
+
+fn desktop_stream_event_is_cancellation(event: &StreamEvent) -> bool {
+    match event {
+        StreamEvent::RuntimeDiagnostic { diagnostic } => {
+            diagnostic.get("schema").and_then(|value| value.as_str())
+                == Some("turn_cancellation.v1")
+        }
+        StreamEvent::Closeout { status, .. } => status == "cancelled",
+        StreamEvent::Error(message) => message.contains("cancelled by caller"),
+        _ => false,
+    }
 }
 
 fn desktop_stream_event_log(event: &StreamEvent) -> Option<String> {
@@ -1316,6 +1381,7 @@ pub fn run() {
             send_message,
             cancel_run,
             force_reset_run,
+            accept_run_review,
             compact_context,
             desktop_context_snapshot,
             desktop_workbench_snapshot,

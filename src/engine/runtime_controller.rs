@@ -31,6 +31,7 @@ use serde::{Deserialize, Serialize};
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
+use tokio_util::sync::CancellationToken;
 
 /// The product command/event controller shared across frontends.
 ///
@@ -89,7 +90,20 @@ impl RuntimeController {
         &self,
         user_message: impl Into<String>,
     ) -> Pin<Box<dyn Stream<Item = StreamEvent> + Send>> {
-        let stream = self.engine.query_stream(user_message).await;
+        self.submit_stream_turn_with_cancel(user_message, CancellationToken::new())
+            .await
+    }
+
+    /// Submit a full agent turn with caller-owned cancellation.
+    pub async fn submit_stream_turn_with_cancel(
+        &self,
+        user_message: impl Into<String>,
+        cancel_token: CancellationToken,
+    ) -> Pin<Box<dyn Stream<Item = StreamEvent> + Send>> {
+        let stream = self
+            .engine
+            .query_stream_with_agent_mode_and_cancel(user_message, AgentMode::Auto, cancel_token)
+            .await;
         self.mirror_stream(stream, None)
     }
 
@@ -100,9 +114,25 @@ impl RuntimeController {
         user_message: impl Into<String>,
         agent_mode: AgentMode,
     ) -> Pin<Box<dyn Stream<Item = StreamEvent> + Send>> {
+        self.submit_stream_turn_with_agent_mode_and_cancel(
+            user_message,
+            agent_mode,
+            CancellationToken::new(),
+        )
+        .await
+    }
+
+    /// Submit a full agent turn with an explicit agent mode and cancellation
+    /// token, preserving the legacy `StreamEvent` stream for compatibility.
+    pub async fn submit_stream_turn_with_agent_mode_and_cancel(
+        &self,
+        user_message: impl Into<String>,
+        agent_mode: AgentMode,
+        cancel_token: CancellationToken,
+    ) -> Pin<Box<dyn Stream<Item = StreamEvent> + Send>> {
         let stream = self
             .engine
-            .query_stream_with_agent_mode(user_message, agent_mode)
+            .query_stream_with_agent_mode_and_cancel(user_message, agent_mode, cancel_token)
             .await;
         self.mirror_stream(stream, None)
     }
@@ -563,6 +593,7 @@ mod tests {
     use crate::tools::ToolRegistry;
     use async_openai::types::ChatCompletionResponseStream;
     use async_trait::async_trait;
+    use futures::StreamExt;
 
     struct MockProvider;
 
@@ -778,6 +809,40 @@ mod tests {
         let snapshot = controller.runtime_state().snapshot().await;
         // Phase remains Idle because cancel only affects active requests.
         assert!(!snapshot.is_querying);
+    }
+
+    #[tokio::test]
+    async fn controller_cancel_token_produces_cancelled_stream_events() {
+        let engine = Arc::new(StreamingQueryEngine::new(
+            Arc::new(MockProvider),
+            Arc::new(ToolRegistry::default_registry()),
+            "mock-controller",
+        ));
+        let controller = RuntimeController::new(engine);
+        let token = CancellationToken::new();
+        token.cancel();
+
+        let mut stream = controller
+            .submit_stream_turn_with_agent_mode_and_cancel("hello", AgentMode::Auto, token)
+            .await;
+
+        let mut saw_cancel_closeout = false;
+        let mut saw_cancel_error = false;
+        while let Some(event) = stream.next().await {
+            match event {
+                StreamEvent::Closeout { status, .. } if status == "cancelled" => {
+                    saw_cancel_closeout = true;
+                }
+                StreamEvent::Error(message) if message.contains("cancelled by caller") => {
+                    saw_cancel_error = true;
+                    break;
+                }
+                _ => {}
+            }
+        }
+
+        assert!(saw_cancel_closeout);
+        assert!(saw_cancel_error);
     }
 
     #[test]

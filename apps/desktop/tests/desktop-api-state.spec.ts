@@ -1,5 +1,6 @@
 import { expect, test } from "@playwright/test";
 import {
+  acceptRunReview,
   archiveSession,
   completeDesktopOnboarding,
   deleteSession,
@@ -84,6 +85,12 @@ test.describe("desktop API web preview state", () => {
     await expect(setDetailLevel("daily")).resolves.toEqual(
       expect.objectContaining({ detail_level: "daily" }),
     );
+    await expect(setDetailLevel("engineering")).resolves.toEqual(
+      expect.objectContaining({ detail_level: "engineering" }),
+    );
+    await expect(setDetailLevel("labrun")).resolves.toEqual(
+      expect.objectContaining({ detail_level: "labrun" }),
+    );
   });
 
   test("supports onboarding, workspace trust, and redacted diagnostics export state", async () => {
@@ -132,6 +139,32 @@ test.describe("desktop API web preview state", () => {
         redacted: true,
       }),
     );
-    expect((await desktopSettings()).credential_storage.active_store).toBe("dotenv_fallback");
+    const settings = await desktopSettings();
+    expect(settings.credential_storage).toEqual(
+      expect.objectContaining({
+        active_store: "dotenv_fallback",
+        preferred_store: "dotenv_fallback",
+        activation_mirror: "dotenv_runtime_env",
+        migration_available: false,
+      }),
+    );
+
+    await expect(
+      acceptRunReview({
+        run_id: "preview-run",
+        session_id: "web-preview",
+        changed_files: ["/Users/example/projects/priority-agent-demo/src/main.rs"],
+        validation_status: "passed",
+        permission_summary: "auto low risk",
+        residual_risk_count: 0,
+        trace_refs: ["trace-preview"],
+        tool_output_refs: ["tool-output-preview"],
+      }),
+    ).resolves.toEqual(
+      expect.objectContaining({
+        accepted: true,
+        run_id: "preview-run",
+      }),
+    );
   });
 });

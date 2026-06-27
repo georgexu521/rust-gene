@@ -19,6 +19,7 @@ import {
 } from "lucide-react";
 import {
   DetailLevelId,
+  DesktopIndexedFile,
   PermissionModeId,
   PermissionModeOption,
   AgentModeId,
@@ -36,6 +37,7 @@ type ComposerProps = {
   recentProjects: string[];
   providerStatus: ProviderModelStatus | null;
   providerSetup: ProviderSetupInfo | null;
+  symbolFiles?: DesktopIndexedFile[] | null;
   detailLevel?: DetailLevelId | null;
   permissionMode?: PermissionModeId | null;
   agentMode?: AgentModeId | null;
@@ -61,6 +63,15 @@ type ComposerProps = {
   onSubmit: (event: FormEvent<HTMLFormElement>) => void;
 };
 
+type FileMentionSuggestion = {
+  id: string;
+  kind: "file" | "symbol";
+  label: string;
+  detail: string;
+  path: string;
+  line?: number;
+};
+
 export function Composer({
   composer,
   contexts,
@@ -68,6 +79,7 @@ export function Composer({
   recentProjects,
   providerStatus,
   providerSetup,
+  symbolFiles = [],
   detailLevel,
   permissionMode,
   permissionOptions = [],
@@ -126,13 +138,24 @@ export function Composer({
     activeModel ||
     "No model";
   const projectName = projectSegments[projectSegments.length - 1] || projectPath || "Project";
-  const modeLabel = detailLevel === "daily" ? "Daily work" : "Coding";
+  const modeLabel =
+    detailLevel === "labrun"
+      ? "LabRun"
+      : detailLevel === "engineering" || detailLevel === "coding"
+        ? "Engineering"
+        : "Daily work";
   const permissionLabel = formatPermissionMode(permissionMode);
   const slashQuery = slashCommandQuery(composer);
   const slashCommandOpen = openMenu === null && slashQuery !== null && !isExactSlashCommand(composer);
+  const fileMentionQueryValue = fileMentionQuery(composer);
+  const fileMentionOpen = openMenu === null && !slashCommandOpen && fileMentionQueryValue !== null;
   const slashMatches = useMemo(
     () => slashCommands.filter((command) => matchesSlashCommand(command, slashQuery || "")).slice(0, 8),
     [slashQuery],
+  );
+  const fileMentionSuggestions = useMemo(
+    () => fileMentionMatches(symbolFiles || [], fileMentionQueryValue || "").slice(0, 8),
+    [symbolFiles, fileMentionQueryValue],
   );
   function currentPromptHistory() {
     return promptHistory.length ? promptHistory : localPromptHistoryRef.current;
@@ -159,6 +182,28 @@ export function Composer({
   function addFileContext() {
     setOpenMenu(null);
     onAddFileContext();
+  }
+
+  function attachFileMention(suggestion: FileMentionSuggestion) {
+    onAddContext({
+      type: "file",
+      label: suggestion.label,
+      path: suggestion.path,
+      line_start: suggestion.line,
+      line_end: suggestion.line,
+    });
+    updateComposerDraft(removeTrailingFileMention(composer));
+    requestAnimationFrame(() => textareaRef.current?.focus());
+  }
+
+  function attachFileMentionPicker() {
+    updateComposerDraft(removeTrailingFileMention(composer));
+    addFileContext();
+  }
+
+  function attachFileMentionDiff() {
+    updateComposerDraft(removeTrailingFileMention(composer));
+    addCurrentDiffContext();
   }
 
   function applySlashCommand(command: SlashCommand) {
@@ -411,6 +456,52 @@ export function Composer({
               ))}
             </div>
           )}
+        </div>
+      ) : null}
+      {fileMentionOpen ? (
+        <div
+          aria-label="File and symbol mentions"
+          className="file-mention-popover"
+          role="dialog"
+        >
+          <div className="slash-command-header">
+            <FileText aria-hidden="true" size={14} />
+            <span>@file context</span>
+            {fileMentionQueryValue ? <small>@{fileMentionQueryValue}</small> : <small>Attach context</small>}
+          </div>
+          {fileMentionSuggestions.length > 0 ? (
+            <div className="slash-command-list file-mention-list">
+              {fileMentionSuggestions.map((suggestion) => (
+                <button
+                  aria-label={`Attach ${suggestion.label}`}
+                  key={suggestion.id}
+                  type="button"
+                  onClick={() => attachFileMention(suggestion)}
+                >
+                  <span className="slash-command-icon">
+                    <FileText aria-hidden="true" size={14} />
+                  </span>
+                  <span>
+                    <strong>{suggestion.label}</strong>
+                    <small>{suggestion.detail}</small>
+                  </span>
+                  <code>{suggestion.kind}</code>
+                </button>
+              ))}
+            </div>
+          ) : (
+            <div className="slash-command-empty">No indexed file or symbol matches</div>
+          )}
+          <div className="file-mention-actions">
+            <button type="button" onClick={attachFileMentionPicker}>
+              <FileText aria-hidden="true" size={14} />
+              Attach file
+            </button>
+            <button type="button" onClick={attachFileMentionDiff}>
+              <GitCompare aria-hidden="true" size={14} />
+              Current diff
+            </button>
+          </div>
         </div>
       ) : null}
       <div className="composer-context-chips" aria-label="Attached context">
@@ -868,14 +959,19 @@ const detailLevelOptions: Array<{
   description: string;
 }> = [
   {
-    id: "coding",
-    label: "Coding",
+    id: "daily",
+    label: "Daily",
+    description: "Quieter task view",
+  },
+  {
+    id: "engineering",
+    label: "Engineering",
     description: "More technical detail and controls",
   },
   {
-    id: "daily",
-    label: "Daily work",
-    description: "Less technical detail",
+    id: "labrun",
+    label: "LabRun",
+    description: "Project governance view",
   },
 ];
 
@@ -1002,6 +1098,58 @@ function matchesSlashCommand(command: SlashCommand, query: string) {
   }
   const haystack = `${command.command} ${command.description} ${command.group}`.toLowerCase();
   return haystack.includes(normalized);
+}
+
+function fileMentionQuery(value: string) {
+  const match = value.match(/(?:^|\s)@([^\s@]*)$/);
+  if (!match) {
+    return null;
+  }
+  return match[1] || "";
+}
+
+function removeTrailingFileMention(value: string) {
+  return value.replace(/(?:^|\s)@[^\s@]*$/, "").trimEnd();
+}
+
+function fileMentionMatches(
+  files: DesktopIndexedFile[],
+  query: string,
+): FileMentionSuggestion[] {
+  const normalizedQuery = query.trim().toLowerCase();
+  const suggestions: FileMentionSuggestion[] = [];
+  for (const file of files) {
+    const path = file.path;
+    const pathMatch = !normalizedQuery || path.toLowerCase().includes(normalizedQuery);
+    if (pathMatch) {
+      suggestions.push({
+        id: `file:${path}`,
+        kind: "file",
+        label: path,
+        detail: `${file.lines} lines · ${file.symbols.length} symbols`,
+        path,
+      });
+    }
+    for (const symbol of file.symbols.slice(0, 8)) {
+      const symbolHaystack =
+        `${symbol.name} ${symbol.kind} ${symbol.signature}`.toLowerCase();
+      if (normalizedQuery && !pathMatch && !symbolHaystack.includes(normalizedQuery)) {
+        continue;
+      }
+      suggestions.push({
+        id: `symbol:${path}:${symbol.line}:${symbol.name}`,
+        kind: "symbol",
+        label: symbol.name,
+        detail: `${path}:${symbol.line} · ${symbol.kind}`,
+        path,
+        line: symbol.line,
+      });
+    }
+    if (suggestions.length >= 24) {
+      break;
+    }
+  }
+  return suggestions;
 }
 
 function contextAttachmentDetail(context: DesktopRunContext) {

@@ -1,7 +1,75 @@
 # Project Status
 Status: Current
 
-Last updated: 2026-06-26
+Last updated: 2026-06-27
+
+## Desktop Next Product Hardening - 2026-06-27
+
+The follow-up desktop product-hardening workstream is tracked in
+`docs/DESKTOP_APP_NEXT_PRODUCT_HARDENING_PLAN_2026-06-26.md`.
+
+Implemented in this slice:
+
+- Daily is now the default desktop view. It hides nonessential timeline stats,
+  trace buttons, timeline facts, JumpBar, and the primary Runtime Inspector
+  until the user asks for deeper evidence. Engineering and LabRun are explicit
+  modes in Composer and Settings.
+- Daily-mode inspector actions open the Runtime Inspector drawer, and the
+  drawer no longer duplicates the primary inspector tab tree.
+- Production Tauri CSP no longer allows `http://127.0.0.1:*`; the release
+  security check fails if the broad localhost wildcard returns.
+- Run Review Accept is persisted as a sanitized desktop backend event in
+  `run-review-acceptances.jsonl`; Dismiss remains local UI dismissal.
+- Run Review now exposes clearer evidence actions: `View diff` and
+  `View validation log`.
+- First-run onboarding can choose provider/model, save a provider key,
+  refresh/test provider status, and acknowledge credential storage inline.
+- Diagnostics export redacts raw settings/log paths by default and only emits
+  basename/hash descriptors unless `include_full_paths` is explicitly set.
+- Desktop credential status now reports preferred/active store, runtime mirror,
+  migration availability, and last-save backend. Credential storage has a
+  `DesktopCredentialStore` trait with mocked backend-selection tests. macOS
+  builds can save through Keychain when available while mirroring to dotenv for
+  runtime activation.
+- Stop run now owns a `CancellationToken` on the active desktop run and passes
+  it through DesktopRuntime, RuntimeController, and StreamingQueryEngine.
+  Cancellation emits explicit runtime diagnostic, closeout, and error events;
+  lightweight provider calls also select on the same token. Required validation
+  process execution has a cancel-aware helper with a focused long-command test.
+- LabRun mode now includes a compact role timeline graph for Professor,
+  Postdoc, Graduate, validation, Postdoc audit, and Professor review.
+- Composer now has a usable `@file` entrypoint backed by the workbench symbol
+  index; file and symbol suggestions attach project file context, including
+  line metadata for symbols.
+- `scripts/desktop-macos-release.sh` now wraps frontend build, UI smoke,
+  release security check, Tauri backend tests, Tauri build, optional
+  notarization, and release-evidence generation under `docs/rc/`.
+
+Validation completed for this slice:
+
+```bash
+cargo fmt --check
+cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml --check
+cargo check -q
+cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml -q
+cargo test -q controller_cancel_token_produces_cancelled_stream_events
+cargo test -q shell_output_with_timeout_trace_and_cancel_interrupts_long_command
+cargo clippy --workspace --all-targets --all-features -- -D warnings
+cargo clippy --manifest-path apps/desktop/src-tauri/Cargo.toml --all-targets -- -D warnings
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml -q -- --test-threads=1
+cargo doc --workspace --all-features --no-deps
+corepack pnpm --dir apps/desktop build
+corepack pnpm --dir apps/desktop test:ui-smoke
+bash scripts/check_desktop_release_security.sh
+bash scripts/validate_docs.sh
+git diff --check
+```
+
+Remaining desktop release-hardening items: provider-SDK/tool-specific
+cooperative cancellation cleanup, Linux Secret Service and Windows Credential
+Manager backends, signed/notarized public macOS release evidence, update
+channel, crash reporter integration, richer `@file` fuzzy ranking/multi-file
+selection, and signed release provenance.
 
 ## Desktop Product Maturity - 2026-06-26
 

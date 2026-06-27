@@ -11,6 +11,7 @@ use crate::services::api::ToolCall;
 use std::collections::HashSet;
 use std::path::Path;
 use tokio::io::AsyncReadExt;
+use tokio_util::sync::CancellationToken;
 
 fn required_validation_timeout() -> Option<std::time::Duration> {
     crate::services::config::runtime_config().required_validation_timeout()
@@ -185,6 +186,16 @@ pub(super) async fn shell_output_with_timeout_and_trace(
     timeout: Option<std::time::Duration>,
     trace: Option<&TraceCollector>,
 ) -> std::io::Result<std::process::Output> {
+    shell_output_with_timeout_trace_and_cancel(command, working_dir, timeout, trace, None).await
+}
+
+pub(super) async fn shell_output_with_timeout_trace_and_cancel(
+    command: &str,
+    working_dir: &std::path::Path,
+    timeout: Option<std::time::Duration>,
+    trace: Option<&TraceCollector>,
+    cancel_token: Option<&CancellationToken>,
+) -> std::io::Result<std::process::Output> {
     let mut cmd = tokio::process::Command::new("sh");
     cmd.arg("-lc").arg(command).current_dir(working_dir);
     sanitize_required_validation_env(&mut cmd);
@@ -225,14 +236,9 @@ pub(super) async fn shell_output_with_timeout_and_trace(
                     emit_required_validation_heartbeat(started_at, command, timeout, trace);
                 }
                 _ = tokio::time::sleep_until(deadline) => {
-                    #[cfg(unix)]
-                    if let Some(pid) = child_pid {
-                        unsafe {
-                            libc::kill(-(pid as i32), libc::SIGKILL);
-                        }
-                    }
-                    let _ = child.start_kill();
-                    let _ = child.wait().await;
+                    stop_required_validation_child(&mut child, child_pid).await;
+                    stdout_task.abort();
+                    stderr_task.abort();
                     return Err(std::io::Error::new(
                         std::io::ErrorKind::TimedOut,
                         format!(
@@ -243,12 +249,42 @@ pub(super) async fn shell_output_with_timeout_and_trace(
                         ),
                     ));
                 }
+                _ = async {
+                    if let Some(token) = cancel_token {
+                        token.cancelled().await;
+                    } else {
+                        std::future::pending::<()>().await;
+                    }
+                } => {
+                    stop_required_validation_child(&mut child, child_pid).await;
+                    stdout_task.abort();
+                    stderr_task.abort();
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::Interrupted,
+                        "required validation command cancelled",
+                    ));
+                }
             }
         } else {
             tokio::select! {
                 result = child.wait() => break result?,
                 _ = heartbeat.tick() => {
                     emit_required_validation_heartbeat(started_at, command, timeout, trace);
+                }
+                _ = async {
+                    if let Some(token) = cancel_token {
+                        token.cancelled().await;
+                    } else {
+                        std::future::pending::<()>().await;
+                    }
+                } => {
+                    stop_required_validation_child(&mut child, child_pid).await;
+                    stdout_task.abort();
+                    stderr_task.abort();
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::Interrupted,
+                        "required validation command cancelled",
+                    ));
                 }
             }
         }
@@ -260,6 +296,17 @@ pub(super) async fn shell_output_with_timeout_and_trace(
         stdout,
         stderr,
     })
+}
+
+async fn stop_required_validation_child(child: &mut tokio::process::Child, child_pid: Option<u32>) {
+    #[cfg(unix)]
+    if let Some(pid) = child_pid {
+        unsafe {
+            libc::kill(-(pid as i32), libc::SIGKILL);
+        }
+    }
+    let _ = child.start_kill();
+    let _ = child.wait().await;
 }
 
 fn emit_required_validation_heartbeat(
@@ -1041,6 +1088,31 @@ mod tests {
             1,
             "required-validation",
         ))
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn shell_output_with_timeout_trace_and_cancel_interrupts_long_command() {
+        let token = CancellationToken::new();
+        let cancel = token.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            cancel.cancel();
+        });
+
+        let started_at = std::time::Instant::now();
+        let err = shell_output_with_timeout_trace_and_cancel(
+            "sleep 30",
+            Path::new("."),
+            Some(std::time::Duration::from_secs(30)),
+            None,
+            Some(&token),
+        )
+        .await
+        .unwrap_err();
+
+        assert_eq!(err.kind(), std::io::ErrorKind::Interrupted);
+        assert!(started_at.elapsed() < std::time::Duration::from_secs(5));
     }
 
     #[test]

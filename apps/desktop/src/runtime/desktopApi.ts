@@ -10,6 +10,8 @@ import type {
   DesktopDiagnosticsResponse,
   DesktopDiagnosticsBundleResult,
   DesktopDiagnosticsRedaction,
+  DesktopRunReviewAcceptanceInput,
+  DesktopRunReviewAcceptanceResult,
   DesktopCredentialStorageStatus,
   DesktopExportResult,
   DesktopFilePreview,
@@ -68,7 +70,7 @@ let webPreviewSettings: DesktopSettings = {
   selected_project: "/Users/example/projects/priority-agent-demo",
   active_session_id: "web-preview",
   permission_mode: "auto_low_risk",
-  detail_level: "coding",
+  detail_level: "daily",
   agent_mode: "auto",
   provider_name: "sample-provider",
   model: "sample-model",
@@ -140,11 +142,15 @@ function previewWorkspaceTrust(project: string) {
 function previewCredentialStorage(): DesktopCredentialStorageStatus {
   return {
     active_store: "dotenv_fallback",
+    preferred_store: "dotenv_fallback",
     system_keychain_available: false,
     dotenv_fallback_path: "web-preview/.priority-agent/.env",
+    activation_mirror: "dotenv_runtime_env",
     environment_only_available: true,
-    acknowledgement_required: true,
+    acknowledgement_required: false,
+    migration_available: false,
     last_updated_source: "web_preview",
+    last_save_backend: null,
     detail: "Web preview simulates dotenv fallback credential storage.",
   };
 }
@@ -592,7 +598,7 @@ export function desktopCredentialStorageStatus(): Promise<DesktopCredentialStora
 }
 
 export function exportDesktopDiagnosticsBundle(
-  redaction: DesktopDiagnosticsRedaction = { include_logs: true, max_log_bytes: 32768 },
+  redaction: DesktopDiagnosticsRedaction = { include_logs: true, max_log_bytes: 32768, include_full_paths: false },
 ): Promise<DesktopDiagnosticsBundleResult> {
   if (!isTauriRuntime()) {
     return Promise.resolve({
@@ -604,6 +610,21 @@ export function exportDesktopDiagnosticsBundle(
   }
 
   return invoke("export_desktop_diagnostics_bundle", { redaction });
+}
+
+export function acceptRunReview(
+  input: DesktopRunReviewAcceptanceInput,
+): Promise<DesktopRunReviewAcceptanceResult> {
+  if (!isTauriRuntime()) {
+    return Promise.resolve({
+      accepted: true,
+      run_id: input.run_id,
+      path: "web-preview/.priority-agent/desktop-diagnostics/run-review-acceptances.jsonl",
+      accepted_at: "preview",
+    });
+  }
+
+  return invoke("accept_run_review", { input });
 }
 
 export function newConversation(): Promise<DesktopSettings> {

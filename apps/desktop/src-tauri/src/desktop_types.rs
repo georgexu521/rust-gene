@@ -233,11 +233,15 @@ pub(crate) struct DesktopWorkspaceTrustStatus {
 #[derive(Debug, Clone, Serialize)]
 pub(crate) struct DesktopCredentialStorageStatus {
     pub(crate) active_store: String,
+    pub(crate) preferred_store: String,
     pub(crate) system_keychain_available: bool,
     pub(crate) dotenv_fallback_path: String,
+    pub(crate) activation_mirror: Option<String>,
     pub(crate) environment_only_available: bool,
     pub(crate) acknowledgement_required: bool,
+    pub(crate) migration_available: bool,
     pub(crate) last_updated_source: String,
+    pub(crate) last_save_backend: Option<String>,
     pub(crate) detail: String,
 }
 
@@ -245,6 +249,7 @@ pub(crate) struct DesktopCredentialStorageStatus {
 pub(crate) struct DesktopDiagnosticsRedaction {
     pub(crate) include_logs: Option<bool>,
     pub(crate) max_log_bytes: Option<usize>,
+    pub(crate) include_full_paths: Option<bool>,
 }
 
 #[derive(Debug, Serialize)]
@@ -253,6 +258,46 @@ pub(crate) struct DesktopDiagnosticsBundleResult {
     pub(crate) privacy: String,
     pub(crate) redacted: bool,
     pub(crate) summary: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct DesktopRunReviewAcceptanceInput {
+    pub(crate) run_id: String,
+    pub(crate) session_id: Option<String>,
+    #[serde(default)]
+    pub(crate) changed_files: Vec<String>,
+    pub(crate) validation_status: Option<String>,
+    pub(crate) permission_summary: Option<String>,
+    pub(crate) residual_risk_count: Option<usize>,
+    #[serde(default)]
+    pub(crate) trace_refs: Vec<String>,
+    #[serde(default)]
+    pub(crate) tool_output_refs: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct DesktopRunReviewAcceptance {
+    pub(crate) schema: String,
+    pub(crate) run_id: String,
+    pub(crate) session_id: Option<String>,
+    pub(crate) accepted_at: String,
+    #[serde(default)]
+    pub(crate) changed_files: Vec<String>,
+    pub(crate) validation_status: String,
+    pub(crate) permission_summary: String,
+    pub(crate) residual_risk_count: usize,
+    #[serde(default)]
+    pub(crate) trace_refs: Vec<String>,
+    #[serde(default)]
+    pub(crate) tool_output_refs: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub(crate) struct DesktopRunReviewAcceptanceResult {
+    pub(crate) accepted: bool,
+    pub(crate) run_id: String,
+    pub(crate) path: String,
+    pub(crate) accepted_at: String,
 }
 
 #[derive(Debug, Serialize)]

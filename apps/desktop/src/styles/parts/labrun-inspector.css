@@ -74,6 +74,97 @@
   font-weight: 760;
 }
 
+.labrun-timeline-card {
+  overflow: hidden;
+}
+
+.labrun-timeline-graph {
+  display: grid;
+  gap: 8px;
+}
+
+.labrun-timeline-step {
+  display: grid;
+  grid-template-columns: 26px 1px minmax(0, 1fr);
+  gap: 8px;
+  min-width: 0;
+}
+
+.labrun-timeline-node {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border: 1px solid #d8e1ea;
+  border-radius: 50%;
+  color: #64707d;
+  background: #ffffff;
+  font-size: 11px;
+  font-weight: 780;
+}
+
+.labrun-timeline-node.done {
+  border-color: #b7d7c3;
+  color: #256b3a;
+  background: #edf8f0;
+}
+
+.labrun-timeline-node.active {
+  border-color: #9fc5f0;
+  color: #245f99;
+  background: #eef6ff;
+}
+
+.labrun-timeline-node.blocked {
+  border-color: #efc0bb;
+  color: #9b332a;
+  background: #fff1ef;
+}
+
+.labrun-timeline-link {
+  width: 1px;
+  min-height: 30px;
+  background: #dde5ed;
+}
+
+.labrun-timeline-link.done {
+  background: #b7d7c3;
+}
+
+.labrun-timeline-link.active {
+  background: #9fc5f0;
+}
+
+.labrun-timeline-link.blocked {
+  background: #efc0bb;
+}
+
+.labrun-timeline-copy {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  padding-bottom: 6px;
+}
+
+.labrun-timeline-copy strong,
+.labrun-timeline-copy small {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.labrun-timeline-copy strong {
+  color: #2d3540;
+  font-size: 12px;
+  font-weight: 760;
+}
+
+.labrun-timeline-copy small {
+  color: #707b87;
+  font-size: 11px;
+}
+
 .labrun-progress-row {
   display: grid;
   gap: 7px;

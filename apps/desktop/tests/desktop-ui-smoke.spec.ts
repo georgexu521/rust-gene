@@ -1,6 +1,12 @@
 import { expect, test, type Page } from "@playwright/test";
 
 test.describe("desktop UI smoke", () => {
+  test.beforeEach(async ({ page }) => {
+    await page.addInitScript(() => {
+      window.sessionStorage.setItem("priority-agent.splash.shown", "1");
+    });
+  });
+
   test("first-run onboarding can be skipped and completed preview starts cleanly", async ({ page }) => {
     await page.goto("/?previewFixture=onboarding");
 
@@ -14,8 +20,15 @@ test.describe("desktop UI smoke", () => {
     await page.goto("/?previewFixture=onboarding");
     const freshWizard = page.getByRole("dialog", { name: "First-run setup" });
     await expect(freshWizard).toBeVisible();
+    await freshWizard.getByRole("button", { name: /Provider/ }).click();
+    await freshWizard.getByLabel("Onboarding provider").selectOption("kimi-code");
+    await freshWizard.getByRole("button", { name: "Apply" }).click();
+    await expect(freshWizard).toContainText("Provider/model selection refreshed.");
     await freshWizard.getByRole("button", { name: /Credentials/ }).click();
-    await freshWizard.getByLabel(/local dotenv fallback/).check();
+    await freshWizard.getByLabel(/dotenv_fallback/).check();
+    await freshWizard.getByLabel("Onboarding provider API key").fill("sk-preview-onboarding-12345678");
+    await freshWizard.getByRole("button", { name: "Save and test" }).click();
+    await expect(freshWizard).toContainText("Saved preview credential for kimi-code");
     await freshWizard.getByRole("button", { name: /Trust/ }).click();
     await freshWizard.getByRole("group", { name: "Package-script validation" }).getByRole("button", { name: "Trusted" }).click();
     await freshWizard.locator(".onboarding-stepper").getByRole("button", { name: /Start/ }).click();
@@ -49,6 +62,10 @@ test.describe("desktop UI smoke", () => {
     await expect(page.getByLabel("Session header")).toContainText("Desktop app Phase 1");
     await expect(page.getByRole("button", { name: /Direct Agent/ })).toHaveAttribute("aria-pressed", "true");
     await expect(page.getByRole("button", { name: /LabRun/ })).toBeVisible();
+    await expect(page.getByRole("complementary", { name: "Runtime inspector" })).not.toBeVisible();
+    await page.getByRole("button", { exact: true, name: "Mode" }).click();
+    await page.getByRole("button", { name: /Use mode Engineering/ }).click();
+    await page.keyboard.press("Escape");
     await expect(page.getByRole("complementary", { name: "Runtime inspector" })).toBeVisible();
     await expect(page.getByRole("tab", { name: "Context" })).toHaveAttribute("aria-selected", "true");
     await expect(page.getByRole("tabpanel", { name: "Context" })).toContainText("Token budget");
@@ -96,9 +113,10 @@ test.describe("desktop UI smoke", () => {
     await expect(labRunTab.getByLabel("LabRun artifact body viewer")).toContainText("review_summary");
     await labRunTab.getByRole("button", { name: "Close body" }).click();
     await labRunTab.getByRole("textbox", { name: "Search LabRun artifacts" }).fill("needs_revision");
-    await expect(labRunTab).toContainText("Graduate implementation result");
-    await expect(labRunTab).toContainText("Graduate Result");
-    await expect(labRunTab).not.toContainText("Professor review");
+    const filteredArtifactList = labRunTab.getByLabel("LabRun artifacts", { exact: true });
+    await expect(filteredArtifactList).toContainText("Graduate implementation result");
+    await expect(filteredArtifactList).toContainText("GraduateResult");
+    await expect(filteredArtifactList).not.toContainText("Professor review");
     await labRunTab.getByRole("textbox", { name: "Search LabRun artifacts" }).fill("");
     await labRunTab.getByRole("button", { name: "Approve proposal" }).click();
     const composerInput = page.getByRole("textbox", { name: "Message", exact: true });
@@ -209,10 +227,12 @@ test.describe("desktop UI smoke", () => {
     await expect(page.getByRole("dialog", { name: "Project controls" })).toContainText("Recent projects");
     await expect(page.getByRole("button", { name: /Use recent project sample-workspace/ })).toBeVisible();
     await composer.getByRole("button", { name: "Mode" }).click();
-    await expect(page.getByRole("dialog", { name: "Mode details" })).toContainText("Coding");
+    await expect(page.getByRole("dialog", { name: "Mode details" })).toContainText("Engineering");
     await expect(page.getByRole("dialog", { name: "Mode details" })).toContainText("Auto low risk");
-    await page.getByRole("button", { name: /Use mode Daily work/ }).click();
+    await page.getByRole("button", { name: /Use mode Daily/ }).click();
     await expect(page.getByRole("dialog", { name: "Mode details" })).toContainText("Daily work");
+    await page.getByRole("button", { name: /Use mode Engineering/ }).click();
+    await expect(page.getByRole("dialog", { name: "Mode details" })).toContainText("Engineering");
     await page.getByRole("button", { name: /Use permission Auto low risk/ }).click();
     await expect(page.getByRole("dialog", { name: "Mode details" })).toContainText("Auto low risk");
     await page.keyboard.press("Escape");
@@ -355,7 +375,7 @@ test.describe("desktop UI smoke", () => {
     await expect(page.getByRole("textbox", { name: "Message", exact: true })).toHaveValue(
       /Please continue from the run review/,
     );
-    await page.getByLabel("Run review actions").getByRole("button", { name: "Dismiss review" }).click();
+    await page.getByLabel("Run review actions").getByRole("button", { name: "Accept" }).click();
     await expect(page.getByLabel("Run summary panel")).not.toBeVisible();
     await page.getByRole("textbox", { name: "Message", exact: true }).fill("");
     await page.locator(".timeline-run-row").getByRole("button", { name: "Open run context Current diff" }).click();
@@ -451,13 +471,14 @@ test.describe("desktop UI smoke", () => {
     await expect(page.getByRole("button", { name: "Back to app" })).toBeFocused();
     await assertSettingsFocusTrap(page);
     const settingsNav = page.getByLabel("Settings categories");
+    const settingsDrawer = page.getByRole("complementary", { name: "Settings" });
     await expect(settingsNav.getByRole("button", { name: "General" })).toHaveClass(/active/);
     await expect(page.getByText("Work mode")).toBeVisible();
-    await expect(page.getByRole("button", { name: /Daily work/ })).toHaveClass(/active/);
-    await page.getByRole("button", { name: /Coding/ }).click();
-    await expect(page.getByRole("button", { name: /Coding/ })).toHaveClass(/active/);
-    await page.getByRole("button", { name: /Daily work/ }).click();
-    await expect(page.getByRole("button", { name: /Daily work/ })).toHaveClass(/active/);
+    await expect(settingsDrawer.getByRole("button", { name: /Engineering/ })).toHaveClass(/active/);
+    await settingsDrawer.getByRole("button", { name: /LabRun/ }).click();
+    await expect(settingsDrawer.getByRole("button", { name: /LabRun/ })).toHaveClass(/active/);
+    await settingsDrawer.getByRole("button", { name: /Daily work/ }).click();
+    await expect(settingsDrawer.getByRole("button", { name: /Daily work/ })).toHaveClass(/active/);
     await expect(page.getByText("Active session", { exact: true })).toBeVisible();
     await expect(page.getByText("Diagnostic log", { exact: true })).toBeVisible();
     await expect(page.getByRole("button", { name: "Open diagnostics folder" })).toBeVisible();
@@ -536,12 +557,16 @@ test.describe("desktop UI smoke", () => {
     await page.getByRole("combobox", { name: "Command search" }).fill("diagnostics");
     await page.getByRole("option", { name: /Show Diagnostics/ }).click();
     await expect(page.getByRole("tab", { name: "Diagnostics" })).toHaveAttribute("aria-selected", "true");
+    await page.keyboard.press("Escape");
+    await expect(page.getByRole("complementary", { name: "Runtime inspector drawer" })).not.toBeVisible();
 
     await page.getByRole("button", { name: "More conversation actions" }).click();
     await expect(page.getByRole("dialog", { name: "Command palette" })).toBeVisible();
     await page.getByRole("combobox", { name: "Command search" }).fill("files");
     await page.getByRole("option", { name: /Show Files/ }).click();
     await expect(page.getByRole("tab", { name: "Files" })).toHaveAttribute("aria-selected", "true");
+    await page.keyboard.press("Escape");
+    await expect(page.getByRole("complementary", { name: "Runtime inspector drawer" })).not.toBeVisible();
 
     await page.getByRole("textbox", { name: "Message" }).fill("");
     await page.getByLabel("Session header").click();
@@ -705,6 +730,7 @@ test.describe("desktop UI smoke", () => {
 
     await alert.getByRole("button", { name: "Diagnostics" }).click();
     await expect(page.getByRole("tab", { name: "Diagnostics" })).toHaveAttribute("aria-selected", "true");
+    await page.keyboard.press("Escape");
     await alert.getByRole("button", { name: "Dismiss" }).click();
     await expect(alert).not.toBeVisible();
   });

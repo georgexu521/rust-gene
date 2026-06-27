@@ -300,9 +300,11 @@ pub(super) fn normalized_permission_mode_label(mode: Option<&str>) -> &'static s
 }
 
 pub(super) fn normalized_detail_level_label(level: Option<&str>) -> &'static str {
-    match level.unwrap_or("coding").trim() {
+    match level.unwrap_or("daily").trim() {
         "default" | "daily" | "daily_work" => "daily",
-        _ => "coding",
+        "labrun" | "lab" => "labrun",
+        "coding" | "engineering" | "engineer" => "engineering",
+        _ => "daily",
     }
 }
 

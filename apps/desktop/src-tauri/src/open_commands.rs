@@ -53,20 +53,7 @@ pub(crate) async fn save_provider_credential(
     provider_id: String,
     key: String,
 ) -> Result<String, String> {
-    match priority_agent::services::api::credentials::save_credential(&provider_id, &key) {
-        priority_agent::services::api::credentials::CredentialSaveOutcome::Verified => {
-            Ok(format!("Saved and activated key for {}", provider_id))
-        }
-        priority_agent::services::api::credentials::CredentialSaveOutcome::SavedUnverified => {
-            Ok(format!(
-                "Saved key for {}, but provider activation could not be verified",
-                provider_id
-            ))
-        }
-        priority_agent::services::api::credentials::CredentialSaveOutcome::Rejected { reason } => {
-            Err(reason)
-        }
-    }
+    save_desktop_provider_credential(&provider_id, &key)
 }
 
 pub(crate) fn scoped_desktop_open_target(

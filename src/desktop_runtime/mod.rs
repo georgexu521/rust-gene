@@ -21,6 +21,7 @@ use serde::Serialize;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::Arc;
+use tokio_util::sync::CancellationToken;
 
 #[derive(Clone)]
 /// Runtime handle consumed by the Tauri desktop workbench.
@@ -160,8 +161,22 @@ impl DesktopRuntime {
         user_message: impl Into<String>,
         agent_mode: crate::engine::agent_mode::AgentMode,
     ) -> Pin<Box<dyn Stream<Item = StreamEvent> + Send>> {
+        self.run_full_turn_with_agent_mode_and_cancel(
+            user_message,
+            agent_mode,
+            CancellationToken::new(),
+        )
+        .await
+    }
+
+    pub async fn run_full_turn_with_agent_mode_and_cancel(
+        &self,
+        user_message: impl Into<String>,
+        agent_mode: crate::engine::agent_mode::AgentMode,
+        cancel_token: CancellationToken,
+    ) -> Pin<Box<dyn Stream<Item = StreamEvent> + Send>> {
         self.controller
-            .submit_stream_turn_with_agent_mode(user_message, agent_mode)
+            .submit_stream_turn_with_agent_mode_and_cancel(user_message, agent_mode, cancel_token)
             .await
     }
 

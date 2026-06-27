@@ -18,8 +18,10 @@ pub(crate) async fn export_desktop_diagnostics_bundle(
     let redaction = redaction.unwrap_or(DesktopDiagnosticsRedaction {
         include_logs: Some(true),
         max_log_bytes: Some(32 * 1024),
+        include_full_paths: Some(false),
     });
     let include_logs = redaction.include_logs.unwrap_or(true);
+    let include_full_paths = redaction.include_full_paths.unwrap_or(false);
     let max_log_bytes = redaction.max_log_bytes.unwrap_or(32 * 1024).min(128 * 1024);
     let log_preview = if include_logs {
         read_redacted_log_preview(&diagnostic_logs_path, max_log_bytes)
@@ -57,8 +59,8 @@ pub(crate) async fn export_desktop_diagnostics_bundle(
             "permission_mode": permission_mode,
             "detail_level": detail_level,
             "agent_mode": agent_mode,
-            "settings_path": settings_path.display().to_string(),
-            "diagnostic_logs_path": diagnostic_logs_path.display().to_string(),
+            "settings_path": desktop_path_descriptor(&settings_path, "settings", include_full_paths),
+            "diagnostic_logs_path": desktop_path_descriptor(&diagnostic_logs_path, "diagnostics", include_full_paths),
             "onboarding": onboarding_state,
             "workspace_trust": workspace_trust,
             "credential_storage": desktop_credential_storage_status_value(),
@@ -115,28 +117,37 @@ pub(crate) async fn export_desktop_diagnostics_bundle(
     })
 }
 
-pub(crate) fn desktop_credential_storage_status_value() -> DesktopCredentialStorageStatus {
-    let dotenv_path = priority_agent::services::api::credentials::credential_env_path();
-    DesktopCredentialStorageStatus {
-        active_store: "dotenv_fallback".to_string(),
-        system_keychain_available: false,
-        dotenv_fallback_path: dotenv_path.display().to_string(),
-        environment_only_available: true,
-        acknowledgement_required: true,
-        last_updated_source: if dotenv_path.exists() {
-            "dotenv_file".to_string()
-        } else {
-            "environment_or_missing".to_string()
-        },
-        detail: "Desktop credential saving currently uses the Priority Agent dotenv fallback; system keychain support is not active in this build.".to_string(),
-    }
-}
-
 fn read_redacted_log_preview(path: &Path, max_bytes: usize) -> Option<String> {
     let bytes = std::fs::read(path).ok()?;
     let start = bytes.len().saturating_sub(max_bytes);
     let text = String::from_utf8_lossy(&bytes[start..]).to_string();
     Some(redact_desktop_support_text(&text))
+}
+
+pub(crate) fn desktop_path_descriptor(
+    path: &Path,
+    kind: &str,
+    include_full_path: bool,
+) -> serde_json::Value {
+    let full_path = path.display().to_string();
+    let basename = path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or(kind)
+        .to_string();
+    let parent_hash = path
+        .parent()
+        .map(|parent| sha256_text(&parent.display().to_string()));
+    let mut value = serde_json::json!({
+        "kind": kind,
+        "basename": basename,
+        "path_hash": sha256_text(&full_path),
+        "parent_hash": parent_hash,
+    });
+    if include_full_path {
+        value["full_path"] = serde_json::Value::String(full_path);
+    }
+    value
 }
 
 pub(crate) fn redact_desktop_support_text(text: &str) -> String {
@@ -173,7 +184,27 @@ fn redact_desktop_support_line(line: &str) -> String {
             return format!("{}=<redacted>", &line[..index]);
         }
     }
-    redact_high_entropy_words(line)
+    redact_high_entropy_words(&redact_local_paths(line))
+}
+
+fn redact_local_paths(line: &str) -> String {
+    line.split_whitespace()
+        .map(|word| {
+            let trimmed = word.trim_matches(|ch: char| {
+                matches!(ch, '"' | '\'' | ',' | ';' | ')' | '(' | '[' | ']')
+            });
+            let local_path_start = ["/Users/", "/private/var/", "/var/folders/"]
+                .iter()
+                .filter_map(|prefix| trimmed.find(prefix))
+                .min();
+            let Some(start) = local_path_start else {
+                return word.to_string();
+            };
+            let redacted = format!("{}<redacted-path>", &trimmed[..start]);
+            word.replace(trimmed, &redacted)
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 fn is_secret_assignment(lower: &str) -> bool {
